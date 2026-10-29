@@ -20,9 +20,13 @@ on:
   pull_request:
     paths:
       - "go/**"
-      - "genkit-tools/**"
+      - "genkit-tools/genkit-schema.json"
       - "tests/specs/**"
       - ".github/workflows/go.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -33,30 +37,25 @@ jobs:
     strategy:
       matrix:
         go-version: ['1.25.x', '1.26.x', '1.27.x']
+    # The PostgreSQL plugin's tests need a server; they skip without one.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: genkit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout Repo
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
-
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
-
-      - name: Set up Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 20.x
-          cache: 'pnpm'
-
-      - name: Enable corepack
-        run: corepack enable
-
-      - name: Install dependencies
-        run: |
-          pnpm install
-          cd genkit-tools && pnpm install
-
-      - name: Generate JSON Schema from Zod
-        run: npm --prefix genkit-tools run export:schemas
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
@@ -78,3 +77,5 @@ jobs:
 
       - name: Run tests
         run: go test -C go -v ./...
+        env:
+          GENKIT_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/genkit_test?sslmode=disable

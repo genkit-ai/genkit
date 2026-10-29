@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import z from 'zod';
-import { McpRunToolEvent } from './analytics.js';
+import { McpRunToolEvent } from './analytics';
 import {
   McpToolOptions,
+  formatMcpError,
   getCommonSchema,
   resolveProjectRoot,
-} from './utils.js';
+} from './utils';
 
 export function defineFlowTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
@@ -43,24 +43,36 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
       );
       if (typeof rootOrError !== 'string') return rootOrError;
 
-      const runtimeManager = await options.manager.getManager(rootOrError);
-      const actions = await runtimeManager.listActions();
+      try {
+        const runtimeManager = await options.manager.getManager(rootOrError);
+        const actions = await runtimeManager.listActions();
 
-      let flows = '';
-      for (const key of Object.keys(actions)) {
-        if (key.startsWith('/flow/')) {
-          flows += ' - Flow name: ' + key.substring('/flow/'.length) + '\n';
-          if (actions[key].description) {
-            flows += '   Description: ' + actions[key].description + '\n';
+        let flows = '';
+        for (const key of Object.keys(actions)) {
+          if (key.startsWith('/flow/')) {
+            flows += ' - Flow name: ' + key.substring('/flow/'.length) + '\n';
+            if (actions[key].description) {
+              flows += '   Description: ' + actions[key].description + '\n';
+            }
+            flows +=
+              '   Input schema: ' +
+              JSON.stringify(actions[key].inputSchema, undefined, 2) +
+              '\n\n';
           }
-          flows +=
-            '   Input schema: ' +
-            JSON.stringify(actions[key].inputSchema, undefined, 2) +
-            '\n\n';
         }
-      }
 
-      return { content: [{ type: 'text', text: flows }] };
+        return { content: [{ type: 'text', text: flows }] };
+      } catch (e) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${formatMcpError(e)}`,
+            },
+          ],
+        };
+      }
     }
   );
 
@@ -68,7 +80,7 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
     'run_flow',
     {
       title: 'Run Flow',
-      description: 'Runs the flow with the provided input',
+      description: 'Executes a Genkit flow with the provided JSON input.',
       inputSchema: getCommonSchema(options.explicitProjectRoot, {
         flowName: z.string().describe('name of the flow; type: string'),
         input: z
@@ -101,14 +113,12 @@ export function defineFlowTools(server: McpServer, options: McpToolOptions) {
           ],
         };
       } catch (e) {
-        const errStr =
-          e instanceof GenkitToolsError ? e.formatError() : JSON.stringify(e);
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `Error: ${errStr}`,
+              text: `Error: ${formatMcpError(e)}`,
             },
           ],
         };

@@ -33,9 +33,9 @@ from anthropic import (
 )
 from genkit_anthropic._models import AnthropicModel
 
-from genkit import ActionRunContext, GenkitError, Message, Part, Role
+from genkit import GenkitError, Message, Part, Role
 from genkit._core._error import get_callable_json, get_http_status
-from genkit.model import ModelRequest
+from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import StatusName
 
 _ERROR_MESSAGE = 'Anthropic request failed'
@@ -496,7 +496,7 @@ async def test_stream_cut_mid_read_is_classified(drop: Exception, status: str) -
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = AsyncAnthropic(api_key='test-key', http_client=http_client, max_retries=0)
     model = AnthropicModel(model_name='claude-sonnet-4-6', client=client)
-    ctx = ActionRunContext(streaming_callback=MagicMock())
+    ctx = ModelContext(streaming_callback=MagicMock())
 
     with pytest.raises(GenkitError) as exc_info:
         await model.generate(_request(), ctx)

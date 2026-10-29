@@ -56,10 +56,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from genkit import ActionRunContext, GenkitError, Message, Part
+from genkit import GenkitError, Message, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentChat,
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -78,7 +79,7 @@ def _text(content: list[Part] | None) -> str:
     return ''.join(p.text for p in (content or []) if p.text)
 
 
-async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def flaky_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = _text(inp.message.content if inp.message else None).lower()
         if 'fail' in text:

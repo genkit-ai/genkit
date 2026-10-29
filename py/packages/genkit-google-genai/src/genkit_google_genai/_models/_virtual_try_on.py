@@ -53,8 +53,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, get_basic_usage_stats
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import Constrained, ModelContext, ModelInfo, ModelRequest, Supports, get_basic_usage_stats
 
 # Ids ``virtual_try_on_model`` offers for autocomplete. Other
 # ``virtual-try-on-`` ids still resolve.
@@ -367,7 +367,7 @@ class VirtualTryOnModel:
 
     def _client_for_context(
         self,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         *,
         config: Mapping[str, Any] | None = None,
     ) -> genai.Client:
@@ -429,7 +429,7 @@ class VirtualTryOnModel:
                 cause=e,
             ) from e
 
-    async def generate(self, request: ModelRequest[VirtualTryOnConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest[VirtualTryOnConfig], ctx: ModelContext) -> ModelResponse:
         """Generate try-on images for the tagged person and product media.
 
         Every image comes back in the one response; there is nothing to stream.

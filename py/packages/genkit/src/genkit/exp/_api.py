@@ -84,7 +84,7 @@ class Genkit(StableGenkit):
     ) -> Agent[StateT]:
         """Define and register an agent with full control over the turn loop.
 
-        fn receives (SessionRunner, ActionRunContext) and must call sess.run(handle_turn)
+        fn receives (SessionRunner, AgentContext) and must call sess.run(handle_turn)
         to process inputs, then return an AgentResult.
 
         Pass ``state_schema`` (a Pydantic model) to type the custom state, so the

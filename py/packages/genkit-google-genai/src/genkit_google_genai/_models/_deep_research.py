@@ -45,8 +45,8 @@ from pydantic import ConfigDict, WithJsonSchema, field_validator, model_validato
 from pydantic.alias_generators import to_snake
 from typing_extensions import NotRequired, TypedDict
 
-from genkit import ActionRunContext, GenkitError, Operation
-from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
+from genkit import GenkitError, Operation
+from genkit.model import BackgroundAction, ModelContext, ModelRef, ModelRequest, model_ref
 from genkit.plugin_api import Action, ActionKind, GenkitConfig, to_json_schema
 
 AGENT_CONFIG_KEYS = (
@@ -217,7 +217,7 @@ def create_deep_research_background_action(
         operation.action = action_key
         return operation
 
-    async def start(request: ModelRequest[DeepResearchConfig], ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest[DeepResearchConfig], ctx: ModelContext) -> Operation:
         reject_request_config_api_key(request.config)
         config = request.config or DeepResearchConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
@@ -247,17 +247,17 @@ def create_deep_research_background_action(
         interaction = await create_interaction(api_key, create_kwargs, options)
         return persist(from_interaction(interaction))
 
-    def _op_key_and_options(ctx: ActionRunContext) -> tuple[str, ClientOptions]:
+    def _op_key_and_options(ctx: ModelContext) -> tuple[str, ClientOptions]:
         call_config = ctx.context.get('config')
         options = client_options.merge(call_config if isinstance(call_config, dict) else None)
         return api_key_for_context(ctx.context, plugin_api_key), options
 
-    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(operation: Operation, ctx: ModelContext) -> Operation:
         api_key, options = _op_key_and_options(ctx)
         interaction = await get_interaction(api_key, operation.id, options)
         return persist(from_interaction(interaction))
 
-    async def cancel(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(operation: Operation, ctx: ModelContext) -> Operation:
         api_key, options = _op_key_and_options(ctx)
         interaction = await cancel_interaction(api_key, operation.id, options)
         return persist(from_interaction(interaction))
