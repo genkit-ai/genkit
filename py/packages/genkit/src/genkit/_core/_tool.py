@@ -65,6 +65,16 @@ class Tool(Action[InputT, OutputT, ChunkT]):
     # ``Tool(place_order)`` infers ``Tool[Order, Receipt, str]`` from the function.
     @overload
     def __init__(
+        self: Tool[Any, _O, _C],
+        func: Callable[[ToolContext[_C], object], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
         self: Tool[_I, _O, _C],
         func: Callable[[_I, ToolContext[_C]], Awaitable[_O]],
         *,
@@ -77,6 +87,16 @@ class Tool(Action[InputT, OutputT, ChunkT]):
     def __init__(
         self: Tool[_I, _O, _C],
         func: Callable[[ToolContext[_C], _I], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Tool[Any, _O, Any],
+        func: Callable[[object], Awaitable[_O]],
         *,
         name: str | None = None,
         description: str | None = None,

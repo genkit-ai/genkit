@@ -479,10 +479,27 @@ def _define_tool(
     return built
 
 
-# Overload order matters: type checkers pick the first shape that fits. The
-# context-only shape comes before input-only because a ``ctx`` function also
-# fits ``[InputT]``. It returns ``Tool[Any, ...]`` because an ``input: Any``
-# function fits it too, and that tool still has to accept an input.
+# Overload order matters: type checkers pick the first shape that fits.
+# - ``(ctx, x: Any)`` fits ``[InputT, ToolContext]`` with the ctx as the input,
+#   and ``(x: Any)`` / ``(x: object)`` fit the ctx-only shape. The ``object``
+#   shapes come first and catch them; a real ``ToolContext`` param can't take
+#   an ``object``, so it skips them.
+# - The context-only shape comes before input-only because a ``ctx`` function
+#   also fits ``[InputT]``. It still returns ``Tool[Any, ...]`` so that shape
+#   keeps accepting an input.
+# - ty types ``(ctx, x: Any)`` as Unknown: the typing spec's overload rule for
+#   Any arguments makes it ambiguous, and no order fixes that.
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolContext[ToolChunkT], object], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
+
+
 @overload
 def define_tool(
     registry: Registry,
@@ -503,6 +520,17 @@ def define_tool(
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> _Tool[ToolInputT, ToolOutputT, ToolChunkT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[object], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT]: ...
 
 
 @overload
@@ -573,6 +601,16 @@ def define_tool(
 
 @overload
 def tool(
+    func: Callable[[ToolContext[ToolChunkT], object], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
+
+
+@overload
+def tool(
     func: Callable[[ToolInputT, ToolContext[ToolChunkT]], Awaitable[ToolOutputT]],
     *,
     name: str | None = None,
@@ -589,6 +627,16 @@ def tool(
     description: str | None = None,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
 ) -> _Tool[ToolInputT, ToolOutputT, ToolChunkT]: ...
+
+
+@overload
+def tool(
+    func: Callable[[object], Awaitable[ToolOutputT]],
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT]: ...
 
 
 @overload
