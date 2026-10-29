@@ -188,7 +188,7 @@ class Genkit:
         from genkit import Genkit
         from genkit_google_genai import GoogleAI
 
-        ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+        ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
         @ai.tool()
         async def current_weather(city: str) -> str:
@@ -390,7 +390,7 @@ class Genkit:
             from genkit import FlowContext, Genkit
             from genkit_google_genai import GoogleAI
 
-            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
             @ai.flow
             async def my_flow(prompt: str) -> str:
@@ -699,9 +699,14 @@ class Genkit:
         info: EmbedderInfo | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> Action:
-        """Register a custom embedder action."""
-        return define_embedder(self._registry, name, fn, info, metadata, description)
+        """Register a custom embedder action.
+
+        The options class comes from ``config_schema`` or the fn's
+        ``EmbedRequest[Cfg]`` annotation; given both, they must be the same class.
+        """
+        return define_embedder(self._registry, name, fn, info, metadata, description, config_schema=config_schema)
 
     def define_format(self, format: FormatDef) -> None:
         """Register a custom output format."""
@@ -1301,7 +1306,7 @@ class Genkit:
             from genkit_google_genai import GoogleAI
 
             # 1. Initialize Genkit and define a flow
-            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
             @ai.flow()

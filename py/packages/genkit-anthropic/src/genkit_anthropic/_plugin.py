@@ -136,10 +136,8 @@ class Anthropic(Plugin):
     name = ANTHROPIC_PLUGIN_NAME
 
     @classmethod
-    def claude_model(
-        cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None
-    ) -> ModelRef[AnthropicConfig]:
-        """Typed ref for a Claude model, e.g. ``Anthropic.claude_model('claude-sonnet-4-5')``.
+    def claude(cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None) -> ModelRef[AnthropicConfig]:
+        """Typed ref for a Claude model, e.g. ``Anthropic.claude('claude-sonnet-4-5')``.
 
         Unknown ids are allowed so new Claude releases work before this
         plugin learns their names; every Anthropic generate model takes
@@ -148,10 +146,10 @@ class Anthropic(Plugin):
         # str(None) is 'None', and unknown ids are allowed, so a non-string
         # would mint a real-looking ref instead of failing here.
         if not isinstance(name, str):
-            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name must be a string.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude: model name must be a string.')
         local = _strip_ref_prefixes(name)
         if not local:
-            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name is required.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude: model name is required.')
         return model_ref(local, config_schema=AnthropicConfig, namespace=ANTHROPIC_PLUGIN_NAME, config=config)
 
     def __init__(

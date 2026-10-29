@@ -18,13 +18,11 @@
 """Google AI and Vertex AI plugin implementations for Genkit.
 
 This module provides the GoogleAI and VertexAI plugins that enable Genkit to use
-Google's generative AI models. Any model ID served by the Gemini API (including
-newly released models) is resolved lazily on demand when ``ai.generate()`` is
-called, without needing pre-registration or SDK updates.
+Google's generative AI models. Both plugins use dynamic model discovery via the
+Google GenAI SDK to detect and register available models at runtime.
 
 Supported capabilities include text generation (Gemini/Gemma), text embeddings,
-text-to-speech (Gemini TTS), image generation (Gemini native image), and video
-generation (Veo).
+image generation (Gemini native image), and video generation (Veo).
 
 Example:
     ```python
@@ -36,7 +34,7 @@ Example:
 
     # 2. Generate content using any discovered Gemini model
     response = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-flash-latest'),
+        model=GoogleAI.gemini('gemini-flash-latest'),
         prompt='Suggest 3 names for a space-themed coffee shop.',
     )
 
@@ -419,7 +417,7 @@ class GoogleFamilyRefs:
     name: str  # plugin namespace ('googleai' or 'vertexai')
 
     @classmethod
-    def gemini_tts_model(
+    def gemini_tts(
         cls, name: KnownGeminiTts | str, *, config: GeminiTtsConfig | None = None
     ) -> ModelRef[GeminiTtsConfig]:
         """Typed ref for a Gemini TTS model (``gemini-…-tts``)."""
@@ -428,13 +426,13 @@ class GoogleFamilyRefs:
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='tts',
-            method='gemini_tts_model',
+            method='gemini_tts',
             config_schema=GeminiTtsConfig,
             config=config,
         )
 
     @classmethod
-    def gemini_image_model(
+    def gemini_image(
         cls, name: KnownGeminiImage | str, *, config: GeminiImageConfig | None = None
     ) -> ModelRef[GeminiImageConfig]:
         """Typed ref for a Gemini native-image model (``gemini-…-image``)."""
@@ -443,19 +441,19 @@ class GoogleFamilyRefs:
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='image',
-            method='gemini_image_model',
+            method='gemini_image',
             config_schema=GeminiImageConfig,
             config=config,
         )
 
     @classmethod
-    def imagen_model(cls, name: str, *, config: object | None = None) -> NoReturn:
-        """Always raises: Imagen is no longer supported. Use ``gemini_image_model``."""
+    def imagen(cls, name: str, *, config: object | None = None) -> NoReturn:
+        """Always raises: Imagen is no longer supported. Use ``gemini_image``."""
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(
-                f'{cls.__name__}.imagen_model: Imagen is no longer supported; '
-                f'for image generation use {cls.__name__}.gemini_image_model().'
+                f'{cls.__name__}.imagen: Imagen is no longer supported; '
+                f'for image generation use {cls.__name__}.gemini_image().'
             ),
         )
 
@@ -501,41 +499,36 @@ def _veo_background_action_metadata(name: str) -> ActionMetadata:
 
 
 class GoogleAI(GoogleFamilyRefs, Plugin):
-    """GoogleAI plugin for Genkit.
+    """GoogleAI plugin for Genkit with dynamic model discovery.
 
-    Provides access to Google AI Studio models. Any model ID served by the
-    Gemini API (including newly released models) is resolved lazily on demand
-    when ``ai.generate()`` is called, without needing pre-registration or SDK
-    updates. Pass models to ``Genkit(model=...)`` or ``ai.generate(model=...)``
-    using a typed ``ModelRef`` constructor such as
-    ``GoogleAI.gemini_model('gemini-flash-latest')`` (recommended; takes a bare
-    ID and stamps ``'googleai/'``) or a prefixed string
-    ``'googleai/gemini-flash-latest'`` (required when passing a plain ``str``).
+    This plugin provides access to Google AI models (Gemini, embedders, Veo)
+    through the Google AI Studio API. Models are discovered dynamically at
+    initialization time, ensuring new models are available without SDK updates.
 
-    Family-Specific ``ModelRef`` Constructors:
-        | Constructor | Family / Pattern | Action Kind | Config Schema |
-        |---|---|---|---|
-        | ``GoogleAI.gemini_model(id)`` | Text/multimodal ``gemini-*`` (and unknown IDs) | MODEL | ``GeminiConfig`` |
-        | ``GoogleAI.gemini_image_model(id)`` | ``gemini-*-image`` | MODEL | ``GeminiImageConfig`` |
-        | ``GoogleAI.gemini_tts_model(id)`` | ``gemini-*-tts`` | MODEL | ``GeminiTtsConfig`` |
-        | ``GoogleAI.gemma_model(id)`` | ``gemma-*`` | MODEL | ``GemmaConfig`` |
-        | ``GoogleAI.veo_model(id)`` | ``veo-*`` (via ``generate_operation()``) | BACKGROUND_MODEL | ``VeoConfig`` |
-        | ``GoogleAI.deep_research_model(id)`` | ``deep-research-*`` | BACKGROUND_MODEL | ``DeepResearchConfig`` |
-        | ``GoogleAI.antigravity_model(id)`` | ``antigravity-*`` | MODEL | ``AntigravityConfig`` |
-        | ``GoogleAI.lyria_model(id)`` | ``lyria-*`` | MODEL | ``LyriaConfig`` |
-        | ``GoogleAI.embedding(id)`` | ``*embedding*`` (via ``ai.embed()``) | EMBEDDER | ``EmbeddingConfig`` |
+    Model Types:
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
+        | Embedders | EMBEDDER | ``googleai/gemini-embedding-001`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-3.1-generate-preview`` |
 
     Example:
         ```python
         from genkit import Genkit
         from genkit_google_genai import GoogleAI
 
+        # 1. Initialize Genkit with dynamic model discovery
         ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Generate text using Gemini Flash
         res = await ai.generate(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             prompt='Explain quantum computing in one sentence.',
         )
+
+        # 3. Inspect output text directly
         print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
         ```
 
     Attributes:
@@ -551,65 +544,50 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
     _vertexai = False
 
     @classmethod
-    def gemini_model(
-        cls, name: KnownGoogleAIGemini | str, *, config: GeminiConfig | None = None
-    ) -> ModelRef[GeminiConfig]:
-        """Typed ref for a Gemini text/multimodal model, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``.
+    def gemini(cls, name: KnownGoogleAIGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
+        """Typed ref for a Gemini text model, e.g. ``GoogleAI.gemini('gemini-flash-latest')``.
 
-        Pass the bare model ID (any pasted ``'googleai/'`` or ``'models/'``
-        prefix is stripped automatically); returns a ``ModelRef[GeminiConfig]``
-        with the ``'googleai/'`` namespace stamped automatically. Accepted by
-        both ``Genkit(model=...)`` and ``ai.generate(model=...)`` as the typed
-        alternative to the ``'googleai/<model-id>'`` string shorthand.
-
-        Any Gemini model ID served by the API (including newly released models)
-        is accepted and resolved lazily on demand when ``ai.generate()`` is
-        called, without needing pre-registration or SDK updates. IDs belonging
-        to other families (``gemini-*-image``, ``gemini-*-tts``, ``gemma-*``,
-        ``veo-*``, or embedders) raise ``INVALID_ARGUMENT`` directing to
-        ``gemini_image_model()``, ``gemini_tts_model()``, ``gemma_model()``,
-        ``veo_model()``, or ``embedding()``.
+        Unknown ids are allowed so a brand-new Gemini release works before
+        this plugin learns its name; ids from other families are refused.
         """
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemini',
-            method='gemini_model',
+            method='gemini',
             config_schema=GeminiConfig,
             config=config,
         )
 
     @classmethod
-    def gemma_model(cls, name: KnownGemma | str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
+    def gemma(cls, name: KnownGemma | str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
         """Typed ref for a Gemma open model (``gemma-…``)."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemma',
-            method='gemma_model',
+            method='gemma',
             config_schema=GemmaConfig,
             config=config,
         )
 
     @classmethod
-    def veo_model(cls, name: KnownGoogleAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+    def veo(cls, name: KnownGoogleAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
         """Typed ref for a Veo video model (``veo-…``)."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='veo',
-            method='veo_model',
+            method='veo',
             config_schema=VeoConfig,
             config=config,
         )
 
     @classmethod
-    def deep_research_model(
-        cls, name: str, *, config: DeepResearchConfig | None = None
-    ) -> ModelRef[DeepResearchConfig]:
+    def deep_research(cls, name: str, *, config: DeepResearchConfig | None = None) -> ModelRef[DeepResearchConfig]:
         """Typed ref for a Deep Research agent. Pass to generate_operation()."""
         clean = strip_ref_prefixes(name) if isinstance(name, str) else ''
         return family_model_ref(
@@ -617,27 +595,27 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='deep-research',
-            method='deep_research_model',
+            method='deep_research',
             config_schema=DeepResearchConfig,
             config=config,
             info=deep_research_model_info(clean) if clean else None,
         )
 
     @classmethod
-    def antigravity_model(cls, name: str, *, config: AntigravityConfig | None = None) -> ModelRef[AntigravityConfig]:
+    def antigravity(cls, name: str, *, config: AntigravityConfig | None = None) -> ModelRef[AntigravityConfig]:
         """Typed ref for an Antigravity agent."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='antigravity',
-            method='antigravity_model',
+            method='antigravity',
             config_schema=AntigravityConfig,
             config=config,
         )
 
     @classmethod
-    def lyria_model(
+    def lyria(
         cls, name: KnownLyria | str, *, config: InteractionsLyriaConfig | None = None
     ) -> ModelRef[InteractionsLyriaConfig]:
         """Typed ref for Google AI Interactions Lyria (lyria-3-clip-preview, …)."""
@@ -646,7 +624,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='lyria',
-            method='lyria_model',
+            method='lyria',
             config_schema=InteractionsLyriaConfig,
             config=config,
         )
@@ -982,39 +960,44 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
 
 class VertexAI(GoogleFamilyRefs, Plugin):
-    """Vertex AI plugin for Genkit.
+    """Vertex AI plugin for Genkit with dynamic model discovery.
 
-    Provides access to Google Cloud Vertex AI models. Any model ID served by
-    Vertex AI (including newly released models) is resolved lazily on demand
-    when ``ai.generate()`` is called, without needing pre-registration or SDK
-    updates. Pass models to ``Genkit(model=...)`` or ``ai.generate(model=...)``
-    using a typed ``ModelRef`` constructor such as
-    ``VertexAI.gemini_model('gemini-4-argon')`` (recommended; takes a bare ID
-    and stamps ``'vertexai/'``) or a prefixed string
-    ``'vertexai/gemini-4-argon'`` (required when passing a plain ``str``).
+    This plugin provides access to Google Cloud Vertex AI models including
+    Gemini, Veo, and embedders. Models are discovered dynamically,
+    ensuring new models are available without SDK updates.
 
-    Family-Specific ``ModelRef`` Constructors:
-        | Constructor | Family / Pattern | Action Kind | Config Schema |
-        |---|---|---|---|
-        | ``VertexAI.gemini_model(id)`` | Text/multimodal ``gemini-*`` (and unknown IDs) | MODEL | ``GeminiConfig`` |
-        | ``VertexAI.gemini_image_model(id)`` | ``gemini-*-image`` | MODEL | ``GeminiImageConfig`` |
-        | ``VertexAI.gemini_tts_model(id)`` | ``gemini-*-tts`` | MODEL | ``GeminiTtsConfig`` |
-        | ``VertexAI.gemma_model(id)`` | ``gemma-*`` | MODEL | ``GemmaConfig`` |
-        | ``VertexAI.veo_model(id)`` | ``veo-*`` (via ``generate_operation()``) | BACKGROUND_MODEL | ``VeoConfig`` |
-        | ``VertexAI.virtual_try_on_model(id)`` | ``virtual-try-on-*`` | MODEL | ``VirtualTryOnConfig`` |
-        | ``VertexAI.embedding(id)`` | ``*embedding*`` (via ``ai.embed()``) | EMBEDDER | ``EmbeddingConfig`` |
+    Vertex AI vs Google AI:
+        Vertex AI provides enterprise features including:
+        - VPC Service Controls
+        - Customer-managed encryption keys (CMEK)
+        - Data residency controls
+        - IAM-based access control
+
+    Model Types:
+        | Type | Action Kind | Example |
+        |---|---|---|
+        | Gemini | MODEL | ``vertexai/gemini-2.5-flash`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``vertexai/veo-3.1-generate-001`` |
+        | Virtual Try-On | MODEL | ``vertexai/virtual-try-on-001`` |
+        | Embedders | EMBEDDER | ``vertexai/text-embedding-005`` |
 
     Example:
         ```python
         from genkit import Genkit
         from genkit_google_genai import VertexAI
 
+        # 1. Initialize Genkit with VertexAI plugin
         ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+        # 2. Generate text using Gemini on Vertex AI
         res = await ai.generate(
-            model=VertexAI.gemini_model('gemini-4-argon'),
+            model=VertexAI.gemini('gemini-2.5-flash'),
             prompt='Explain quantum computing in one sentence.',
         )
+
+        # 3. Inspect output text directly
         print(res.text)
+        # => Quantum computing utilizes quantum bits to solve complex problems faster...
         ```
 
     Attributes:
@@ -1030,64 +1013,50 @@ class VertexAI(GoogleFamilyRefs, Plugin):
     name = VERTEXAI_PLUGIN_NAME
 
     @classmethod
-    def gemini_model(
-        cls, name: KnownVertexAIGemini | str, *, config: GeminiConfig | None = None
-    ) -> ModelRef[GeminiConfig]:
-        """Typed ref for a Gemini text/multimodal model, e.g. ``VertexAI.gemini_model('gemini-4-argon')``.
+    def gemini(cls, name: KnownVertexAIGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
+        """Typed ref for a Gemini text model, e.g. ``VertexAI.gemini('gemini-2.5-flash')``.
 
-        Pass the bare model ID (any pasted ``'vertexai/'`` or ``'models/'``
-        prefix is stripped automatically); returns a ``ModelRef[GeminiConfig]``
-        with the ``'vertexai/'`` namespace stamped automatically. Accepted by
-        both ``Genkit(model=...)`` and ``ai.generate(model=...)`` as the typed
-        alternative to the ``'vertexai/<model-id>'`` string shorthand.
-
-        Any Gemini model ID served by Vertex AI (including newly released
-        models) is accepted and resolved lazily on demand when ``ai.generate()``
-        is called, without needing pre-registration or SDK updates. IDs
-        belonging to other families (``gemini-*-image``, ``gemini-*-tts``,
-        ``gemma-*``, ``veo-*``, ``virtual-try-on-*``, or embedders) raise
-        ``INVALID_ARGUMENT`` directing to ``gemini_image_model()``,
-        ``gemini_tts_model()``, ``gemma_model()``, ``veo_model()``,
-        ``virtual_try_on_model()``, or ``embedding()``.
+        Unknown ids are allowed so a brand-new Gemini release works before
+        this plugin learns its name; ids from other families are refused.
         """
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemini',
-            method='gemini_model',
+            method='gemini',
             config_schema=GeminiConfig,
             config=config,
         )
 
     @classmethod
-    def gemma_model(cls, name: str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
+    def gemma(cls, name: str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
         """Typed ref for a Gemma open model (``gemma-…``); Vertex AI serves none through generate_content."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemma',
-            method='gemma_model',
+            method='gemma',
             config_schema=GemmaConfig,
             config=config,
         )
 
     @classmethod
-    def veo_model(cls, name: KnownVertexAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+    def veo(cls, name: KnownVertexAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
         """Typed ref for a Veo video model (``veo-…``)."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='veo',
-            method='veo_model',
+            method='veo',
             config_schema=VeoConfig,
             config=config,
         )
 
     @classmethod
-    def virtual_try_on_model(
+    def virtual_try_on(
         cls, name: KnownVirtualTryOn | str, *, config: VirtualTryOnConfig | None = None
     ) -> ModelRef[VirtualTryOnConfig]:
         """Typed ref for a Virtual Try-On model (``virtual-try-on-…``)."""
@@ -1096,7 +1065,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='virtual-try-on',
-            method='virtual_try_on_model',
+            method='virtual_try_on',
             config_schema=VirtualTryOnConfig,
             config=config,
         )

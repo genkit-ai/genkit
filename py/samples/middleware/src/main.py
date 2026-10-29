@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from genkit import Genkit, ModelResponse, Part
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 _EMAIL = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
 

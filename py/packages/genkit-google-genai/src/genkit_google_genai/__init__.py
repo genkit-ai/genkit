@@ -18,39 +18,31 @@
 """Google GenAI plugin for Genkit.
 
 This plugin provides integration with Google's generative AI models through
-either Google AI (Gemini API) or Google Cloud Vertex AI. Any model ID served by
-the Gemini API (including newly released models) is resolved lazily on demand
-when ``ai.generate()`` is called, without needing pre-registration or SDK
-updates.
-
-Specifying Models (``ModelRef`` vs. Prefixed String):
-    Both ``Genkit(model=...)`` and ``ai.generate(model=...)`` accept either form:
-
-    - **Typed ``ModelRef`` (recommended)**: ``GoogleAI.gemini_model('gemini-flash-latest')``
-      (or ``VertexAI.gemini_model('gemini-4-argon')``) — pass the bare model ID;
-      returns a ``ModelRef[GeminiConfig]`` with the ``'googleai/'`` (or
-      ``'vertexai/'``) namespace stamped automatically and static config
-      type-checking.
-    - **Prefixed string shorthand**: ``'googleai/gemini-flash-latest'`` (or
-      ``'vertexai/gemini-4-argon'``) — when passing a plain ``str`` to
-      ``Genkit(model=...)`` or ``ai.generate(model=...)``, the ``'googleai/'``
-      (or ``'vertexai/'``) prefix is required; passing an unprefixed string
-      raises ``NOT_FOUND``.
+either Google AI (Gemini API) or Google Cloud Vertex AI. It dynamically discovers
+and registers available models and embedders at runtime.
 
 Example:
-    Using GoogleAI (Gemini API):
+    Using GoogleAI (Gemini API) with typed flat config:
 
     ```python
     from genkit import Genkit
-    from genkit_google_genai import GoogleAI
+    from genkit_google_genai import GeminiConfig, GoogleAI
 
     # 1. Initialize Genkit with the GoogleAI plugin
     ai = Genkit(plugins=[GoogleAI()])
 
-    # 2. Generate content using dynamic model discovery
+    # 2. Generate content with reasoning, safety settings, and search grounding
     res = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-flash-latest'),
-        prompt='Suggest 2 catchy names for a space coffee shop.',
+        model=GoogleAI.gemini('gemini-flash-latest'),
+        prompt='Suggest 2 catchy names for a space coffee shop and verify no trademark conflicts.',
+        config=GeminiConfig(
+            thinking_level='HIGH',
+            include_thoughts=True,
+            safety_settings=[
+                {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_ONLY_HIGH'},
+            ],
+            google_search=True,
+        ),
     )
 
     # 3. Inspect output shapes directly
@@ -68,9 +60,9 @@ Example:
     # 1. Initialize with your GCP project and location
     ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
 
-    # 2. Generate content with Gemini on Vertex AI
+    # 2. Generate content with Gemini Pro on Vertex AI
     res = await ai.generate(
-        model=VertexAI.gemini_model('gemini-4-argon'),
+        model=VertexAI.gemini('gemini-2.5-pro'),
         prompt='Explain quantum entanglement in one sentence.',
     )
 
@@ -93,16 +85,28 @@ from genkit_google_genai._google import (
     VertexAI,
 )
 from genkit_google_genai._models._antigravity import AntigravityConfig
-from genkit_google_genai._models._deep_research import DeepResearchConfig
+from genkit_google_genai._models._deep_research import DeepResearchConfig, McpServerConfig
 from genkit_google_genai._models._embedder import EmbeddingConfig
 from genkit_google_genai._models._gemini import (
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
     GemmaConfig,
+    HarmBlockMethod,
+    HarmBlockThreshold,
+    HarmCategory,
+    ImageAspectRatio,
+    ImageSize,
+    PersonGeneration,
+    PhishBlockThreshold,
+    ProminentPeople,
+    ResponseModality,
+    SafetySetting,
+    SearchType,
+    ThinkingLevel,
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig
-from genkit_google_genai._models._veo import VeoConfig
+from genkit_google_genai._models._veo import ImageResizeMode, VeoConfig, VideoCompressionQuality
 from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 
 __all__ = [
@@ -114,8 +118,23 @@ __all__ = [
     'GeminiTtsConfig',
     'GemmaConfig',
     'GoogleAI',
+    'HarmBlockMethod',
+    'HarmBlockThreshold',
+    'HarmCategory',
+    'ImageAspectRatio',
+    'ImageResizeMode',
+    'ImageSize',
     'LyriaConfig',
+    'McpServerConfig',
+    'PersonGeneration',
+    'PhishBlockThreshold',
+    'ProminentPeople',
+    'ResponseModality',
+    'SafetySetting',
+    'SearchType',
+    'ThinkingLevel',
     'VeoConfig',
     'VertexAI',
+    'VideoCompressionQuality',
     'VirtualTryOnConfig',
 ]

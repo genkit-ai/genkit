@@ -23,7 +23,7 @@ Example:
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
 
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
     @ai.flow()
     async def my_flow(prompt: str) -> str:

@@ -175,7 +175,7 @@ class Genkit(StableGenkit):
             ai = Genkit(plugins=[GoogleAI()])
             agent = ai.define_agent(
                 name='weatherAgent',
-                model=GoogleAI.gemini_model('gemini-flash-latest'),
+                model=GoogleAI.gemini('gemini-flash-latest'),
                 system='Weather assistant.',
                 tools=[current_weather],
                 store=InMemorySessionStore(),

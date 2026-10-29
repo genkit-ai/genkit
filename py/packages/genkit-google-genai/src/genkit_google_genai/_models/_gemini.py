@@ -19,7 +19,7 @@
 import asyncio
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
@@ -50,14 +50,24 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
-    ValidationInfo,
-    ValidatorFunctionWrapHandler,
     WithJsonSchema,
     field_validator,
     model_validator,
+    with_config,
 )
+from pydantic.alias_generators import to_camel, to_snake
+from typing_extensions import NotRequired, Self, TypedDict
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import (
+    FinishReason,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+    RuntimeErrorReason,
+)
 from genkit.model import (
     Candidate,
     Constrained,
@@ -70,7 +80,6 @@ from genkit.model import (
     ToolDefinition,
     get_basic_usage_stats,
 )
-from genkit.plugin_api import GenkitConfig, StrEnum
 
 
 def _to_dict(obj: JsonAny) -> JsonAny:  # noqa: ANN401
@@ -219,40 +228,42 @@ from genkit_google_genai._models._utils import (  # noqa: E402
     ToolWire,
 )
 
-
-class HarmCategory(StrEnum):
-    """Harm categories."""
-
-    HARM_CATEGORY_UNSPECIFIED = 'HARM_CATEGORY_UNSPECIFIED'
-    HARM_CATEGORY_HATE_SPEECH = 'HARM_CATEGORY_HATE_SPEECH'
-    HARM_CATEGORY_SEXUALLY_EXPLICIT = 'HARM_CATEGORY_SEXUALLY_EXPLICIT'
-    HARM_CATEGORY_HARASSMENT = 'HARM_CATEGORY_HARASSMENT'
-    HARM_CATEGORY_DANGEROUS_CONTENT = 'HARM_CATEGORY_DANGEROUS_CONTENT'
-
-
-class HarmBlockThreshold(StrEnum):
-    """Harm block thresholds."""
-
-    BLOCK_LOW_AND_ABOVE = 'BLOCK_LOW_AND_ABOVE'
-    BLOCK_MEDIUM_AND_ABOVE = 'BLOCK_MEDIUM_AND_ABOVE'
-    BLOCK_ONLY_HIGH = 'BLOCK_ONLY_HIGH'
-    BLOCK_NONE = 'BLOCK_NONE'
-
-
-# Each strict nested class below declares every field of the google.genai type
-# it is sent as (named in its docstring), so a key the SDK accepts never fails
-# the unknown-key check. googlegenai_gemini_test.py pins the field sets.
+# Input-only choice sets, exported for annotating caller code. Literals rather
+# than enums so callers pass plain strings (thinking_level='HIGH') without
+# importing anything, and type checkers still reject a value outside the set.
+# The Dev UI schemas below read the same sets with get_args. Model names are
+# never exported this way: model lists change.
 #
-# Config fields don't use google.genai types. SDK enums are Literals of their
-# values and nested messages are GenkitConfig mirrors; tests pin both against
-# the installed SDK.
-
+# googlegenai_gemini_test.py pins each set that has a google-genai enum, so an
+# SDK bump that adds a value fails until it is added here. The SDK's
+# *_UNSPECIFIED placeholders are listed only where Genkit already offered
+# them (HarmCategory, HarmBlockMethod, ProminentPeople, PhishBlockThreshold).
+HarmCategory: TypeAlias = Literal[
+    'HARM_CATEGORY_UNSPECIFIED',
+    'HARM_CATEGORY_HATE_SPEECH',
+    'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+    'HARM_CATEGORY_HARASSMENT',
+    'HARM_CATEGORY_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_CIVIC_INTEGRITY',
+    'HARM_CATEGORY_JAILBREAK',
+    'HARM_CATEGORY_IMAGE_HATE',
+    'HARM_CATEGORY_IMAGE_DANGEROUS_CONTENT',
+    'HARM_CATEGORY_IMAGE_HARASSMENT',
+    'HARM_CATEGORY_IMAGE_SEXUALLY_EXPLICIT',
+]
+HarmBlockThreshold: TypeAlias = Literal[
+    'BLOCK_LOW_AND_ABOVE', 'BLOCK_MEDIUM_AND_ABOVE', 'BLOCK_ONLY_HIGH', 'BLOCK_NONE', 'OFF'
+]
 HarmBlockMethod: TypeAlias = Literal['HARM_BLOCK_METHOD_UNSPECIFIED', 'SEVERITY', 'PROBABILITY']
-"""Values of ``genai_types.HarmBlockMethod``."""
-
+ThinkingLevel: TypeAlias = Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']
+# genai_types.ImageConfig types aspect_ratio and image_size as str. These
+# follow the Gemini image generation docs, union across image models:
+# https://ai.google.dev/gemini-api/docs/image-generation#aspect_ratios_and_image_size
+ImageAspectRatio: TypeAlias = Literal[
+    '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
+]
+ImageSize: TypeAlias = Literal['512', '1K', '2K', '4K']
 ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
-"""Values of ``genai_types.ProminentPeople``."""
-
 PhishBlockThreshold: TypeAlias = Literal[
     'PHISH_BLOCK_THRESHOLD_UNSPECIFIED',
     'BLOCK_LOW_AND_ABOVE',
@@ -262,186 +273,214 @@ PhishBlockThreshold: TypeAlias = Literal[
     'BLOCK_VERY_HIGH_AND_ABOVE',
     'BLOCK_ONLY_EXTREMELY_HIGH',
 ]
-"""Values of ``genai_types.PhishBlockThreshold``."""
+# No google-genai enum: ImageConfig.person_generation is a str documented with these values.
+PersonGeneration: TypeAlias = Literal['ALLOW_ALL', 'ALLOW_ADULT', 'ALLOW_NONE']
+ResponseModality: TypeAlias = Literal['TEXT', 'IMAGE', 'AUDIO']
+SearchType: TypeAlias = Literal['web', 'image']
 
 
-class SafetySettingsSchema(GenkitConfig):
-    """Safety settings schema. Sent as ``genai_types.SafetySetting``."""
+@with_config(ConfigDict(extra='forbid'))
+class SafetySetting(TypedDict):
+    """One ``safety_settings`` entry. Sent as ``genai_types.SafetySetting``.
+
+    A TypedDict so a dict literal type-checks without importing it.
+    """
 
     category: HarmCategory
     threshold: HarmBlockThreshold
-    method: HarmBlockMethod | None = None
+    method: NotRequired[HarmBlockMethod | None]
 
 
-class PrebuiltVoiceConfig(GenkitConfig):
-    """Prebuilt voice config. Sent as ``genai_types.PrebuiltVoiceConfig``."""
+def _literal_list_schema(choices: tuple[str, ...], description: str) -> WithJsonSchema:
+    """Top-level ``{type: array, items: {enum}}`` so the Dev UI renders a multi-select.
 
-    voice_name: str | None = Field(default=None)
-
-
-class FunctionCallingMode(StrEnum):
-    """Function calling mode."""
-
-    MODE_UNSPECIFIED = 'MODE_UNSPECIFIED'
-    AUTO = 'AUTO'
-    ANY = 'ANY'
-    NONE = 'NONE'
-
-
-class FunctionCallingConfig(GenkitConfig):
-    """Function calling config. Sent as ``genai_types.FunctionCallingConfig``."""
-
-    mode: FunctionCallingMode | None = None
-    allowed_function_names: list[str] | None = Field(default=None)
-    stream_function_call_arguments: bool | None = Field(default=None)
+    The Dev UI reads array item enums only off the outer object, so the
+    ``anyOf[array, null]`` pydantic emits for ``list[Literal] | None``
+    renders as free text.
+    """
+    return WithJsonSchema({
+        'type': 'array',
+        'items': {'type': 'string', 'enum': list(choices)},
+        'description': description,
+    })
 
 
-class ThinkingLevel(StrEnum):
-    """Thinking level."""
+# Flat fields grouped by the nested request object the plugin builds from them.
+_THINKING_FIELDS = ('include_thoughts', 'thinking_budget', 'thinking_level')
+_IMAGE_FIELDS = (
+    'aspect_ratio',
+    'image_size',
+    'output_mime_type',
+    'output_compression_quality',
+    'person_generation',
+    'prominent_people',
+)
+_GOOGLE_SEARCH_OPTIONS = (
+    'google_search_types',
+    'google_search_exclude_domains',
+    'google_search_blocking_confidence',
+    'google_search_start_time',
+    'google_search_end_time',
+)
 
-    MINIMAL = 'MINIMAL'
-    LOW = 'LOW'
-    MEDIUM = 'MEDIUM'
-    HIGH = 'HIGH'
-
-
-class ThinkingConfig(GenkitConfig):
-    """Thinking config. Sent as ``genai_types.ThinkingConfig``."""
-
-    include_thoughts: bool | None = Field(default=None)
-    thinking_budget: int | None = Field(default=None)
-    thinking_level: ThinkingLevel | None = Field(default=None)
-
-
-class FileSearchConfig(GenkitConfig):
-    """File search config. Sent as ``genai_types.FileSearch``."""
-
-    file_search_store_names: list[str] | None = Field(default=None)
-    metadata_filter: str | None = Field(default=None)
-    top_k: int | None = Field(default=None)
-
-
-class ImageAspectRatio(StrEnum):
-    """Image aspect ratio."""
-
-    RATIO_1_1 = '1:1'
-    RATIO_2_3 = '2:3'
-    RATIO_3_2 = '3:2'
-    RATIO_3_4 = '3:4'
-    RATIO_4_3 = '4:3'
-    RATIO_4_5 = '4:5'
-    RATIO_5_4 = '5:4'
-    RATIO_9_16 = '9:16'
-    RATIO_16_9 = '16:9'
-    RATIO_21_9 = '21:9'
-
-
-class ImageSize(StrEnum):
-    """Image size."""
-
-    SIZE_1K = '1K'
-    SIZE_2K = '2K'
-    SIZE_4K = '4K'
-
-
-class ImageOutputOptions(GenkitConfig):
-    """Image output options. Sent as ``genai_types.ImageConfigImageOutputOptions``."""
-
-    mime_type: str | None = Field(default=None)
-    compression_quality: int | None = Field(default=None)
-
-
-class ImageConfig(GenkitConfig):
-    """Image config. Sent as ``genai_types.ImageConfig``."""
-
-    aspect_ratio: ImageAspectRatio | None = Field(default=None)
-    image_size: ImageSize | None = Field(default=None)
-    output_mime_type: str | None = Field(default=None)
-    output_compression_quality: int | None = Field(default=None)
-    person_generation: str | None = Field(default=None)
-    prominent_people: ProminentPeople | None = Field(default=None)
-    image_output_options: ImageOutputOptions | None = Field(default=None)
-
-
-class VoiceConsentSignature(GenkitConfig):
-    """Voice consent signature. Sent as ``genai_types.VoiceConsentSignature``."""
-
-    signature: str | None = Field(default=None)
-
-
-class ReplicatedVoiceConfig(GenkitConfig):
-    """Replicated voice config. Sent as ``genai_types.ReplicatedVoiceConfig``."""
-
-    # Same bytes handling as the SDK type: a str (JSON, Dev UI) is base64-decoded,
-    # raw bytes pass through, JSON output is base64. The python-mode dump then
-    # hands the SDK raw bytes, so audio isn't encoded twice.
-    model_config = ConfigDict(val_json_bytes='base64', ser_json_bytes='base64')
-
-    mime_type: str | None = Field(default=None)
-    voice_sample_audio: bytes | None = Field(default=None)
-    consent_audio: bytes | None = Field(default=None)
-    voice_consent_signature: VoiceConsentSignature | None = Field(default=None)
-
-
-class VoiceConfig(GenkitConfig):
-    """Voice config. Sent as ``genai_types.VoiceConfig``."""
-
-    prebuilt_voice_config: PrebuiltVoiceConfig | None = Field(default=None)
-    replicated_voice_config: ReplicatedVoiceConfig | None = Field(default=None)
-
-
-class CodeExecutionConfig(GenkitConfig):
-    """Code execution tool options. Sent as ``genai_types.ToolCodeExecution``."""
-
-
-class UrlContextConfig(GenkitConfig):
-    """URL context tool options. Sent as ``genai_types.UrlContext``."""
-
-
-class WebSearchConfig(GenkitConfig):
-    """Enables web search. Sent as ``genai_types.WebSearch``."""
-
-
-class ImageSearchConfig(GenkitConfig):
-    """Enables image search. Sent as ``genai_types.ImageSearch``."""
-
-
-class SearchTypes(GenkitConfig):
-    """Search types to enable. Sent as ``genai_types.SearchTypes``."""
-
-    web_search: WebSearchConfig | None = Field(default=None)
-    image_search: ImageSearchConfig | None = Field(default=None)
-
-
-class TimeRangeFilter(GenkitConfig):
-    """Search result time range. Sent as ``genai_types.Interval``."""
-
-    start_time: datetime | None = Field(default=None)
-    end_time: datetime | None = Field(default=None)
-
-
-class GoogleSearchConfig(GenkitConfig):
-    """Google Search tool options. Sent as ``genai_types.GoogleSearch``."""
-
-    search_types: SearchTypes | None = Field(default=None)
-    blocking_confidence: PhishBlockThreshold | None = Field(default=None)
-    exclude_domains: list[str] | None = Field(default=None)
-    time_range_filter: TimeRangeFilter | None = Field(default=None)
-
-
-# The options class a dict under each tool toggle is validated as.
-_TOOL_OPTION_TYPES: dict[str, type[GenkitConfig]] = {
-    'code_execution': CodeExecutionConfig,
-    'google_search': GoogleSearchConfig,
-    'url_context': UrlContextConfig,
+# Nested keys the flat fields replaced, and what to pass instead. The error
+# repeats the caller's casing, so a .prompt file gets camelCase names.
+_FLATTENED_KEYS: dict[str, tuple[str, ...]] = {
+    'thinking_config': _THINKING_FIELDS,
+    'image_config': _IMAGE_FIELDS,
+    'speech_config': ('voice', 'speakers', 'language_code'),
+    'file_search': ('file_search_store_names', 'file_search_metadata_filter', 'file_search_top_k'),
+    'google_search_retrieval': ('google_search',),
 }
+# Flat fields that only a family subclass declares, and that subclass's constructor.
+_FLATTENED_KEY_OWNERS: dict[str, tuple[str, str]] = {
+    'speech_config': ('GeminiTtsConfig', 'gemini_tts'),
+    'image_config': ('GeminiImageConfig', 'gemini_image'),
+}
+_TOOL_CHOICE_KEYS = frozenset({'function_calling_config', 'tool_config'})
+
+# Settings the Gemini API rejects (google-genai raises before sending). The
+# plugin raises first so the error names the flat field.
+_VERTEX_ONLY_FIELDS = (
+    'output_mime_type',
+    'output_compression_quality',
+    'person_generation',
+    'prominent_people',
+    'google_search_exclude_domains',
+    'google_search_blocking_confidence',
+)
+
+
+# Genkit's generate(tool_choice=) and the Gemini function calling mode it sends.
+_FUNCTION_CALLING_MODES: dict[str, genai_types.FunctionCallingConfigMode] = {
+    'auto': genai_types.FunctionCallingConfigMode.AUTO,
+    'required': genai_types.FunctionCallingConfigMode.ANY,
+    'none': genai_types.FunctionCallingConfigMode.NONE,
+}
+
+
+def _tool_config(tool_choice: str, function_tools: list[genai_types.Tool]) -> genai_types.ToolConfig:
+    """The toolConfig for a request's tool_choice. Function calling has no config fields.
+
+    'required' also names the request's tools as the allowed functions, as Go
+    does; Gemini only reads allowed_function_names in ANY mode.
+    """
+    calling = genai_types.FunctionCallingConfig(mode=_FUNCTION_CALLING_MODES[tool_choice])
+    if tool_choice == 'required':
+        calling.allowed_function_names = [
+            declaration.name
+            for tool in function_tools
+            for declaration in tool.function_declarations or []
+            if declaration.name
+        ]
+    return genai_types.ToolConfig(function_calling_config=calling)
+
+
+def _pop_prefixed(config: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Pop every ``<prefix>name`` key from *config*, returned as ``{name: value}``."""
+    return {key[len(prefix) :]: config.pop(key) for key in [k for k in config if k.startswith(prefix)]}
+
+
+def present_items(values: Iterable[str] | None) -> list[str]:
+    """Non-empty entries of a list field; an untouched Dev UI list sends ``['']``."""
+    return [v for v in values or [] if v]
+
+
+def file_search_fields(
+    store_names: Iterable[str] | None, options: Mapping[str, Any], *, prefix: str = ''
+) -> tuple[list[str], dict[str, Any]]:
+    """Store names and the set file_search options; options without a store raise.
+
+    ``options`` uses the names after ``file_search_`` (``metadata_filter``,
+    ``top_k``). Shared by Gemini and Deep Research.
+    """
+    stores = present_items(store_names)
+    set_options = {key: value for key, value in options.items() if value is not None}
+    if set_options and not stores:
+        names = ', '.join(f'file_search_{k}' for k in set_options)
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{prefix}{names} needs file_search_store_names',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    return stores, set_options
+
+
+def flattened_key_error(key: str, value: object, fields: Collection[str]) -> GenkitError | None:
+    """The error for a nested key the flat fields replaced, or None if *key* isn't one.
+
+    *fields* are the config class's field names; a hint only names fields
+    that class has. Repeats the caller's casing, so a .prompt file gets
+    camelCase names.
+    """
+    snake = to_snake(key)
+    camel = snake != key
+
+    def names(flat: Iterable[str]) -> str:
+        return ' / '.join(to_camel(f) if camel else f for f in flat)
+
+    if snake in _TOOL_CHOICE_KEYS:
+        message = f"{key} is not a config field; pass ai.generate(tool_choice='auto' | 'required' | 'none')"
+    elif snake in _FLATTENED_KEYS:
+        flat = _FLATTENED_KEYS[snake]
+        if all(f in fields for f in flat):
+            message = f'{key} was flattened; use {names(flat)}'
+        elif snake in _FLATTENED_KEY_OWNERS:
+            owner, constructor = _FLATTENED_KEY_OWNERS[snake]
+            message = (
+                f'{key} was flattened into {names(flat)}, which only {owner} has; '
+                f'build the model ref with {constructor}()'
+            )
+        else:
+            return None
+    elif snake == 'google_search' and isinstance(value, Mapping) and snake in fields:
+        options = [o for o in _GOOGLE_SEARCH_OPTIONS if o in fields]
+        message = f'{key} takes True or False' + (f'; set options with {names(options)}' if options else '')
+    elif snake in ('code_execution', 'url_context') and isinstance(value, Mapping) and snake in fields:
+        message = f'{key} takes True or False'
+    else:
+        return None
+    return GenkitError(status='INVALID_ARGUMENT', message=message, reason=RuntimeErrorReason.INVALID_INPUT)
+
+
+def _both_set_error(first: str, second: str) -> ValueError:
+    return ValueError(f'{first} and {second} are both set; pass {first}=None or {second}=None to clear a default')
 
 
 class GeminiConfig(ModelConfig):
     """Gemini Config.
 
-    Unknown keys raise. A request field this class doesn't declare goes in
-    ``extra`` under its wire name and is merged into the request body.
+    Every setting is a flat field; the plugin builds the nested
+    ``GenerateContentConfig`` from them at request time. Unknown keys raise.
+    A request field this class doesn't declare goes in ``extra`` under its
+    wire name and is merged into the request body.
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GeminiConfig, GoogleAI
+
+        # 1. Initialize plugin and client
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Run generation with flat reasoning, safety, and search grounding
+        res = await ai.generate(
+            model=GoogleAI.gemini('gemini-flash-latest'),
+            prompt='Review allergy safety for pesto pasta and cite recent culinary guidelines.',
+            config=GeminiConfig(
+                thinking_level='HIGH',
+                include_thoughts=True,
+                safety_settings=[
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_ONLY_HIGH'},
+                ],
+                google_search=True,
+            ),
+        )
+
+        # 3. Inspect generated text
+        print(res.text)
+        # => Pesto pasta traditionally contains pine nuts and parmesan cheese...
+        ```
     """
 
     # GenkitConfig's flags (to_camel, both spellings, extra='forbid') are
@@ -464,14 +503,14 @@ class GeminiConfig(ModelConfig):
     )
 
     safety_settings: Annotated[
-        list[SafetySettingsSchema] | None,
+        list[SafetySetting] | None,
         WithJsonSchema({
             'type': 'array',
             'items': {
                 'type': 'object',
                 'properties': {
-                    'category': {'type': 'string', 'enum': [e.value for e in HarmCategory]},
-                    'threshold': {'type': 'string', 'enum': [e.value for e in HarmBlockThreshold]},
+                    'category': {'type': 'string', 'enum': list(get_args(HarmCategory))},
+                    'threshold': {'type': 'string', 'enum': list(get_args(HarmBlockThreshold))},
                     'method': {'type': 'string', 'enum': list(get_args(HarmBlockMethod))},
                 },
                 'required': ['category', 'threshold'],
@@ -486,9 +525,9 @@ class GeminiConfig(ModelConfig):
         default=None,
     )
 
-    code_execution: bool | CodeExecutionConfig | None = Field(
+    code_execution: bool | None = Field(
         default=None,
-        description='Enables the model to generate and run code. True attaches the tool; a dict is the tool options.',
+        description='Enables the model to generate and run code.',
     )
 
     context_cache: bool | None = Field(
@@ -498,100 +537,90 @@ class GeminiConfig(ModelConfig):
         ),
     )
 
-    function_calling_config: Annotated[
-        FunctionCallingConfig | None,
-        WithJsonSchema({
-            'type': 'object',
-            'properties': {
-                'mode': {'type': 'string', 'enum': [e.value for e in FunctionCallingMode]},
-                'allowedFunctionNames': {'type': 'array', 'items': {'type': 'string'}},
-                'streamFunctionCallArguments': {'type': 'boolean'},
-            },
-            'description': (
-                'Controls how the model uses the provided tools (function declarations). With AUTO (Default) '
-                'mode, the model decides whether to generate a natural language response or suggest a function '
-                'call based on the prompt and context. With ANY, the model is constrained to always predict a '
-                'function call and guarantee function schema adherence. With NONE, the model is prohibited '
-                'from making function calls.'
-            ),
-            'additionalProperties': False,
-        }),
-    ] = Field(
-        default=None,
-    )
+    response_modalities: Annotated[
+        list[ResponseModality] | None,
+        _literal_list_schema(get_args(ResponseModality), 'The modalities to be used in the response.'),
+    ] = Field(default=None)
 
-    response_modalities: list[str] | None = Field(
-        default=None,
-        description='The modalities to be used in the response.',
-    )
-
-    google_search: bool | GoogleSearchConfig | None = Field(
+    google_search: bool | None = Field(
         default=None,
         description=(
             'Ground the response in public web data with the Google Search tool. '
-            'True attaches it; a dict is the tool options (excludeDomains, timeRangeFilter, ...).'
+            'Left unset, any google_search_* option turns it on. False with options set raises.'
         ),
     )
+    google_search_types: Annotated[
+        list[SearchType] | None,
+        _literal_list_schema(get_args(SearchType), 'Search types to enable. Web search when unset.'),
+    ] = Field(default=None)
+    google_search_exclude_domains: list[str] | None = Field(
+        default=None, description='Domains to exclude from results, e.g. ["amazon.com"]. Vertex AI only.'
+    )
+    google_search_blocking_confidence: PhishBlockThreshold | None = Field(
+        default=None, description='Block results at or above this phishing confidence. Vertex AI only.'
+    )
+    google_search_start_time: datetime | None = Field(
+        default=None,
+        description='Only return results from this time on (inclusive). Set with google_search_end_time.',
+    )
+    google_search_end_time: datetime | None = Field(
+        default=None,
+        description='Only return results before this time (exclusive). Set with google_search_start_time.',
+    )
+
+    file_search_store_names: list[str] | None = Field(
+        default=None,
+        description=(
+            'The fileSearchStores to retrieve from; setting it attaches the File Search tool. '
+            'Example: fileSearchStores/my-file-search-store-123'
+        ),
+    )
+    file_search_metadata_filter: str | None = Field(
+        default=None, description='Metadata filter to apply to the semantic retrieval documents and chunks.'
+    )
+    file_search_top_k: int | None = Field(
+        default=None, description='The number of semantic retrieval chunks to retrieve.'
+    )
+
+    url_context: bool | None = Field(
+        default=None, description='Return grounding metadata from links included in the query'
+    )
+
+    @field_validator('response_modalities', mode='before')
+    @classmethod
+    def _upper_case_modalities(cls, value: object) -> object:
+        """Accept 'Text' / 'image' the same as 'TEXT' / 'IMAGE'; the API is case-insensitive here."""
+        if isinstance(value, list):
+            return [v.upper() if isinstance(v, str) else v for v in cast(list[object], value)]
+        return value
 
     @model_validator(mode='before')
     @classmethod
-    def _google_search_retrieval_was_renamed(cls, data: Any) -> Any:  # noqa: ANN401
-        """Name the replacement for the pre-1.0 key instead of the generic unknown-key error."""
+    def _reject_nested_keys(cls, data: Any) -> Any:  # noqa: ANN401
+        """Name the flat fields when a caller passes a nested key they replaced."""
         if isinstance(data, Mapping):
-            for old in ('google_search_retrieval', 'googleSearchRetrieval'):
-                if old in data:
-                    raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message=f'{old} was renamed to google_search; pass True or a dict of tool options',
-                    )
+            for key, value in cast(Mapping[str, Any], data).items():
+                if isinstance(key, str) and (error := flattened_key_error(key, value, cls.model_fields)) is not None:
+                    raise error
         return data
 
-    @field_validator('code_execution', 'google_search', 'url_context', mode='wrap')
-    @classmethod
-    def _tool_options_against_sdk_type(
-        cls,
-        value: Any,  # noqa: ANN401
-        handler: ValidatorFunctionWrapHandler,
-        info: ValidationInfo,
-    ) -> Any:  # noqa: ANN401
-        """True/False toggles the tool; anything else validates as the tool options class alone.
-
-        Skipping the ``bool | Tool`` union keeps the error path to the bad key
-        (``google_search.exclude_domainz``) instead of one error per union arm.
-        """
-        if value is None or isinstance(value, bool):
-            return value
-        return _TOOL_OPTION_TYPES[info.field_name or ''].model_validate(value)
-
-    file_search: Annotated[
-        FileSearchConfig | None,
-        WithJsonSchema({
-            'type': 'object',
-            'properties': {
-                'fileSearchStoreNames': {
-                    'type': 'array',
-                    'items': {'type': 'string'},
-                    'description': (
-                        'The names of the fileSearchStores to retrieve from. '
-                        'Example: fileSearchStores/my-file-search-store-123'
-                    ),
-                },
-                'metadataFilter': {
-                    'type': 'string',
-                    'description': 'Metadata filter to apply to the semantic retrieval documents and chunks.',
-                },
-                'topK': {
-                    'type': 'integer',
-                    'description': 'The number of semantic retrieval chunks to retrieve.',
-                },
-            },
-            'additionalProperties': False,
-        }),
-    ] = Field(default=None)
-
-    url_context: bool | UrlContextConfig | None = Field(
-        default=None, description='Return grounding metadata from links included in the query'
-    )
+    @model_validator(mode='after')
+    def _reject_contradictions(self) -> Self:
+        """Settings that can't both be set. Checked per layer and again on the merged config."""
+        if self.thinking_level is not None and self.thinking_budget is not None:
+            raise _both_set_error('thinking_level', 'thinking_budget')
+        if self.google_search is False:
+            options = [
+                name
+                for name in _GOOGLE_SEARCH_OPTIONS
+                if (val := getattr(self, name)) is not None and (not isinstance(val, list) or any(val))
+            ]
+            if options:
+                raise ValueError(
+                    f'google_search=False with {", ".join(options)} set; drop the options, '
+                    'or pass None for each to clear a default'
+                )
+        return self
 
     # inherited from ModelConfig:
     # version, temperature, max_output_tokens, top_k, top_p, stop_sequences
@@ -628,48 +657,37 @@ class GeminiConfig(ModelConfig):
         ge=0.0,
         le=1.0,
     )
-    top_k: int | None = Field(  # pyrefly: ignore[bad-override]
+    top_k: int | None = Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
         default=None,
         description=('The maximum number of tokens to consider when sampling.'),
     )
 
-    thinking_config: Annotated[
-        ThinkingConfig | None,
-        WithJsonSchema({
-            'type': 'object',
-            'properties': {
-                'includeThoughts': {
-                    'type': 'boolean',
-                    'description': (
-                        'Indicates whether to include thoughts in the response. If true, thoughts are returned only if '
-                        'the model supports thought and thoughts are available.'
-                    ),
-                },
-                'thinkingBudget': {
-                    'type': 'integer',
-                    'description': (
-                        'For Gemini 2.5 - Indicates the thinking budget in tokens. 0 is DISABLED. -1 is AUTOMATIC. '
-                        'The default values and allowed ranges are model dependent. The thinking budget parameter '
-                        'gives the model guidance on the number of thinking tokens it can use when generating a '
-                        'response. A greater number of tokens is typically associated with more detailed thinking, '
-                        'which is needed for solving more complex tasks.'
-                    ),
-                },
-                'thinkingLevel': {
-                    'type': 'string',
-                    'enum': [e.value for e in ThinkingLevel],
-                    'description': (
-                        'For Gemini 3.0 - Indicates the thinking level. A higher level is associated with more '
-                        'detailed thinking, which is needed for solving more complex tasks.'
-                    ),
-                },
-            },
-            'additionalProperties': False,
-        }),
-    ] = Field(default=None)
+    thinking_level: ThinkingLevel | None = Field(
+        default=None,
+        description=(
+            'For Gemini 3 and later - the thinking level. A higher level is associated with more '
+            'detailed thinking, which is needed for solving more complex tasks. Not with thinking_budget.'
+        ),
+    )
+    thinking_budget: int | None = Field(
+        default=None,
+        description=(
+            'For Gemini 2.5 - the thinking budget in tokens. 0 is DISABLED. -1 is AUTOMATIC. '
+            'The default values and allowed ranges are model dependent. Not with thinking_level.'
+        ),
+    )
+    include_thoughts: bool | None = Field(
+        default=None,
+        description=(
+            'Include thoughts in the response. Thoughts are returned only if the model supports '
+            'thought and thoughts are available.'
+        ),
+    )
 
-    max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None, description='Maximum number of tokens to generate.'
+    max_output_tokens: int | None = (
+        Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
+            default=None, description='Maximum number of tokens to generate.'
+        )
     )
     stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
@@ -682,32 +700,10 @@ class GeminiConfig(ModelConfig):
     frequency_penalty: float | None = Field(
         default=None, description='Penalizes tokens by how often they appear in the output.'
     )
-    candidate_count: int | None = Field(default=None, description='Number of response candidates to generate.')
     response_logprobs: bool | None = Field(default=None, description='Return log probabilities of the output tokens.')
     logprobs: int | None = Field(
         default=None, description='Number of top candidate tokens to return log probabilities for.'
     )
-
-
-class SpeakerVoiceConfig(GenkitConfig):
-    """Speaker voice config. Sent as ``genai_types.SpeakerVoiceConfig``."""
-
-    speaker: str | None = None
-    voice_config: VoiceConfig | None = Field(default=None)
-
-
-class MultiSpeakerVoiceConfig(GenkitConfig):
-    """Multi-speaker voice config. Sent as ``genai_types.MultiSpeakerVoiceConfig``."""
-
-    speaker_voice_configs: list[SpeakerVoiceConfig] | None = Field(default=None)
-
-
-class SpeechConfig(GenkitConfig):
-    """Speech config. Sent as ``genai_types.SpeechConfig``."""
-
-    voice_config: VoiceConfig | None = Field(default=None)
-    language_code: str | None = Field(default=None)
-    multi_speaker_voice_config: MultiSpeakerVoiceConfig | None = Field(default=None)
 
 
 DEFAULT_TTS_VOICE_NAME = 'Kore'
@@ -717,41 +713,119 @@ _GEMINI_API_TTS_MODELS_NEEDING_VOICE = frozenset({'gemini-3.1-flash-tts-preview'
 """Gemini API TTS models that reject a request naming no voice. On Vertex AI every TTS model gets the default."""
 
 
-class GeminiTtsConfig(GeminiConfig):
-    """Gemini TTS Config."""
+def _body_names_voice(body: object) -> bool:
+    """Whether a wire-shaped body names a voice under ``generationConfig.speechConfig``.
 
-    speech_config: SpeechConfig | None = Field(
+    A replicated (cloned) voice has no flat field and goes through
+    ``config.extra``. Keys are compared the way google-genai's extra_body
+    merge aligns them: underscores dropped, lowercased.
+    """
+
+    def child(node: object, name: str) -> object:
+        if not isinstance(node, Mapping):
+            return None
+        for key, value in cast(Mapping[str, Any], node).items():
+            if isinstance(key, str) and key.replace('_', '').lower() == name:
+                return value
+        return None
+
+    speech = child(child(body, 'generationconfig'), 'speechconfig')
+    return child(speech, 'voiceconfig') is not None or child(speech, 'multispeakervoiceconfig') is not None
+
+
+def _extra_sets_voice(cfg: genai_types.GenerateContentConfig) -> bool:
+    """Whether the extra body already on *cfg* names a voice, so the default voice stays out."""
+    return _body_names_voice(cfg.http_options.extra_body if cfg.http_options else None)
+
+
+class GeminiTtsConfig(GeminiConfig):
+    """Gemini TTS Config.
+
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GeminiTtsConfig, GoogleAI
+
+        # 1. Initialize plugin and client
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Synthesize multi-speaker podcast audio
+        res = await ai.generate(
+            model=GoogleAI.gemini_tts('gemini-2.5-flash-preview-tts'),
+            prompt='Host: Welcome to Morning Roaster. Chef: Today we review Ethiopian beans.',
+            config=GeminiTtsConfig(
+                speakers={'Host': 'Kore', 'Chef': 'Puck'},
+                language_code='en-US',
+            ),
+        )
+
+        # 3. Access synthesized audio parts
+        print(res.media.url)
+        # => data:audio/wav;base64,UklGRiQAAABXQVZFZ...
+        ```
+    """
+
+    voice: str | None = Field(
         default=None,
         description=(
-            'Speech synthesis settings. Without a voice config or a multi-speaker voice config, '
-            f'models that reject a request without a voice get the {DEFAULT_TTS_VOICE_NAME} prebuilt voice.'
+            'Prebuilt voice name, e.g. "Kore". Not with speakers. Without voice or speakers, '
+            f'models that reject a request without a voice get {DEFAULT_TTS_VOICE_NAME}.'
         ),
     )
+    speakers: dict[str, str] | None = Field(
+        default=None,
+        description='Multi-speaker voices as {speaker name in the prompt: prebuilt voice name}. Not with voice.',
+    )
+    language_code: str | None = Field(
+        default=None, description='Language code (ISO 639-1) for the speech, e.g. "en-US".'
+    )
+
+    @model_validator(mode='after')
+    def _one_voice_kind(self) -> Self:
+        if self.voice is not None and self.speakers is not None:
+            raise _both_set_error('voice', 'speakers')
+        return self
 
 
 class GeminiImageConfig(GeminiConfig):
-    """Gemini Image Config."""
+    """Gemini Image Config.
 
-    image_config: Annotated[
-        ImageConfig | None,
-        WithJsonSchema({
-            'type': 'object',
-            'properties': {
-                'aspectRatio': {'type': 'string', 'enum': [e.value for e in ImageAspectRatio]},
-                'imageSize': {'type': 'string', 'enum': [e.value for e in ImageSize]},
-                'outputMimeType': {'type': 'string'},
-                'outputCompressionQuality': {'type': 'integer'},
-                'personGeneration': {'type': 'string'},
-                'prominentPeople': {'type': 'string', 'enum': list(get_args(ProminentPeople))},
-                'imageOutputOptions': {
-                    'type': 'object',
-                    'properties': {'mimeType': {'type': 'string'}, 'compressionQuality': {'type': 'integer'}},
-                    'additionalProperties': False,
-                },
-            },
-            'additionalProperties': False,
-        }),
-    ] = Field(default=None)
+    Example:
+        ```python
+        from genkit import Genkit
+        from genkit_google_genai import GeminiImageConfig, GoogleAI
+
+        # 1. Initialize plugin and client
+        ai = Genkit(plugins=[GoogleAI()])
+
+        # 2. Generate architectural artwork with specified aspect ratio and size
+        res = await ai.generate(
+            model=GoogleAI.gemini_image('gemini-2.5-flash-preview-image-generation'),
+            prompt='A modern minimalist espresso bar with warm cedar accents.',
+            config=GeminiImageConfig(
+                aspect_ratio='16:9',
+                image_size='2K',
+            ),
+        )
+
+        # 3. Access generated image media
+        print(res.media.url)
+        # => data:image/png;base64,iVBORw0KGgoAAAANSU...
+        ```
+    """
+
+    aspect_ratio: ImageAspectRatio | None = Field(default=None, description='Aspect ratio of the generated images.')
+    image_size: ImageSize | None = Field(default=None, description='Size of the generated images.')
+    output_mime_type: str | None = Field(
+        default=None, description='MIME type of the generated image, e.g. "image/jpeg". Vertex AI only.'
+    )
+    output_compression_quality: int | None = Field(
+        default=None, description='Compression quality of the generated image (image/jpeg only). Vertex AI only.'
+    )
+    person_generation: PersonGeneration | None = Field(default=None, description='Controls the generation of people.')
+    prominent_people: ProminentPeople | None = Field(
+        default=None, description='Whether generating prominent people (celebrities) is allowed.'
+    )
 
 
 class GemmaConfig(GeminiConfig):
@@ -1842,7 +1916,7 @@ class GeminiModel:
                 request_cfg = genai_types.GenerateContentConfig()
             if not request_cfg.response_modalities:
                 request_cfg.response_modalities = ['AUDIO']
-            if self._tts_needs_default_voice(model_name):
+            if self._tts_needs_default_voice(model_name) and not _extra_sets_voice(request_cfg):
                 speech = request_cfg.speech_config
                 if speech is None:
                     speech = genai_types.SpeechConfig()
@@ -2322,7 +2396,9 @@ class GeminiModel:
                 extra = dumped_config.pop('extra', None)
 
                 # 3. Extract tool-related fields
+                self._check_backend_fields(dumped_config)
                 self._extract_tools_from_config(dumped_config, tools)
+                self._nest_generation_fields(dumped_config, extra)
 
                 # 4. Clean Genkit-specific and unsupported keys
                 self._clean_unsupported_keys(dumped_config)
@@ -2342,7 +2418,8 @@ class GeminiModel:
                         cfg.top_k = known['top_k']
 
         # Tools from top-level field and config-level fields
-        tools.extend(declared_tools if declared_tools is not None else self._get_tools(request))
+        function_tools = declared_tools if declared_tools is not None else self._get_tools(request)
+        tools.extend(function_tools)
 
         has_output = bool(request.output_format or request.output_schema or request.output_content_type)
 
@@ -2370,6 +2447,9 @@ class GeminiModel:
 
             if tools:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
+
+            if request.tool_choice and function_tools:
+                cfg.tool_config = _tool_config(request.tool_choice, function_tools)
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
             cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
@@ -2438,50 +2518,139 @@ class GeminiModel:
             action_name=self._version,
         )
 
+    def _invalid_config(self, message: str) -> GenkitError:
+        return GenkitError(
+            status='INVALID_ARGUMENT', message=f'{self._version}: {message}', reason=RuntimeErrorReason.INVALID_INPUT
+        )
+
+    def _check_backend_fields(self, config: Mapping[str, Any]) -> None:
+        """Raise for settings the backend rejects, naming the flat field.
+
+        google-genai raises its own ValueError for these, with the nested
+        SDK path; the plugin knows the backend, so it raises first.
+        """
+        if self._client.vertexai:
+            fields = [
+                *(('file_search_store_names',) if present_items(config.get('file_search_store_names')) else ()),
+                *(
+                    name
+                    for name in ('file_search_metadata_filter', 'file_search_top_k')
+                    if config.get(name) is not None
+                ),
+            ]
+            if fields:
+                raise self._invalid_config(f'{", ".join(fields)}: Gemini API only, not supported on Vertex AI')
+            return
+        fields = [
+            name
+            for name in _VERTEX_ONLY_FIELDS
+            if config.get(name) is not None
+            and (name != 'google_search_exclude_domains' or present_items(config.get(name)))
+        ]
+        if any(s.get('method') is not None for s in config.get('safety_settings') or []):
+            fields.append('safety_settings[].method')
+        if fields:
+            raise self._invalid_config(f'{", ".join(fields)}: Vertex AI only, not supported on the Gemini API')
+
     def _extract_tools_from_config(
         self,
         config: dict[str, Any],
         tools: list[genai_types.Tool],
     ) -> None:
-        """Extract tool-related fields from config dict into the tools list.
+        """Turn the flat tool fields into ``tools`` entries.
 
         Mutates *config* by popping consumed keys and appends to *tools*.
+        Rules that span two fields which can come from different layers
+        (ModelRef, prompt, call) are checked here, on the merged config.
         """
-        # Code execution, Google Search, URL context: True or an options dict
-        # (already checked against the options class) attaches the tool; False
-        # or None doesn't.
-        val = config.pop('code_execution', None)
-        if val is not None and val is not False:
-            tools.append(genai_types.Tool(code_execution=genai_types.ToolCodeExecution(**({} if val is True else val))))
+        if config.pop('code_execution', None):
+            tools.append(genai_types.Tool(code_execution=genai_types.ToolCodeExecution()))
 
-        # Safety settings — filter out unspecified categories
+        # Safety settings — filter out unspecified categories and None methods
         if 'safety_settings' in config:
             config['safety_settings'] = [
-                s for s in config['safety_settings'] if s['category'] != HarmCategory.HARM_CATEGORY_UNSPECIFIED
+                {k: v for k, v in s.items() if v is not None}
+                for s in config['safety_settings']
+                if s['category'] != 'HARM_CATEGORY_UNSPECIFIED'
             ]
 
-        val = config.pop('google_search', None)
-        if val is not None and val is not False:
-            tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**({} if val is True else val))))
+        # Google Search: True, or any option with google_search unset. The
+        # config class already rejected False alongside options. Empty list
+        # options (an untouched Dev UI list) mean unset.
+        search = _pop_prefixed(config, 'google_search_')
+        if 'types' in search and not search['types']:
+            search.pop('types')
+        if 'exclude_domains' in search:
+            domains = present_items(search.pop('exclude_domains'))
+            if domains:
+                search['exclude_domains'] = domains
+        if config.pop('google_search', None) or search:
+            options: dict[str, Any] = {}
+            if 'types' in search:
+                options['search_types'] = {f'{t}_search': {} for t in search.pop('types')}
+            start, end = search.pop('start_time', None), search.pop('end_time', None)
+            if (start is None) != (end is None):
+                raise self._invalid_config('set google_search_start_time and google_search_end_time together')
+            if start is not None:
+                # The API rejects sub-second precision ("Granularity of nano is
+                # not supported"), so datetime.now() would fail as sent. Round
+                # outward so the window only grows and never collapses to empty.
+                options['time_range_filter'] = {
+                    'start_time': start.replace(microsecond=0),
+                    'end_time': end.replace(microsecond=0) + timedelta(seconds=1) if end.microsecond else end,
+                }
+            options.update(search)  # exclude_domains, blocking_confidence
+            tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**options)))
 
-        # File Search
-        val = config.pop('file_search', None)
-        if val and val.get('file_search_store_names'):
-            valid_stores = [s for s in val['file_search_store_names'] if s]
-            if valid_stores:
-                val['file_search_store_names'] = valid_stores
-                tools.append(genai_types.Tool(file_search=genai_types.FileSearch(**val)))
-
-        val = config.pop('url_context', None)
-        if val is not None and val is not False:
-            tools.append(genai_types.Tool(url_context=genai_types.UrlContext(**({} if val is True else val))))
-
-        # Function Calling Config → ToolConfig
-        fcc = config.pop('function_calling_config', None)
-        if fcc:
-            config['tool_config'] = genai_types.ToolConfig(
-                function_calling_config=genai_types.FunctionCallingConfig(**fcc)
+        # File Search. Empty store names (an untouched Dev UI list) mean off.
+        file_search = _pop_prefixed(config, 'file_search_')
+        stores, options = file_search_fields(
+            file_search.pop('store_names', None), file_search, prefix=f'{self._version}: '
+        )
+        if stores:
+            tools.append(
+                genai_types.Tool(file_search=genai_types.FileSearch(file_search_store_names=stores, **options))
             )
+
+        if config.pop('url_context', None):
+            tools.append(genai_types.Tool(url_context=genai_types.UrlContext()))
+
+    def _nest_generation_fields(self, config: dict[str, Any], extra: Mapping[str, Any] | None) -> None:
+        """Group the flat thinking, image and speech fields into their nested request objects.
+
+        Mutates *config*. The dicts use google-genai's snake_case names for
+        ThinkingConfig, ImageConfig and SpeechConfig.
+        """
+        thinking = {key: config.pop(key) for key in _THINKING_FIELDS if key in config}
+        if thinking:
+            config['thinking_config'] = thinking
+
+        image = {key: config.pop(key) for key in _IMAGE_FIELDS if key in config}
+        if image:
+            config['image_config'] = image
+
+        voice, speakers = config.pop('voice', None), config.pop('speakers', None)
+        language_code = config.pop('language_code', None)
+        speech: dict[str, Any] = {}
+        if voice is not None:
+            speech['voice_config'] = {'prebuilt_voice_config': {'voice_name': voice}}
+        if speakers is not None:
+            speech['multi_speaker_voice_config'] = {
+                'speaker_voice_configs': [
+                    {'speaker': speaker, 'voice_config': {'prebuilt_voice_config': {'voice_name': name}}}
+                    for speaker, name in speakers.items()
+                ]
+            }
+        if speech and _body_names_voice(extra):
+            # extra is deep-merged into the body, so both voices would be sent.
+            raise self._invalid_config(
+                f'{"voice" if voice is not None else "speakers"} and extra generationConfig.speechConfig '
+                'both name a voice; pass one'
+            )
+        if language_code is not None:
+            speech['language_code'] = language_code
+        if speech:
+            config['speech_config'] = speech
 
     def _clean_unsupported_keys(self, config: dict[str, Any]) -> None:
         """Remove Genkit-specific and SDK-gated keys from the config dict.
