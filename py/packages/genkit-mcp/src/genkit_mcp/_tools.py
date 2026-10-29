@@ -35,7 +35,7 @@ from mcp.types import (
 )
 
 import genkit
-from genkit import ActionRunContext, MultipartToolResponse, Part
+from genkit import MultipartToolResponse, Part, ToolContext
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 from genkit_mcp._errors import _ToolResultError
@@ -205,7 +205,7 @@ def mcp_tool_to_action(
         )
     mcp_meta = dict(tool.meta) if tool.meta is not None else {}
 
-    async def handler(input: dict[str, Any], ctx: ActionRunContext) -> MultipartToolResponse:
+    async def handler(input: dict[str, Any], ctx: ToolContext) -> MultipartToolResponse:
         context_mcp = ctx.context.get('mcp', {})
         meta = context_mcp.get('_meta') if isinstance(context_mcp, dict) else None
         try:
