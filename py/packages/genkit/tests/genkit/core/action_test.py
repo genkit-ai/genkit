@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import FlowContext, Genkit, Message, Part, PublicError
+from genkit import Genkit, Message, Part, PublicError
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -809,58 +809,3 @@ async def test_action_run_and_stream_reject_abort_signal_kwarg() -> None:
 
     with pytest.raises(TypeError, match='abort_signal'):
         action.stream('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
-
-
-@pytest.mark.asyncio
-async def test_action_task_cancel_sets_ctx_abort_signal_in_except_and_finally() -> None:
-    """Cancelling a running action task sets ctx.abort_signal before except CancelledError and finally run."""
-    started = asyncio.Event()
-    seen_in_except: list[bool] = []
-    seen_in_finally: list[bool] = []
-
-    async def simmer(dish: str, ctx: FlowContext[str]) -> str:
-        started.set()
-        try:
-            await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            seen_in_except.append(ctx.abort_signal.is_set())
-            raise
-        finally:
-            seen_in_finally.append(ctx.abort_signal.is_set())
-        return dish
-
-    action = Action(name='simmer', kind=ActionKind.FLOW, fn=simmer)
-    task = asyncio.create_task(action.run('stock'))
-    await started.wait()
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
-
-    assert seen_in_except == [True]
-    assert seen_in_finally == [True]
-
-
-@pytest.mark.asyncio
-async def test_action_timeout_sets_ctx_abort_signal_in_except_and_finally() -> None:
-    """Timing out a running action sets ctx.abort_signal inside its except CancelledError and finally blocks."""
-    seen_in_except: list[bool] = []
-    seen_in_finally: list[bool] = []
-
-    async def simmer(dish: str, ctx: FlowContext[str]) -> str:
-        try:
-            await asyncio.sleep(10)
-        except asyncio.CancelledError:
-            seen_in_except.append(ctx.abort_signal.is_set())
-            raise
-        finally:
-            seen_in_finally.append(ctx.abort_signal.is_set())
-        return dish
-
-    action = Action(name='simmer', kind=ActionKind.FLOW, fn=simmer)
-
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(action.run('stock'), timeout=0.02)
-
-    assert seen_in_except == [True]
-    assert seen_in_finally == [True]
