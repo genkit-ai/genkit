@@ -73,7 +73,7 @@ __all__ = [
     'ScoreStatus',
     # Reference types
     'EvaluatorRef',
-    # Plugins: build in init/resolve/list_actions
+    # Plugins: build and return in init, resolve, and list_actions
     'Evaluator',
     'BatchEvaluator',
 ]

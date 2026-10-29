@@ -102,7 +102,8 @@ def _get_func_description(func: Callable[..., Any], description: str | None = No
 class Evaluator(Action[EvaluatorRequest, EvalResponse, Never]):
     """Evaluator action that runs ``fn`` on each dataset sample, without registering it.
 
-    Plugin ``init`` / ``resolve`` / ``list_actions`` return this; ``define_evaluator`` registers it.
+    Plugin ``init`` / ``resolve`` / ``list_actions`` return this.
+    ``define_evaluator`` registers it.
     """
 
     def __init__(
@@ -245,8 +246,6 @@ class BatchEvaluator(Action[EvaluatorRequest, EvalResponse, Never]):
             metadata=evaluator_meta,
             description=evaluator_description,
         )
-        self.input_schema = to_json_schema(EvaluatorRequest)
-        self.output_schema = to_json_schema(EvalResponse)
 
 
 def define_batch_evaluator(

@@ -403,6 +403,14 @@ def vertex_evaluator_name(metric_type: VertexAIEvaluationMetricType) -> str:
     return f'vertexai/{metric_type.lower()}'
 
 
+def vertex_evaluator_action(metric_type: VertexAIEvaluationMetricType) -> Evaluator:
+    """Evaluator action for a Vertex metric."""
+    return _create_evaluator_for_metric(
+        factory=EvaluatorFactory('', ''),
+        metric_type=metric_type,
+    )
+
+
 def create_vertex_evaluators(
     metrics: list[VertexAIEvaluationMetricType],
     project: str,
