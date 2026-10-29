@@ -1598,6 +1598,9 @@ async def run_model_until_aborted(
     async def watch_abort() -> None:
         await abort_signal.wait()
         if this_task is not None:
+            # Model plugins often block on socket I/O and do not cooperatively check
+            # abort_signal. Forcibly cancelling this_task interrupts pending I/O
+            # inside the provider SDK, immediately halting token streaming and billing.
             cancelled_by_abort.set()
             this_task.cancel()
 
@@ -1611,8 +1614,10 @@ async def run_model_until_aborted(
         )
     finally:
         watcher_task.cancel()
-        # generate turns our own cancel into an ABORTED reply, so it mustn't
-        # count against an enclosing asyncio.timeout() or TaskGroup.
+        # Genkit catches the resulting CancelledError in generate_turn and boxes it
+        # into a valid ModelResponse(finish_reason=FinishReason.ABORTED). Because this
+        # abort is handled locally rather than re-raised, decrement the task's cancel
+        # count on Python 3.11+ so it does not poison an enclosing timeout or TaskGroup.
         if cancelled_by_abort.is_set():
             uncancel(this_task)
 
