@@ -28,6 +28,7 @@ from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, 
 from pydantic import AliasChoices, BaseModel, ConfigDict, PrivateAttr, ValidationError, field_validator
 
 from genkit._core._action import Action
+from genkit._core._config_check import config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -106,27 +107,41 @@ def _config_key_spellings(config_cls: type[BaseModel]) -> dict[str, str] | None:
     """
     if config_cls.model_config.get('extra') in ('allow', 'ignore'):
         return None
+    fields = config_cls.model_fields
+    for info in fields.values():
+        validation_alias = info.validation_alias
+        if validation_alias is None or isinstance(validation_alias, str):
+            continue
+        if not isinstance(validation_alias, AliasChoices) or not all(
+            isinstance(choice, str) for choice in validation_alias.choices
+        ):
+            return None
     accepts_field_name = bool(
         config_cls.model_config.get('validate_by_name') or config_cls.model_config.get('populate_by_name')
     )
+    # config_field_names is the same walk model config folding uses; pydantic
+    # only rejects the bare field name when it has an alias and the class
+    # doesn't validate by name.
+    names = config_field_names(config_cls)
+    alias_keys = set(names) - set(fields)
+    for name, info in fields.items():
+        if name == info.alias or name == info.validation_alias:
+            alias_keys.add(name)
+        elif isinstance(info.validation_alias, AliasChoices) and name in info.validation_alias.choices:
+            alias_keys.add(name)
+    accepted = {
+        key: name
+        for key, name in names.items()
+        if key in alias_keys
+        or accepts_field_name
+        or (fields[name].alias is None and fields[name].validation_alias is None)
+    }
     spellings: dict[str, str] = {}
-    for name, info in config_cls.model_fields.items():
-        shown = info.alias or name
-        has_validation_alias = info.alias is not None or info.validation_alias is not None
-        if not has_validation_alias or accepts_field_name:
-            spellings[name] = shown
-        if info.alias:
-            spellings[info.alias] = shown
-        validation_alias = info.validation_alias
-        if isinstance(validation_alias, str):
-            spellings[validation_alias] = shown
-        elif isinstance(validation_alias, AliasChoices):
-            for choice in validation_alias.choices:
-                if not isinstance(choice, str):
-                    return None
-                spellings[choice] = shown
-        elif validation_alias is not None:
-            return None
+    for key, name in accepted.items():
+        info = fields[name]
+        # The wire, Dev UI schema and the JS/Go SDKs use the serialization alias.
+        wire = info.serialization_alias
+        spellings[key] = wire if wire is not None and wire in accepted else (info.alias or name)
     return spellings
 
 
@@ -486,7 +501,17 @@ class GenerateMiddleware(MiddlewareDesc):
                 source='genkit.generate',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        return self._cls(**config)
+        try:
+            return self._cls(**config)
+        except ValidationError as e:
+            # Wrong type, a bound, or a missing required field.
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Middleware "{self.name}" got invalid config',
+                source='genkit.generate',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+                cause=e,
+            ) from e
 
     def __call__(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
         return self.instantiate(config)

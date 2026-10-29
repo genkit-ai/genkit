@@ -61,3 +61,23 @@ def test_retry_misspelled_prompt_key_raises() -> None:
     """A typo in a .prompt `config` names the accepted keys."""
     with pytest.raises(GenkitError, match='Middleware "retry" got unknown config key\\(s\\) maxRetry;'):
         GenerateMiddleware(cls=Retry, name='retry').instantiate({'maxRetry': 0})
+
+
+def test_filesystem_takes_the_js_root_directory_key() -> None:
+    """`rootDirectory` from a JS or Go .prompt file sets the sandbox root."""
+    definition = GenerateMiddleware(cls=Filesystem, name='filesystem')
+    fs = definition.instantiate({'rootDirectory': './ws'})
+
+    assert isinstance(fs, Filesystem)
+    assert fs.config.root_dir == './ws'
+    assert Filesystem(root_dir='./ws').config.model_dump(by_alias=True)['rootDirectory'] == './ws'
+    assert definition.config_schema is not None
+    assert 'rootDirectory' in definition.config_schema['properties']
+
+
+def test_filesystem_missing_root_is_invalid_argument() -> None:
+    """`config: {}` names the middleware instead of raising a bare ValidationError."""
+    with pytest.raises(GenkitError) as raised:
+        GenerateMiddleware(cls=Filesystem, name='filesystem').instantiate({})
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'rootDirectory' in str(raised.value)

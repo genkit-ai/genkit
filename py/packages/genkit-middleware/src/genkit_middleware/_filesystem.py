@@ -38,7 +38,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import AliasChoices, BaseModel as PydanticBaseModel, Field
 
 from genkit import (
     Interrupt,
@@ -108,7 +108,12 @@ _MAX_READ_SLICE_BYTES = 256 * 1024  # 256 KB — max bytes returned per slice
 class FilesystemConfig(GenkitConfig):
     """Sandbox root and write/tool naming options."""
 
-    root_dir: str
+    # The wire key is rootDirectory (matches JS and Go); Python keeps root_dir.
+    # alias= would rename the kwarg for type checkers, so use the split aliases.
+    root_dir: str = Field(
+        validation_alias=AliasChoices('rootDirectory', 'root_dir'),
+        serialization_alias='rootDirectory',
+    )
     allow_write_access: bool = False
     tool_name_prefix: str = ''
 

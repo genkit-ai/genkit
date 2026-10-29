@@ -137,8 +137,18 @@ def _cache_ttl_seconds(cache: object) -> float:
             message=f"metadata.cache must be true or {{'ttlSeconds': N}}, got {type(cache).__name__}",
         )
     options = cast(Mapping[str, Any], cache)
-    ttl = options.get('ttlSeconds', options.get('ttl_seconds'))
-    return DEFAULT_TTL if ttl is None else float(ttl)
+    ttl = options.get('ttlSeconds')
+    if ttl is None:
+        ttl = options.get('ttl_seconds')
+    if ttl is None:
+        return DEFAULT_TTL
+    # bool is an int; True as a TTL is a typo, not one second.
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not math.isfinite(ttl) or ttl <= 0:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'metadata.cache.ttlSeconds must be a positive number of seconds, got {ttl!r}',
+        )
+    return float(ttl)
 
 
 def _to_string_list(value: Any) -> list[str]:  # noqa: ANN401
