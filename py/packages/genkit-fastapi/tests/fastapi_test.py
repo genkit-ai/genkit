@@ -852,3 +852,60 @@ def test_to_sse_is_experimental_only() -> None:
     assert 'to_sse' not in genkit_fastapi.__all__
     assert not hasattr(genkit_fastapi, 'to_sse')
     assert 'to_sse' in genkit_fastapi.exp.__all__
+
+
+class SourceMeta(BaseModel):
+    """Where a CRM record came from."""
+
+    source: str
+
+
+class CrmDoc(BaseModel):
+    """A user model that happens to have a `raw` field."""
+
+    title: str
+    raw: SourceMeta
+
+
+def test_serve_flow_keeps_user_model_raw_field_over_json_and_sse() -> None:
+    """A flow returning a model with a `raw` field serves it whole; only agent wrappers unwrap `raw`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def fetch_doc(title: str, ctx: FlowContext[CrmDoc]) -> CrmDoc:
+        ctx.send_chunk(CrmDoc(title='draft', raw=SourceMeta(source='crm')))
+        return CrmDoc(title=title, raw=SourceMeta(source='crm'))
+
+    app = FastAPI()
+    app.include_router(serve_flow(fetch_doc, base_path='/doc'))
+    client = TestClient(app)
+
+    as_json = client.post('/doc', json={'data': 'T'})
+    as_sse = client.post('/doc?stream=true', json={'data': 'T'})
+
+    assert as_json.json() == {'result': {'title': 'T', 'raw': {'source': 'crm'}}}
+    assert as_sse.text == (
+        'data: {"message":{"title":"draft","raw":{"source":"crm"}}}\n\n'
+        'data: {"result":{"title":"T","raw":{"source":"crm"}}}\n\n'
+    )
+
+
+def test_to_sse_keeps_user_model_raw_field() -> None:
+    """exp.to_sse on a handle of user models doesn't flatten a `raw` field."""
+    doc = CrmDoc(title='T', raw=SourceMeta(source='crm'))
+
+    assert _sse_lines(_Turn(chunks=[doc], result=doc)) == [
+        'data: {"message":{"title":"T","raw":{"source":"crm"}}}\n\n',
+        'data: {"result":{"title":"T","raw":{"source":"crm"}}}\n\n',
+    ]
+
+
+def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """The error frame is logged on the adapter logger, 5xx with the traceback."""
+    with caplog.at_level(logging.ERROR, logger='genkit_fastapi._handler'):
+        _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
+
+    assert [(r.name, r.getMessage()) for r in caplog.records] == [
+        ('genkit_fastapi._handler', 'served flow stream failed'),
+    ]
+    assert caplog.records[0].exc_info is not None

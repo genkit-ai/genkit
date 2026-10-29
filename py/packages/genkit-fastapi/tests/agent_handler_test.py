@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 # serve_agent needs the agent subsystem; skip the whole module where it isn't built.
@@ -20,7 +22,7 @@ InMemorySessionStore = _genkit_agent.InMemorySessionStore
 AgentInit = _genkit_agent.AgentInit
 
 from genkit_fastapi import handle_genkit_request  # noqa: E402
-from genkit_fastapi.exp import serve_agent  # noqa: E402
+from genkit_fastapi.exp import serve_agent, to_sse  # noqa: E402
 
 from genkit._ai._agents._client import error_from_http  # noqa: E402
 from genkit._core._error import RuntimeErrorReason  # noqa: E402
@@ -261,26 +263,45 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
     assert err.reason is reason
 
 
-def test_hand_rolled_route_yields_to_sse_same_frames_as_serve_agent() -> None:
-    """A custom route that streams via handle_genkit_request matches serve_agent SSE."""
-    mounted = client(build_agent('mountedFrames'))
-    served = mounted.post('/api/chat?stream=true', json={'message': 'Hi'})
+_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 
-    agent = build_agent('handFrames')
+
+def frames(text: str) -> list[str]:
+    """SSE data lines with session / snapshot uuids masked, so frames from separate runs compare whole."""
+    return [_UUID.sub('<id>', line) for line in text.splitlines() if line.startswith('data: ')]
+
+
+def test_hand_rolled_routes_send_the_same_frames_as_serve_agent() -> None:
+    """handle_genkit_request, turn.to_sse(), and exp.to_sse(turn) send serve_agent's frames, payloads included."""
+    served = client(build_agent('servedFrames')).post('/api/chat?stream=true', json={'message': 'Hi'})
+
+    via_request = build_agent('requestFrames')
+    via_method = build_agent('methodFrames')
+    via_function = build_agent('functionFrames')
     app = FastAPI()
 
-    @app.post('/custom', response_model=None)
-    async def custom(request: Request) -> object:
-        return await handle_genkit_request(request, action=agent)
+    @app.post('/request', response_model=None)
+    async def request_route(request: Request) -> object:
+        return await handle_genkit_request(request, action=via_request)
 
-    hand = TestClient(app).post(
-        '/custom?stream=true',
-        json={'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}},
-    )
+    @app.post('/method')
+    async def method_route() -> StreamingResponse:
+        return StreamingResponse(via_method.chat().send_stream('Hi').to_sse(), media_type='text/event-stream')
 
-    served_kinds = [next(iter(e)) for e in sse_events(served.text)]
-    hand_kinds = [next(iter(e)) for e in sse_events(hand.text)]
-    assert served_kinds == hand_kinds
-    assert served_kinds[-1] == 'result'
-    assert 'Hi there!' in json.dumps(sse_events(served.text)[-1]['result'])
-    assert 'Hi there!' in json.dumps(sse_events(hand.text)[-1]['result'])
+    @app.post('/function')
+    async def function_route() -> StreamingResponse:
+        return StreamingResponse(to_sse(via_function.chat().send_stream('Hi')), media_type='text/event-stream')
+
+    hand = TestClient(app)
+    wire_body = {'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}}
+
+    expected = [
+        'data: {"message":{"modelChunk":{"role":"model","index":0.0,"content":[{"text":"Hi there!"}]}}}',
+        'data: {"message":{"turnEnd":{"snapshotId":"<id>","finishReason":"stop"}}}',
+        'data: {"result":{"sessionId":"<id>","snapshotId":"<id>",'
+        '"message":{"role":"model","content":[{"text":"Hi there!"}]},"artifacts":[],"finishReason":"stop"}}',
+    ]
+    assert frames(served.text) == expected
+    assert frames(hand.post('/request?stream=true', json=wire_body).text) == expected
+    assert frames(hand.post('/method').text) == expected
+    assert frames(hand.post('/function').text) == expected

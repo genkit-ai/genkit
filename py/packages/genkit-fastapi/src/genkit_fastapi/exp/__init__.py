@@ -24,9 +24,12 @@ from genkit_fastapi.exp import serve_agent, to_sse
 
 app.include_router(serve_agent(weather_agent), prefix='/api')
 
-# A hand-rolled route frames a generate_stream / chat.send_stream handle.
+# A hand-rolled route frames any handle with `.stream` / `.response`.
 return StreamingResponse(to_sse(chat.send_stream('Weather in Paris?')), media_type='text/event-stream')
 ```
+
+``to_sse(handle)`` is the framer behind ``StreamResponse.to_sse()`` and
+``AgentTurn.to_sse()``; calling the method directly sends the same frames.
 """
 
 from .._handler import to_sse

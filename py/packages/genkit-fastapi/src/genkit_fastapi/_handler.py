@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
-from genkit._core._action import input_from_json
+from genkit._core._action import _stream_to_sse, input_from_json
 from genkit._core._context import joined_headers
 from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
 from genkit.plugin_api import Action
@@ -48,9 +48,6 @@ InitT = TypeVar('InitT')
 
 def to_dict(obj: Any) -> Any:  # noqa: ANN401
     """Convert object to dict if it's a Pydantic model, otherwise return as-is."""
-    raw = getattr(obj, 'raw', None)
-    if isinstance(raw, BaseModel):
-        return raw.model_dump(by_alias=True, exclude_none=True)
     return obj.model_dump(by_alias=True, exclude_none=True) if isinstance(obj, BaseModel) else obj
 
 
@@ -109,18 +106,6 @@ def wants_stream(request: Request) -> bool:
     return 'text/event-stream' in accept or request.query_params.get('stream') == 'true'
 
 
-def format_stream_chunk(chunk: object) -> str:
-    """Format a stream chunk for SSE."""
-    msg_json = json.dumps({'message': to_dict(chunk)}, separators=JSON_SEPARATORS)
-    return f'data: {msg_json}\n\n'
-
-
-def format_stream_result(result: object) -> str:
-    """Format the final stream result for SSE."""
-    res_json = json.dumps({'result': to_dict(result)}, separators=JSON_SEPARATORS)
-    return f'data: {res_json}\n\n'
-
-
 def format_stream_error(error: Exception) -> str:
     """Format a stream failure as a canonical SSE data event."""
     return served_stream_error_event(error=error)
@@ -151,14 +136,11 @@ async def to_sse(turn: StreamHandle) -> AsyncIterator[str]:
     Experimental: import it from ``genkit_fastapi.exp``. It may change
     between minor releases.
     """
-    try:
-        async for chunk in turn.stream:
-            yield format_stream_chunk(chunk)
-        result = await turn.response
-        yield format_stream_result(result)
-    except Exception as e:
-        log_served_failure(adapter_logger=logger, error=e, where='stream')
-        yield format_stream_error(e)
+    # Lazy: keeps the agent runtime off the `import genkit_fastapi` path.
+    from genkit._ai._agents._client import agent_sse_value
+
+    async for line in _stream_to_sse(turn.stream, lambda: turn.response, to_value=agent_sse_value, logger=logger):
+        yield line
 
 
 async def handle_genkit_request(

@@ -130,9 +130,9 @@ async def deploy_service(service: str, ctx: FlowContext[str]) -> str:
 async def deploy_stream(service: str, user: User = Depends(current_user)):
     stream = deploy_service.stream(service, context={'user_id': user.id})
     return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
-    # => data: {"message": "[u_42] building payments"}
-    # => data: {"message": "[u_42] rolling out payments"}
-    # => data: {"result": "https://payments.run.app"}
+    # => data: {"message":"[u_42] building payments"}
+    # => data: {"message":"[u_42] rolling out payments"}
+    # => data: {"result":"https://payments.run.app"}
 
 
 @app.post('/chat/stream')
@@ -140,6 +140,11 @@ async def chat_stream(prompt: str, user: User = Depends(current_user)):
     stream = ai.generate_stream(prompt=prompt, context={'user_id': user.id})
     return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
 ```
+
+> [!WARNING]
+> The `result` frame is whatever the stream resolves to. For `ai.generate_stream()` that's the full `ModelResponse`, including `request`: the system prompt, tool definitions, retrieved documents, and history. `serve_flow` on a flow that returns a `ModelResponse` sends the same. If the client shouldn't see those, stream from a flow that returns only what it needs (for example `response.text`).
+
+`chat.send_stream(...).to_sse()` frames agent turns the same way `serve_agent` does (`AgentStreamChunk` messages, then the `AgentOutput` result). For a handle without a `.to_sse()` method, `genkit_fastapi.exp.to_sse(handle)` runs the same framer and logs failures on the `genkit_fastapi` logger.
 
 ### Handling Full Genkit Requests (`handle_genkit_request`)
 

@@ -19,6 +19,7 @@
 import asyncio
 import inspect
 import json
+import logging
 import re
 import sys
 import time
@@ -42,6 +43,7 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
+from pydantic_core import to_jsonable_python
 from typing_extensions import TypeVar
 
 from genkit._core._channel import CloseableQueue, mirror_result, start_stream
@@ -50,6 +52,7 @@ from genkit._core._error import (
     GenkitError,
     Interrupt,
     RuntimeErrorReason,
+    log_served_failure,
     mark_request_error,
     served_stream_error_event,
 )
@@ -207,26 +210,37 @@ OutputT_co = TypeVar('OutputT_co', covariant=True)
 
 _SSE_JSON_SEPARATORS = (',', ':')
 
+_sse_logger = logging.getLogger(__name__)
 
-def _to_sse_value(obj: Any) -> Any:  # noqa: ANN401
-    raw = getattr(obj, 'raw', None)
-    if isinstance(raw, BaseModel):
-        return raw.model_dump(by_alias=True, exclude_none=True)
-    if isinstance(obj, BaseModel):
-        return obj.model_dump(by_alias=True, exclude_none=True)
-    return obj
+
+def _to_sse_value(obj: object) -> object:
+    """JSON-ready frame value: camelCase aliases, no null model fields, nested models/lists/datetimes encoded."""
+    return to_jsonable_python(obj, by_alias=True, exclude_none=True)
+
+
+def _sse_frame(key: str, value: object) -> str:
+    return f'data: {json.dumps({key: value}, separators=_SSE_JSON_SEPARATORS)}\n\n'
 
 
 async def _stream_to_sse(
     stream: AsyncIterator[Any],
-    response: Awaitable[Any],
+    response: Callable[[], Awaitable[Any]],
+    *,
+    to_value: Callable[[Any], object] = _to_sse_value,
+    logger: logging.Logger = _sse_logger,
 ) -> AsyncIterator[str]:
+    """The one Genkit SSE framer: ``message`` per chunk, then ``result``, or ``error`` instead of the rest.
+
+    ``response`` is called only after the stream drains, so a failed or never-iterated
+    stream doesn't leave an un-awaited result coroutine behind.
+    """
     try:
         async for chunk in stream:
-            yield f'data: {json.dumps({"message": _to_sse_value(chunk)}, separators=_SSE_JSON_SEPARATORS)}\n\n'
-        result = await response
-        yield f'data: {json.dumps({"result": _to_sse_value(result)}, separators=_SSE_JSON_SEPARATORS)}\n\n'
+            yield _sse_frame('message', to_value(chunk))
+        result = await response()
+        yield _sse_frame('result', to_value(result))
     except Exception as e:
+        log_served_failure(adapter_logger=logger, error=e, where='stream')
         yield served_stream_error_event(error=e)
 
 
@@ -286,7 +300,7 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
     def to_sse(self) -> AsyncIterator[str]:
         r"""Frame this stream as Genkit SSE lines (``data: {"message"|"result"|"error": ...}\n\n``)."""
-        return _stream_to_sse(self._stream, self._response)
+        return _stream_to_sse(self._stream, lambda: self._response)
 
 
 class ActionMetadataKey(StrEnum):
