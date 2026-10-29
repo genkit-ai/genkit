@@ -333,3 +333,32 @@ async def test_generate_stream_to_sse_frames_model_chunks_and_response() -> None
     assert events[0]['message']['content'] == [{'text': 'Miso'}]
     assert events[1]['message']['content'] == [{'text': ' soup'}]
     assert events[2]['result']['finishReason'] == 'stop'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_cancelling_shielded_waiter_does_not_cancel_run() -> None:
+    """Cancelling a shielded waiter on stream.response does not cancel the underlying stream."""
+    ai = Genkit()
+    release = asyncio.Event()
+
+    async def slow_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Simmering')]))
+        await release.wait()
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Simmering done')]),
+        )
+
+    ai.define_model(name='slow', fn=slow_model)
+
+    async with ai.generate_stream(model='slow', prompt='Cook') as stream:
+        waiter = asyncio.ensure_future(asyncio.shield(stream.response))
+        await asyncio.sleep(0.01)
+
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
+        release.set()
+        res = await stream.response
+        assert res.text == 'Simmering done'

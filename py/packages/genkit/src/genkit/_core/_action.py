@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from pydantic_core import to_jsonable_python
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
@@ -301,6 +301,18 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     def to_sse(self) -> AsyncIterator[str]:
         r"""Frame this stream as Genkit SSE lines (``data: {"message"|"result"|"error": ...}\n\n``)."""
         return _stream_to_sse(self._stream, lambda: self._response)
+
+    async def aclose(self) -> None:
+        """Close the stream and release any underlying resources."""
+        aclose = getattr(self._stream, 'aclose', None)
+        if aclose is not None:
+            await aclose()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
 
 class ActionMetadataKey(StrEnum):
@@ -1019,7 +1031,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
     ) -> ActionResponse[OutputT]:
         """Run the action and return its result with trace ids.
@@ -1031,7 +1042,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             on_chunk: Called with each chunk the action streams.
             context: Request context (auth, headers, ...), read as ``ctx.context``.
             telemetry_labels: Custom labels set as span attributes.
-            abort_signal: Set it to cancel the run cooperatively.
             init: Session init value for a bidi action (e.g. a served agent's
                 session identity). Validated against the init schema; plain
                 actions ignore it.
@@ -1047,7 +1057,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             on_chunk=on_chunk,
             context=context,
             telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
             init=init,
         )
 
@@ -1091,20 +1100,22 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
+        action_ctx = ActionRunContext(
+            context=_action_context.get(None),
+            streaming_callback=streaming_cb,
+            abort_signal=abort_signal,
+            init=init,
+            input_stream=input_stream,
+        )
 
         try:
             return await self._run_with_telemetry(
                 input,
-                ActionRunContext(
-                    context=_action_context.get(None),
-                    streaming_callback=streaming_cb,
-                    abort_signal=abort_signal,
-                    init=init,
-                    input_stream=input_stream,
-                ),
+                action_ctx,
                 on_trace_start,
                 telemetry_labels,
             )
+
         finally:
             if token is not None:
                 _action_context.reset(token)
@@ -1115,7 +1126,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """Start the action and return a ``StreamResponse``: iterate it for chunks, await ``.response`` for the result.
@@ -1127,7 +1137,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             input,
             context=context,
             telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
             init=init,
         )
 
@@ -1142,7 +1151,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """``stream`` plus ``input_stream``, which ``BidiAction.stream_bidi`` feeds."""
-
         async def run(send_chunk: Callable[[ChunkT], None]) -> ActionResponse[OutputT]:
             return await self._run(
                 input,
@@ -1394,10 +1402,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             # The wrapper takes (input, ctx) and forwards to the user's
             # function with self.params.call. Keep the sentinel so a
             # defaulted tool input is omitted there instead of becoming None.
-            output = await self._fn(input, ctx)
+            coro = self._fn(input, ctx)
         else:
-            output = await self._params.call(self._fn, input, ctx)
-        return output
+            coro = self._params.call(self._fn, input, ctx)
+        return await coro
 
 
 async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:
