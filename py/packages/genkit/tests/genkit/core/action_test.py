@@ -13,7 +13,7 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Genkit, Message, Part, PublicError
+from genkit import FlowContext, Genkit, Message, Part, PublicError
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -809,3 +809,34 @@ async def test_action_run_and_stream_reject_abort_signal_kwarg() -> None:
 
     with pytest.raises(TypeError, match='abort_signal'):
         action.stream('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+
+@pytest.mark.asyncio
+async def test_action_stream_async_with_calls_aclose() -> None:
+    """`async with action.stream(...) as stream:` calls `await stream.aclose()` on exit."""
+    closed: list[bool] = []
+
+    async def make_tea(leaf: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk(f'steeping {leaf}')
+        ctx.send_chunk(f'pouring {leaf}')
+        return f'{leaf} served'
+
+    action = Action(name='make_tea', kind=ActionKind.FLOW, fn=make_tea)
+    stream_resp = action.stream('oolong')
+
+    orig_aclose = stream_resp.aclose
+
+    async def tracked_aclose() -> None:
+        closed.append(True)
+        await orig_aclose()
+
+    stream_resp.aclose = tracked_aclose  # type: ignore[method-assign]
+
+    seen: list[str] = []
+    async with stream_resp as s:
+        async for chunk in s:
+            seen.append(chunk)
+            break
+
+    assert seen == ['steeping oolong']
+    assert closed == [True]

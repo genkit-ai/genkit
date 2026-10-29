@@ -42,7 +42,7 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue, StoppableStream
 from genkit._core._compat import StrEnum
@@ -201,15 +201,38 @@ OutputT_co = TypeVar('OutputT_co', covariant=True)
 
 
 class StreamResponse(Generic[ChunkT_co, OutputT_co]):
-    """Wrapper for streaming action results.
+    """Chunks from a running action, then its result.
 
-    ``.stream`` is the same reader every time you touch it, and ``async for
-    chunk in flow.stream(x)`` reads through that reader too, so you can pull
-    a chunk off ``.stream`` and keep going with ``async for`` on either.
+    Returned by ``Action.stream()`` for every action kind: flows, tools,
+    models, and the rest.
 
-    Leaving an ``async for`` early (``break``, an exception, or a cancel) stops
-    the run, and ``.response`` raises ``GenkitError`` with status ``CANCELLED``.
-    Reading to the end doesn't. See ``Action.stream``.
+    - Chunks are single-pass. Once a loop has read them, a second ``async for``
+      yields nothing (or re-raises, if the run failed).
+    - ``.response`` can be awaited any number of times, before or after
+      iterating. Chunks sent before you iterate are buffered.
+    - If the run raises, both the loop and ``.response`` raise it.
+      ``ModelStreamResponse`` (``generate_stream``, ``prompt.stream``) reports
+      model failures on ``.response`` instead; see its docstring.
+    - Leaving an ``async for`` early (``break``, an exception, or a cancel) stops
+      the run, and ``.response`` raises ``GenkitError`` with status ``CANCELLED``.
+      Reading to the end doesn't. See ``Action.stream``.
+
+    Example:
+        ```python
+        @ai.flow()
+        async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
+            ctx.send_chunk('Out for delivery')
+            return f'Order {order_id} delivered'
+
+
+        result = track_order.stream('A-1042')
+        async for update in result:
+            print(update)
+        # => Out for delivery
+
+        print(await result.response)
+        # => Order A-1042 delivered
+        ```
     """
 
     def __init__(
@@ -224,14 +247,29 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
     @property
     def stream(self) -> StoppableStream[ChunkT_co]:
+        """The chunks, in order. Iterating the response itself reads the same stream."""
         return self._stream
 
     @property
     def response(self) -> Awaitable[OutputT_co]:
+        """The final result, available once the run ends."""
         return self._response
 
     def __aiter__(self) -> AsyncGenerator[ChunkT_co, None]:
+        # `async for chunk in result` reads `.stream`, so callers can skip the hop.
         return self._stream.__aiter__()
+
+    async def aclose(self) -> None:
+        """Close the stream and release any underlying resources."""
+        aclose = getattr(self._stream, 'aclose', None)
+        if aclose is not None:
+            await aclose()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
 
 class ActionMetadataKey(StrEnum):
@@ -1047,9 +1085,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """Start the action and return its chunks (``.stream``) and result (``.response``).
+        """Start the action and return a ``StreamResponse``: iterate it for chunks, await ``.response`` for the result.
 
-        Takes the same keyword arguments as ``run``, minus ``on_chunk``.
+        Takes the same keyword arguments as ``run``, minus ``on_chunk``. If the
+        action raises, both the loop and ``.response`` raise.
         """
         return self._stream(
             input,
@@ -1152,6 +1191,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     result_future.cancel()
             elif (exc := closed.exception()) is not None:
                 result_future.set_exception(exc)
+                _ = result_future.exception()
             else:
                 result_future.set_result(closed.result().response)
 
