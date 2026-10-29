@@ -22,23 +22,23 @@ import {
   modelRef,
 } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import {
+  ensureToolIds,
+  fromInteraction,
+  toInteractionResponseFormat,
+  toInteractionSteps,
+  toInteractionTool,
+} from '../common/interaction-converters.js';
+import {
+  InteractionAllowedTools,
+  InteractionTool,
+} from '../common/interaction-types.js';
 import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
   cancelInteraction,
   createInteraction,
   getInteraction,
 } from './client.js';
-import {
-  ensureToolIds,
-  fromInteraction,
-  toInteractionSteps,
-  toInteractionTool,
-} from './interaction-converters.js';
-import {
-  InteractionAllowedTools,
-  InteractionTool,
-  ResponseModality,
-} from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -198,9 +198,6 @@ const ADVANCED_DEEP_RESEARCH_INFO = {
 } as ModelInfo;
 
 const KNOWN_MODELS = {
-  'deep-research-pro-preview-12-2025': commonRef(
-    'deep-research-pro-preview-12-2025'
-  ),
   'deep-research-preview-04-2026': commonRef(
     'deep-research-preview-04-2026',
     ADVANCED_DEEP_RESEARCH_INFO
@@ -211,6 +208,24 @@ const KNOWN_MODELS = {
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`).
+const HIDDEN_MODELS = {
+  // Deprecated; shuts down on Oct 23 2026 (changelog, Oct 8 2026). Replaced
+  // by deep-research-preview-04-2026 and deep-research-max-preview-04-2026.
+  'deep-research-pro-preview-12-2025': commonRef(
+    'deep-research-pro-preview-12-2025',
+    { ...GENERIC_MODEL.info, stage: 'deprecated' }
+  ),
+} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
 
 export type DeepResearchModelName = `deep-research-${string}`;
 export function isDeepResearchModelName(
@@ -225,8 +240,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -255,7 +270,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, options)
   );
 }
@@ -367,26 +382,21 @@ export function defineModel(
         }
       }
 
-      let responseFormat: any = undefined;
-      if (
+      // JSON output and the requested output types, as `response_format`
+      // entries.
+      const jsonOutput =
         request.output?.format === 'json' ||
-        request.output?.contentType === 'application/json'
-      ) {
-        responseFormat = {
-          type: 'text',
-          mime_type: 'application/json',
-        };
-        if (request.output.schema) {
-          responseFormat.schema = cleanSchema(request.output.schema);
-        }
-      }
-
-      let responseModalitiesConverted: ResponseModality[] | undefined;
-      if (responseModalities) {
-        responseModalitiesConverted = responseModalities.map(
-          (m) => m.toLowerCase() as ResponseModality
-        );
-      }
+        request.output?.contentType === 'application/json';
+      const responseFormat = toInteractionResponseFormat({
+        modalities: responseModalities,
+        json: jsonOutput
+          ? {
+              schema: request.output?.schema
+                ? cleanSchema(request.output.schema)
+                : undefined,
+            }
+          : undefined,
+      });
 
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
@@ -408,7 +418,6 @@ export function defineModel(
         store,
         tools: tools.length ? tools : undefined,
         response_format: responseFormat,
-        response_modalities: responseModalitiesConverted,
         ...rest,
       };
 
@@ -457,4 +466,4 @@ export function defineModel(
   });
 }
 
-export const TEST_ONLY = { KNOWN_MODELS };
+export const TEST_ONLY = { KNOWN_MODELS, HIDDEN_MODELS, GENERIC_MODEL };

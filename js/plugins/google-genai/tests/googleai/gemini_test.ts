@@ -19,14 +19,20 @@ import { logger } from 'genkit/logging';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
+import { CreateInteractionRequest } from '../../src/common/interaction-types.js';
 import {
   GeminiConfigSchema,
   GeminiImageConfigSchema,
   GeminiTtsConfigSchema,
+  GeminiVideoConfigSchema,
+  GemmaConfigSchema,
+  TEST_ONLY,
   defineModel,
+  isGeminiModelName,
+  isImageModelName,
+  isVideoModelName,
   model,
 } from '../../src/googleai/gemini.js';
-import { CreateInteractionRequest } from '../../src/googleai/interaction-types.js';
 import {
   FinishReason,
   GenerateContentRequest,
@@ -603,7 +609,7 @@ describe('Google AI Gemini', () => {
         });
       });
 
-      it('passes responseModalities to the API (Interactions API)', async () => {
+      it('sends responseModalities as response_format entries (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
@@ -617,9 +623,87 @@ describe('Google AI Gemini', () => {
         const apiRequest: CreateInteractionRequest = JSON.parse(
           fetchStub.lastCall.args[1].body
         );
-        assert.deepStrictEqual(apiRequest.response_modalities, [
-          'text',
-          'audio',
+        assert.deepStrictEqual(apiRequest.response_format, [
+          { type: 'text' },
+          { type: 'audio' },
+        ]);
+        // Deprecated by the API: not sent.
+        assert.strictEqual(apiRequest.response_modalities, undefined);
+      });
+
+      it('sends imageConfig on the image entry with text, for image models (Interactions API)', async () => {
+        const model = defineModel(
+          'gemini-nano-banana-2.1',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model
+          .run({
+            ...minimalRequest,
+            config: { imageConfig: { aspectRatio: '9:16', imageSize: '2K' } },
+          })
+          .catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        // The same outputs as before (text and image), with the image
+        // settings in the image entry (seen live to apply, Oct 2026).
+        assert.deepStrictEqual(apiRequest.response_format, [
+          { type: 'text' },
+          { type: 'image', aspect_ratio: '9:16', image_size: '2K' },
+        ]);
+        assert.strictEqual(apiRequest.response_modalities, undefined);
+        assert.ok(!('image_config' in (apiRequest.generation_config ?? {})));
+      });
+
+      it('asks image models for text and image by default (Interactions API)', async () => {
+        const model = defineModel(
+          'gemini-3.1-flash-lite-image',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest).catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, [
+          { type: 'text' },
+          { type: 'image' },
+        ]);
+      });
+
+      it('keeps JSON output when audioFormat is set too (Interactions API)', async () => {
+        // Used to be lost: the audio entry replaced the JSON text entry.
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model
+          .run({
+            ...minimalRequest,
+            config: {
+              responseModalities: ['TEXT', 'AUDIO'],
+              audioFormat: { mimeType: 'audio/wav' },
+            },
+            output: {
+              format: 'json',
+              contentType: 'application/json',
+              constrained: true,
+              schema: jsonOutputSchema,
+            },
+          })
+          .catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, [
+          {
+            type: 'text',
+            mime_type: 'application/json',
+            schema: jsonOutputSchema,
+          },
+          { type: 'audio', mime_type: 'audio/wav' },
         ]);
       });
 
@@ -780,6 +864,43 @@ describe('Google AI Gemini', () => {
         assert.ok(String(budgetWarnings[0].args[0]).includes('thinkingLevel'));
       });
 
+      it('drops topK with one warning per model (Interactions API)', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        // An unlisted model (routed to Interactions) not used by other tests,
+        // since the warning is only logged once per model and field.
+        const model = defineModel('gemini-top-k-test', defaultPluginOptions);
+        const request = {
+          ...minimalRequest,
+          config: { topK: 40, temperature: 0.5 },
+        };
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request).catch(() => undefined);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request).catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generation_config, {
+          temperature: 0.5,
+        });
+        const topKWarnings = warnStub
+          .getCalls()
+          .filter((c) => String(c.args[0]).includes('topK'));
+        assert.strictEqual(topKWarnings.length, 1);
+      });
+
+      it('still sends topK to generateContent models', async () => {
+        const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { topK: 40 } });
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.generationConfig?.topK, 40);
+      });
+
       it('handles every config schema field explicitly (Interactions API)', () => {
         // The Interactions API rejects unknown `generation_config` fields with
         // a 400, so every field in the plugin's config schemas must be either
@@ -806,30 +927,56 @@ describe('Google AI Gemini', () => {
           'previousInteractionId',
           'store',
           'speechConfig',
+          'audioFormat',
+          'videoFormat',
           'thinkingConfig',
           'contextCache',
+          // Dropped with a warning (no `top_k` in generation_config).
+          'topK',
           'toolConfig',
           'tools',
+          // Sent as a `response_format` image entry.
+          'imageConfig',
         ];
         // Verified live to be accepted in `generation_config`.
         const acceptedByApi = [
           'temperature',
           'topP',
-          'topK',
           'maxOutputTokens',
           'stopSequences',
-          'imageConfig',
         ];
-        const known = new Set([...handledInGemini, ...acceptedByApi]);
+        // A `generation_config` field in the Omni guide (video models); not
+        // yet verified live.
+        const documentedForApi = ['videoConfig'];
+        const known = new Set([
+          ...handledInGemini,
+          ...acceptedByApi,
+          ...documentedForApi,
+        ]);
         for (const schema of [
           GeminiConfigSchema,
           GeminiTtsConfigSchema,
           GeminiImageConfigSchema,
+          GeminiVideoConfigSchema,
         ]) {
           for (const field of Object.keys(schema.shape)) {
             assert.ok(known.has(field), `unhandled config field: ${field}`);
           }
         }
+      });
+
+      it('sends any Gemma temperature to the server unchanged', async () => {
+        // The plugin doesn't limit the range; the server validates it.
+        assert.ok(GemmaConfigSchema.safeParse({ temperature: 1.5 }).success);
+
+        const model = defineModel('gemma-4-31b-it', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { temperature: 1.5 } });
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.generationConfig?.temperature, 1.5);
       });
 
       it('still sends thinkingBudget to generateContent models', async () => {
@@ -950,6 +1097,314 @@ describe('Google AI Gemini', () => {
         assert.strictEqual(apiRequest.service_tier, 'flex');
       });
 
+      for (const name of [
+        'gemini-4-argon',
+        'gemini-3.8-flash',
+        'gemini-3.8-flash-tts',
+        'gemini-3.8-flash-lite-tts',
+        'gemini-omni-1.1-flash',
+      ]) {
+        it(`routes ${name} to the Interactions API`, async () => {
+          const model = defineModel(name, defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          // Only the request matters here; the mocked response isn't an
+          // Interaction, so ignore how it's parsed.
+          await model.run(minimalRequest).catch(() => undefined);
+
+          sinon.assert.calledOnce(fetchStub);
+          const url: string = fetchStub.lastCall.args[0];
+          assert.ok(url.endsWith('/interactions'), url);
+          const apiRequest: CreateInteractionRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.strictEqual(apiRequest.model, name);
+        });
+      }
+
+      it('streams TTS as PCM chunks and returns them joined in one part', async () => {
+        const model = defineModel(
+          'gemini-3.8-flash-lite-tts',
+          defaultPluginOptions
+        );
+        // The event shapes seen live: a model_output step whose audio arrives
+        // as several `audio/l16` deltas.
+        const pcm = [
+          [1, 2],
+          [3, 4],
+          [5, 6],
+        ];
+        const events = [
+          {
+            event_type: 'interaction.created',
+            interaction: { status: 'in_progress' },
+          },
+          {
+            event_type: 'step.start',
+            index: 0,
+            step: { type: 'model_output' },
+          },
+          ...pcm.map((bytes) => ({
+            event_type: 'step.delta',
+            index: 0,
+            delta: {
+              type: 'audio',
+              mime_type: 'audio/l16',
+              data: Buffer.from(bytes).toString('base64'),
+            },
+          })),
+          { event_type: 'step.stop', index: 0 },
+          {
+            event_type: 'interaction.completed',
+            interaction: { status: 'completed' },
+          },
+        ];
+        const encoder = new TextEncoder();
+        fetchStub.resolves(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (const event of events) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`
+                    )
+                  );
+                }
+                controller.close();
+              },
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'text/event-stream' },
+            }
+          )
+        );
+
+        const chunkTypes: (string | undefined)[] = [];
+        const response = await model.run(minimalRequest, {
+          onChunk: (chunk) =>
+            chunkTypes.push(...chunk.content.map((p) => p.media?.contentType)),
+        });
+
+        assert.deepStrictEqual(chunkTypes, [
+          'audio/l16',
+          'audio/l16',
+          'audio/l16',
+        ]);
+        // The final response has one part, in the format the server sent.
+        const content = response.result.message?.content ?? [];
+        assert.strictEqual(content.length, 1);
+        assert.strictEqual(content[0].media?.contentType, 'audio/l16');
+        const url = content[0].media?.url ?? '';
+        assert.deepStrictEqual(
+          Buffer.from(url.substring(url.indexOf(',') + 1), 'base64'),
+          Buffer.from([1, 2, 3, 4, 5, 6])
+        );
+      });
+
+      it('removes a C2PA ID3 tag from streamed audio/l16, in the chunks and the final WAV', async () => {
+        const model = defineModel(
+          'gemini-3.8-flash-lite-tts',
+          defaultPluginOptions
+        );
+        // A small WAV like the server's first chunk: 44-byte header and two
+        // bytes of audio.
+        const wav = Buffer.alloc(46);
+        wav.write('RIFF', 0, 'ascii');
+        wav.writeUInt32LE(38, 4);
+        wav.write('WAVE', 8, 'ascii');
+        wav.write('fmt ', 12, 'ascii');
+        wav.writeUInt32LE(16, 16);
+        wav.writeUInt16LE(1, 20);
+        wav.writeUInt16LE(1, 22);
+        wav.writeUInt32LE(24000, 24);
+        wav.writeUInt32LE(48000, 28);
+        wav.writeUInt16LE(2, 32);
+        wav.writeUInt16LE(16, 34);
+        wav.write('data', 36, 'ascii');
+        wav.writeUInt32LE(2, 40);
+        wav.writeUInt16LE(0x0101, 44);
+        // The tagged chunk seen live: a 6,125-byte ID3 tag, then PCM.
+        const tag = Buffer.alloc(6125, 0x55);
+        Buffer.from([
+          0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x2f, 0x63,
+        ]).copy(tag);
+        tag.write('GEOB', 10, 'ascii');
+        const audio = (mime_type: string, bytes: Buffer) => ({
+          event_type: 'step.delta',
+          index: 0,
+          delta: { type: 'audio', mime_type, data: bytes.toString('base64') },
+        });
+        const events = [
+          {
+            event_type: 'interaction.created',
+            interaction: { status: 'in_progress' },
+          },
+          {
+            event_type: 'step.start',
+            index: 0,
+            step: { type: 'model_output' },
+          },
+          audio('audio/wav', wav),
+          audio('audio/l16', Buffer.from([2, 2])),
+          audio('audio/l16', Buffer.concat([tag, Buffer.from([3, 3])])),
+          { event_type: 'step.stop', index: 0 },
+          {
+            event_type: 'interaction.completed',
+            interaction: { status: 'completed' },
+          },
+        ];
+        const encoder = new TextEncoder();
+        fetchStub.resolves(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (const event of events) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`
+                    )
+                  );
+                }
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+          )
+        );
+
+        const chunkSizes: number[] = [];
+        const response = await model.run(minimalRequest, {
+          onChunk: (chunk) => {
+            for (const p of chunk.content) {
+              const url = p.media?.url ?? '';
+              chunkSizes.push(
+                Buffer.from(url.substring(url.indexOf(',') + 1), 'base64')
+                  .length
+              );
+            }
+          },
+        });
+
+        // The live chunks no longer contain the tag.
+        assert.deepStrictEqual(chunkSizes, [46, 2, 2]);
+        // The final WAV holds only the audio, with an even data size.
+        const content = response.result.message?.content ?? [];
+        assert.strictEqual(content.length, 1);
+        assert.strictEqual(content[0].media?.contentType, 'audio/wav');
+        const url = content[0].media?.url ?? '';
+        const finalWav = Buffer.from(
+          url.substring(url.indexOf(',') + 1),
+          'base64'
+        );
+        assert.strictEqual(finalWav.readUInt32LE(40), 6);
+        assert.deepStrictEqual(
+          finalWav.subarray(44, 50),
+          Buffer.from([1, 1, 2, 2, 3, 3])
+        );
+      });
+
+      it('sends audioFormat as an audio response_format (Interactions API)', async () => {
+        const model = defineModel('gemini-3.8-flash-tts', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model
+          .run({
+            ...minimalRequest,
+            config: {
+              audioFormat: { mimeType: 'audio/mulaw', sampleRate: 8000 },
+            },
+          })
+          .catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, {
+          type: 'audio',
+          mime_type: 'audio/mulaw',
+          sample_rate: 8000,
+        });
+        assert.ok(!('audio_format' in (apiRequest.generation_config ?? {})));
+      });
+
+      it('sends videoFormat as a video response_format (Interactions API)', async () => {
+        const model = defineModel(
+          'gemini-omni-1.1-flash',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model
+          .run({
+            ...minimalRequest,
+            config: {
+              store: true,
+              videoFormat: {
+                aspectRatio: '9:16',
+                resolution: '1080p',
+                delivery: 'uri',
+              },
+            },
+          })
+          .catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, {
+          type: 'video',
+          aspect_ratio: '9:16',
+          resolution: '1080p',
+          delivery: 'uri',
+        });
+        assert.ok(!('video_format' in (apiRequest.generation_config ?? {})));
+      });
+
+      it('sends videoConfig as generation_config.video_config (Interactions API)', async () => {
+        const model = defineModel(
+          'gemini-omni-1.1-flash',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model
+          .run({
+            ...minimalRequest,
+            config: { videoConfig: { task: 'image_to_video' } },
+          })
+          .catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generation_config?.video_config, {
+          task: 'image_to_video',
+        });
+      });
+
+      it('sends no response_format for a video model without videoFormat (server defaults apply)', async () => {
+        const model = defineModel(
+          'gemini-omni-1.1-flash',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest).catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(apiRequest.response_format, undefined);
+      });
+
+      it('asks TTS models for audio without format settings when audioFormat is not set (server defaults apply)', async () => {
+        const model = defineModel('gemini-3.8-flash-tts', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest).catch(() => undefined);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.response_format, { type: 'audio' });
+      });
+
       it('drops permissive safetySettings on an Interactions model (default behavior)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
@@ -1058,7 +1513,8 @@ describe('Google AI Gemini', () => {
           assert.deepStrictEqual(body.generation_config?.speech_config, [
             { voice: 'Puck' },
           ]);
-          assert.deepStrictEqual(body.response_modalities, ['audio']);
+          assert.deepStrictEqual(body.response_format, { type: 'audio' });
+          assert.strictEqual(body.response_modalities, undefined);
         });
 
         it('sends multi-speaker turns with speech_metadata annotations', async () => {
@@ -1520,6 +1976,41 @@ describe('Google AI Gemini', () => {
         );
       });
 
+      it('drops audioFormat and videoFormat on generateContent models', async () => {
+        // The older preview TTS models use the TTS schema (which has
+        // audioFormat) but are on generateContent, which rejects unknown
+        // generation_config fields with a 400.
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel(
+          'gemini-2.5-flash-preview-tts',
+          defaultPluginOptions
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: {
+            audioFormat: { mimeType: 'audio/wav' },
+            videoFormat: { resolution: '720p' },
+          },
+        });
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generationConfig, {
+          responseModalities: ['AUDIO'],
+        });
+        const warnings = warnStub.getCalls().map((c) => String(c.args[0]));
+        assert.ok(
+          warnings.some((w) => w.startsWith('audioFormat is not supported')),
+          warnings.join('\n')
+        );
+        assert.ok(
+          warnings.some((w) => w.startsWith('videoFormat is not supported')),
+          warnings.join('\n')
+        );
+      });
+
       it('does not default responseModalities to AUDIO for non-TTS models', async () => {
         const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
@@ -1785,12 +2276,155 @@ describe('Google AI Gemini', () => {
       assert.strictEqual(modelRef.configSchema, GeminiImageConfigSchema);
     });
 
+    it('returns a ModelReference for gemini-omni-1.1-flash (video)', () => {
+      const name = 'gemini-omni-1.1-flash';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `googleai/${name}`);
+      assert.strictEqual(modelRef.configSchema, GeminiVideoConfigSchema);
+      const supports = modelRef.info?.supports;
+      assert.strictEqual(supports?.multiturn, true);
+      assert.strictEqual(supports?.media, true);
+      assert.strictEqual(supports?.tools, false);
+      assert.strictEqual(supports?.systemRole, true);
+      assert.strictEqual(supports?.constrained, 'none');
+      assert.deepStrictEqual(supports?.output, ['media']);
+    });
+
+    it('returns a video ModelReference for an unknown gemini-omni model string', () => {
+      const name = 'gemini-omni-9.9-flash';
+      const modelRef = model(name);
+      assert.strictEqual(modelRef.name, `googleai/${name}`);
+      assert.strictEqual(modelRef.configSchema, GeminiVideoConfigSchema);
+      assert.deepStrictEqual(
+        modelRef.info?.supports,
+        model('gemini-omni-1.1-flash').info?.supports
+      );
+    });
+
+    it('treats gemini-omni-* names as video models, not Gemini models', () => {
+      assert.strictEqual(isVideoModelName('gemini-omni-1.1-flash'), true);
+      assert.strictEqual(isGeminiModelName('gemini-omni-1.1-flash'), false);
+      assert.strictEqual(isVideoModelName('gemini-3.8-flash'), false);
+    });
+
+    it('treats gemini-nano-banana-* names as image models, not Gemini models', () => {
+      assert.strictEqual(isImageModelName('gemini-nano-banana-2.1'), true);
+      assert.strictEqual(isImageModelName('gemini-3.1-flash-lite-image'), true);
+      assert.strictEqual(isImageModelName('gemini-3.8-flash'), false);
+      assert.strictEqual(isGeminiModelName('gemini-nano-banana-2.1'), false);
+      // An unlisted Nano Banana name gets the image config schema.
+      assert.strictEqual(
+        model('gemini-nano-banana-9').configSchema,
+        GeminiImageConfigSchema
+      );
+    });
+
     it('returns a ModelReference for an unknown model string', () => {
       const name = 'gemini-42.0-flash';
       const modelRef = model(name);
       assert.strictEqual(modelRef.name, `googleai/${name}`);
       assert.strictEqual(modelRef.info?.supports?.multiturn, true);
       assert.strictEqual(modelRef.configSchema, GeminiConfigSchema);
+    });
+
+    it('sets a stage on every hidden model', () => {
+      for (const name of Object.keys(TEST_ONLY.HIDDEN_MODELS)) {
+        const stage = model(name).info?.stage;
+        assert.ok(
+          stage === 'legacy' || stage === 'deprecated',
+          `${name} has stage ${stage}`
+        );
+      }
+    });
+
+    it('keeps the default capabilities on hidden models', () => {
+      // Passing `info` replaces the defaults, so a hidden model must copy them.
+      assert.strictEqual(model('gemini-2.5-flash').info?.stage, 'legacy');
+      assert.deepStrictEqual(
+        model('gemini-2.5-flash').info?.supports,
+        model('gemini-42.0-flash').info?.supports
+      );
+
+      assert.strictEqual(
+        model('gemini-2.5-flash-preview-tts').info?.stage,
+        'deprecated'
+      );
+      assert.deepStrictEqual(
+        model('gemini-2.5-flash-preview-tts').info?.supports,
+        model('gemini-9.9-flash-tts').info?.supports
+      );
+
+      assert.strictEqual(
+        model('gemini-3.1-flash-image').info?.stage,
+        'deprecated'
+      );
+      assert.deepStrictEqual(
+        model('gemini-3.1-flash-image').info?.supports,
+        model('gemini-9.9-flash-image').info?.supports
+      );
+
+      assert.strictEqual(model('gemini-3.5-flash').info?.stage, 'deprecated');
+      assert.deepStrictEqual(
+        model('gemini-3.5-flash').info?.supports,
+        model('gemini-42.0-flash').info?.supports
+      );
+    });
+
+    it('does not set a stage on known models', () => {
+      for (const name of Object.keys(TEST_ONLY.KNOWN_MODELS)) {
+        assert.strictEqual(model(name).info?.stage, undefined, name);
+      }
+    });
+
+    it('describes gemini-nano-banana-2.1: tools, but no structured output', () => {
+      const supports = model('gemini-nano-banana-2.1').info?.supports;
+      assert.strictEqual(supports?.tools, true);
+      assert.strictEqual(supports?.toolChoice, true);
+      assert.strictEqual(supports?.constrained, 'none');
+      assert.strictEqual(supports?.multiturn, true);
+      assert.strictEqual(supports?.media, true);
+    });
+  });
+
+  describe('image model capabilities', () => {
+    // fetchStub and mockFetchResponse come from the outer describe.
+    it('asks for JSON in the prompt instead of sending a schema for gemini-nano-banana-2.1', async () => {
+      const imageModel = defineModel(
+        'gemini-nano-banana-2.1',
+        defaultPluginOptions
+      );
+      mockFetchResponse(defaultApiResponse);
+      // Only the request matters here; the mocked response isn't an
+      // Interaction, so ignore how it's parsed.
+      await imageModel
+        .run({
+          messages: [{ role: 'user', content: [{ text: 'Name a landmark' }] }],
+          output: {
+            format: 'json',
+            contentType: 'application/json',
+            constrained: true,
+            schema: {
+              type: 'object',
+              properties: { name: { type: 'string' } },
+            },
+          },
+        })
+        .catch(() => undefined);
+
+      sinon.assert.calledOnce(fetchStub);
+      const apiRequest: CreateInteractionRequest = JSON.parse(
+        fetchStub.lastCall.args[1].body
+      );
+      // Only the image model's default outputs: no JSON text entry or schema.
+      assert.deepStrictEqual(apiRequest.response_format, [
+        { type: 'text' },
+        { type: 'image' },
+      ]);
+      assert.ok(
+        JSON.stringify(apiRequest.input).includes(
+          'Output should be in JSON format and conform to the following schema'
+        )
+      );
     });
   });
 });

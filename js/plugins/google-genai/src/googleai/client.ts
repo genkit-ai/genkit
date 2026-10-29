@@ -17,17 +17,20 @@
 import { GenkitError, StatusName, type ErrorResponseMetadata } from 'genkit';
 import { logger } from 'genkit/logging';
 import { runInNewSpan } from 'genkit/tracing';
+import { InteractionStreamResult } from '../common/interaction-types.js';
 import {
+  INTERACTIONS_API_REVISION,
   buildTraceMetadataInput,
   extractErrMsg,
   getGenkitClientHeader,
   httpStatusToGenkitStatus,
   interactionErrorCodeToGenkitStatus,
   interactionProcessStream,
+  isInteractionUrl,
   parseRetryAfterMs,
   processStream,
+  withoutHeaders,
 } from '../common/utils.js';
-import { InteractionStreamResult } from './interaction-types.js';
 import { isObject } from './utils.js';
 
 import {
@@ -39,8 +42,6 @@ import {
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
   ListModelsResponse,
   Model,
   VeoOperation,
@@ -321,32 +322,6 @@ export async function embedContent(
   });
 }
 
-export async function imagenPredict(
-  apiKey: string | undefined,
-  model: string,
-  imagenPredictRequest: ImagenPredictRequest,
-  clientOptions?: ClientOptions
-): Promise<ImagenPredictResponse> {
-  const url = getGoogleAIUrl({
-    resourcePath: `models/${model}`,
-    resourceMethod: 'predict',
-    clientOptions,
-  });
-
-  const fetchOptions = getFetchOptions({
-    method: 'POST',
-    apiKey,
-    clientOptions,
-    body: JSON.stringify(imagenPredictRequest),
-  });
-
-  return maybeTraceRequest<ImagenPredictResponse>(url, fetchOptions, {
-    model: model,
-    request: imagenPredictRequest,
-    clientOptions,
-  });
-}
-
 export async function veoPredict(
   apiKey: string | undefined,
   model: string,
@@ -487,12 +462,14 @@ function getHeaders(
   clientOptions?: ClientOptions,
   isInteraction?: boolean
 ): HeadersInit {
-  let customHeaders = {};
-  if (clientOptions?.customHeaders) {
-    customHeaders = structuredClone(clientOptions.customHeaders);
-    delete customHeaders['x-goog-api-key']; // Not allowed in user settings
-    delete customHeaders['x-goog-api-client']; // Not allowed in user settings
-  }
+  // Not allowed in user settings (in any letter case). The Interactions
+  // converters only understand INTERACTIONS_API_REVISION's schema, so custom
+  // headers can't change it either.
+  const customHeaders = withoutHeaders(clientOptions?.customHeaders, [
+    'x-goog-api-key',
+    'x-goog-api-client',
+    ...(isInteraction ? ['Api-Revision'] : []),
+  ]);
   const headers: HeadersInit = {
     ...customHeaders,
     'Content-Type': 'application/json',
@@ -500,7 +477,7 @@ function getHeaders(
   };
 
   if (isInteraction) {
-    headers['Api-Revision'] = '2026-05-20';
+    headers['Api-Revision'] = INTERACTIONS_API_REVISION;
   }
 
   if (apiKey) {
@@ -659,20 +636,6 @@ async function makeRequest(
     }
     throw new Error(`Failed to fetch from ${url}: ${extractErrMsg(e)}`);
   }
-}
-
-/**
- * Reports whether a URL targets the Interactions API, i.e. its resource path
- * (see `getGoogleAIUrl`) contains an `interactions` path segment.
- */
-function isInteractionUrl(url: string): boolean {
-  let pathname: string;
-  try {
-    pathname = new URL(url).pathname;
-  } catch {
-    pathname = url.split('?')[0];
-  }
-  return pathname.split('/').includes('interactions');
 }
 
 export const TEST_ONLY = {

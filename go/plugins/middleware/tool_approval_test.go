@@ -31,11 +31,10 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/core/api"
-	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 	"github.com/google/go-cmp/cmp"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func defineToolModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
@@ -53,45 +52,6 @@ func defineTool(t *testing.T, r api.Registry, name string) ai.Tool {
 		}) (string, error) {
 			return "result:" + input.V, nil
 		})
-}
-
-// spanCollector is a minimal sdktrace.SpanExporter that records finished
-// spans so a test can assert on them.
-type spanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
-}
-
-func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
-}
-
-func (c *spanCollector) Shutdown(context.Context) error { return nil }
-
-// byName returns every recorded span with the given name.
-func (c *spanCollector) byName(name string) []sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var out []sdktrace.ReadOnlySpan
-	for _, s := range c.spans {
-		if s.Name() == name {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-// spanAttr returns the string value of the named span attribute, if present.
-func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.AsString(), true
-		}
-	}
-	return "", false
 }
 
 // twoToolModelHandler returns a model handler that requests two tools on the first call,
@@ -201,11 +161,7 @@ func TestToolApprovalInterruptIsTracedOnce(t *testing.T) {
 	safe := defineTool(t, r, "safe")
 	dangerous := defineTool(t, r, "dangerous")
 
-	collector := &spanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(collector)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
+	collector := tracingtest.Capture(t)
 
 	ta := &ToolApproval{AllowedTools: []string{"safe"}}
 	if _, err := ai.Generate(ctx, r,
@@ -217,14 +173,14 @@ func TestToolApprovalInterruptIsTracedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	spans := collector.byName("dangerous")
+	spans := collector.ByName("dangerous")
 	if len(spans) != 1 {
 		t.Fatalf("got %d spans named %q, want exactly 1", len(spans), "dangerous")
 	}
 	// An approval interrupt resolves the call without running the tool, and
 	// must still look exactly like a tool call in the trace.
 	const subtypeKey = "genkit:metadata:subtype"
-	subtype, ok := spanAttr(spans[0], subtypeKey)
+	subtype, ok := tracingtest.Attr(spans[0], subtypeKey)
 	if !ok {
 		t.Fatalf("span %q: missing attribute %q", "dangerous", subtypeKey)
 	}

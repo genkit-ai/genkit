@@ -91,6 +91,34 @@ describe('InMemorySessionStore', () => {
   });
 });
 
+describe('InMemorySessionStore onSnapshotStateChange', () => {
+  it('notifies every listener even when one unsubscribes mid-dispatch', async () => {
+    const store = new InMemorySessionStore<{ foo: string }>();
+    const seen: string[] = [];
+    // The first listener unsubscribes itself as soon as it is notified, as the
+    // detach runtime does on an abort; the second must still be notified.
+    const unsubscribeFirst = store.onSnapshotStateChange('snap-1', () => {
+      seen.push('first');
+      if (typeof unsubscribeFirst === 'function') unsubscribeFirst();
+    });
+    store.onSnapshotStateChange('snap-1', () => {
+      seen.push('second');
+    });
+
+    await store.saveSnapshot('snap-1', () => ({
+      createdAt: new Date().toISOString(),
+      status: 'aborted',
+    }));
+    assert.deepStrictEqual(seen, ['first', 'second']);
+
+    await store.saveSnapshot('snap-1', () => ({
+      createdAt: new Date().toISOString(),
+      status: 'completed',
+    }));
+    assert.deepStrictEqual(seen, ['first', 'second', 'second']);
+  });
+});
+
 describe('FileSessionStore', () => {
   function tmpDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-file-store-'));
