@@ -23,7 +23,7 @@ import re
 import sys
 import time
 import types
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -936,7 +936,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
     ) -> ActionResponse[OutputT]:
         """Run the action and return its result with trace ids.
@@ -948,7 +947,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             on_chunk: Called with each chunk the action streams.
             context: Request context (auth, headers, ...), read as ``ctx.context``.
             telemetry_labels: Custom labels set as span attributes.
-            abort_signal: Set it to cancel the run cooperatively.
             init: Session init value for a bidi action (e.g. a served agent's
                 session identity). Validated against the init schema; plain
                 actions ignore it.
@@ -964,7 +962,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             on_chunk=on_chunk,
             context=context,
             telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
             init=init,
         )
 
@@ -1008,20 +1005,24 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
+        action_ctx = ActionRunContext(
+            context=_action_context.get(None),
+            streaming_callback=streaming_cb,
+            abort_signal=abort_signal,
+            init=init,
+            input_stream=input_stream,
+        )
 
         try:
             return await self._run_with_telemetry(
                 input,
-                ActionRunContext(
-                    context=_action_context.get(None),
-                    streaming_callback=streaming_cb,
-                    abort_signal=abort_signal,
-                    init=init,
-                    input_stream=input_stream,
-                ),
+                action_ctx,
                 on_trace_start,
                 telemetry_labels,
             )
+        except asyncio.CancelledError:
+            action_ctx.abort_signal.set()
+            raise
         finally:
             if token is not None:
                 _action_context.reset(token)
@@ -1032,7 +1033,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """Start the action and return its chunks (``.stream``) and result (``.response``).
@@ -1043,7 +1043,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             input,
             context=context,
             telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
             init=init,
         )
 
@@ -1330,10 +1329,46 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             # The wrapper takes (input, ctx) and forwards to the user's
             # function with self.params.call. Keep the sentinel so a
             # defaulted tool input is omitted there instead of becoming None.
-            output = await self._fn(input, ctx)
+            coro = self._fn(input, ctx)
         else:
-            output = await self._params.call(self._fn, input, ctx)
-        return output
+            coro = self._params.call(self._fn, input, ctx)
+        return await _AbortOnCancel(coro, ctx.abort_signal)
+
+
+class _AbortOnCancel(Generic[OutputT]):
+    """Set ``abort_signal`` before ``CancelledError`` enters the action coroutine."""
+
+    def __init__(self, coro: Awaitable[OutputT], abort_signal: asyncio.Event) -> None:
+        self._coro = coro
+        self._abort_signal = abort_signal
+
+    def __await__(self) -> Generator[Any, Any, OutputT]:
+        it = self._coro.__await__()
+        sent: Any = None
+        throwing: BaseException | None = None
+        while True:
+            try:
+                if throwing is not None:
+                    exc, throwing = throwing, None
+                    yielded = it.throw(exc)
+                else:
+                    yielded = it.send(sent)
+            except StopIteration as stop:
+                return cast(OutputT, stop.value)
+            except asyncio.CancelledError:
+                self._abort_signal.set()
+                raise
+            try:
+                sent = yield yielded
+            except GeneratorExit:
+                close = getattr(it, 'close', None)
+                if close is not None:
+                    close()
+                raise
+            except BaseException as exc:
+                if isinstance(exc, asyncio.CancelledError):
+                    self._abort_signal.set()
+                throwing = exc
 
 
 async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:
