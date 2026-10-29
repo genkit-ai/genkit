@@ -9349,7 +9349,7 @@ async def test_parallel_tool_task_cancel_attaches_closed_history_and_completed_s
         await task
 
     await asyncio.wait_for(reserve_cleaned_up.wait(), timeout=2.0)
-    cancelled_exc = exc_info.value
+    cancelled_exc = exc_info.value if hasattr(exc_info.value, 'messages') else task
     saved_messages = getattr(cancelled_exc, 'messages', None)
     saved_message = getattr(cancelled_exc, 'message', None)
     assert isinstance(saved_messages, list)

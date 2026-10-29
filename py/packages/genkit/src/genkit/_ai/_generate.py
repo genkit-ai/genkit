@@ -1210,8 +1210,15 @@ def stamp_cancelled_error(
     message: Message | None,
 ) -> None:
     """Attach closed history and any partial tool-turn message onto a foreign CancelledError."""
-    exc.__dict__['messages'] = [as_message(m) for m in messages]
-    exc.__dict__['message'] = as_message(message) if message is not None else None
+    stamped_messages = [as_message(m) for m in messages]
+    stamped_message = as_message(message) if message is not None else None
+    exc.__dict__['messages'] = stamped_messages
+    exc.__dict__['message'] = stamped_message
+    with contextlib.suppress(Exception):
+        cur_task = asyncio.current_task()
+        if cur_task is not None:
+            cur_task.messages = stamped_messages  # type: ignore[attr-defined]
+            cur_task.message = stamped_message  # type: ignore[attr-defined]
 
 
 def raise_if_foreign_cancel(
