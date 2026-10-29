@@ -80,6 +80,41 @@ config = GeminiConfig.model_validate({
 `systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
 `generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
 
+### Structured output
+
+Set the output schema on the request; the plugin sends it to Gemini as
+`responseJsonSchema`, so `anyOf`, `$ref`, `additionalProperties` and numeric
+bounds reach the model as written.
+
+```python
+from pydantic import BaseModel
+
+
+class Country(BaseModel):
+    name: str
+    capital: str
+    population: int
+
+
+response = await ai.generate(prompt='Give quick facts about Japan.', output_schema=Country)
+print(response.output)
+```
+
+To send the schema as the older OpenAPI-style `responseSchema` field instead,
+construct the plugin with `GoogleAI(legacy_response_schema=True)` or
+`VertexAI(legacy_response_schema=True)`. The schema is converted to that shape.
+Keywords the conversion does not map, such as `pattern`, `minLength`,
+`additionalProperties` and an `anyOf` or `oneOf` next to a `type`, are left
+out, as are a `$ref` back to a model that contains it, an array with no
+convertible `items` and a map (an object with `additionalProperties` and no
+`properties`, such as `dict[str, int]`). It raises `INVALID_ARGUMENT` for a constraint with no
+`type` (an `enum` of strings counts as a string), for a `type` list, `anyOf`
+or `oneOf` that would lose some but not all of its non-null branches, for a
+required property or whole schema that cannot be converted, and for an
+unresolvable `$ref`, an unsupported `type` or a keyword value it cannot read.
+Constrained enum output always goes out this way, as `text/x.enum` with a
+converted `responseSchema`.
+
 ### Video generation (Veo)
 
 Video is a job, not a round-trip. `generate_operation` hands back a ticket;
@@ -122,6 +157,40 @@ print(operation.output)
 ```
 
 Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media).
+
+### Virtual Try-On (Vertex AI)
+
+`virtual-try-on-001` dresses a person in a product and returns the composited
+images. The inputs are media parts on the last message, tagged so the model
+knows which is which: `metadata={'type': 'personImage'}` for the person and
+`metadata={'type': 'productImage'}` for the product. Each `url` is a `data:`
+url, bare base64 image data, or a `gs://` path; http(s) urls are not fetched.
+
+```python
+from genkit import Genkit, Message, Part, Role
+from genkit_google_genai import VertexAI
+
+ai = Genkit(plugins=[VertexAI()])
+
+response = await ai.generate(
+    model=VertexAI.virtual_try_on_model('virtual-try-on-001'),
+    messages=[
+        Message(
+            role=Role.USER,
+            content=[
+                Part.from_media(
+                    'gs://my-bucket/person.png', content_type='image/png', metadata={'type': 'personImage'}
+                ),
+                Part.from_media(
+                    'gs://my-bucket/shirt.png', content_type='image/png', metadata={'type': 'productImage'}
+                ),
+            ],
+        )
+    ],
+)
+for part in response.message.content:
+    print(part.media.url)
+```
 
 ### Vertex AI Evaluators
 

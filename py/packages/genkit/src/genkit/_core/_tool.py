@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypeVar
@@ -29,10 +29,18 @@ from genkit._core._action import Action, ActionKind, ActionRunContext, get_func_
 from genkit._core._model import MultipartToolResponse
 from genkit._core._typing import MultipartToolResponse as MultipartToolResponseData, ToolDefinition
 
+if TYPE_CHECKING:
+    from genkit._ai._tools import ToolContext
+
 InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
 # What ``ctx.send_chunk`` streams. Untyped on this branch, so ``Any``.
 ChunkT = TypeVar('ChunkT', default=Any)
+
+# Solved per call by the ``Tool(...)`` overloads below.
+_I = TypeVar('_I')
+_O = TypeVar('_O')
+_C = TypeVar('_C')
 
 # Metadata key for the schema the model binds as the tool's ``outputSchema``.
 # For ``-> MultipartToolResponse[T]`` that's ``T``; for ``-> T`` it's ``T``.
@@ -53,9 +61,61 @@ class Tool(Action[InputT, OutputT, ChunkT]):
 
     _wire_action: Action[InputT, MultipartToolResponse[Any], ChunkT] | None
 
+    # One overload per handler shape, same as ``ai.tool`` / ``define_tool``, so
+    # ``Tool(place_order)`` infers ``Tool[Order, Receipt, str]`` from the function.
+    @overload
+    def __init__(
+        self: Tool[_I, _O, _C],
+        func: Callable[[_I, ToolContext[_C]], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Tool[_I, _O, _C],
+        func: Callable[[ToolContext[_C], _I], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Tool[Any, _O, _C],
+        func: Callable[[ToolContext[_C]], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Tool[_I, _O, Any],
+        func: Callable[[_I], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(
+        self: Tool[None, _O, Any],
+        func: Callable[[], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None: ...
+
     def __init__(
         self,
-        func: Callable[..., Awaitable[OutputT]],
+        func: Callable[..., Awaitable[Any]],
         *,
         name: str | None = None,
         description: str | None = None,

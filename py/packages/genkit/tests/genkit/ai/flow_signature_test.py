@@ -346,3 +346,80 @@ async def test_standalone_flow_class_runs_and_streams_without_registry() -> None
 
     with pytest.raises(TypeError, match='Flow must be async'):
         Flow(sync_fn)  # type: ignore[arg-type]
+
+
+class _Order(BaseModel):
+    dish: str
+
+
+@pytest.mark.asyncio
+async def test_flow_input_type_inference_across_shapes() -> None:
+    """Each handler shape types the flow's input as written, in pyright, pyrefly and ty.
+
+    `(x: Any)` and `(x: object)` also accept a FlowContext, so they must not
+    match the ctx-only overload and come out as Flow[None, ...].
+    """
+    ai = Genkit()
+
+    async def echo_any(x: Any) -> str:  # noqa: ANN401
+        return str(x)
+
+    async def echo_object(x: object) -> str:
+        return str(x)
+
+    async def ping(ctx: FlowContext) -> str:
+        return 'pong'
+
+    async def plate(ctx: FlowContext[str]) -> str:
+        ctx.send_chunk('searing')
+        return 'plated'
+
+    async def take_order(x: _Order) -> str:
+        return x.dish
+
+    async def stream_order(x: _Order, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk(x.dish)
+        return x.dish
+
+    async def stream_any(ctx: FlowContext[str], x: Any) -> str:  # noqa: ANN401
+        return str(x)
+
+    async def specials() -> str:
+        return 'risotto'
+
+    async def with_default(dish: str = 'soup') -> str:
+        return dish
+
+    # 1. Decorator, bare and called.
+    # ty types `(x: Any)` as Unknown: it matches overloads with different
+    # returns, and the typing spec's overload rule makes that ambiguous. No
+    # arrangement fixes it without breaking `(ctx: FlowContext)`.
+    assert_type(ai.flow(echo_any), Flow[Any, str])  # ty: ignore[type-assertion-failure]
+    assert_type(ai.flow()(echo_any), Flow[Any, str])  # ty: ignore[type-assertion-failure]
+    assert_type(ai.flow(echo_object), Flow[Any, str])
+    assert_type(ai.flow()(echo_object), Flow[Any, str])
+    assert_type(ai.flow(ping), Flow[None, str])
+    assert_type(ai.flow()(plate), Flow[None, str, str])
+    assert_type(ai.flow(take_order), Flow[_Order, str])
+    assert_type(ai.flow(stream_order), Flow[_Order, str, str])
+    assert_type(ai.flow(stream_any), Flow[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(ai.flow(specials), Flow[None, str])
+    assert_type(ai.flow(with_default), Flow[str, str])
+
+    # 2. Standalone Flow(fn). An __init__ overload can't pin InputT to None,
+    # so ctx-only and no-arg flows leave it at its Any default.
+    assert_type(Flow(echo_any), Flow[Any, str])
+    assert_type(Flow(echo_object), Flow[Any, str])
+    assert_type(Flow(ping), Flow[Any, str])
+    assert_type(Flow(plate), Flow[Any, str, str])
+    assert_type(Flow(take_order), Flow[_Order, str])
+    assert_type(Flow(stream_order), Flow[_Order, str, str])
+    assert_type(Flow(stream_any), Flow[Any, str, str])
+    assert_type(Flow(specials), Flow[Any, str])
+    assert_type(Flow(with_default), Flow[str, str])
+
+    # 3. An Any/object flow takes any input at the call site.
+    echo = Flow(echo_object)
+    assert await echo(5) == '5'
+    assert await Flow(echo_any)({'dish': 'soup'}) == "{'dish': 'soup'}"
+    assert await Flow(ping)() == 'pong'

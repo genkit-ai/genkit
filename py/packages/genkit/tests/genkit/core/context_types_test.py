@@ -4,7 +4,7 @@
 """FlowContext, ToolContext, and ModelContext: one class hierarchy, generic over the chunk type."""
 
 import types
-from typing import Any, get_args, get_origin
+from typing import Any, cast, get_args, get_origin
 
 import pytest
 from typing_extensions import assert_type
@@ -27,6 +27,24 @@ def test_model_context_is_exported_from_genkit_model() -> None:
     assert 'ModelContext' in genkit.model.__all__
     assert get_origin(ModelContext) is ActionRunContext
     assert get_args(ModelContext) == (ModelResponseChunk,)
+
+
+def test_model_context_has_one_definition() -> None:
+    """`genkit.model.ModelContext` and the model module's alias are the same object."""
+    from genkit._ai import _model
+    from genkit._core import _action
+
+    assert _model.ModelContext is _action.ModelContext
+    assert genkit.model.ModelContext is _action.ModelContext
+
+
+def test_model_context_runtime_check_uses_action_run_context() -> None:
+    """`ModelContext` is annotation-only: isinstance on it raises, isinstance on ActionRunContext works."""
+    ctx: ModelContext = ActionRunContext[ModelResponseChunk]()
+
+    assert isinstance(ctx, ActionRunContext)
+    with pytest.raises(TypeError):
+        isinstance(ctx, cast(Any, ModelContext))
 
 
 def test_action_run_context_is_not_publicly_exported() -> None:
