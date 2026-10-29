@@ -115,19 +115,18 @@ def _check_class(
 ) -> BaseModel | None:
     """Fold, validate, and raise one INVALID_ARGUMENT naming every problem.
 
-    Under ``extra='forbid'`` pydantic would bind one spelling of a setting and
-    call the other unknown; the caller didn't misspell anything, they wrote
-    the setting twice, so that is reported as its own problem. Other classes
-    take both spellings, and the later one wins when folded.
+    Two spellings of one setting in the same dict (``max_output_tokens`` and
+    ``maxOutputTokens``) are reported as their own problem, whatever the
+    class's ``extra`` setting. Folding would keep whichever came last in dict
+    order, and under ``extra='forbid'`` pydantic would call the other one
+    unknown; the caller didn't misspell anything, they wrote the setting
+    twice. Spellings in different layers (a ModelRef's config and the call's)
+    are folded before they get here, so the later layer still wins.
     """
     spellings: dict[str, list[str]] = {}
     for key in values:
         spellings.setdefault(names.get(key, key), []).append(key)
-    repeated = (
-        [sorted(keys, key=lambda k: k != field) for field, keys in spellings.items() if len(keys) > 1]
-        if schema.model_config.get('extra') == 'forbid'
-        else []
-    )
+    repeated = [sorted(keys, key=lambda k: k != field) for field, keys in spellings.items() if len(keys) > 1]
     instance: BaseModel | None = None
     problems: list[ErrorDetails] = []
     cause: ValidationError | None = None

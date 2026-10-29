@@ -47,7 +47,7 @@ from typing_extensions import TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue
 from genkit._core._compat import StrEnum
-from genkit._core._config_check import check_config_json_schema, validate_whole_config
+from genkit._core._config_check import check_config_json_schema, check_config_values, validate_whole_config
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
 from genkit._core._model import (
     BatchEvaluatorRequest,
@@ -1267,7 +1267,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         if current is not None and not isinstance(current, (Mapping, BaseModel)):
             return current  # request validation reports the wrong type
         defaults = config_defaults(schema, self._config_default_fields)
-        merged = overlay_config(layers=[defaults, normalize_config(config=current)], schema=schema)
+        request_layer = normalize_config(config=current)
+        # Folding keeps whichever spelling of a setting came last, so the
+        # request's own dict is checked first: both spellings in it raise.
+        check_config_values(config=request_layer, schema=schema, model=self.name)
+        merged = overlay_config(layers=[defaults, request_layer], schema=schema)
         validate_whole_config(config=merged, schema=schema, model=self.name)
         return merged
 

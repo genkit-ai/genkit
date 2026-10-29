@@ -719,6 +719,47 @@ async def test_embed_folds_aliases_to_the_embedder_class() -> None:
     assert seen['options'] == {'task_type': 'RETRIEVAL_QUERY', 'output_dimensionality': 256}
 
 
+class OpenEmbedConfig(AliasedEmbedConfig):
+    """Same fields, but unknown keys pass through."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra='allow')
+
+
+@pytest.mark.asyncio
+async def test_spellings_fold_across_layers_but_raise_inside_one_dict() -> None:
+    """Camel on the ref and snake on the call fold, last wins. Both in one dict raise, even with extra='allow'."""
+    ai = Genkit()
+    seen: dict[str, Any] = {}
+
+    async def crm_search(request: EmbedRequest) -> EmbedResponse:
+        seen['options'] = request.options
+        return _embedding()
+
+    ai.define_embedder('crm', crm_search, config_schema=OpenEmbedConfig)
+
+    # 1. Two layers: the call's snake key replaces the ref's camel key.
+    await ai.embed(
+        embedder=EmbedderRef(name='crm', config={'outputDimensionality': 256}),
+        content='acme corp',
+        config={'output_dimensionality': 768},
+    )
+    assert seen.pop('options') == {'output_dimensionality': 768}
+
+    # 2. One dict, both spellings: raises from ai.embed and from a Dev UI run.
+    with pytest.raises(GenkitError) as err:
+        await ai.embed(
+            embedder='crm', content='acme corp', config={'outputDimensionality': 256, 'output_dimensionality': 768}
+        )
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert 'output_dimensionality and outputDimensionality are the same setting; pass one' in str(err.value)
+
+    action = await ai._registry.resolve_action_by_key('/embedder/crm')
+    assert action is not None
+    with pytest.raises(GenkitError, match='output_dimensionality and outputDimensionality are the same setting'):
+        await action.run({'input': [], 'options': {'output_dimensionality': 768, 'outputDimensionality': 256}})
+    assert seen == {}
+
+
 @pytest.mark.asyncio
 async def test_version_is_the_lowest_caller_layer_for_models_and_embedders() -> None:
     """ref.version < ref.config['version'] < call config['version'], for both kinds."""
