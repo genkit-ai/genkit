@@ -647,12 +647,21 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             base_url: The base URL for the API. Defaults to None.
             headers: Extra HTTP headers sent on every request. Genkit appends
                 its client attribution to ``x-goog-api-client`` and ``user-agent``.
-            timeout_seconds: Per-request timeout in seconds. Defaults to no
-                timeout. The timeout set on ``http_client`` itself is not used.
+                Interactions models (Deep Research, Antigravity, Lyria) drop a
+                caller's ``x-goog-api-client`` and send only Genkit's.
+            timeout_seconds: Per-request timeout in seconds; must be positive.
+                Defaults to no timeout. The timeout set on ``http_client``
+                itself is not used.
             http_client: An ``httpx.AsyncClient`` that model calls go through,
                 for proxies, mTLS, or a custom transport. Genkit never closes
-                it. Vertex evaluators and downloads of media URLs in prompts
-                don't use it.
+                it. OAuth token refresh for ``credentials`` and downloads of
+                media URLs in prompts don't use it.
+
+                The client is bound to the event loop that first uses it, so
+                only pass one when every Genkit call runs on a single loop. A
+                call from another loop (a second ``asyncio.run``, or the Dev UI
+                reflection server's thread under ``genkit start``) fails or
+                hangs, and may do so after the request reached the server.
             legacy_response_schema: Send JSON output schemas as Gemini's
                 ``responseSchema`` field instead of ``responseJsonSchema``,
                 converted to its format; a schema that cannot be converted
@@ -1104,12 +1113,19 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             base_url: The base URL for the API. Defaults to None.
             headers: Extra HTTP headers sent on every request. Genkit appends
                 its client attribution to ``x-goog-api-client`` and ``user-agent``.
-            timeout_seconds: Per-request timeout in seconds. Defaults to no
-                timeout. The timeout set on ``http_client`` itself is not used.
+            timeout_seconds: Per-request timeout in seconds; must be positive.
+                Defaults to no timeout. The timeout set on ``http_client``
+                itself is not used.
             http_client: An ``httpx.AsyncClient`` that model calls go through,
                 for proxies, mTLS, or a custom transport. Genkit never closes
-                it. Vertex evaluators and downloads of media URLs in prompts
-                don't use it.
+                it. OAuth token refresh, Vertex evaluators and downloads of
+                media URLs in prompts don't use it.
+
+                The client is bound to the event loop that first uses it, so
+                only pass one when every Genkit call runs on a single loop. A
+                call from another loop (a second ``asyncio.run``, or the Dev UI
+                reflection server's thread under ``genkit start``) fails or
+                hangs, and may do so after the request reached the server.
             legacy_response_schema: Send JSON output schemas as Gemini's
                 ``responseSchema`` field instead of ``responseJsonSchema``,
                 converted to its format; a schema that cannot be converted
