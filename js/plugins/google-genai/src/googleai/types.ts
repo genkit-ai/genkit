@@ -15,6 +15,10 @@
  */
 
 import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from '../common/interaction-types.js';
+import {
   Content,
   FinishReason,
   GenerateContentCandidate,
@@ -25,11 +29,6 @@ import {
   GoogleSearchRetrievalTool,
   HarmBlockThreshold,
   HarmCategory,
-  ImagenInstance,
-  ImagenParameters,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
-  ImagenPrediction,
   Part,
   SafetySetting,
   TaskType,
@@ -38,10 +37,6 @@ import {
   ToolConfig,
   UrlContextTool,
 } from '../common/types.js';
-import {
-  CreateInteractionRequest,
-  GeminiInteraction,
-} from './interaction-types.js';
 
 // This makes it easier to import all types from one place.
 export {
@@ -58,11 +53,6 @@ export {
   type GenerateContentStreamResult,
   type GenerationConfig,
   type GoogleSearchRetrievalTool,
-  type ImagenInstance,
-  type ImagenParameters,
-  type ImagenPredictRequest,
-  type ImagenPredictResponse,
-  type ImagenPrediction,
   type Part,
   type SafetySetting,
   type Tool,
@@ -88,7 +78,10 @@ export interface GoogleAIPluginOptions {
   legacyResponseSchema?: boolean;
   /**
    * Whether to store conversations on the server when using the Interactions API.
-   * Defaults to false (stateless).
+   * Defaults to false (stateless). On generateContent models, it sets whether
+   * the server logs requests for the API key's project; sent only when set
+   * (otherwise the project's logging setting applies). A request's
+   * `config.store` takes precedence.
    */
   store?: boolean;
   /**
@@ -195,47 +188,4 @@ export interface EmbedContentResponse {
  */
 export interface ContentEmbedding {
   values: number[];
-}
-
-export declare interface VeoPredictRequest {
-  instances: VeoInstance[];
-  parameters: VeoParameters;
-}
-
-export declare interface VeoParameters {
-  negativePrompt?: string;
-  aspectRatio?: string;
-  personGeneration?: string;
-  durationSeconds?: number;
-  enhancePrompt?: boolean;
-  resolution?: string;
-  seed?: number;
-}
-
-export declare interface VeoInstance {
-  prompt: string;
-  image?: VeoImage;
-  video?: VeoVideo;
-}
-
-export declare interface VeoImage {
-  bytesBase64Encoded: string;
-  mimeType: string;
-}
-
-export declare interface VeoVideo {
-  uri: string;
-}
-
-export declare interface VeoOperation {
-  name: string;
-  done?: boolean;
-  error?: {
-    message: string;
-  };
-  response?: {
-    generateVideoResponse: {
-      generatedSamples: { video: { uri: string } }[];
-    };
-  };
 }

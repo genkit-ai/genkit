@@ -32,7 +32,7 @@ from django.urls import path
 from genkit_django import genkit_django_handler
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError
+from genkit import FlowContext, Genkit, GenkitError, PublicError
 from genkit.plugin_api import provider_error
 from genkit.web import RequestData
 
@@ -70,7 +70,7 @@ def _build_views() -> dict[str, Any]:
 
     @genkit_django_handler(ai, context_provider=my_context_provider)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
+    async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
         ctx.send_chunk(1)
         ctx.send_chunk({'username': ctx.context.get('username')})
         ctx.send_chunk({'foo': 'bar'})
@@ -100,7 +100,7 @@ def _build_views() -> dict[str, Any]:
 
     @genkit_django_handler(ai, context_provider=echo_context)
     @ai.flow()
-    async def echo_request(_: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def echo_request(_: str, ctx: FlowContext) -> dict[str, Any]:
         return {
             'method': ctx.context['method'],
             'authorization': ctx.context['authorization'],
@@ -131,7 +131,7 @@ def _build_views() -> dict[str, Any]:
 
     @genkit_django_handler(ai, context_provider=from_django_request)
     @ai.flow()
-    async def table_from_cookie(_: str, ctx: ActionRunContext) -> str:
+    async def table_from_cookie(_: str, ctx: FlowContext) -> str:
         return f'table {ctx.context["table"]}'
 
     @genkit_django_handler(ai)

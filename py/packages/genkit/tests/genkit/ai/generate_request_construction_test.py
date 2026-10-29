@@ -10,9 +10,10 @@ from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, Part
-from genkit._core._action import ActionRunContext
-from genkit._core._model import FinishReason, Message, ModelConfig, ModelRequest, ModelResponse
+from genkit._core._error import GenkitError
+from genkit._core._model import Message, ModelConfig, ModelRequest, ModelResponse
 from genkit._core._typing import Role
+from genkit.model import ModelContext
 
 
 class ConformingCfg(BaseModel):
@@ -43,22 +44,22 @@ def ai_and_seen() -> tuple[Genkit, dict]:
     ai = Genkit()
     seen: dict = {}
 
-    async def conforming(request: ModelRequest[ConformingCfg], ctx: ActionRunContext) -> ModelResponse:
+    async def conforming(request: ModelRequest[ConformingCfg], ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         seen['request'] = request
         if request.output_format == 'json':
             return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('{}')]))
         return OK
 
-    async def strict(request: ModelRequest[StrictCfg], ctx: ActionRunContext) -> ModelResponse:
+    async def strict(request: ModelRequest[StrictCfg], ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         return OK
 
-    async def bare(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def bare(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         return OK
 
-    async def plugin_only(request: ModelRequest[PluginOnlyCfg], ctx: ActionRunContext) -> ModelResponse:
+    async def plugin_only(request: ModelRequest[PluginOnlyCfg], ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         return OK
 
@@ -140,47 +141,40 @@ async def test_unknown_keys_reach_plugin_via_model_extra(ai_and_seen: tuple[Genk
 
 
 @pytest.mark.asyncio
-async def test_invalid_config_value_is_still_resendable(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """A bad value on a declared field is a failed response, not a raw ValidationError."""
-    ai, _ = ai_and_seen
-    response = await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "Invalid input for model 'conforming'" in response.finish_message
-    assert response.error is not None
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER]
+async def test_invalid_config_value_raises_before_the_turn(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """A bad value on a declared field raises INVALID_ARGUMENT; the model never runs."""
+    ai, seen = ai_and_seen
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "config 'temperature'" in str(exc_info.value)
+    assert 'config' not in seen
 
 
 @pytest.mark.asyncio
-async def test_invalid_config_with_docs_is_still_resendable(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """ai.generate(docs=..., config={'temperature': 'high'}) is a failed response, not AttributeError."""
-    ai, _ = ai_and_seen
-    response = await ai.generate(
-        model='conforming',
-        prompt='hi',
-        docs=[Document.from_text('ctx')],
-        config={'temperature': 'high'},
-    )
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "Invalid input for model 'conforming'" in response.finish_message
-    assert response.error is not None
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER]
+async def test_invalid_config_with_docs_raises_before_the_turn(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(docs=..., config={'temperature': 'high'}) raises INVALID_ARGUMENT, not AttributeError."""
+    ai, seen = ai_and_seen
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(
+            model='conforming',
+            prompt='hi',
+            docs=[Document.from_text('ctx')],
+            config={'temperature': 'high'},
+        )
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'config' not in seen
 
 
 @pytest.mark.asyncio
-async def test_strict_config_rejects_unknown_keys_as_failed_response(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """extra='forbid' rejects unknown keys on the response — the plugin opted in."""
-    ai, _ = ai_and_seen
-    response = await ai.generate(model='strict', prompt='hi', config={'thinking': True})
-    assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message is not None
-    assert "Invalid input for model 'strict'" in response.finish_message
-    assert response.error is not None
-    assert response.message is None
-    assert [m.role for m in response.messages] == [Role.USER]
+async def test_strict_config_rejects_unknown_keys_before_the_turn(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """extra='forbid' rejects unknown keys with INVALID_ARGUMENT — the plugin opted in."""
+    ai, seen = ai_and_seen
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model='strict', prompt='hi', config={'thinking': True})
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "unknown config key 'thinking'" in str(exc_info.value)
+    assert 'config' not in seen
 
 
 @pytest.mark.asyncio

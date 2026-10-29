@@ -112,28 +112,13 @@ class TestGetThinkingSignature:
         assert get_thinking_signature(part) is None
 
     def test_reads_thought_signature(self) -> None:
-        """Reads JS-style thoughtSignature metadata."""
-        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig-js'})
-        assert get_thinking_signature(part) == 'sig-js'
-
-    def test_falls_back_to_signature(self) -> None:
-        """Reads Go-style signature metadata when thoughtSignature is absent."""
-        part = Part.from_text('hello', metadata={'signature': 'sig-go'})
-        assert get_thinking_signature(part) == 'sig-go'
-
-    def test_prefers_thought_signature(self) -> None:
-        """Prefers JS-style metadata when both aliases are present."""
-        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig-js', 'signature': 'sig-go'})
-        assert get_thinking_signature(part) == 'sig-js'
-
-    def test_decodes_bytes_signature(self) -> None:
-        """Decodes Go-style raw byte signatures."""
-        part = Part.from_text('hello', metadata={'signature': b'sig-go'})
-        assert get_thinking_signature(part) == 'sig-go'
+        """Reads thoughtSignature metadata."""
+        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig'})
+        assert get_thinking_signature(part) == 'sig'
 
     def test_returns_none_for_non_string_signature(self) -> None:
         """Returns None when signature metadata is not string-like."""
-        part = Part.from_text('hello', metadata={'signature': 123})
+        part = Part.from_text('hello', metadata={'thoughtSignature': 123})
         assert get_thinking_signature(part) is None
 
 

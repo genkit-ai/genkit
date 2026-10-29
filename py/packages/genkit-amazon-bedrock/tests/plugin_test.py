@@ -448,6 +448,12 @@ async def test_generate_bedrock_arn_model_keeps_full_path() -> None:
     assert action.name == f'bedrock/{arn}'
 
 
+def test_bedrock_positional_region_raises_type_error() -> None:
+    """Bedrock('us-east-1') raises TypeError; the region is passed as region=."""
+    with pytest.raises(TypeError):
+        Bedrock('us-east-1')  # type: ignore[misc]
+
+
 @pytest.mark.asyncio
 async def test_generate_with_a_rerank_id_raises_not_found_and_sends_nothing() -> None:
     """The plugin has no rerank action, so a rerank ID fails as a GenkitError before any AWS call."""

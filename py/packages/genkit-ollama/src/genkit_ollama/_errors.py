@@ -27,7 +27,7 @@ from genkit.plugin_api import provider_error
 
 
 @asynccontextmanager
-async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
+async def wrap_connection_errors(base_url: str) -> AsyncIterator[None]:
     """Turn an unreachable or slow Ollama server into a GenkitError that says how to fix it.
 
     Catches two flavours of unreachable-server failure:
@@ -42,7 +42,7 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
     a raw ``HTTPStatusError`` is not a ``TransportError`` either.
 
     Args:
-        server_address: The Ollama server URL, surfaced in the error message.
+        base_url: The Ollama server URL, surfaced in the error message.
 
     Yields:
         None. Wraps the enclosed ``async with`` block.
@@ -57,14 +57,14 @@ async def wrap_connection_errors(server_address: str) -> AsyncIterator[None]:
         raise provider_error(
             exc,
             status='DEADLINE_EXCEEDED',
-            message=f'Request to Ollama server at {server_address} timed out.',
+            message=f'Request to Ollama server at {base_url} timed out.',
         ) from exc
     except (httpx.TransportError, ConnectionError) as exc:
         raise provider_error(
             exc,
             status='UNAVAILABLE',
             message=(
-                f'Cannot reach the Ollama server at {server_address}. '
-                f'Start it with `ollama serve` (or set server_address to a reachable host).'
+                f'Cannot reach the Ollama server at {base_url}. '
+                f'Start it with `ollama serve` (or set base_url to a reachable host).'
             ),
         ) from exc

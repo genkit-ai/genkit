@@ -33,8 +33,8 @@ from anthropic import (
 )
 from genkit_anthropic._models import AnthropicModel
 
-from genkit import ActionRunContext, GenkitError, Message, Part, Role
-from genkit.model import ModelRequest
+from genkit import GenkitError, Message, Part, Role
+from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import StatusName
 from genkit.web import error_body, error_status
 
@@ -410,10 +410,9 @@ def _model_never_called() -> tuple[AnthropicModel, MagicMock]:
 @pytest.mark.parametrize(
     ('part', 'message_fragment'),
     [
-        (Part.from_reasoning('The guest listed a peanut allergy.'), 'require a signature'),
         (Part.from_media(url='data:image/png;base64', content_type='image/png'), 'not enough values to unpack'),
     ],
-    ids=['unsigned-thinking', 'data-uri-without-payload'],
+    ids=['data-uri-without-payload'],
 )
 async def test_generate_marks_unsendable_history_invalid_argument(part: Part, message_fragment: str) -> None:
     """History the plugin cannot convert is caller input; retry must not resend it."""
@@ -497,7 +496,7 @@ async def test_stream_cut_mid_read_is_classified(drop: Exception, status: str) -
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = AsyncAnthropic(api_key='test-key', http_client=http_client, max_retries=0)
     model = AnthropicModel(model_name='claude-sonnet-4-6', client=client)
-    ctx = ActionRunContext(streaming_callback=MagicMock())
+    ctx = ModelContext(streaming_callback=MagicMock())
 
     with pytest.raises(GenkitError) as exc_info:
         await model.generate(_request(), ctx)

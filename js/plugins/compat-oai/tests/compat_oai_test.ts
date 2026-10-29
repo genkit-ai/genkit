@@ -25,6 +25,7 @@ import {
 } from '@jest/globals';
 import type {
   GenerateRequest,
+  GenerateResponseChunkData,
   GenerateResponseData,
   MessageData,
   Part,
@@ -237,6 +238,86 @@ describe('toOpenAiMessages', () => {
               },
             },
           ],
+        },
+      ],
+    },
+    {
+      should: 'keep text alongside tool request content',
+      inputMessages: [
+        {
+          role: 'model',
+          content: [
+            { text: 'Let me look that up.' },
+            {
+              toolRequest: {
+                ref: 'call_1',
+                name: 'lookup',
+                input: {},
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'assistant',
+          content: 'Let me look that up.',
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'lookup', arguments: '{}' },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      should: 'echo reasoning alongside tool request content',
+      inputMessages: [
+        {
+          role: 'model',
+          content: [
+            { reasoning: 'I should call the tool.' },
+            { text: 'Let me look that up.' },
+            {
+              toolRequest: {
+                ref: 'call_1',
+                name: 'lookup',
+                input: {},
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'assistant',
+          content: 'Let me look that up.',
+          reasoning_content: 'I should call the tool.',
+          tool_calls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'lookup', arguments: '{}' },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      should: 'echo reasoning on a text-only assistant message',
+      inputMessages: [
+        {
+          role: 'model',
+          content: [{ reasoning: 'Simple greeting.' }, { text: 'Hi there!' }],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'assistant',
+          content: 'Hi there!',
+          reasoning_content: 'Simple greeting.',
         },
       ],
     },
@@ -489,6 +570,7 @@ describe('fromOpenAiChoice', () => {
         message: {
           role: 'model',
           content: [
+            { text: 'Tool call' },
             {
               toolRequest: {
                 name: 'exampleTool',
@@ -540,6 +622,69 @@ describe('fromOpenAiChoice', () => {
         message: {
           role: 'model',
           content: [{ reasoning: 'Let me think...' }, { text: 'Final answer' }],
+        },
+      },
+    },
+    {
+      should: 'keep reasoning_content and content alongside tool_calls',
+      choice: {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: 'Let me look that up.',
+          reasoning_content: 'Need to call lookup.',
+          refusal: null,
+          tool_calls: [
+            {
+              id: 'ref123',
+              type: 'function',
+              function: { name: 'lookup', arguments: '{}' },
+            },
+          ],
+        } as any,
+        finish_reason: 'tool_calls',
+        logprobs: null,
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [
+            { reasoning: 'Need to call lookup.' },
+            { text: 'Let me look that up.' },
+            { toolRequest: { name: 'lookup', input: {}, ref: 'ref123' } },
+          ],
+        },
+      },
+    },
+    {
+      should: 'not parse preamble text as json when tool_calls are present',
+      jsonMode: true,
+      choice: {
+        index: 0,
+        message: {
+          role: 'assistant',
+          content: 'Let me look that up.',
+          refusal: null,
+          tool_calls: [
+            {
+              id: 'ref123',
+              type: 'function',
+              function: { name: 'lookup', arguments: '{}' },
+            },
+          ],
+        },
+        finish_reason: 'tool_calls',
+        logprobs: null,
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [
+            { text: 'Let me look that up.' },
+            { toolRequest: { name: 'lookup', input: {}, ref: 'ref123' } },
+          ],
         },
       },
     },
@@ -600,7 +745,7 @@ describe('fromOpenAiChunkChoice', () => {
       },
     },
     {
-      should: 'work with json',
+      should: 'emit a complete json delta as text in json mode',
       chunkChoice: {
         index: 0,
         delta: {
@@ -615,8 +760,23 @@ describe('fromOpenAiChunkChoice', () => {
         finishReason: 'unknown',
         message: {
           role: 'model',
-          content: [{ data: { json: 'test' } }],
+          content: [{ text: '{"json":"test"}' }],
         },
+      },
+    },
+    {
+      // OpenAI streams `{}` and `[]` as standalone tokens inside larger
+      // documents, so a delta that parses on its own must stay text.
+      should: 'emit a standalone empty object delta as text in json mode',
+      chunkChoice: {
+        index: 0,
+        delta: { role: 'assistant', content: '{}' },
+        finish_reason: null,
+      },
+      jsonMode: true,
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: { role: 'model', content: [{ text: '{}' }] },
       },
     },
     {
@@ -643,6 +803,7 @@ describe('fromOpenAiChunkChoice', () => {
         message: {
           role: 'model',
           content: [
+            { text: 'Tool call' },
             {
               toolRequest: {
                 name: 'exampleTool',
@@ -653,6 +814,118 @@ describe('fromOpenAiChunkChoice', () => {
           ],
         },
         finishReason: 'stop',
+      },
+    },
+    {
+      should: 'emit a partial json fragment as text in json mode',
+      chunkChoice: {
+        index: 0,
+        delta: { role: 'assistant', content: '{"json"' },
+        finish_reason: null,
+      },
+      jsonMode: true,
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: { role: 'model', content: [{ text: '{"json"' }] },
+      },
+    },
+    {
+      should: 'emit a scalar json fragment as text in json mode',
+      chunkChoice: {
+        index: 0,
+        delta: { role: 'assistant', content: '12' },
+        finish_reason: null,
+      },
+      jsonMode: true,
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: { role: 'model', content: [{ text: '12' }] },
+      },
+    },
+    {
+      should: 'emit a preamble-only delta as text in json mode',
+      chunkChoice: {
+        index: 0,
+        delta: { role: 'assistant', content: 'Let me look' },
+        finish_reason: null,
+      },
+      jsonMode: true,
+      expectedOutput: {
+        finishReason: 'unknown',
+        message: { role: 'model', content: [{ text: 'Let me look' }] },
+      },
+    },
+    {
+      should: 'not parse text that accompanies tool calls in json mode',
+      chunkChoice: {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          content: '{"not":"output"}',
+          tool_calls: [
+            {
+              index: 0,
+              id: 'ref123',
+              function: {
+                name: 'exampleTool',
+                arguments: JSON.stringify({ param: 'value' }),
+              },
+            },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      },
+      jsonMode: true,
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [
+            { text: '{"not":"output"}' },
+            {
+              toolRequest: {
+                name: 'exampleTool',
+                input: { param: 'value' },
+                ref: 'ref123',
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      should: 'work with tool calls only',
+      chunkChoice: {
+        index: 0,
+        delta: {
+          role: 'assistant',
+          tool_calls: [
+            {
+              index: 0,
+              id: 'ref123',
+              function: {
+                name: 'exampleTool',
+                arguments: JSON.stringify({ param: 'value' }),
+              },
+            },
+          ],
+        },
+        finish_reason: 'tool_calls',
+      },
+      expectedOutput: {
+        finishReason: 'stop',
+        message: {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                name: 'exampleTool',
+                input: { param: 'value' },
+                ref: 'ref123',
+              },
+            },
+          ],
+        },
       },
     },
     {
@@ -1754,6 +2027,200 @@ describe('openAIModelRunner', () => {
     // The last chunk should have the fully accumulated, parsed input.
     const lastPart = toolRequestChunks.at(-1)!.content[0];
     expect(lastPart.toolRequest.input).toStrictEqual({ city: 'Tokyo' });
+  });
+
+  it('should stream json deltas as text so accumulated text stays valid json', async () => {
+    // Real OpenAI tokenization of `{"query":"boots","filters":{},"limit":10}`:
+    // `{}` arrives as its own delta and must not be dropped from the text.
+    const deltas = [
+      '{"',
+      'query',
+      '":"',
+      'boots',
+      '","',
+      'filters',
+      '":',
+      '{}',
+      ',"',
+      'limit',
+      '":',
+      '10',
+      '}',
+    ];
+    const fullText = deltas.join('');
+    const openaiClient = {
+      beta: {
+        chat: {
+          completions: {
+            stream: jest.fn(
+              () =>
+                new (class {
+                  i = 0;
+                  [Symbol.asyncIterator]() {
+                    return {
+                      next: async () =>
+                        this.i < deltas.length
+                          ? {
+                              value: {
+                                choices: [
+                                  {
+                                    index: 0,
+                                    delta: { content: deltas[this.i++] },
+                                    finish_reason: null,
+                                  },
+                                ],
+                              },
+                              done: false,
+                            }
+                          : { done: true },
+                    };
+                  }
+                  async finalChatCompletion() {
+                    return {
+                      choices: [
+                        {
+                          message: { role: 'assistant', content: fullText },
+                          finish_reason: 'stop',
+                        },
+                      ],
+                    };
+                  }
+                })()
+            ),
+          },
+        },
+      },
+    };
+    const chunks: GenerateResponseChunkData[] = [];
+    const runner = openAIModelRunner(
+      'gpt-4o',
+      openaiClient as unknown as OpenAI
+    );
+    const response = await runner(
+      { messages: [], output: { format: 'json' } },
+      {
+        streamingRequested: true,
+        sendChunk: (chunk) => chunks.push(chunk),
+      }
+    );
+
+    expect(
+      chunks.every((c) => c.content.every((p) => p.data === undefined))
+    ).toBe(true);
+    expect(
+      chunks.flatMap((c) => c.content.map((p) => p.text ?? '')).join('')
+    ).toBe(fullText);
+    expect(response.message?.content).toStrictEqual([
+      { data: { query: 'boots', filters: {}, limit: 10 } },
+    ]);
+  });
+
+  it('should stream preamble text then tool calls in json mode and keep both in the final message', async () => {
+    const deltas: any[] = [
+      { index: 0, delta: { content: 'Let me look' }, finish_reason: null },
+      { index: 0, delta: { content: ' that up.' }, finish_reason: null },
+      {
+        index: 0,
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_abc',
+              function: { name: 'getWeather', arguments: '{"city":"Tokyo"}' },
+            },
+          ],
+        },
+        finish_reason: null,
+      },
+    ];
+    const openaiClient = {
+      beta: {
+        chat: {
+          completions: {
+            stream: jest.fn(
+              () =>
+                new (class {
+                  i = 0;
+                  [Symbol.asyncIterator]() {
+                    return {
+                      next: async () => {
+                        if (this.i < deltas.length) {
+                          return {
+                            value: { choices: [deltas[this.i++]] },
+                            done: false,
+                          };
+                        }
+                        return { done: true };
+                      },
+                    };
+                  }
+                  async finalChatCompletion() {
+                    return {
+                      choices: [
+                        {
+                          message: {
+                            role: 'assistant',
+                            content: 'Let me look that up.',
+                            tool_calls: [
+                              {
+                                id: 'call_abc',
+                                type: 'function',
+                                function: {
+                                  name: 'getWeather',
+                                  arguments: '{"city":"Tokyo"}',
+                                },
+                              },
+                            ],
+                          },
+                          finish_reason: 'tool_calls',
+                        },
+                      ],
+                    };
+                  }
+                })()
+            ),
+          },
+        },
+      },
+    };
+    const chunks: any[] = [];
+    const runner = openAIModelRunner(
+      'gpt-4o',
+      openaiClient as unknown as OpenAI
+    );
+    const response = await runner(
+      { messages: [], output: { format: 'json' } },
+      {
+        streamingRequested: true,
+        sendChunk: (chunk) => chunks.push(chunk),
+      }
+    );
+
+    // Preamble arrives as plain text chunks (not parsed as JSON), followed by
+    // the tool request chunk.
+    expect(chunks.map((c) => c.content[0])).toStrictEqual([
+      { text: 'Let me look' },
+      { text: ' that up.' },
+      {
+        toolRequest: {
+          name: 'getWeather',
+          ref: 'call_abc',
+          input: { city: 'Tokyo' },
+          partial: true,
+        },
+      },
+    ]);
+    // The final message keeps the text next to the tool request.
+    expect(response.message?.content).toStrictEqual([
+      { text: 'Let me look that up.' },
+      {
+        toolRequest: {
+          name: 'getWeather',
+          ref: 'call_abc',
+          input: { city: 'Tokyo' },
+        },
+      },
+    ]);
   });
 
   it('should skip tool-call deltas received before the tool name', async () => {

@@ -75,6 +75,25 @@ class GenkitAttr:
     OUTPUT = 'genkit.output'
 
 
+# Span attributes this package writes whose value can hold prompt, reply,
+# system, or tool text. A trace store that must not keep content blanks
+# these. Add the key here when GenAiInstrumentation writes a new one.
+# The genkit:metadata:* keys come from Genkit core through set_metadata:
+# interrupt is the payload a tool raised, resumed is the caller's resume
+# payload.
+CONTENT_ATTRIBUTES: frozenset[str] = frozenset({
+    GenAiAttr.INPUT_MESSAGES,
+    GenAiAttr.OUTPUT_MESSAGES,
+    GenAiAttr.SYSTEM_INSTRUCTIONS,
+    GenAiAttr.TOOL_CALL_ARGUMENTS,
+    GenAiAttr.TOOL_CALL_RESULT,
+    GenkitAttr.INPUT,
+    GenkitAttr.OUTPUT,
+    'genkit:metadata:interrupt',
+    'genkit:metadata:resumed',
+})
+
+
 class GenAiOperation:
     """Well-known values for ``gen_ai.operation.name``."""
 

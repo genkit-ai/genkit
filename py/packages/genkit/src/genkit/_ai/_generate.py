@@ -38,6 +38,8 @@ from genkit._ai._model import (
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
+    annotated_config_class,
+    check_config_before_turn,
     resolve_model_name,
     text_from_content,
 )
@@ -90,7 +92,6 @@ from genkit._core._model import (
     Part,
     as_message,
     chunk_for_stream,
-    declared_config_type,
     reject_config_api_key,
     reject_unanswered_interrupts,
 )
@@ -783,6 +784,11 @@ async def run_generate(
     # reflection) starts here, so it fails before middleware or the model runs.
     reject_config_api_key(options.config)
     registry = scope.registry
+    # Config values the model's ModelRequest[...] class or JSON-schema
+    # config_schema= rejects raise here, before any hook runs, for every entry
+    # point (ai.generate, prompts, generate_operation, /util/generate).
+    if options.model:
+        await check_config_before_turn(model=options.model, config=options.config, registry=registry)
 
     if options.tools:
         options.tools = await expand_wildcard_tools(registry, options.tools)
@@ -1594,7 +1600,7 @@ async def call_model(
                 turn=current_turn,
                 messages=len(params.request.messages),
             )
-        result = await turn_model.run(
+        result = await turn_model._run(
             input=params.request,
             context=c.custom_context,
             on_chunk=c.on_chunk,
@@ -1619,7 +1625,7 @@ async def call_model(
     # that object; a swapped-in dict or other class would reach inner layers
     # as a second shape, so each handoff is checked. When the build fell back
     # to a bare request (the config didn't fit), the model action reports it.
-    config_class = declared_config_type(turn_model.input_class) if turn_model.input_class is not None else None
+    config_class = annotated_config_class(turn_model)
     on_handoff: Callable[[ModelHookParams, MiddlewareDef], None] | None = None
     if config_class is not None and isinstance(request.config, config_class):
         config_check = MiddlewareConfigCheck(config=request.config, schema=config_class, model=turn_model.name)

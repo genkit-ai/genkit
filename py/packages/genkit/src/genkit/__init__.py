@@ -42,12 +42,13 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import (
     MultipartToolResponse,
-    ToolRunContext,
+    ToolContext,
     tool,
 )
-from genkit._core._action import ActionRunContext, StreamResponse
+from genkit._core._action import FlowContext, StreamResponse
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
+from genkit._core._flow import Flow
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     Document,
@@ -88,11 +89,12 @@ __all__ = [
     # Tools and HITL
     'tool',
     'Tool',
-    'ToolRunContext',
+    'ToolContext',
     'Interrupt',
     'MultipartToolResponse',
     # Flows, prompts, errors
-    'ActionRunContext',
+    'Flow',
+    'FlowContext',
     'Prompt',
     'GenkitError',
     'PublicError',

@@ -18,14 +18,16 @@
 """OpenAI OpenAI API Compatible Plugin for Genkit."""
 
 import enum
+import inspect
 import os
+from collections.abc import Mapping
 from typing import Any, Literal, TypeAlias, cast
 
 from openai import APIError, AsyncOpenAI
 from openai.types import Model
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
+from genkit import Embedding, GenkitError, ModelResponse
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -35,6 +37,7 @@ from genkit.embedder import (
     embedder_action_metadata,
 )
 from genkit.model import (
+    ModelContext,
     ModelInfo,
     ModelRef,
     ModelRequest,
@@ -80,6 +83,33 @@ from genkit_openai._typing import OpenAIConfig
 # Headers that tie a call to the plugin's OpenAI organization or project. A
 # tenant key runs under the tenant's own account, so these are not copied.
 _PLUGIN_ACCOUNT_HEADERS = frozenset({'openai-organization', 'openai-project'})
+
+_CLIENT_OPTION_KEYS = frozenset(inspect.signature(AsyncOpenAI.__init__).parameters) - {'self'}
+
+
+def _client_kwargs(
+    *, api_key: str | None, base_url: str | None, client_options: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Merge the typed settings into ``client_options`` for ``AsyncOpenAI``.
+
+    Raises:
+        TypeError: A ``client_options`` key ``AsyncOpenAI`` doesn't take, or
+            ``api_key``/``base_url`` given both as an argument and in ``client_options``.
+    """
+    options = dict(client_options or {})
+    for key in options:
+        if key not in _CLIENT_OPTION_KEYS:
+            raise TypeError(
+                f'OpenAI got an unexpected client_options key {key!r}; '
+                f'AsyncOpenAI accepts {", ".join(sorted(k for k in _CLIENT_OPTION_KEYS if not k.startswith("_")))}'
+            )
+    for name, value in (('api_key', api_key), ('base_url', base_url)):
+        if value is None:
+            continue
+        if name in options:
+            raise TypeError(f'OpenAI got {name} both as an argument and in client_options; pass it once')
+        options[name] = value
+    return options
 
 
 def _missing_key_error() -> GenkitError:
@@ -318,27 +348,50 @@ class OpenAI(Plugin):
             )
         return model_ref(local, config_schema=OpenAIConfig, namespace='openai', config=config)
 
-    def __init__(self, **openai_params: Any) -> None:  # noqa: ANN401
-        """Initializes the OpenAI plugin with the specified parameters.
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        client_options: Mapping[str, Any] | None = None,
+    ) -> None:
+        """Initializes the OpenAI plugin.
 
         Args:
-            openai_params: Additional parameters that will be passed to the OpenAI client constructor.
-                           These parameters may include API keys, timeouts, organization IDs, and
-                           other configuration settings required by OpenAI's API.
+            api_key: OpenAI API key. Defaults to ``OPENAI_API_KEY``.
+            base_url: OpenAI API base URL up to and including ``/v1``, e.g.
+                ``https://openrouter.ai/api/v1``; the SDK appends
+                ``/chat/completions``. Defaults to ``OPENAI_BASE_URL``, then the
+                public API.
+            client_options: Other ``AsyncOpenAI`` settings, such as
+                ``organization``, ``project``, ``timeout``, ``max_retries``,
+                ``default_headers``, or ``http_client``.
+
+        Raises:
+            TypeError: If ``client_options`` has a key ``AsyncOpenAI`` doesn't
+                take, or repeats ``api_key`` or ``base_url``.
         """
-        self._openai_params = openai_params
-        self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**self._openai_params))
-        # Only used when the plugin has no key of its own. Its placeholder key is
-        # never sent: every call through it swaps in the caller's key first.
-        tenant_only_params: dict[str, Any] = {**openai_params, 'api_key': 'unset'}
-        self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_params))
-        plugin_headers: dict[str, str] = dict(openai_params.get('default_headers') or {})
+        options = _client_kwargs(api_key=api_key, base_url=base_url, client_options=client_options)
+        self._options = options
+        self._plugin_api_key: str | None = options.get('api_key')
+        plugin_headers: dict[str, str] = dict(options.get('default_headers') or {})
         self._tenant_headers = {k: v for k, v in plugin_headers.items() if k.lower() not in _PLUGIN_ACCOUNT_HEADERS}
         self._pins_authorization = any(k.lower() == 'authorization' for k in plugin_headers)
         self._list_actions_cache: list[ActionMetadata] | None = None
 
+    @loop_local_client
+    def _runtime_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(**self._options)
+
+    @loop_local_client
+    def _tenant_only_client(self) -> AsyncOpenAI:
+        # Only used when the plugin has no key of its own. Its placeholder key is
+        # never sent: every call through it swaps in the caller's key first.
+        params: dict[str, Any] = {**self._options, 'api_key': 'unset'}
+        return AsyncOpenAI(**params)
+
     def _has_plugin_key(self) -> bool:
-        return bool(self._openai_params.get('api_key') or os.environ.get('OPENAI_API_KEY'))
+        return bool(self._plugin_api_key or os.environ.get('OPENAI_API_KEY'))
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -429,7 +482,7 @@ class OpenAI(Plugin):
 
         return None
 
-    def _client_for_call(self, request: ModelRequest, ctx: ActionRunContext) -> AsyncOpenAI:
+    def _client_for_call(self, request: ModelRequest, ctx: ModelContext) -> AsyncOpenAI:
         """The plugin's client, or a copy carrying the caller's ``context.secrets`` key.
 
         A tenant who passed their own key is the one who should be billed. The
@@ -459,7 +512,7 @@ class OpenAI(Plugin):
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message=(
-                    'OpenAI(default_headers=...) pins an Authorization header, which would replace '
+                    "OpenAI(client_options={'default_headers': ...}) pins an Authorization header, which would replace "
                     'the context.secrets key. Drop that header to serve per-request keys.'
                 ),
             )
@@ -496,7 +549,7 @@ class OpenAI(Plugin):
         """
         model_info = self.get_model_info(name) or {}
 
-        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ModelContext) -> ModelResponse:
             catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, name))
             supports = catalog.supports if catalog is not None else get_default_openai_model_info(name).supports
             openai_model = OpenAIModelHandler(OpenAIModel(name, self._client_for_call(request, ctx), supports=supports))
@@ -534,7 +587,7 @@ class OpenAI(Plugin):
         """
         info_dict, config_schema = _get_multimodal_info_dict(name, model_type, supported_models)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             model_instance = model_class(name, self._client_for_call(request, ctx))
             return await model_instance.generate(request, ctx)
 

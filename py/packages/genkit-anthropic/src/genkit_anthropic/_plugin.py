@@ -16,13 +16,17 @@
 
 """Anthropic plugin for Genkit."""
 
-from typing import Any, Literal, cast
+import inspect
+import os
+from collections.abc import Mapping
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelRef, ModelRequest, model as create_model, model_action_metadata, model_ref
+from genkit import GenkitError, ModelResponse
+from genkit.model import ModelContext, ModelRef, ModelRequest, model as create_model, model_action_metadata, model_ref
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -39,6 +43,42 @@ from genkit_anthropic._secrets import context_api_key, reject_config_api_key
 logger = structlog.get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
+
+_CLIENT_OPTION_KEYS = frozenset(inspect.signature(AsyncAnthropic.__init__).parameters) - {'self'}
+
+
+def _client_kwargs(
+    *, api_key: str | None, base_url: str | None, client_options: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Merge the typed settings into ``client_options`` for ``AsyncAnthropic``.
+
+    Raises:
+        TypeError: A ``client_options`` key ``AsyncAnthropic`` doesn't take, or
+            ``api_key``/``base_url`` given both as an argument and in ``client_options``.
+    """
+    options = dict(client_options or {})
+    for key in options:
+        if key not in _CLIENT_OPTION_KEYS:
+            raise TypeError(
+                f'Anthropic got an unexpected client_options key {key!r}; '
+                f'AsyncAnthropic accepts {", ".join(sorted(k for k in _CLIENT_OPTION_KEYS if not k.startswith("_")))}'
+            )
+    for name, value in (('api_key', api_key), ('base_url', base_url)):
+        if value is None:
+            continue
+        if name in options:
+            raise TypeError(f'Anthropic got {name} both as an argument and in client_options; pass it once')
+        options[name] = value
+    return options
+
+
+def _reject_v1_suffix(base_url: str | None, *, source: str) -> None:
+    """The SDK appends ``/v1/messages``, so a base URL ending in ``/v1`` would send ``/v1/v1/messages``."""
+    if base_url and urlsplit(base_url).path.rstrip('/').endswith('/v1'):
+        raise ValueError(
+            f'{source} {base_url!r} ends in /v1, but the Anthropic SDK appends /v1/messages itself; '
+            'pass the origin, e.g. https://claude-proxy.example.com'
+        )
 
 
 def _has_credential(client: AsyncAnthropic) -> bool:
@@ -116,34 +156,50 @@ class Anthropic(Plugin):
 
     def __init__(
         self,
-        models: list[str] | None = None,
         *,
+        api_key: str | None = None,
+        base_url: str | None = None,
         api_version: Literal['stable', 'beta'] | None = None,
-        **anthropic_params: object,
+        client_options: Mapping[str, Any] | None = None,
     ) -> None:
         """Initializes Anthropic plugin with given configuration.
 
+        Any Claude model id resolves on demand, so there is no model list to pass.
+
         Args:
-            models: List of model names to register. Defaults to all supported models.
+            api_key: Anthropic API key. Defaults to ``ANTHROPIC_API_KEY``.
+            base_url: Anthropic API origin with no ``/v1`` suffix, e.g.
+                ``https://claude-proxy.example.com``; the SDK appends
+                ``/v1/messages``. Defaults to ``ANTHROPIC_BASE_URL``, then the
+                public API. A value ending in ``/v1`` raises.
             api_version: Default API surface unless overridden by per-request
                 config. An explicit config ``apiVersion`` always takes
                 precedence. Defaults to stable.
-            **anthropic_params: Additional parameters passed to the AsyncAnthropic client.
-                This may include api_key, base_url, timeout, and other configuration
-                settings required by Anthropic's API.
+            client_options: Other ``AsyncAnthropic`` settings, such as
+                ``auth_token``, ``timeout``, ``max_retries``, ``default_headers``,
+                or ``http_client``.
 
         Raises:
             ValueError: If ``api_version`` is not ``'stable'``, ``'beta'``, or
-                ``None``.
+                ``None``, or the base URL ends in ``/v1``.
+            TypeError: If ``client_options`` has a key ``AsyncAnthropic`` doesn't
+                take, or repeats ``api_key`` or ``base_url``.
         """
         if api_version not in (None, 'stable', 'beta'):
             raise ValueError("api_version must be 'stable', 'beta', or None")
 
-        self.models = models or list(SUPPORTED_ANTHROPIC_MODELS.keys())
+        options = _client_kwargs(api_key=api_key, base_url=base_url, client_options=client_options)
+        if 'base_url' in options:
+            _reject_v1_suffix(options['base_url'], source='base_url')
+        else:
+            _reject_v1_suffix(os.environ.get('ANTHROPIC_BASE_URL'), source='ANTHROPIC_BASE_URL')
         self._default_api_version: Literal['stable', 'beta'] | None = api_version
-        self._anthropic_params = anthropic_params
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params)))
+        self._options = options
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncAnthropic:
+        return AsyncAnthropic(**self._options)
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -179,7 +235,7 @@ class Anthropic(Plugin):
         """
         model_info = get_model_info(name)
 
-        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ModelContext) -> ModelResponse:
             # A key in config is the more specific error, so it wins over a missing plugin key.
             reject_config_api_key(request.config)
             client = self._runtime_client()

@@ -61,6 +61,30 @@ describe('BetaRunner.toAnthropicMessageContent', () => {
     }, /Tool request ref is required/);
   });
 
+  it('sends back empty reasoning that has a signature', () => {
+    const runner = createRunner();
+    const part: Part = {
+      reasoning: '',
+      metadata: { thoughtSignature: 'sig_empty' },
+    };
+
+    const result = (runner as any).toAnthropicMessageContent(part);
+
+    assert.deepStrictEqual(result, {
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+  });
+
+  it('throws a signature error for empty reasoning without a signature', () => {
+    const runner = createRunner();
+
+    assert.throws(() => {
+      (runner as any).toAnthropicMessageContent({ reasoning: '' });
+    }, /thinking parts require a signature/);
+  });
+
   it('maps tool request with ref into tool_use block', () => {
     const runner = createRunner();
     const part: Part = {
@@ -781,6 +805,45 @@ describe('BetaRunner', () => {
     assert.deepStrictEqual(fallbackPart, { text: '' });
     assert.strictEqual(warnMock.mock.calls.length, 1);
     warnMock.mock.restore();
+  });
+
+  it('should round-trip an empty thinking block from a response', () => {
+    const mockClient = createMockAnthropicClient();
+    const runner = new BetaRunner({
+      name: 'claude-test',
+      client: mockClient as Anthropic,
+    });
+
+    const thinkingPart = (runner as any).fromBetaContentBlock({
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+
+    const { messages } = (runner as any).toAnthropicMessages([
+      { role: 'user', content: [{ text: 'What is the weather?' }] },
+      {
+        role: 'model',
+        content: [
+          thinkingPart,
+          {
+            toolRequest: {
+              ref: 'toolu_1',
+              name: 'getWeather',
+              input: { city: 'Paris' },
+            },
+          },
+        ],
+      },
+    ]);
+
+    assert.strictEqual(messages[1].role, 'assistant');
+    assert.deepStrictEqual(messages[1].content[0], {
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+    assert.strictEqual(messages[1].content[1].type, 'tool_use');
   });
 
   it('should map additional stop reasons', () => {

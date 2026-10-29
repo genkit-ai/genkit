@@ -100,24 +100,24 @@ def test_image_extra_cannot_set_prompt() -> None:
 
 
 def test_generate_openai_timeout_in_extra_raises_pointing_at_plugin() -> None:
-    """`config={'extra': {'timeout': 30}}` raises INVALID_ARGUMENT pointing at OpenAI(...)."""
+    """`config={'extra': {'timeout': 30}}` raises INVALID_ARGUMENT pointing at OpenAI(client_options=...)."""
     with pytest.raises(GenkitError) as err:
         _openai_create_kwargs(config=OpenAIConfig(extra={'timeout': 30}))
 
     assert err.value.status == 'INVALID_ARGUMENT'
     assert "'timeout'" in str(err.value)
-    assert 'OpenAI(timeout=' in str(err.value)
+    assert "OpenAI(client_options={'timeout': ..." in str(err.value)
     assert 'default_headers' in str(err.value)
 
 
 def test_generate_openai_extra_headers_in_extra_raises_pointing_at_plugin() -> None:
-    """`config={'extra': {'extra_headers': {...}}}` raises INVALID_ARGUMENT pointing at OpenAI(...)."""
+    """`config={'extra': {'extra_headers': {...}}}` raises INVALID_ARGUMENT pointing at OpenAI(client_options=...)."""
     with pytest.raises(GenkitError) as err:
         _openai_create_kwargs(config=OpenAIConfig(extra={'extra_headers': {'X-Team': 'search'}}))
 
     assert err.value.status == 'INVALID_ARGUMENT'
     assert 'extra_headers' in str(err.value)
-    assert 'OpenAI(timeout=' in str(err.value)
+    assert "OpenAI(client_options={'timeout': ..." in str(err.value)
 
 
 def test_generate_openai_model_in_extra_raises_pointing_at_version() -> None:

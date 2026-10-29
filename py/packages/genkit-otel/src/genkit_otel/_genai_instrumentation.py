@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from collections.abc import Mapping
-from typing import TypeVar
+from typing import ClassVar, TypeVar
 
 from opentelemetry import metrics as metrics_api, trace as trace_api
 from opentelemetry._logs import Logger, get_logger
@@ -35,6 +35,7 @@ from genkit.model import ModelRequest
 from genkit.telemetry import Instrumentation, SpanContext, SpanMetadata, SpanNext
 from genkit_otel._gen_ai_attributes import (
     CAPTURE_CONTENT_ENV_VAR,
+    CONTENT_ATTRIBUTES,
     GEN_AI_OPERATION_DETAILS_EVENT,
     ContentCapturingMode,
     GenAiAttr,
@@ -74,6 +75,14 @@ class GenAiInstrumentation(Instrumentation):
 
     Content capture is off by default. Prompt and reply text may
     contain PII, so a later reader only sees it when the caller opts in.
+    """
+
+    CONTENT_ATTRIBUTES: ClassVar[frozenset[str]] = CONTENT_ATTRIBUTES
+    """Span attribute keys this instrumentation writes whose values can hold
+    prompt, reply, system-instruction, or tool payload text.
+
+    A trace store that must not keep content blanks these. Other
+    instrumentation libraries' keys aren't included.
     """
 
     def __init__(

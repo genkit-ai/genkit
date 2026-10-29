@@ -24,7 +24,7 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, Message, Part
-from genkit._core._action import ActionRunContext, _action_context
+from genkit._core._action import _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse, ModelResponseChunk
@@ -35,6 +35,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.model import ModelContext
 from genkit.plugin_api import ActionKind
 
 
@@ -50,12 +51,12 @@ def register_bg_model(
     starts: list[str] | None = None,
     checks: list[str] | None = None,
 ) -> None:
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         if starts is not None:
             starts.append('start')
         return Operation(id=op_id, done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         if checks is not None:
             checks.append('check')
         return op
@@ -324,10 +325,10 @@ class SwallowsStart(BaseMiddleware):
 async def test_generate_keeps_fallback_answer_when_start_raises(ai: Genkit) -> None:
     """A hook that substitutes another model's answer is not a missing handle."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         raise GenkitError(status='UNAVAILABLE', message='veo capacity exhausted')
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg-model', start=start, check=check)
@@ -390,7 +391,7 @@ async def test_generate_stamps_latency_from_action_run(ai: Genkit) -> None:
     assert wrapped.latency_ms is not None
     assert wrapped.latency_ms >= 0
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='raw-1', done=False)
 
     _register_raw_background(ai, name='raw-bg', start=start)
@@ -407,10 +408,10 @@ def _register_raw_background(ai: Genkit, *, name: str, start: Callable[..., Awai
 async def test_box_stamps_operation_action_so_check_can_poll(ai: Genkit) -> None:
     """A raw start that forgot action can still be polled after generate()."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='raw-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True, action=op.action)
 
     _register_raw_background(ai, name='raw-bg', start=start)
@@ -429,7 +430,7 @@ async def test_box_stamps_operation_action_so_check_can_poll(ai: Genkit) -> None
 async def test_generate_background_start_without_operation_returns_closed_history(ai: Genkit) -> None:
     """start() that returns a ModelResponse leaves the prompt and no ticket."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(operation=Operation(id='boxed-1', done=False))
 
     _register_raw_background(ai, name='boxed-bg', start=start)
@@ -452,7 +453,7 @@ async def test_generate_background_start_without_operation_returns_closed_histor
 async def test_generate_operation_raises_when_start_returns_no_ticket(ai: Genkit) -> None:
     """generate_operation still raises when start() did not return a ticket."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(operation=Operation(id='boxed-1', done=False))
 
     _register_raw_background(ai, name='boxed-bg', start=start)
@@ -503,7 +504,7 @@ async def test_generate_operation_raises_the_boxed_error_when_start_never_ran(ai
 async def test_generate_chat_model_returning_operation_returns_closed_history(ai: Genkit) -> None:
     """A chat model that returns a bare Operation leaves the prompt and no model message."""
 
-    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def model_fn(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='sneaky', done=False)
 
     ai.define_model(name='plain', fn=cast(Any, model_fn))
@@ -527,7 +528,7 @@ async def test_generate_chat_model_returning_operation_returns_closed_history(ai
 async def test_generate_chat_model_returning_dict_returns_closed_history(ai: Genkit) -> None:
     """A chat model that returns a dict leaves the prompt and no model message."""
 
-    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> dict[str, object]:
+    async def model_fn(_request: ModelRequest, _ctx: ModelContext) -> dict[str, object]:
         return {'operation': {'id': 'op-1', 'done': False}}
 
     ai.define_model(name='plain-dict', fn=model_fn)
@@ -550,7 +551,7 @@ async def test_generate_chat_model_returning_dict_returns_closed_history(ai: Gen
 async def test_generate_chat_model_returning_none_returns_closed_history(ai: Genkit) -> None:
     """A chat model that returns None leaves the prompt and no model message."""
 
-    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> None:
+    async def model_fn(_request: ModelRequest, _ctx: ModelContext) -> None:
         return None
 
     ai.define_model(name='plain-none', fn=model_fn)
@@ -575,7 +576,7 @@ async def test_generate_chat_model_returning_response_with_operation_returns_clo
 ) -> None:
     """A chat model that stuffs a handle onto ModelResponse does not keep that ticket."""
 
-    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('Started')]),
             operation=Operation(id='lro-1', done=False),
@@ -648,10 +649,10 @@ def test_model_response_eq_uses_operation_snapshot() -> None:
 async def test_started_operation_dump_round_trips_through_check(ai: Genkit) -> None:
     """The dump of a real start() handle reloads and polls without edits."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(
@@ -677,11 +678,11 @@ async def test_generate_operation_passes_context_to_start(ai: Genkit) -> None:
     """generate_operation(context=) already reaches start. Keep that hop."""
     seen: dict[str, Any] = {}
 
-    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, ctx: ModelContext) -> Operation:
         seen['start'] = dict(ctx.context)
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg-model', start=start, check=check)
@@ -700,11 +701,11 @@ async def test_background_action_start_passes_context(ai: Genkit) -> None:
     """Holding the wrapper and calling start() still delivers the tenant key."""
     seen: dict[str, Any] = {}
 
-    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, ctx: ModelContext) -> Operation:
         seen['start'] = dict(ctx.context)
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     bg = ai.define_background_model(name='bg-model', start=start, check=check)
@@ -722,14 +723,14 @@ async def test_check_and_cancel_pass_folded_context(ai: Genkit) -> None:
     """check/cancel hand the plugin secrets and fold config= into context['config']."""
     seen: dict[str, dict[str, Any]] = {}
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, ctx: ModelContext) -> Operation:
         seen['check'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
-    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, ctx: ModelContext) -> Operation:
         seen['cancel'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
@@ -762,10 +763,10 @@ async def test_bare_check_operation_still_works(ai: Genkit) -> None:
     """The plugin-key loop does not require context= or config=."""
     seen: dict[str, object] = {}
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, ctx: ModelContext) -> Operation:
         seen['check'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
@@ -789,14 +790,14 @@ async def test_operation_config_keeps_ambient_context(
     """Connection knobs don't discard the tenant context of the current call."""
     seen: dict[str, dict[str, Any]] = {}
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
-    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
@@ -821,14 +822,14 @@ async def test_empty_context_replaces_ambient(ai: Genkit, method_name: str) -> N
     """An explicit empty context means plugin-key / no tenant, not a no-op."""
     seen: dict[str, dict[str, Any]] = {}
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
-    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
@@ -849,14 +850,14 @@ async def test_empty_context_with_config_replaces_ambient(ai: Genkit, method_nam
     """Connection knobs don't undo an explicit request to clear context."""
     seen: dict[str, dict[str, Any]] = {}
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
-    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
@@ -877,14 +878,14 @@ async def test_bare_operation_inherits_ambient_context(ai: Genkit, method_name: 
     """A poll inside the current request sees its tenant without extra plumbing."""
     seen: dict[str, dict[str, Any]] = {}
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
-    async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, ctx: ModelContext) -> Operation:
         seen['operation'] = dict(ctx.context)
         return Operation(id=op.id, done=True)
 
@@ -904,11 +905,11 @@ async def test_generate_operation_empty_context_replaces_ambient(ai: Genkit) -> 
     """generate_operation(..., context={}) is plugin-key this time, not ambient."""
     seen: dict[str, dict[str, Any]] = {}
 
-    async def start(_request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, ctx: ModelContext) -> Operation:
         seen['start'] = dict(ctx.context)
         return Operation(id='bg-op-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg-model', start=start, check=check)
@@ -942,7 +943,7 @@ class Reroute(BaseMiddleware[RerouteConfig]):
 
 
 def register_plain(ai: Genkit, *, name: str = 'plain', text: str = 'from-plain') -> None:
-    async def model_fn(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(text)]))
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
@@ -950,7 +951,7 @@ def register_plain(ai: Genkit, *, name: str = 'plain', text: str = 'from-plain')
 
 
 def register_tool_caller(ai: Genkit, *, name: str = 'flash') -> None:
-    async def model_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
@@ -1197,7 +1198,7 @@ async def test_wrap_generate_cannot_swap_model_on_the_turn_after_a_tool(ai: Genk
     """After a closed tool round the named model still runs, not the hook's rewrite."""
     calls = 0
 
-    async def flash(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def flash(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -1224,7 +1225,7 @@ async def test_wrap_generate_cannot_swap_to_video_on_the_turn_after_a_tool(ai: G
     """After a closed tool round a Veo id in the hook does not start a job."""
     calls = 0
 
-    async def flash(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def flash(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         nonlocal calls
         calls += 1
         if calls == 1:

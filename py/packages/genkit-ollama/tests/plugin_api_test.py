@@ -31,17 +31,17 @@ from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.model import ModelRequest
+from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import ActionKind, to_json_schema
 
 
 def test_init_with_options() -> None:
-    """server_address and static headers land on the plugin."""
-    plugin = Ollama(server_address='new.server.address', request_headers={'Content-Type': 'json'})
+    """base_url and static headers land on the plugin."""
+    plugin = Ollama(base_url='new.server.address', request_headers={'Content-Type': 'json'})
 
-    assert plugin.server_address == 'new.server.address'
+    assert plugin.base_url == 'new.server.address'
     assert plugin.request_headers == {'Content-Type': 'json'}
 
 
@@ -179,6 +179,29 @@ async def test_list_actions(ollama_plugin_instance: Ollama) -> None:
     assert has_embedder
 
 
+@pytest.mark.asyncio
+async def test_ollama_listed_model_keeps_input_schema(ollama_plugin_instance: Ollama) -> None:
+    """A model from list_actions carries the ModelRequest schema, and resolving it keeps that schema."""
+    client_mock = MagicMock()
+    client_mock.list = AsyncMock(return_value=MagicMock(models=[MagicMock(model='llama3', digest='')]))
+    client_mock.show = AsyncMock(
+        return_value=ollama_api.ShowResponse.model_validate({
+            'template': '',
+            'capabilities': ['completion'],
+            'model_info': {},
+        })
+    )
+    ollama_plugin_instance.client = lambda: client_mock
+
+    [listed] = await ollama_plugin_instance.list_actions()
+    action = await ollama_plugin_instance.resolve(ActionKind.MODEL, 'llama3')
+
+    assert listed.name == 'ollama/llama3'
+    assert listed.input_schema == to_json_schema(ModelRequest)
+    assert action is not None
+    assert action.input_schema == to_json_schema(ModelRequest)
+
+
 def test_timeout_stored() -> None:
     """A timeout kwarg is stored on the plugin."""
     plugin = Ollama(timeout=30.0)
@@ -189,7 +212,7 @@ def test_timeout_stored() -> None:
 def test_make_client_forwards_host_headers_and_timeout() -> None:
     """_make_client forwards host, headers, and a non-None timeout to AsyncClient."""
     plugin = Ollama(
-        server_address='http://example:11434',
+        base_url='http://example:11434',
         request_headers={'Authorization': 'Bearer x'},
         timeout=30.0,
     )
@@ -206,7 +229,7 @@ def test_make_client_forwards_host_headers_and_timeout() -> None:
 
 def test_make_client_omits_timeout_when_none() -> None:
     """With the default timeout (None) the timeout kwarg is omitted entirely."""
-    plugin = Ollama(server_address='http://example:11434')
+    plugin = Ollama(base_url='http://example:11434')
 
     with patch('ollama.AsyncClient') as async_client:
         plugin._make_client()
@@ -399,8 +422,10 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     client_mock.chat = AsyncMock()
     plugin.client = lambda: client_mock
 
-    image_client = MagicMock()
-    image_client.get = AsyncMock(side_effect=httpx.ConnectError('image host unreachable'))
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('image host unreachable')
+
+    image_client = httpx.AsyncClient(transport=httpx.MockTransport(unreachable))
 
     action = plugin._create_model_action(_ResolvedModel(name='m'))
     request = ModelRequest(
@@ -451,7 +476,7 @@ async def _call_ollama(plugin: Ollama, surface: str, error: BaseException) -> No
     else:
         action = plugin._create_model_action(_ResolvedModel(name='m'))
         request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-        ctx = ActionRunContext(streaming_callback=MagicMock()) if streaming else None
+        ctx = ModelContext(streaming_callback=MagicMock()) if streaming else None
         await action._fn(request, ctx)
 
 
@@ -467,7 +492,7 @@ async def test_ollama_not_running_is_unavailable_with_start_hint(surface: str) -
         await _call_ollama(plugin, surface, error)
 
     assert exc_info.value.status == 'UNAVAILABLE'
-    assert f'Cannot reach the Ollama server at {plugin.server_address}' in str(exc_info.value)
+    assert f'Cannot reach the Ollama server at {plugin.base_url}' in str(exc_info.value)
     assert '`ollama serve`' in str(exc_info.value)
     assert exc_info.value.__cause__ is error
 
@@ -483,7 +508,7 @@ async def test_connection_refused_is_unavailable(surface: str) -> None:
         await _call_ollama(plugin, surface, error)
 
     assert exc_info.value.status == 'UNAVAILABLE'
-    assert plugin.server_address in str(exc_info.value)
+    assert plugin.base_url in str(exc_info.value)
     assert exc_info.value.__cause__ is error
 
 
@@ -498,7 +523,7 @@ async def test_timeout_is_deadline_exceeded(surface: str) -> None:
         await _call_ollama(plugin, surface, error)
 
     assert exc_info.value.status == 'DEADLINE_EXCEEDED'
-    assert f'Request to Ollama server at {plugin.server_address} timed out.' in str(exc_info.value)
+    assert f'Request to Ollama server at {plugin.base_url} timed out.' in str(exc_info.value)
     assert exc_info.value.__cause__ is error
 
 
@@ -908,3 +933,88 @@ async def test_the_probe_timeout_covers_a_slow_header_callable() -> None:
     supports = await asyncio.wait_for(_supports(plugin, 'llava'), timeout=1)
 
     assert supports['tools'] is True
+
+
+def test_ollama_positional_argument_raises_type_error() -> None:
+    """Ollama('http://example:11434') raises TypeError; every option is passed by name."""
+    with pytest.raises(TypeError):
+        Ollama('http://example:11434')  # type: ignore[misc]
+
+
+def test_ollama_server_address_raises_type_error() -> None:
+    """Ollama(server_address=...) raises TypeError; the server is set with base_url=."""
+    with pytest.raises(TypeError, match='server_address'):
+        Ollama(server_address='http://example:11434')  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_ollama_base_url_sends_requests_to_that_server() -> None:
+    """Ollama(base_url='http://example:11434') sends ai.generate to that host."""
+    seen: list[httpx.Request] = []
+    with _real_client_on(_fake_server(seen)):
+        ai = Genkit(plugins=[Ollama(base_url='http://example:11434')])
+        response = await ai.generate(model='ollama/m', prompt='Suggest a dish.')
+
+    assert response.text == 'Tartine'
+    assert {(r.url.host, r.url.port) for r in seen} == {('example', 11434)}
+
+
+@pytest.mark.asyncio
+async def test_ollama_without_base_url_uses_local_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ollama() with no base_url sends ai.generate to http://127.0.0.1:11434."""
+    monkeypatch.delenv('OLLAMA_HOST', raising=False)
+    seen: list[httpx.Request] = []
+    with _real_client_on(_fake_server(seen)):
+        ai = Genkit(plugins=[Ollama()])
+        await ai.generate(model='ollama/m', prompt='Suggest a dish.')
+
+    assert {(r.url.host, r.url.port) for r in seen} == {('127.0.0.1', 11434)}
+
+
+@pytest.mark.asyncio
+async def test_ollama_without_base_url_reads_ollama_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ollama() with OLLAMA_HOST=http://gpu-box:11434 sends ai.generate to gpu-box, as the ollama SDK does."""
+    monkeypatch.setenv('OLLAMA_HOST', 'http://gpu-box:11434')
+    seen: list[httpx.Request] = []
+    with _real_client_on(_fake_server(seen)):
+        ai = Genkit(plugins=[Ollama()])
+        await ai.generate(model='ollama/m', prompt='Suggest a dish.')
+
+    assert {(r.url.host, r.url.port) for r in seen} == {('gpu-box', 11434)}
+
+
+@pytest.mark.parametrize(
+    'base_url',
+    ['http://gpu-box:11434/v1', 'http://gpu-box:11434/v1/', 'http://gpu-box:11434/api', 'gpu-box:11434/v1'],
+)
+def test_ollama_base_url_with_api_suffix_raises(monkeypatch: pytest.MonkeyPatch, base_url: str) -> None:
+    """A /v1 or /api suffix would turn into a path prefix (/v1/api/chat) and 404, so the constructor says so."""
+    monkeypatch.delenv('OLLAMA_HOST', raising=False)
+    with pytest.raises(ValueError, match=r'server root'):
+        Ollama(base_url=base_url)
+
+
+def test_ollama_host_with_v1_suffix_raises_naming_the_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same check covers OLLAMA_HOST, and the error says that's where the value came from."""
+    monkeypatch.setenv('OLLAMA_HOST', 'http://gpu-box:11434/v1')
+    with pytest.raises(ValueError, match='OLLAMA_HOST'):
+        Ollama()
+
+
+@pytest.mark.parametrize('base_url', ['http://gpu-box:11434', 'gpu-box:11434', 'https://proxy.example.com/ollama'])
+def test_ollama_server_root_and_proxy_paths_are_accepted(monkeypatch: pytest.MonkeyPatch, base_url: str) -> None:
+    """A bare server, host:port, or a proxy path prefix passes."""
+    monkeypatch.delenv('OLLAMA_HOST', raising=False)
+    assert Ollama(base_url=base_url).base_url == base_url
+
+
+@pytest.mark.asyncio
+async def test_ollama_base_url_wins_over_ollama_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ollama(base_url=...) sends ai.generate to that host even when OLLAMA_HOST is set."""
+    monkeypatch.setenv('OLLAMA_HOST', 'http://gpu-box:11434')
+    seen: list[httpx.Request] = []
+    with _real_client_on(_fake_server(seen)):
+        ai = Genkit(plugins=[Ollama(base_url='http://example:11434')])
+        await ai.generate(model='ollama/m', prompt='Suggest a dish.')
+
+    assert {(r.url.host, r.url.port) for r in seen} == {('example', 11434)}

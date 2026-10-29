@@ -28,7 +28,7 @@ from genkit_fastapi import genkit_fastapi_handler, serve_flow
 from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError
+from genkit import FlowContext, Genkit, GenkitError, PublicError
 from genkit.plugin_api import provider_error
 from genkit.web import RequestData
 
@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
     @app.post('/chat', response_model=None)
     @genkit_fastapi_handler(ai)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
+    async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
         return {'greeting': f'Hi {name}'}
 
     @ai.flow()
@@ -227,7 +227,7 @@ def test_context_dependency_value_reaches_action() -> None:
     ai = Genkit()
 
     @ai.flow()
-    async def whoami(_: str, ctx: ActionRunContext) -> str:
+    async def whoami(_: str, ctx: FlowContext) -> str:
         return str(ctx.context.get('uid'))
 
     async def current_uid() -> str:
@@ -401,7 +401,7 @@ def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> N
     @app.post('/echo', response_model=None)
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
         return {
             'method': ctx.context['method'],
             'authorization': ctx.context['authorization'],
@@ -433,7 +433,7 @@ def test_request_data_duplicate_authorization_is_comma_joined() -> None:
     @app.post('/echo', response_model=None)
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
         return {'authorization': ctx.context['authorization']}
 
     response = TestClient(app).post(
@@ -457,7 +457,7 @@ def test_request_data_duplicate_x_forwarded_for_is_comma_joined() -> None:
     @app.post('/echo', response_model=None)
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
         return {'xff': ctx.context['xff']}
 
     response = TestClient(app).post(

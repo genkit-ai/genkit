@@ -36,9 +36,9 @@ from genkit_vertexai._model_garden._plugin import ModelGardenModel
 from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
+from genkit import Genkit, GenkitError, Message, Part, Role
 from genkit._ai._formats._builtin import built_in_formats
-from genkit.model import ModelRequest, OutputConfig
+from genkit.model import ModelContext, ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
 CLAUDE = 'modelgarden/anthropic/claude-sonnet-4@20250514'
@@ -145,6 +145,35 @@ def test_anthropic_model_garden_uses_anthropic_config_schema() -> None:
     assert AnthropicModelGarden.get_config_schema() is AnthropicConfig
 
 
+@pytest.mark.asyncio
+async def test_generate_model_garden_claude_drops_part_with_only_signature_key() -> None:
+    """A Model Garden Claude thinking part carrying only ``signature`` is left out of the request."""
+    ai = Genkit(plugins=[ModelGarden(project='project', location='us-east5')])
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('what is 17 * 23?')]),
+        Message(
+            role=Role.MODEL,
+            content=[Part.from_reasoning('because', metadata={'signature': 'sig'}), Part.from_text('391')],
+        ),
+    ]
+    reply = MagicMock()
+    reply.content = [MagicMock(type='text', text='ok')]
+    reply.usage = MagicMock(input_tokens=1, output_tokens=1)
+    reply.stop_reason = 'end_turn'
+
+    with patch('genkit_vertexai._model_garden._anthropic.AsyncAnthropicVertex') as client_ctor:
+        client = client_ctor.return_value
+        client.messages.create = AsyncMock(return_value=reply)
+        client.beta.messages.create = AsyncMock(return_value=reply)
+        response = await ai.generate(
+            model='modelgarden/anthropic/claude-sonnet-4@20250514', messages=history, prompt='now add 100'
+        )
+
+    assert response.text == 'ok'
+    create = client.messages.create if client.messages.create.called else client.beta.messages.create
+    assert create.call_args.kwargs['messages'][1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': '391'}]}
+
+
 def test_anthropic_model_garden_does_not_advertise_api_key() -> None:
     """The advertised schema has no apiKey; a per-request key goes in context.secrets."""
     properties = AnthropicModelGarden.get_config_schema().model_json_schema()['properties']
@@ -205,7 +234,7 @@ async def test_model_garden_llama_json_request_sends_json_object() -> None:
         location='us-central1',
         project='p',
     )
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=False)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
@@ -527,3 +556,32 @@ async def test_model_garden_environment_project_skips_adc(vertex_requests: list[
 
     adc.assert_not_called()
     assert [_project_in(r) for r in vertex_requests] == ['env-proj']
+
+
+def test_model_garden_positional_project_raises_type_error() -> None:
+    """ModelGarden('my-project') raises TypeError; the project is passed as project=."""
+    with pytest.raises(TypeError):
+        ModelGarden('my-project')  # type: ignore[misc]
+
+
+def test_model_garden_models_argument_raises_type_error() -> None:
+    """ModelGarden(models=[...]) raises TypeError; models resolve by name without a list."""
+    with pytest.raises(TypeError, match='models'):
+        ModelGarden(project='p', models=['meta/llama-3.1-405b-instruct-maas'])  # type: ignore[call-arg]
+
+
+@pytest.mark.asyncio
+async def test_model_garden_without_models_still_resolves_any_model() -> None:
+    """ai.generate(model='modelgarden/mistralai/mistral-small-2503') works with no models list configured."""
+    client = MagicMock()
+    client.chat.completions.create = AsyncMock(return_value=_chat_completion('hello from mistral'))
+
+    with patch(
+        'genkit_vertexai._model_garden._plugin.ModelGardenModel.create_client',
+        new=AsyncMock(return_value=client),
+    ):
+        ai = Genkit(plugins=[ModelGarden(project='p', location='us-central1')])
+        response = await ai.generate(model=MISTRAL, prompt='hi')
+
+    assert response.text == 'hello from mistral'
+    assert client.chat.completions.create.call_args.kwargs['model'] == 'mistralai/mistral-small-2503'

@@ -46,7 +46,7 @@ func TestEmbedValidRequest(t *testing.T) {
 		Options: &EmbedOptions{Model: "all-minilm"},
 	}
 
-	resp, err := embed(context.Background(), server.URL, req)
+	resp, err := embed(context.Background(), nil, server.URL, nil, req)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -64,7 +64,7 @@ func TestEmbedInvalidServerAddress(t *testing.T) {
 		Options: &EmbedOptions{Model: "all-minilm"},
 	}
 
-	_, err := embed(context.Background(), "", req)
+	_, err := embed(context.Background(), nil, "", nil, req)
 	if err == nil || !strings.Contains(err.Error(), "invalid server address") {
 		t.Fatalf("expected invalid server address error, got %v", err)
 	}

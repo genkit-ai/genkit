@@ -37,7 +37,7 @@
 
 ::: genkit.Tool
 
-::: genkit.ToolRunContext
+::: genkit.ToolContext
 
 ::: genkit.Interrupt
 
@@ -45,7 +45,7 @@
 
 ::: genkit.MultipartToolResponse
 
-::: genkit.ActionRunContext
+::: genkit.FlowContext
 
 ::: genkit.Prompt
 
@@ -66,6 +66,8 @@
 ::: genkit.model.BackgroundAction
 
 ::: genkit.model.GenerateActionOptions
+
+::: genkit.model.ModelContext
 
 ::: genkit.model.ModelRequest
 
@@ -141,9 +143,9 @@
 
 ::: genkit.evaluator.BaseDataPoint
 
-::: genkit.evaluator.EvalRequest
+::: genkit.evaluator.EvaluatorRequest
 
-::: genkit.evaluator.EvalFnResponse
+::: genkit.evaluator.EvaluatorResponse
 
 ::: genkit.evaluator.Score
 
@@ -151,7 +153,9 @@
 
 ::: genkit.evaluator.ScoreStatus
 
-::: genkit.evaluator.evaluator_action_metadata
+::: genkit.evaluator.Evaluator
+
+::: genkit.evaluator.BatchEvaluator
 
 ::: genkit.evaluator.EvaluatorRef
 

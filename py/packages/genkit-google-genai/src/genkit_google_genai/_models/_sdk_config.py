@@ -93,6 +93,8 @@ GEMINI_MANAGED_BODY_FIELDS = frozenset({'contents', 'systeminstruction', 'tools'
 GEMINI_MANAGED_GENERATION_FIELDS = frozenset({'responseschema', 'responsejsonschema', 'responsemimetype'})
 # Veo's predictLongRunning body: `instances` carries the prompt and input media.
 VEO_MANAGED_BODY_FIELDS = frozenset({'instances'})
+# Virtual Try-On's predict body: `instances` carries the person and product images.
+VIRTUAL_TRY_ON_MANAGED_BODY_FIELDS = frozenset({'instances'})
 
 
 def _wire_key(key: str) -> str:

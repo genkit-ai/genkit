@@ -18,16 +18,18 @@
 
 import asyncio
 import inspect
+import os
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, replace
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 import httpx
 import ollama as ollama_api
 import structlog
 
-from genkit import ActionRunContext, ModelResponse
+from genkit import ModelResponse
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -36,7 +38,15 @@ from genkit.embedder import (
     embedder as create_embedder,
     embedder_action_metadata,
 )
-from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, model as create_model, model_action_metadata
+from genkit.model import (
+    Constrained,
+    ModelContext,
+    ModelInfo,
+    ModelRequest,
+    Supports,
+    model as create_model,
+    model_action_metadata,
+)
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -174,6 +184,18 @@ class _CallableHeaders(httpx.Auth):
         yield request
 
 
+def _reject_api_path_suffix(base_url: str, *, source: str) -> None:
+    """Requests go to ``{base_url}/api/chat``, so a ``/v1`` or ``/api`` suffix becomes a path prefix and 404s."""
+    # The SDK accepts host:port with no scheme; add one so the path parses.
+    path = urlsplit(base_url if '://' in base_url else f'http://{base_url}').path.rstrip('/')
+    for suffix in ('/v1', '/api'):
+        if path.endswith(suffix):
+            raise ValueError(
+                f'{source} {base_url!r} ends in {suffix}, but requests go to {{base_url}}/api/chat; '
+                'pass the server root, e.g. http://gpu-box:11434'
+            )
+
+
 class Ollama(Plugin):
     """Ollama plugin for Genkit.
 
@@ -185,7 +207,8 @@ class Ollama(Plugin):
 
     def __init__(
         self,
-        server_address: str | None = None,
+        *,
+        base_url: str | None = None,
         request_headers: dict[str, str] | _HeaderSource | None = None,
         timeout: float | None = None,
     ) -> None:
@@ -197,8 +220,11 @@ class Ollama(Plugin):
         ``/api/show`` probe.
 
         Args:
-            server_address: The URL of the Ollama server. Defaults to a predefined
-                Ollama server URL if not provided.
+            base_url: The Ollama server root, e.g. ``http://gpu-box:11434``,
+                with no ``/v1`` or ``/api`` suffix: requests go to
+                ``{base_url}/api/chat``. Defaults to ``OLLAMA_HOST``, then
+                ``http://127.0.0.1:11434``. A value ending in ``/v1`` or
+                ``/api`` raises ``ValueError``.
             request_headers: Extra HTTP headers for every request to the Ollama
                 server, typically auth for a proxy in front of it. A dict is
                 sent as-is. A callable (sync or async, no arguments) runs before
@@ -207,7 +233,9 @@ class Ollama(Plugin):
             timeout: Optional request timeout (seconds) forwarded to the underlying
                 httpx client.
         """
-        self.server_address = server_address or DEFAULT_OLLAMA_SERVER_URL
+        # Passing host= turns off the SDK's own OLLAMA_HOST lookup, so read it here.
+        self.base_url = base_url or os.environ.get('OLLAMA_HOST') or DEFAULT_OLLAMA_SERVER_URL
+        _reject_api_path_suffix(self.base_url, source='base_url' if base_url else 'OLLAMA_HOST')
 
         # A dict is baked into the cached client; a callable runs per request via httpx auth.
         self.request_headers: dict[str, str] = {}
@@ -218,10 +246,14 @@ class Ollama(Plugin):
             _require_no_arg_callable(request_headers)
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
-        self.client = loop_local_client(self._make_client)
         self._probes: dict[str, _ProbeResult] = {}
         # One probe per model at a time; concurrent first uses await the same task.
         self._inflight: dict[str, asyncio.Task[_ResolvedModel]] = {}
+
+    @loop_local_client
+    def client(self) -> ollama_api.AsyncClient:
+        """The per-event-loop client built with the static headers and timeout."""
+        return self._make_client()
 
     def _make_client(self) -> ollama_api.AsyncClient:
         """Build the Ollama AsyncClient for the current event loop.
@@ -229,7 +261,7 @@ class Ollama(Plugin):
         Returns:
             A new ``ollama.AsyncClient`` targeting the configured server.
         """
-        kwargs: dict[str, Any] = {'host': self.server_address, 'headers': self.request_headers}
+        kwargs: dict[str, Any] = {'host': self.base_url, 'headers': self.request_headers}
         if self._auth is not None:
             # Extra kwargs go straight to httpx.AsyncClient.
             kwargs['auth'] = self._auth
@@ -355,7 +387,7 @@ class Ollama(Plugin):
         model = OllamaModel(
             client=self.client,
             model_definition=model_ref,
-            server_address=self.server_address,
+            base_url=self.base_url,
         )
 
         action_metadata = model_action_metadata(
@@ -364,7 +396,7 @@ class Ollama(Plugin):
             info=ollama_model_info(model_ref, f'Ollama - {name}'),
         )
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+        async def _run(request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
             # OllamaModel wraps connection errors at the SDK boundary, so a failed
             # media-URL fetch isn't misreported as an Ollama server outage.
             return await model.generate(request, ctx)
@@ -377,8 +409,8 @@ class Ollama(Plugin):
         )
 
         # Explicitly set schemas (always present in the action metadata).
-        action.input_schema = action_metadata.input_json_schema  # type: ignore[invalid-assignment]
-        action.output_schema = action_metadata.output_json_schema  # type: ignore[invalid-assignment]
+        action.input_schema = action_metadata.input_schema  # type: ignore[invalid-assignment]
+        action.output_schema = action_metadata.output_schema  # type: ignore[invalid-assignment]
 
         return action
 
@@ -393,11 +425,11 @@ class Ollama(Plugin):
         """
         embedder = OllamaEmbedder(client=self.client, model=name)
 
-        server_address = self.server_address
+        base_url = self.base_url
 
         async def _run(request: EmbedRequest) -> EmbedResponse:
             # Embedding requests never fetch media, so the whole SDK call is wrapped.
-            async with wrap_connection_errors(server_address):
+            async with wrap_connection_errors(base_url):
                 return await embedder.embed(request)
 
         return create_embedder(
@@ -422,7 +454,7 @@ class Ollama(Plugin):
         Returns:
             ActionMetadata for each model and embedder.
         """
-        async with wrap_connection_errors(self.server_address):
+        async with wrap_connection_errors(self.base_url):
             try:
                 response = await self.client().list()
             except ollama_api.ResponseError as e:

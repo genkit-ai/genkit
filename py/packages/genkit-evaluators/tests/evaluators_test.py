@@ -20,7 +20,7 @@ import pytest
 from genkit_evaluators import register_genkit_evaluators
 
 from genkit import Genkit
-from genkit.evaluator import BaseDataPoint, EvalRequest, Score
+from genkit.evaluator import BaseDataPoint, EvaluatorRequest, Score
 
 
 def _only_score(evaluation: list[Score]) -> Score:
@@ -46,7 +46,7 @@ async def test_deep_equal(ai: Genkit) -> None:
     ]
     eval_action = await ai._registry.resolve_evaluator('genkitEval/deep_equal')
     assert eval_action is not None
-    req = EvalRequest(
+    req = EvaluatorRequest(
         dataset=[BaseDataPoint.model_validate(d) for d in dataset],
         eval_run_id='testrun',
     )
@@ -68,7 +68,7 @@ async def test_regex(ai: Genkit) -> None:
     ]
     eval_action = await ai._registry.resolve_evaluator('genkitEval/regex')
     assert eval_action is not None
-    req = EvalRequest(
+    req = EvaluatorRequest(
         dataset=[BaseDataPoint.model_validate(d) for d in dataset],
         eval_run_id='testrun',
     )
@@ -90,7 +90,7 @@ async def test_jsonata(ai: Genkit) -> None:
     ]
     eval_action = await ai._registry.resolve_evaluator('genkitEval/jsonata')
     assert eval_action is not None
-    req = EvalRequest(
+    req = EvaluatorRequest(
         dataset=[BaseDataPoint.model_validate(d) for d in dataset],
         eval_run_id='testrun',
     )

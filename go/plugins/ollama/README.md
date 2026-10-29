@@ -50,6 +50,19 @@ func main() {
 }
 ```
 
+A hosted Ollama server, such as `https://ollama.com`, authenticates with the
+`OLLAMA_API_KEY` environment variable, which the plugin sends as a bearer token.
+A proxy that needs other headers takes `Headers`, which go on every request. For
+credentials that change per request, such as a short-lived token, supply an
+`HTTPClient` whose transport adds them (for example `oauth2.NewClient`):
+
+```go
+o := &ollama.Ollama{
+ ServerAddress: "https://ollama.example.com",
+ Headers:       http.Header{"X-Api-Key": {apiKey}},
+}
+```
+
 ## Language Models
 
 Because Ollama models are locally hosted and the available models depend on what the user has pulled (`ollama pull <model>`), the plugin doesn't pre-initialize any default models. You must define them explicitly.

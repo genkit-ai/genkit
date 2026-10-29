@@ -39,8 +39,8 @@ from anthropic import (
 )
 from anthropic.types import Message as AnthropicMessage
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit.model import Constrained, ModelContext, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
@@ -252,7 +252,7 @@ def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) ->
                 status='INVALID_ARGUMENT',
                 message=(
                     f'anthropic: {field!r} is a client setting, not a request field; '
-                    'pass it to Anthropic(timeout=..., default_headers=...)'
+                    "pass it as Anthropic(client_options={'timeout': ..., 'default_headers': ...})"
                 ),
             )
     for field in _MANAGED_BODY_FIELDS:
@@ -322,7 +322,7 @@ class AnthropicModel:
         self.client = client
         self._default_api_version = default_api_version
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
         """Generate response from Anthropic.
 
         Args:
@@ -334,9 +334,9 @@ class AnthropicModel:
         """
         context = ctx.context if ctx is not None and isinstance(ctx.context, dict) else None
         client = self._client_for_key(context_api_key(context))
-        # A config that fails validation, a bad thinking budget, an unsigned
-        # thinking part, or a malformed data URI is caller input, so retry
-        # skips it. Pydantic's ValidationError is a ValueError.
+        # A config that fails validation, a bad thinking budget, or a malformed
+        # data URI is caller input, so retry skips it. Pydantic's
+        # ValidationError is a ValueError.
         try:
             config = _normalize_config(request.config)
             use_beta = self._uses_beta_api(config)
@@ -487,6 +487,10 @@ class AnthropicModel:
         params['model'] = version or self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
+        # ModelConfig types top_k as float, so 40 dumps as 40.0; Claude's top_k is an int.
+        top_k = params.get('top_k')
+        if isinstance(top_k, float) and top_k.is_integer():
+            params['top_k'] = int(top_k)
 
         # Not create() kwargs; see AnthropicConfig.SDK_UNSUPPORTED_KEYS.
         for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
@@ -576,7 +580,7 @@ class AnthropicModel:
     async def _generate_streaming(
         self,
         params: dict[str, Any],
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         client: object | None = None,
         use_beta: bool = False,
     ) -> AnthropicMessage:
@@ -725,13 +729,12 @@ class AnthropicModel:
         """
         reasoning = part.reasoning
         if reasoning:
+            # Claude only accepts thinking it signed. Unsigned reasoning, such as
+            # history from a model that signs nothing, is dropped, the same as on
+            # Bedrock's Claude path.
             signature = get_thinking_signature(part)
             if not signature:
-                raise ValueError(
-                    'Anthropic thinking parts require a signature when sending back '
-                    'to the API. Preserve the `metadata.thoughtSignature` value from '
-                    'the original response.'
-                )
+                return None
             return {'type': 'thinking', 'thinking': reasoning, 'signature': signature}
 
         redacted_thinking = get_redacted_thinking_data(part)

@@ -85,7 +85,7 @@ def test_known_claude_matches_catalog() -> None:
 
 def test_create_model_action_types_anthropic_config() -> None:
     """Anthropic model actions opt into ModelRequest[AnthropicConfig]."""
-    plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
+    plugin = Anthropic(api_key='test-key')
     action = plugin._create_model_action('claude-sonnet-4')
 
     hints = get_type_hints(action._fn)  # noqa: SLF001

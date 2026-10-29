@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import Sequence
 from typing import ClassVar
 
 from genkit._core._action import Action, ActionKind, set_action_name
@@ -92,7 +93,7 @@ class Plugin(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> Sequence[Action | ActionMetadata]:
         """Return advertised actions for dev UI/reflection listing.
 
         ``ActionMetadata.action_type`` must be set (typically ``ActionKind.*``) and
@@ -185,7 +186,7 @@ class MiddlewarePlugin(Plugin):
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> Sequence[Action | ActionMetadata]:
         return []
 
     def list_middleware(self) -> list[GenerateMiddleware]:

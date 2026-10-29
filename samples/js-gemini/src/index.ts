@@ -17,7 +17,6 @@
 import { googleAI } from '@genkit-ai/google-genai';
 import * as fs from 'fs';
 import { MediaPart, genkit, z } from 'genkit';
-import { Readable } from 'stream';
 import wav from 'wav';
 
 const ai = genkit({
@@ -345,15 +344,16 @@ async function toWav(
   });
 }
 
-// An example of using Ver 2 model to make a static photo move.
-ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
+// An example of using Gemini Omni to make a static photo move. It returns the
+// video directly (an inline MP4), not an operation.
+ai.defineFlow('photo-move', async (_, { sendChunk }) => {
   const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
-  let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-generate-preview'),
+  const { media } = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
     prompt: [
       {
-        text: 'make the subject in the photo move',
+        text: 'Use this image as the starting frame and make the subject in the photo move.',
       },
       {
         media: {
@@ -362,60 +362,22 @@ ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
         },
       },
     ],
-    config: {
-      durationSeconds: 5,
-      aspectRatio: '9:16',
-      personGeneration: 'allow_adult',
-    },
+    config: { videoFormat: { aspectRatio: '9:16' } },
   });
-
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
-  }
-
-  while (!operation.done) {
-    sendChunk('check status of operation ' + operation.id);
-    operation = await ai.checkOperation(operation);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  if (operation.error) {
-    sendChunk('Error: ' + operation.error.message);
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  // operation done, download generated video to disk
-  const video = operation.output?.message?.content.find((p) => !!p.media);
-  if (!video) {
+  if (!media) {
     throw new Error('Failed to find the generated video');
   }
   sendChunk('Writing results to photo.mp4');
-  await downloadVideo(video, 'photo.mp4');
+  saveInlineVideo(media, 'photo.mp4');
   sendChunk('Done!');
 
-  return operation;
+  return media;
 });
 
-function getApiKeyFromEnvVar(): string | undefined {
-  return (
-    process.env.GEMINI_API_KEY ||
-    process.env.GOOGLE_API_KEY ||
-    process.env.GOOGLE_GENAI_API_KEY
+/** Writes an inline (data URL) video to a file. */
+function saveInlineVideo(media: MediaPart['media'], path: string) {
+  fs.writeFileSync(
+    path,
+    Buffer.from(media.url.substring(media.url.indexOf(',') + 1), 'base64')
   );
-}
-
-async function downloadVideo(video: MediaPart, path: string) {
-  const fetch = (await import('node-fetch')).default;
-  const videoDownloadResponse = await fetch(
-    `${video.media!.url}&key=${getApiKeyFromEnvVar()}`
-  );
-  if (
-    !videoDownloadResponse ||
-    videoDownloadResponse.status !== 200 ||
-    !videoDownloadResponse.body
-  ) {
-    throw new Error('Failed to fetch video');
-  }
-
-  Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
 }
