@@ -302,7 +302,7 @@ class McpConnection:
                 )
                 tools.extend(result.tools)
                 cursor = result.nextCursor
-                if cursor is None:
+                if not cursor:
                     return tools
                 if cursor in seen:
                     raise _ProtocolError(f'{self._config.command!r} repeated the tools/list cursor {cursor!r}')

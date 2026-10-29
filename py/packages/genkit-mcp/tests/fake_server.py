@@ -74,6 +74,9 @@ async def list_tools(req: ListToolsRequest) -> ListToolsResult:
     if os.environ.get('MCP_FAKE_STUCK_CURSOR'):
         return ListToolsResult(tools=TOOLS[:1], nextCursor='stuck')
 
+    if os.environ.get('MCP_FAKE_EMPTY_CURSOR'):
+        return ListToolsResult(tools=TOOLS, nextCursor='')
+
     if os.environ.get('MCP_FAKE_ENDLESS_CURSOR'):
         return ListToolsResult(tools=TOOLS[:1], nextCursor=str(list_requests))
 

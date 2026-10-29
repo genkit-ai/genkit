@@ -214,6 +214,17 @@ async def test_list_tools_follows_pagination_cursors(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_tools_treats_an_empty_cursor_as_the_last_page(tmp_path: Path) -> None:
+    connection = McpConnection(config(tmp_path, MCP_FAKE_EMPTY_CURSOR='1'))
+    try:
+        assert [tool.name for tool in await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)] == ALL_TOOLS
+        served = await asyncio.wait_for(connection.call_tool('list_requests', {}), timeout=LIMIT)
+        assert text_of(served) == '1'
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
 async def test_list_tools_rejects_a_non_advancing_cursor(tmp_path: Path) -> None:
     connection = McpConnection(config(tmp_path, MCP_FAKE_STUCK_CURSOR='1'))
     try:
