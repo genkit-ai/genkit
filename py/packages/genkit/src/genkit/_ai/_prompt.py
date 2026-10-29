@@ -72,7 +72,7 @@ from genkit._core._channel import start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
-from genkit._core._middleware import BaseMiddleware, middleware_class_index
+from genkit._core._middleware import BaseMiddleware, _dump_middleware_ref_config, middleware_class_index
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
@@ -976,7 +976,6 @@ async def to_prompt_model_request(*, registry: Registry, options: GenerateAction
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
@@ -1348,7 +1347,7 @@ def _use_to_wire_metadata(
             name = cls_index.get(type(entry))
             if not name:
                 continue
-            config = entry.config.model_dump(exclude_none=True, mode='json')
+            config = _dump_middleware_ref_config(entry.config)
             item = {'name': name}
             if config:
                 item['config'] = config

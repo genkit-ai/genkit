@@ -18,6 +18,7 @@
 
 # Base class and framework primitives
 from genkit._core._action import Action, ActionKind
+from genkit._core._base import GenkitConfig
 from genkit._core._compat import StrEnum
 from genkit._core._constants import GENKIT_CLIENT_HEADER
 from genkit._core._environment import is_dev_environment
@@ -31,6 +32,7 @@ __all__ = [
     # Base class and framework primitives
     'MiddlewarePlugin',
     'Plugin',
+    'GenkitConfig',
     'Action',
     'ActionMetadata',
     'ActionKind',

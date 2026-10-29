@@ -23,11 +23,12 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, Field
 
 from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
 from genkit.model import ABNORMAL_FINISH_REASONS, ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 from ._catalog import A2uiCatalog, render_catalog_instructions
 from ._loader import resolve_catalog
@@ -44,17 +45,22 @@ from ._types import DEFAULT_VERSION, SURFACE_KEYS, Envelope, SupportedVersion, V
 SKIP_REWRITE_FINISH_REASONS = ABNORMAL_FINISH_REASONS | {FinishReason.UNKNOWN}
 
 
-class SurfacesConfig(BaseModel):
+class SurfacesConfig(GenkitConfig):
     """Options for :class:`Surfaces`."""
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True)
 
     instructions: Literal['system', 'none'] = 'system'
     # 'off' passes envelopes through unchecked, 'warn' logs and drops the
     # offending block, 'strict' kills the turn. Default is 'warn' because a
     # single hallucinated component should not cost the whole answer.
-    validation: ValidateMode = Field(default='warn', alias='validate')
-    surface_id: str | None = Field(default=None, alias='surfaceId')
+    #
+    # The wire key is 'validate' (matches JS and Go), while the Python field is
+    # validation so it does not shadow BaseModel.validate.
+    validation: ValidateMode = Field(
+        default='warn',
+        validation_alias=AliasChoices('validate', 'validation'),
+        serialization_alias='validate',
+    )
+    surface_id: str | None = None
     # Registry id from load_catalog. The Developer UI lists those same ids.
     catalog: str | None = None
     # A typo here would stamp envelopes the renderer cannot paint.
@@ -69,7 +75,7 @@ class Surfaces(BaseMiddleware[SurfacesConfig]):
     aborted / failed / unknown / other) is left alone — the stop is the result,
     not a salvaged card.
 
-    Under `validate='strict'` a bad fence fails the turn: generate returns a
+    Under `validation='strict'` a bad fence fails the turn: generate returns a
     response with `finish_reason` failed, no `message`, and the reason on
     `error`. `messages` ends at the user turn, so a retry does not feed the
     hallucinated surface back to the model.

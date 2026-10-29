@@ -32,3 +32,4 @@ def package_version() -> str:
 GENKIT_VERSION: Final[str] = package_version()
 
 GENKIT_CLIENT_HEADER: Final[str] = f'genkit-python/{GENKIT_VERSION}'
+"""Client identifier plugins send to providers, e.g. `genkit-python/1.0.0`."""

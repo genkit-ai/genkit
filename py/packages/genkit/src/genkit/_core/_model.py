@@ -78,6 +78,9 @@ from genkit._core._typing import (
 
 # ModelConfigDict is the hand-copied autocomplete list for this class — keep
 # the keys matching so a new knob shows up in the IDE the same day it becomes legal.
+#
+# GenerationCommonConfig is generated as a GenkitConfig, so model_dump()
+# returns field names for provider SDKs and by_alias=True gives the wire shape.
 class ModelConfig(GenerationCommonConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
@@ -86,8 +89,6 @@ class ModelConfig(GenerationCommonConfig):
     per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
     here.
     """
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
 
     extra: dict[str, Any] | None = None
     """Provider settings the model's config class doesn't declare, sent as-is.
@@ -106,9 +107,11 @@ class ModelConfig(GenerationCommonConfig):
 
 
 ModelUsage = GenerationUsage  # public name for GenerationUsage
+"""Token, character, and media counts a model reports for one generation."""
 
 # what callers pass as tool_choice; they type the string, not an enum.
 ToolChoice = Literal['auto', 'required', 'none']
+"""Whether the model may call tools (`auto`), must call one (`required`), or must not (`none`)."""
 
 # A termination known to carry no conforming output. Every path that would
 # parse a response against its output schema consults this first: a schema
@@ -128,6 +131,7 @@ ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset({
     FinishReason.INTERRUPTED,
     FinishReason.OTHER,
 })
+"""Finish reasons that skip output-schema validation because the response carries no conforming output."""
 
 logger = get_logger(__name__)
 
@@ -389,7 +393,8 @@ class Part(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
         validate_assignment=True,
     )
 
@@ -910,11 +915,33 @@ class Artifact(GenkitModel):
         return parts_from_inbound(v)
 
 
+def options_dict(value: object) -> dict[str, Any]:
+    """The options dict an untyped embedder receives.
+
+    ``None`` is ``{}``. A mapping is copied. A BaseModel is dumped with only
+    the fields the caller set, the same as an untyped model fn's config, so a
+    ref's value survives a field the call left unset. Fields marked
+    ``exclude=True`` that were set are copied back so a client-only setting
+    still arrives. Anything else raises ValueError.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, BaseModel):
+        dumped = value.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
+        for name in value.model_fields_set:
+            if name not in dumped:
+                dumped[name] = getattr(value, name)
+        return dumped
+    if isinstance(value, Mapping):
+        return dict(cast(Mapping[str, Any], value))
+    raise ValueError(f'options must be a mapping or BaseModel, got {type(value).__name__}')
+
+
 class EmbedRequest(GenkitModel):
     """Embed request whose documents are the public Document type."""
 
     input: list[Document]
-    options: Any | None = Field(default=None)
+    options: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator('input', mode='before')
     @classmethod
@@ -922,6 +949,11 @@ class EmbedRequest(GenkitModel):
         if not isinstance(v, list):
             return v
         return [as_document(d) for d in v]
+
+    @field_validator('options', mode='before')
+    @classmethod
+    def _wrap_options(cls, v: object) -> dict[str, Any]:
+        return options_dict(v)
 
 
 class SessionState(GenkitModel):
@@ -1083,7 +1115,7 @@ class OutputConfig(GenkitModel):
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
+        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True, protected_namespaces=()
     )
     format: str | None = None
     json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
@@ -1119,7 +1151,9 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         so passing them there leaves output unset.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
+    )
     messages: list[Message]
     docs: list[Document] | None = None
     config: ModelRequestConfigT | None = None

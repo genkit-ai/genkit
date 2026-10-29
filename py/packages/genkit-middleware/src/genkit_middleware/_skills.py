@@ -29,6 +29,7 @@ from pydantic import BaseModel as PydanticBaseModel, Field
 from genkit import Message, ModelResponse, Part, Role, Tool, tool
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 from genkit.model import GenerateActionOptions
+from genkit.plugin_api import GenkitConfig
 
 _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
@@ -40,7 +41,7 @@ class _UseSkillInput(PydanticBaseModel):
     skill_name: str = Field(description='The name of the skill to load (as listed in the system prompt).')
 
 
-class SkillsConfig(PydanticBaseModel):
+class SkillsConfig(GenkitConfig):
     """Directories to scan for skill folders containing ``SKILL.md``."""
 
     skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
