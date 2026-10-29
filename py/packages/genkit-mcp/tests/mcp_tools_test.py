@@ -6,6 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 # SPDX-License-Identifier: Apache-2.0
 
 """Unit tests for MCP tool result translation."""
@@ -141,8 +147,8 @@ def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
             EmbeddedResource(
                 type='resource',
                 resource=BlobResourceContents(
-                    uri=AnyUrl('file:///data.bin'),
-                    mimeType='application/octet-stream',
+                    uri=AnyUrl('file:///data.pdf'),
+                    mimeType='application/pdf',
                     blob='blob-data',
                 ),
             ),
@@ -163,8 +169,20 @@ def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
     assert response.content == [
         Part.from_media(url='data:image/png;base64,image-data', content_type='image/png'),
         Part.from_media(url='data:audio/mpeg;base64,audio-data', content_type='audio/mpeg'),
-        Part.from_media(url='data:application/octet-stream;base64,blob-data', content_type='application/octet-stream'),
+        Part.from_media(url='data:application/pdf;base64,blob-data', content_type='application/pdf'),
         Part(resource=Resource(uri='https://example.test/docs')),
+    ]
+
+
+def test_call_result_to_multipart_labels_a_blob_without_a_mime_type_as_octet_stream() -> None:
+    result = CallToolResult(
+        content=[EmbeddedResource(type='resource', resource=BlobResourceContents(uri=AnyUrl('file:///x'), blob='YQ=='))]
+    )
+
+    response = call_result_to_multipart(result)
+
+    assert response.content == [
+        Part.from_media(url='data:application/octet-stream;base64,YQ==', content_type='application/octet-stream')
     ]
 
 
@@ -278,6 +296,7 @@ async def no_content(name: str, arguments: dict[str, Any], meta: dict[str, Any] 
     ('tool_name', 'expected'),
     [
         ('lookup', 'catalog_lookup'),
+        ('get-weather', 'catalog_get-weather'),
         ('look.up', 'catalog_look_up'),
         ('fs/read_file', 'catalog_fs_read_file'),
         ('caf\u00e9 menu', 'catalog_caf__menu'),
@@ -331,9 +350,18 @@ def test_mcp_tools_to_actions_maps_a_listing_in_order() -> None:
     assert [server_tool_of(action) for action in actions] == ['lookup', 'look.up']
 
 
-def test_mcp_tools_to_actions_refuses_a_listing_whose_sanitised_names_collide() -> None:
-    """Two server tools which would answer to one Genkit name cannot both be handed out."""
-    tools = [Tool(name='look.up', inputSchema={'type': 'object'}), Tool(name='look/up', inputSchema={'type': 'object'})]
+@pytest.mark.parametrize(
+    ('colliding', 'genkit_name'),
+    [(['look.up', 'look/up'], 'catalog_look_up'), (['lookup', 'lookup'], 'catalog_lookup')],
+)
+def test_mcp_tools_to_actions_skips_tools_which_share_a_genkit_name(colliding: list[str], genkit_name: str) -> None:
+    """Server tools which would answer to one Genkit name are left out; the rest of the listing survives."""
+    tools = [Tool(name=name, inputSchema={'type': 'object'}) for name in [colliding[0], 'other', colliding[1]]]
 
-    with pytest.raises(ValueError, match="'look.up' and 'look/up' both map to the Genkit tool name 'catalog_look_up'"):
-        mcp_tools_to_actions(tools, 'catalog', no_content)
+    with capture_logs() as logs:
+        actions = mcp_tools_to_actions(tools, 'catalog', no_content)
+
+    assert [action.name for action in actions] == ['catalog_other']
+    assert [entry['log_level'] for entry in logs] == ['warning']
+    assert logs[0]['tool'] == genkit_name
+    assert logs[0]['server_tools'] == colliding

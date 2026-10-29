@@ -242,22 +242,21 @@ def mcp_tools_to_actions(
 
     Returns:
         Unregistered actions in listing order, for a dynamic action provider to
-        hand out.
-
-    Raises:
-        ValueError: If two tools in the listing share a Genkit tool name once
-            the characters the model providers reject are rewritten.
+        hand out. Tools that share a Genkit tool name are logged and left out,
+        since either one could answer a call meant for the other.
     """
-    actions: list[Action] = []
-    server_tool_by_name: dict[str, str] = {}
+    server_tools_by_name: dict[str, list[str]] = {}
     for tool in tools:
-        action = mcp_tool_to_action(tool, prefix, call)
-        if action.name in server_tool_by_name:
-            raise ValueError(
-                f'MCP tools {server_tool_by_name[action.name]!r} and {tool.name!r} both map to the '
-                f'Genkit tool name {action.name!r} once the characters the model providers reject are '
-                'rewritten. Rename one of them on the server.'
+        server_tools_by_name.setdefault(mcp_tool_name(prefix, tool.name), []).append(tool.name)
+    for name, server_tools in server_tools_by_name.items():
+        if len(server_tools) > 1:
+            logger.warning(
+                'MCP tools skipped: they share one Genkit tool name',
+                tool=name,
+                server_tools=server_tools,
             )
-        server_tool_by_name[action.name] = tool.name
-        actions.append(action)
-    return actions
+    return [
+        mcp_tool_to_action(tool, prefix, call)
+        for tool in tools
+        if len(server_tools_by_name[mcp_tool_name(prefix, tool.name)]) == 1
+    ]
