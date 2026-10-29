@@ -191,7 +191,7 @@ def _is_known_unsupported(name: str) -> bool:
     return any(matcher in name for matcher in _UNSUPPORTED_MODEL_MATCHERS)
 
 
-# Default Supports for each multimodal model type, used as fallback when
+# Default ModelSupports for each multimodal model type, used as fallback when
 # a model is not found in the registry.
 _DEFAULT_SUPPORTS: dict[_ModelType, ModelSupports] = {
     _ModelType.IMAGE: ModelSupports(
@@ -250,8 +250,7 @@ def _get_multimodal_info(
     schema = multimodal_config_class(name=name, model_type=model_type)
     model_info = supported_models.get(name)
     if model_info:
-        # customOptions comes from the config class, not configSchema.
-        return model_info.model_copy(update={'config_schema': None}), schema
+        return model_info, schema
 
     return ModelInfo(label=f'OpenAI - {name}', supports=_DEFAULT_SUPPORTS.get(model_type)), schema
 
