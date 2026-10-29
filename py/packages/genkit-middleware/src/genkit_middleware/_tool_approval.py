@@ -20,15 +20,15 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from genkit import Interrupt, MultipartToolResponse
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ToolHookParams
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import ActionKind, GenkitConfig
 from genkit.telemetry import SpanContext, run_in_new_span
 
 
-class ToolApprovalConfig(BaseModel):
+class ToolApprovalConfig(GenkitConfig):
     """Tools that may run without an approval interrupt."""
 
     allowed_tools: list[str] = Field(default_factory=list)

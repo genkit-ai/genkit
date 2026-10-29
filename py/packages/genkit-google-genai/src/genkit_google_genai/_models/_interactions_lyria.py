@@ -39,21 +39,19 @@ from genkit_google_genai._models._interactions_utils import (
     require_interaction_steps,
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import field_validator
 from typing_extensions import Never
 
 from genkit import ModelResponse
 from genkit.model import ModelContext, ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action, ActionKind, GenkitConfig
 
 CREATE_OPTION_KEYS = ('response_modalities',)
 
 
-class LyriaConfig(BaseModel):
+class LyriaConfig(GenkitConfig):
     """Google AI Interactions Lyria model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -84,7 +82,8 @@ def create_lyria_action(
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         modalities = create_options.get('response_modalities') or ['audio', 'text']
         system_instruction, turns = split_system_instruction(request.messages or [])
         steps = to_interaction_steps(ensure_tool_ids(turns))
@@ -92,7 +91,6 @@ def create_lyria_action(
             'model': version,
             'input': steps,
             'response_modalities': modalities,
-            **passthrough,
         }
         if system_instruction:
             create_kwargs['system_instruction'] = system_instruction

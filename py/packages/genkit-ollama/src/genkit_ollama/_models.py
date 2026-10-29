@@ -224,8 +224,6 @@ class OllamaConfig(ModelConfig):
     ``options`` as-is, so newer sampler parameters work without an SDK bump.
     """
 
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
-
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None
     num_ctx: int | None = None
@@ -634,8 +632,9 @@ class OllamaModel:
         ``chat`` call — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
-        dict. Both paths snake-case the keys (declared fields can arrive
-        camelCased) and return only the values that are set.
+        dict. Both paths snake-case the keys: a wire dict is camelCase, and
+        undeclared extras on a loose ModelConfig subclass keep the caller's
+        spelling. Only set values are returned.
 
         Args:
             config: The configuration to extract request kwargs from.

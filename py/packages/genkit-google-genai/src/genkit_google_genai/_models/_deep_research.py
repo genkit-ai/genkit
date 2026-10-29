@@ -39,12 +39,11 @@ from genkit_google_genai._models._interactions_utils import (
     steps_with_folded_system_instruction,
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import field_validator
 
 from genkit import GenkitError, Operation
 from genkit.model import BackgroundAction, ModelContext, ModelRef, ModelRequest, model_ref
-from genkit.plugin_api import Action, ActionKind, to_json_schema
+from genkit.plugin_api import Action, ActionKind, GenkitConfig, to_json_schema
 
 AGENT_CONFIG_KEYS = (
     'thinking_summaries',
@@ -65,27 +64,24 @@ CREATE_OPTION_KEYS = (
 )
 
 
-class McpServerConfig(BaseModel):
+class McpServerConfig(GenkitConfig):
     """MCP server configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     name: str | None = None
     url: str | None = None
     headers: dict[str, str] | None = None
     allowed_tools: list[str] | None = None
 
 
-class FileSearchConfig(BaseModel):
+class FileSearchConfig(GenkitConfig):
     """File search store configuration for Deep Research."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     file_search_store_names: list[str]
 
 
-class DeepResearchConfig(BaseModel):
+class DeepResearchConfig(GenkitConfig):
     """Deep Research model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -179,7 +175,8 @@ def create_deep_research_background_action(
         options = client_options.merge(client_overrides_from_config(config))
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        agent_fields, _tool_fields, create_options, passthrough = partition_keys(
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        agent_fields, _tool_fields, create_options, _ = partition_keys(
             dumped,
             AGENT_CONFIG_KEYS,
             TOOL_CONFIG_KEYS,
@@ -194,7 +191,6 @@ def create_deep_research_background_action(
             'background': True,
             'agent_config': agent_config,
             **create_options,
-            **passthrough,
         }
         if tools:
             create_kwargs['tools'] = tools
