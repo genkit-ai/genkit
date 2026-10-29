@@ -247,14 +247,17 @@ def get_logger(name: str | None = None) -> FilteringBoundLogger:
         ```python
         from genkit.plugin_api import get_logger
 
+        # 1. Initialize plugin logger
         logger = get_logger(__name__)
-        logger.info('menu lookup', restaurant_id='r-42', items=12)
-        # => console: menu lookup  restaurant_id=r-42 items=12
-        # => Dev UI:  same line, attached to the running flow's trace
 
-        logger.debug('cache miss', restaurant_id='r-42')
+        # 2. Log provider events that route to Dev UI traces
+        logger.info('provider request', model='custom-embedder', batch_size=4)
+        # => console: provider request  model=custom-embedder batch_size=4
+        # => Dev UI:  same line, attached to the active action trace
+
+        logger.debug('backend cache hit', model='custom-embedder')
         # => console: nothing unless GENKIT_LOG=debug
-        # => Dev UI:  cache miss, still exported under `genkit start`
+        # => Dev UI:  backend cache hit, still exported under `genkit start`
         ```
     """
     return cast(FilteringBoundLogger, ExportTee(structlog.get_logger(name)))
