@@ -88,12 +88,11 @@ async def check_inventory(ingredient: str) -> dict[str, int]:
     return {'pesto': 12, 'pine_nuts': 4}
 
 
-# 3. Generate with flat thinking, safety, search grounding, and strict tool choice
+# 3. Generate with flat thinking, safety, search grounding, and a tool
 res = await ai.generate(
     model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Check pesto inventory and cite current safety storage guidelines.',
     tools=[check_inventory],
-    tool_choice='required',
     config=GeminiConfig(
         thinking_level='HIGH',
         include_thoughts=True,
@@ -118,7 +117,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 # Generate multi-speaker audio dialog
 res = await ai.generate(
-    model=GoogleAI.gemini('gemini-2.5-flash-preview-tts'),
+    model=GoogleAI.gemini_tts('gemini-2.5-flash-preview-tts'),
     prompt='Host: Welcome to Morning Roaster. Chef: Today we review Ethiopian beans.',
     config=GeminiTtsConfig(
         speakers={'Host': 'Kore', 'Chef': 'Puck'},
@@ -140,7 +139,7 @@ ai = Genkit(plugins=[GoogleAI()])
 
 # Generate high-resolution image with specified aspect ratio and size
 res = await ai.generate(
-    model=GoogleAI.gemini('gemini-2.5-flash-preview-image-generation'),
+    model=GoogleAI.gemini_image('gemini-2.5-flash-preview-image-generation'),
     prompt='A modern minimalist espresso bar with warm cedar accents.',
     config=GeminiImageConfig(
         aspect_ratio='16:9',
