@@ -93,8 +93,6 @@
 
 ::: genkit.model.ModelStage
 
-::: genkit.model.model_action_metadata
-
 ::: genkit.model.ModelRef
 
 ::: genkit.model.ModelConfig

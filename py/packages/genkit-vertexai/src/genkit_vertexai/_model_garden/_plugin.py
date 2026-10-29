@@ -335,14 +335,42 @@ class ModelGarden(Plugin):
             info=_openai_compat_model_info(name),
         )
 
+    def _deferred_openai_compat_handler(
+        self, name: str
+    ) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
+        """A handler that looks up region and project when it runs, not when it is built."""
+
+        async def generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+            location, project = await self._location_and_project(name)
+            handler = ModelGardenModel(model=name, location=location, project=project).to_openai_compatible_model()
+            return await handler(request, ctx)
+
+        return generate
+
     async def list_actions(self) -> list[Action]:
-        """Generate a list of available actions or models.
+        """The OpenAI-compatible Model Garden models, for the Dev UI.
+
+        Listing needs no project and makes no ADC lookup: each model finds its
+        project when it runs, and fails then with FAILED_PRECONDITION if there
+        is none.
 
         Returns:
-            list[Action]: A list of Action objects.
-            Empty when the ``openai`` extra isn't installed, so the Dev UI only lists models that can run.
+            One Model per supported OpenAI-compatible model. Empty when the
+            ``openai`` extra isn't installed, so the Dev UI only lists models
+            that can run.
         """
         try:
-            return [await self._create_model_action(model) for model in SUPPORTED_OPENAI_COMPAT_MODELS]
+            with _requires_extra(_OPENAI_EXTRA):
+                from genkit_openai import OpenAIConfig
         except GenkitError:
             return []
+
+        return [
+            Model(
+                model_garden_name(name),
+                self._deferred_openai_compat_handler(name),
+                config_schema=OpenAIConfig,
+                info=info,
+            )
+            for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()
+        ]
