@@ -52,7 +52,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 from google import genai
@@ -70,7 +70,10 @@ logger = logging.getLogger(__name__)
 @loop_local_client
 def _media_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
-        headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
+        headers={
+            'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
+            'Accept-Encoding': 'identity',
+        },
         follow_redirects=True,
     )
 
@@ -493,6 +496,11 @@ class PartConverter:
     async def _download_image(cls, url: str) -> tuple[bytes, str | None]:
         """Downloads media content from a URL and returns raw bytes with MIME type.
 
+        Redirects are followed and private or loopback addresses are not
+        blocked, so apps that pass end-user URLs here should vet them first;
+        upfront vetting of the initial URL does not cover 302 redirects to
+        loopback or link-local addresses (such as ``169.254.169.254``).
+
         Args:
             url: The URL to download.
 
@@ -500,9 +508,9 @@ class PartConverter:
             A tuple containing the content (bytes) and its MIME type (str or None).
 
         Raises:
-            GenkitError: INVALID_ARGUMENT when the media host answers with a
-                4xx other than 408/429: the caller's URL is wrong or not
-                public, and another model would fail on it too.
+            GenkitError: INVALID_ARGUMENT if the body is larger than 20MB,
+                if the host sends a compressed ``Content-Encoding``, or when
+                the media host answers with a 4xx other than 408/429.
             httpx.HTTPStatusError: A 5xx, 408, or 429 from the media host, left
                 raw. It is not Gemini's failure, so Fallback must not switch
                 models over it (the next model needs the same URL); Retry
@@ -510,16 +518,56 @@ class PartConverter:
             httpx.TransportError: A timeout or transport failure, left
                 unclassified because it may pass on retry.
         """
-        response = await _media_client().get(url, timeout=60.0)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            code = e.response.status_code
-            if 400 <= code < 500 and code not in (408, 429):
+        client = _media_client()
+        async with client.stream('GET', url, timeout=60.0) as response:
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                code = e.response.status_code
+                where = _redact_url(str(e.request.url))
+                sanitized = httpx.HTTPStatusError(
+                    f'HTTP {code} for {where}',
+                    request=e.request,
+                    response=e.response,
+                )
+                if 400 <= code < 500 and code not in (408, 429):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'Could not download request media (HTTP {code} for {where})',
+                        cause=sanitized,
+                    ) from sanitized
+                raise sanitized from None
+            encoding = response.headers.get('content-encoding', '').strip().lower()
+            if encoding not in ('', 'identity'):
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
-                    message=f'Could not download request media (HTTP {code})',
-                    cause=e,
-                ) from e
-            raise
-        return response.content, response.headers.get('content-type')
+                    message=(
+                        f'media at {_redact_url(url)} sent unsupported '
+                        f'Content-Encoding {encoding!r}; expected uncompressed bytes'
+                    ),
+                )
+            declared = response.headers.get('content-length', '')
+            if declared.isdigit() and int(declared) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                raise _media_too_large(url)
+            body = bytearray()
+            chunks = response.aiter_bytes() if response.is_stream_consumed else response.aiter_raw()
+            async for chunk in chunks:
+                body.extend(chunk)
+                if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                    raise _media_too_large(url)
+            return bytes(body), response.headers.get('content-type')
+
+
+# A truncated image or video is a corrupt file, so a URL over the cap fails
+# instead of sending the first 20MB.
+_MAX_MEDIA_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _redact_url(url: str) -> str:
+    # Signed URLs carry credentials in the query string, so error messages only name host and path.
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc.rpartition('@')[2], parts.path, '', ''))
+
+
+def _media_too_large(url: str) -> GenkitError:
+    return GenkitError(status='INVALID_ARGUMENT', message=f'media at {_redact_url(url)} is larger than 20MB')

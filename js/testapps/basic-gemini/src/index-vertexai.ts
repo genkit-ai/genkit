@@ -16,7 +16,15 @@
 
 import { vertexAI } from '@genkit-ai/google-genai';
 import * as fs from 'fs';
-import { genkit, Operation, Part, StreamingCallback, z } from 'genkit';
+import {
+  Document,
+  genkit,
+  MessageData,
+  Operation,
+  Part,
+  StreamingCallback,
+  z,
+} from 'genkit';
 import wav from 'wav';
 import { RpgCharacterSchema } from './types';
 
@@ -37,9 +45,414 @@ ai.defineFlow('basic-hi', async () => {
   return text;
 });
 
+// Newer Gemini models (and any model not listed in the plugin) use the
+// Interactions API. It's available on the global location.
+ai.defineFlow('argon-basic', async () => {
+  const { text } = await ai.generate({
+    model: vertexAI.model('gemini-4-argon'),
+    prompt: 'You are a helpful AI assistant named Walt, say hello.',
+  });
+  return text;
+});
+
+// Server-side conversation state (Interactions API models only). With
+// `store: true`, each response's message carries `metadata.interactionId`;
+// passing the previous messages back continues that interaction, and only
+// the new message is sent.
+ai.defineFlow('interactions-multi-turn-store', async () => {
+  const first = await ai.generate({
+    model: vertexAI.model('gemini-3.8-flash'),
+    prompt:
+      'Remember this: my cat is called Biscuit and my favorite color is green. Say hi.',
+    config: { store: true },
+  });
+
+  const second = await ai.generate({
+    model: vertexAI.model('gemini-3.8-flash'),
+    messages: first.messages,
+    prompt: 'What is my cat called and what is my favorite color?',
+    config: { store: true },
+  });
+
+  return {
+    firstInteractionId: first.message?.metadata?.interactionId,
+    secondInteractionId: second.message?.metadata?.interactionId,
+    answer: second.text,
+  };
+});
+
+// Text-to-speech (generateContent only; available on the global location).
+// The text is read verbatim, so delivery goes in speechMetadata.style.
+ai.defineFlow(
+  {
+    name: 'tts-voice-and-style',
+    inputSchema: z.string().default('Have a wonderful day!'),
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async (text) => {
+    const { media } = await ai.generate({
+      model: vertexAI.model('gemini-3.8-flash-lite-tts'),
+      prompt: [
+        {
+          text,
+          metadata: { speechMetadata: { style: 'cheerful and friendly' } },
+        },
+      ],
+      config: { speechConfig: { voiceConfig: { voice: 'Kore' } } },
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return { media: media.url };
+  }
+);
+
+// TTS with the googleAI voice shape (prebuiltVoiceConfig.voiceName), which
+// the platform also accepts, so TTS code can move between the two plugins.
+ai.defineFlow(
+  {
+    name: 'tts-googleai-voice-shape',
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async () => {
+    const { media } = await ai.generate({
+      model: vertexAI.model('gemini-3.8-flash-lite-tts'),
+      prompt: 'This voice was chosen with the googleAI config shape.',
+      config: {
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+        },
+      },
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return { media: media.url };
+  }
+);
+
+// Multi-speaker TTS: exactly two speakers, each turn a separate text part
+// naming its speaker.
+ai.defineFlow(
+  {
+    name: 'tts-multi-speaker',
+    outputSchema: z.object({ media: z.string() }),
+  },
+  async () => {
+    const { media } = await ai.generate({
+      model: vertexAI.model('gemini-3.8-flash-tts'),
+      prompt: [
+        {
+          text: "How's it going today, Jane?",
+          metadata: { speechMetadata: { speaker: 'Joe', style: 'cheerful' } },
+        },
+        {
+          text: 'Not too bad, how about you? <laugh>',
+          metadata: { speechMetadata: { speaker: 'Jane', style: 'relaxed' } },
+        },
+      ],
+      config: {
+        speechConfig: {
+          multiSpeakerVoiceConfig: {
+            speakerVoiceConfigs: [
+              { speaker: 'Joe', voiceConfig: { voice: 'Puck' } },
+              { speaker: 'Jane', voiceConfig: { voice: 'Kore' } },
+            ],
+          },
+        },
+      },
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return { media: media.url };
+  }
+);
+
+// Streamed TTS. Audio chunks arrive while the speech is being generated, so a
+// client can start playing right away; the final response joins them into one
+// part. Streaming returns raw PCM (audio/l16, 24 kHz, mono) by default.
+ai.defineFlow(
+  {
+    name: 'tts-streaming',
+    outputSchema: z.object({
+      chunkCount: z.number(),
+      contentType: z.string().optional(),
+      bytes: z.number(),
+    }),
+  },
+  async (_, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: vertexAI.model('gemini-3.8-flash-lite-tts'),
+      prompt:
+        'Streaming lets an app start playing speech before the whole ' +
+        'sentence has been generated.',
+      config: { speechConfig: { voiceConfig: { voice: 'Kore' } } },
+    });
+
+    let chunkCount = 0;
+    for await (const chunk of stream) {
+      // A real client would play chunk.media here. Report progress only, to
+      // keep the stream small.
+      chunkCount++;
+      sendChunk(`chunk ${chunkCount}: ${chunk.media?.contentType}`);
+    }
+
+    const { media } = await response;
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    // Raw PCM can't be played in the Dev UI, so return its size instead.
+    return {
+      chunkCount,
+      contentType: media.contentType,
+      bytes: Buffer.from(media.url.split(',')[1] ?? '', 'base64').length,
+    };
+  }
+);
+
+// TTS output formats. audio/wav (default) is a complete WAV file; audio/l16 is
+// raw PCM (24 kHz); audio/mulaw and audio/alaw are telephony formats (8 kHz).
+// Only audio/wav plays in the Dev UI, so the others return their size.
+ai.defineFlow(
+  {
+    name: 'tts-audio-format',
+    inputSchema: z
+      .enum(['audio/wav', 'audio/l16', 'audio/mulaw', 'audio/alaw'])
+      .default('audio/mulaw'),
+    outputSchema: z.object({
+      contentType: z.string().optional(),
+      bytes: z.number(),
+      media: z.string().optional(),
+    }),
+  },
+  async (mimeType) => {
+    const { media } = await ai.generate({
+      model: vertexAI.model('gemini-3.8-flash-lite-tts'),
+      prompt: 'Thank you for calling. Please hold.',
+      config: {
+        speechConfig: { voiceConfig: { voice: 'Kore' } },
+        audioFormat: { mimeType },
+      },
+    });
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return {
+      contentType: media.contentType,
+      bytes: Buffer.from(media.url.split(',')[1] ?? '', 'base64').length,
+      ...(mimeType === 'audio/wav' ? { media: media.url } : {}),
+    };
+  }
+);
+
+// Video generation with Gemini Omni (Interactions API, global location).
+// Unlike Veo, it isn't a background model: ai.generate() returns the video
+// directly, as an inline MP4 (a data URL), which plays in the Dev UI. The
+// flows use 360p to keep them fast; see videoFormat for other sizes.
+ai.defineFlow('omni-text-to-video', async () => {
+  const { media } = await ai.generate({
+    model: vertexAI.model('gemini-omni-1.1-flash-preview'),
+    prompt:
+      'A paper boat floating down a rain-filled gutter, continuous shot, with the sound of rain.',
+    config: {
+      videoFormat: { aspectRatio: '9:16', resolution: '360p' },
+    },
+  });
+  if (!media) {
+    throw new Error('no video returned');
+  }
+  return media;
+});
+
+// Brings a still image to life: the image is used as the starting frame.
+ai.defineFlow('omni-image-to-video', async () => {
+  // A living room with a grey sofa in front of sheer white curtains.
+  const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
+  const { media } = await ai.generate({
+    model: vertexAI.model('gemini-omni-1.1-flash-preview'),
+    prompt: [
+      {
+        media: {
+          url: `data:image/png;base64,${room}`,
+          contentType: 'image/png',
+        },
+      },
+      {
+        text: 'Use this image as the starting frame. A ginger cat walks in, jumps up onto the sofa and curls up on a cushion. Single continuous shot, with soft room sound.',
+      },
+    ],
+    config: {
+      // Optional: the model infers the task from the prompt if it isn't set.
+      videoConfig: { task: 'image_to_video' },
+      videoFormat: { resolution: '360p' },
+    },
+  });
+  if (!media) {
+    throw new Error('no video returned');
+  }
+  return media;
+});
+
+// Generates a video, then edits it in a second turn. Editing continues the
+// stored interaction, so both turns need store: true; the plugin finds the
+// previous interaction in the messages and sends only the new message.
+ai.defineFlow('omni-edit-video', async () => {
+  const config = { store: true, videoFormat: { resolution: '360p' } };
+  const original = await ai.generate({
+    model: vertexAI.model('gemini-omni-1.1-flash-preview'),
+    prompt: 'A woman playing violin outdoors.',
+    config,
+  });
+  if (!original.media) {
+    throw new Error('no video returned');
+  }
+
+  const edited = await ai.generate({
+    model: vertexAI.model('gemini-omni-1.1-flash-preview'),
+    messages: [
+      ...original.messages,
+      {
+        role: 'user',
+        content: [
+          { text: 'Make the violin invisible. Keep everything else the same.' },
+        ],
+      },
+    ],
+    config,
+  });
+  if (!edited.media) {
+    throw new Error('no edited video returned');
+  }
+  // Both videos play in the Dev UI, to compare before and after.
+  return { original: original.media, edited: edited.media };
+});
+
+// The other Omni model: fast, conversational video generation. It only
+// supports 720p (the default); other resolutions return a 400.
+ai.defineFlow('omni-flash', async () => {
+  const { media } = await ai.generate({
+    model: vertexAI.model('gemini-omni-flash-preview'),
+    prompt: 'A hot air balloon rising over green hills at sunrise.',
+  });
+  if (!media) {
+    throw new Error('no video returned');
+  }
+  return media;
+});
+
+// Multimodal embedding with gemini-embedding-2 (the `:embedContent` method):
+// text and media in one document give one embedding in a shared space.
+ai.defineFlow('embed-multimodal', async () => {
+  // AI generated portrait.
+  const woman = fs.readFileSync('woman.png', { encoding: 'base64' });
+  const embeddings = await ai.embed({
+    embedder: vertexAI.embedder('gemini-embedding-2'),
+    content: Document.fromParts([
+      { text: 'A portrait of a woman.' },
+      {
+        media: {
+          contentType: 'image/png',
+          url: `data:image/png;base64,${woman}`,
+        },
+      },
+    ]),
+    options: { outputDimensionality: 256 },
+  });
+  return {
+    count: embeddings.length,
+    dimensions: embeddings[0]?.embedding.length,
+  };
+});
+
+// Text embedding with gemini-embedding-001 (the `:predict` method), which
+// supports taskType and title.
+ai.defineFlow('embed-text', async () => {
+  const embeddings = await ai.embed({
+    embedder: vertexAI.embedder('gemini-embedding-001'),
+    content: 'The CN Tower is a communications tower in Toronto.',
+    options: {
+      outputDimensionality: 256,
+      taskType: 'RETRIEVAL_DOCUMENT',
+      title: 'CN Tower', // Used with taskType RETRIEVAL_DOCUMENT
+    },
+  });
+  return {
+    count: embeddings.length,
+    dimensions: embeddings[0]?.embedding.length,
+  };
+});
+
+// Image generation with Nano Banana 2.1 (generateContent). It doesn't support
+// seed, topK, logprobs, temperature or topP.
+ai.defineFlow('image-generation', async () => {
+  const { media } = await ai.generate({
+    model: vertexAI.model('gemini-nano-banana-2.1'),
+    prompt: 'A cozy reading nook with a window seat on a rainy afternoon.',
+  });
+  if (!media) {
+    throw new Error('no image returned');
+  }
+  return media;
+});
+
+// The low-cost image model (Nano Banana 2 Lite).
+ai.defineFlow('image-generation-lite', async () => {
+  const { media } = await ai.generate({
+    model: vertexAI.model('gemini-3.1-flash-lite-image'),
+    prompt: 'A simple flat icon of a coffee cup.',
+  });
+  if (!media) {
+    throw new Error('no image returned');
+  }
+  return media;
+});
+
+// Agentic video understanding: instead of reading frames at a fixed rate, the
+// model explores the video and loads only what it needs (better for long
+// videos). Set per video with `metadata.processing` ('agentic' or 'static',
+// the default). usage.custom.toolUseTokens counts what was loaded.
+ai.defineFlow('agentic-video-understanding', async () => {
+  const { text, usage } = await ai.generate({
+    model: vertexAI.model('gemini-4-argon'),
+    prompt: [
+      {
+        media: { url: 'https://www.youtube.com/watch?v=QO30-W3b_vw' },
+        metadata: { processing: 'agentic' },
+      },
+      {
+        text: 'What happens in this video? List the main moments with timestamps (MM:SS).',
+      },
+    ],
+  });
+  return { text, toolUseTokens: usage.custom?.toolUseTokens };
+});
+
+// Safety settings are supported on the platform (unlike the Gemini API's
+// Interactions API). The plugin sends them in the Interactions format.
+ai.defineFlow('safety-settings', async () => {
+  const { text, finishReason } = await ai.generate({
+    model: vertexAI.model('gemini-3.8-flash'),
+    prompt: 'Write a friendly two-line poem about autumn leaves.',
+    config: {
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_LOW_AND_ABOVE',
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+        },
+      ],
+    },
+  });
+  return { text, finishReason };
+});
+
 ai.defineFlow('basic-hi-lite', async () => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-flash-lite-latest'),
+    model: vertexAI.model('gemini-3.5-flash-lite'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
@@ -49,7 +462,7 @@ ai.defineFlow('basic-hi-lite', async () => {
 // Flex/Priority PayGo
 ai.defineFlow('paygo', async () => {
   const response = await ai.generate({
-    model: vertexAI.model('gemini-3.1-flash-lite-preview'),
+    model: vertexAI.model('gemini-3.1-flash-lite'),
     prompt: 'You are a helpful AI assistant named Walt, say hello.',
     config: {
       payGo: 'priority', // or priority-only, flex, flex-only.
@@ -59,16 +472,16 @@ ai.defineFlow('paygo', async () => {
   return response;
 });
 
-// Gemini 3.1 thinkingLevel config
+// thinkingLevel config
 ai.defineFlow(
   {
-    name: 'thinking-level-3.1-pro',
-    inputSchema: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+    name: 'thinking-level',
+    inputSchema: z.enum(['LOW', 'MEDIUM', 'HIGH']).default('LOW'),
     outputSchema: z.any(),
   },
   async (level) => {
     const { text } = await ai.generate({
-      model: vertexAI.model('gemini-3.1-pro-preview'),
+      model: vertexAI.model('gemini-3.8-flash'),
       prompt: [
         'Alice, Bob, and Carol each live in a different house on the ',
         'same street: red, green, and blue. The person who lives in the red house ',
@@ -101,41 +514,12 @@ ai.defineFlow('multi-regional', async () => {
   return text;
 });
 
-ai.defineFlow(
-  {
-    name: 'thinking-level-flash',
-    inputSchema: z.enum(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']),
-    outputSchema: z.any(),
-  },
-  async (level) => {
-    const { text } = await ai.generate({
-      model: vertexAI.model('gemini-3-flash-preview'),
-      prompt: [
-        'Alice, Bob, and Carol each live in a different house on the ',
-        'same street: red, green, and blue. The person who lives in the red house ',
-        'owns a cat. Bob does not live in the green house. Carol owns a dog. The ',
-        'green house is to the left of the red house. Alice does not own a cat. ',
-        'The person in the blue house owns a fish. ',
-        'Who lives in each house, and what pet do they own? Provide your ',
-        'step-by-step reasoning.',
-      ].join(''),
-      config: {
-        location: 'global',
-        thinkingConfig: {
-          thinkingLevel: level,
-        },
-      },
-    });
-    return text;
-  }
-);
-
 // Multimodal input
 ai.defineFlow('multimodal-input', async () => {
   const photoBase64 = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-3.8-flash'),
     config: {
       location: 'global',
     },
@@ -156,7 +540,7 @@ ai.defineFlow('multimodal-input', async () => {
 // YouTube videos
 ai.defineFlow('youtube-videos', async (_, { sendChunk }) => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-3.8-flash'),
     prompt: [
       {
         text: 'transcribe this video',
@@ -190,7 +574,7 @@ export const videoUnderstanding = ai.defineFlow(
   },
   async () => {
     const llmResponse = await ai.generate({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       prompt: [
         {
           media: {
@@ -217,7 +601,7 @@ export const videoUnderstanding = ai.defineFlow(
 // streaming
 ai.defineFlow('streaming', async (_, { sendChunk }) => {
   const { stream } = ai.generateStream({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-3.8-flash'),
     prompt: 'Write a poem about AI.',
   });
 
@@ -230,10 +614,23 @@ ai.defineFlow('streaming', async (_, { sendChunk }) => {
   return poem;
 });
 
-// Google maps grounding
+/**
+ * Collects the grounding citations from a response. On the Interactions API
+ * they're annotations on the output text, which the plugin copies to each
+ * text part's `metadata.annotations` (no need to read `response.raw`).
+ */
+function citations(message?: MessageData) {
+  return message?.content.flatMap((part) => {
+    const annotations = part.metadata?.annotations;
+    return Array.isArray(annotations) ? annotations : [];
+  });
+}
+
+// Google maps grounding (Interactions API: the location goes on the
+// googleMaps tool; retrievalConfig.latLng is copied there).
 ai.defineFlow('maps-grounding', async () => {
-  const { text, raw } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+  const { text, message } = await ai.generate({
+    model: vertexAI.model('gemini-3.8-flash'),
     prompt: 'Describe some sights near me',
     config: {
       tools: [
@@ -252,26 +649,20 @@ ai.defineFlow('maps-grounding', async () => {
     },
   });
 
-  return {
-    text,
-    groundingMetadata: (raw as any)?.candidates[0]?.groundingMetadata,
-  };
+  return { text, citations: citations(message) };
 });
 
 // Search grounding
 ai.defineFlow('search-grounding', async () => {
-  const { text, raw } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
-    prompt: 'Who is Albert Einstein?',
+  const { text, message } = await ai.generate({
+    model: vertexAI.model('gemini-3.8-flash'),
+    prompt: 'What is the weather like today in Toronto?',
     config: {
       tools: [{ googleSearch: {} }],
     },
   });
 
-  return {
-    text,
-    groundingMetadata: (raw as any)?.candidates[0]?.groundingMetadata,
-  };
+  return { text, citations: citations(message) };
 });
 
 const getWeather = ai.defineTool(
@@ -312,14 +703,14 @@ const celsiusToFahrenheit = ai.defineTool(
 // Tool calling with Gemini
 ai.defineFlow(
   {
-    name: 'toolCalling',
+    name: 'tool-calling',
     inputSchema: z.string().default('Paris, France'),
     outputSchema: z.string(),
     streamSchema: z.any(),
   },
   async (location, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
@@ -337,7 +728,7 @@ ai.defineFlow(
 
 ai.defineFlow(
   {
-    name: 'streamingToolCalling',
+    name: 'tool-calling-streamed-arguments',
     inputSchema: z.string().default('Paris, France'),
     outputSchema: z.string(),
     streamSchema: z.any(),
@@ -378,7 +769,7 @@ ai.defineFlow(
   },
   async (location, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
@@ -409,7 +800,7 @@ ai.defineFlow(
   },
   async (name, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 2, // we want creativity
       },
@@ -425,14 +816,14 @@ ai.defineFlow(
   }
 );
 
-// Gemini reasoning example.
-ai.defineFlow('reasoning', async (_, { sendChunk }) => {
+// Thought summaries (includeThoughts) come back as reasoning parts.
+ai.defineFlow('thinking-summaries', async (_, { sendChunk }) => {
   const { message } = await ai.generate({
     prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
-    model: vertexAI.model('gemini-2.5-pro'),
+    model: vertexAI.model('gemini-3.8-flash'),
     config: {
       thinkingConfig: {
-        thinkingBudget: 1024,
+        thinkingLevel: 'MEDIUM',
         includeThoughts: true,
       },
     },
@@ -443,7 +834,7 @@ ai.defineFlow('reasoning', async (_, { sendChunk }) => {
 });
 
 // Media resolution
-ai.defineFlow('gemini-media-resolution', async (_) => {
+ai.defineFlow('media-resolution', async (_) => {
   const plant = fs.readFileSync('palm_tree.png', { encoding: 'base64' });
   const { text } = await ai.generate({
     model: vertexAI.model('gemini-3.1-pro-preview'),
@@ -465,12 +856,12 @@ ai.defineFlow('gemini-media-resolution', async (_) => {
 });
 
 // Image editing with Gemini.
-ai.defineFlow('gemini-image-editing', async (_) => {
+ai.defineFlow('image-editing', async (_) => {
   const plant = fs.readFileSync('palm_tree.png', { encoding: 'base64' });
   const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
 
   const { media } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash-image'),
+    model: vertexAI.model('gemini-nano-banana-2.1'),
     prompt: [
       { text: 'add the plant to my room' },
       { media: { url: `data:image/png;base64,${plant}` } },
@@ -481,8 +872,8 @@ ai.defineFlow('gemini-image-editing', async (_) => {
   return media;
 });
 
-// Nano banana pro config
-ai.defineFlow('nano-banana-pro', async (_) => {
+// Image size and aspect ratio (imageConfig)
+ai.defineFlow('image-generation-aspect-ratio-size', async (_) => {
   const { media } = await ai.generate({
     model: vertexAI.model('gemini-3-pro-image'),
     prompt: 'Generate a picture of a sunset in the mountains by a lake',
@@ -497,7 +888,8 @@ ai.defineFlow('nano-banana-pro', async (_) => {
   return media;
 });
 
-ai.defineFlow('nano-banana-2', async (_) => {
+// Text rendered in a generated image
+ai.defineFlow('image-generation-text-rendering', async (_) => {
   const { media } = await ai.generate({
     model: vertexAI.model('gemini-3.1-flash-image'),
     prompt:
@@ -508,16 +900,6 @@ ai.defineFlow('nano-banana-2', async (_) => {
         imageSize: '512',
       },
     },
-  });
-
-  return media;
-});
-
-// A simple example of image generation with Gemini.
-ai.defineFlow('imagen-image-generation', async (_) => {
-  const { media } = await ai.generate({
-    model: vertexAI.model('imagen-3.0-generate-002'),
-    prompt: `generate an image of a banana riding a bicycle`,
   });
 
   return media;
@@ -607,9 +989,10 @@ ai.defineFlow('veo-text-prompt', async (_, { sendChunk }) => {
   return mediaPart.media;
 });
 
-// An example of using Ver 3 model to make a static photo move.
+// An example of using a Veo model to make a static photo move. The photo is
+// AI generated (Veo's safety filter blocks photos of real people).
 ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
-  const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
+  const startingImage = fs.readFileSync('woman.png', { encoding: 'base64' });
 
   let { operation } = await ai.generate({
     model: vertexAI.model('veo-3.1-generate-001'),
@@ -619,8 +1002,8 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
       },
       {
         media: {
-          contentType: 'image/jpeg',
-          url: `data:image/jpeg;base64,${startingImage}`,
+          contentType: 'image/png',
+          url: `data:image/png;base64,${startingImage}`,
         },
       },
     ],
@@ -665,7 +1048,7 @@ ai.defineFlow('veo-photo-move', async (_, { sendChunk }) => {
 // at all. Overriding location is a good stand-in to demonstrate the same
 // context-override mechanism working end-to-end.
 ai.defineFlow('veo-photo-move-location-override', async (_, { sendChunk }) => {
-  const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
+  const startingImage = fs.readFileSync('woman.png', { encoding: 'base64' });
 
   let { operation } = await ai.generate({
     model: vertexAI.model('veo-3.1-generate-001'),
@@ -675,8 +1058,8 @@ ai.defineFlow('veo-photo-move-location-override', async (_, { sendChunk }) => {
       },
       {
         media: {
-          contentType: 'image/jpeg',
-          url: `data:image/jpeg;base64,${startingImage}`,
+          contentType: 'image/png',
+          url: `data:image/png;base64,${startingImage}`,
         },
       },
     ],
@@ -799,7 +1182,7 @@ ai.defineFlow('lyria-music-generation', async (_) => {
   };
 });
 
-ai.defineFlow('lyria3-music-generation', async () => {
+ai.defineFlow('lyria-3-music-generation', async () => {
   const response = await ai.generate({
     model: vertexAI.model('lyria-3-clip-preview'),
     prompt:
@@ -807,6 +1190,77 @@ ai.defineFlow('lyria3-music-generation', async () => {
   });
 
   return response;
+});
+
+// Polls a background operation (Deep Research) until it's done. Research
+// takes several minutes, so this polls every 20 s.
+async function waitForResearch(
+  operation?: Operation,
+  sendChunk?: StreamingCallback<any>
+) {
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+  while (!operation.done) {
+    sendChunk?.('check status of operation ' + operation.id);
+    await new Promise((resolve) => setTimeout(resolve, 20000));
+    operation = await ai.checkOperation(operation);
+  }
+  if (operation.error) {
+    throw new Error('Deep Research failed: ' + operation.error.message);
+  }
+  return operation;
+}
+
+// Deep Research is a background model: ai.generate() returns an operation to
+// poll with ai.checkOperation(). It runs on the global location.
+ai.defineFlow('deep-research', async (_, { sendChunk }) => {
+  const { operation } = await ai.generate({
+    model: vertexAI.model('deep-research-preview-04-2026'),
+    prompt:
+      'Compare TCP and UDP in a short markdown table (reliability, connection type, speed).',
+    config: { thinkingSummaries: 'AUTO' },
+  });
+  const done = await waitForResearch(operation, sendChunk);
+  return done.output?.message?.content;
+});
+
+// Enterprise Web Search instead of Google Search (web data with additional
+// compliance controls). Any tool given replaces the default tools.
+ai.defineFlow('deep-research-enterprise-search', async (_, { sendChunk }) => {
+  const { operation } = await ai.generate({
+    model: vertexAI.model('deep-research-preview-04-2026'),
+    prompt:
+      "Summarize this week's most important AI announcements in 5 bullets.",
+    config: {
+      tools: [{ googleSearch: { searchTypes: ['enterpriseWebSearch'] } }],
+    },
+  });
+  const done = await waitForResearch(operation, sendChunk);
+  return done.output?.message?.content;
+});
+
+// Cancelling a running Deep Research task with ai.cancelOperation(). The
+// returned operation is done, with finishReason 'aborted'.
+ai.defineFlow('deep-research-cancel', async (_, { sendChunk }) => {
+  const { operation } = await ai.generate({
+    model: vertexAI.model('deep-research-preview-04-2026'),
+    prompt: 'Write a detailed history of the TCP protocol.',
+  });
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+  sendChunk('Started operation: ' + operation.id);
+  // Give the task a moment to start before cancelling it.
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+
+  const cancelled = await ai.cancelOperation(operation);
+  return {
+    id: cancelled.id,
+    done: cancelled.done,
+    finishReason: cancelled.output?.finishReason,
+    error: cancelled.error,
+  };
 });
 
 // Tuned model. Replace the 12345 with your ENDPOINT ID

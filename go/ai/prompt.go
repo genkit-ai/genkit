@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/google/dotprompt/go/dotprompt"
 	"github.com/invopop/jsonschema"
@@ -134,7 +135,7 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 	}
 	metadata["type"] = api.ActionTypeExecutablePrompt
 
-	baseName, variant, _ := strings.Cut(name, ".")
+	baseName, variant := splitVariant(name)
 
 	use, err := configsToRefs(pOpts.commonGenOptions.Use)
 	if err != nil {
@@ -165,19 +166,43 @@ func DefinePrompt(r api.Registry, name string, opts ...PromptOption) Prompt {
 		metadata["prompt"] = promptMetadata
 	}
 
-	a := core.NewActionOf(api.ActionTypeExecutablePrompt, name, &core.ActionOptions{Metadata: metadata, InputSchema: p.InputSchema}, p.buildRequest)
+	a := core.NewActionOf(api.ActionTypeExecutablePrompt, name, &core.ActionOptions{Description: p.Description, Metadata: metadata, InputSchema: p.InputSchema}, p.buildRequest)
 	a.Register(r)
 	p.Action = *a
 
 	return p
 }
 
+// promptFallbackPrefix keys the registry values that let [LookupPrompt] find a
+// prompt loaded from a subdirectory by its file name alone.
+const promptFallbackPrefix = "/promptFallback/"
+
+// promptFallback points a prompt's file name at its full name.
+type promptFallback struct {
+	name string    // full prompt name, such as "support/main"
+	warn sync.Once // warns the first time a lookup uses the fallback
+}
+
 // LookupPrompt looks up a [Prompt] registered by [DefinePrompt].
 // It returns nil if the prompt was not defined.
+//
+// A prompt that [LoadPromptDirFromFS] loaded from a subdirectory is named after
+// its path, such as "support/main". LookupPrompt also finds it by its file name
+// alone, "main", when no other prompt has that name. That fallback logs a
+// warning and goes away in the next major version.
 func LookupPrompt(r api.Registry, name string) Prompt {
 	action := core.ResolveActionFor[any, *GenerateActionOptions, struct{}](r, api.ActionTypeExecutablePrompt, name)
 	if action == nil {
-		return nil
+		f, ok := r.LookupValue(promptFallbackPrefix + name).(*promptFallback)
+		if !ok {
+			return nil
+		}
+		f.warn.Do(func() {
+			slog.Warn("prompt looked up by its file name; use its full name, the file-name fallback is removed in the next major version", "name", name, "prompt", f.name)
+		})
+		if action = core.ResolveActionFor[any, *GenerateActionOptions, struct{}](r, api.ActionTypeExecutablePrompt, f.name); action == nil {
+			return nil
+		}
 	}
 	return &prompt{
 		Action:   *action,
@@ -818,6 +843,14 @@ func convertToPartPointers(parts []dotprompt.Part) ([]*Part, error) {
 // LoadPromptDirFromFS loads prompts and partials from a filesystem for the given namespace.
 // The fsys parameter should be an fs.FS implementation (e.g., embed.FS or os.DirFS).
 // The dir parameter specifies the directory within the filesystem where prompts are located.
+//
+// A prompt file name.prompt in a subdirectory sub registers as "sub/name". [LookupPrompt]
+// also finds it as "name" if no other prompt has that name; see there.
+//
+// A partial file _name.prompt in a subdirectory sub registers as "sub/name". It also
+// registers as "name" if no other partial has that name yet. Root-level partials load
+// first, so they keep their name. When two nested partials share a base name, only the
+// first one in walk order gets the short name; reference the others by the full name.
 func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 	if fsys == nil {
 		panic("ai.LoadPrompt: no prompt filesystem provided")
@@ -827,29 +860,60 @@ func LoadPromptDirFromFS(r api.Registry, fsys fs.FS, dir, namespace string) {
 		panic(fmt.Errorf("failed to access prompt directory %q in filesystem: %w", dir, err))
 	}
 
+	loadPromptDirFromFS(r, fsys, dir, "", namespace, r.Dotprompt().Partials)
+}
+
+// loadPromptDirFromFS loads the prompts and partials in root/subdir, then recurses
+// into its subdirectories. partials holds every partial name registered so far and
+// is updated as the walk registers more.
+func loadPromptDirFromFS(r api.Registry, fsys fs.FS, root, subdir, namespace string, partials map[string]string) {
+	dir := path.Join(root, subdir)
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		panic(fmt.Errorf("failed to read prompt directory structure: %w", err))
 	}
 
+	// Files load before subdirectories so that a shallower file claims its short
+	// name first. fs.ReadDir returns entries sorted by name.
 	for _, entry := range entries {
 		filename := entry.Name()
-		filePath := path.Join(dir, filename)
-		if entry.IsDir() {
-			LoadPromptDirFromFS(r, fsys, filePath, namespace)
-		} else if strings.HasSuffix(filename, ".prompt") {
-			if strings.HasPrefix(filename, "_") {
-				partialName := strings.TrimSuffix(filename[1:], ".prompt")
-				source, err := fs.ReadFile(fsys, filePath)
-				if err != nil {
-					slog.Error("failed to read prompt partial file, skipping it", "file", filePath, "error", err)
-					continue
-				}
-				r.RegisterPartial(partialName, string(source))
-				slog.Debug("registered dotprompt partial", "partial", partialName, "file", filePath)
-			} else {
-				LoadPromptFromFS(r, fsys, dir, filename, namespace)
+		if entry.IsDir() || !strings.HasSuffix(filename, ".prompt") {
+			continue
+		}
+		if !strings.HasPrefix(filename, "_") {
+			if p := LoadPromptFromFS(r, fsys, root, path.Join(subdir, filename), namespace); p != nil && subdir != "" {
+				shortName, variant := splitVariant(strings.TrimSuffix(filename, ".prompt"))
+				registerPromptFallback(r, p.Name(), promptKey(shortName, variant, namespace))
 			}
+			continue
+		}
+
+		filePath := path.Join(dir, filename)
+		data, err := fs.ReadFile(fsys, filePath)
+		if err != nil {
+			slog.Error("failed to read prompt partial file, skipping it", "file", filePath, "error", err)
+			continue
+		}
+		source := string(data)
+		shortName := strings.TrimSuffix(filename[1:], ".prompt")
+		names := []string{path.Join(subdir, shortName)}
+		if subdir != "" {
+			if _, ok := partials[shortName]; ok {
+				slog.Debug("dotprompt partial short name is taken, registering full name only", "partial", names[0], "file", filePath)
+			} else {
+				names = append(names, shortName)
+			}
+		}
+		for _, name := range names {
+			r.RegisterPartial(name, source)
+			partials[name] = source
+			slog.Debug("registered dotprompt partial", "partial", name, "file", filePath)
+		}
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			loadPromptDirFromFS(r, fsys, root, path.Join(subdir, entry.Name()), namespace, partials)
 		}
 	}
 }
@@ -877,11 +941,22 @@ func LoadPromptFromFS(r api.Registry, fsys fs.FS, dir, filename, namespace strin
 	return p
 }
 
+// registerPromptFallback lets [LookupPrompt] find the prompt named name by
+// shortName, unless another fallback already has that name. A prompt actually
+// named shortName always wins at lookup.
+func registerPromptFallback(r api.Registry, name, shortName string) {
+	if r.LookupValue(promptFallbackPrefix+shortName) != nil {
+		slog.Debug("dotprompt file name is taken, prompt is reachable by its full name only", "prompt", name, "taken", shortName)
+		return
+	}
+	r.RegisterValue(promptFallbackPrefix+shortName, &promptFallback{name: name})
+}
+
 // LoadPromptFromSource loads a prompt from raw .prompt file content.
 // The source parameter should contain the complete .prompt file text (frontmatter + template).
 // The name parameter is the prompt name (may include variant suffix like "myPrompt.variant").
 func LoadPromptFromSource(r api.Registry, source, name, namespace string) (Prompt, error) {
-	name, variant, _ := strings.Cut(name, ".")
+	name, variant := splitVariant(name)
 
 	dp := r.Dotprompt()
 
@@ -1042,6 +1117,15 @@ func LoadPromptDir(r api.Registry, dir string, namespace string) {
 // LoadPrompt loads a single prompt from a directory on the local filesystem into the registry.
 func LoadPrompt(r api.Registry, dir, filename, namespace string) Prompt {
 	return LoadPromptFromFS(r, os.DirFS(dir), ".", filename, namespace)
+}
+
+// splitVariant splits a prompt name such as "support/main.casual" into its name
+// and variant. The variant follows the first dot of the last path segment, so a
+// directory such as "v1.0/" stays part of the name.
+func splitVariant(name string) (string, string) {
+	dir, base := path.Split(name)
+	base, variant, _ := strings.Cut(base, ".")
+	return dir + base, variant
 }
 
 // promptKey generates a unique key for the prompt in the registry.

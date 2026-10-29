@@ -39,6 +39,10 @@ const config: Config = {
     '^.+\\.[jt]s$': 'ts-jest',
   },
 
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+  },
+
   // An array of regexp pattern strings that are matched against all source file paths, matched files will skip transformation
   transformIgnorePatterns: ['/node_modules/'],
 };

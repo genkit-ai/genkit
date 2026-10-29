@@ -146,6 +146,7 @@ class SnapshotAssertions(SpecModel):
     finish_reason: str | None = None
     has_session_id: bool | None = None
     state_contains: PartialState | None = None
+    message_count: int | None = None
     error_contains: dict[str, Any] | None = None
 
 
@@ -669,6 +670,11 @@ def assert_snapshot(*, snap: SessionSnapshotSchema, expect: SnapshotAssertions) 
         )
     if expect.state_contains is not None:
         assert_contains(actual=dumped.get('state'), expected=dump(model=expect.state_contains), path='snapshot.state')
+    if expect.message_count is not None:
+        messages = (dumped.get('state') or {}).get('messages') or []
+        assert len(messages) == expect.message_count, (
+            f'Expected {expect.message_count} messages in snapshot.state, got {len(messages)}: {messages}'
+        )
     if expect.error_contains is not None:
         err = dumped.get('error')
         assert err, 'Expected snapshot to have error'

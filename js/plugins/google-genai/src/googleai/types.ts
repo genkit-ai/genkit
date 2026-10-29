@@ -15,6 +15,10 @@
  */
 
 import {
+  CreateInteractionRequest,
+  GeminiInteraction,
+} from '../common/interaction-types.js';
+import {
   Content,
   FinishReason,
   GenerateContentCandidate,
@@ -25,11 +29,6 @@ import {
   GoogleSearchRetrievalTool,
   HarmBlockThreshold,
   HarmCategory,
-  ImagenInstance,
-  ImagenParameters,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
-  ImagenPrediction,
   Part,
   SafetySetting,
   TaskType,
@@ -38,10 +37,6 @@ import {
   ToolConfig,
   UrlContextTool,
 } from '../common/types.js';
-import {
-  CreateInteractionRequest,
-  GeminiInteraction,
-} from './interaction-types.js';
 
 // This makes it easier to import all types from one place.
 export {
@@ -58,11 +53,6 @@ export {
   type GenerateContentStreamResult,
   type GenerationConfig,
   type GoogleSearchRetrievalTool,
-  type ImagenInstance,
-  type ImagenParameters,
-  type ImagenPredictRequest,
-  type ImagenPredictResponse,
-  type ImagenPrediction,
   type Part,
   type SafetySetting,
   type Tool,

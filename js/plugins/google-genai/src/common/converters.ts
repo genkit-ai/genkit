@@ -35,6 +35,7 @@ import {
   PartialArg,
   Schema,
   SchemaType,
+  SpeechMetadata,
   VideoMetadata,
   isObject,
 } from './types.js';
@@ -234,9 +235,31 @@ function toGeminiCustom(part: Part): GeminiPart {
 }
 
 function toGeminiText(part: Part): GeminiPart {
+  const speechMetadata = toGeminiSpeechMetadata(part.metadata?.speechMetadata);
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     text: part.text ?? '',
+    ...(speechMetadata ? { speechMetadata } : {}),
   });
+}
+
+/**
+ * Reads a text part's `metadata.speechMetadata` (`{ speaker?, style? }`),
+ * used by TTS models to assign each turn to a speaker and set its delivery
+ * style. Returns `undefined` if neither is set.
+ */
+function toGeminiSpeechMetadata(value: unknown): SpeechMetadata | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const speaker = typeof value.speaker === 'string' ? value.speaker : undefined;
+  const style = typeof value.style === 'string' ? value.style : undefined;
+  if (!speaker && !style) {
+    return undefined;
+  }
+  return {
+    ...(speaker ? { speaker } : {}),
+    ...(style ? { style } : {}),
+  };
 }
 
 /**

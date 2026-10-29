@@ -24,12 +24,16 @@ from typing import Any, overload
 
 from typing_extensions import TypeVar
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_func_description
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    ActionRunContext,
+    ChunkT,
+    InputT,
+    OutputT,
+    get_func_description,
+)
 from genkit._core._registry import Registry
-
-InputT = TypeVar('InputT', default=Any)
-OutputT = TypeVar('OutputT', default=Any)
-ChunkT = TypeVar('ChunkT', default=Any)
 
 _FlowInputT = TypeVar('_FlowInputT')
 _FlowOutputT = TypeVar('_FlowOutputT')
@@ -42,6 +46,17 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
     ``@ai.flow`` constructs and registers a ``Flow`` on the ``Genkit`` instance.
     Constructing ``Flow(fn)`` directly builds a standalone (unregistered) flow.
     """
+
+    # `(ctx, x: Any)` would match the (input, ctx) shape with the ctx as the
+    # input; catch it first. InputT isn't bound here, so it defaults to Any.
+    @overload
+    def __init__(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> None: ...
 
     @overload
     def __init__(
@@ -126,6 +141,17 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
         )
 
 
+# Same order as _FlowDecorator.__call__; the `object` shapes catch
+# `(x: Any)` / `(x: object)` before the ctx-only shape can.
+@overload
+def define_flow(
+    registry: Registry,
+    func: Callable[[ActionRunContext[_FlowChunkT], object], Awaitable[_FlowOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+) -> Flow[Any, _FlowOutputT, _FlowChunkT]: ...
+
+
 @overload
 def define_flow(
     registry: Registry,
@@ -142,6 +168,15 @@ def define_flow(
     name: str | None = None,
     description: str | None = None,
 ) -> Flow[_FlowInputT, _FlowOutputT, _FlowChunkT]: ...
+
+
+@overload
+def define_flow(
+    registry: Registry,
+    func: Callable[[object], Awaitable[_FlowOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+) -> Flow[Any, _FlowOutputT]: ...
 
 
 @overload
