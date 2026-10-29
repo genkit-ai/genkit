@@ -31,11 +31,10 @@ from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
-from genkit._core._schema import to_json_schema
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.model import ModelRequest
-from genkit.plugin_api import ActionKind
+from genkit.model import ModelContext, ModelRequest
+from genkit.plugin_api import ActionKind, to_json_schema
 
 
 def test_init_with_options() -> None:
@@ -423,8 +422,10 @@ async def test_model_action_does_not_wrap_media_fetch_error() -> None:
     client_mock.chat = AsyncMock()
     plugin.client = lambda: client_mock
 
-    image_client = MagicMock()
-    image_client.get = AsyncMock(side_effect=httpx.ConnectError('image host unreachable'))
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError('image host unreachable')
+
+    image_client = httpx.AsyncClient(transport=httpx.MockTransport(unreachable))
 
     action = plugin._create_model_action(_ResolvedModel(name='m'))
     request = ModelRequest(
@@ -475,7 +476,7 @@ async def _call_ollama(plugin: Ollama, surface: str, error: BaseException) -> No
     else:
         action = plugin._create_model_action(_ResolvedModel(name='m'))
         request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-        ctx = ActionRunContext(streaming_callback=MagicMock()) if streaming else None
+        ctx = ModelContext(streaming_callback=MagicMock()) if streaming else None
         await action._fn(request, ctx)
 
 

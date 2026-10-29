@@ -54,7 +54,7 @@ Example:
 
     # 2. Generate content with Gemini Pro on Vertex AI
     res = await ai.generate(
-        model=VertexAI.gemini_model('gemini-pro-latest'),
+        model=VertexAI.gemini_model('gemini-2.5-pro'),
         prompt='Explain quantum entanglement in one sentence.',
     )
 
@@ -78,6 +78,7 @@ from genkit_google_genai._google import (
 )
 from genkit_google_genai._models._antigravity import AntigravityConfig
 from genkit_google_genai._models._deep_research import DeepResearchConfig
+from genkit_google_genai._models._embedder import EmbeddingConfig
 from genkit_google_genai._models._gemini import (
     GeminiConfig,
     GeminiImageConfig,
@@ -86,10 +87,12 @@ from genkit_google_genai._models._gemini import (
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig
 from genkit_google_genai._models._veo import VeoConfig
+from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 
 __all__ = [
     'AntigravityConfig',
     'DeepResearchConfig',
+    'EmbeddingConfig',
     'GeminiConfig',
     'GeminiImageConfig',
     'GeminiTtsConfig',
@@ -98,4 +101,5 @@ __all__ = [
     'LyriaConfig',
     'VeoConfig',
     'VertexAI',
+    'VirtualTryOnConfig',
 ]

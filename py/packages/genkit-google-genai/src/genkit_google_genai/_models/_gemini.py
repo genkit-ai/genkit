@@ -17,7 +17,9 @@
 """Gemini models."""
 
 import asyncio
-from collections.abc import Mapping
+import json
+import math
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast
@@ -55,20 +57,12 @@ from pydantic import (
     model_validator,
 )
 
-from genkit import (
-    ActionRunContext,
-    FinishReason,
-    GenkitError,
-    Message,
-    ModelResponse,
-    ModelResponseChunk,
-    Part,
-    Role,
-)
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import (
     ConstrainedSupport,
     GenerationUsage,
     ModelConfig,
+    ModelContext,
     ModelInfo,
     ModelRequest,
     ModelSupports,
@@ -120,6 +114,27 @@ def _to_float(obj: Any, attr: str) -> float | None:  # noqa: ANN401
     return float(val) if val is not None else None
 
 
+def _to_string_list(value: Any) -> list[str]:  # noqa: ANN401
+    """Coerce a JSON Schema string array; a bare string is not one."""
+    if not isinstance(value, list):
+        raise TypeError(f'expected a list, got {type(value).__name__}')
+    return [str(item) for item in value]
+
+
+def _to_finite_float(value: Any) -> float:  # noqa: ANN401
+    """Coerce a JSON Schema bound; infinity and NaN have no JSON encoding."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{value!r} is not a finite number')
+    return number
+
+
+def _to_json_value(value: Any) -> Any:  # noqa: ANN401
+    """Return *value* unchanged when it encodes as strict JSON."""
+    json.dumps(value, allow_nan=False)
+    return value
+
+
 def _usage_from_metadata(usage_metadata: Any) -> GenerationUsage:  # noqa: ANN401
     """Build GenerationUsage from a google-genai usage_metadata block."""
     if usage_metadata is None:
@@ -131,6 +146,39 @@ def _usage_from_metadata(usage_metadata: Any) -> GenerationUsage:  # noqa: ANN40
         total_tokens=_to_float(usage_metadata, 'total_token_count'),
         thoughts_tokens=_to_float(usage_metadata, 'thoughts_token_count'),
         cached_content_tokens=_to_float(usage_metadata, 'cached_content_token_count'),
+    )
+
+
+def _custom_from_feedback(
+    feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+) -> dict[str, Any] | None:
+    """The response's ``custom`` payload: the prompt feedback the service sent, if any."""
+    if feedback is None:
+        return None
+    return {'promptFeedback': feedback.model_dump(mode='json', by_alias=True, exclude_none=True)}
+
+
+def _no_candidates_response(
+    feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+    usage_metadata: Any,  # noqa: ANN401
+) -> ModelResponse:
+    """Response for a reply that carried no candidates.
+
+    A refused prompt comes back with no candidates and the reason in the
+    prompt feedback, and finishes BLOCKED.
+
+    Raises:
+        GenkitError: INTERNAL when the prompt was not blocked.
+    """
+    reason = feedback.block_reason if feedback is not None else None
+    if feedback is None or not reason or reason == genai_types.BlockedReason.BLOCKED_REASON_UNSPECIFIED:
+        raise GenkitError(status='INTERNAL', message='Model returned no candidates.')
+    return ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part.from_text('')]),
+        finish_reason=FinishReason.BLOCKED,
+        finish_message=feedback.block_reason_message or f'prompt blocked: {reason.value}',
+        usage=_usage_from_metadata(usage_metadata),
+        custom=_custom_from_feedback(feedback),
     )
 
 
@@ -475,7 +523,7 @@ class GeminiConfig(ModelConfig):
         ge=0.0,
         le=1.0,
     )
-    top_k: int | None = Field(  # pyrefly: ignore[bad-override]
+    top_k: int | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride] # pyrefly: ignore[bad-override]
         default=None,
         alias='topK',
         description=('The maximum number of tokens to consider when sampling.'),
@@ -516,7 +564,7 @@ class GeminiConfig(ModelConfig):
         }),
     ] = Field(None, alias='thinkingConfig')
 
-    max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
+    max_output_tokens: int | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride] # pyrefly: ignore[bad-override]
         default=None, alias='maxOutputTokens', description='Maximum number of tokens to generate.'
     )
     stop_sequences: list[str] | None = Field(default=None, alias='stopSequences', description='Stop sequences.')
@@ -940,30 +988,30 @@ GENERIC_GEMMA_MODEL = ModelInfo(
 )
 
 
-# Quote autocomplete needs a Literal, so these aliases are the model-id
-# catalog. Constructors take ``Known* | str``: listed ids autocomplete,
-# and an id Google ships after this release still type-checks and routes.
-KnownGemini: TypeAlias = Literal[
+# Quote autocomplete needs a Literal, so these aliases list the ids each
+# constructor autocompletes; SUPPORTED_MODELS is the runtime catalog.
+# Constructors take ``Known* | str``, so an unlisted id still type-checks
+# and routes.
+KnownSharedGemini: TypeAlias = Literal[
     'gemini-2.5-flash',
     'gemini-2.5-pro',
     'gemini-2.5-flash-lite',
-    'gemini-flash-latest',
-    'gemini-flash-lite-latest',
-    'gemini-pro-latest',
     'gemini-3-flash-preview',
-    'gemini-3-pro-preview',
     'gemini-3.1-flash-lite',
-    'gemini-3.1-flash-lite-preview',
     'gemini-3.1-pro-preview',
     'gemini-3.1-pro-preview-customtools',
     'gemini-3.5-flash',
     'gemini-3.6-flash',
     'gemini-3.7-flash',
-    'gemini-2.5-flash-preview-04-17',
-    'gemini-2.5-pro-exp-03-25',
-    'gemini-2.5-pro-preview-03-25',
-    'gemini-2.5-pro-preview-05-06',
 ]
+# Vertex AI does not serve the rotating ``-latest`` aliases.
+KnownGoogleAIGemini: TypeAlias = Literal[
+    KnownSharedGemini,
+    'gemini-flash-latest',
+    'gemini-flash-lite-latest',
+    'gemini-pro-latest',
+]
+KnownVertexAIGemini: TypeAlias = KnownSharedGemini
 KnownGeminiTts: TypeAlias = Literal[
     'gemini-2.5-flash-preview-tts',
     'gemini-2.5-pro-preview-tts',
@@ -973,11 +1021,8 @@ KnownGeminiTts: TypeAlias = Literal[
 ]
 KnownGeminiImage: TypeAlias = Literal[
     'gemini-2.5-flash-image',
-    'gemini-2.5-flash-image-preview',
     'gemini-3-pro-image',
-    'gemini-3-pro-image-preview',
     'gemini-3.1-flash-image',
-    'gemini-3.1-flash-image-preview',
 ]
 KnownGemma: TypeAlias = Literal[
     'gemma-3-1b-it',
@@ -1275,6 +1320,7 @@ class GeminiModel:
         client: genai.Client,
         client_kwargs: dict[str, Any] | None = None,
         base_url_pinned: bool = False,
+        legacy_response_schema: bool = False,
     ) -> None:
         """Initialize Gemini model.
 
@@ -1286,11 +1332,14 @@ class GeminiModel:
                 (api_version, base_url, location).
             base_url_pinned: Whether the plugin caller explicitly pinned a
                 base URL (as opposed to one derived from the location).
+            legacy_response_schema: Send a JSON output schema as Gemini's
+                ``response_schema`` instead of ``response_json_schema``.
         """
         self._version = version
         self._client = client
         self._client_kwargs = client_kwargs
         self._base_url_pinned = base_url_pinned
+        self._legacy_response_schema = legacy_response_schema
 
     def _get_tools(self, request: ModelRequest) -> list[genai_types.Tool]:
         """Generates VertexAI Gemini compatible tool definitions.
@@ -1351,14 +1400,64 @@ class GeminiModel:
             wrapped=wrapped,
         )
 
+    # JSON Schema keywords copied onto a Gemini Schema: (keyword, attribute, coercion).
+    _SCHEMA_SCALAR_KEYS: tuple[tuple[str, str, Callable[[Any], Any]], ...] = (
+        ('format', 'format', str),
+        ('default', 'default', _to_json_value),
+        ('minimum', 'minimum', _to_finite_float),
+        ('maximum', 'maximum', _to_finite_float),
+        ('minItems', 'min_items', int),
+        ('maxItems', 'max_items', int),
+        ('propertyOrdering', 'property_ordering', _to_string_list),
+    )
+
+    # JSON Schema keywords that annotate a node without constraining it.
+    _SCHEMA_ANNOTATION_KEYS = frozenset([
+        'title',
+        'description',
+        'default',
+        'examples',
+        'deprecated',
+        'readOnly',
+        'writeOnly',
+        '$comment',
+        '$schema',
+        '$id',
+        '$defs',
+    ])
+
     def _convert_schema_property(
-        self, input_schema: dict[str, object] | None, defs: dict[str, object] | None = None
+        self,
+        input_schema: dict[str, object] | None,
+        defs: dict[str, object] | None = None,
+        *,
+        strict: bool = False,
+        refs: frozenset[str] = frozenset(),
     ) -> genai_types.Schema | None:
-        """Sanitizes a schema to be compatible with Gemini API.
+        """Convert a JSON Schema dict into a Gemini ``Schema``.
+
+        Resolves local ``$ref``, maps ``anyOf`` and ``oneOf`` on a node with
+        no ``type`` to ``any_of``, folds a ``null`` branch of either or of a
+        ``type`` list into ``nullable``, maps the ``enum`` type to STRING and a
+        string ``const`` to a one-value ``enum``. An ``enum`` is kept only on a
+        STRING node whose members are all strings, dropping a ``null`` member;
+        a node with such an ``enum`` and no ``type`` is treated as a string.
+        Any other node with no ``type``, an array with no ``items`` object or
+        whose ``items`` convert to None, and a ``$ref`` back to a definition
+        that contains it convert to None and are left out of the parent's
+        ``properties`` and ``required``.
 
         Args:
-            input_schema: A dictionary with input parameters
+            input_schema: A JSON Schema dict.
             defs: Dictionary with definitions. Optional.
+            strict: Raise ``INVALID_ARGUMENT`` for a node that constrains
+                without a ``type``, for a required property that converts to
+                None, for a ``type`` list, ``anyOf`` or ``oneOf`` that would
+                lose some but not all of its non-null branches and for a
+                keyword value that cannot be coerced, instead of leaving them
+                out. An object with ``additionalProperties`` and no
+                ``properties`` also converts to None.
+            refs: Names of the definitions being expanded on the current path.
 
         Returns:
             Schema or None
@@ -1377,57 +1476,184 @@ class GeminiModel:
                 ref_name = ref_tokens[-1]
 
                 if defs is None or ref_name not in defs:
-                    raise ValueError(f'Failed to resolve schema for {ref_name}')
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'{self._version}: schema $ref {ref_path!r} cannot be resolved',
+                    )
+                if ref_name in refs:
+                    return None
 
                 ref_schema = defs[ref_name]
                 if isinstance(ref_schema, dict):
-                    schema = self._convert_schema_property(cast(dict[str, object], ref_schema), defs)
+                    schema = self._convert_schema_property(
+                        cast(dict[str, object], ref_schema), defs, strict=strict, refs=refs | {ref_name}
+                    )
                 else:
                     schema = None
 
-                if schema and input_schema.get('description'):
-                    schema.description = cast(str, input_schema['description'])
+                if schema:
+                    self._copy_schema_keywords(input_schema, schema, strict=strict)
 
                 return schema
 
         if 'type' not in input_schema:
+            for keyword in ('anyOf', 'oneOf'):
+                branches = input_schema.get(keyword)
+                if isinstance(branches, list):
+                    return self._convert_union(
+                        input_schema, keyword, cast(list[object], branches), defs, strict=strict, refs=refs
+                    )
+            enum = input_schema.get('enum')
+            if isinstance(enum, list) and self._string_enum_members(cast(list[object], enum)) is not None:
+                nullable = any(m is None for m in cast(list[object], enum))
+                typed: dict[str, object] = {**input_schema, 'type': ['string', 'null'] if nullable else 'string'}
+                return self._convert_schema_property(typed, defs, strict=strict, refs=refs)
+            if strict:
+                unsupported = sorted(set(input_schema) - self._SCHEMA_ANNOTATION_KEYS)
+                if unsupported:
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'{self._version}: schema with {unsupported[0]} but no type cannot be converted',
+                    )
             return None
 
         schema = genai_types.Schema()
-        if input_schema.get('description'):
-            schema.description = cast(str, input_schema['description'])
+        self._copy_schema_keywords(input_schema, schema, strict=strict)
 
         if 'required' in input_schema:
             schema.required = cast(list[str], input_schema['required'])
 
-        if 'type' in input_schema:
-            raw_type = input_schema['type']
-            if isinstance(raw_type, list):
-                non_null = [t for t in raw_type if t != 'null']
+        raw_type = input_schema['type']
+        if isinstance(raw_type, list):
+            non_null = [t for t in raw_type if t != 'null']
+            if strict and len(non_null) > 1:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'{self._version}: schema type {raw_type!r} cannot be converted',
+                )
+            if len(non_null) < len(raw_type):
                 schema.nullable = True
-                raw_type = non_null[0] if non_null else 'string'
-            schema_type = genai_types.Type(cast(str, raw_type))
-            schema.type = schema_type
+            raw_type = non_null[0] if non_null else 'string'
+        if raw_type == 'enum':
+            raw_type = 'string'
+        if not isinstance(raw_type, str) or raw_type.upper() not in genai_types.Type.__members__:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self._version}: schema type {raw_type!r} is not supported',
+            )
+        schema_type = genai_types.Type(raw_type)
+        schema.type = schema_type
 
-            if 'enum' in input_schema:
-                schema.enum = cast(list[str], input_schema['enum'])
+        if schema_type == genai_types.Type.STRING:
+            const = input_schema.get('const')
+            enum = input_schema.get('enum')
+            if isinstance(const, str):
+                schema.enum = [const]
+            elif isinstance(enum, list):
+                members = self._string_enum_members(cast(list[object], enum))
+                if members is not None:
+                    schema.enum = members
 
-            if schema_type == genai_types.Type.ARRAY:
-                items_value = input_schema.get('items')
-                if isinstance(items_value, dict):
-                    schema.items = self._convert_schema_property(cast(dict[str, object], items_value), defs)
+        if schema_type == genai_types.Type.ARRAY:
+            items_value = input_schema.get('items')
+            if isinstance(items_value, dict):
+                schema.items = self._convert_schema_property(
+                    cast(dict[str, object], items_value), defs, strict=strict, refs=refs
+                )
+            if schema.items is None:
+                return None
 
-            if schema_type == genai_types.Type.OBJECT:
-                schema.properties = {}
-                properties_value = input_schema.get('properties', {})
-                if isinstance(properties_value, dict):
-                    properties = cast(dict[str, dict[str, object]], properties_value)
-                    for key in properties:
-                        nested_schema = self._convert_schema_property(properties[key], defs)
-                        if nested_schema:
-                            schema.properties[key] = nested_schema
+        if schema_type == genai_types.Type.OBJECT:
+            additional = input_schema.get('additionalProperties')
+            if strict and not input_schema.get('properties') and (additional is True or isinstance(additional, dict)):
+                return None
+            schema.properties = {}
+            properties_value = input_schema.get('properties', {})
+            if isinstance(properties_value, dict):
+                properties = cast(dict[str, object], properties_value)
+                for key, value in properties.items():
+                    nested_schema = (
+                        self._convert_schema_property(cast(dict[str, object], value), defs, strict=strict, refs=refs)
+                        if isinstance(value, dict)
+                        else None
+                    )
+                    if nested_schema is not None:
+                        schema.properties[key] = nested_schema
+                    elif key in (schema.required or ()):
+                        if strict:
+                            raise GenkitError(
+                                status='INVALID_ARGUMENT',
+                                message=f'{self._version}: required property {key} cannot be converted',
+                            )
+                        schema.required = [name for name in schema.required or () if name != key] or None
 
         return schema
+
+    def _convert_union(
+        self,
+        input_schema: dict[str, object],
+        keyword: str,
+        union: list[object],
+        defs: dict[str, object] | None,
+        *,
+        strict: bool,
+        refs: frozenset[str],
+    ) -> genai_types.Schema | None:
+        """Convert an ``anyOf`` or ``oneOf`` node to ``any_of``; a ``null`` branch becomes ``nullable``.
+
+        A branch that converts to None is left out, and the node converts to
+        None when every branch does. With ``strict``, leaving out some branches
+        but not all raises instead.
+        """
+        branches = [cast(dict[str, object], b) for b in union if isinstance(b, dict)]
+        typed = [b for b in branches if b.get('type') not in ('null', ['null'])]
+        converted = [
+            s for b in typed if (s := self._convert_schema_property(b, defs, strict=strict, refs=refs)) is not None
+        ]
+        if not converted:
+            return None
+        if strict and len(converted) < len(typed):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self._version}: schema {keyword} branch cannot be converted',
+            )
+
+        schema = converted[0] if len(converted) == 1 else genai_types.Schema(any_of=converted)
+        if len(typed) < len(branches):
+            schema.nullable = True
+        self._copy_schema_keywords(input_schema, schema, strict=strict)
+        return schema
+
+    def _copy_schema_keywords(
+        self, input_schema: dict[str, object], schema: genai_types.Schema, *, strict: bool
+    ) -> None:
+        """Copy the description and the scalar keywords from *input_schema* onto *schema*.
+
+        A value that cannot be coerced raises with ``strict`` and is left out otherwise.
+        """
+        if input_schema.get('description'):
+            schema.description = cast(str, input_schema['description'])
+        for key, attr, coerce in self._SCHEMA_SCALAR_KEYS:
+            value = input_schema.get(key)
+            if value is None:
+                continue
+            try:
+                setattr(schema, attr, coerce(value))
+            except (TypeError, ValueError, OverflowError) as e:
+                if not strict:
+                    continue
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'{self._version}: schema keyword {key} has an invalid value {value!r}',
+                ) from e
+
+    @staticmethod
+    def _string_enum_members(enum: list[object]) -> list[str] | None:
+        """Return the non-null members of *enum* when all of them are strings, else None."""
+        members = [m for m in enum if m is not None]
+        if members and all(isinstance(m, str) for m in members):
+            return cast(list[str], members)
+        return None
 
     async def _retrieve_cached_content(
         self,
@@ -1493,7 +1719,7 @@ class GeminiModel:
             raise transport_error(e) from e
         return cache
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Handle a generation request.
 
         Args:
@@ -1733,6 +1959,9 @@ class GeminiModel:
         except TRANSPORT_ERRORS as e:
             raise transport_error(e) from e
 
+        if not response.candidates:
+            return _no_candidates_response(response.prompt_feedback, response.usage_metadata)
+
         content = await self._contents_from_response(response, tools=tools)
 
         # Ensure we always have at least one content item to avoid UI errors
@@ -1751,13 +1980,14 @@ class GeminiModel:
             ),
             finish_reason=finish_reason,
             usage=_usage_from_metadata(response.usage_metadata),
+            custom=_custom_from_feedback(response.prompt_feedback),
         )
 
     async def _streaming_generate(
         self,
         request_contents: list[genai_types.Content],
         request_cfg: genai_types.GenerateContentConfig | None,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         model_name: str,
         client: genai.Client | None = None,
         tools: ToolTable | None = None,
@@ -1773,9 +2003,15 @@ class GeminiModel:
             tools: tools declared this turn
 
         Returns:
-            empty genai response
+            genai response.
         """
         client = client or self._client
+        accumulated_content: list[Part] = []
+        finish_reason = FinishReason.UNKNOWN
+        usage_metadata: Any = None
+        prompt_feedback: genai_types.GenerateContentResponsePromptFeedback | None = None
+        saw_chunk = False
+        saw_candidates = False
         try:
             generator = await client.aio.models.generate_content_stream(
                 model=resolve_vertex_model_name(client, model_name),
@@ -1785,10 +2021,8 @@ class GeminiModel:
             # The HTTP call happens on the first iteration, not on the
             # await that created the generator, so classify has to cover
             # the async for as well.
-            accumulated_content: list[Part] = []
-            finish_reason = FinishReason.UNKNOWN
-            usage_metadata: Any = None
             async for response_chunk in generator:
+                saw_chunk = True
                 content = await self._contents_from_response(response_chunk, tools=tools)
                 if content:  # Only process if we have content
                     accumulated_content.extend(content)
@@ -1802,26 +2036,36 @@ class GeminiModel:
                 # chunks, so hold onto the latest values we see as the stream drains —
                 # otherwise a streamed turn reports no finish reason and no usage at all.
                 if response_chunk.candidates and response_chunk.candidates[0] is not None:
+                    saw_candidates = True
                     fr = response_chunk.candidates[0].finish_reason
                     if fr:
                         finish_reason = _to_finish_reason(fr)
                 if response_chunk.usage_metadata is not None:
                     usage_metadata = response_chunk.usage_metadata
-
-            return ModelResponse(
-                message=Message(
-                    role=Role.MODEL,
-                    content=accumulated_content,
-                ),
-                finish_reason=finish_reason,
-                usage=_usage_from_metadata(usage_metadata),
-            )
+                if response_chunk.prompt_feedback is not None:
+                    prompt_feedback = response_chunk.prompt_feedback
         except APIError as e:
             raise api_error(e) from e
         except GOOGLE_AUTH_ERRORS as e:
             raise_auth_error(e)
         except TRANSPORT_ERRORS as e:
             raise transport_error(e) from e
+
+        # An empty 200 body ends the SDK's stream without a chunk or an error.
+        if not saw_chunk:
+            raise GenkitError(status='UNAVAILABLE', message='Model stream returned no responses.')
+        if not saw_candidates:
+            return _no_candidates_response(prompt_feedback, usage_metadata)
+
+        return ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=accumulated_content,
+            ),
+            finish_reason=finish_reason,
+            usage=_usage_from_metadata(usage_metadata),
+            custom=_custom_from_feedback(prompt_feedback),
+        )
 
     @cached_property
     def metadata(self) -> dict:
@@ -1975,13 +2219,17 @@ class GeminiModel:
                         cfg = genai_types.GenerateContentConfig(**known)
                     except ValidationError as e:
                         raise sdk_config_error(action_name=self._version, error=e) from e
+                    # The SDK types top_k as float and coerces 40 to 40.0; the
+                    # API's topK is int32. Assignment isn't revalidated.
+                    if isinstance(known.get('top_k'), int):
+                        cfg.top_k = known['top_k']
 
         # Tools from top-level field and config-level fields
         tools.extend(declared_tools if declared_tools is not None else self._get_tools(request))
 
-        has_output = bool(request.output_format or request.output_schema)
+        has_output = bool(request.output_format or request.output_schema or request.output_content_type)
 
-        if cfg is not None or tools or system_instruction or request.output_format or leftovers or extra:
+        if cfg is not None or tools or system_instruction or has_output or leftovers or extra:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
@@ -2002,14 +2250,8 @@ class GeminiModel:
                 supports_constrained = model_supports_constrained == ConstrainedSupport.ALL or (
                     model_supports_constrained == ConstrainedSupport.NO_TOOLS and not request.tools
                 )
-
-                response_mime_type = (
-                    'application/json' if request.output_format == 'json' and supports_constrained else None
-                )
-                cfg.response_mime_type = response_mime_type
-
-                if request.output_schema and request.output_constrained and supports_constrained:
-                    cfg.response_schema = self._convert_schema_property(request.output_schema)
+                if supports_constrained:
+                    self._apply_output_config(cfg, request)
 
             if tools:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
@@ -2035,6 +2277,40 @@ class GeminiModel:
 
     # Keys that may not be supported by older google-genai SDK versions.
     _SDK_GATED_KEYS = frozenset(['image_config', 'thinking_config', 'response_modalities'])
+
+    def _apply_output_config(self, cfg: genai_types.GenerateContentConfig, request: ModelRequest) -> None:
+        """Set the response MIME type and schema for the request's output format.
+
+        JSON output turns on JSON mode, and constrained JSON output also sends
+        the schema verbatim as ``response_json_schema``, or as a converted
+        ``response_schema`` when ``legacy_response_schema`` is set. Constrained
+        enum output sends ``text/x.enum`` with a converted ``response_schema``;
+        enum output without a constrained schema sends neither.
+        """
+        schema = request.output_schema
+        json_mode = request.output_format == 'json' or request.output_content_type == 'application/json'
+        enum_mode = request.output_format == 'enum' or request.output_content_type == 'text/enum'
+
+        if json_mode:
+            cfg.response_mime_type = 'application/json'
+            if schema and request.output_constrained:
+                if self._legacy_response_schema:
+                    cfg.response_schema = self._output_response_schema(schema)
+                else:
+                    cfg.response_json_schema = schema
+        elif enum_mode and schema and request.output_constrained:
+            cfg.response_mime_type = 'text/x.enum'
+            cfg.response_schema = self._output_response_schema(schema)
+
+    def _output_response_schema(self, output_schema: dict[str, Any]) -> genai_types.Schema:
+        """Convert the request's output schema for ``response_schema``."""
+        schema = self._convert_schema_property(output_schema, strict=True)
+        if schema is None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{self._version}: output_schema cannot be converted to response_schema',
+            )
+        return schema
 
     def _normalize_config_to_dict(
         self,

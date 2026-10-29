@@ -24,7 +24,7 @@ from flask import Flask, abort
 from genkit_flask import genkit_flask_handler
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit import FlowContext, Genkit, GenkitError, PublicError, RequestData
 from genkit.plugin_api import provider_error
 
 
@@ -55,7 +55,7 @@ def create_app() -> Flask:
     @app.post('/chat')
     @genkit_flask_handler(ai, context_provider=my_context_provider)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
+    async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
         ctx.send_chunk(1)
         ctx.send_chunk({'username': ctx.context.get('username')})
         ctx.send_chunk({'foo': 'bar'})
@@ -200,7 +200,7 @@ def test_flask_context_provider_sees_method_lowercase_headers_and_input() -> Non
     @app.post('/echo')
     @genkit_flask_handler(ai, context_provider=provider)
     @ai.flow()
-    async def echo(_: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def echo(_: str, ctx: FlowContext) -> dict[str, Any]:
         return {
             'method': ctx.context['method'],
             'authorization': ctx.context['authorization'],

@@ -29,7 +29,7 @@ import httpx
 import ollama as ollama_api
 import structlog
 
-from genkit import ActionRunContext, ModelResponse
+from genkit import ModelResponse
 from genkit.embedder import (
     Embedder,
     EmbedderInfo,
@@ -40,6 +40,7 @@ from genkit.embedder import (
 from genkit.model import (
     ConstrainedSupport,
     Model,
+    ModelContext,
     ModelInfo,
     ModelRequest,
     ModelSupports,
@@ -240,10 +241,14 @@ class Ollama(Plugin):
             _require_no_arg_callable(request_headers)
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
-        self.client = loop_local_client(self._make_client)
         self._probes: dict[str, _ProbeResult] = {}
         # One probe per model at a time; concurrent first uses await the same task.
         self._inflight: dict[str, asyncio.Task[_ResolvedModel]] = {}
+
+    @loop_local_client
+    def client(self) -> ollama_api.AsyncClient:
+        """The per-event-loop client built with the static headers and timeout."""
+        return self._make_client()
 
     def _make_client(self) -> ollama_api.AsyncClient:
         """Build the Ollama AsyncClient for the current event loop.
@@ -380,7 +385,7 @@ class Ollama(Plugin):
             base_url=self.base_url,
         )
 
-        async def _run(request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+        async def _run(request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
             # OllamaModel wraps connection errors at the SDK boundary, so a failed
             # media-URL fetch isn't misreported as an Ollama server outage.
             return await model.generate(request, ctx)

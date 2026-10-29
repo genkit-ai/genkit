@@ -19,7 +19,7 @@
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, Interrupt, ToolRunContext
+from genkit import Genkit, Interrupt, ToolContext
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
@@ -31,7 +31,7 @@ class TransferRequest(BaseModel):
 
 
 @ai.tool()
-async def request_transfer(body: TransferRequest, ctx: ToolRunContext) -> dict:
+async def request_transfer(body: TransferRequest, ctx: ToolContext) -> dict:
     # First call pauses. After you resume, is_resumed() is True and the
     # wire actually runs.
     if not ctx.is_resumed():

@@ -37,8 +37,8 @@ from genkit_google_genai._models._secrets import reject_request_config_api_key
 from pydantic import BaseModel, ConfigDict, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import Model, ModelRequest
+from genkit import ModelResponse
+from genkit.model import Model, ModelContext, ModelRequest
 
 DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
 
@@ -81,7 +81,7 @@ def create_antigravity_action(
     version = extract_version(name)
     info = antigravity_model_info(version)
 
-    async def run(request: ModelRequest[AntigravityConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[AntigravityConfig], ctx: ModelContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
         config = request.config or AntigravityConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)

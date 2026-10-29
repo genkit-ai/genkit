@@ -25,7 +25,7 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
+from genkit._core._action import Action, ActionKind, ModelContext, get_current_context
 from genkit._core._config_check import check_config_json_schema, check_request_config
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._model import ModelRequest, ModelResponse
@@ -110,7 +110,7 @@ def _operation_action(
 
     # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
     @wraps(fn)
-    async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
+    async def run_and_stamp(input: object, ctx: ModelContext) -> Operation:  # noqa: A002
         if config_schema:
             # Same check as a regular model action: the whole config, after
             # every middleware, before the provider starts an operation.
@@ -137,9 +137,9 @@ def _operation_action(
 
 
 # A fn may return a plain Operation; its output is validated as a ModelResponse.
-StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
-CheckModelOpFn = Callable[[Operation[ModelResponse], ActionRunContext], Awaitable[Operation]]
-CancelModelOpFn = Callable[[Operation[ModelResponse], ActionRunContext], Awaitable[Operation]]
+StartModelOpFn = Callable[[ModelRequest, ModelContext], Awaitable[Operation]]
+CheckModelOpFn = Callable[[Operation[ModelResponse], ModelContext], Awaitable[Operation]]
+CancelModelOpFn = Callable[[Operation[ModelResponse], ModelContext], Awaitable[Operation]]
 
 
 def operation_context(

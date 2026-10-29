@@ -35,7 +35,7 @@
 
 ::: genkit.Tool
 
-::: genkit.ToolRunContext
+::: genkit.ToolContext
 
 ::: genkit.Interrupt
 
@@ -43,7 +43,7 @@
 
 ::: genkit.MultipartToolResponse
 
-::: genkit.ActionRunContext
+::: genkit.FlowContext
 
 ::: genkit.Prompt
 
@@ -70,6 +70,8 @@
 ::: genkit.model.BackgroundModel
 
 ::: genkit.model.GenerateActionOptions
+
+::: genkit.model.ModelContext
 
 ::: genkit.model.ModelRequest
 

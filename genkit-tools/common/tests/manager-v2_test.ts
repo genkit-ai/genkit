@@ -695,3 +695,63 @@ describe('RuntimeManagerV2 reflection auth', () => {
     expect(manager.listRuntimes()).toEqual([]);
   });
 });
+
+describe('RuntimeManagerV2 register reply', () => {
+  const TELEMETRY_URL = 'http://localhost:4033';
+
+  /** Registers a runtime and resolves with the JSON-RPC `register` result. */
+  async function register(
+    m: RuntimeManagerV2
+  ): Promise<{ telemetryServerUrl?: string }> {
+    const ws = new WebSocket(`ws://localhost:${m.port}`);
+    try {
+      return await new Promise((resolve, reject) => {
+        ws.on('error', reject);
+        ws.on('message', (data) => {
+          resolve(JSON.parse(data.toString()).result);
+        });
+        ws.on('open', () => {
+          ws.send(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'register',
+              params: { id: 'test-runtime-telemetry', pid: 1234 },
+              id: '1',
+            })
+          );
+        });
+      });
+    } finally {
+      ws.close();
+    }
+  }
+
+  it('hands telemetryServerUrl to the runtime by default', async () => {
+    const m = await RuntimeManagerV2.create({
+      projectRoot: './',
+      telemetryServerUrl: TELEMETRY_URL,
+    });
+    try {
+      const result = await register(m);
+      expect(result.telemetryServerUrl).toBe(TELEMETRY_URL);
+    } finally {
+      await m.stop();
+    }
+  });
+
+  it('withholds telemetryServerUrl when suppressRuntimeTelemetry is set, but keeps it for UI reads', async () => {
+    const m = await RuntimeManagerV2.create({
+      projectRoot: './',
+      telemetryServerUrl: TELEMETRY_URL,
+      suppressRuntimeTelemetry: true,
+    });
+    try {
+      const result = await register(m);
+      expect(result.telemetryServerUrl).toBeUndefined();
+      // The manager still knows the URL so the Dev UI can read traces/logs.
+      expect(m.telemetryServerUrl).toBe(TELEMETRY_URL);
+    } finally {
+      await m.stop();
+    }
+  });
+});

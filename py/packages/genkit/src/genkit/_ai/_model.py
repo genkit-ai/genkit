@@ -30,6 +30,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    ModelContext,
     get_func_description,
 )
 from genkit._core._background import BackgroundModel
@@ -62,7 +63,7 @@ from genkit._core._typing import GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
-ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any]]]
+ModelFn = Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse[Any]]]
 
 logger = get_logger(__name__)
 

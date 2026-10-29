@@ -14,13 +14,12 @@ from pydantic.alias_generators import to_camel
 from genkit import Genkit, Message, Part
 from genkit._ai._model import ModelConfig
 from genkit._ai._prompt import GenerateCall, to_generate_options
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._typing import Role
 from genkit.exp import Genkit as ExpGenkit
-from genkit.model import Model, ModelRef
+from genkit.model import Model, ModelContext, ModelRef
 from genkit.testing import EchoModel, define_echo_model
 
 
@@ -224,11 +223,11 @@ async def test_generate_operation_with_model_ref(ai: Genkit) -> None:
     """generate_operation applies the ref's version and config, not just the name."""
     seen: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         seen.append(request)
         return Operation(id='ref-op-123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lro-model', start=start, check=check)
@@ -1069,10 +1068,10 @@ async def test_generate_operation_rejects_wrong_config_class() -> None:
     """generate_operation checks the class before it re-enters generate with a dict."""
     ai = Genkit()
 
-    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='op-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(
@@ -1096,7 +1095,7 @@ async def test_model_factory_stashes_class_without_registering() -> None:
     ai = Genkit()
     echo = EchoModel()
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return await echo.model_fn(request, ctx)
 
     action = Model('flash-plugin-style', model_fn, config_schema=CustomConfig)
@@ -1479,10 +1478,10 @@ async def test_define_agent_with_define_model_action_runs_that_model() -> None:
 async def test_generate_operation_with_define_background_model_result_starts_the_operation() -> None:
     """generate_operation(model=the define_background_model result) starts it, same as the name."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='bg-op', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -1498,11 +1497,11 @@ async def test_generate_operation_with_another_instances_background_model_raises
     """generate_operation(model=other_ai's background model) raises INVALID_ARGUMENT before starting."""
     started: list[str] = []
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append('called')
         return Operation(id='bg-op', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     other = Genkit()

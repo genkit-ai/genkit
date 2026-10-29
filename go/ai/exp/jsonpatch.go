@@ -17,9 +17,11 @@
 package exp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,10 +39,14 @@ import (
 // operation set for interoperability and is deliberately lenient so a stream of
 // deltas stays robust.
 //
-// Both operate on JSON-shaped values: the map[string]any / []any / float64 /
-// string / bool / nil tree produced by unmarshaling into an any. Inputs are
-// normalized (round-tripped through JSON) on the way in, so any
-// JSON-serializable Go value may be passed.
+// Both operate on JSON-shaped values: the map[string]any / []any /
+// json.Number / string / bool / nil tree produced by decoding into an any with
+// [json.Decoder.UseNumber]. Inputs are normalized (round-tripped through JSON)
+// on the way in, so any JSON-serializable Go value may be passed, and numbers
+// keep their exact text: an integer above 2^53 survives a diff and an apply.
+// Decode a stored patch with UseNumber too, or its values round on the way in.
+// The runtime's own custom-state values, such as the state prompt templates
+// read, keep float64 instead, so code that handles both sees both shapes.
 
 // Diff computes an RFC 6902 JSON Patch that transforms from into to.
 //
@@ -54,7 +60,7 @@ import (
 //
 // Object keys are visited in sorted order, so the patch is deterministic.
 func Diff(from, to any) JSONPatch {
-	return diffValues(normalizeJSON(from), normalizeJSON(to))
+	return diffValues(exactJSON(from), exactJSON(to))
 }
 
 // diffValues diffs two already-normalized JSON values. The runtime uses it
@@ -123,19 +129,20 @@ func diffWalk(from, to any, pointer string, patch *JSONPatch) {
 // a missing member is a no-op. A test operation is honored and returns an error
 // on mismatch. Other unknown operations also return an error.
 func ApplyPatch(document any, patch JSONPatch) (any, error) {
-	return applyOps(cloneJSON(normalizeJSON(document)), patch)
+	return applyOps(cloneJSON(exactJSON(document)), patch, exactJSON)
 }
 
 // applyOps applies patch to an already-normalized doc, mutating it in place
 // where possible and returning the result (which may be a fresh value for
-// root-level operations). The runtime/client pass a clone they own.
-func applyOps(doc any, patch JSONPatch) (any, error) {
+// root-level operations). normalize is how doc was normalized, and normalizes
+// each operation's value to match. The runtime/client pass a clone they own.
+func applyOps(doc any, patch JSONPatch, normalize func(any) any) (any, error) {
 	for _, op := range patch {
 		if op == nil {
 			continue
 		}
 		var err error
-		doc, err = applyOp(doc, op)
+		doc, err = applyOp(doc, op, normalize)
 		if err != nil {
 			return nil, err
 		}
@@ -143,20 +150,20 @@ func applyOps(doc any, patch JSONPatch) (any, error) {
 	return doc, nil
 }
 
-func applyOp(doc any, op *JSONPatchOperation) (any, error) {
+func applyOp(doc any, op *JSONPatchOperation, normalize func(any) any) (any, error) {
 	tokens, err := parsePointer(op.Path)
 	if err != nil {
 		return nil, err
 	}
 	switch op.Op {
 	case JSONPatchOpAdd:
-		return setPath(doc, tokens, normalizeJSON(op.Value), true), nil
+		return setPath(doc, tokens, normalize(op.Value), true), nil
 	case JSONPatchOpReplace:
-		return setPath(doc, tokens, normalizeJSON(op.Value), false), nil
+		return setPath(doc, tokens, normalize(op.Value), false), nil
 	case JSONPatchOpRemove:
 		return removePath(doc, tokens), nil
 	case JSONPatchOpTest:
-		if !jsonEqual(getPath(doc, tokens), normalizeJSON(op.Value)) {
+		if !jsonEqual(getPath(doc, tokens), normalize(op.Value)) {
 			return nil, fmt.Errorf("jsonpatch: test failed at %q", op.Path)
 		}
 		return doc, nil
@@ -393,9 +400,83 @@ func unionKeys(a, b map[string]any) []string {
 	return keys
 }
 
-// jsonEqual reports deep equality of two normalized JSON values.
+// jsonEqual reports deep equality of two normalized JSON values. Numbers
+// compare by value, as RFC 6902 requires of the test operation, so
+// json.Number("1") equals json.Number("1.0").
 func jsonEqual(a, b any) bool {
+	switch a := a.(type) {
+	case json.Number:
+		b, ok := b.(json.Number)
+		return ok && numbersEqual(a, b)
+	case map[string]any:
+		b, ok := b.(map[string]any)
+		if !ok || len(a) != len(b) {
+			return false
+		}
+		for k, av := range a {
+			if bv, ok := b[k]; !ok || !jsonEqual(av, bv) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		b, ok := b.([]any)
+		return ok && slices.EqualFunc(a, b, jsonEqual)
+	}
 	return reflect.DeepEqual(a, b)
+}
+
+// numbersEqual reports whether two JSON numbers have the same value. It
+// compares their decimal forms without converting them, so it is exact for any
+// size. A number that is not valid JSON equals only its own text.
+func numbersEqual(a, b json.Number) bool {
+	if a == b {
+		return true
+	}
+	x, okx := decimalOf(string(a))
+	y, oky := decimalOf(string(b))
+	return okx && oky && x == y
+}
+
+// decimal is a JSON number in canonical form: its value is
+// (-1 if neg) * digits * 10^exp, digits has no leading or trailing zeros, and
+// zero is the zero decimal.
+type decimal struct {
+	neg    bool
+	digits string
+	exp    int
+}
+
+// decimalOf parses a JSON number into its canonical decimal form.
+func decimalOf(s string) (decimal, bool) {
+	var d decimal
+	if rest, ok := strings.CutPrefix(s, "-"); ok {
+		d.neg, s = true, rest
+	}
+	mant, expText, hasExp := strings.Cut(strings.ToLower(s), "e")
+	intPart, frac, hasFrac := strings.Cut(mant, ".")
+	if intPart == "" || (hasFrac && frac == "") || (len(intPart) > 1 && intPart[0] == '0') {
+		return decimal{}, false
+	}
+	if hasExp {
+		e, err := strconv.Atoi(expText)
+		if err != nil {
+			return decimal{}, false
+		}
+		d.exp = e
+	}
+	digits := intPart + frac
+	if strings.Trim(digits, "0123456789") != "" {
+		return decimal{}, false
+	}
+	d.exp -= len(frac)
+	trimmed := strings.TrimRight(digits, "0")
+	d.exp += len(digits) - len(trimmed)
+	d.digits = strings.TrimLeft(trimmed, "0")
+	if d.digits == "" {
+		return decimal{}, true
+	}
+	return d, true
 }
 
 // normalizeJSON round-trips v through JSON so it becomes the canonical
@@ -412,6 +493,27 @@ func normalizeJSON(v any) any {
 	}
 	var out any
 	if err := json.Unmarshal(b, &out); err != nil {
+		return v
+	}
+	return out
+}
+
+// exactJSON is normalizeJSON with numbers kept as json.Number, so they keep
+// their exact text instead of rounding through float64. The exported Diff and
+// ApplyPatch use it; the runtime's own custom-state paths keep float64, which
+// prompt templates and stream consumers read.
+func exactJSON(v any) any {
+	if v == nil {
+		return nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var out any
+	if err := dec.Decode(&out); err != nil {
 		return v
 	}
 	return out

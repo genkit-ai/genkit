@@ -1028,6 +1028,15 @@ func assertSnapshot(t *testing.T, label string, snap *exp.SessionSnapshot[custom
 			t.Errorf("%s: %v", label, err)
 		}
 	}
+	if want, ok := expect["messageCount"]; ok {
+		got := 0
+		if snap.State != nil {
+			got = len(snap.State.Messages)
+		}
+		if canon(t, got) != canon(t, want) {
+			t.Errorf("%s: snapshot.state.messages: want %v messages, got %d: %s", label, want, got, mustJSON(actual["state"]))
+		}
+	}
 	if ec, ok := expect["errorContains"].(map[string]any); ok {
 		assertErrorContains(t, label, "snapshot.error", actual["error"], ec)
 	}

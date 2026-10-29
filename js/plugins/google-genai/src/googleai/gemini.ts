@@ -44,23 +44,31 @@ import {
   toGeminiSystemInstruction,
   toGeminiTool,
 } from '../common/converters.js';
-import { isKnownKey } from '../common/utils.js';
+import {
+  applyLatLngToGoogleMapsTools,
+  createInteractionChunkConverter,
+  fromInteractionSync,
+  mergeStreamedAudio,
+  removeId3FromAudio,
+  selectInteractionInput,
+  toInteractionConfigTool,
+  toInteractionGenerationConfig,
+  toInteractionResponseFormat,
+  toInteractionSteps,
+  toInteractionTool,
+  toInteractionToolChoice,
+} from '../common/interaction-converters.js';
+import {
+  InteractionTool,
+  ModelGenerationConfig,
+} from '../common/interaction-types.js';
+import { isKnownKey, warnDroppedConfigField } from '../common/utils.js';
 import {
   createInteraction,
   createInteractionStream,
   generateContent,
   generateContentStream,
 } from './client.js';
-import {
-  fromInteractionDelta,
-  fromInteractionSync,
-  toInteractionConfigTool,
-  toInteractionGenerationConfig,
-  toInteractionResponseModalities,
-  toInteractionSteps,
-  toInteractionTool,
-} from './interaction-converters.js';
-import { InteractionTool, ModelGenerationConfig } from './interaction-types.js';
 import {
   ClientOptions,
   CreateInteractionRequest,
@@ -128,57 +136,6 @@ function isDefaultSafetySetting(setting: {
     setting.category === 'HARM_CATEGORY_UNSPECIFIED' ||
     setting.threshold === 'BLOCK_NONE'
   );
-}
-
-/** Hints for config fields the Interactions API doesn't support. */
-const DROPPED_CONFIG_FIELD_HINTS: Record<string, string> = {
-  'thinkingConfig.thinkingBudget':
-    " Use thinkingConfig.thinkingLevel ('LOW' | 'MEDIUM' | 'HIGH') instead.",
-};
-
-/** `model:field` pairs that have already been warned about. */
-const warnedDroppedConfigFields = new Set<string>();
-
-/**
- * Warns (once per model and field) that a config field isn't supported by an
- * Interactions model and was ignored.
- */
-function warnDroppedConfigField(model: string, field: string) {
-  const key = `${model}:${field}`;
-  if (warnedDroppedConfigFields.has(key)) return;
-  warnedDroppedConfigFields.add(key);
-  logger.warn(
-    `${field} is not supported by '${model}' and was ignored.` +
-      (DROPPED_CONFIG_FIELD_HINTS[field] ?? '')
-  );
-}
-
-/**
- * Copies a `retrievalConfig.latLng` user location onto the Interactions
- * `google_maps` tools, which take `latitude`/`longitude` directly (there is no
- * retrieval config on the Interactions path). A location already set on a tool
- * is kept.
- *
- * @returns Whether there was a `google_maps` tool to apply the location to.
- */
-function applyLatLngToGoogleMapsTools(
-  tools: InteractionTool[],
-  latLng: { latitude?: number; longitude?: number }
-): boolean {
-  let found = false;
-  tools.forEach((tool, i) => {
-    if (tool.type !== 'google_maps') return;
-    found = true;
-    if ('latitude' in tool || 'longitude' in tool) return;
-    tools[i] = {
-      ...tool,
-      ...(latLng.latitude !== undefined ? { latitude: latLng.latitude } : {}),
-      ...(latLng.longitude !== undefined
-        ? { longitude: latLng.longitude }
-        : {}),
-    };
-  });
-  return found;
 }
 
 const VoiceConfigSchema = z
@@ -375,7 +332,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   store: z
     .boolean()
     .describe(
-      'Whether to store the interaction for later retrieval. Defaults to false.'
+      'Interactions API models: whether to store the interaction for later ' +
+        'retrieval (defaults to false). generateContent models: whether ' +
+        "the server logs the request for the API key's project; sent only " +
+        "when set (otherwise the project's logging setting applies)."
     )
     .optional(),
   thinkingConfig: z
@@ -444,6 +404,33 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
     .describe('Speech generation config')
     .passthrough()
     .optional(),
+  audioFormat: z
+    .object({
+      mimeType: z
+        .union([
+          z.enum(['audio/wav', 'audio/l16', 'audio/mulaw', 'audio/alaw']),
+          // Allows other formats. `string & {}` (rather than z.string()) keeps
+          // the listed ones in TypeScript autocomplete.
+          z.custom<string & {}>((val) => typeof val === 'string'),
+        ])
+        .describe(
+          'Audio encoding. Defaults to audio/wav (with a header) for ' +
+            'non-streamed requests and audio/l16 (raw PCM, no header) for ' +
+            'streamed requests.'
+        )
+        .optional(),
+      sampleRate: z
+        .number()
+        .int()
+        .describe('Sample rate in Hz, for example 24000, 16000 or 8000.')
+        .optional(),
+    })
+    .describe(
+      'Format of the generated audio. Supported by models that use the ' +
+        'Interactions API (for example gemini-3.8-flash-tts).'
+    )
+    .passthrough()
+    .optional(),
 }).passthrough();
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
 export type GeminiTtsConfig = z.infer<GeminiTtsConfigSchemaType>;
@@ -503,15 +490,82 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
 export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
 export type GeminiImageConfig = z.infer<GeminiImageConfigSchemaType>;
 
+/**
+ * Config for video generation models such as gemini-omni-1.1-flash.
+ * See https://ai.google.dev/gemini-api/docs/omni
+ */
+export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
+  videoFormat: z
+    .object({
+      aspectRatio: z
+        .union([
+          z.enum(['16:9', '9:16']),
+          // Allows other values. `string & {}` (rather than z.string()) keeps
+          // the listed ones in TypeScript autocomplete.
+          z.custom<string & {}>((val) => typeof val === 'string'),
+        ])
+        .describe(
+          'Aspect ratio of the generated video. Defaults to 16:9 (landscape).'
+        )
+        .optional(),
+      resolution: z
+        .union([
+          z.enum(['360p', '720p', '1080p', '4k']),
+          z.custom<string & {}>((val) => typeof val === 'string'),
+        ])
+        .describe(
+          'Resolution of the generated video. Defaults to 720p. 1080p and ' +
+            '4k are upscaled.'
+        )
+        .optional(),
+      delivery: z
+        .union([
+          z.enum(['uri']),
+          z.custom<string & {}>((val) => typeof val === 'string'),
+        ])
+        .describe(
+          'How the video is returned. By default it is returned inline. ' +
+            '"uri" returns a Files API URI instead, which is recommended ' +
+            'for large videos (requires store: true).'
+        )
+        .optional(),
+    })
+    .describe('Format of the generated video.')
+    .passthrough()
+    .optional(),
+  videoConfig: z
+    .object({
+      task: z
+        .union([
+          z.enum([
+            'text_to_video',
+            'image_to_video',
+            'reference_to_video',
+            'edit',
+            'extend',
+          ]),
+          z.custom<string & {}>((val) => typeof val === 'string'),
+        ])
+        .describe(
+          'The kind of generation to perform. If not set, the model infers ' +
+            'it from the prompt and inputs. Setting it adds constraints, so ' +
+            'only use it when prompting alone does not give the intended mode.'
+        )
+        .optional(),
+    })
+    .describe('Video generation settings.')
+    .passthrough()
+    .optional(),
+}).passthrough();
+export type GeminiVideoConfigSchemaType = typeof GeminiVideoConfigSchema;
+export type GeminiVideoConfig = z.infer<GeminiVideoConfigSchemaType>;
+
 export const GemmaConfigSchema = GeminiConfigSchema.extend({
+  // No range check: the accepted range depends on the model, so the value is
+  // sent as is and the server validates it.
   temperature: z
     .number()
-    .min(0.0)
-    .max(1.0)
-    .describe(
-      GenerationCommonConfigDescriptions.temperature +
-        ' The default value is 1.0.'
-    )
+    .describe(GenerationCommonConfigDescriptions.temperature)
     .optional(),
 }).passthrough();
 export type GemmaConfigSchemaType = typeof GemmaConfigSchema;
@@ -522,6 +576,7 @@ type ConfigSchemaType =
   | GeminiConfigSchemaType
   | GeminiTtsConfigSchemaType
   | GeminiImageConfigSchemaType
+  | GeminiVideoConfigSchemaType
   | GemmaConfigSchemaType;
 type ConfigSchema = z.infer<ConfigSchemaType>;
 
@@ -582,6 +637,25 @@ const GENERIC_IMAGE_MODEL = commonRef(
   },
   GeminiImageConfigSchema
 );
+// Per the Omni guide: text, image and video in, video (with audio) out; edits
+// continue a stored interaction. Tools and structured output aren't
+// documented for video generation. The guide says system instructions aren't
+// supported, but they are applied (checked live, Oct 2026).
+const GENERIC_VIDEO_MODEL = commonRef(
+  'gemini-video',
+  {
+    supports: {
+      multiturn: true,
+      media: true,
+      tools: false,
+      toolChoice: false,
+      systemRole: true,
+      constrained: 'none',
+      output: ['media'],
+    },
+  },
+  GeminiVideoConfigSchema
+);
 const GENERIC_GEMMA_MODEL = commonRef(
   'gemma-generic',
   undefined,
@@ -592,15 +666,11 @@ const KNOWN_GEMINI_MODELS = {
   'gemini-pro-latest': commonRef('gemini-pro-latest'),
   'gemini-flash-latest': commonRef('gemini-flash-latest'),
   'gemini-flash-lite-latest': commonRef('gemini-flash-lite-latest'),
+  'gemini-4-argon': commonRef('gemini-4-argon'),
+  'gemini-3.8-flash': commonRef('gemini-3.8-flash'),
   'gemini-3.6-flash': commonRef('gemini-3.6-flash'),
   'gemini-3.5-flash-lite': commonRef('gemini-3.5-flash-lite'),
 
-  'gemini-3.5-flash': commonRef(
-    'gemini-3.5-flash',
-    undefined,
-    GeminiConfigSchema,
-    false
-  ),
   'gemini-3.1-flash-lite': commonRef(
     'gemini-3.1-flash-lite',
     undefined,
@@ -625,24 +695,6 @@ const KNOWN_GEMINI_MODELS = {
     GeminiConfigSchema,
     false
   ),
-  'gemini-2.5-pro': commonRef(
-    'gemini-2.5-pro',
-    undefined,
-    GeminiConfigSchema,
-    false
-  ),
-  'gemini-2.5-flash': commonRef(
-    'gemini-2.5-flash',
-    undefined,
-    GeminiConfigSchema,
-    false
-  ),
-  'gemini-2.5-flash-lite': commonRef(
-    'gemini-2.5-flash-lite',
-    undefined,
-    GeminiConfigSchema,
-    false
-  ),
 };
 export type KnownGeminiModels = keyof typeof KNOWN_GEMINI_MODELS;
 export type GeminiModelName = `gemini-${string}`;
@@ -650,30 +702,23 @@ export function isGeminiModelName(value: string): value is GeminiModelName {
   return (
     value.startsWith('gemini-') &&
     !isTTSModelName(value) &&
-    !isImageModelName(value)
+    !isImageModelName(value) &&
+    !isVideoModelName(value)
   );
 }
 
 const KNOWN_TTS_MODELS = {
-  'gemini-2.5-flash-preview-tts': commonRef(
-    'gemini-2.5-flash-preview-tts',
+  'gemini-3.8-flash-tts': commonRef(
+    'gemini-3.8-flash-tts',
     { ...GENERIC_TTS_MODEL.info },
-    GeminiTtsConfigSchema,
-    false
+    GeminiTtsConfigSchema
   ),
-  'gemini-2.5-pro-preview-tts': commonRef(
-    'gemini-2.5-pro-preview-tts',
+  'gemini-3.8-flash-lite-tts': commonRef(
+    'gemini-3.8-flash-lite-tts',
     { ...GENERIC_TTS_MODEL.info },
-    GeminiTtsConfigSchema,
-    false
+    GeminiTtsConfigSchema
   ),
-  'gemini-3.1-flash-tts-preview': commonRef(
-    'gemini-3.1-flash-tts-preview',
-    { ...GENERIC_TTS_MODEL.info },
-    GeminiTtsConfigSchema,
-    false
-  ),
-};
+} as const;
 export type KnownTtsModels = keyof typeof KNOWN_TTS_MODELS;
 export type TTSModelName = `gemini-${string}-tts${string}`;
 export function isTTSModelName(value: string): value is TTSModelName {
@@ -681,16 +726,21 @@ export function isTTSModelName(value: string): value is TTSModelName {
 }
 
 const KNOWN_IMAGE_MODELS = {
+  // Function calling works, but structured output doesn't: with a schema the
+  // model still returns only an image (checked live, Oct 2026). 'none' makes
+  // Genkit ask for JSON in the prompt instead of sending a schema.
+  'gemini-nano-banana-2.1': commonRef(
+    'gemini-nano-banana-2.1',
+    {
+      ...GENERIC_IMAGE_MODEL.info,
+      supports: { ...GENERIC_IMAGE_MODEL.info?.supports, constrained: 'none' },
+    },
+    GeminiImageConfigSchema
+  ),
   'gemini-3.1-flash-lite-image': commonRef(
     'gemini-3.1-flash-lite-image',
     { ...GENERIC_IMAGE_MODEL.info },
     GeminiImageConfigSchema
-  ),
-  'gemini-3.1-flash-image': commonRef(
-    'gemini-3.1-flash-image',
-    { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema,
-    false
   ),
   'gemini-3-pro-image': commonRef(
     'gemini-3-pro-image',
@@ -698,17 +748,30 @@ const KNOWN_IMAGE_MODELS = {
     GeminiImageConfigSchema,
     false
   ),
-  'gemini-2.5-flash-image': commonRef(
-    'gemini-2.5-flash-image',
-    { ...GENERIC_IMAGE_MODEL.info },
-    GeminiImageConfigSchema,
-    false
-  ),
 } as const;
 export type KnownImageModels = keyof typeof KNOWN_IMAGE_MODELS;
-export type ImageModelName = `gemini-${string}-image${string}`;
+export type ImageModelName =
+  | `gemini-${string}-image${string}`
+  | `gemini-nano-banana-${string}`;
+/** Image models: `-image` names and the Nano Banana names (as in vertexAI). */
 export function isImageModelName(value: string): value is ImageModelName {
-  return value.startsWith('gemini-') && value.includes('-image');
+  return (
+    value.startsWith('gemini-') &&
+    (value.includes('-image') || value.startsWith('gemini-nano-banana-'))
+  );
+}
+
+const KNOWN_VIDEO_MODELS = {
+  'gemini-omni-1.1-flash': commonRef(
+    'gemini-omni-1.1-flash',
+    { ...GENERIC_VIDEO_MODEL.info },
+    GeminiVideoConfigSchema
+  ),
+} as const;
+export type KnownVideoModels = keyof typeof KNOWN_VIDEO_MODELS;
+export type VideoModelName = `gemini-omni-${string}`;
+export function isVideoModelName(value: string): value is VideoModelName {
+  return value.startsWith('gemini-omni-');
 }
 
 const KNOWN_GEMMA_MODELS = {
@@ -731,21 +794,89 @@ export function isGemmaModelName(value: string): value is GemmaModelName {
   return value.startsWith('gemma-');
 }
 
-const DEPRECATED_MODELS = {
-  // When models are < 1 month from shutdown, move them here instead.
-  // They will still be instantiated with the correct options,
-  // but they will no longer appear in autocomplete suggestions.
-};
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the Known*Models types, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`):
+// - 'deprecated': deprecated by Google, or < 1 month from shutdown.
+// - 'legacy': not deprecated, but no longer offered to new projects.
+const HIDDEN_MODELS = {
+  // Gemini 2.5: Google limits access to accounts that used it before; new
+  // projects should use newer models.
+  'gemini-2.5-pro': commonRef(
+    'gemini-2.5-pro',
+    { ...GENERIC_MODEL.info, stage: 'legacy' },
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-2.5-flash': commonRef(
+    'gemini-2.5-flash',
+    { ...GENERIC_MODEL.info, stage: 'legacy' },
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-2.5-flash-lite': commonRef(
+    'gemini-2.5-flash-lite',
+    { ...GENERIC_MODEL.info, stage: 'legacy' },
+    GeminiConfigSchema,
+    false
+  ),
+  'gemini-2.5-flash-image': commonRef(
+    'gemini-2.5-flash-image',
+    { ...GENERIC_IMAGE_MODEL.info, stage: 'legacy' },
+    GeminiImageConfigSchema,
+    false
+  ),
+
+  // Shut down on Nov 17 2026.
+  'gemini-2.5-flash-preview-tts': commonRef(
+    'gemini-2.5-flash-preview-tts',
+    { ...GENERIC_TTS_MODEL.info, stage: 'deprecated' },
+    GeminiTtsConfigSchema,
+    false
+  ),
+  'gemini-2.5-pro-preview-tts': commonRef(
+    'gemini-2.5-pro-preview-tts',
+    { ...GENERIC_TTS_MODEL.info, stage: 'deprecated' },
+    GeminiTtsConfigSchema,
+    false
+  ),
+  'gemini-3.1-flash-tts-preview': commonRef(
+    'gemini-3.1-flash-tts-preview',
+    { ...GENERIC_TTS_MODEL.info, stage: 'deprecated' },
+    GeminiTtsConfigSchema,
+    false
+  ),
+
+  // Deprecated, not shutting down: the server routes requests for it to
+  // gemini-3.6-flash (per the deprecations page, Oct 2026). Still sent through
+  // generateContent, as before: the routing happens on the server.
+  'gemini-3.5-flash': commonRef(
+    'gemini-3.5-flash',
+    { ...GENERIC_MODEL.info, stage: 'deprecated' },
+    GeminiConfigSchema,
+    false
+  ),
+
+  // Deprecated (no shutdown date yet); replaced by gemini-nano-banana-2.1.
+  'gemini-3.1-flash-image': commonRef(
+    'gemini-3.1-flash-image',
+    { ...GENERIC_IMAGE_MODEL.info, stage: 'deprecated' },
+    GeminiImageConfigSchema,
+    false
+  ),
+} as const;
 
 const KNOWN_MODELS = {
   ...KNOWN_GEMINI_MODELS,
   ...KNOWN_TTS_MODELS,
   ...KNOWN_IMAGE_MODELS,
+  ...KNOWN_VIDEO_MODELS,
   ...KNOWN_GEMMA_MODELS,
 };
 
 const ALL_MODELS = {
-  ...DEPRECATED_MODELS,
+  ...HIDDEN_MODELS,
   ...KNOWN_MODELS,
 };
 
@@ -774,6 +905,15 @@ export function model(
       config,
       configSchema: GeminiImageConfigSchema,
       info: { ...GENERIC_IMAGE_MODEL.info },
+    });
+  }
+
+  if (isVideoModelName(name)) {
+    return modelRef({
+      name: `googleai/${name}`,
+      config,
+      configSchema: GeminiVideoConfigSchema,
+      info: { ...GENERIC_VIDEO_MODEL.info },
     });
   }
 
@@ -949,8 +1089,23 @@ export function defineModel(
         previousInteractionId: previousInteractionIdFromConfig,
         store: storeFromConfig,
         responseModalities: responseModalitiesFromConfig,
+        // Interactions-only: sent as `response_format` below.
+        audioFormat: audioFormatFromConfig,
+        videoFormat: videoFormatFromConfig,
         ...restOfConfigOptions
       } = requestOptions;
+
+      if (!useInteractions) {
+        // generateContent rejects unknown generation_config fields with a
+        // 400, and has no equivalent for these (e.g. the older preview TTS
+        // models still use this schema).
+        if (audioFormatFromConfig !== undefined) {
+          warnDroppedConfigField(modelVersion, 'audioFormat');
+        }
+        if (videoFormatFromConfig !== undefined) {
+          warnDroppedConfigField(modelVersion, 'videoFormat');
+        }
+      }
 
       if (codeExecutionFromConfig) {
         tools.push({
@@ -1134,32 +1289,12 @@ export function defineModel(
         );
 
       if (useInteractions) {
-        if (functionCallingConfig) {
-          const mode = functionCallingConfig.mode?.toLowerCase();
-          const validMode =
-            mode && mode !== 'mode_unspecified' ? mode : undefined;
-          if (validMode || functionCallingConfig.allowedFunctionNames?.length) {
-            interactionGenerationConfig.tool_choice = {
-              allowed_tools: {
-                ...(validMode ? { mode: validMode } : {}),
-                ...(functionCallingConfig.allowedFunctionNames
-                  ? { tools: functionCallingConfig.allowedFunctionNames }
-                  : {}),
-              },
-            };
-          }
-        } else if (request.toolChoice) {
-          const mode =
-            typeof request.toolChoice === 'string'
-              ? request.toolChoice === 'required'
-                ? 'any'
-                : request.toolChoice
-              : 'any';
-          interactionGenerationConfig.tool_choice = {
-            allowed_tools: {
-              mode,
-            },
-          };
+        const toolChoice = toInteractionToolChoice(
+          functionCallingConfig,
+          request.toolChoice
+        );
+        if (toolChoice) {
+          interactionGenerationConfig.tool_choice = toolChoice;
         }
       }
 
@@ -1196,47 +1331,13 @@ export function defineModel(
       );
 
       if (useInteractions) {
-        const storeOptedIn =
-          storeFromConfig === true || pluginOptions?.store === true;
-
-        if (previousInteractionIdFromConfig && !storeOptedIn) {
-          throw new GenkitError({
-            status: 'INVALID_ARGUMENT',
-            message: 'store must be true when previousInteractionId is set.',
-          });
-        }
-
-        let previousInteractionId = previousInteractionIdFromConfig;
-        let newMessages = messages;
-
-        // If previousInteractionId was not explicitly set in config,
-        // only extract previousInteractionId from the last model message's metadata
-        // if the caller explicitly opted in to store (store: true).
-        if (!previousInteractionId && storeOptedIn) {
-          for (let i = messages.length - 1; i >= 0; i--) {
-            const prevId = messages[i]?.metadata?.interactionId;
-            if (
-              messages[i].role === 'model' &&
-              prevId &&
-              typeof prevId === 'string'
-            ) {
-              previousInteractionId = prevId;
-              newMessages = messages.slice(i + 1);
-              break;
-            }
-          }
-        } else if (previousInteractionId) {
-          // Config overrides messages if both are present.
-          // Still slice messages if messages contains prior history up to that turn.
-          for (let i = messages.length - 1; i >= 0; i--) {
-            if (messages[i].role === 'model') {
-              newMessages = messages.slice(i + 1);
-              break;
-            }
-          }
-        }
-
-        const store = storeOptedIn;
+        const store = storeFromConfig === true || pluginOptions?.store === true;
+        const { messages: newMessages, previousInteractionId } =
+          selectInteractionInput(
+            messages,
+            store,
+            previousInteractionIdFromConfig
+          );
 
         // Turn-level speech metadata (speaker/style) is only accepted together
         // with a speech_config; without one the server returns a generic 400
@@ -1304,26 +1405,36 @@ export function defineModel(
           store,
         };
 
-        if (jsonMode) {
-          req.response_format = {
-            type: 'text',
-            mime_type: 'application/json',
-          };
-          if (request.output?.constrained) {
-            req.response_format.schema = pluginOptions?.legacyResponseSchema
-              ? cleanSchema(request.output.schema)
-              : request.output.schema;
-          }
-        }
-
-        if (responseModalitiesFromConfig) {
-          req.response_modalities = toInteractionResponseModalities(
-            responseModalitiesFromConfig
-          );
-        } else if (isTTSModelName(modelVersion)) {
-          req.response_modalities = ['audio'];
-        } else if (isImageModelName(modelVersion)) {
-          req.response_modalities = ['text', 'image'];
+        // One `response_format` with an entry per output type (the
+        // deprecated `response_modalities` and `generation_config
+        // .image_config` aren't sent). TTS and image models ask for the same
+        // outputs as before by default.
+        const responseFormat = toInteractionResponseFormat({
+          modalities:
+            responseModalitiesFromConfig ??
+            (isTTSModelName(modelVersion)
+              ? ['AUDIO']
+              : isImageModelName(modelVersion)
+                ? ['TEXT', 'IMAGE']
+                : undefined),
+          imageConfig:
+            'imageConfig' in requestOptions
+              ? requestOptions.imageConfig
+              : undefined,
+          audioFormat: audioFormatFromConfig,
+          videoFormat: videoFormatFromConfig,
+          json: jsonMode
+            ? {
+                schema: request.output?.constrained
+                  ? pluginOptions?.legacyResponseSchema
+                    ? cleanSchema(request.output.schema)
+                    : request.output.schema
+                  : undefined,
+              }
+            : undefined,
+        });
+        if (responseFormat) {
+          req.response_format = responseFormat;
         }
 
         if (
@@ -1346,30 +1457,42 @@ export function defineModel(
             req,
             clientOpt
           );
+          const toChunkParts = createInteractionChunkConverter();
           for await (const event of result.stream) {
-            if (event.event_type === 'step.delta') {
-              const chunkParts = fromInteractionDelta(event.delta);
-              if (chunkParts.length > 0) {
-                sendChunk({
-                  index: 0,
-                  content: chunkParts,
-                });
-              }
+            const chunkParts = toChunkParts(event).map(removeId3FromAudio);
+            if (chunkParts.length > 0) {
+              sendChunk({
+                index: 0,
+                content: chunkParts,
+              });
             }
           }
           const response = await result.response;
           const out = fromInteractionSync(response);
+          // Streamed audio arrives as many headerless chunks (raw PCM by
+          // default); the final response joins them into one part of the
+          // same format.
+          if (out.message?.content) {
+            out.message.content = mergeStreamedAudio(
+              out.message.content.map(removeId3FromAudio)
+            );
+          }
           return out;
         }
       }
 
-      // `store: false` is already how this model behaves, so only warn when
-      // something would actually be ignored.
-      if (storeFromConfig === true || previousInteractionIdFromConfig) {
+      // There's no stored conversation to continue on generateContent.
+      if (previousInteractionIdFromConfig) {
         logger.warn(
-          'store and previousInteractionId are not supported for this model and will be ignored.'
+          'previousInteractionId is not supported for this model and will be ignored.'
         );
       }
+
+      // On generateContent, `store` only controls whether the server logs
+      // this request for the API key's project (viewable in AI Studio's Logs
+      // and Datasets); there's nothing to continue. Sent only when set;
+      // otherwise the project's logging setting applies.
+      const generateContentStore = storeFromConfig ?? pluginOptions?.store;
 
       let generateContentRequest: GenerateContentRequest = {
         systemInstruction,
@@ -1381,6 +1504,7 @@ export function defineModel(
         ) as SafetySetting[],
         contents: messages.map((message) => toGeminiMessage(message, ref)),
         serviceTier,
+        store: generateContentStore,
       };
 
       let response: GenerateContentResponse;
@@ -1442,4 +1566,4 @@ export function defineModel(
   );
 }
 
-export const TEST_ONLY = { KNOWN_MODELS };
+export const TEST_ONLY = { KNOWN_MODELS, HIDDEN_MODELS };

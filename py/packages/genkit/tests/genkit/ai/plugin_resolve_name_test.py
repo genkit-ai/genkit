@@ -25,14 +25,14 @@ from collections.abc import Callable
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit import Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
 from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
-from genkit.model import BackgroundModel, Model, ModelRequest
+from genkit.model import BackgroundModel, Model, ModelContext, ModelRequest
 from genkit.plugin_api import Action, ActionKind, Plugin
 
 
 def _answering_model(name: str, text: str) -> Action:
-    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
     return Model(name, fn)
@@ -77,13 +77,13 @@ class VideoPlugin(Plugin):
         self.seen: list[tuple[ActionKind, str]] = []
 
     def _video(self, model_id: str) -> BackgroundModel:
-        async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+        async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
             return Operation(id='job-1', done=False)
 
-        async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def check(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True)
 
-        async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def cancel(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True, metadata={'cancelled': True})
 
         return BackgroundModel(model_id, start=start, check=check, cancel=cancel)

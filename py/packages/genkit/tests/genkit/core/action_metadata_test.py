@@ -22,13 +22,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, ValidationError
 
-from genkit import ActionRunContext, Genkit, Message, ModelResponse, Part, Role
+from genkit import Genkit, Message, ModelResponse, Part, Role
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, EvalResponse
 from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
 from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorRequest, EvaluatorResponse, Score
-from genkit.model import Model, ModelRequest
+from genkit.model import Model, ModelContext, ModelRequest
 from genkit.plugin_api import Action, ActionKind, Plugin
 
 REQUEST_SCHEMA: dict[str, Any] = {
@@ -127,7 +127,7 @@ def test_action_metadata_input_schema_class_raises_validation_error() -> None:
 async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     """Rows from Model/Embedder/Evaluator carry their request schema to /api/actions."""
 
-    async def generate_row(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate_row(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
     async def embed_row(request: EmbedRequest) -> EmbedResponse:

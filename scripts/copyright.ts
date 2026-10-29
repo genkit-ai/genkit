@@ -49,43 +49,42 @@ const COPYRIGHT = ` Copyright ${new Date().getFullYear()} Google LLC
  See the License for the specific language governing permissions and
  limitations under the License.`;
 
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await readFile(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
+async function getSourceFilesToUpdate(targetPaths?: string[]) {
+  const paths =
+    targetPaths && targetPaths.length > 0
+      ? targetPaths
+      : (
+          execSync('git ls-files', FILE_OPTS) +
+          '\n' +
+          execSync('git ls-files -o --exclude-standard', FILE_OPTS)
+        )
+          .split('\n')
+          .filter((p) => !!p);
 
-async function getSourceFilesToUpdate() {
-  const paths = (
-    execSync('git ls-files', FILE_OPTS) +
-    '\n' +
-    execSync('git ls-files -o --exclude-standard', FILE_OPTS)
-  )
-    .split('\n')
-    .filter((p) => !!p);
-
-  const existingPaths = (
-    await Promise.all(
-      paths.map(async (path) => ((await fileExists(path)) ? path : null))
-    )
-  ).filter((path) => path !== null) as string[];
-
-  const fileContents = await Promise.all(
-    existingPaths.map((path) => readFile(path, { encoding: 'utf-8' }))
-  );
-
-  return fileContents
-    .map((contents, idx) => ({
-      contents,
-      path: existingPaths[idx],
-      format: FORMAT_TYPES.find(({ regex }) => regex.test(existingPaths[idx])),
+  const filesWithFormat = paths
+    .map((path) => ({
+      path,
+      format: FORMAT_TYPES.find(({ regex }) => regex.test(path)),
     }))
     .filter(
-      ({ contents, format }) => format && !/Copyright \d\d\d\d/.test(contents)
+      (item): item is { path: string; format: FormatType } => !!item.format
     );
+
+  const fileContents = await Promise.all(
+    filesWithFormat.map(async ({ path, format }) => {
+      try {
+        const contents = await readFile(path, FILE_OPTS);
+        return { path, contents, format };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  return fileContents.filter(
+    (item): item is { path: string; contents: string; format: FormatType } =>
+      item !== null && !/Copyright \d\d\d\d/.test(item.contents)
+  );
 }
 
 function updateContent(content: string, format: FormatType): string {
@@ -101,8 +100,12 @@ function updateContent(content: string, format: FormatType): string {
 console.log('Checking copyright in sources...');
 
 (async () => {
-  const missing = await getSourceFilesToUpdate();
-  if (process.argv[2] === '--check') {
+  const args = process.argv.slice(2);
+  const checkOnly = args.includes('--check');
+  const targetPaths = args.filter((arg) => !arg.startsWith('-'));
+
+  const missing = await getSourceFilesToUpdate(targetPaths);
+  if (checkOnly) {
     if (missing.length) {
       console.error(
         `Copyright header missing in ${missing.map(({ path }) => path).join(', ')}`
