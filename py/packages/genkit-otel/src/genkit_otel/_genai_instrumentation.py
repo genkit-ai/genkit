@@ -17,7 +17,6 @@
 """Instrumentation that emits OpenTelemetry GenAI spans and metrics."""
 
 import json
-import logging
 import os
 import time
 from collections.abc import Mapping
@@ -32,6 +31,7 @@ from pydantic import BaseModel
 
 from genkit import Interrupt, ModelResponse
 from genkit.model import ModelRequest
+from genkit.plugin_api import get_logger as get_genkit_logger
 from genkit.telemetry import Instrumentation, SpanContext, SpanMetadata, SpanNext
 from genkit_otel._gen_ai_attributes import (
     CAPTURE_CONTENT_ENV_VAR,
@@ -58,7 +58,7 @@ from genkit_otel._gen_ai_message_mapping import (
 )
 from genkit_otel._gen_ai_metrics import GenAiMetrics
 
-logger = logging.getLogger('genkit_otel')
+logger = get_genkit_logger(__name__)
 
 T = TypeVar('T')
 

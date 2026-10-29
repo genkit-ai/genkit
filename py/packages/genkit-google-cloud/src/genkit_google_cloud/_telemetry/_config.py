@@ -380,7 +380,8 @@ class GcpTelemetry:
             })
 
             # Suppress detector warnings during GCP resource detection
-            detector_logger = logging.getLogger('opentelemetry.resourcedetector.gcp_resource_detector')
+            # Third-party stdlib logger; only its level changes here.
+            detector_logger = logging.getLogger('opentelemetry.resourcedetector.gcp_resource_detector')  # noqa: TID251
             original_level = detector_logger.level
             detector_logger.setLevel(logging.ERROR)
 

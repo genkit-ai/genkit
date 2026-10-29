@@ -1445,20 +1445,8 @@ async def test_wrap_generate_called_per_turn() -> None:
             iters_b.append(params.iteration)
             return await next_fn(params, ctx)
 
-    class GenerateTrackerPlugin(Plugin):
-        name = 'extension-middleware'
-
-        async def init(self) -> list[Action]:
-            return []
-
-        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-            return None
-
-        async def list_actions(self) -> list[ActionMetadata]:
-            return []
-
-        def list_middleware(self) -> list[type[Middleware]]:
-            return [TrackerA, TrackerB]
+    class GenerateTrackerPlugin(ExtensionPlugin):
+        middleware = [TrackerA, TrackerB]
 
     ai = Genkit(plugins=[GenerateTrackerPlugin()])
     pm, _ = define_scripted_model(ai)
@@ -1533,20 +1521,8 @@ async def test_wrap_tool_called_on_tool_execution() -> None:
             tool_names.append(tool_req.name)
             return await next_fn(params, ctx)
 
-    class ToolTrackerPlugin(Plugin):
-        name = 'extension-middleware'
-
-        async def init(self) -> list[Action]:
-            return []
-
-        async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-            return None
-
-        async def list_actions(self) -> list[ActionMetadata]:
-            return []
-
-        def list_middleware(self) -> list[type[Middleware]]:
-            return [Tracker]
+    class ToolTrackerPlugin(ExtensionPlugin):
+        middleware = [Tracker]
 
     ai = Genkit(plugins=[ToolTrackerPlugin()])
     pm, _ = define_scripted_model(ai)

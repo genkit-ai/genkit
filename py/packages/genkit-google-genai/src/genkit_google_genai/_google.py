@@ -48,7 +48,6 @@ Example:
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import Callable
 from typing import Any, NoReturn
@@ -79,6 +78,7 @@ from genkit.plugin_api import (
     ActionKind,
     ActionMetadata,
     Plugin,
+    get_logger,
     loop_local_client,
     to_json_schema,
 )
@@ -151,7 +151,7 @@ from genkit_google_genai._models._veo import (
     veo_model_info,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class GenaiModels:
