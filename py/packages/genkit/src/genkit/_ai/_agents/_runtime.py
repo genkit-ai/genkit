@@ -51,7 +51,8 @@ from genkit._core._error import (
     PublicError,
     RuntimeErrorReason,
     StatusName,
-    interrupt_outside_tool_error,
+    TaskGroupError,
+    interrupt_escape_error,
 )
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -171,7 +172,15 @@ class SessionRunner(Generic[StateT]):
             try:
 
                 async def body(span: SpanContext, turn_input: AgentInput = inp, ctx: TurnContext = turn_ctx) -> object:
-                    turn_result = await fn(turn_input, ctx)
+                    try:
+                        turn_result = await fn(turn_input, ctx)
+                    except (Interrupt, TaskGroupError) as exc:
+                        # No generate loop here to pause. Convert inside the
+                        # span so runTurn-N records the failure.
+                        failure = interrupt_escape_error(exc)
+                        if failure is None:
+                            raise
+                        raise failure from exc
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
@@ -199,13 +208,18 @@ class SessionRunner(Generic[StateT]):
                 self.last_good_state_version = self.session.version
                 self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
-            except (Exception, Interrupt) as exc:
-                # A tool the turn body called directly can raise Interrupt.
-                # There's no generate loop here to pause, so the turn fails.
-                if isinstance(exc, Interrupt):
-                    exc = interrupt_outside_tool_error(exc)
+            except (Exception, Interrupt, TaskGroupError) as exc:
+                # body converts the turn's own Interrupt; this covers one
+                # raised from a hook outside it.
+                failure = interrupt_escape_error(exc)
+                if failure is not None:
+                    turn_error: Exception = failure
+                elif isinstance(exc, Exception):
+                    turn_error = exc
+                else:
+                    raise
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
-                self.last_turn_error = to_error_details(exc)
+                self.last_turn_error = to_error_details(turn_error)
 
                 if self.on_end_turn is not None:
                     await self.on_end_turn(AgentFinishReason.FAILED)
@@ -881,10 +895,14 @@ class AgentRuntime:
                     coro=fn(self.session_runner, action_ctx),
                 )
                 result_holder.append(result)
-            except Interrupt as e:
-                err_holder.append(interrupt_outside_tool_error(e))
-            except Exception as e:  # noqa: BLE001
-                err_holder.append(e)
+            except (Exception, Interrupt, TaskGroupError) as e:  # noqa: BLE001
+                failure = interrupt_escape_error(e)
+                if failure is not None:
+                    err_holder.append(failure)
+                elif isinstance(e, Exception):
+                    err_holder.append(e)
+                else:
+                    raise
             finally:
                 # Synchronously close self.turn_inputs to signal turn completion,
                 # letting SessionRunner stop waiting for more inputs.

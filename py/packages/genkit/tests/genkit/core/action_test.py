@@ -8,6 +8,7 @@
 import json
 from typing import Any, cast
 
+import anyio
 import pytest
 from pydantic import BaseModel, ConfigDict
 
@@ -699,6 +700,52 @@ async def test_await_flow_that_raises_interrupt_raises_internal_genkit_error() -
     assert exc.value.message == 'Interrupt raised outside a tool'
     assert exc.value.cause is interrupt
     assert exc.value.__cause__ is interrupt
+
+
+@pytest.mark.asyncio
+async def test_await_flow_with_task_group_interrupt_raises_internal_genkit_error() -> None:
+    """An Interrupt from a task group child fails the flow with GenkitError, not a BaseExceptionGroup.
+
+    The group isn't an Exception, so a served flow would otherwise skip the
+    web adapter's handler and return a bare 500. anyio raises the same
+    builtin group as asyncio.TaskGroup on 3.11+, and the backport on 3.10.
+    """
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, order_id)
+        return 'refunded'
+
+    with pytest.raises(GenkitError) as exc:
+        await refund('A-17')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.message == 'Interrupt raised inside a task group'
+
+
+@pytest.mark.asyncio
+async def test_await_flow_with_task_group_value_error_raises_exception_group() -> None:
+    """A task group with only ordinary failures still propagates as the ExceptionGroup it was."""
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise ValueError(f'unknown order {order_id}')
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, order_id)
+        return 'refunded'
+
+    with pytest.raises(Exception) as exc:  # noqa: PT011 - asserting the exact type below
+        await refund('A-17')
+
+    assert type(exc.value).__name__ == 'ExceptionGroup'
 
 
 @pytest.mark.asyncio

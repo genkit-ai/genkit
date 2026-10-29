@@ -16,6 +16,8 @@
 
 """Error classes and utilities for the Genkit framework."""
 
+import builtins
+import importlib
 import json
 import logging
 import math
@@ -604,6 +606,56 @@ def interrupt_outside_tool_error(interrupt: Interrupt) -> GenkitError:
     error = GenkitError(status='INTERNAL', message='Interrupt raised outside a tool', cause=interrupt)
     error.__cause__ = interrupt
     return error
+
+
+class _NoTaskGroupError(BaseException):
+    """Never raised; stands in when no task-group exception type exists."""
+
+
+def _task_group_error() -> type[BaseException]:
+    builtin = getattr(builtins, 'BaseExceptionGroup', None)  # 3.11+
+    if builtin is not None:
+        return builtin
+    # 3.10 has no asyncio.TaskGroup; anyio task groups raise the
+    # `exceptiongroup` backport, which anyio installs there.
+    try:
+        backport = importlib.import_module('exceptiongroup')
+    except ImportError:
+        return _NoTaskGroupError
+    return backport.BaseExceptionGroup
+
+
+# What asyncio.TaskGroup / anyio raise when a child task raises a
+# BaseException. An Interrupt in a child task arrives wrapped in one of these.
+TaskGroupError: type[BaseException] = _task_group_error()
+
+
+def _group_has_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, Interrupt):
+        return True
+    children = getattr(exc, 'exceptions', None) if isinstance(exc, TaskGroupError) else None
+    return any(_group_has_interrupt(child) for child in children or ())
+
+
+def interrupt_escape_error(exc: BaseException) -> GenkitError | None:
+    """The failure for an Interrupt that reached a boundary that can't pause on it.
+
+    Returns None when ``exc`` carries no Interrupt, so the caller re-raises it
+    as is. An Interrupt inside a task group can't pause generate: the group may
+    also hold other failures, and there's no single interrupt to answer. It
+    fails the run, as it did when Interrupt was an Exception.
+    """
+    if isinstance(exc, Interrupt):
+        return interrupt_outside_tool_error(exc)
+    if isinstance(exc, TaskGroupError) and _group_has_interrupt(exc):
+        error = GenkitError(
+            status='INTERNAL',
+            message='Interrupt raised inside a task group',
+            cause=exc,
+        )
+        error.__cause__ = exc
+        return error
+    return None
 
 
 class PublicError(GenkitError):

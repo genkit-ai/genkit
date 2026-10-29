@@ -18,6 +18,7 @@ import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
+import anyio
 import pytest
 from pydantic import BaseModel
 
@@ -2053,6 +2054,60 @@ async def test_send_when_turn_calls_interrupting_tool_directly_returns_failed_tu
     res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
 
     err = _assert_failed(res, message='Interrupt raised outside a tool')
+    assert err.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_turn_interrupt_marks_run_turn_span_error(exporter: Any) -> None:  # noqa: ANN401
+    """The turn's Interrupt is converted inside runTurn-N, so the span records the failure.
+
+    Converted after the span unwound, the span would see a raw Interrupt,
+    treat it as control flow, and report success while the turn FAILED.
+    """
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        await refund_order('A-17')
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(ai, 'refundDeskTrace', handle, store=InMemorySessionStore())
+    res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+    _assert_failed(res, message='Interrupt raised outside a tool')
+
+    turn_spans = [span for span in exporter.get_finished_spans() if span.name == 'runTurn-1']
+    assert turn_spans
+    attrs = turn_spans[-1].attributes or {}
+    assert attrs.get('genkit:state') == 'error'
+
+
+@pytest.mark.asyncio
+async def test_send_when_turn_task_group_interrupts_returns_failed_turn() -> None:
+    """An Interrupt from a task group child in a turn body fails the turn instead of hanging.
+
+    The BaseExceptionGroup isn't an Exception, so without conversion it
+    would skip the turn loop's handler and leave send() waiting.
+    """
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, 'A-17')
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(ai, 'refundDeskGroup', handle, store=InMemorySessionStore())
+    res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+
+    err = _assert_failed(res, message='Interrupt raised inside a task group')
     assert err.status == 'INTERNAL'
 
 

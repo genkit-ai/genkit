@@ -52,6 +52,7 @@ from genkit._ai._tools import (
     normalize_pending_content,
     parts_to_wire,
     restart_interrupt_error,
+    run_restarted_tool,
     run_tool_after_restart,
     run_tool_request,
 )
@@ -2598,7 +2599,9 @@ async def run_restart(
     )
 
     async def next_fn(p: ToolHookParams, ctx: GenerateMiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
+        # A second Interrupt stays raw through the chain so a middleware
+        # `except Exception` can't swallow it; converted below.
+        executed = await run_restarted_tool(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
         if executed.tool_response is None:
             raise GenkitError(status='INTERNAL', message='Expected a tool response part')
         raw_content = executed.tool_response.content or []
@@ -2621,15 +2624,12 @@ async def run_restart(
     except TOOL_RAISES as e:
         intr = interrupt_from_exc(e)
         if intr is not None:
-            # run_tool_after_restart already logged when the tool body interrupted.
-            # wrap_tool can raise Interrupt itself; that's the only interrupt path.
-            if not isinstance(e, GenkitError):
-                logger.debug(
-                    'restarted tool triggered an interrupt',
-                    tool=tool_req.name,
-                )
-            # wrap_tool paused again. generate turns this into the same
-            # INTERRUPTED they already know how to answer.
+            # The tool body or wrap_tool paused again. generate turns this
+            # into the same INTERRUPTED they already know how to answer.
+            logger.debug(
+                'restarted tool triggered an interrupt',
+                tool=tool_req.name,
+            )
             raise restart_interrupt_error(intr) from e
         raise
 
