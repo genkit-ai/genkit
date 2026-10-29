@@ -29,6 +29,6 @@ def package_version() -> str:
 
 
 # Sent over HTTP in the client header and on the OTLP log scope.
-GENKIT_VERSION: Final = package_version()
+GENKIT_VERSION: Final[str] = package_version()
 
-GENKIT_CLIENT_HEADER: Final = f'genkit-python/{GENKIT_VERSION}'
+GENKIT_CLIENT_HEADER: Final[str] = f'genkit-python/{GENKIT_VERSION}'
