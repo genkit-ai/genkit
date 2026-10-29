@@ -1962,38 +1962,20 @@ class Genkit:
         attributes = {metadata_key(k): str(v) for k, v in (metadata or {}).items()}
         return await run_in_new_span(name, body, action_type='flowStep', attributes=attributes)
 
-    @overload
     async def check_operation(
         self,
-        operation: Operation[T],
+        operation: Operation | Mapping[str, Any],
         *,
         context: dict[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> Operation[T]: ...
-
-    @overload
-    async def check_operation(
-        self,
-        operation: Mapping[str, Any],
-        *,
-        context: dict[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> Operation[ModelResponse]: ...
-
-    async def check_operation(
-        self,
-        operation: Operation[Any] | Mapping[str, Any],
-        *,
-        context: dict[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> Operation[Any]:
+    ) -> Operation[ModelResponse]:
         """Poll a background job.
 
-        Returns the same ``Operation[T]`` it was given, like JS
-        ``checkOperation<T>``. A stored handle can be passed as the dict you
-        saved. It is validated as strictly as an ``Operation`` (an unknown
-        key or a missing ``id`` is INVALID_ARGUMENT) and comes back as
-        ``Operation[ModelResponse]``.
+        Background models are the only operations, so the handle comes back
+        as ``Operation[ModelResponse]``. Pass the ``Operation`` you have or
+        the dict a stored one dumped to. Either is validated as an
+        ``Operation[ModelResponse]`` first: an unknown key, a missing ``id``,
+        or an ``output`` that isn't a ModelResponse is INVALID_ARGUMENT.
 
         Pass ``context={'secrets': {'api_key': ...}}`` again when start used a
         per-request key. ``config`` is client knobs (``base_url``,
@@ -2022,36 +2004,18 @@ class Genkit:
         """
         return await check_operation(self._registry, operation, context=context, config=config)
 
-    @overload
     async def cancel_operation(
         self,
-        operation: Operation[T],
+        operation: Operation | Mapping[str, Any],
         *,
         context: dict[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> Operation[T]: ...
-
-    @overload
-    async def cancel_operation(
-        self,
-        operation: Mapping[str, Any],
-        *,
-        context: dict[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> Operation[ModelResponse]: ...
-
-    async def cancel_operation(
-        self,
-        operation: Operation[Any] | Mapping[str, Any],
-        *,
-        context: dict[str, Any] | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> Operation[Any]:
+    ) -> Operation[ModelResponse]:
         """Cancel a background job.
 
         Same input and return types as ``check_operation``: an
-        ``Operation[T]`` comes back as ``Operation[T]``, a stored dict as
-        ``Operation[ModelResponse]``. Same ``context`` / ``config`` pockets.
+        ``Operation`` or a stored dict in, ``Operation[ModelResponse]`` out.
+        Same ``context`` / ``config`` pockets.
 
         Example:
             ```python
