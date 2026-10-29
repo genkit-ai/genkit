@@ -34,6 +34,8 @@ export interface ProcessManagerStartOptions {
  */
 export class ProcessManager {
   private appProcess?: ChildProcess;
+  private startOptions?: ProcessManagerStartOptions;
+  private currentProcessPromise?: Promise<void>;
 
   private _status: ProcessStatus = 'stopped';
   private manualRestart = false;
@@ -48,20 +50,24 @@ export class ProcessManager {
    * Starts the process.
    */
   start(options?: ProcessManagerStartOptions): Promise<void> {
+    const resolvedOptions = options
+      ? { ...this.startOptions, ...options }
+      : this.startOptions;
+    this.startOptions = resolvedOptions;
     logger.debug(`Starting process: ${this.command} ${this.args.join(' ')}`);
-    return new Promise((resolve, reject) => {
+    this.currentProcessPromise = new Promise((resolve, reject) => {
       this._status = 'running';
       this.appProcess = spawn(this.command, this.args, {
-        cwd: options?.cwd,
+        cwd: resolvedOptions?.cwd,
         env: {
           ...process.env,
           ...this.env,
         },
         shell: process.platform === 'win32',
-        stdio: options?.nonInteractive ? 'pipe' : 'inherit',
+        stdio: resolvedOptions?.nonInteractive ? 'pipe' : 'inherit',
       });
 
-      if (!options?.nonInteractive) {
+      if (!resolvedOptions?.nonInteractive) {
         // In interactive mode, stdio: inherit handles the piping.
       } else {
         this.appProcess.stderr?.on('data', (data) => {
@@ -82,6 +88,7 @@ export class ProcessManager {
         this.cleanup();
         if (this.manualRestart) {
           this.manualRestart = false;
+          resolve();
           return;
         }
         // If the process was killed by a signal, it's not an error in this context.
@@ -92,6 +99,7 @@ export class ProcessManager {
         }
       });
     });
+    return this.currentProcessPromise;
   }
 
   /**
@@ -100,7 +108,15 @@ export class ProcessManager {
   async restart(options?: ProcessManagerStartOptions): Promise<void> {
     this.manualRestart = true;
     await this.kill();
+    this.manualRestart = false;
     this.start(options).catch(() => {});
+  }
+
+  /**
+   * Returns the promise for the currently running or most recently started process.
+   */
+  waitForProcess(): Promise<void> | undefined {
+    return this.currentProcessPromise;
   }
 
   /**

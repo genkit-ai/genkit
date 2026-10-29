@@ -14,23 +14,24 @@
  * limitations under the License.
  */
 
-import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import z from 'zod';
-import { McpRunToolEvent } from './analytics.js';
+import { McpRunToolEvent } from './analytics';
 import {
   McpToolOptions,
+  formatMcpError,
   getCommonSchema,
   resolveProjectRoot,
-} from './utils.js';
+} from './utils';
 
 export function defineTraceTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
     'get_trace',
     {
       title: 'Get Genkit Trace',
-      description: 'Returns the trace details.',
+      description:
+        'Retrieves the detailed Genkit execution trace (spans, inputs, outputs, and errors) for a flow or action run by its `traceId`.',
       inputSchema: getCommonSchema(options.explicitProjectRoot, {
         traceId: z
           .string()
@@ -59,14 +60,12 @@ export function defineTraceTools(server: McpServer, options: McpToolOptions) {
           ],
         };
       } catch (e) {
-        const errStr =
-          e instanceof GenkitToolsError ? e.formatError() : JSON.stringify(e);
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `Error: ${errStr}`,
+              text: `Error: ${formatMcpError(e)}`,
             },
           ],
         };

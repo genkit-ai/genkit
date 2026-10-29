@@ -157,14 +157,41 @@ async def test_custom_action_allows_unannotated_input() -> None:
 
 
 def test_action_with_unannotated_second_parameter_raises_type_error() -> None:
-    """`(request, ctx)` with no ctx annotation raises at definition, saying to annotate ActionRunContext."""
+    """`(request, ctx)` with no ctx annotation raises at definition, saying to annotate ModelContext."""
 
     async def chef(request: ModelRequest, ctx) -> ModelResponse:  # noqa: ANN001
         return _REPLY
 
     with pytest.raises(TypeError, match="model 'chef' takes one input, but 'ctx' is a second parameter") as exc:
         Action(ActionKind.MODEL, 'chef', chef)
-    assert "annotate 'ctx' as ActionRunContext" in str(exc.value)
+    assert "annotate 'ctx' as ModelContext" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ('kind', 'expected'),
+    [
+        (ActionKind.MODEL, 'ModelContext'),
+        (ActionKind.BACKGROUND_MODEL, 'ModelContext'),
+        (ActionKind.CHECK_OPERATION, 'ModelContext'),
+        (ActionKind.CANCEL_OPERATION, 'ModelContext'),
+        (ActionKind.FLOW, 'FlowContext'),
+        (ActionKind.TOOL, 'ToolContext'),
+        (ActionKind.AGENT, 'AgentContext'),
+        (ActionKind.EMBEDDER, 'FlowContext'),
+        (ActionKind.EVALUATOR, 'FlowContext'),
+        (ActionKind.CUSTOM, 'FlowContext'),
+    ],
+)
+def test_signature_error_names_public_context_for_kind(kind: ActionKind, expected: str) -> None:
+    """The fix-it hint names the public context for each kind, never the internal ActionRunContext."""
+
+    async def handler(order: str, extra: str) -> str:
+        return order
+
+    with pytest.raises(TypeError) as exc:
+        Action(kind, 'handler', handler)
+    assert f"annotate 'extra' as {expected}" in str(exc.value)
+    assert 'ActionRunContext' not in str(exc.value)
 
 
 def test_action_with_positional_only_parameter_raises_type_error() -> None:

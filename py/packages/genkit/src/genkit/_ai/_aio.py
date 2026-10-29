@@ -291,6 +291,15 @@ class Genkit:
         description: str | None = None,
     ) -> _FlowDecorator: ...
 
+    # Overload order matters; see _FlowDecorator.__call__ for why the
+    # `object` shapes come before the context shapes.
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, ChunkT]: ...
+
     @overload
     def flow(
         self,
@@ -304,6 +313,13 @@ class Genkit:
         func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
         /,
     ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT]: ...
 
     @overload
     def flow(

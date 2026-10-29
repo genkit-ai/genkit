@@ -353,6 +353,31 @@ def describe_action(kind: ActionKind, name: str) -> str:
     return f"{_kind_label(kind)} '{name}'"
 
 
+_MODEL_CONTEXT_KINDS = frozenset({
+    ActionKind.MODEL,
+    ActionKind.BACKGROUND_MODEL,
+    ActionKind.CHECK_OPERATION,
+    ActionKind.CANCEL_OPERATION,
+})
+
+
+def _public_context_name(kind: ActionKind) -> str:
+    """The public context type a handler of this kind annotates its ctx with.
+
+    ToolContext for tools, ModelContext (genkit.model) for model and
+    background-model ops, AgentContext (genkit.exp.agent) for agents, and
+    FlowContext for everything else. FlowContext is the public name of the
+    run-context class, so it's correct for embedders, evaluators and the rest.
+    """
+    if kind == ActionKind.TOOL:
+        return 'ToolContext'
+    if kind in _MODEL_CONTEXT_KINDS:
+        return 'ModelContext'
+    if kind == ActionKind.AGENT:
+        return 'AgentContext'
+    return 'FlowContext'
+
+
 def find_input_and_context(
     fn: Callable[..., object],
     hints: Mapping[str, Any],
@@ -365,7 +390,7 @@ def find_input_and_context(
     ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
     owner = describe_action(kind, name)
-    context_class = {ActionKind.TOOL: 'ToolContext', ActionKind.FLOW: 'FlowContext'}.get(kind, 'ActionRunContext')
+    context_class = _public_context_name(kind)
 
     params = [
         p
@@ -792,6 +817,17 @@ FlowContext = ActionRunContext
 
 # The context parameter passed to model and background-model functions.
 ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
+"""Annotation alias for ``ActionRunContext[ModelResponseChunk]``: the ctx a model function gets.
+
+- ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
+- ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
+- ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
+- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+
+Use it in annotations only. It's a subscripted generic, so
+``isinstance(ctx, ModelContext)`` raises TypeError; runtime checks should use
+``isinstance(ctx, ActionRunContext)``.
+"""
 
 
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
@@ -1403,10 +1439,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     """An Action extended with bidirectional streaming via stream_bidi().
 
-    Both one-shot calls and live sessions run through the same Action.run() /
-    stream() path: run() drives the fn with a single input, while stream_bidi()
-    is sugar that hands run() a live input stream and returns a connection
-    handle for sending per-turn inputs and receiving chunks.
+    One-shot calls and live sessions run the same fn: run() and stream() hand
+    it a single input as a one-item stream, while stream_bidi() starts the
+    stream path with a live input stream and returns a connection handle for
+    sending per-turn inputs and receiving chunks.
     """
 
     def __init__(
@@ -1463,6 +1499,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     async def stream_bidi(
         self,
         init: InitT | None = None,
+        *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> BidiConnection[InputT, ChunkT, OutputT]:

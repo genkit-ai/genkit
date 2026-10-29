@@ -101,6 +101,13 @@ export interface VertexPluginOptions {
   experimental_debugTraces?: boolean;
   /** Use `responseSchema` field instead of `responseJsonSchema`. */
   legacyResponseSchema?: boolean;
+  /**
+   * Whether to store conversations on the server when using the Interactions API.
+   * Defaults to false (stateless) for models. Deep Research uses the
+   * server's default unless `store` is set here or in the request config;
+   * a `store: false` is sent as is, and the agent rejects it.
+   */
+  store?: boolean;
 }
 
 interface BaseClientOptions {
@@ -119,6 +126,12 @@ export interface RegionalClientOptions extends BaseClientOptions {
   projectId: string;
   authClient: GoogleAuth;
   apiKey?: string; // In addition to regular auth
+  /**
+   * True when `location` is the built-in default (`us-central1`), i.e. no
+   * location was set in the plugin options or `GCLOUD_LOCATION`. Models on
+   * the Interactions API then use `global` instead.
+   */
+  locationDefaulted?: boolean;
 }
 
 export const MULTI_REGIONAL_LOCATIONS = ['eu', 'us'] as const;
@@ -289,13 +302,33 @@ export declare type EmbeddingPrediction =
   | TextEmbeddingPrediction
   | MultimodalEmbeddingPrediction;
 
-export declare interface EmbedContentRequest {
+/**
+ * Request for the `:predict` embeddings method (gemini-embedding-001,
+ * text-embedding-*, multimodalembedding@001).
+ */
+export declare interface EmbedPredictRequest {
   instances: EmbeddingInstance[];
   parameters: EmbedContentConfig;
 }
 
-export declare interface EmbedContentResponse {
+/** Response from the `:predict` embeddings method. */
+export declare interface EmbedPredictResponse {
   predictions: EmbeddingPrediction[];
+}
+
+/**
+ * Request for the `:embedContent` method (gemini-embedding-2): one content
+ * per request, with interleaved text and media parts.
+ */
+export declare interface EmbedContentRequest {
+  content: Content;
+  outputDimensionality?: number;
+  autoTruncate?: boolean;
+}
+
+/** Response from the `:embedContent` method. */
+export declare interface EmbedContentResponse {
+  embedding: { values: number[] };
 }
 
 /** Optional parameters for the embed content method. */
