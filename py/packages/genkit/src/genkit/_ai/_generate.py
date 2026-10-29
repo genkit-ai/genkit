@@ -2503,24 +2503,6 @@ async def resolve_resume_options(
             settled=settled,
         )
     except BaseException:
-        if call is not None:
-            has_completed_sibling = False
-            for (index, _orig_part), outcome in zip(indexed_requests, settled, strict=False):
-                if isinstance(outcome, BaseException):
-                    continue
-                resumed_request, resumed_response = outcome
-                if resumed_response is not None:
-                    updated_content[index] = to_pending_response(resumed_request, resumed_response)
-                    has_completed_sibling = True
-            if has_completed_sibling:
-                call.set_messages(messages[:-1])
-                call.pending_message = as_message(
-                    Message(
-                        role=last_message.role,
-                        content=updated_content,
-                        metadata=last_message.metadata,
-                    )
-                )
         raise
 
     tool_responses = []
