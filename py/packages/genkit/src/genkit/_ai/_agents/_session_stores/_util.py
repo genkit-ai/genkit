@@ -37,6 +37,7 @@ from genkit._core._model import SessionSnapshot
 from genkit._core._typing import SnapshotStatus
 
 SaveFn = Callable[[SessionSnapshot | None], SessionSnapshot | None]
+"""Synchronous save mutator: gets a copy of the stored snapshot (or None), returns the new one or None to skip."""
 Subs = dict[str, list['asyncio.Queue[SnapshotStatus | None]']]
 OnClose = Callable[[], Awaitable[None]]
 
@@ -48,6 +49,7 @@ TERMINAL_STATUSES: Final[frozenset[SnapshotStatus]] = frozenset({
     SnapshotStatus.FAILED,
     SnapshotStatus.ABORTED,
 })
+"""Final snapshot statuses: a store rejects any later status change, and status streams end after one."""
 
 
 def assert_safe_snapshot_id(*, snapshot_id: str) -> None:

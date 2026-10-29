@@ -834,6 +834,11 @@ class ActionRunContext(Generic[ChunkT]):
 
 # The app-facing name for a flow's ctx. Same class, so FlowContext[str] works.
 FlowContext = ActionRunContext
+"""Execution context passed to a flow function.
+
+An alias for :class:`~genkit.ActionRunContext`. Provides access to streaming,
+caller context data, and cancellation signals.
+"""
 
 # The context parameter passed to model and background-model functions.
 ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]

@@ -63,6 +63,13 @@ VideoCompressionQuality: TypeAlias = Literal['OPTIMIZED', 'LOSSLESS']
 ImageResizeMode: TypeAlias = Literal['CROP', 'PAD']
 
 
+VideoCompressionQuality: TypeAlias = Literal['OPTIMIZED', 'LOSSLESS']
+"""Values of ``genai_types.VideoCompressionQuality``."""
+
+ImageResizeMode: TypeAlias = Literal['CROP', 'PAD']
+"""Values of ``genai_types.ImageResizeMode``."""
+
+
 def is_veo_model(name: str) -> bool:
     """Check if a model name is a Veo model.
 
