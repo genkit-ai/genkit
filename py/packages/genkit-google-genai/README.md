@@ -53,9 +53,12 @@ async def greet(name: str) -> str:
 
 ## Features
 
-### Dynamic Models
+### Dynamic Models & Specifying Model References
 
-The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API (e.g., `GoogleAI.gemini_model('gemini-flash-latest')`, `VertexAI.gemini_model('gemini-3.1-pro-preview')`).
+Any model ID served by the Gemini API (including newly released models) is resolved lazily on demand when `ai.generate()` is called, without needing pre-registration or SDK updates. You can pass models to `Genkit(model=...)` or `ai.generate(model=...)` in two ways:
+
+- **Typed `ModelRef` (recommended)**: `GoogleAI.gemini_model('gemini-flash-latest')` or `VertexAI.gemini_model('gemini-4-argon')` — pass the bare model ID; returns a `ModelRef[GeminiConfig]` with the `'googleai/'` or `'vertexai/'` namespace stamped automatically and static config type-checking.
+- **Prefixed string shorthand**: `'googleai/gemini-flash-latest'` or `'vertexai/gemini-4-argon'` — when passing a plain `str`, the `'googleai/'` or `'vertexai/'` prefix is required; passing an unprefixed string raises `NOT_FOUND`.
 
 ### Provider fields the plugin doesn't declare
 

@@ -517,6 +517,16 @@ def test_genkit_two_positional_args_says_got_2() -> None:
         Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]
 
 
+def test_genkit_init_has_docstring() -> None:
+    """Genkit.__init__.__doc__ documents keyword arguments and lazy model resolution."""
+    doc = Genkit.__init__.__doc__
+    assert doc is not None
+    assert 'plugins:' in doc
+    assert 'model:' in doc
+    assert 'prompt_dir:' in doc
+    assert 'GoogleAI.gemini_model' in doc
+
+
 def test_define_evaluator_takes_name_and_fn_positionally() -> None:
     """define_evaluator(name, fn, *, ...) matches define_model; options stay keyword-only."""
     ai = Genkit()

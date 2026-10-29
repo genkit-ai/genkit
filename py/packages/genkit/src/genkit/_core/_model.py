@@ -106,9 +106,11 @@ class ModelConfig(GenerationCommonConfig):
 
 
 ModelUsage = GenerationUsage  # public name for GenerationUsage
+"""Token, character, and media counts a model reports for one generation."""
 
 # what callers pass as tool_choice; they type the string, not an enum.
 ToolChoice = Literal['auto', 'required', 'none']
+"""Whether the model may call tools (`auto`), must call one (`required`), or must not (`none`)."""
 
 # A termination known to carry no conforming output. Every path that would
 # parse a response against its output schema consults this first: a schema
@@ -128,6 +130,7 @@ ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset({
     FinishReason.INTERRUPTED,
     FinishReason.OTHER,
 })
+"""Finish reasons that skip output-schema validation because the response carries no conforming output."""
 
 logger = get_logger(__name__)
 

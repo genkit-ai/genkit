@@ -74,6 +74,7 @@ StatusName = Literal[
     'UNAVAILABLE',
     'DATA_LOSS',
 ]
+"""Canonical gRPC status name a `GenkitError` carries, e.g. `'NOT_FOUND'`."""
 
 
 class RuntimeErrorReason(StrEnum):
