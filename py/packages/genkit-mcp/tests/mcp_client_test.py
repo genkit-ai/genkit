@@ -7,10 +7,12 @@
 """Integration tests for the MCP client registered as a dynamic action provider."""
 
 import asyncio
+import gc
 import os
 import sys
 import threading
 import time
+import weakref
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any, TypeVar
@@ -20,7 +22,7 @@ import psutil
 import pytest
 from genkit_mcp import McpClient, define_mcp_client
 from genkit_mcp._config import McpStdioServerConfig
-from genkit_mcp._connection import McpConnection
+from genkit_mcp._connection import McpConnection, _serving
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools
@@ -64,14 +66,17 @@ def server(tmp_path: Path, **env: str) -> dict[str, Any]:
     }
 
 
-def server_processes() -> list[psutil.Process]:
-    """Every fake MCP server this test process still owns."""
+def server_processes(tmp_path: Path) -> list[psutil.Process]:
+    """Every fake MCP server this test started that is still running."""
+    pid_file = str(tmp_path / 'server.pid')
     running: list[psutil.Process] = []
     for child in psutil.Process().children(recursive=True):
         try:
-            if any('fake_server.py' in argument for argument in child.cmdline()):
+            if any('fake_server.py' in argument for argument in child.cmdline()) and (
+                child.environ().get('MCP_FAKE_PID_FILE') == pid_file
+            ):
                 running.append(child)
-        except psutil.Error:  # pragma: no cover - the child exited mid-scan
+        except psutil.NoSuchProcess:  # pragma: no cover - the child exited mid-scan
             continue
     return running
 
@@ -87,6 +92,18 @@ class BackgroundLoop:
     async def run(self, coro: Coroutine[Any, Any, _T]) -> _T:
         """Await a coroutine which runs on the background loop."""
         return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self.loop))
+
+    def pause(self) -> None:
+        """Stop the loop without closing it, as a loop driven one run at a time sits between runs."""
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self._thread.join(timeout=30)
+
+    def resume(self) -> None:
+        """Run a paused loop again on a new thread. Does nothing while it runs."""
+        if self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         """Stop the loop and join its thread."""
@@ -221,7 +238,7 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
         assert action is not None
         assert (await action.run({'message': 'first'})).response.output == 'first'
 
-        killed = server_processes()
+        killed = server_processes(tmp_path)
         assert len(killed) == 1
         killed[0].kill()
         killed[0].wait(timeout=30)
@@ -234,7 +251,7 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
         # and a process to list from is the replaced connection.
         expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
         assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
-        replaced = server_processes()
+        replaced = server_processes(tmp_path)
         assert len(replaced) == 1
         assert replaced[0].pid != killed[0].pid
     finally:
@@ -252,12 +269,12 @@ async def test_close_stops_the_server_on_every_loop_that_opened_one(tmp_path: Pa
         assert action is not None
         assert (await action.run({'message': 'main'})).response.output == 'main'
         assert (await background.run(action.run({'message': 'background'}))).response.output == 'background'
-        assert len(server_processes()) == 2
+        assert len(server_processes(tmp_path)) == 2
 
         await client.close()
-        assert server_processes() == []
-        await client.close()
+        assert server_processes(tmp_path) == []
     finally:
+        await client.close()
         background.stop()
 
 
@@ -281,32 +298,204 @@ async def test_close_ignores_a_loop_which_already_finished(tmp_path: Path) -> No
         assert not thread.is_alive()
         assert outputs == ['other']
         # Only the main loop's connection is left: it was opened by the listing.
-        assert len(server_processes()) == 1
+        assert len(server_processes(tmp_path)) == 1
 
         await client.close()
-        assert server_processes() == []
+        assert server_processes(tmp_path) == []
     finally:
         await client.close()
 
 
 @pytest.mark.asyncio
-async def test_close_returns_when_another_loop_stops_before_closing_its_connection(tmp_path: Path) -> None:
-    """A loop which stops after close handed it the connection is skipped, not awaited forever."""
+@pytest.mark.filterwarnings('error::RuntimeWarning')
+@pytest.mark.filterwarnings('error::pytest.PytestUnraisableExceptionWarning')
+async def test_a_loop_which_stops_before_closing_its_connection_closes_it_when_run_again(tmp_path: Path) -> None:
+    """Close does not wait on a loop which stopped, and that loop stops its server once it runs again."""
+    client = McpClient('fake', **server(tmp_path))
+    background = BackgroundLoop()
+    release = threading.Event()
+    try:
+        tools = await client.get_active_tools()
+        assert (await background.run(tools[0]({'message': 'background'}))).output == 'background'
+        background.loop.call_soon_threadsafe(release.wait)
+        background.loop.call_soon_threadsafe(background.loop.stop)
+        closing = asyncio.create_task(client.close())
+        await asyncio.sleep(0)
+        release.set()
+
+        await asyncio.wait_for(closing, 10)
+        stranded = server_processes(tmp_path)
+        assert len(stranded) == 1
+
+        background.resume()
+        _, alive = await asyncio.to_thread(psutil.wait_procs, stranded, 15)
+        assert alive == []
+    finally:
+        release.set()
+        background.resume()
+        await client.close()
+        background.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_close_still_stops_every_server(tmp_path: Path) -> None:
+    """Each loop's shutdown runs on its own, so a caller which gives up strands no server."""
     client = McpClient('fake', **server(tmp_path))
     background = BackgroundLoop()
     try:
         tools = await client.get_active_tools()
         assert (await background.run(tools[0]({'message': 'background'}))).output == 'background'
-        background.loop.call_soon_threadsafe(time.sleep, 0.5)
-        background.loop.call_soon_threadsafe(background.loop.stop)
+        running = server_processes(tmp_path)
+        assert len(running) == 2
 
-        await asyncio.wait_for(client.close(), 10)
+        closing = asyncio.create_task(client.close())
+        await asyncio.sleep(0)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+
+        _, alive = await asyncio.to_thread(psutil.wait_procs, running, 15)
+        assert alive == []
     finally:
         await client.close()
         background.stop()
-        # The stopped loop still holds its connection, and nothing can reach it to close it.
-        for process in server_processes():
-            process.kill()
+
+
+@pytest.mark.asyncio
+async def test_a_second_close_waits_for_the_first(tmp_path: Path) -> None:
+    """Close returns once the server has exited, even when another close started the shutdown."""
+    client = McpClient('fake', **server(tmp_path))
+    await client.get_active_tools()
+
+    first = asyncio.create_task(client.close())
+    try:
+        await asyncio.sleep(0)
+        assert not first.done()
+        await client.close()
+
+        assert server_processes(tmp_path) == []
+    finally:
+        await first
+
+
+@pytest.mark.asyncio
+async def test_close_returns_when_another_loop_cancels_its_shutdown(tmp_path: Path) -> None:
+    """asyncio.run cancels every task on its way out, the shutdown among them, and that is no failure of close."""
+    client = McpClient('fake', **server(tmp_path))
+    background = BackgroundLoop()
+    release = threading.Event()
+
+    def cancel_everything() -> None:
+        for task in asyncio.all_tasks(background.loop):
+            task.cancel()
+
+    try:
+        tools = await client.get_active_tools()
+        assert (await background.run(tools[0]({'message': 'background'}))).output == 'background'
+        background.loop.call_soon_threadsafe(release.wait)
+        closing = asyncio.create_task(client.close())
+        await asyncio.sleep(0)
+        background.loop.call_soon_threadsafe(cancel_everything)
+        release.set()
+
+        await asyncio.wait_for(closing, 10)
+        _, alive = await asyncio.to_thread(psutil.wait_procs, server_processes(tmp_path), 15)
+        assert alive == []
+    finally:
+        release.set()
+        await client.close()
+        background.stop()
+
+
+@pytest.mark.asyncio
+async def test_restart_stops_a_paused_loops_server_when_that_loop_runs_again(tmp_path: Path) -> None:
+    """A loop driven one run at a time is not running when another loop restarts, and its old server is not leaked."""
+    client = McpClient('fake', **server(tmp_path))
+    background = BackgroundLoop()
+    try:
+        tools = await client.get_active_tools()
+        assert (await background.run(tools[0]({'message': 'background'}))).output == 'background'
+        replaced = server_processes(tmp_path)
+        assert len(replaced) == 2
+        background.pause()
+
+        await client.restart()
+        background.resume()
+        assert (await background.run(tools[0]({'message': 'again'}))).output == 'again'
+
+        _, alive = await asyncio.to_thread(psutil.wait_procs, replaced, 15)
+        assert alive == []
+        assert len(server_processes(tmp_path)) == 2
+    finally:
+        background.resume()
+        await client.close()
+        background.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_close_refused_mid_request_leaves_the_server_for_the_next_close(tmp_path: Path) -> None:
+    """A connection cannot be closed from inside its own request, and stays where a later close reaches it."""
+    client = McpClient('fake', **server(tmp_path))
+    await client.get_active_tools()
+    running = server_processes(tmp_path)
+    assert len(running) == 1
+    (serving,) = client._connections.values()
+
+    token = _serving.set(serving)
+    try:
+        with pytest.raises(GenkitError, match='cannot be closed from inside') as raised:
+            await client.close()
+        assert raised.value.status == 'FAILED_PRECONDITION'
+    finally:
+        _serving.reset(token)
+    assert server_processes(tmp_path) == running
+
+    await client.close()
+    assert server_processes(tmp_path) == []
+
+
+@pytest.mark.asyncio
+async def test_a_finished_loops_connection_is_dropped(tmp_path: Path) -> None:
+    """A connection holds its loop, so the client lets go of those whose loop has closed."""
+    client = McpClient('fake', **server(tmp_path))
+    finished: list[weakref.ref[asyncio.AbstractEventLoop]] = []
+    try:
+        tools = await client.get_active_tools()
+
+        async def call_and_note_the_loop() -> None:
+            finished.append(weakref.ref(asyncio.get_running_loop()))
+            await tools[0]({'message': 'other'})
+
+        def use_own_loop() -> None:
+            asyncio.run(call_and_note_the_loop())
+
+        for _ in range(3):
+            thread = threading.Thread(target=use_own_loop)
+            thread.start()
+            thread.join(timeout=30)
+            assert not thread.is_alive()
+
+        assert (await tools[0]({'message': 'main'})).output == 'main'
+        gc.collect()
+        assert len(finished) == 3
+        assert [loop for loop in finished if loop() is not None] == []
+    finally:
+        await client.close()
+
+
+def test_a_discarded_genkit_instance_takes_its_client_with_it(tmp_path: Path) -> None:
+    """The record of which client registered a provider does not keep either alive."""
+    ai = Genkit()
+    client = define_mcp_client(ai, 'fake', **server(tmp_path))
+    assert client._provider is not None
+    collected_client = weakref.ref(client)
+    collected_provider = weakref.ref(client._provider.action)
+
+    del ai, client
+    gc.collect()
+
+    assert collected_client() is None
+    assert collected_provider() is None
 
 
 @pytest.mark.asyncio
@@ -327,7 +516,7 @@ async def test_close_stops_waiting_on_a_loop_too_busy_to_close_its_connection(
         await asyncio.wait_for(client.close(), 10)
         assert time.monotonic() - started < 2.5
 
-        _, alive = psutil.wait_procs(server_processes(), timeout=10)
+        _, alive = psutil.wait_procs(server_processes(tmp_path), timeout=10)
         assert alive == []
     finally:
         await client.close()
@@ -360,7 +549,7 @@ async def test_a_closed_client_starts_no_server_on_a_new_loop(tmp_path: Path) ->
         assert len(errors) == 1
         assert isinstance(errors[0], GenkitError)
         assert errors[0].status == 'FAILED_PRECONDITION'
-        assert server_processes() == []
+        assert server_processes(tmp_path) == []
     finally:
         await client.close()
 
@@ -370,7 +559,8 @@ async def test_a_closed_clients_tools_fail_as_closed_except_by_key(tmp_path: Pat
     """Generate and listing report the closed client, while key resolution finds nothing."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
-    client = define_mcp_client(ai, 'fake', **server(tmp_path))
+    client = define_mcp_client(ai, 'fake', **server(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
+    await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
     await client.close()
 
     with pytest.raises(GenkitError) as raised:
@@ -394,7 +584,7 @@ async def test_a_closed_client_refuses_to_restart(tmp_path: Path) -> None:
     with pytest.raises(GenkitError, match="MCP client 'fake' is closed") as raised:
         await client.restart()
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert server_processes() == []
+    assert server_processes(tmp_path) == []
 
 
 @pytest.mark.asyncio
@@ -402,17 +592,23 @@ async def test_restart_replaces_the_server_and_its_listing(tmp_path: Path) -> No
     """Restart connects and lists on the calling loop before it returns."""
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', **server(tmp_path), cache_ttl_millis=LONG_TTL_MILLIS)
+    key = '/dynamic-action-provider/fake:tool/fake_echo'
     try:
         listed = [tool.name for tool in await client.get_active_tools()]
-        before = server_processes()
+        cached = await ai._registry.resolve_action_by_key(key)
+        assert cached is not None
+        before = server_processes(tmp_path)
         assert len(before) == 1
 
         await client.restart()
 
-        after = server_processes()
+        after = server_processes(tmp_path)
         assert len(after) == 1
         assert after[0].pid != before[0].pid
         assert [tool.name for tool in await client.get_active_tools()] == listed
+        relisted = await ai._registry.resolve_action_by_key(key)
+        assert relisted is not None
+        assert relisted is not cached
     finally:
         await client.close()
 
@@ -429,7 +625,7 @@ async def test_a_call_cut_off_by_restart_fails_as_unavailable(tmp_path: Path) ->
         await client.restart()
 
         with pytest.raises(GenkitError, match="MCP client 'fake' restarted") as raised:
-            await stalled
+            await asyncio.wait_for(stalled, 15)
         assert raised.value.status == 'UNAVAILABLE'
         assert (await tools['fake_echo']({'message': 'retried'})).output == 'retried'
     finally:
@@ -449,7 +645,7 @@ async def test_a_call_on_another_loop_cut_off_by_restart_fails_as_unavailable(tm
         await client.restart()
 
         with pytest.raises(GenkitError, match="MCP client 'fake' restarted") as raised:
-            await stalled
+            await asyncio.wait_for(stalled, 15)
         assert raised.value.status == 'UNAVAILABLE'
         assert (await background.run(tools['fake_echo']({'message': 'retried'}))).output == 'retried'
     finally:
@@ -494,24 +690,22 @@ async def test_tool_names_are_known_before_anything_connects(tmp_path: Path) -> 
     try:
         assert client.tool_name('echo') == 'fake_echo'
         assert not (tmp_path / 'server.pid').exists()
-        assert server_processes() == []
+        assert server_processes(tmp_path) == []
     finally:
         await client.close()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize('name', ['my server', 'tools.everything', '9lives', '-fake'])
-async def test_a_name_no_model_would_accept_is_refused_at_definition(tmp_path: Path, name: str) -> None:
+def test_a_name_no_model_would_accept_is_refused_at_definition(tmp_path: Path, name: str) -> None:
     """The name prefixes every tool name, so it has to be one a model accepts."""
     ai = Genkit()
     with pytest.raises(ValueError, match='cannot prefix an MCP tool name'):
         define_mcp_client(ai, name, **server(tmp_path))
-    assert server_processes() == []
+    assert server_processes(tmp_path) == []
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize('name', ['mcp-servers/everything', 'fake:everything', ''])
-async def test_a_name_no_selector_could_carry_is_refused_at_definition(
+def test_a_name_no_selector_could_carry_is_refused_at_definition(
     tmp_path: Path,
     name: str,
 ) -> None:
@@ -519,7 +713,7 @@ async def test_a_name_no_selector_could_carry_is_refused_at_definition(
     ai = Genkit()
     with pytest.raises(ValueError, match='cannot name an MCP provider'):
         define_mcp_client(ai, name, **server(tmp_path))
-    assert server_processes() == []
+    assert server_processes(tmp_path) == []
 
 
 @pytest.mark.asyncio
@@ -537,8 +731,7 @@ async def test_a_name_a_live_client_holds_is_refused_at_definition(tmp_path: Pat
         await first.close()
 
 
-@pytest.mark.asyncio
-async def test_a_name_another_provider_holds_is_refused_at_definition(tmp_path: Path) -> None:
+def test_a_name_another_provider_holds_is_refused_at_definition(tmp_path: Path) -> None:
     """The name is taken whoever registered the provider."""
     ai = Genkit()
 
@@ -613,7 +806,7 @@ async def test_an_unregistered_client_registers_nothing(tmp_path: Path) -> None:
         assert client._provider is None
         assert await ai._registry.resolve_action_by_key('/dynamic-action-provider/fake:tool/fake_echo') is None
         assert await expand_wildcard_tools(ai._registry, ['fake:tool/*']) == ['fake:tool/*']
-        assert server_processes() == []
+        assert server_processes(tmp_path) == []
     finally:
         await client.close()
 
@@ -629,7 +822,7 @@ async def test_an_unregistered_client_lists_and_runs_its_tools(tmp_path: Path) -
     finally:
         await client.close()
 
-    assert server_processes() == []
+    assert server_processes(tmp_path) == []
 
 
 @pytest.mark.asyncio
@@ -638,12 +831,12 @@ async def test_an_unregistered_client_restarts_and_closes_without_a_provider(tmp
     client = McpClient('fake', **server(tmp_path))
     try:
         listed = [tool.name for tool in await client.get_active_tools()]
-        before = server_processes()
+        before = server_processes(tmp_path)
         assert len(before) == 1
 
         await client.restart()
 
-        after = server_processes()
+        after = server_processes(tmp_path)
         assert len(after) == 1
         assert after[0].pid != before[0].pid
         assert [tool.name for tool in await client.get_active_tools()] == listed
@@ -651,7 +844,7 @@ async def test_an_unregistered_client_restarts_and_closes_without_a_provider(tmp
         await client.close()
 
     assert client._provider is None
-    assert server_processes() == []
+    assert server_processes(tmp_path) == []
     with pytest.raises(GenkitError, match="MCP client 'fake' is closed") as raised:
         await client.restart()
     assert raised.value.status == 'FAILED_PRECONDITION'

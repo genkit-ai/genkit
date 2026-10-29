@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
+import concurrent.futures
 import os
 import threading
 import time
@@ -52,7 +52,7 @@ _CROSS_LOOP_CLOSE_TIMEOUT_SECONDS = 30.0
 
 _LOOP_POLL_SECONDS = 0.1
 
-_registered_clients: weakref.WeakKeyDictionary[Action[Any, Any], McpClient] = weakref.WeakKeyDictionary()
+_registered_clients: weakref.WeakKeyDictionary[Action[Any, Any], weakref.ref[McpClient]] = weakref.WeakKeyDictionary()
 """The client behind each provider :func:`define_mcp_client` registered."""
 
 
@@ -62,8 +62,8 @@ class McpClient:
     A client holds no Genkit instance. It builds actions and manages the child
     process; registering those actions is :func:`define_mcp_client`.
 
-    Obtain instances from :func:`define_mcp_client` rather than constructing
-    directly.
+    A client built directly is unregistered: no selector reaches it, and its
+    tools come from :meth:`get_active_tools`.
     """
 
     _provider: DynamicActionProvider | None
@@ -114,6 +114,10 @@ class McpClient:
         self._connections: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, McpConnection] = (
             weakref.WeakKeyDictionary()
         )
+        self._closing: weakref.WeakKeyDictionary[
+            McpConnection, tuple[asyncio.AbstractEventLoop, concurrent.futures.Future[None]]
+        ] = weakref.WeakKeyDictionary()
+        self._close_tasks: set[asyncio.Task[None]] = set()
         self._connections_lock = threading.Lock()
 
     @property
@@ -151,7 +155,7 @@ class McpClient:
 
         The list can go straight into ``generate`` as ``tools=``, and each tool
         can be called directly. A registered client's tools are also selected
-        as ``<name>:tool/*``, which is how the Dev UI reaches them.
+        as ``<name>:tool/*``.
 
         Returns:
             One tool per server tool, in server order.
@@ -188,20 +192,22 @@ class McpClient:
         """
         with self._connections_lock:
             self._refuse_when_closed()
-        await self._disconnect_all()
-        self._invalidate_listing()
+        try:
+            await self._disconnect_all()
+        finally:
+            self._invalidate_listing()
         await self._list_actions()
 
     async def close(self) -> None:
         """Disconnect from the server, stop its process, and keep it that way.
 
         A connection belongs to the event loop that opened it, so each one is
-        shut down on its own loop. A loop which has stopped, or stops before it
-        gets to the connection, is skipped. A loop run by ``asyncio.run`` cancelled
-        its connection on the way out, taking the server process with it; a loop
-        stopped any other way did not, and this call cannot reach its connection.
-        A loop still running is waited on for at most 30 seconds, and then left
-        to finish the shutdown on its own.
+        shut down on its own loop, and the shutdown carries on if this call is
+        cancelled. A loop finished by ``asyncio.run`` cancelled its connection on
+        the way out, taking the server process with it. A loop which is not
+        running shuts its connection down when it next runs, and is not waited
+        on. A loop still running is waited on for at most 30 seconds, and then
+        left to finish the shutdown on its own.
 
         Closing is final, as it is for a file or an ``httpx.AsyncClient``: a
         closed client cannot be restarted, so build a new one with
@@ -210,8 +216,10 @@ class McpClient:
         """
         with self._connections_lock:
             self._closed = True
-        await self._disconnect_all()
-        self._invalidate_listing()
+        try:
+            await self._disconnect_all()
+        finally:
+            self._invalidate_listing()
 
     def _invalidate_listing(self) -> None:
         """Drop the registered listing of this client's tools, if it has one."""
@@ -219,31 +227,62 @@ class McpClient:
             self._provider.invalidate_cache()
 
     async def _disconnect_all(self) -> None:
-        """Shut every connection down on the loop which opened it."""
-        current = asyncio.get_running_loop()
-        with self._connections_lock:
-            connections = list(self._connections.items())
-            self._connections.clear()
-        for loop, connection in connections:
-            if loop is current:
-                await connection.close()
-            elif loop.is_running():
-                await self._close_on(loop, connection)
+        """Shut every connection down on the loop which opened it.
 
-    async def _close_on(self, loop: asyncio.AbstractEventLoop, connection: McpConnection) -> None:
-        """Close a connection on another loop, giving up if that loop stops or stalls."""
-        closing = connection.close()
-        future = asyncio.run_coroutine_threadsafe(closing, loop)
-        waiter = asyncio.wrap_future(future)
+        The shutdowns run on their own loops whatever happens to this call, and
+        a second call waits for those the first one started.
+        """
+        with self._connections_lock:
+            self._drop_closed_loops()
+            for loop, connection in self._connections.items():
+                self._start_close(loop, connection)
+            self._connections.clear()
+            closing = list(self._closing.values())
+        results = await asyncio.gather(
+            *(self._wait_for_close(loop, closed) for loop, closed in closing),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    def _start_close(self, loop: asyncio.AbstractEventLoop, connection: McpConnection) -> None:
+        """Close a connection on its own loop once that loop runs. Call under the connections lock."""
+        closed: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        def finish(task: asyncio.Task[None]) -> None:
+            # Only the loop shutting down cancels the task, and that takes the
+            # server process with it.
+            error = None if task.cancelled() else task.exception()
+            with self._connections_lock:
+                self._close_tasks.discard(task)
+                self._closing.pop(connection, None)
+                if error is not None:
+                    # Still open, so leave it where the next close finds it.
+                    self._connections.setdefault(loop, connection)
+            if error is not None:
+                closed.set_exception(error)
+            else:
+                closed.set_result(None)
+
+        def start() -> None:
+            task = loop.create_task(connection.close())
+            with self._connections_lock:
+                self._close_tasks.add(task)
+            task.add_done_callback(finish)
+
+        try:
+            loop.call_soon_threadsafe(start)
+        except RuntimeError:
+            # The loop is closed, so nothing can run a close on it.
+            return
+        self._closing[connection] = (loop, closed)
+
+    async def _wait_for_close(self, loop: asyncio.AbstractEventLoop, closed: concurrent.futures.Future[None]) -> None:
+        """Wait for a close on the given loop, unless that loop stops or stalls."""
         deadline = time.monotonic() + _CROSS_LOOP_CLOSE_TIMEOUT_SECONDS
-        while True:
-            done, _ = await asyncio.wait({waiter}, timeout=_LOOP_POLL_SECONDS)
-            if done:
-                break
+        while not closed.done():
             if not loop.is_running():
-                future.cancel()
-                if inspect.getcoroutinestate(closing) == inspect.CORO_CREATED:
-                    closing.close()
                 return
             if time.monotonic() >= deadline:
                 logger.warning(
@@ -252,7 +291,21 @@ class McpClient:
                     timeout_seconds=_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS,
                 )
                 return
-        await waiter
+            await asyncio.sleep(_LOOP_POLL_SECONDS)
+        closed.result()
+
+    def _drop_closed_loops(self) -> None:
+        """Forget what belongs to loops which have closed. Call under the connections lock.
+
+        A connection holds its loop, so the weak keys alone never let a closed
+        loop go, and a close queued on a loop which closed first never finishes.
+        """
+        for loop in [loop for loop in self._connections if loop.is_closed()]:
+            del self._connections[loop]
+        for connection, (loop, _) in list(self._closing.items()):
+            if loop.is_closed():
+                del self._closing[connection]
+        self._close_tasks -= {task for task in self._close_tasks if task.get_loop().is_closed()}
 
     def _refuse_when_closed(self) -> None:
         """Raise if this client has been closed. Call under the connections lock."""
@@ -264,6 +317,7 @@ class McpClient:
         loop = asyncio.get_running_loop()
         with self._connections_lock:
             self._refuse_when_closed()
+            self._drop_closed_loops()
             existing = self._connections.get(loop)
             if existing is not None and not existing.is_terminal:
                 return existing
@@ -368,7 +422,8 @@ def define_mcp_client(
 
     existing = ai._registry.registered_action(ActionKind.DYNAMIC_ACTION_PROVIDER, name)
     if existing is not None:
-        owner = _registered_clients.get(existing)
+        owner_ref = _registered_clients.get(existing)
+        owner = owner_ref() if owner_ref is not None else None
         if owner is None or not owner._closed:
             raise ValueError(
                 f'A dynamic action provider named {name!r} is already registered. '
@@ -381,5 +436,6 @@ def define_mcp_client(
         description=f'Tools of the MCP server {name}.',
         cache_ttl_millis=cache_ttl_millis,
     )
-    _registered_clients[client._provider.action] = client
+    # A strong reference would keep the action, its key, alive for good.
+    _registered_clients[client._provider.action] = weakref.ref(client)
     return client
