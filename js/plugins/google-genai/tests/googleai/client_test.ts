@@ -32,8 +32,6 @@ import {
   generateContentStream,
   getGoogleAIUrl,
   listModels,
-  veoCheckOperation,
-  veoPredict,
 } from '../../src/googleai/client.js';
 import {
   ClientOptions,
@@ -44,8 +42,6 @@ import {
   GenerateContentResponse,
   GenerateContentStreamResult,
   Model,
-  VeoOperation,
-  VeoPredictRequest,
 } from '../../src/googleai/types.js';
 
 const { getAbortSignal } = TEST_ONLY;
@@ -951,101 +947,6 @@ describe('Google AI Client', () => {
         capturedSignal!.aborted,
         true,
         'The passed signal should be aborted after the original controller is aborted'
-      );
-    });
-  });
-
-  describe('veoPredict', () => {
-    const model = 'veo-1.5-flash-0804';
-    const request: VeoPredictRequest = {
-      instances: [{ prompt: 'A video of a sunset' }],
-      parameters: {},
-    };
-
-    it('should return VeoOperation', async () => {
-      const mockResponse: VeoOperation = {
-        name: 'operations/12345',
-        done: false,
-      };
-      mockFetchResponse(mockResponse);
-
-      const result = await veoPredict(apiKey, model, request);
-      assert.deepStrictEqual(result, mockResponse);
-
-      const expectedUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predictLongRunning`;
-      sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'x-goog-api-client': getGenkitClientHeader(),
-        },
-        redirect: 'manual',
-        body: JSON.stringify(request),
-      });
-    });
-
-    it('should throw on API error', async () => {
-      const errorResponse = { error: { message: 'Veo failed to start' } };
-      mockFetchResponse(errorResponse, false, 500, 'Internal Server Error');
-
-      await assert.rejects(veoPredict(apiKey, model, request), (err: any) => {
-        assert.strictEqual(err.name, 'GenkitError');
-        assert.strictEqual(err.status, 'INTERNAL');
-        assert.match(
-          err.message,
-          /Error fetching from .* \[500 Internal Server Error\] Veo failed to start/
-        );
-        return true;
-      });
-    });
-  });
-
-  describe('veoCheckOperation', () => {
-    const operationName = 'operations/12345';
-
-    it('should return VeoOperation state', async () => {
-      const mockResponse: VeoOperation = {
-        name: operationName,
-        done: true,
-        response: {
-          generateVideoResponse: {
-            generatedSamples: [{ video: { uri: 'gs://bucket/video.mp4' } }],
-          },
-        },
-      };
-      mockFetchResponse(mockResponse);
-
-      const result = await veoCheckOperation(apiKey, operationName);
-      assert.deepStrictEqual(result, mockResponse);
-
-      const expectedUrl = `https://generativelanguage.googleapis.com/v1beta/${operationName}`;
-      sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'x-goog-api-client': getGenkitClientHeader(),
-        },
-        redirect: 'manual',
-      });
-    });
-
-    it('should throw on API error', async () => {
-      const errorResponse = { error: { message: 'Operation not found' } };
-      mockFetchResponse(errorResponse, false, 404, 'Not Found');
-
-      await assert.rejects(
-        veoCheckOperation(apiKey, operationName),
-        (err: any) => {
-          assert.strictEqual(err.name, 'GenkitError');
-          assert.strictEqual(err.status, 'UNKNOWN');
-          assert.match(
-            err.message,
-            /Error fetching from .* \[404 Not Found\] Operation not found/
-          );
-          return true;
-        }
       );
     });
   });

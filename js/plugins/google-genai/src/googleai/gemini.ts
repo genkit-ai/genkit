@@ -332,7 +332,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   store: z
     .boolean()
     .describe(
-      'Whether to store the interaction for later retrieval. Defaults to false.'
+      'Interactions API models: whether to store the interaction for later ' +
+        'retrieval (defaults to false). generateContent models: whether ' +
+        "the server logs the request for the API key's project; sent only " +
+        "when set (otherwise the project's logging setting applies)."
     )
     .optional(),
   thinkingConfig: z
@@ -1478,13 +1481,18 @@ export function defineModel(
         }
       }
 
-      // `store: false` is already how this model behaves, so only warn when
-      // something would actually be ignored.
-      if (storeFromConfig === true || previousInteractionIdFromConfig) {
+      // There's no stored conversation to continue on generateContent.
+      if (previousInteractionIdFromConfig) {
         logger.warn(
-          'store and previousInteractionId are not supported for this model and will be ignored.'
+          'previousInteractionId is not supported for this model and will be ignored.'
         );
       }
+
+      // On generateContent, `store` only controls whether the server logs
+      // this request for the API key's project (viewable in AI Studio's Logs
+      // and Datasets); there's nothing to continue. Sent only when set;
+      // otherwise the project's logging setting applies.
+      const generateContentStore = storeFromConfig ?? pluginOptions?.store;
 
       let generateContentRequest: GenerateContentRequest = {
         systemInstruction,
@@ -1496,6 +1504,7 @@ export function defineModel(
         ) as SafetySetting[],
         contents: messages.map((message) => toGeminiMessage(message, ref)),
         serviceTier,
+        store: generateContentStore,
       };
 
       let response: GenerateContentResponse;
