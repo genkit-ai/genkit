@@ -196,20 +196,23 @@ class Middleware(Generic[TConfig]):
         class RetryConfig(BaseModel):
             max_retries: int = 3
 
-    2. Extend Middleware with your config model, e.g. Retry:
+    2. Extend Middleware with your config model and give it a registry name:
         ai = Genkit()
 
-        @ai.middleware(
-            name="retry",
-            description="Configures smart retry logic with exponential backoff and a jitter."
-        )
+        @ai.middleware
         class Retry(Middleware[RetryConfig]):
-            async def wrap_model(self, params, next_fn, ctx):
+            name = 'retry'
+            description = 'Retries model calls with exponential backoff and jitter.'
+
+            async def wrap_model(self, params, ctx, next_fn):
                 for attempt in range(self.config.max_retries + 1):
                     ...
 
-    Wrap your subclass with the ``@ai.middleware`` decorator to make it available
-    in your local Dev UI.
+    ``@ai.middleware`` (or ``ai.define_middleware(Retry)``) registers the class
+    so the Dev UI lists it and a ``.prompt`` file can name it.
+    ``@ai.middleware(name=..., description=...)`` overrides the class attributes.
+    ``name`` and ``description`` are not inherited: a subclass of ``Retry``
+    sets its own ``name`` before it can be registered.
 
     3. Use the Retry middleware in your `generate` call:
         ai.generate(
@@ -234,6 +237,12 @@ class Middleware(Generic[TConfig]):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init_subclass__(**kwargs)
+        # The registry name and Dev UI description belong to the class that
+        # declares them; a subclass inheriting them would collide with its parent.
+        if 'name' not in cls.__dict__:
+            cls.name = ''
+        if 'description' not in cls.__dict__:
+            cls.description = None
         # Python keeps RetryConfig in Middleware[RetryConfig] for type checkers only.
         # We copy it onto cls.Config so Retry(max_retries=5) and the Dev UI form work.
         if 'Config' in cls.__dict__:
@@ -282,17 +291,9 @@ class Middleware(Generic[TConfig]):
         name: str | None = None,
         *,
         description: str | None = None,
-        metadata: dict[str, Any] | None = None,
     ) -> _MiddlewareMetadata:
         """Build the internal Dev UI catalog descriptor for this middleware class."""
-        effective_name = name if name is not None else cls.name
-        effective_desc = description if description is not None else cls.description
-        return _MiddlewareMetadata(
-            cls=cls,
-            name=effective_name,
-            description=effective_desc,
-            metadata=metadata,
-        )
+        return _MiddlewareMetadata(cls=cls, name=name, description=description)
 
     def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
@@ -388,20 +389,23 @@ class _MiddlewareMetadata(MiddlewareDesc):
         cls: type[Middleware],
         name: str | None = None,
         description: str | None = None,
-        metadata: dict[str, Any] | None = None,
     ) -> None:
-        effective_name = name if name is not None else getattr(cls, 'name', '')
+        effective_name = name if name is not None else cls.name
+        if not effective_name:
+            raise ValueError(
+                f"{cls.__name__} has no middleware name. Set `name = '...'` on the class "
+                f'or pass a name: ai.define_middleware({cls.__name__}, name=...).'
+            )
         res = _validate_middleware_key_segment(effective_name)
         if res.errored:
             raise ValueError(f'middleware name {res.error_message}')
-        effective_desc = description if description is not None else getattr(cls, 'description', None)
+        effective_desc = description if description is not None else cls.description
         if effective_desc is None and cls.__doc__:
             effective_desc = inspect.cleandoc(cls.__doc__)
         super().__init__(
             name=effective_name,
             description=effective_desc,
             config_schema=_derive_config_schema(cls),
-            metadata=metadata,
         )
         self._cls = cls
 
