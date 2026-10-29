@@ -44,7 +44,8 @@ CLIENT_OPTION_KEYS = frozenset({
 EXTRA_DESCRIPTION = (
     "Interactions API fields this class doesn't declare, in the API's snake_case wire names. Merged into "
     'the top level of the create body after everything else, and nested objects merge key by key, so a key '
-    'named here wins. Not checked; do not put API keys here.'
+    'named here wins. Keys match ignoring case and underscores, so `Agent` overrides `agent`. '
+    'Not validated, except that a top-level API key raises; do not put API keys here.'
 )
 
 

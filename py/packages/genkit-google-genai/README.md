@@ -80,9 +80,12 @@ config = GeminiConfig.model_validate({
 `systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
 `generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
 
-Antigravity, Interactions Lyria, and Deep Research work the same way. Their
-`extra` is merged into the Interactions create body, which uses snake_case
-names, and a nested object merges key by key:
+Antigravity, Interactions Lyria, and Deep Research also reject unknown keys
+and take undeclared fields in `extra`, which is merged into the Interactions
+create body (snake_case names). A nested object merges key by key. Keys match
+ignoring case and underscores, the same way the Gemini merge aligns them. Unlike
+Gemini, no field is reserved: a key in `extra` overrides what Genkit builds,
+including `agent`, `input`, `agent_config`, and `tools`.
 
 ```python
 op = await ai.generate_operation(

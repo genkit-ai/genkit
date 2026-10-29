@@ -123,7 +123,13 @@ def _existing_wire_key(target: dict[str, Any], key: str) -> str | None:
 
 
 def deep_merge(target: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
-    """Nested dicts merge so one key in ``extra`` does not wipe the siblings next to it."""
+    """Nested dicts merge so one key in ``extra`` does not wipe the siblings next to it.
+
+    Keys match the way google-genai's ``extra_body`` merge aligns them
+    (underscores dropped, lowercased), so ``Agent`` overrides ``agent`` and
+    ``agentConfig`` merges into ``agent_config``. The existing key's spelling
+    is kept. A non-dict value replaces the whole entry.
+    """
     merged = dict(target)
     for key, value in update.items():
         existing = _existing_wire_key(merged, key)
