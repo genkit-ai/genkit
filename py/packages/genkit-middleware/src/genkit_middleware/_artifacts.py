@@ -27,11 +27,12 @@ from genkit.exp import current_session
 from genkit.exp.agent import Artifact
 from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
 from genkit.model import GenerateActionOptions
+from genkit.plugin_api import GenkitConfig
 
 ARTIFACTS_LISTING_MARKER = 'artifacts-middleware-listing'
 
 
-class ArtifactsConfig(BaseModel):
+class ArtifactsConfig(GenkitConfig):
     """Options for session artifact tools and prompt injection."""
 
     readonly: bool = Field(

@@ -19,7 +19,6 @@
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
 
 from genkit.model import ModelConfig
 
@@ -45,12 +44,6 @@ class BedrockConfig(ModelConfig):
     through ``additional_model_request_fields``; ``extra`` is merged into the
     same field, after it, since Converse has no open top-level body.
     """
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-        extra='forbid',
-    )
 
     tool_choice: str | None = None
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""

@@ -475,3 +475,11 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
 
     assert backup_calls == 0
     assert response.finish_reason == FinishReason.FAILED
+
+
+def test_fallback_model_ref_entry_dumps_camel_case_config_keys() -> None:
+    """A ModelRef entry in Fallback writes camelCase config keys in the middleware ref."""
+    ref = model_ref('echo/b', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=5, top_k=3))
+    fb = Fallback(models=[ref])
+    dumped = fb.config.model_dump(by_alias=True, exclude_none=True, mode='json')
+    assert dumped['models'] == [{'name': 'echo/b', 'config': {'maxOutputTokens': 5, 'topK': 3}}]
