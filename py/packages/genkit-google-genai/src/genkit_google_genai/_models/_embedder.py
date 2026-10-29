@@ -18,7 +18,6 @@
 
 import asyncio
 import json
-import logging
 from collections.abc import Coroutine
 from typing import Any, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -35,9 +34,9 @@ from pydantic.alias_generators import to_camel
 
 from genkit import Document, Embedding, GenkitError, Part
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
-from genkit.plugin_api import to_json_schema
+from genkit.plugin_api import get_logger, to_json_schema
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Known task_type values, offered for autocomplete. Any other string is
 # forwarded as given, so a task type newer than this list still works.
