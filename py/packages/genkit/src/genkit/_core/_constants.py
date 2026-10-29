@@ -33,3 +33,4 @@ GENKIT_VERSION: Final[str] = package_version()
 
 # Header value plugins send in ``x-goog-api-client`` and ``user-agent``.
 GENKIT_USER_AGENT: Final[str] = f'genkit-python/{GENKIT_VERSION}'
+"""Header value plugins send in x-goog-api-client and user-agent."""
