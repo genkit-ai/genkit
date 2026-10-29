@@ -10,10 +10,10 @@ from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, Part
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelConfig, ModelRequest, ModelResponse
 from genkit._core._typing import Role
+from genkit.model import ModelContext
 
 
 class ConformingCfg(BaseModel):
@@ -44,22 +44,22 @@ def ai_and_seen() -> tuple[Genkit, dict]:
     ai = Genkit()
     seen: dict = {}
 
-    async def conforming(request: ModelRequest[ConformingCfg], ctx: ActionRunContext) -> ModelResponse:
+    async def conforming(request: ModelRequest[ConformingCfg], ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         seen['request'] = request
         if request.output_format == 'json':
             return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('{}')]))
         return OK
 
-    async def strict(request: ModelRequest[StrictCfg], ctx: ActionRunContext) -> ModelResponse:
+    async def strict(request: ModelRequest[StrictCfg], ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         return OK
 
-    async def bare(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def bare(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         return OK
 
-    async def plugin_only(request: ModelRequest[PluginOnlyCfg], ctx: ActionRunContext) -> ModelResponse:
+    async def plugin_only(request: ModelRequest[PluginOnlyCfg], ctx: ModelContext) -> ModelResponse:
         seen['config'] = request.config
         return OK
 

@@ -42,8 +42,8 @@ from botocore.exceptions import (
     UnauthorizedSSOTokenError,
 )
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelRequest
+from genkit import GenkitError, ModelResponse
+from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import StatusName, get_logger, provider_error
 from genkit_amazon_bedrock._converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock._stream import consume_converse_stream
@@ -186,7 +186,7 @@ class BedrockModel:
         self._model_id = model_id
         self._transport = transport
 
-    async def generate(self, request: ModelRequest[Any], ctx: ActionRunContext | None = None) -> ModelResponse:
+    async def generate(self, request: ModelRequest[Any], ctx: ModelContext | None = None) -> ModelResponse:
         """Runs a Converse or ConverseStream call.
 
         Args:
@@ -229,7 +229,7 @@ class BedrockModel:
         self,
         converse_kwargs: dict[str, Any],
         request: ModelRequest[Any],
-        ctx: ActionRunContext,
+        ctx: ModelContext,
     ) -> ModelResponse:
         """Streams a ConverseStream call, accumulating the final response.
 

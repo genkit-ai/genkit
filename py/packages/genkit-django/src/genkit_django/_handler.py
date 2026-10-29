@@ -98,13 +98,13 @@ def genkit_django_handler(
 
     ```python
     from django.urls import path
-    from genkit import ActionRunContext
+    from genkit import FlowContext
     from genkit_django import genkit_django_handler
 
 
     @genkit_django_handler(ai)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> str:
+    async def say_hi(name: str, ctx: FlowContext) -> str:
         stream = ai.generate_stream(prompt=f'tell a joke about {name}')
         async for chunk in stream.stream:
             if chunk.text:

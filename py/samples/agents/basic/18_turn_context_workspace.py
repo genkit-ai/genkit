@@ -35,9 +35,10 @@ from pathlib import Path
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, FinishReason
+from genkit import FinishReason
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -52,7 +53,7 @@ store = InMemorySessionStore()
 WORKSPACES = Path(__file__).resolve().parent / '.workspaces'
 
 
-async def workspace_agent_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def workspace_agent_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
         # Reserved before this handler ran — same id the store will persist under.
         assert turn_ctx.snapshot_id is not None

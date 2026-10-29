@@ -112,9 +112,14 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 		case ai.RoleModel:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			am.Content.OfString = param.NewOpt(content)
-			if reasoning := concatenateReasoningContent(msg.Content); reasoning != "" {
+			// A reasoning part goes back even when its text is empty. DeepSeek
+			// rejects a thinking-mode tool call it cannot match to one of its
+			// own replies, as when the caller rewrote the call IDs, unless the
+			// turn carries reasoning_content, and a turn with no chain of
+			// thought carries it empty.
+			if slices.ContainsFunc(msg.Content, (*ai.Part).IsReasoning) {
 				am.SetExtraFields(map[string]any{
-					"reasoning_content": reasoning,
+					"reasoning_content": concatenateReasoningContent(msg.Content),
 				})
 			}
 			toolCalls, err := convertToolCalls(msg.Content)
@@ -575,7 +580,7 @@ func (g *ModelGenerator) applyResponseFormat(output *ai.ModelOutputConfig) {
 	}
 	if output != nil && output.Constrained && output.Schema != nil && slices.Contains(g.outputFormats, output.Format) {
 		switch output.Format {
-		case "array", "enum":
+		case ai.OutputFormatArray, ai.OutputFormatEnum:
 			format = jsonSchemaFormat(output.Schema)
 		}
 	}
@@ -604,7 +609,7 @@ func getResponseFormat(output *ai.ModelOutputConfig) openai.ChatCompletionNewPar
 	}
 
 	switch output.Format {
-	case "json":
+	case ai.OutputFormatJSON:
 		if output.Schema != nil {
 			format = jsonSchemaFormat(output.Schema)
 		} else {
@@ -666,6 +671,9 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// Use openai-go's accumulator to collect the complete response
 	acc := &openai.ChatCompletionAccumulator{}
 	var reasoning strings.Builder
+	// The accumulator drops the reasoning fields, so whether the provider
+	// sent one at all, even empty, is tracked apart from its text.
+	var reasoningSeen bool
 	// The accumulator adds up the three top-level token counts and drops
 	// everything else the usage carries, including the reasoning and cache
 	// breakdowns, so the usage chunk is kept whole and used in its place.
@@ -709,10 +717,12 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 		// Some OpenAI-compatible reasoning models return reasoning in a
 		// non-standard field: reasoning_content for Kimi and DeepSeek,
 		// reasoning for OpenRouter.
-		if reasoningDelta := firstReasoning(
+		reasoningDelta, ok := firstReasoning(
 			chunk.Choices[0].Delta.JSON.ExtraFields["reasoning_content"].Raw(),
 			chunk.Choices[0].Delta.JSON.ExtraFields["reasoning"].Raw(),
-		); reasoningDelta != "" {
+		)
+		reasoningSeen = reasoningSeen || ok
+		if reasoningDelta != "" {
 			reasoning.WriteString(reasoningDelta)
 			modelChunk.Content = append(modelChunk.Content, ai.NewReasoningPart(reasoningDelta, nil))
 		}
@@ -761,7 +771,7 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	if err != nil {
 		return nil, err
 	}
-	if reasoning.Len() > 0 && resp.Reasoning() == "" {
+	if reasoningSeen && !slices.ContainsFunc(resp.Message.Content, (*ai.Part).IsReasoning) {
 		resp.Message.Content = append(
 			[]*ai.Part{ai.NewReasoningPart(reasoning.String(), nil)},
 			resp.Message.Content...,
@@ -872,15 +882,16 @@ func extractJSONValue(raw string) any {
 	return value
 }
 
-func extractReasoningContent(raw string) string {
+// extractReasoningContent decodes a raw reasoning field. ok is false when the
+// field is absent, null, or not a string.
+func extractReasoningContent(raw string) (reasoning string, ok bool) {
 	if raw == "" || raw == "null" {
-		return ""
+		return "", false
 	}
-	var reasoning string
 	if err := json.Unmarshal([]byte(raw), &reasoning); err != nil {
-		return ""
+		return "", false
 	}
-	return reasoning
+	return reasoning, true
 }
 
 // firstReasoning returns the first non-empty reasoning string among raws, the
@@ -888,13 +899,20 @@ func extractReasoningContent(raw string) string {
 // them is in the OpenAI schema and providers disagree on the name, so the
 // caller passes every field it knows in preference order; a provider sending
 // two of them is read once rather than appended twice.
-func firstReasoning(raws ...string) string {
+//
+// ok reports whether any of the fields holds a string, even an empty one. A
+// provider that sends an empty reasoning_content still wants it passed back
+// on the turns that follow, so an empty field yields an empty reasoning part
+// rather than none.
+func firstReasoning(raws ...string) (reasoning string, ok bool) {
 	for _, raw := range raws {
-		if reasoning := extractReasoningContent(raw); reasoning != "" {
-			return reasoning
+		r, present := extractReasoningContent(raw)
+		if r != "" {
+			return r, true
 		}
+		ok = ok || present
 	}
-	return ""
+	return "", ok
 }
 
 // extractErrorObject decodes the error object a provider returns beside a
@@ -963,10 +981,10 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, sep
 	// reasoning field as a Genkit reasoning part. DeepSeek and Kimi name it
 	// reasoning_content; OpenRouter normalizes every vendor it fronts onto
 	// reasoning.
-	if reasoning := firstReasoning(
+	if reasoning, ok := firstReasoning(
 		choice.Message.JSON.ExtraFields["reasoning_content"].Raw(),
 		choice.Message.JSON.ExtraFields["reasoning"].Raw(),
-	); reasoning != "" {
+	); ok {
 		resp.Message.Content = append(resp.Message.Content, ai.NewReasoningPart(reasoning, nil))
 	}
 

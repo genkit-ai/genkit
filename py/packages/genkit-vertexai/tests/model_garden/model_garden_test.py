@@ -36,9 +36,9 @@ from genkit_vertexai._model_garden._plugin import ModelGardenModel
 from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
+from genkit import Genkit, GenkitError, Message, Part, Role
 from genkit._ai._formats._builtin import built_in_formats
-from genkit.model import ModelRequest, OutputConfig
+from genkit.model import ModelContext, ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
 CLAUDE = 'modelgarden/anthropic/claude-sonnet-4@20250514'
@@ -234,7 +234,7 @@ async def test_model_garden_llama_json_request_sends_json_object() -> None:
         location='us-central1',
         project='p',
     )
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=False)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
