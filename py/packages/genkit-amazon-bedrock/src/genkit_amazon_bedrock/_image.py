@@ -75,6 +75,70 @@ def _image_family(model_id: str) -> ImageFamily | None:
     return None
 
 
+def _managed_extra_field(extra: dict[str, Any], family: ImageFamily) -> str | None:
+    """The ``extra`` key that would overwrite a field Genkit builds from the prompt, if any.
+
+    Stability takes the prompt as ``prompt``. Titan Image and Nova Canvas take
+    it as ``textToImageParams.text`` under ``taskType: TEXT_IMAGE``; other
+    ``textToImageParams`` entries (``negativeText``) are the caller's.
+    """
+    if family == 'stability':
+        return 'prompt' if 'prompt' in extra else None
+    if 'taskType' in extra:
+        return 'taskType'
+    if 'textToImageParams' in extra:
+        params = extra['textToImageParams']
+        if not isinstance(params, dict):
+            # A non-mapping would replace the whole object, prompt included.
+            return 'textToImageParams'
+        if 'text' in params:
+            return 'textToImageParams.text'
+    return None
+
+
+def _deep_merge(body: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """Merges ``extra`` over ``body``; nested objects merge key by key, other values replace."""
+    merged = dict(body)
+    for key, value in extra.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(cast(dict[str, Any], current), cast(dict[str, Any], value))
+        else:
+            merged[key] = value
+    return merged
+
+
+def merge_image_extra(body: dict[str, Any], extra: dict[str, Any], family: ImageFamily) -> dict[str, Any]:
+    """Merges ``config.extra`` into a built InvokeModel image body.
+
+    Keys are Bedrock wire names, matched exactly. Nested objects merge key by
+    key, so ``{'imageGenerationConfig': {'seed': 7}}`` keeps the other
+    defaults, and a colliding leaf takes the caller's value. Fields Genkit
+    builds from the prompt are rejected rather than overwritten.
+
+    Args:
+        body: The body built from the prompt and declared config.
+        extra: The caller's ``extra`` mapping.
+        family: The image family the body was built for.
+
+    Returns:
+        A new body; ``body`` is not modified.
+
+    Raises:
+        GenkitError: INVALID_ARGUMENT when ``extra`` names a prompt field.
+    """
+    field = _managed_extra_field(extra, family)
+    if field is not None:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'bedrock image: extra field {field!r} is built by Genkit from the request '
+                'and cannot be set from config'
+            ),
+        )
+    return _deep_merge(body, extra)
+
+
 def is_image_model(model_id: str) -> bool:
     """Reports whether a Bedrock model ID names a text-to-image model.
 
@@ -201,9 +265,7 @@ def _normalize_image_config(config: Any) -> tuple[dict[str, Any], dict[str, Any]
     the common config) are dropped in either spelling: the framework coerces
     every config into ModelConfig, and Bedrock's image APIs take none of them.
     ``extra`` is one of those knobs, so it comes back separately for the
-    caller to merge over the finished body. The merge is top-level: a key in
-    ``extra`` replaces that key of the body, and a nested object is not
-    merged field by field.
+    caller to merge over the finished body (see ``merge_image_extra``).
 
     Args:
         config: The raw ``request.config`` value.
@@ -301,8 +363,8 @@ class BedrockImageModel:
         else:
             body = build_amazon_image_body(prompt, config, include_quality=family == 'nova_canvas')
         # extra is the caller's escape hatch for fields the plugin doesn't
-        # model. It replaces top-level keys of the body as written.
-        body.update(extra)
+        # model, e.g. Nova Canvas textToImageParams.negativeText.
+        body = merge_image_extra(body, extra, family)
         payload = await self._invoke(body)
 
         if family == 'stability':

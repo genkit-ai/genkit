@@ -97,7 +97,8 @@ class ModelConfig(GenerationCommonConfig):
     builds from the request (messages, tools) are rejected rather than
     overwritten. Where the map lands depends on the provider: the request
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
-    ``additionalModelRequestFields`` for Bedrock.
+    ``additionalModelRequestFields`` for Bedrock chat models (the InvokeModel
+    body for Bedrock image models).
 
     Keys aren't validated, except that an API key here raises like one at the
     top level: config travels with the request into traces. Don't put other

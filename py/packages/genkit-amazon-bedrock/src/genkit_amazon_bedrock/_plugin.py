@@ -22,7 +22,8 @@ Bedrock Converse and ConverseStream APIs; embedders and image generation use
 InvokeModel.
 """
 
-from typing import TYPE_CHECKING, Any, Literal
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import structlog
 
@@ -65,7 +66,10 @@ def _reject_secrets_api_key(context: dict[str, Any]) -> None:
     # the app's AWS account no matter what, so running the call anyway would
     # charge the wrong account without anyone noticing.
     secrets = context.get('secrets')
-    if isinstance(secrets, dict) and (secrets.get('api_key') is not None or secrets.get('apiKey') is not None):
+    if not isinstance(secrets, Mapping):
+        return
+    bag = cast(Mapping[str, object], secrets)
+    if bag.get('api_key') is not None or bag.get('apiKey') is not None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(

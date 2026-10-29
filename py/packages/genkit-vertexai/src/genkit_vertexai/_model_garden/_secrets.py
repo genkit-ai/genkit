@@ -16,7 +16,8 @@
 
 """Model Garden has no per-request API key."""
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from genkit import GenkitError
 
@@ -29,7 +30,10 @@ def reject_secrets_api_key(context: dict[str, Any]) -> None:
     anyway would charge the wrong account without anyone noticing.
     """
     secrets = context.get('secrets')
-    if isinstance(secrets, dict) and (secrets.get('api_key') is not None or secrets.get('apiKey') is not None):
+    if not isinstance(secrets, Mapping):
+        return
+    bag = cast(Mapping[str, object], secrets)
+    if bag.get('api_key') is not None or bag.get('apiKey') is not None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(

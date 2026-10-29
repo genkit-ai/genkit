@@ -127,8 +127,8 @@ async def test_generate_bedrock_image_extra_key_overrides_built_field() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_bedrock_image_extra_replaces_top_level_key() -> None:
-    """`extra={'imageGenerationConfig': {'seed': 7}}` replaces that whole key; nested fields are not merged."""
+async def test_generate_bedrock_image_extra_deep_merges_nested_object() -> None:
+    """`extra={'imageGenerationConfig': {'seed': 7}}` sets `seed` and keeps the other defaults."""
     ai, transport = bedrock_app()
 
     await ai.generate(
@@ -138,8 +138,55 @@ async def test_generate_bedrock_image_extra_replaces_top_level_key() -> None:
     )
 
     body = json.loads(transport.invoke_calls[0]['body'])
-    assert body['imageGenerationConfig'] == {'seed': 7}
+    assert body['imageGenerationConfig'] == {
+        'numberOfImages': 1,
+        'height': 1024,
+        'width': 1024,
+        'cfgScale': 8.0,
+        'seed': 7,
+        'quality': 'standard',
+    }
     assert body['taskType'] == 'TEXT_IMAGE'
+
+
+@pytest.mark.asyncio
+async def test_generate_bedrock_image_extra_adds_negative_text_next_to_prompt() -> None:
+    """`extra={'textToImageParams': {'negativeText': ...}}` on Nova Canvas keeps the prompt text."""
+    ai, transport = bedrock_app()
+
+    await ai.generate(
+        model=NOVA_CANVAS,
+        prompt='a reef',
+        config={'extra': {'textToImageParams': {'negativeText': 'blurry'}}},
+    )
+
+    body = json.loads(transport.invoke_calls[0]['body'])
+    assert body['textToImageParams'] == {'text': 'a reef', 'negativeText': 'blurry'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model', 'extra', 'field'),
+    [
+        (IMAGE_MODEL, {'prompt': 'a shipwreck'}, 'prompt'),
+        (NOVA_CANVAS, {'taskType': 'INPAINTING'}, 'taskType'),
+        (NOVA_CANVAS, {'textToImageParams': {'text': 'a shipwreck'}}, 'textToImageParams.text'),
+        (NOVA_CANVAS, {'textToImageParams': 'a shipwreck'}, 'textToImageParams'),
+    ],
+    ids=['stability_prompt', 'nova_task_type', 'nova_text', 'nova_params_not_mapping'],
+)
+async def test_generate_bedrock_image_extra_prompt_field_fails_invalid_argument(
+    model: str, extra: dict[str, Any], field: str
+) -> None:
+    """An `extra` key that would overwrite the prompt fails with INVALID_ARGUMENT and sends nothing."""
+    ai, transport = bedrock_app()
+
+    response = await ai.generate(model=model, prompt='a reef', config={'extra': extra})
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert repr(field) in response.error.message
+    assert transport.invoke_calls == []
 
 
 @pytest.mark.asyncio

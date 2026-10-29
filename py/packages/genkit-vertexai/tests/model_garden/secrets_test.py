@@ -17,11 +17,13 @@
 """A per-request key in context.secrets on a Model Garden model."""
 
 from collections.abc import Awaitable, Callable
+from types import MappingProxyType
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from genkit_vertexai import ModelGarden
 from genkit_vertexai._model_garden._plugin import ModelGardenModel
+from genkit_vertexai._model_garden._secrets import reject_secrets_api_key
 
 from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.model import ModelRequest
@@ -83,3 +85,11 @@ async def test_generate_model_garden_secrets_without_api_key_runs_on_google_cred
             await generate(hi_request(), ActionRunContext(context={'secrets': {'db_password': 'x'}}))
 
     create_client.assert_called_once()
+
+
+def test_reject_secrets_api_key_checks_read_only_mapping() -> None:
+    """A read-only mapping of secrets (MappingProxyType) is checked like a dict."""
+    with pytest.raises(GenkitError) as exc_info:
+        reject_secrets_api_key({'secrets': MappingProxyType({'api_key': 'tenant-key'})})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
