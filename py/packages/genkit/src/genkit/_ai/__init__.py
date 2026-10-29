@@ -1,4 +1,4 @@
-# Copyright 2025 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,18 +14,4 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Type definitions for Google GenAI context caching."""
-
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
-
-
-class CacheConfigSchema(BaseModel):
-    """Configuration for context caching."""
-
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
-
-    ttl_seconds: int | None = None
-
-
-CacheConfig = bool | CacheConfigSchema
+"""Internal package."""

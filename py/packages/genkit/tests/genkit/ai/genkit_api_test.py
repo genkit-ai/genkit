@@ -17,7 +17,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit
+import genkit.plugin_api
+from genkit import Genkit, get_logger
 from genkit._core._action import _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
@@ -25,7 +26,6 @@ from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import Operation
 from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
 from genkit.model import ModelContext
-from genkit.plugin_api import get_logger
 from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
@@ -187,6 +187,13 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
+
+
+def test_get_logger_lives_only_in_genkit() -> None:
+    """`get_logger` is app-facing: exported from `genkit`, not from `genkit.plugin_api`."""
+    assert 'get_logger' in genkit.__all__
+    assert 'get_logger' not in genkit.plugin_api.__all__
+    assert not hasattr(genkit.plugin_api, 'get_logger')
 
 
 @pytest.mark.asyncio
@@ -516,6 +523,16 @@ def test_genkit_two_positional_args_says_got_2() -> None:
         match=r'Genkit\(\) takes no positional arguments, got 2\.',
     ):
         Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]
+
+
+def test_genkit_init_has_docstring() -> None:
+    """Genkit.__init__.__doc__ documents keyword arguments and lazy model resolution."""
+    doc = Genkit.__init__.__doc__
+    assert doc is not None
+    assert 'plugins:' in doc
+    assert 'model:' in doc
+    assert 'prompt_dir:' in doc
+    assert 'GoogleAI.gemini_model' in doc
 
 
 def test_define_evaluator_takes_name_and_fn_positionally() -> None:

@@ -27,9 +27,8 @@ See:
 import re
 from typing import Any
 
-from genkit import Part
+from genkit import Part, get_logger
 from genkit.model import ModelRequest, ModelUsage
-from genkit.plugin_api import get_logger
 
 logger = get_logger(__name__)
 

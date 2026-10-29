@@ -36,9 +36,8 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import ModelConfig, ModelContext, ModelRequest, ModelUsage, Supports, ToolDefinition
-from genkit.plugin_api import get_logger
 
 logger = get_logger(__name__)
 

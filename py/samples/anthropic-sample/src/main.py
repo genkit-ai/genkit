@@ -23,7 +23,7 @@ from genkit import Genkit
 
 ai = Genkit(
     plugins=[Anthropic()],
-    model=Anthropic.claude_model('claude-sonnet-4-6'),
+    model=Anthropic.claude('claude-sonnet-4-6'),
 )
 
 

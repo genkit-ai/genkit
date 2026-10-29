@@ -30,8 +30,8 @@ import threading
 from collections.abc import AsyncGenerator, Awaitable
 from typing import TYPE_CHECKING, Any
 
-from genkit import GenkitError
-from genkit.plugin_api import get_logger, provider_error
+from genkit import GenkitError, get_logger
+from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._config import (
     DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_MAX_POOL_CONNECTIONS,

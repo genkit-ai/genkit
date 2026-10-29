@@ -27,7 +27,7 @@ from genkit_anthropic import Anthropic
 ai = Genkit(plugins=[Anthropic()])
 
 res = await ai.generate(
-    model=Anthropic.claude_model('claude-sonnet-4-6'),
+    model=Anthropic.claude('claude-sonnet-4-6'),
     prompt='Explain recursion in 10 words.',
 )
 print(res.text)
@@ -44,6 +44,26 @@ Anthropic(
     base_url='https://claude-proxy.example.com',
     client_options={'timeout': 30, 'max_retries': 5, 'default_headers': {'X-Team': 'search'}},
 )
+```
+
+## Typed config
+
+`AnthropicConfig` and its nested settings take snake_case keyword arguments,
+so pyright, pyrefly and ty check every key. The request goes out with
+Anthropic's own snake_case names (`budget_tokens`, `task_budget`):
+
+```python
+from genkit_anthropic import AnthropicConfig, OutputConfig, TaskBudget, ThinkingConfig
+
+# 1. Build the config from typed nested settings
+config = AnthropicConfig(
+    max_output_tokens=4096,
+    thinking=ThinkingConfig(type='enabled', budget_tokens=2048),
+    output_config=OutputConfig(task_budget=TaskBudget(total=20000)),
+)
+
+# 2. Generate with it
+res = await ai.generate(model='anthropic/claude-sonnet-4-6', prompt='Plan a tasting menu.', config=config)
 ```
 
 ## Per-request API key

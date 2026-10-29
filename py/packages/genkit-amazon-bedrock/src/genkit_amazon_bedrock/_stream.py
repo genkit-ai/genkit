@@ -27,9 +27,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import ModelContext, ModelRequest, ToolDefinition, ToolRequest
-from genkit.plugin_api import get_logger
 from genkit_amazon_bedrock._converters import (
     bedrock_reasoning_part,
     coerce_tool_input,

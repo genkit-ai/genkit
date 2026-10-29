@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from genkit import Genkit, ToolContext
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 # What your auth middleware would have already resolved for this request.
 ACCOUNTS = {

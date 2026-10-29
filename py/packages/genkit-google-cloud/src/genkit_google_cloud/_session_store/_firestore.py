@@ -53,7 +53,7 @@ from google.cloud.firestore import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit import GenkitError, GenkitRuntimeError, RuntimeErrorReason, get_logger
 from genkit.exp.agent import (
     TERMINAL_STATUSES,
     AgentFinishReason,
@@ -74,7 +74,7 @@ from genkit.exp.agent import (
     require_one_selector,
     session_id_of,
 )
-from genkit.plugin_api import get_logger, loop_local_client
+from genkit.plugin_api import loop_local_client
 
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'

@@ -44,8 +44,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import ProxyTracerProvider, get_current_span, span as trace_span
 
-from genkit import GenkitError
-from genkit.plugin_api import get_logger, is_dev_environment
+from genkit import GenkitError, get_logger
+from genkit.plugin_api import is_dev_environment
 from genkit.telemetry import configure_instrumentation, is_instrumented_by
 
 from ._constants import (

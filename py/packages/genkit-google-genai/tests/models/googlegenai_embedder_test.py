@@ -19,7 +19,7 @@
 import asyncio
 import base64
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, get_args
 from unittest.mock import AsyncMock
 
@@ -137,7 +137,9 @@ async def test_vertex_only_options_map_to_embed_content_config(mocker: MockerFix
     client = _single_embedding_client(mocker)
     embedder = Embedder('text-embedding-005', client, is_vertex=True)
 
-    await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
+    await embedder.generate(
+        EmbedRequest(input=[Document.from_text('text')], options=options)  # pyright: ignore[reportArgumentType]
+    )
 
     config = client.aio.models.embed_content.call_args.kwargs['config']
     assert config == genai.types.EmbedContentConfig(auto_truncate=False, mime_type='text/plain')
@@ -157,13 +159,15 @@ async def test_vertex_only_options_are_not_forwarded_on_gemini_api(mocker: Mocke
     client = _single_embedding_client(mocker)
     embedder = Embedder('gemini-embedding-001', client)
 
-    await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
+    await embedder.generate(
+        EmbedRequest(input=[Document.from_text('text')], options=options)  # pyright: ignore[reportArgumentType]
+    )
 
     config = client.aio.models.embed_content.call_args.kwargs['config']
     assert config == genai.types.EmbedContentConfig(task_type='CLUSTERING')
 
 
-def _warnings(entries: list[dict[str, Any]]) -> list[str]:
+def _warnings(entries: Sequence[Mapping[str, Any]]) -> list[str]:
     """Warning events from structlog's captured entries, as formatted messages."""
     return [entry['event'] for entry in entries if entry['log_level'] == 'warning']
 
@@ -248,7 +252,7 @@ async def test_typed_options_instance_is_accepted(mocker: MockerFixture) -> None
     await embedder.generate(
         EmbedRequest(
             input=[Document.from_text('text')],
-            options=EmbeddingConfig(task_type='CLASSIFICATION'),
+            options=EmbeddingConfig(task_type='CLASSIFICATION'),  # pyright: ignore[reportArgumentType]
         )
     )
 

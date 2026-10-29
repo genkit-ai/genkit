@@ -18,12 +18,12 @@
 
 # Base class and framework primitives
 from genkit._core._action import Action, ActionKind
+from genkit._core._base import GenkitConfig
 from genkit._core._compat import StrEnum
 from genkit._core._constants import GENKIT_USER_AGENT
 from genkit._core._dap import DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import StatusName, provider_error
-from genkit._core._logger import get_logger
 from genkit._core._loop_cache import loop_local_client
 from genkit._core._plugin import Plugin
 from genkit._core._schema import to_json_schema
@@ -32,6 +32,7 @@ from genkit._core._typing import ActionMetadata
 __all__ = [
     # Base class and framework primitives
     'Plugin',
+    'GenkitConfig',
     'Action',
     'ActionMetadata',
     'ActionKind',
@@ -41,8 +42,6 @@ __all__ = [
     'StrEnum',
     # Provider failures
     'provider_error',
-    # Logging that also reaches the Dev UI trace panel
-    'get_logger',
     # HTTP / version stamping
     'GENKIT_USER_AGENT',
     # Loop-local caching

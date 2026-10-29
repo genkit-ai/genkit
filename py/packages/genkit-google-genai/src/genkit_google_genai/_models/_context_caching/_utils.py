@@ -25,9 +25,8 @@ from genkit_google_genai._models._context_caching._constants import (
 )
 from google.genai import types as genai_types
 
-from genkit import GenkitError
+from genkit import GenkitError, get_logger
 from genkit.model import ModelRequest
-from genkit.plugin_api import get_logger
 
 logger = get_logger(__name__)
 

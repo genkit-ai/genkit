@@ -317,8 +317,8 @@ class OpenAI(Plugin):
     name = 'openai'
 
     @classmethod
-    def gpt_model(cls, name: KnownGpt | str, *, config: OpenAIConfig | None = None) -> ModelRef[OpenAIConfig]:
-        """Typed ref for an OpenAI chat model, e.g. ``OpenAI.gpt_model('gpt-4o')``.
+    def gpt(cls, name: KnownGpt | str, *, config: OpenAIConfig | None = None) -> ModelRef[OpenAIConfig]:
+        """Typed ref for an OpenAI chat model, e.g. ``OpenAI.gpt('gpt-4o')``.
 
         Chat only: image, TTS, STT, and embedding ids validate different
         request shapes, so binding OpenAIConfig to them would let chat-only
@@ -327,10 +327,10 @@ class OpenAI(Plugin):
         # str(None) is 'None', and that classifies as chat, so a non-string
         # would mint a real-looking ref instead of failing here.
         if not isinstance(name, str):
-            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name must be a string.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt: model name must be a string.')
         local = _strip_ref_prefixes(name)
         if not local:
-            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt_model: model name is required.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='OpenAI.gpt: model name is required.')
         model_type = _classify_model(local)
         if model_type != _ModelType.CHAT:
             kind = {
@@ -342,7 +342,7 @@ class OpenAI(Plugin):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
-                    f"OpenAI.gpt_model: '{local}' is {kind}; it does not take "
+                    f"OpenAI.gpt: '{local}' is {kind}; it does not take "
                     f"OpenAIConfig. Pass it as a string ('openai/{local}')."
                 ),
             )
@@ -629,20 +629,19 @@ class OpenAI(Plugin):
             # Get optional parameters (omit when None; OpenAI create() uses Omit, not None)
             dimensions: int | None = None
             encoding_format: Literal['float'] | None = None
-            if request.options:
-                dim_val = request.options.get('dimensions')
-                if dim_val is not None:
-                    # bool is an int subclass, so True would otherwise pass as 1.
-                    if not isinstance(dim_val, int) or isinstance(dim_val, bool):
-                        raise GenkitError(
-                            status='INVALID_ARGUMENT',
-                            message=f'dimensions must be an int, got {dim_val!r}',
-                        )
-                    dimensions = dim_val
-                # 'base64' is deliberately not forwarded: the SDK sends base64 either
-                # way and only decodes the response when it was not asked explicitly.
-                if request.options.get('encodingFormat') == 'float':
-                    encoding_format = 'float'
+            dim_val = request.options.get('dimensions')
+            if dim_val is not None:
+                # bool is an int subclass, so True would otherwise pass as 1.
+                if not isinstance(dim_val, int) or isinstance(dim_val, bool):
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=f'dimensions must be an int, got {dim_val!r}',
+                    )
+                dimensions = dim_val
+            # 'base64' is deliberately not forwarded: the SDK sends base64 either
+            # way and only decodes the response when it was not asked explicitly.
+            if request.options.get('encodingFormat') == 'float':
+                encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
             client = self._embed_client()

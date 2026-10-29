@@ -25,5 +25,5 @@ Supported models (set `model` in flow input):
 - `googleai/deep-research-pro-preview-12-2025`
 
 This sample talks to Google AI Deep Research, not Vertex. Antigravity and
-Lyria 3 are ordinary `generate` models on the same plugin (`GoogleAI.antigravity_model`,
-`GoogleAI.lyria_model`); they are not in this sample.
+Lyria 3 are ordinary `generate` models on the same plugin (`GoogleAI.antigravity`,
+`GoogleAI.lyria`); they are not in this sample.

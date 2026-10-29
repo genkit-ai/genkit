@@ -20,7 +20,7 @@ This module provides reusable error handling and base utilities for
 trace and metrics exporters, eliminating code duplication.
 """
 
-from genkit.plugin_api import get_logger
+from genkit import get_logger
 
 logger = get_logger(__name__)
 
