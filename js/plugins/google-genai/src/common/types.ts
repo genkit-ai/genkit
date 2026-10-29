@@ -1267,6 +1267,12 @@ export declare interface GenerateContentRequest {
   toolConfig?: ToolConfig;
   /** Optional. Service tier (e.g. 'standard', 'flex', or 'priority'). */
   serviceTier?: string;
+  /**
+   * Optional. googleAI only. Whether the server logs this request for the
+   * API key's project (viewable in AI Studio); overrides the project's
+   * logging setting.
+   */
+  store?: boolean;
 }
 
 /**

@@ -301,7 +301,6 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     def to_sse(self) -> AsyncIterator[str]:
         r"""Frame this stream as Genkit SSE lines (``data: {"message"|"result"|"error": ...}\n\n``)."""
         return _stream_to_sse(self._stream, lambda: self._response)
-
     async def aclose(self) -> None:
         """Close the stream and release any underlying resources."""
         aclose = getattr(self._stream, 'aclose', None)
@@ -1161,7 +1160,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 init=init,
                 input_stream=input_stream,
             )
-
         channel, task = start_stream(run)
         return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
 

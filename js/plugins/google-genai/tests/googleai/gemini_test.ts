@@ -793,31 +793,77 @@ describe('Google AI Gemini', () => {
         );
       });
 
-      it('does not warn about store: false on generateContent models', async () => {
-        const warnStub = sinon.stub(logger, 'warn');
+      // On generateContent, `store` controls whether the server logs the
+      // request for the project; it's sent as is when set.
+      for (const store of [true, false]) {
+        it(`sends store: ${store} to generateContent models, without a warning`, async () => {
+          const warnStub = sinon.stub(logger, 'warn');
+          const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          await model.run({ ...minimalRequest, config: { store } });
+
+          const apiRequest: GenerateContentRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.strictEqual(apiRequest.store, store);
+          assert.ok(
+            !warnStub
+              .getCalls()
+              .some((c) => String(c.args[0]).includes('store')),
+            'store should not warn'
+          );
+        });
+      }
+
+      it('does not send store to generateContent models when it is not set', async () => {
         const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
-        await model.run({ ...minimalRequest, config: { store: false } });
+        await model.run(minimalRequest);
 
-        assert.ok(
-          !warnStub
-            .getCalls()
-            .some((c) => String(c.args[0]).includes('store and previous')),
-          'store: false should not warn'
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
         );
+        assert.strictEqual('store' in apiRequest, false);
       });
 
-      it('warns about store: true on generateContent models', async () => {
+      it('sends the plugin store option to generateContent models; the request config wins', async () => {
+        const model = defineModel('gemini-2.5-flash', {
+          ...defaultPluginOptions,
+          store: false,
+        });
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+        const fromPlugin: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(fromPlugin.store, false);
+
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { store: true } });
+        const fromRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(fromRequest.store, true);
+      });
+
+      it('warns that previousInteractionId is ignored on generateContent models', async () => {
         const warnStub = sinon.stub(logger, 'warn');
         const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
-        await model.run({ ...minimalRequest, config: { store: true } });
+        await model.run({
+          ...minimalRequest,
+          config: { previousInteractionId: 'v1_abc123' },
+        });
 
         assert.ok(
           warnStub
             .getCalls()
-            .some((c) => String(c.args[0]).includes('store and previous')),
-          'store: true should warn'
+            .some((c) =>
+              String(c.args[0]).includes(
+                'previousInteractionId is not supported'
+              )
+            ),
+          'previousInteractionId should warn'
         );
       });
 
