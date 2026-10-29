@@ -24,12 +24,16 @@ from typing import Any, overload
 
 from typing_extensions import TypeVar
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_func_description
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    ActionRunContext,
+    ChunkT,
+    InputT,
+    OutputT,
+    get_func_description,
+)
 from genkit._core._registry import Registry
-
-InputT = TypeVar('InputT', default=Any)
-OutputT = TypeVar('OutputT', default=Any)
-ChunkT = TypeVar('ChunkT', default=Any)
 
 _FlowInputT = TypeVar('_FlowInputT')
 _FlowOutputT = TypeVar('_FlowOutputT')
