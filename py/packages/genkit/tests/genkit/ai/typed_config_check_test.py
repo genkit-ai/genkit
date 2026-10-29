@@ -92,29 +92,15 @@ async def test_generate_with_good_config_reaches_model_as_annotation_class() -> 
 
 
 @pytest.mark.asyncio
-async def test_generate_with_other_models_config_object_converts_when_values_fit() -> None:
-    """Another class's config object converts into the annotation's class when its values fit."""
+async def test_generate_with_other_models_config_object_raises() -> None:
+    """Another class's config object is a caller mistake and raises before the model runs."""
     ai = Genkit()
     sketch, configs = sketch_model()
     ai.define_model('acme/sketch', sketch)
 
-    await ai.generate(model='acme/sketch', prompt='a lighthouse', config=OtherConfig(quality='high'))
+    with pytest.raises(GenkitError, match=r'config must be .*SketchConfig or a mapping, got .*OtherConfig'):
+        await ai.generate(model='acme/sketch', prompt='a lighthouse', config=OtherConfig(quality='high'))
 
-    assert configs == [SketchConfig(quality='high')]
-
-
-@pytest.mark.asyncio
-async def test_generate_with_other_models_config_object_raises_when_values_dont_fit() -> None:
-    """Another class's config object with a value the annotation's class rejects raises up front."""
-    ai = Genkit()
-    sketch, configs = sketch_model()
-    ai.define_model('acme/sketch', sketch)
-
-    with pytest.raises(GenkitError) as exc_info:
-        await ai.generate(model='acme/sketch', prompt='a lighthouse', config=OtherConfig(quality='ultra'))
-
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert "config 'quality'" in str(exc_info.value)
     assert configs == []
 
 
@@ -148,22 +134,22 @@ async def test_prompt_with_bad_call_config_raises_invalid_argument() -> None:
     assert configs == []
 
 
-@pytest.mark.asyncio
-async def test_config_schema_class_still_wins_over_annotation() -> None:
-    """With both, the call is checked against the class passed as config_schema=."""
+def test_config_schema_class_must_match_annotation() -> None:
+    """With both, the class passed as config_schema= must be the annotated class."""
 
     class StrictSketchConfig(BaseModel):
         quality: Literal['high'] = 'high'
 
     ai = Genkit()
-    sketch, configs = sketch_model()
-    ai.define_model('acme/sketch', sketch, config_schema=StrictSketchConfig)
-
-    with pytest.raises(GenkitError) as exc_info:
-        await ai.generate(model='acme/sketch', prompt='a lighthouse', config={'quality': 'low'})
-
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert configs == []
+    sketch, _ = sketch_model()
+    with pytest.raises(
+        GenkitError,
+        match=(
+            r"model 'acme/sketch': config_schema is .*StrictSketchConfig, "
+            r'but the function takes config as .*SketchConfig'
+        ),
+    ):
+        ai.define_model('acme/sketch', sketch, config_schema=StrictSketchConfig)
 
 
 @pytest.mark.asyncio

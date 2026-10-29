@@ -28,7 +28,6 @@ import json
 from typing import Any, Literal, Protocol, cast
 
 import httpx
-import structlog
 from anthropic import (
     APIConnectionError,
     APIError,
@@ -39,7 +38,7 @@ from anthropic import (
 )
 from anthropic.types import Message as AnthropicMessage
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import Constrained, ModelContext, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
 from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
@@ -54,7 +53,7 @@ from genkit_anthropic._utils import (
     to_anthropic_media,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 BETA_APIS: tuple[str, ...] = (

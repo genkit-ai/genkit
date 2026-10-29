@@ -39,7 +39,7 @@ from google.genai.interactions import Interaction
 
 from genkit import GenkitError
 from genkit._core._error import get_callable_json, get_http_status
-from genkit.plugin_api import GENKIT_CLIENT_HEADER
+from genkit.plugin_api import GENKIT_USER_AGENT
 
 
 def test_google_ai_url_defaults() -> None:
@@ -68,7 +68,7 @@ def test_headers_set_api_revision_and_strip_reserved_custom() -> None:
     built = httpx.Headers(result)
     assert built['Api-Revision'] == API_REVISION
     assert built['x-goog-api-key'] == 'k'
-    assert built['x-goog-api-client'] == GENKIT_CLIENT_HEADER
+    assert built['x-goog-api-client'] == GENKIT_USER_AGENT
     assert built['x-custom'] == '1'
 
 

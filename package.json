@@ -31,6 +31,8 @@
     "pre-commit": "pnpm lint-staged"
   },
   "devDependencies": {
+    "@commitlint/cli": "20.5.3",
+    "@commitlint/config-conventional": "20.5.3",
     "@types/node": "22.10.5",
     "inquirer": "^8.2.6",
     "lint-staged": "^17.5.0",

@@ -23,7 +23,7 @@ from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit, ModelResponse, Part
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 
 ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
@@ -34,15 +34,17 @@ class PiiRedactConfig(BaseModel):
     pass
 
 
-@ai.middleware(name='pii_redact')
-class PiiRedact(BaseMiddleware[PiiRedactConfig]):
+@ai.middleware
+class PiiRedact(Middleware[PiiRedactConfig]):
+    name = 'pii_redact'
+
     # The provider sees whatever we put on params.request, including on
     # retries. This is the last place a ticket's email can be removed.
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         new_messages = []
         for message in params.request.messages:

@@ -35,11 +35,10 @@ from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
 from genkit._core._action import Action, ActionKind
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
 from genkit._core._protocols import SessionLike
 from genkit._core._tool import Tool
-from genkit._core._typing import MiddlewareRef
 
 
 def current_session() -> SessionLike | None:
@@ -111,7 +110,7 @@ class Genkit(StableGenkit):
         model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         config: ModelConfigDict,
         max_turns: int | None = None,
         description: str | None = None,
@@ -130,7 +129,7 @@ class Genkit(StableGenkit):
         model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         description: str | None = None,
@@ -148,7 +147,7 @@ class Genkit(StableGenkit):
         model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         system: str | list[Part] | None = None,
         tools: Sequence[str | Tool] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         description: str | None = None,
