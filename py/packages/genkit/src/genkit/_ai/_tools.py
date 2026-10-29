@@ -357,18 +357,32 @@ async def run_tool_after_restart(
     Sets the same context variables as the tool wrapper so ToolRunContext reflects
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
-    tool_req = restart_trp.tool_request
-    if tool_req is None:
-        raise ValueError('run_tool_after_restart needs a tool request part')
     try:
-        raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+        return await run_restarted_tool(tool=tool, restart_trp=restart_trp, ctx=ctx)
     except Interrupt as e:
         logger.debug(
             'restarted tool triggered an interrupt',
-            tool=tool_req.name,
+            tool=restart_trp.tool_request.name if restart_trp.tool_request else tool.name,
         )
         raise restart_interrupt_error(e) from e
 
+
+async def run_restarted_tool(
+    *,
+    tool: Action,
+    restart_trp: Part,
+    ctx: GenerateMiddlewareContext | None = None,
+) -> Part:
+    """Like ``run_tool_after_restart``, but a second Interrupt propagates as is.
+
+    run_restart calls this inside the wrap_tool chain. Converting the Interrupt
+    there would hand middleware an Exception its catch-all could swallow,
+    skipping the approval the restart is asking for.
+    """
+    tool_req = restart_trp.tool_request
+    if tool_req is None:
+        raise ValueError('run_tool_after_restart needs a tool request part')
+    raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
     envelope = as_multipart_tool_response(raw, tool_name=tool_req.name)
     return Part(
         tool_response=ToolResponse(

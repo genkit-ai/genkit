@@ -10,6 +10,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+import anyio
 import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part
@@ -328,6 +329,97 @@ async def test_restarted_tool_catch_all_still_interrupts_again() -> None:
     assert second.error is None
     assert second.interrupts[0].metadata is not None
     assert second.interrupts[0].metadata['interrupt'] == {'reason': 'needs approval', 'order_id': 'A-17'}
+
+
+@pytest.mark.asyncio
+async def test_restart_through_wrap_tool_catch_all_still_interrupts_again() -> None:
+    """On restart, a wrap_tool ``except Exception`` can't swallow the tool's second Interrupt.
+
+    The Interrupt stays raw through the middleware chain and is converted
+    only after it, so generate pauses again instead of the model seeing
+    ``'tool failed'``.
+    """
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.middleware(name='degrade_tool_errors')
+    class DegradeToolErrors(BaseMiddleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: GenerateMiddlewareContext,
+            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            try:
+                return await next_fn(params, ctx)
+            except Exception:  # noqa: BLE001 - the catch-all under test
+                return MultipartToolResponse(output='tool failed')
+
+    @ai.tool(name='refund_order')
+    async def refund_order(inp: dict) -> str:
+        raise Interrupt({'reason': 'needs approval', 'order_id': inp['order_id']})
+
+    pm.responses.append(_refund_request(order_id='A-17', amount=900))
+    first = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
+            use=[MiddlewareRef(name='degrade_tool_errors')],
+        ),
+    )
+    assert first.finish_reason == FinishReason.INTERRUPTED
+
+    second = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=list(first.messages),
+            resume=Resume(restart=[first.interrupts[0].restart()]),
+            use=[MiddlewareRef(name='degrade_tool_errors')],
+        ),
+    )
+    assert second.finish_reason == FinishReason.INTERRUPTED
+    assert second.error is None
+    assert second.interrupts[0].metadata is not None
+    assert second.interrupts[0].metadata['interrupt'] == {'reason': 'needs approval', 'order_id': 'A-17'}
+
+
+@pytest.mark.asyncio
+async def test_interrupt_inside_task_group_fails_the_turn() -> None:
+    """An Interrupt from a task group child fails the turn instead of escaping as a BaseExceptionGroup.
+
+    The group isn't an Exception, so without conversion it would skip every
+    `except Exception` and surface from generate as a raw BaseExceptionGroup.
+    """
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    @ai.tool(name='refund_order')
+    async def refund_order(inp: dict) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, inp['order_id'])
+        return 'refunded'
+
+    pm.responses.append(_refund_request(order_id='A-17', amount=900))
+    r = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
+        ),
+    )
+    assert r.finish_reason == FinishReason.FAILED
+    assert r.error is not None
+    assert r.error.status == 'INTERNAL'
+    assert r.error.details is not None
+    assert r.error.details['reason'] == 'TOOL_FAILED'
 
 
 @pytest.mark.asyncio

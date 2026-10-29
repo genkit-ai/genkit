@@ -49,6 +49,8 @@ from genkit._core._error import (
     ErrorReason,
     GenkitError,
     Interrupt,
+    TaskGroupError,
+    interrupt_escape_error,
     interrupt_outside_tool_error,
     mark_request_error,
 )
@@ -1200,6 +1202,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if self._kind != ActionKind.TOOL:
                     raise interrupt_outside_tool_error(e) from e
                 raise
+            except TaskGroupError as e:
+                # asyncio.TaskGroup / anyio wrap a child's Interrupt in a
+                # BaseExceptionGroup, which every `except Exception` misses.
+                failure = interrupt_escape_error(e)
+                if failure is None:
+                    raise
+                raise failure from e
             if self._strict_io:
                 output = self._validate_output(output)
             latency_ms = (time.perf_counter() - start_time) * 1000
