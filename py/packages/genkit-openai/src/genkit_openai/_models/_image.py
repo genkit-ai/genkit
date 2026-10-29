@@ -35,8 +35,8 @@ from openai import AsyncOpenAI
 from openai.types.images_response import ImagesResponse
 from pydantic import Field
 
-from genkit import ActionRunContext, FinishReason, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
+from genkit import FinishReason, Message, ModelResponse, Part, Role
+from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, Supports
 
 
 class OpenAIDalleConfig(ModelConfig):
@@ -199,7 +199,7 @@ class OpenAIImageModel:
         """The name of the image model."""
         return self._model_name
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Generate images from the request.
 
         Args:

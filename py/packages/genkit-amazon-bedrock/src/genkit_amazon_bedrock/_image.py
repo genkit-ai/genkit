@@ -32,8 +32,8 @@ from typing import Any, Literal, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelRequest
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelConfig, ModelContext, ModelRequest
 from genkit.plugin_api import get_logger
 from genkit_amazon_bedrock._embedders import InvokeModelTransport
 from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
@@ -241,7 +241,7 @@ class BedrockImageModel:
         self._model_id = model_id
         self._transport = transport
 
-    async def generate(self, request: ModelRequest[Any], ctx: ActionRunContext | None = None) -> ModelResponse:
+    async def generate(self, request: ModelRequest[Any], ctx: ModelContext | None = None) -> ModelResponse:
         """Runs an InvokeModel call and returns the generated images.
 
         Args:

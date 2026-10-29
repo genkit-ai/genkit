@@ -39,7 +39,7 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Prompt,
-    ToolRunContext,
+    ToolContext,
     tool,
 )
 from genkit._ai._model import ModelRequest, text_from_message
@@ -396,6 +396,10 @@ async def test_load_nested_prompt() -> None:
         admin_prompt = sub_dir / 'dashboard.prompt'
         admin_prompt.write_text('---\nmodel: echoModel\n---\nWelcome Admin {{name}}')
 
+        dotted_dir = prompt_dir / 'v1.0'
+        dotted_dir.mkdir()
+        (dotted_dir / 'greet.fun.prompt').write_text('---\nmodel: echoModel\n---\nHello from v1.0')
+
         load_prompt_folder(ai, prompt_dir)
 
         # Test loading nested prompt
@@ -405,6 +409,10 @@ async def test_load_nested_prompt() -> None:
 
         assert 'Welcome Admin' in response.text
         assert 'SuperUser' in response.text
+
+        # The variant comes from the file name, not from a dot in the directory.
+        rendered = await (await prompt(ai._registry, 'v1.0/greet', variant='fun')).render()
+        assert text_from_message(rendered.messages[0]) == 'Hello from v1.0'
 
 
 @pytest.mark.asyncio
@@ -431,6 +439,32 @@ async def test_load_and_use_partial() -> None:
 
         # The partial should be included in the output
         assert 'Hello from partial' in response.text or 'space' in response.text
+
+
+@pytest.mark.asyncio
+async def test_load_nested_partials() -> None:
+    """Nested partials register under their full name and, when free, their short name."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        (prompt_dir / 'a').mkdir(parents=True)
+        (prompt_dir / 'b').mkdir()
+        (prompt_dir / '_greeting.prompt').write_text('root greeting')
+        (prompt_dir / 'a' / '_greeting.prompt').write_text('a greeting')
+        (prompt_dir / 'a' / '_system.prompt').write_text('a system')
+        (prompt_dir / 'b' / '_system.prompt').write_text('b system')
+        (prompt_dir / 'main.prompt').write_text(
+            '---\nmodel: echoModel\n---\n{{> a/system}}|{{> b/system}}|{{> system}}|{{> greeting}}|{{> a/greeting}}'
+        )
+
+        load_prompt_folder(ai, prompt_dir)
+
+        rendered = await (await prompt(ai._registry, 'main')).render()
+
+        # Full names always resolve; short names go to the root partial first,
+        # then to the first nested partial in walk order.
+        assert text_from_message(rendered.messages[0]) == 'a system|b system|a system|root greeting|a greeting'
 
 
 @pytest.mark.asyncio
@@ -1378,7 +1412,7 @@ def _allergy_check_prompt(ai: Genkit, pm: ScriptedModel, seen: list[tuple[str, d
             return await next_fn(params, ctx)
 
     @ai.tool(name='check_allergies')
-    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def check_allergies(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(('tool', dict(ctx.context)))
         return 'no nuts'
 

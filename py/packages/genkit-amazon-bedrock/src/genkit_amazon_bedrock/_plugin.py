@@ -24,9 +24,9 @@ InvokeModel.
 
 from typing import TYPE_CHECKING, Literal
 
-from genkit import ActionRunContext, ModelResponse
+from genkit import ModelResponse
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
-from genkit.model import ModelRequest, model as create_model, model_action_metadata
+from genkit.model import ModelContext, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
     ActionKind,
@@ -208,7 +208,7 @@ class Bedrock(Plugin):
         model_info = get_model_info(model_id, model_type)
         config_schema = _config_schema(model_type)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             if model_type == 'image':
                 image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
                 return await image_model.generate(request, ctx)

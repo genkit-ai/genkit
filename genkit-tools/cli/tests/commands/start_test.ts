@@ -74,6 +74,7 @@ describe('start command', () => {
     start.setOptionValue('experimentalAuth', undefined);
     start.setOptionValue('writeEnvFile', undefined);
     start.setOptionValue('noui', false);
+    start.setOptionValue('experimentalUseOtel', undefined);
   });
 
   afterEach(() => {
@@ -214,6 +215,71 @@ describe('start command', () => {
       );
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining('--experimental-auth has no effect')
+      );
+    });
+  });
+
+  describe('--experimental-use-otel', () => {
+    const otelEnvVars = {
+      GENKIT_ENV: 'dev',
+      GENKIT_TELEMETRY_SERVER: '',
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:
+        'http://localhost:4033/api/otlp/v1/traces',
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: 'http/json',
+    };
+
+    beforeEach(() => {
+      jest.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
+        envVars: otelEnvVars,
+        telemetryServerUrl: 'http://localhost:4033',
+        reflectionV2Port: 3200,
+      });
+    });
+
+    it('gives the generic warning when it spawns the app', async () => {
+      await start.parseAsync([
+        'node',
+        'genkit',
+        '--experimental-use-otel',
+        'run',
+        'app',
+      ]);
+
+      expect(startDevProcessManagerSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ experimentalUseOtel: true })
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Native Genkit Dev UI tracing is off')
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('export OTEL_')
+      );
+    });
+
+    it('prints the vars to export when nothing can hand them to the app', async () => {
+      start.parseAsync(['node', 'genkit', '--noui', '--experimental-use-otel']);
+      await waitForCall(startManagerSpy);
+
+      expect(startManagerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ experimentalUseOtel: true })
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('cannot hand the OTLP endpoints to your app')
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          '  export OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4033/api/otlp/v1/traces\n' +
+            '  export OTEL_EXPORTER_OTLP_TRACES_PROTOCOL=http/json'
+        )
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('  export GENKIT_TELEMETRY_SERVER=\n')
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining('GENKIT_ENV')
       );
     });
   });

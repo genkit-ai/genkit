@@ -19,10 +19,10 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Generic, TypeVar, cast, overload
+from typing import Any, TypeVar, overload
 
-from genkit._core._action import Action, ActionRunContext
-from genkit._core._flow import define_flow
+from genkit._core._action import ActionRunContext
+from genkit._core._flow import Flow, define_flow
 from genkit._core._registry import Registry
 
 # TypeVars for generic input/output typing
@@ -39,52 +39,49 @@ class _FlowDecorator:
         self._name = name
         self._description = description
 
-    # Overload order matters: pyright picks the first matching overload, and a
-    # flow with a defaulted input arg (`async def f(x: str = '...') -> ...`)
-    # is structurally callable as both 1-arg and 0-arg. We list the most
-    # specific shapes first so the input type stays as the caller wrote it
-    # instead of collapsing to `None`.
+    # Overload order matters: checkers pick the first matching overload.
+    #
+    # - A flow with a defaulted input (`async def f(x: str = '...')`) is
+    #   callable as both 1-arg and 0-arg, so the 1-arg shapes come first and
+    #   the input type stays as written instead of collapsing to `None`.
+    # - `(x: Any)` and `(x: object)` also accept a FlowContext, so they'd match
+    #   the ctx-only shape and type as Flow[None, ...]. The `object` shapes
+    #   come first and catch them as Flow[Any, ...]. A real `(ctx: FlowContext)`
+    #   can't take an `object`, so it skips them.
+    # - ty follows the typing spec's overload rule for Any: `(x: Any)` matches
+    #   overloads with different returns, so ty types it Unknown. That's the
+    #   best any arrangement can do there without breaking `(ctx: FlowContext)`.
     @overload
-    def __call__(self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
+    def __call__(
+        self, func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]]
+    ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
-    def __call__(self, func: Callable[[ActionRunContext, InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
+    def __call__(
+        self, func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]]
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
-    def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT]: ...
+    def __call__(
+        self, func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]]
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
-    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Action[None, OutputT]: ...
+    def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Flow[Any, OutputT]: ...
 
-    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Action[Any, Any]:
+    @overload
+    def __call__(
+        self, func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]]
+    ) -> Flow[None, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Flow[InputT, OutputT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Flow[None, OutputT]: ...
+
+    @overload
+    def __call__(self, func: Callable[..., Awaitable[OutputT]]) -> Flow[Any, OutputT, Any]: ...
+
+    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Flow[Any, Any, Any]:
         return define_flow(self._registry, func, self._name, self._description)
-
-
-class _FlowDecoratorWithChunk(Generic[ChunkT]):
-    """Decorator class for streaming flow registration with chunk type inference."""
-
-    def __init__(self, registry: Registry, name: str | None, description: str | None, chunk_type: type[ChunkT]) -> None:
-        self._registry = registry
-        self._name = name
-        self._description = description
-        self._chunk_type = chunk_type
-
-    @overload
-    def __call__(
-        self, func: Callable[[InputT, ActionRunContext], Awaitable[OutputT]]
-    ) -> Action[InputT, OutputT, ChunkT]: ...
-
-    @overload
-    def __call__(
-        self, func: Callable[[ActionRunContext, InputT], Awaitable[OutputT]]
-    ) -> Action[InputT, OutputT, ChunkT]: ...
-
-    @overload
-    def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Action[InputT, OutputT, ChunkT]: ...
-
-    @overload
-    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Action[None, OutputT, ChunkT]: ...
-
-    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Action[Any, Any, ChunkT]:
-        # Cast is safe: chunk_type is purely for static typing, runtime behavior is identical
-        return cast(Action[Any, Any, ChunkT], define_flow(self._registry, func, self._name, self._description))

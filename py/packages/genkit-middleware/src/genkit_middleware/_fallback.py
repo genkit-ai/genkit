@@ -136,7 +136,7 @@ class Fallback(Middleware[FallbackConfig]):
                 {**dict(params.request), 'config': fallback_request_config(entry) or {}},
             )
             try:
-                result = await fallback_action.run(
+                result = await fallback_action._run(
                     input=fallback_request,
                     context=ctx.context,
                     on_chunk=on_chunk,

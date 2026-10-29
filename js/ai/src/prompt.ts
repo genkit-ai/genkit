@@ -432,6 +432,16 @@ function definePromptAsync<
   return executablePrompt;
 }
 
+/**
+ * Strips the variant from a prompt name such as `support/main.casual`. The
+ * variant follows the first dot of the last path segment, so a directory such
+ * as `v1.0/` stays part of the name.
+ */
+function withoutVariant(name: string): string {
+  const dot = name.indexOf('.', name.lastIndexOf('/') + 1);
+  return dot === -1 ? name : name.substring(0, dot);
+}
+
 function promptMetadata(options: PromptConfig<any, any, any>) {
   const metadata = {
     ...options.metadata,
@@ -441,9 +451,7 @@ function promptMetadata(options: PromptConfig<any, any, any>) {
       input: {
         schema: options.input ? toJsonSchema(options.input) : undefined,
       },
-      name: options.name.includes('.')
-        ? options.name.split('.')[0]
-        : options.name,
+      name: withoutVariant(options.name),
       model: modelName(options.model),
       tools: (options.tools ?? []).map(toolName).filter(Boolean) as string[],
       toolChoice: options.toolChoice,
@@ -778,45 +786,74 @@ export function loadPromptFolder(
     loadPromptFolderRecursively(registry, dir, ns, '');
   }
 }
+
+/**
+ * Loads the prompts and partials in `subDir` of `dir`, then recurses into its
+ * subdirectories.
+ *
+ * A partial file `_name.prompt` in subdirectory `sub` registers as `sub/name`.
+ * It also registers as `name` if no other partial has that name yet. Root-level
+ * partials load first, so they keep their name. When two nested partials share
+ * a base name, only the first one in walk order gets the short name.
+ */
 export function loadPromptFolderRecursively(
   registry: Registry,
   dir: string,
   ns: string,
-  subDir: string
+  subDir: string,
+  partials = new Set<string>()
 ): void {
   const promptsPath = resolve(dir);
-  const dirEnts = readdirSync(join(promptsPath, subDir), {
-    withFileTypes: true,
-  });
+  const parentPath = join(promptsPath, subDir);
+  // Subdirectory paths use "/" on every platform because they become prompt
+  // and partial names.
+  const prefix = subDir ? `${subDir}/` : '';
+  // Sorted so that the walk order, and with it which partial gets a short
+  // name, does not depend on the filesystem.
+  const dirEnts = readdirSync(parentPath, { withFileTypes: true }).sort(
+    (a, b) => (a.name < b.name ? -1 : 1)
+  );
+  // Files load before subdirectories so that a shallower partial claims its
+  // short name first.
   for (const dirEnt of dirEnts) {
-    const parentPath = join(promptsPath, subDir);
     const fileName = dirEnt.name;
-    if (dirEnt.isFile() && fileName.endsWith('.prompt')) {
-      if (fileName.startsWith('_')) {
-        const partialName = fileName.substring(1, fileName.length - 7);
-        definePartial(
-          registry,
-          partialName,
-          readFileSync(join(parentPath, fileName), {
-            encoding: 'utf8',
-          })
-        );
+    if (!dirEnt.isFile() || !fileName.endsWith('.prompt')) {
+      continue;
+    }
+    if (!fileName.startsWith('_')) {
+      // If this prompt is in a subdirectory, we need to include that
+      // in the namespace to prevent naming conflicts.
+      loadPrompt(registry, promptsPath, fileName, prefix, ns);
+      continue;
+    }
+    const filePath = join(parentPath, fileName);
+    const shortName = fileName.substring(1, fileName.length - 7);
+    const names = [`${prefix}${shortName}`];
+    if (subDir) {
+      if (partials.has(shortName)) {
         logger.debug(
-          `Registered Dotprompt partial "${partialName}" from "${join(parentPath, fileName)}"`
+          `Dotprompt partial name "${shortName}" is taken, registering "${names[0]}" from "${filePath}" only`
         );
       } else {
-        // If this prompt is in a subdirectory, we need to include that
-        // in the namespace to prevent naming conflicts.
-        loadPrompt(
-          registry,
-          promptsPath,
-          fileName,
-          subDir ? `${subDir}/` : '',
-          ns
-        );
+        names.push(shortName);
       }
-    } else if (dirEnt.isDirectory()) {
-      loadPromptFolderRecursively(registry, dir, ns, join(subDir, fileName));
+    }
+    const source = readFileSync(filePath, { encoding: 'utf8' });
+    for (const name of names) {
+      definePartial(registry, name, source);
+      partials.add(name);
+      logger.debug(`Registered Dotprompt partial "${name}" from "${filePath}"`);
+    }
+  }
+  for (const dirEnt of dirEnts) {
+    if (dirEnt.isDirectory()) {
+      loadPromptFolderRecursively(
+        registry,
+        dir,
+        ns,
+        `${prefix}${dirEnt.name}`,
+        partials
+      );
     }
   }
 }
@@ -844,14 +881,17 @@ function loadPrompt(
   prefix = '',
   ns = 'dotprompt'
 ): void {
-  let name = `${prefix ?? ''}${basename(filename, '.prompt')}`;
+  // The variant comes from the file name only, so a directory such as "v1.0/"
+  // stays part of the name.
+  let name = basename(filename, '.prompt');
   let variant: string | null = null;
   if (name.includes('.')) {
     const parts = name.split('.');
     name = parts[0];
     variant = parts[1];
   }
-  const source = readFileSync(join(path, prefix ?? '', filename), 'utf8');
+  name = `${prefix}${name}`;
+  const source = readFileSync(join(path, prefix, filename), 'utf8');
   const parsedPrompt = registry.dotprompt.parse(source);
   definePromptAsync(
     registry,
