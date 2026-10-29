@@ -58,10 +58,11 @@ provider name you registered the server under, `everything` here. The separator 
 because Gemini and OpenAI reject a `/` in a function declaration name. A prefix holding a character
 they reject fails when the client is defined, rather than on your first `generate`. A tool name the
 server lists with such a character, such as `look.up`, has it rewritten to an underscore with a
-warning. Two tools that then share a name, such as `look.up` and `look/up`, fail the listing. Length
-is not checked at definition, because the tool half of the name is unknown until the server lists
-it. A `<prefix>_<tool>` longer than 64 characters is warned about when the tools are listed and
-passed through, so the provider's 400 arrives on `generate`. Nor are names checked across servers: a
+warning. Two tools that then share a name, such as `look.up` and `look/up`, are both left out with a
+warning, since either could answer a call meant for the other. Length is not checked at definition,
+because the tool half of the name is unknown until the server lists it. A `<prefix>_<tool>` longer
+than 64 characters is warned about when the tools are listed and passed through, so the provider's
+400 arrives on `generate`. Nor are names checked across servers: a
 prefix `fake` with a tool `await_stall` and a prefix `fake_await` with a tool `stall` both make
 `fake_await_stall`, and `generate` refuses to bind both. Each prefix names one provider, so a second
 client under a name already registered fails when it is defined, unless the client holding the name
