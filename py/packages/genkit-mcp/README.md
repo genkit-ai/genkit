@@ -91,5 +91,5 @@ status: core finds no action for a closed client or a server that cannot start.
 
 Nothing needs closing at exit. Call `close()` when you are done with a server before your process
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,
-and a closed client's tools can no longer be selected by a flow. Whether the Dev UI lists a
-provider's tools at all depends on core registry support, closed or not.
+and a closed client's tools can no longer be selected by a flow. The Dev UI lists each registered
+client's tools, and none for a closed one or one whose server cannot start.
