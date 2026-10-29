@@ -41,8 +41,6 @@
 
 ::: genkit.Interrupt
 
-::: genkit.tool_response
-
 ::: genkit.MultipartToolResponse
 
 ::: genkit.ActionRunContext

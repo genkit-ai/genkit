@@ -40,8 +40,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.formats, genki
 
 ::: genkit.Interrupt
 
-::: genkit.tool_response
-
 ::: genkit.MultipartToolResponse
 
 ::: genkit.ActionRunContext

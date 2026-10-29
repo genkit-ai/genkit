@@ -18,7 +18,9 @@
 
 import abc
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic
+
+from typing_extensions import TypeVar
 
 from genkit._ai._model import (
     Message,
@@ -40,8 +42,8 @@ class FormatterConfig(GenkitModel):
     default_instructions: bool | str | None = None
 
 
-OutputT = TypeVar('OutputT')
-ChunkT = TypeVar('ChunkT')
+OutputT = TypeVar('OutputT', default=Any)
+ChunkT = TypeVar('ChunkT', default=Any)
 
 
 class FormatHandler(Generic[OutputT, ChunkT]):
