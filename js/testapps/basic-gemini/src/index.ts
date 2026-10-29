@@ -16,18 +16,10 @@
 
 import { googleAI, type UrlCitation } from '@genkit-ai/google-genai';
 import * as fs from 'fs';
-import {
-  Document,
-  genkit,
-  z,
-  type MediaPart,
-  type Operation,
-  type Part,
-  type StreamingCallback,
-} from 'genkit';
+import { Document, genkit, z, type MediaPart } from 'genkit';
 import { fallback, retry } from 'genkit/model/middleware';
 import { Readable } from 'stream';
-import wav from 'wav';
+import { pipeline } from 'stream/promises';
 import {
   createFileSearchStore,
   deleteFileSearchStore,
@@ -227,6 +219,28 @@ ai.defineFlow('multi-turn-previous-interaction', async () => {
   };
 });
 
+// Agentic video understanding: instead of reading frames at a fixed rate, the
+// model explores the video and loads only what it needs (better for long
+// videos). Set per video with `metadata.processing` ('agentic' or 'static',
+// the default). The model's loading steps come back as custom
+// processingCall / processingResult parts, which are resent as they are in
+// follow-up turns; usage.custom.toolUseTokens counts what was loaded.
+ai.defineFlow('agentic-video-understanding', async () => {
+  const { text, usage } = await ai.generate({
+    model: googleAI.model('gemini-4-argon'),
+    prompt: [
+      {
+        media: { url: 'https://www.youtube.com/watch?v=QO30-W3b_vw' },
+        metadata: { processing: 'agentic' },
+      },
+      {
+        text: 'What happens in this video? List the main moments with timestamps (MM:SS).',
+      },
+    ],
+  });
+  return { text, toolUseTokens: usage.custom?.toolUseTokens };
+});
+
 ai.defineFlow('maps-grounding', async () => {
   const { text, raw } = await ai.generate({
     model: googleAI.model('gemini-3.1-pro-preview'),
@@ -277,8 +291,10 @@ function isUrlCitation(annotation: unknown): annotation is UrlCitation {
   );
 }
 
-// Streams a response that uses the built-in Google Search tool. Citations
-// arrive at the end of the stream and are attached to the final text part.
+// Streams a response that uses the built-in Google Search tool. Each search
+// is streamed as a `googleSearchCall` part (with its queries) when it
+// finishes. Citations arrive at the end of the stream and are attached to
+// the final text part.
 ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
   const { stream, response } = ai.generateStream({
     model: googleAI.model('gemini-3.6-flash'),
@@ -291,6 +307,13 @@ ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
   });
 
   for await (const chunk of stream) {
+    for (const part of chunk.content) {
+      const queries: unknown =
+        part.custom?.googleSearchCall?.arguments?.queries;
+      if (Array.isArray(queries)) {
+        sendChunk(`[Searching: ${queries.join(', ')}]\n`);
+      }
+    }
     if (chunk.text) {
       sendChunk(chunk.text);
     }
@@ -306,6 +329,39 @@ ai.defineFlow('streaming-google-search', async (_, { sendChunk }) => {
     text,
     citations: citations.map(({ title, url }) => ({ title, url })),
   };
+});
+
+// A tool that fails, and a generate call that reports the failure on the
+// response instead of throwing: `res.error` says what broke, and
+// `res.messages` is the conversation up to the last finished tool round, so
+// it can be sent again once the service is back.
+const flakyLookup = ai.defineTool(
+  {
+    name: 'flakyLookup',
+    description: 'Looks up the local time in a city; the service is down.',
+    inputSchema: z.object({ city: z.string() }),
+    outputSchema: z.string(),
+  },
+  async () => {
+    throw new Error('time service unavailable');
+  }
+);
+
+ai.defineFlow('tool-failure-on-response', async () => {
+  const res = await ai.generate({
+    model: googleAI.model('gemini-flash-latest'),
+    prompt: 'What time is it in Tokyo? Use the flakyLookup tool.',
+    tools: [flakyLookup],
+    throwOnError: false,
+  });
+  if (res.error) {
+    return {
+      finishReason: res.finishReason,
+      error: res.error,
+      keptMessages: res.messages.map((m) => m.role),
+    };
+  }
+  return { text: res.text };
 });
 
 ai.defineFlow('basic-hi', async () => {
@@ -433,6 +489,29 @@ ai.defineFlow('multimodal-input', async () => {
         media: {
           contentType: 'image/jpeg',
           url: `data:image/jpeg;base64,${photoBase64}`,
+        },
+      },
+    ],
+  });
+
+  return text;
+});
+
+// A Word document as inline media. Office documents (Word, Excel, ...) are
+// sent as `document` content with their content type.
+ai.defineFlow('word-document-input', async () => {
+  const docxBase64 = fs.readFileSync('story.docx', { encoding: 'base64' });
+  const contentType =
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+  const { text } = await ai.generate({
+    model: googleAI.model('gemini-3.8-flash'),
+    prompt: [
+      { text: 'Summarize this document in three sentences.' },
+      {
+        media: {
+          contentType,
+          url: `data:${contentType};base64,${docxBase64}`,
         },
       },
     ],
@@ -790,7 +869,10 @@ ai.defineFlow(
   }
 );
 
-// Gemini reasoning example (legacy thinkingBudget)
+// Gemini reasoning example (legacy thinkingBudget). Kept on purpose:
+// thinkingBudget only works on generateContent models, which are all Gemini
+// 2.5 (legacy) now; newer models use thinkingLevel (see 'thinking-level').
+// Gemini 2.5 is only available to accounts that used it before.
 ai.defineFlow('reasoning - thinkingBudget', async (_, { sendChunk }) => {
   const { message } = await ai.generate({
     prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
@@ -808,7 +890,7 @@ ai.defineFlow('reasoning - thinkingBudget', async (_, { sendChunk }) => {
 });
 
 // Media resolution
-ai.defineFlow('gemini-media-resolution', async (_) => {
+ai.defineFlow('media-resolution', async (_) => {
   const plant = fs.readFileSync('palm_tree.png', { encoding: 'base64' });
   const { text } = await ai.generate({
     model: googleAI.model('gemini-3.1-pro-preview'),
@@ -832,13 +914,13 @@ ai.defineFlow('gemini-media-resolution', async (_) => {
   return text;
 });
 
-// Image editing with Gemini.
-ai.defineFlow('gemini-image-editing', async (_) => {
+// Image editing: combine two input images.
+ai.defineFlow('image-editing', async (_) => {
   const plant = fs.readFileSync('palm_tree.png', { encoding: 'base64' });
   const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
 
   const { media } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash-image'),
+    model: googleAI.model('gemini-nano-banana-2.1'),
     prompt: [
       { text: 'add the plant to my room' },
       { media: { url: `data:image/png;base64,${plant}` } },
@@ -854,8 +936,8 @@ ai.defineFlow('gemini-image-editing', async (_) => {
   return media;
 });
 
-// Nano banana pro config
-ai.defineFlow('nano-banana-pro', async (_) => {
+// Image aspect ratio and size
+ai.defineFlow('image-config', async (_) => {
   const { media } = await ai.generate({
     model: googleAI.model('gemini-3-pro-image'),
     prompt: 'Generate a picture of a sunset in the mountains by a lake',
@@ -870,8 +952,12 @@ ai.defineFlow('nano-banana-pro', async (_) => {
   return media;
 });
 
-// webSearch and imageSearch with Nano Banana 2
-ai.defineFlow('nano-banana-2', async (_) => {
+// Image generation grounded with Google Search (web and image search).
+// Stays on gemini-3.1-flash-image (deprecated) for now: with Google Search,
+// gemini-nano-banana-2.1 currently asks the client to run the search
+// (a `google:search` function call) instead of running it on the server, even
+// for the docs example (checked Oct 2026; reported). Move to 2.1 once fixed.
+ai.defineFlow('image-search-grounding', async (_) => {
   const { media } = await ai.generate({
     model: googleAI.model('gemini-3.1-flash-image'),
     prompt:
@@ -895,7 +981,8 @@ ai.defineFlow('nano-banana-2', async (_) => {
   return media;
 });
 
-ai.defineFlow('nano-banana-2-lite', async (_) => {
+// Image generation with thought summaries.
+ai.defineFlow('image-thinking', async (_) => {
   const { media } = await ai.generate({
     model: googleAI.model('gemini-3.1-flash-lite-image'),
     prompt: 'Generate an image of the CN Tower. ',
@@ -915,17 +1002,18 @@ ai.defineFlow('nano-banana-2-lite', async (_) => {
   return media;
 });
 
-// A simple example of image generation with Gemini.
-ai.defineFlow('imagen-image-generation', async (_) => {
+// A simple example of image generation.
+ai.defineFlow('image-generation', async (_) => {
   const { media } = await ai.generate({
-    model: googleAI.model('imagen-4.0-generate-001'),
+    model: googleAI.model('gemini-nano-banana-2.1'),
     prompt: `generate an image of a banana riding a bicycle`,
   });
 
   return media;
 });
 
-// TTS sample with speech Config
+// TTS sample with a prebuilt voice. The 3.8 TTS models return a complete WAV
+// file, so the media URL can be used directly.
 ai.defineFlow(
   {
     name: 'tts-Algenib',
@@ -938,9 +1026,9 @@ ai.defineFlow(
   },
   async (prompt) => {
     const { media } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      model: googleAI.model('gemini-3.8-flash-lite-tts'),
       config: {
-        // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation#javascript
+        // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: { voiceName: 'Algenib' },
@@ -952,17 +1040,12 @@ ai.defineFlow(
     if (!media) {
       throw new Error('no media returned');
     }
-    const audioBuffer = Buffer.from(
-      media.url.substring(media.url.indexOf(',') + 1),
-      'base64'
-    );
-    return {
-      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
-    };
+    return { media: media.url };
   }
 );
 
-// TTS sample with default voice
+// TTS sample with default voice. Uses the Interactions API, which returns a
+// complete WAV file, so the media URL can be used directly (no toWav()).
 ai.defineFlow(
   {
     name: 'tts-default-voice',
@@ -975,75 +1058,60 @@ ai.defineFlow(
   },
   async (prompt) => {
     const { media } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      model: googleAI.model('gemini-3.8-flash-tts'),
       prompt,
     });
     if (!media) {
       throw new Error('no media returned');
     }
-    const audioBuffer = Buffer.from(
-      media.url.substring(media.url.indexOf(',') + 1),
-      'base64'
-    );
-    return {
-      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
-    };
+    return { media: media.url };
   }
 );
 
+// Expressive TTS with the 3.8 models: the text is read verbatim, so delivery
+// goes in speechMetadata.style (not in the text), point-in-time vocal events
+// are inline angle-bracket tags (<laugh>, <short pause>, ...), and CAPITALS
+// add emphasis. Changing style mid-script means splitting it into turns.
 ai.defineFlow(
   {
     name: 'tts-audio-tags',
-    inputSchema: z.string().default(
-      `DIRECTOR'S NOTES
-Style:
-* The "Vocal Smile": You must hear the grin in the audio. The soft palate is
-always raised to keep the tone bright, sunny, and explicitly inviting.
-* Dynamics: High projection without shouting. Punchy consonants and elongated
-vowels on excitement words (e.g., "Beauuutiful morning").
-
-Pace: Speaks at an energetic pace, keeping up with the fast music.  Speaks
-with A "bouncing" cadence. High-speed delivery with fluid transitions — no dead
-air, no gaps.
-
-Accent: Jaz is from Brixton, London
-
-SAMPLE CONTEXT
-Jaz is the industry standard for Top 40 radio, high-octane event promos, or any
-script that requires a charismatic Estuary accent and 11/10 infectious energy.
-
-TRANSCRIPT
-[excitedly] Yes, massive vibes in the studio! You are locked in and it is
-absolutely popping off in London right now. If you're stuck on the tube, or
-just sat there pretending to work... stop it. Seriously, I see you.
-[shouting] Turn this up! We've got the project roadmap landing in three,
-two... let's go!`
-    ),
     outputSchema: z.object({ media: z.string() }),
   },
-  async (prompt: string) => {
+  async () => {
     const { media } = await ai.generate({
-      model: googleAI.model('gemini-3.1-flash-tts-preview'),
-      prompt,
-      config: {
-        // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation#javascript
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Puck' },
+      model: googleAI.model('gemini-3.8-flash-tts'),
+      prompt: [
+        {
+          text:
+            'Yes, MASSIVE vibes in the studio! <laugh> You are locked in and ' +
+            "it is absolutely popping off in London right now. If you're " +
+            'stuck on the tube, or just sat there pretending to work... ' +
+            '<short pause> stop it. Seriously, I see you.',
+          metadata: {
+            speechMetadata: {
+              style:
+                'energetic Top 40 radio DJ with a Brixton London accent, ' +
+                'bright and grinning, fast bouncing pace',
+            },
           },
+        },
+        {
+          text:
+            "Turn this UP! We've got the project roadmap landing in three, " +
+            "two... <cheer> let's go!",
+          metadata: { speechMetadata: { style: 'shouting with excitement' } },
+        },
+      ],
+      config: {
+        speechConfig: {
+          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
         },
       },
     });
     if (!media) {
       throw new Error('no media returned');
     }
-    const audioBuffer = Buffer.from(
-      media.url.substring(media.url.indexOf(',') + 1),
-      'base64'
-    );
-    return {
-      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
-    };
+    return { media: media.url };
   }
 );
 
@@ -1104,11 +1172,11 @@ ai.defineFlow(
             speakerVoiceConfigs: [
               {
                 speaker: 'Joe',
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
               },
               {
                 speaker: 'Jane',
-                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
               },
             ],
           },
@@ -1122,250 +1190,201 @@ ai.defineFlow(
   }
 );
 
-async function toWav(
-  pcmData: Buffer,
-  channels = 1,
-  rate = 24000,
-  sampleWidth = 2
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // This code depends on `wav` npm library.
-    const writer = new wav.Writer({
-      channels,
-      sampleRate: rate,
-      bitDepth: sampleWidth * 8,
+// Streamed multi-speaker TTS. Audio chunks arrive while the speech is being
+// generated, so a client can start playing right away; the final response
+// joins them into one part. Streaming defaults to raw PCM (audio/l16); asking
+// for audio/wav makes the final response a playable WAV file, like a
+// non-streamed response (the chunks are still mostly raw PCM).
+ai.defineFlow(
+  {
+    name: 'tts-streaming',
+    outputSchema: z.object({ chunkCount: z.number(), media: z.string() }),
+  },
+  async (_, { sendChunk }) => {
+    const { response, stream } = ai.generateStream({
+      model: googleAI.model('gemini-3.8-flash-lite-tts'),
+      prompt: [
+        {
+          text: "How's it going today, Jane?",
+          metadata: { speechMetadata: { speaker: 'Joe' } },
+        },
+        {
+          text: 'Not too bad, how about you?',
+          metadata: { speechMetadata: { speaker: 'Jane' } },
+        },
+      ],
+      config: {
+        speechConfig: {
+          multiSpeakerVoiceConfig: {
+            speakerVoiceConfigs: [
+              {
+                speaker: 'Joe',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
+              },
+              {
+                speaker: 'Jane',
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+              },
+            ],
+          },
+        },
+        audioFormat: { mimeType: 'audio/wav' },
+      },
     });
 
-    let bufs = [] as any[];
-    writer.on('error', reject);
-    writer.on('data', function (d) {
-      bufs.push(d);
-    });
-    writer.on('end', function () {
-      resolve(Buffer.concat(bufs).toString('base64'));
-    });
+    let chunkCount = 0;
+    for await (const chunk of stream) {
+      // A real client would play chunk.media here. Report progress only, to
+      // keep the stream small.
+      chunkCount++;
+      sendChunk(`chunk ${chunkCount}: ${chunk.media?.contentType}`);
+    }
 
-    writer.write(pcmData);
-    writer.end();
+    const { media } = await response;
+    if (!media) {
+      throw new Error('no media returned');
+    }
+    return { chunkCount, media: media.url };
+  }
+);
+
+// Video generation with Gemini Omni. Unlike Veo, it isn't a background model:
+// ai.generate() returns the video directly, as an inline MP4 (a data URL) by
+// default, which plays in the Dev UI. The flows use 360p to keep them fast;
+// see videoFormat for other sizes.
+ai.defineFlow('omni-text-to-video', async () => {
+  const { media } = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
+    prompt:
+      'A paper boat floating down a rain-filled gutter, continuous shot, with the sound of rain.',
+    config: {
+      videoFormat: { aspectRatio: '9:16', resolution: '360p' },
+    },
   });
-}
+  if (!media) {
+    throw new Error('no video returned');
+  }
+  // To save an inline video to a file instead:
+  // fs.writeFileSync(
+  //   'omni-text-to-video.mp4',
+  //   Buffer.from(media.url.substring(media.url.indexOf(',') + 1), 'base64')
+  // );
+  return media;
+});
 
-// An example of using Ver 3 model to make a static photo move.
-ai.defineFlow('photo-move-veo', async (_, { sendChunk }) => {
-  const startingImage = fs.readFileSync('woman.png', { encoding: 'base64' });
-
-  let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-lite-generate-preview'),
+// Brings a still image to life: the image is used as the starting frame.
+ai.defineFlow('omni-image-to-video', async () => {
+  // A living room with a grey sofa in front of sheer white curtains.
+  const room = fs.readFileSync('my_room.png', { encoding: 'base64' });
+  const { media } = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
     prompt: [
       {
-        text: 'make the subject in the photo move',
+        media: {
+          url: `data:image/png;base64,${room}`,
+          contentType: 'image/png',
+        },
       },
       {
-        media: {
-          contentType: 'image/png',
-          url: `data:image/png;base64,${startingImage}`,
-        },
+        text: 'Use this image as the starting frame. A ginger cat walks in, jumps up onto the sofa and curls up on a cushion. The curtains move slightly in a breeze. Single continuous shot, no cuts, with soft room sound and a quiet purr.',
       },
     ],
     config: {
-      resolution: '1080p',
-      durationSeconds: 8,
-      aspectRatio: '9:16',
-      personGeneration: 'allow_adult',
-      seed: 42,
+      // Optional: the model infers the task from the prompt if it isn't set.
+      videoConfig: { task: 'image_to_video' },
+      videoFormat: { resolution: '360p' },
     },
   });
-
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
+  if (!media) {
+    throw new Error('no video returned');
   }
-
-  while (!operation.done) {
-    sendChunk('check status of operation ' + operation.id);
-    operation = await ai.checkOperation(operation);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  if (operation.error) {
-    sendChunk('Error: ' + operation.error.message);
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  // operation done, download generated video to disk
-  const video = operation.output?.message?.content.find((p) => !!p.media);
-  if (!video) {
-    sendChunk(operation);
-    throw new Error('Failed to find the generated video');
-  }
-  sendChunk('Writing results to photo.mp4');
-  await downloadVideo(video, 'photo.mp4');
-  sendChunk('Done!');
-
-  return operation;
+  return media;
 });
 
-// An example of overriding the apiKey used by a Veo background model at call
-// time via options.context.secrets.apiKey, rather than relying on the
-// plugin-configured apiKey (env var or plugin init option). This is useful
-// when per-request credentials (e.g. from an authenticated HTTP caller)
-// should be used instead of a single, plugin-wide key. Because Veo is a
-// background model, the same context must be supplied on both the initial
-// ai.generate() call and every subsequent ai.checkOperation() call.
-ai.defineFlow('photo-move-veo-apikey-override', async (_, { sendChunk }) => {
-  const startingImage = fs.readFileSync('woman.png', { encoding: 'base64' });
+// Generates a video, then edits it in a second turn. Editing continues the
+// stored interaction, so both turns need store: true; the plugin finds the
+// previous interaction in the messages and sends only the new message.
+ai.defineFlow('omni-edit-video', async () => {
+  const config = { store: true, videoFormat: { resolution: '360p' } };
+  const original = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
+    prompt: 'A woman playing violin outdoors.',
+    config,
+  });
+  if (!original.media) {
+    throw new Error('no video returned');
+  }
 
-  let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-lite-generate-preview'),
-    prompt: [
+  const edited = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
+    messages: [
+      ...original.messages,
       {
-        text: 'make the subject in the photo move',
-      },
-      {
-        media: {
-          contentType: 'image/png',
-          url: `data:image/png;base64,${startingImage}`,
-        },
+        role: 'user',
+        content: [
+          { text: 'Make the violin invisible. Keep everything else the same.' },
+        ],
       },
     ],
+    config,
+  });
+  if (!edited.media) {
+    throw new Error('no edited video returned');
+  }
+  // Both videos play in the Dev UI, to compare before and after.
+  return { original: original.media, edited: edited.media };
+});
+
+// Large videos (e.g. 4k) can be returned as a Files API URI instead of inline
+// data. URI delivery requires store: true. The file can take a few seconds to
+// become ACTIVE, and downloading it needs the API key.
+ai.defineFlow('omni-uri-delivery', async () => {
+  const { media } = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
+    prompt: 'A beautiful sunset over a calm ocean, with gentle waves.',
     config: {
-      resolution: '1080p',
-      durationSeconds: 8,
-      aspectRatio: '9:16',
-      personGeneration: 'allow_adult',
-      seed: 42,
-    },
-    context: {
-      secrets: {
-        apiKey: process.env.CUSTOM_KEY,
-      },
+      store: true,
+      videoFormat: { resolution: '360p', delivery: 'uri' },
     },
   });
-
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
+  if (!media) {
+    throw new Error('no video returned');
   }
-
-  while (!operation.done) {
-    sendChunk('check status of operation ' + operation.id);
-    operation = await ai.checkOperation(operation, {
-      context: { secrets: { apiKey: process.env.CUSTOM_KEY } },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  if (operation.error) {
-    sendChunk('Error: ' + operation.error.message);
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  // operation done, download generated video to disk
-  const video = operation.output?.message?.content.find((p) => !!p.media);
-  if (!video) {
-    sendChunk(operation);
-    throw new Error('Failed to find the generated video');
-  }
-  sendChunk('Writing results to photo.mp4');
-  await downloadVideo(video, 'photo.mp4');
-  sendChunk('Done!');
-
-  return operation;
+  await waitForActiveFile(media.url);
+  const file = 'omni-uri-delivery.mp4';
+  await downloadVideo({ media }, file);
+  return {
+    media,
+    note: `The video was downloaded to ${process.cwd()}/${file}. Open it in a video player.`,
+  };
 });
 
-async function waitForOperation(
-  operation?: Operation,
-  sendChunk?: StreamingCallback<any>
-) {
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
+/** Waits until a Files API file (from its download URL) is ACTIVE. */
+async function waitForActiveFile(url: string) {
+  const fileId = url.match(/files\/([^:/?]+)/)?.[1];
+  if (!fileId) {
+    throw new Error(`No file ID in ${url}`);
   }
-
-  while (!operation.done) {
-    sendChunk?.('check status of operation ' + operation.id);
-    operation = await ai.checkOperation(operation);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  if (operation.error) {
-    sendChunk?.('Error: ' + operation.error.message);
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  return operation;
-}
-
-ai.defineFlow('veo-extend-video', async (_, { sendChunk }) => {
-  sendChunk('Beginning generation of original video');
-  // Veo can only extend videos originally generated by veo.
-  // Generate an original video
-  let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-generate-preview'),
-    prompt: [
-      {
-        text: 'An origami butterfly flaps its wings and flies out of the french doors into the garden.',
-      },
-    ],
-  });
-
-  const doneOp = await waitForOperation(operation, sendChunk);
-  const video1 = doneOp.output?.message?.content.find((p: Part) => !!p.media);
-  if (!video1) {
-    throw new Error(
-      'failed to find video in operation response: ' +
-        JSON.stringify(doneOp, null, 2)
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/files/${fileId}`,
+      { headers: { 'x-goog-api-key': getApiKeyFromEnvVar() ?? '' } }
     );
-  }
-
-  sendChunk('Writing results of initial video to videoOriginal.mp4');
-  await downloadVideo(video1, 'videoOriginal.mp4');
-  sendChunk('Downloaded!');
-
-  sendChunk('Beginning Extension of Video');
-
-  ({ operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-generate-preview'),
-    prompt: [
-      {
-        text: 'Track the butterfly into the garden as it lands on an orange origami flower. A fluffy white puppy runs up and gently pats the flower.',
-      },
-      {
-        media: {
-          contentType: 'video/mp4',
-          url: video1.media.url,
-        },
-      },
-    ],
-    config: {
-      durationSeconds: 8,
-      aspectRatio: '16:9', // Must match the original
-    },
-  }));
-
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
-  }
-
-  while (!operation.done) {
-    sendChunk('check status of operation ' + operation.id);
-    operation = await ai.checkOperation(operation);
+    const file: unknown = await response.json();
+    const state =
+      typeof file === 'object' && file !== null && 'state' in file
+        ? file.state
+        : undefined;
+    if (state === 'ACTIVE') {
+      return;
+    }
+    if (state === 'FAILED') {
+      throw new Error(`Video file ${fileId} failed to process`);
+    }
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
-
-  if (operation.error) {
-    sendChunk('Error: ' + operation.error.message);
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  // operation done, download generated video to disk
-  const video = operation.output?.message?.content.find((p) => !!p.media);
-  if (!video) {
-    throw new Error('Failed to find the generated video');
-  }
-  sendChunk('Writing results to videoExtended.mp4');
-  await downloadVideo(video, 'videoExtended.mp4');
-  sendChunk('Done!');
-
-  return operation;
-});
+  throw new Error(`Video file ${fileId} did not become ACTIVE`);
+}
 
 function getApiKeyFromEnvVar(): string | undefined {
   return (
@@ -1377,9 +1396,10 @@ function getApiKeyFromEnvVar(): string | undefined {
 
 async function downloadVideo(video: MediaPart, path: string) {
   const fetch = (await import('node-fetch')).default;
-  const videoDownloadResponse = await fetch(
-    `${video.media!.url}&key=${getApiKeyFromEnvVar()}`
-  );
+  // The key goes in a header, not the URL, so it stays out of logs.
+  const videoDownloadResponse = await fetch(video.media!.url, {
+    headers: { 'x-goog-api-key': getApiKeyFromEnvVar() ?? '' },
+  });
   if (
     !videoDownloadResponse ||
     videoDownloadResponse.status !== 200 ||
@@ -1388,12 +1408,16 @@ async function downloadVideo(video: MediaPart, path: string) {
     throw new Error('Failed to fetch video');
   }
 
-  Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
+  // Wait until the whole file is written, so callers can use it right away.
+  await pipeline(
+    Readable.from(videoDownloadResponse.body),
+    fs.createWriteStream(path)
+  );
 }
 
 ai.defineFlow('video-to-image-generation', async () => {
   const response = await ai.generate({
-    model: googleAI.model('gemini-3.1-flash-image'),
+    model: googleAI.model('gemini-nano-banana-2.1'),
     prompt: [
       {
         media: {
@@ -1414,8 +1438,8 @@ ai.defineFlow('video-to-image-generation', async () => {
   return response;
 });
 
-// Test external URL with Gemini 3.0 (should pass as fileUri)
-ai.defineFlow('external-url-gemini-3.0', async () => {
+// An image passed by external URL (sent as a fileUri, not downloaded).
+ai.defineFlow('external-image-url', async () => {
   const { text } = await ai.generate({
     model: googleAI.model('gemini-3-flash-preview'),
     prompt: [
@@ -1431,16 +1455,16 @@ ai.defineFlow('external-url-gemini-3.0', async () => {
   return text;
 });
 
-// Gemini 3.1 thinkingLevel config
+// Gemini 4 thinkingLevel config
 ai.defineFlow(
   {
-    name: 'thinking-level-3.1-pro',
+    name: 'thinking-level',
     inputSchema: z.enum(['LOW', 'MEDIUM', 'HIGH']),
     outputSchema: z.any(),
   },
   async (level) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-3.1-pro-preview'),
+      model: googleAI.model('gemini-4-argon'),
       prompt: [
         'Alice, Bob, and Carol each live in a different house on the ',
         'same street: red, green, and blue. The person who lives in the red house ',
@@ -1476,32 +1500,9 @@ ai.defineFlow('embed-text', async () => {
   return embeddings;
 });
 
-// Embed multimodal content
-ai.defineFlow('embed-multimodal', async () => {
-  const photoBase64 = fs.readFileSync('photo.jpg', { encoding: 'base64' });
-
-  const embeddings = await ai.embed({
-    embedder: googleAI.embedder('gemini-embedding-2-preview'),
-    content: Document.fromParts([
-      { text: 'A picture of Albert Einstein.' },
-      {
-        media: {
-          contentType: 'image/jpeg',
-          url: `data:image/jpeg;base64,${photoBase64}`,
-        },
-      },
-    ]),
-    options: {
-      outputDimensionality: 256,
-    },
-  });
-
-  return embeddings;
-});
-
 ai.defineFlow('antigravity', async () => {
   const { message } = await ai.generate({
-    model: googleAI.model('antigravity-preview-05-2026'),
+    model: googleAI.model('antigravity-preview-09-2026'),
     prompt: 'Read Hacker News, summarize the top 10 stories.',
     config: {
       environment: 'remote',
@@ -1513,7 +1514,7 @@ ai.defineFlow('antigravity', async () => {
 
 ai.defineFlow('antigravity-tools', async () => {
   const { message } = await ai.generate({
-    model: googleAI.model('antigravity-preview-05-2026'),
+    model: googleAI.model('antigravity-preview-09-2026'),
     prompt: 'Read Hacker News, summarize the top 10 stories.',
     config: {
       environment: 'remote',
@@ -1525,7 +1526,7 @@ ai.defineFlow('antigravity-tools', async () => {
 
 ai.defineFlow('antigravity-multi-turn', async () => {
   const response1 = await ai.generate({
-    model: googleAI.model('antigravity-preview-05-2026'),
+    model: googleAI.model('antigravity-preview-09-2026'),
     prompt: 'Create a simple python script to print hello world.',
     config: {
       environment: 'remote',
@@ -1537,7 +1538,7 @@ ai.defineFlow('antigravity-multi-turn', async () => {
   const environmentId = response1.message?.metadata?.environmentId as string;
 
   const response2 = await ai.generate({
-    model: googleAI.model('antigravity-preview-05-2026'),
+    model: googleAI.model('antigravity-preview-09-2026'),
     prompt: 'Now modify the script to print it backwards and run it.',
     config: {
       environment: environmentId,
@@ -1549,7 +1550,24 @@ ai.defineFlow('antigravity-multi-turn', async () => {
   return { turn1: response1.message, turn2: response2.message };
 });
 
-ai.defineFlow('embed-multimodal-gemini-embedding-2', async () => {
+// Antigravity calling one of your own tools, on a chosen underlying model.
+// The tool result is sent as a continuation of the stored interaction.
+ai.defineFlow('antigravity-function-tools', async () => {
+  const { text } = await ai.generate({
+    model: googleAI.model('antigravity-preview-09-2026'),
+    prompt:
+      'Use the getWeather tool to get the weather in Tokyo, then tell me in one sentence.',
+    tools: [getWeather],
+    config: {
+      environment: 'remote',
+      model: 'gemini-3.5-flash-lite', // Optional; defaults to gemini-3.8-flash
+    },
+  });
+  return text;
+});
+
+// Embed multimodal content
+ai.defineFlow('embed-multimodal', async () => {
   const photoBase64 = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   const embeddings = await ai.embed({
@@ -1574,7 +1592,7 @@ ai.defineFlow('embed-multimodal-gemini-embedding-2', async () => {
 // Deep research example
 ai.defineFlow('deep-research', async (_, { sendChunk }) => {
   let { operation } = await ai.generate({
-    model: googleAI.model('deep-research-pro-preview-12-2025'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     prompt:
       'Compare the differences between TCP and UDP protocols. Provide the answer in a markdown table focusing on reliability, connection type, and speed.',
   });
@@ -1604,7 +1622,7 @@ ai.defineFlow('deep-research', async (_, { sendChunk }) => {
 // ai.generate() call and every subsequent ai.checkOperation() call.
 ai.defineFlow('deep-research-apikey-override', async (_, { sendChunk }) => {
   let { operation } = await ai.generate({
-    model: googleAI.model('deep-research-pro-preview-12-2025'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     prompt:
       'Compare the differences between TCP and UDP protocols. Provide the answer in a markdown table focusing on reliability, connection type, and speed.',
     context: {
@@ -1638,7 +1656,7 @@ ai.defineFlow('deep-research-multi-turn', async (_, { sendChunk }) => {
   // 1. First turn: Initial comparison with specific requirements
   sendChunk('--- Turn 1: Initial Research ---');
   let { operation } = await ai.generate({
-    model: googleAI.model('deep-research-pro-preview-12-2025'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     messages: [
       {
         role: 'system',
@@ -1682,7 +1700,7 @@ ai.defineFlow('deep-research-multi-turn', async (_, { sendChunk }) => {
   const interactionId = operation.id;
 
   let { operation: op2 } = await ai.generate({
-    model: googleAI.model('deep-research-pro-preview-12-2025'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     messages: [
       {
         role: 'user',
@@ -1713,7 +1731,8 @@ ai.defineFlow('deep-research-multi-turn', async (_, { sendChunk }) => {
   return op2.output?.message?.content.find((p) => !!p.text)?.text;
 });
 
-ai.defineFlow('deep-research-preview', async (_, { sendChunk }) => {
+// Deep Research with several built-in tools at once.
+ai.defineFlow('deep-research-combined-tools', async (_, { sendChunk }) => {
   const storeName = await createFileSearchStore();
   await uploadBlobToFileSearchStore(storeName);
 
@@ -1783,8 +1802,10 @@ ai.defineFlow('deep-research-collaboration', async (_, { sendChunk }) => {
   sendChunk('\n--- Turn 2: Approving and Executing Plan ---');
   const interactionId = operation.id;
 
+  // A stored interaction can only be continued by the agent that created it
+  // (the server returns 400 "belongs to a different agent" otherwise).
   let { operation: op2 } = await ai.generate({
-    model: googleAI.model('deep-research-max-preview-04-2026'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     prompt: 'Looks great! Proceed with the research.',
     config: {
       collaborativePlanning: false,
@@ -1811,7 +1832,7 @@ ai.defineFlow('deep-research-collaboration', async (_, { sendChunk }) => {
 // Deep research cancel example
 ai.defineFlow('deep-research-cancel', async (_, { sendChunk }) => {
   let { operation } = await ai.generate({
-    model: googleAI.model('deep-research-pro-preview-12-2025'),
+    model: googleAI.model('deep-research-preview-04-2026'),
     prompt:
       'Compare the differences between TCP and UDP protocols. Provide the answer in a markdown table focusing on reliability, connection type, and speed.',
   });
@@ -1863,7 +1884,7 @@ ai.defineFlow('lyria-music-generation', async () => {
 
 ai.defineFlow('lyria-full-length-song', async () => {
   const response = await ai.generate({
-    model: googleAI.model('lyria-3-pro-preview'),
+    model: googleAI.model('lyria-3.5'),
     prompt:
       'An epic cinematic orchestral piece about a journey home. Starts with a solo piano intro, builds through sweeping strings, and climaxes with a massive wall of sound.',
   });
@@ -1949,8 +1970,8 @@ ai.defineFlow('lyria-foreign-language', async () => {
   return response;
 });
 
-// Gemma 4 with thinkingConfig
-ai.defineFlow('gemma-4', async (_, { sendChunk }) => {
+// Gemma with thinkingConfig
+ai.defineFlow('gemma-thinking', async (_, { sendChunk }) => {
   const { text, message } = await ai.generate({
     model: googleAI.model('gemma-4-31b-it'),
     system: 'You are a physics tutor who loves cats. Use cat analogies.',
@@ -1968,8 +1989,8 @@ ai.defineFlow('gemma-4', async (_, { sendChunk }) => {
   };
 });
 
-// Gemma 4 multi-turn
-ai.defineFlow('gemma-4-multi-turn', async (_, { sendChunk }) => {
+// Gemma multi-turn
+ai.defineFlow('gemma-multi-turn', async (_, { sendChunk }) => {
   // First turn
   sendChunk('--- Turn 1 ---');
   const response1 = await ai.generate({

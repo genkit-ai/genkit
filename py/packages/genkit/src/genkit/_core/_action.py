@@ -44,7 +44,7 @@ from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from typing_extensions import TypeVar
 
-from genkit._core._channel import Channel, CloseableQueue
+from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
 from genkit._core._model import (
@@ -204,10 +204,18 @@ OutputT_co = TypeVar('OutputT_co', covariant=True)
 
 
 class StreamResponse(Generic[ChunkT_co, OutputT_co]):
-    """Chunks from a running flow, then its result.
+    """Chunks from a running action, then its result.
 
-    Returned by ``flow.stream()``. If the flow raises, both the loop and
-    ``.response`` raise.
+    Returned by ``Action.stream()`` for every action kind: flows, tools,
+    models, and the rest.
+
+    - Chunks are single-pass. Once a loop has read them, a second ``async for``
+      yields nothing (or re-raises, if the run failed).
+    - ``.response`` can be awaited any number of times, before or after
+      iterating. Chunks sent before you iterate are buffered.
+    - If the run raises, both the loop and ``.response`` raise it.
+      ``ModelStreamResponse`` (``generate_stream``, ``prompt.stream``) reports
+      model failures on ``.response`` instead; see its docstring.
 
     Example:
         ```python
@@ -356,6 +364,31 @@ def describe_action(kind: ActionKind, name: str) -> str:
     return f"{_kind_label(kind)} '{name}'"
 
 
+_MODEL_CONTEXT_KINDS = frozenset({
+    ActionKind.MODEL,
+    ActionKind.BACKGROUND_MODEL,
+    ActionKind.CHECK_OPERATION,
+    ActionKind.CANCEL_OPERATION,
+})
+
+
+def _public_context_name(kind: ActionKind) -> str:
+    """The public context type a handler of this kind annotates its ctx with.
+
+    ToolContext for tools, ModelContext (genkit.model) for model and
+    background-model ops, AgentContext (genkit.exp.agent) for agents, and
+    FlowContext for everything else. FlowContext is the public name of the
+    run-context class, so it's correct for embedders, evaluators and the rest.
+    """
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2):
+        return 'ToolContext'
+    if kind in _MODEL_CONTEXT_KINDS:
+        return 'ModelContext'
+    if kind == ActionKind.AGENT:
+        return 'AgentContext'
+    return 'FlowContext'
+
+
 def find_input_and_context(
     fn: Callable[..., object],
     hints: Mapping[str, Any],
@@ -368,11 +401,7 @@ def find_input_and_context(
     ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
     owner = describe_action(kind, name)
-    context_class = {
-        ActionKind.TOOL: 'ToolContext',
-        ActionKind.TOOL_V2: 'ToolContext',
-        ActionKind.FLOW: 'FlowContext',
-    }.get(kind, 'ActionRunContext')
+    context_class = _public_context_name(kind)
 
     params = [
         p
@@ -799,6 +828,17 @@ FlowContext = ActionRunContext
 
 # The context parameter passed to model and background-model functions.
 ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
+"""Annotation alias for ``ActionRunContext[ModelResponseChunk]``: the ctx a model function gets.
+
+- ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
+- ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
+- ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
+- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+
+Use it in annotations only. It's a subscripted generic, so
+``isinstance(ctx, ModelContext)`` raises TypeError; runtime checks should use
+``isinstance(ctx, ActionRunContext)``.
+"""
 
 
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
@@ -1057,40 +1097,20 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """``stream`` plus ``input_stream``, which ``BidiAction.stream_bidi`` feeds."""
-        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel()
 
-        def send_chunk(c: ChunkT) -> None:
-            channel.send(c)
+        async def run(send_chunk: Callable[[ChunkT], None]) -> ActionResponse[OutputT]:
+            return await self._run(
+                input,
+                on_chunk=send_chunk,
+                context=context,
+                telemetry_labels=telemetry_labels,
+                abort_signal=abort_signal,
+                init=init,
+                input_stream=input_stream,
+            )
 
-        resp = self._run(
-            input,
-            on_chunk=send_chunk,
-            context=context,
-            telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
-            init=init,
-            input_stream=input_stream,
-        )
-        channel.set_close_future(asyncio.create_task(resp))
-
-        # Mirror the run's terminal state onto .response so a caller awaiting it
-        # sees the same success/error/cancel the run ended with, instead of
-        # hanging (or dropping the error on the floor) when the run raises.
-        result_future: asyncio.Future[OutputT] = asyncio.Future()
-
-        def _resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
-            if result_future.done():
-                return
-            if closed.cancelled():
-                result_future.cancel()
-            elif (exc := closed.exception()) is not None:
-                result_future.set_exception(exc)
-            else:
-                result_future.set_result(closed.result().response)
-
-        channel.closed.add_done_callback(_resolve_response)
-
-        return StreamResponse(stream=channel, response=result_future)
+        channel, task = start_stream(run)
+        return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
 
     def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:
@@ -1410,10 +1430,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     """An Action extended with bidirectional streaming via stream_bidi().
 
-    Both one-shot calls and live sessions run through the same Action.run() /
-    stream() path: run() drives the fn with a single input, while stream_bidi()
-    is sugar that hands run() a live input stream and returns a connection
-    handle for sending per-turn inputs and receiving chunks.
+    One-shot calls and live sessions run the same fn: run() and stream() hand
+    it a single input as a one-item stream, while stream_bidi() starts the
+    stream path with a live input stream and returns a connection handle for
+    sending per-turn inputs and receiving chunks.
     """
 
     def __init__(
@@ -1470,6 +1490,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     async def stream_bidi(
         self,
         init: InitT | None = None,
+        *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> BidiConnection[InputT, ChunkT, OutputT]:

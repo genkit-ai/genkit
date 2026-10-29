@@ -28,6 +28,7 @@ import inspect
 import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import datetime, timezone
+from typing import Final
 
 from genkit._ai._agents._session import SnapshotStatusStream, select_leaf_snapshot
 from genkit._ai._agents._snapshot import parse_snapshot_lookup_kw
@@ -42,7 +43,7 @@ OnClose = Callable[[], Awaitable[None]]
 # Persisted statuses that end a snapshot's store lifecycle. apply_save treats
 # these as absorbing; status streams end after one. ``expired`` is a read-time
 # overlay and is never written, so it is not included here.
-TERMINAL_STATUSES = frozenset({
+TERMINAL_STATUSES: Final[frozenset[SnapshotStatus]] = frozenset({
     SnapshotStatus.COMPLETED,
     SnapshotStatus.FAILED,
     SnapshotStatus.ABORTED,

@@ -70,6 +70,9 @@
   },
   "author": "genkit",
   "license": "Apache-2.0",
+  "files": [
+    "lib/"
+  ],
   "types": "./lib/types/src/types/index.d.ts",
   "exports": {
     ".": {

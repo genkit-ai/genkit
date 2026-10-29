@@ -88,7 +88,7 @@ from genkit._core._background import (
     define_background_model,
     missing_operation_error,
 )
-from genkit._core._channel import Channel, run_loop
+from genkit._core._channel import run_loop, start_stream
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
@@ -291,6 +291,15 @@ class Genkit:
         description: str | None = None,
     ) -> _FlowDecorator: ...
 
+    # Overload order matters; see _FlowDecorator.__call__ for why the
+    # `object` shapes come before the context shapes.
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, ChunkT]: ...
+
     @overload
     def flow(
         self,
@@ -304,6 +313,13 @@ class Genkit:
         func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
         /,
     ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT]: ...
 
     @overload
     def flow(
@@ -1749,9 +1765,8 @@ class Genkit:
                 print(chunk.text)
             final = await result.response
         """
-        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
 
-        async def _run_generate() -> ModelResponse[Any]:
+        async def _run_generate(send_chunk: Callable[[ModelResponseChunk], None]) -> ModelResponse[Any]:
             return await self._generate(
                 model=model,
                 prompt=prompt,
@@ -1773,13 +1788,11 @@ class Genkit:
                 output_constrained=output_constrained,
                 use=use,
                 docs=docs,
-                on_chunk=lambda c: channel.send(c),
+                on_chunk=send_chunk,
             )
 
-        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
-        channel.set_close_future(response_future)
-
-        return ModelStreamResponse[Any](stream=channel, response=response_future)
+        channel, task = start_stream(_run_generate)
+        return ModelStreamResponse[Any](stream=channel, response=task)
 
     async def _generate(
         self,

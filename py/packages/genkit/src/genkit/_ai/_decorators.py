@@ -43,11 +43,23 @@ class _FlowDecorator:
         self._name = name
         self._description = description
 
-    # Overload order matters: pyright picks the first matching overload, and a
-    # flow with a defaulted input arg (`async def f(x: str = '...') -> ...`)
-    # is structurally callable as both 1-arg and 0-arg. We list the most
-    # specific shapes first so the input type stays as the caller wrote it
-    # instead of collapsing to `None`.
+    # Overload order matters: checkers pick the first matching overload.
+    #
+    # - A flow with a defaulted input (`async def f(x: str = '...')`) is
+    #   callable as both 1-arg and 0-arg, so the 1-arg shapes come first and
+    #   the input type stays as written instead of collapsing to `None`.
+    # - `(x: Any)` and `(x: object)` also accept a FlowContext, so they'd match
+    #   the ctx-only shape and type as Flow[None, ...]. The `object` shapes
+    #   come first and catch them as Flow[Any, ...]. A real `(ctx: FlowContext)`
+    #   can't take an `object`, so it skips them.
+    # - ty follows the typing spec's overload rule for Any: `(x: Any)` matches
+    #   overloads with different returns, so ty types it Unknown. That's the
+    #   best any arrangement can do there without breaking `(ctx: FlowContext)`.
+    @overload
+    def __call__(
+        self, func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]]
+    ) -> Flow[Any, OutputT, ChunkT]: ...
+
     @overload
     def __call__(
         self, func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]]
@@ -57,6 +69,9 @@ class _FlowDecorator:
     def __call__(
         self, func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]]
     ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Flow[Any, OutputT]: ...
 
     @overload
     def __call__(
