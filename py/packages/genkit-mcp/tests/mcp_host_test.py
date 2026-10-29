@@ -913,17 +913,15 @@ async def test_a_server_error_answering_the_listing_fails_it(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_tools_of_one_server_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> None:
-    """A server whose own tools collide is not skipped: one of them would vanish silently."""
+async def test_tools_of_one_server_sharing_a_genkit_name_are_left_out(tmp_path: Path) -> None:
+    """Neither colliding tool is listed, since either could answer for the other; the other servers still are."""
     host = McpHost(
         'hosted',
         mcp_servers={**servers(tmp_path, 'alpha'), **servers(tmp_path, 'beta', MCP_FAKE_COLLIDING_TOOLS='1')},
     )
     try:
-        with pytest.raises(
-            GenkitError, match=r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'beta_look_up'"
-        ) as refused:
-            await host.get_active_tools()
-        assert refused.value.status == 'INVALID_ARGUMENT'
+        names = [tool.name for tool in await host.get_active_tools()]
+        assert 'beta_look_up' not in names
+        assert 'alpha_echo' in names
     finally:
         await host.close()

@@ -146,8 +146,8 @@ does not answer a request in time fails with `DEADLINE_EXCEEDED`. The host logs 
 so the other servers stay selectable. A server disconnected or replaced while the host was listing
 it is left out of that listing, and a server that does not advertise the tools capability is not
 asked for tools and lists none. Any other failure fails the whole listing:
-a server that breaks the protocol, a server that answers the listing with an error, and two tools
-that share a name. Only the server you ask for is affected by `await host.connect(...)`,
+a server that breaks the protocol, a server that answers the listing with an error, and two servers
+that serve a tool of the same name. Only the server you ask for is affected by `await host.connect(...)`,
 `await host.disconnect(...)` and `await host.reconnect(...)`. `connect` and `reconnect` start the
 server and list it before they return, so a server that cannot start fails right there. A server
 that `connect` cannot list is stopped, and the host keeps what it held before, including any server

@@ -164,10 +164,8 @@ class McpHost:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, also
                 while the server was being listed, ``UNAVAILABLE`` if the
                 server cannot be started, ``DEADLINE_EXCEEDED`` if it does not
-                answer in time, ``INVALID_ARGUMENT`` if two of the server's
-                tools share a Genkit tool name, ``INTERNAL`` if it breaks the
-                protocol, or the status for the JSON-RPC error code it answers
-                the listing with.
+                answer in time, ``INTERNAL`` if it breaks the protocol, or the
+                status for the JSON-RPC error code it answers the listing with.
         """
         self._refuse_when_closed()
         try:
@@ -224,10 +222,8 @@ class McpHost:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed,
                 ``UNAVAILABLE`` if the server cannot be started,
                 ``DEADLINE_EXCEEDED`` if it does not answer in time,
-                ``INVALID_ARGUMENT`` if two of the server's tools share a
-                Genkit tool name, ``INTERNAL`` if it breaks the protocol, or
-                the status for the JSON-RPC error code it answers the listing
-                with.
+                ``INTERNAL`` if it breaks the protocol, or the status for the
+                JSON-RPC error code it answers the listing with.
         """
         self._refuse_when_closed()
         client = self._client(server_name)
@@ -252,16 +248,17 @@ class McpHost:
 
         Returns:
             One tool per server tool, servers in listing order and tools in
-            server order.
+            server order, leaving out tools of one server which share a Genkit
+            tool name.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this host is closed, even
-                while it was listing, ``INVALID_ARGUMENT`` if two tools share a
-                name, within one server or across two, ``INTERNAL`` if a server
-                breaks the protocol, or the status for the JSON-RPC error code
-                a server answers the listing with. Distinct server names do not
-                rule out a shared tool name, because the name and the tool name
-                are joined by the underscore either of them may hold.
+                while it was listing, ``INVALID_ARGUMENT`` if two servers serve
+                a tool of the same name, ``INTERNAL`` if a server breaks the
+                protocol, or the status for the JSON-RPC error code a server
+                answers the listing with. Distinct server names do not rule out
+                a shared tool name, because the name and the tool name are
+                joined by the underscore either of them may hold.
         """
         return await self._list(McpClient.get_active_tools)
 
