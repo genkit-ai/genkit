@@ -876,16 +876,17 @@ async def test_get_active_tools_asks_the_server_every_call(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_tools_sharing_a_genkit_name_fail_the_listing(tmp_path: Path) -> None:
-    """The provider keeps one action per name, so a collision would hide a tool."""
+async def test_tools_sharing_a_genkit_name_are_left_out(tmp_path: Path) -> None:
+    """Either colliding tool could answer a call meant for the other, so neither is listed or bound."""
     ai = Genkit()
     client = define_mcp_client(ai, 'bookshop', **server(tmp_path, MCP_FAKE_COLLIDING_TOOLS='1'))
-    collision = r"MCP tools 'look\.up' and 'look/up' both map to the Genkit tool name 'bookshop_look_up'"
     try:
-        with pytest.raises(ValueError, match=collision):
-            await client.get_active_tools()
-        with pytest.raises(ValueError, match=collision):
-            await expand_wildcard_tools(ai._registry, ['bookshop:tool/*'])
+        assert await client.get_active_tools() == []
+        expanded = await expand_wildcard_tools(ai._registry, ['bookshop:tool/*'])
+        assert [name for name in expanded if name.startswith('/tool')] == []
+        assert (
+            await ai._registry.resolve_action_by_key('/dynamic-action-provider/bookshop:tool/bookshop_look_up') is None
+        )
     finally:
         await client.close()
 

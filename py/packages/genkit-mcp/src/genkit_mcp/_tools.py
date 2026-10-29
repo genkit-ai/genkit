@@ -302,8 +302,8 @@ def mcp_tools_to_handles(
         Handles in listing order, leaving out the tools
         :func:`mcp_tools_to_actions` leaves out.
     """
-    output_schemas = {tool.name: tool.outputSchema for tool in tools}
+    by_name = {mcp_tool_name(prefix, tool.name): tool for tool in tools}
     return [
-        Tool(action, original_output_schema=output_schemas[action.metadata['mcp']['tool']])
+        Tool(action, original_output_schema=by_name[action.name].outputSchema)
         for action in mcp_tools_to_actions(tools, prefix, call)
     ]

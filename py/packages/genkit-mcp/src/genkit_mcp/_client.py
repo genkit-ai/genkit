@@ -158,13 +158,12 @@ class McpClient:
         as ``<name>:tool/*``.
 
         Returns:
-            One tool per server tool, in server order.
+            One tool per server tool, in server order, leaving out tools which
+            share a Genkit tool name.
 
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
                 ``UNAVAILABLE`` if the server cannot be started.
-            ValueError: If two of the server's tools share a Genkit tool name
-                once the characters the model providers reject are rewritten.
         """
         tools = await self._on_connection(McpConnection.list_tools)
         return mcp_tools_to_handles(tools, self._name, self._call_tool)
@@ -187,8 +186,6 @@ class McpClient:
         Raises:
             GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
                 ``UNAVAILABLE`` if the server cannot be started.
-            ValueError: If two of the server's tools share a Genkit tool name
-                once the characters the model providers reject are rewritten.
         """
         with self._connections_lock:
             self._refuse_when_closed()
