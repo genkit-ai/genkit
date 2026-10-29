@@ -35,7 +35,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 type testState struct {
@@ -263,57 +263,13 @@ func TestAgent_WithSessionStore(t *testing.T) {
 	}
 }
 
-// spanCollector is a minimal in-memory sdktrace.SpanExporter that records
-// finished spans so a test can assert on their attributes.
-type spanCollector struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
-}
-
-func (c *spanCollector) ExportSpans(_ context.Context, spans []sdktrace.ReadOnlySpan) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.spans = append(c.spans, spans...)
-	return nil
-}
-
-func (c *spanCollector) Shutdown(context.Context) error { return nil }
-
-// byName returns the first recorded span with the given name, or nil.
-func (c *spanCollector) byName(name string) sdktrace.ReadOnlySpan {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, s := range c.spans {
-		if s.Name() == name {
-			return s
-		}
-	}
-	return nil
-}
-
-// collectSpans registers an in-memory exporter on the global tracer provider
-// (the one tracing.RunInNewSpan writes through) for the duration of the test.
-// The SimpleSpanProcessor exports each span synchronously as it ends, so by
-// the time a turn completes its span is already recorded.
-func collectSpans(t *testing.T) *spanCollector {
-	t.Helper()
-	c := &spanCollector{}
-	sp := sdktrace.NewSimpleSpanProcessor(c)
-	tp := tracing.TracerProvider()
-	tp.RegisterSpanProcessor(sp)
-	t.Cleanup(func() { tp.UnregisterSpanProcessor(sp) })
-	return c
-}
-
-// spanAttr returns the string value of the named span attribute, if present.
-func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.AsString(), true
-		}
-	}
-	return "", false
-}
+// The full span-attribute keys agent identifiers land under: agent.go records
+// them as custom metadata (agent:sessionId / agent:snapshotId), which the
+// instrumentation stores with the genkit:metadata: prefix.
+const (
+	sessionIDSpanAttrKey  = "genkit:metadata:" + sessionIDMetaKey
+	snapshotIDSpanAttrKey = "genkit:metadata:" + snapshotIDMetaKey
+)
 
 // TestAgent_RootSpanCarriesSessionID verifies the agent's root action span is
 // stamped with the invocation's session ID under
@@ -323,7 +279,7 @@ func spanAttr(span sdktrace.ReadOnlySpan, key string) (string, bool) {
 func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	const agentName = "tracedCounterFlow"
 	af := defineCounterAgent(reg, agentName)
@@ -347,11 +303,11 @@ func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
 	const attrKey = "genkit:metadata:agent:sessionId"
 
 	// The root action span (named for the agent) carries the session ID.
-	root := spans.byName(agentName)
+	root := spans.First(agentName)
 	if root == nil {
 		t.Fatalf("missing root action span %q", agentName)
 	}
-	got, ok := spanAttr(root, attrKey)
+	got, ok := tracingtest.Attr(root, attrKey)
 	if !ok {
 		t.Fatalf("root span %q: missing attribute %q", agentName, attrKey)
 	}
@@ -363,17 +319,17 @@ func TestAgent_RootSpanCarriesSessionID(t *testing.T) {
 	// and no subtype, matching JS's run(); the session ID lives on the root
 	// span only.
 	for _, turn := range []string{"runTurn-1", "runTurn-2"} {
-		span := spans.byName(turn)
+		span := spans.First(turn)
 		if span == nil {
 			t.Fatalf("missing span %q", turn)
 		}
-		if v, ok := spanAttr(span, attrKey); ok {
+		if v, ok := tracingtest.Attr(span, attrKey); ok {
 			t.Errorf("turn span %q: unexpected attribute %q = %q (want it on the root span only)", turn, attrKey, v)
 		}
-		if v, _ := spanAttr(span, "genkit:type"); v != "flowStep" {
+		if v, _ := tracingtest.Attr(span, "genkit:type"); v != "flowStep" {
 			t.Errorf("turn span %q: genkit:type = %q, want %q", turn, v, "flowStep")
 		}
-		if v, ok := spanAttr(span, "genkit:metadata:subtype"); ok {
+		if v, ok := tracingtest.Attr(span, "genkit:metadata:subtype"); ok {
 			t.Errorf("turn span %q: unexpected genkit:metadata:subtype = %q (JS's run() sets no subtype)", turn, v)
 		}
 	}
@@ -1726,18 +1682,18 @@ func TestAgent_SetMessages(t *testing.T) {
 // turnSpanState parses a turn span's genkit:output attribute, which the agent
 // records as {"state": <session state>} (see turnSpanOutput), and returns the
 // embedded state.
-func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testState] {
+func turnSpanState(t *testing.T, span *tracing.SpanData) *SessionState[testState] {
 	t.Helper()
-	raw, ok := spanAttr(span, "genkit:output")
+	raw, ok := tracingtest.Attr(span, "genkit:output")
 	if !ok {
-		t.Fatalf("span %q: missing genkit:output attribute", span.Name())
+		t.Fatalf("span %q: missing genkit:output attribute", span.DisplayName)
 	}
 	var out turnSpanOutput[testState]
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.Name(), raw, err)
+		t.Fatalf("span %q: genkit:output %q is not valid turn output: %v", span.DisplayName, raw, err)
 	}
 	if out.State == nil {
-		t.Fatalf("span %q: genkit:output %q carries no state", span.Name(), raw)
+		t.Fatalf("span %q: genkit:output %q carries no state", span.DisplayName, raw)
 	}
 	return out.State
 }
@@ -1749,7 +1705,7 @@ func turnSpanState(t *testing.T, span sdktrace.ReadOnlySpan) *SessionState[testS
 func TestAgent_TurnSpanOutput(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	af := DefineCustomAgent(reg, "turnOutputFlow",
 		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
@@ -1791,7 +1747,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 	// the running counter and one user message plus one reply per turn.
 	for turn := range 2 {
 		name := fmt.Sprintf("runTurn-%d", turn+1)
-		span := spans.byName(name)
+		span := spans.First(name)
 		if span == nil {
 			t.Fatalf("missing span %q", name)
 		}
@@ -1810,7 +1766,7 @@ func TestAgent_TurnSpanOutput(t *testing.T) {
 			t.Errorf("%s: len(state.artifacts) = %d, want 1", name, got)
 		}
 		// Client-managed: no snapshot, so no snapshot-ID attribute.
-		if v, ok := spanAttr(span, snapshotIDSpanAttrKey); ok {
+		if v, ok := tracingtest.Attr(span, snapshotIDSpanAttrKey); ok {
 			t.Errorf("%s: unexpected %s = %q (client-managed writes no snapshot)", name, snapshotIDSpanAttrKey, v)
 		}
 	}
@@ -1824,7 +1780,7 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	af := defineCounterAgent(reg, "turnOutputSnapshotFlow", WithSessionStore(store))
 
@@ -1843,13 +1799,13 @@ func TestAgent_TurnSpanOutput_WithSnapshots(t *testing.T) {
 		t.Fatalf("Output failed: %v", err)
 	}
 
-	span := spans.byName("runTurn-1")
+	span := spans.First("runTurn-1")
 	if span == nil {
 		t.Fatal("missing span runTurn-1")
 	}
 
 	// The turn span is tagged with the turn-end snapshot's ID.
-	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	got, ok := tracingtest.Attr(span, snapshotIDSpanAttrKey)
 	if !ok {
 		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
@@ -1882,7 +1838,7 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 	ctx := context.Background()
 	reg := newTestRegistry(t)
 	store := newTestInMemStore[testState]()
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	const agentName = "committedFailureSpanFlow"
 	af := defineCommittingFailureAgent(reg, agentName, WithSessionStore[testState](store))
@@ -1895,11 +1851,11 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 		t.Fatal("committed failure wrote no snapshot")
 	}
 
-	span := spans.byName("runTurn-1")
+	span := spans.First("runTurn-1")
 	if span == nil {
 		t.Fatal("missing span runTurn-1")
 	}
-	got, ok := spanAttr(span, snapshotIDSpanAttrKey)
+	got, ok := tracingtest.Attr(span, snapshotIDSpanAttrKey)
 	if !ok {
 		t.Fatalf("turn span: missing %s", snapshotIDSpanAttrKey)
 	}
@@ -1907,7 +1863,7 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 		t.Errorf("turn span %s = %q, want %q (the failed turn's snapshot)", snapshotIDSpanAttrKey, got, out.SnapshotID)
 	}
 	// The turn span still records the failure.
-	if v, _ := spanAttr(span, "genkit:state"); v != "error" {
+	if v, _ := tracingtest.Attr(span, "genkit:state"); v != "error" {
 		t.Errorf("turn span genkit:state = %q, want %q", v, "error")
 	}
 	// Its output is the state the failed turn's snapshot saved, as a
@@ -1924,11 +1880,11 @@ func TestAgent_CommittedFailedTurn_TurnSpanCarriesSnapshotID(t *testing.T) {
 		t.Errorf("turn span len(state.messages) = %d, want %d (the failed turn's snapshot)", got, want)
 	}
 
-	root := spans.byName(agentName)
+	root := spans.First(agentName)
 	if root == nil {
 		t.Fatalf("missing root action span %q", agentName)
 	}
-	if v, ok := spanAttr(root, snapshotIDSpanAttrKey); ok {
+	if v, ok := tracingtest.Attr(root, snapshotIDSpanAttrKey); ok {
 		t.Errorf("root span %q: unexpected %s = %q (want it on the turn span only)", agentName, snapshotIDSpanAttrKey, v)
 	}
 }
@@ -2148,8 +2104,9 @@ func TestDefinePromptAgent_DefaultAndNamed(t *testing.T) {
 	}
 }
 
-// TestDefinePromptAgent_Panics covers the definition-time failures: a prompt
-// that is not registered, and setting the prompt source more than once.
+// TestDefinePromptAgent_Panics covers the definition-time failure for a prompt
+// that is not registered, and checks that a repeated prompt source replaces the
+// earlier one rather than panicking.
 func TestDefinePromptAgent_Panics(t *testing.T) {
 	reg := setupPromptTestRegistry(t)
 	ai.DefinePrompt(reg, "present", ai.WithModelName("test/echo"))
@@ -2163,14 +2120,11 @@ func TestDefinePromptAgent_Panics(t *testing.T) {
 		DefinePromptAgent[testState](reg, "absent")
 	})
 
-	t.Run("duplicate prompt source", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Fatal("expected panic for duplicate WithNamedPrompt")
-			}
-		}()
-		DefinePromptAgent[testState](reg, "present",
-			WithNamedPrompt[testState]("present", nil),
+	t.Run("later prompt source wins", func(t *testing.T) {
+		// The first source names a missing prompt, so the definition panics
+		// unless the later option replaced it.
+		DefinePromptAgent[testState](reg, "laterWins",
+			WithNamedPrompt[testState]("absent", nil),
 			WithNamedPrompt[testState]("present", nil))
 	})
 }
@@ -3625,6 +3579,60 @@ func TestAgent_Detach_AfterPriorTurns_ChainsParent(t *testing.T) {
 	waitForSnapshot(t, store, out.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
 		return s.Status == SnapshotStatusCompleted
 	})
+}
+
+// TestAgent_SnapshotsComeAfterTheirParent checks that each new snapshot is
+// created at least a millisecond after its parent, even when the parent's
+// CreatedAt is ahead of this clock, so a row never ties with its parent at the
+// millisecond precision stores keep and GetLatestSnapshot finds the newest row.
+func TestAgent_SnapshotsComeAfterTheirParent(t *testing.T) {
+	reg := newTestRegistry(t)
+	store := newTestInMemStore[testState]()
+	af := defineCounterAgent(reg, "snapshotsAfterParent", WithSessionStore(store))
+	ctx := context.Background()
+
+	ahead := time.Now().Add(time.Hour)
+	if _, err := store.SaveSnapshot(ctx, "seed", func(*SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
+		return &SessionSnapshot[testState]{SessionID: "sess", Status: SnapshotStatusCompleted,
+			State: &SessionState[testState]{}, CreatedAt: ahead, UpdatedAt: ahead}, nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	turn, err := af.RunText(ctx, "turn", WithSnapshotID[testState]("seed"))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	conn, err := af.Connect(ctx, WithSnapshotID[testState](turn.SnapshotID))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	drainInBackground(conn)
+	sendText(t, conn, "detached turn")
+	if err := conn.Detach(); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	pending, err := conn.Output()
+	if err != nil {
+		t.Fatalf("Output: %v", err)
+	}
+	waitForSnapshot(t, store, pending.SnapshotID, 2*time.Second, func(s *SessionSnapshot[testState]) bool {
+		return s.Status == SnapshotStatusCompleted
+	})
+
+	parentAt := ahead
+	for _, id := range []string{turn.SnapshotID, pending.SnapshotID} {
+		snap, err := store.GetSnapshot(ctx, id)
+		if err != nil || snap == nil {
+			t.Fatalf("GetSnapshot(%s) = (%v, %v)", id, snap, err)
+		}
+		if snap.CreatedAt.Before(parentAt.Add(time.Millisecond)) {
+			t.Errorf("snapshot %s created at %v, want at least a millisecond after its parent's %v", id, snap.CreatedAt, parentAt)
+		}
+		parentAt = snap.CreatedAt
+	}
+	if latest, err := store.GetLatestSnapshot(ctx, "sess"); err != nil || latest == nil || latest.SnapshotID != pending.SnapshotID {
+		t.Errorf("GetLatestSnapshot = (%v, %v), want the detached run's row %s", latest, err, pending.SnapshotID)
+	}
 }
 
 func TestAgent_Detach_RequiresStore(t *testing.T) {
@@ -5615,7 +5623,11 @@ func TestAgent_GetSnapshotAction_BySessionID(t *testing.T) {
 	// The session-ID lookup returns the latest row whatever its status, so a
 	// reconnecting client can observe a failed/pending tip (unlike resume,
 	// which rejects it).
-	failedAt := time.Now()
+	tip, err := store.GetSnapshot(ctx, out2.SnapshotID)
+	if err != nil || tip == nil {
+		t.Fatalf("GetSnapshot(%s) = (%v, %v)", out2.SnapshotID, tip, err)
+	}
+	failedAt := snapshotTime(tip.CreatedAt)
 	failed, err := store.SaveSnapshot(ctx, "", func(_ *SessionSnapshot[testState]) (*SessionSnapshot[testState], error) {
 		return &SessionSnapshot[testState]{
 			SessionID:    out1.SessionID,
@@ -6169,16 +6181,42 @@ func TestAgent_Description(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects a second WithDescription", func(t *testing.T) {
+	t.Run("later WithDescription wins", func(t *testing.T) {
 		reg := newTestRegistry(t)
-		defer func() {
-			if recover() == nil {
-				t.Error("expected a panic when WithDescription is set twice")
-			}
-		}()
-		DefineCustomAgent(reg, "twice", noopFn,
+		af := DefineCustomAgent(reg, "twice", noopFn,
 			WithDescription[testState]("first"), WithDescription[testState]("second"))
+		if got := af.Desc().Description; got != "second" {
+			t.Errorf("Desc().Description = %q, want %q", got, "second")
+		}
 	})
+}
+
+// TestWithMaxSnapshotWait_Rejects pins the option's validation: the limit must
+// be positive.
+func TestWithMaxSnapshotWait_Rejects(t *testing.T) {
+	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+		return nil, nil
+	}
+	tests := []struct {
+		name string
+		opts []AgentOption[testState]
+		want string
+	}{
+		{"zero", []AgentOption[testState]{WithMaxSnapshotWait[testState](0)}, "must be positive"},
+		{"negative", []AgentOption[testState]{WithMaxSnapshotWait[testState](-time.Second)}, "must be positive"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				r := recover()
+				if r == nil || !strings.Contains(fmt.Sprint(r), tt.want) {
+					t.Errorf("panic = %v, want one containing %q", r, tt.want)
+				}
+			}()
+			DefineCustomAgent(newTestRegistry(t), "capped", noopFn,
+				append(tt.opts, WithSessionStore(newTestInMemStore[testState]()))...)
+		})
+	}
 }
 
 // TestAgent_RegisterCarriesCompanions verifies that registering an agent
@@ -8652,9 +8690,11 @@ func TestAgent_WithSessionID_OptionValidation(t *testing.T) {
 		!strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("WithState+WithSnapshotID: expected mutual-exclusion error, got %v", err)
 	}
-	if _, err := af.Connect(ctx, WithSessionID[testState]("s"), WithSessionID[testState]("s2")); err == nil ||
-		!strings.Contains(err.Error(), "more than once") {
-		t.Errorf("WithSessionID twice: expected duplicate-option error, got %v", err)
+	// A repeated option replaces the earlier one, as in the ai package.
+	if init, err := resolveInvocationInit("sessionOptFlow", []InvocationOption[testState]{
+		WithSessionID[testState]("s"), WithSessionID[testState]("s2"),
+	}); err != nil || init == nil || init.SessionID != "s2" {
+		t.Errorf("WithSessionID twice: got init %+v, err %v; want SessionID \"s2\"", init, err)
 	}
 	// An empty session ID is an explicit error, not a silent no-op: a
 	// pipelined AgentOutput.SessionID from a storeless invocation must not
@@ -9000,56 +9040,88 @@ func TestAgent_OutputUnblocksOnCancel(t *testing.T) {
 	}
 }
 
-// TestPromptAgent_FailedTurnReasonIsNotTheModelReason pins the one place the
-// generate loop's finish reason must not be forwarded verbatim. A response
-// the loop completed and post-processing then rejected keeps the model's own
-// reason ("stop") beside its ErrInvalidOutput, so a turn that failed would
-// otherwise report a success on its TurnEnd chunk and on its snapshot row.
-func TestPromptAgent_FailedTurnReasonIsNotTheModelReason(t *testing.T) {
-	ctx := context.Background()
-	reg := newTestRegistry(t)
-	ai.ConfigureFormats(reg)
-	defineTestModel(reg, "test/badjson", nil,
-		func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			// Not the JSON the output type asks for, and the model itself
-			// finished cleanly: exactly the shape that carries "stop" out of
-			// a failed generate.
-			return &ai.ModelResponse{
-				Request:      req,
+// TestPromptAgent_RejectedCompletionCommitsTheSeam pins how a turn ends when
+// the model finished and the turn rejected what it returned: output off the
+// schema, or a blocked response. The model's message must not be committed,
+// since a re-attempt would send the model its own rejected output, so the
+// failed row holds the request's messages only. The reason is pinned too:
+// both responses carry the model's own finish reason ("stop", "blocked"),
+// and a failed turn must not forward it onto its TurnEnd chunk or its row.
+func TestPromptAgent_RejectedCompletionCommitsTheSeam(t *testing.T) {
+	tests := []struct {
+		name       string
+		resp       *ai.ModelResponse
+		wantStatus status.Name
+	}{
+		{
+			name: "output off the schema",
+			resp: &ai.ModelResponse{
 				Message:      ai.NewModelTextMessage("not json"),
 				FinishReason: ai.FinishReasonStop,
-			}, nil
+			},
+			wantStatus: status.Internal,
+		},
+		{
+			name: "blocked",
+			resp: &ai.ModelResponse{
+				Message:       ai.NewModelTextMessage("I can't help with that."),
+				FinishReason:  ai.FinishReasonBlocked,
+				FinishMessage: "safety",
+			},
+			wantStatus: status.FailedPrecondition,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			reg := newTestRegistry(t)
+			ai.ConfigureFormats(reg)
+			defineTestModel(reg, "test/rejected", nil,
+				func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+					resp := *tt.resp
+					resp.Request = req
+					return &resp, nil
+				})
+			ai.DefineGenerateAction(ctx, reg)
+
+			store := newTestInMemStore[testState]()
+			af := DefineAgent[testState](reg, "rejectedAgent", InlinePrompt{
+				ai.WithModelName("test/rejected"),
+				ai.WithOutputType(struct {
+					Name string `json:"name"`
+				}{}),
+			}, WithSessionStore(store))
+
+			out, err := af.RunText(ctx, "hi")
+			if err != nil {
+				t.Fatalf("RunText: %v", err)
+			}
+			if out.FinishReason != AgentFinishReasonFailed {
+				t.Errorf("output FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
+			}
+			if out.Error == nil || out.Error.Status != tt.wantStatus {
+				t.Errorf("output Error = %+v, want status %s", out.Error, tt.wantStatus)
+			}
+			if out.SnapshotID == "" {
+				t.Fatal("no snapshot: the turn committed the seam, so it must have one")
+			}
+			snap, err := af.GetSnapshot(ctx, out.SnapshotID)
+			if err != nil {
+				t.Fatalf("GetSnapshot: %v", err)
+			}
+			if snap.Status != SnapshotStatusFailed {
+				t.Errorf("snapshot Status = %q, want %q", snap.Status, SnapshotStatusFailed)
+			}
+			if snap.FinishReason != AgentFinishReasonFailed {
+				t.Errorf("snapshot FinishReason = %q, want %q: the model's own reason must not ride onto a failed row",
+					snap.FinishReason, AgentFinishReasonFailed)
+			}
+			msgs := snap.State.Messages
+			if len(msgs) != 1 || msgs[0].Role != ai.RoleUser || msgs[0].Content[0].Text != "hi" {
+				b, _ := json.Marshal(msgs)
+				t.Errorf("committed messages = %s, want only the user's \"hi\": the rejected message must not be a resume point", b)
+			}
 		})
-	ai.DefineGenerateAction(ctx, reg)
-
-	store := newTestInMemStore[testState]()
-	af := DefineAgent[testState](reg, "invalidOutputAgent", InlinePrompt{
-		ai.WithModelName("test/badjson"),
-		ai.WithOutputType(struct {
-			Name string `json:"name"`
-		}{}),
-	}, WithSessionStore(store))
-
-	out, err := af.RunText(ctx, "hi")
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
-	}
-	if out.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("output FinishReason = %q, want %q", out.FinishReason, AgentFinishReasonFailed)
-	}
-	if out.SnapshotID == "" {
-		t.Fatal("no snapshot: the turn committed the partial, so it must have one")
-	}
-	snap, err := af.GetSnapshot(ctx, out.SnapshotID)
-	if err != nil {
-		t.Fatalf("GetSnapshot: %v", err)
-	}
-	if snap.Status != SnapshotStatusFailed {
-		t.Errorf("snapshot Status = %q, want %q", snap.Status, SnapshotStatusFailed)
-	}
-	if snap.FinishReason != AgentFinishReasonFailed {
-		t.Errorf("snapshot FinishReason = %q, want %q: the model's own reason must not ride onto a failed row",
-			snap.FinishReason, AgentFinishReasonFailed)
 	}
 }
 

@@ -16,15 +16,21 @@
 
 import { GenerateRequest, GenkitError, z, type ActionContext } from 'genkit';
 import process from 'process';
-import { extractMedia } from '../common/utils.js';
-import { ClientOptions, ImagenInstance, VeoImage, VeoVideo } from './types.js';
+import { ClientOptions, VeoImage, VeoVideo } from './types.js';
 
+export { isObject } from '../common/types.js';
 export {
+  appendToWavData,
+  camelToSnakeCase,
   checkModelName,
   cleanSchema,
+  convertObjectKeysToSnakeCase,
   extractText,
   extractVersion,
+  isStringArray,
   modelName,
+  stripLeadingId3Tags,
+  toSnakeCaseObj,
 } from '../common/utils.js';
 
 /**
@@ -151,20 +157,6 @@ export function extractVeoVideo(
   };
 }
 
-export function extractImagenImage(
-  request: GenerateRequest
-): ImagenInstance['image'] | undefined {
-  const image = extractMedia(request, {
-    metadataType: 'base',
-    isDefault: true,
-  })?.url.split(',')[1];
-
-  if (image) {
-    return { bytesBase64Encoded: image };
-  }
-  return undefined;
-}
-
 /**
  * For each field in ClientOptions, if the request config object has
  * a matching non-empty/non-null field, it overrides the original.
@@ -264,50 +256,4 @@ export function applyContextOverrides(
   // `context.config` (from checkOperation/cancelOperation's top-level
   // `config`).
   return calculateRequestOptions(newOptions, context.config);
-}
-
-/**
- * Converts a string in camelCase to lowercase snake_case.
- */
-export function camelToSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
-}
-
-export function convertObjectKeysToSnakeCase(obj: Array<unknown>): unknown[];
-export function convertObjectKeysToSnakeCase(
-  obj: Record<string, unknown>
-): Record<string, unknown>;
-export function convertObjectKeysToSnakeCase(obj: unknown): unknown;
-
-export function convertObjectKeysToSnakeCase(obj: unknown): unknown {
-  if (typeof obj !== 'object' || obj === null) {
-    return obj;
-  }
-
-  if (Array.isArray(obj)) {
-    return obj.map((item) => convertObjectKeysToSnakeCase(item));
-  }
-
-  const newObj: Record<string, unknown> = {};
-  for (const key in obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
-      const snakeCaseKey = camelToSnakeCase(key);
-      newObj[snakeCaseKey] = convertObjectKeysToSnakeCase(obj[key]);
-    }
-  }
-  return newObj;
-}
-
-export function isObject(val: unknown): val is Record<string, unknown> {
-  return typeof val === 'object' && val !== null && !Array.isArray(val);
-}
-
-/** Reports whether every element of an array is a string. */
-export function isStringArray(values: unknown[]): values is string[] {
-  return values.every((v) => typeof v === 'string');
-}
-
-export function toSnakeCaseObj(val: unknown): Record<string, unknown> {
-  const snakeVal = convertObjectKeysToSnakeCase(val);
-  return isObject(snakeVal) ? snakeVal : {};
 }

@@ -150,6 +150,13 @@ describe('VertexAI Plugin', () => {
       }
     });
 
+    it('should register Deep Research as a background model', async () => {
+      const deepResearch = await ai.registry.lookupAction(
+        '/background-model/vertexai/deep-research-preview-04-2026'
+      );
+      assert.ok(deepResearch, 'Deep Research should be a background model');
+    });
+
     it('should register all known Embedder models', async () => {
       for (const modelName in EMBEDDER_TEST_ONLY.KNOWN_MODELS) {
         const modelPath = `/embedder/vertexai/${modelName}`;
@@ -179,6 +186,13 @@ describe('VertexAI Plugin', () => {
       const model = await ai.registry.lookupAction(testImagenPath);
       assert.ok(model, `${testImagenName} should be resolvable and registered`);
       assert.strictEqual(model?.__action.name, `vertexai/${testImagenName}`);
+    });
+
+    it('should resolve unlisted Deep Research names as background models', async () => {
+      const deepResearch = await ai.registry.lookupAction(
+        '/background-model/vertexai/deep-research-preview-12-2026'
+      );
+      assert.ok(deepResearch);
     });
 
     it('should register a new Embedder when looked up', async () => {

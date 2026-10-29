@@ -17,6 +17,8 @@
 """Tests for the per-event-loop client cache."""
 
 import asyncio
+from unittest import mock
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -52,3 +54,94 @@ async def test_decorator_form_caches_the_factory_result() -> None:
     first = http_client()
     assert http_client() is first
     await first.aclose()
+
+
+class _Bistro:
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+        self.builds = 0
+
+    @loop_local_client
+    def client(self) -> httpx.AsyncClient:
+        """Per-loop HTTP client for the bistro."""
+        self.builds += 1
+        return httpx.AsyncClient(headers={'x-api-key': self.api_key})
+
+
+@pytest.mark.asyncio
+async def test_method_form_caches_per_instance() -> None:
+    bistro = _Bistro('k1')
+    assert bistro.client.__name__ == 'client'  # ty: ignore[unresolved-attribute]
+    assert bistro.client.__doc__ == 'Per-loop HTTP client for the bistro.'
+    first = bistro.client()
+    assert bistro.client() is first
+    assert bistro.builds == 1
+    assert first.headers['x-api-key'] == 'k1'
+    await first.aclose()
+
+
+@pytest.mark.asyncio
+async def test_method_form_keeps_instances_apart() -> None:
+    a, b = _Bistro('k1'), _Bistro('k2')
+    assert a.client() is not b.client()
+    assert b.client().headers['x-api-key'] == 'k2'
+    await a.client().aclose()
+    await b.client().aclose()
+
+
+def test_method_form_gives_each_loop_its_own_client() -> None:
+    bistro = _Bistro('k1')
+
+    async def grab() -> httpx.AsyncClient:
+        return bistro.client()
+
+    assert asyncio.run(grab()) is not asyncio.run(grab())
+    assert bistro.builds == 2
+
+
+@pytest.mark.asyncio
+async def test_instance_attribute_overrides_method_form() -> None:
+    """Tests stub the client by assigning the attribute, as with cached_property."""
+    bistro = _Bistro('k1')
+    stub = MagicMock()
+    bistro.client = lambda: stub
+    assert bistro.client() is stub
+    assert bistro.builds == 0
+
+
+def test_method_form_stays_loop_local_after_first_read() -> None:
+    """The bound getter cached in __dict__ is itself per-loop."""
+    bistro = _Bistro('k1')
+    getter = bistro.client
+
+    async def grab() -> httpx.AsyncClient:
+        assert bistro.client is getter
+        return bistro.client()
+
+    first, second = asyncio.run(grab()), asyncio.run(grab())
+    assert first is not second
+    assert bistro.builds == 2
+
+
+@pytest.mark.asyncio
+async def test_del_drops_bound_getter_and_rebuilds() -> None:
+    bistro = _Bistro('k1')
+    first = bistro.client()
+    del bistro.client
+    second = bistro.client()
+    assert second is not first
+    assert bistro.builds == 2
+    await first.aclose()
+    await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_patch_object_on_unread_attribute_restores() -> None:
+    bistro = _Bistro('k1')
+    stub = MagicMock()
+    with mock.patch.object(bistro, 'client', lambda: stub):
+        assert bistro.client() is stub
+    real = bistro.client()
+    assert real is not stub
+    assert bistro.builds == 1
+    await real.aclose()

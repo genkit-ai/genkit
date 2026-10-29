@@ -31,21 +31,39 @@ import {
   model,
 } from '../../src/googleai/veo.js';
 
-const { toVeoParameters, fromVeoOperation, GENERIC_MODEL, KNOWN_MODELS } =
-  TEST_ONLY;
+const {
+  toVeoParameters,
+  fromVeoOperation,
+  GENERIC_MODEL,
+  HIDDEN_MODELS,
+  ALL_MODELS,
+} = TEST_ONLY;
 
 describe('Google AI Veo', () => {
-  describe('KNOWN_MODELS', () => {
+  describe('ALL_MODELS', () => {
     it('should contain non-zero number of models', () => {
-      assert.ok(Object.keys(KNOWN_MODELS).length > 0);
+      assert.ok(Object.keys(ALL_MODELS).length > 0);
+    });
+  });
+
+  describe('HIDDEN_MODELS', () => {
+    it('should set a stage and keep the default capabilities', () => {
+      for (const ref of Object.values(HIDDEN_MODELS)) {
+        assert.strictEqual(ref.info?.stage, 'deprecated', ref.name);
+        assert.deepStrictEqual(
+          ref.info?.supports,
+          GENERIC_MODEL.info?.supports,
+          ref.name
+        );
+      }
     });
   });
 
   describe('listKnownModels()', () => {
-    it('should return an array of model actions', () => {
+    it('should return an array of model actions, including hidden models', () => {
       const models = listKnownModels();
       assert.ok(Array.isArray(models));
-      assert.strictEqual(models.length, Object.keys(KNOWN_MODELS).length);
+      assert.strictEqual(models.length, Object.keys(ALL_MODELS).length);
       models.forEach((m) => {
         assert.ok(m.__action.name.startsWith('googleai/veo-'));
         assert.ok(m.start);

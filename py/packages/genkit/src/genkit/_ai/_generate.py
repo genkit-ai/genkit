@@ -1585,7 +1585,7 @@ async def run_model_until_aborted(
     """
     abort_signal = ctx.abort_signal
     if abort_signal is None:
-        return await model.run(
+        return await model._run(
             input=request,
             context=ctx.custom_context,
             on_chunk=ctx.on_chunk,
@@ -1604,7 +1604,7 @@ async def run_model_until_aborted(
 
     watcher_task = asyncio.create_task(watch_abort())
     try:
-        return await model.run(
+        return await model._run(
             input=request,
             context=ctx.custom_context,
             on_chunk=ctx.on_chunk,
@@ -1637,6 +1637,7 @@ async def call_model(
     # Last turn's model answer does not belong to this one. It is set again
     # the moment the model answers.
     call.answered = None
+
     request = await turn_request(options=options, resolved=resolved)
     # Stashed before the model runs so a failure on this turn still echoes the
     # request the caller made instead of a rebuilt subset of it.

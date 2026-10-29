@@ -31,6 +31,7 @@ from typing import (
     ClassVar,
     Generic,
     NamedTuple,
+    TypeAlias,
     Union,
     cast,
     get_args,
@@ -50,6 +51,7 @@ from genkit._core._model import (
     EmbedRequest,
     ModelRequest,
     ModelResponse,
+    ModelResponseChunk,
     config_type_path,
     declared_config_type,
     reject_config_api_key,
@@ -271,13 +273,13 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 # An action function takes at most one input and at most one run context, in
 # either order:
 #
-#   async def lookup(order: Order, ctx: ActionRunContext) -> Receipt: ...
-#   async def lookup(ctx: ActionRunContext, order: Order) -> Receipt: ...  # same
-#   async def ping(ctx: ActionRunContext) -> str: ...                      # no input
+#   async def lookup(order: Order, ctx: FlowContext) -> Receipt: ...
+#   async def lookup(ctx: FlowContext, order: Order) -> Receipt: ...  # same
+#   async def ping(ctx: FlowContext) -> str: ...                      # no input
 #
 # Rules for the function:
-#   - The context is the parameter annotated ActionRunContext or a subclass
-#     (ToolRunContext, ...).
+#   - The context is the parameter annotated ActionRunContext (FlowContext is
+#     the same class) or a subclass (ToolContext).
 #   - Any other parameter is the input, so there's only one. Put more fields
 #     on one input model.
 #   - Input and return types need a JSON schema: a Pydantic model, dataclass,
@@ -319,7 +321,7 @@ class ActionParams:
             # A missing input is left out only when the parameter has a
             # default, so `weather(city='Paris')` still runs as Paris. A
             # required parameter still receives the sentinel (bidi agents
-            # ignore it when `ctx.input_stream` is the real source).
+            # ignore it when `ctx._input_stream` is the real source).
             if not (input is NO_INPUT and self.input_optional):
                 kwargs[self.input.name] = input
         if self.context is not None:
@@ -338,6 +340,31 @@ def describe_action(kind: ActionKind, name: str) -> str:
     return f"{_kind_label(kind)} '{name}'"
 
 
+_MODEL_CONTEXT_KINDS = frozenset({
+    ActionKind.MODEL,
+    ActionKind.BACKGROUND_MODEL,
+    ActionKind.CHECK_OPERATION,
+    ActionKind.CANCEL_OPERATION,
+})
+
+
+def _public_context_name(kind: ActionKind) -> str:
+    """The public context type a handler of this kind annotates its ctx with.
+
+    ToolContext for tools, ModelContext (genkit.model) for model and
+    background-model ops, AgentContext (genkit.exp.agent) for agents, and
+    FlowContext for everything else. FlowContext is the public name of the
+    run-context class, so it's correct for embedders, evaluators and the rest.
+    """
+    if kind == ActionKind.TOOL:
+        return 'ToolContext'
+    if kind in _MODEL_CONTEXT_KINDS:
+        return 'ModelContext'
+    if kind == ActionKind.AGENT:
+        return 'AgentContext'
+    return 'FlowContext'
+
+
 def find_input_and_context(
     fn: Callable[..., object],
     hints: Mapping[str, Any],
@@ -350,7 +377,7 @@ def find_input_and_context(
     ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
     owner = describe_action(kind, name)
-    context_class = 'ToolRunContext' if kind == ActionKind.TOOL else 'ActionRunContext'
+    context_class = _public_context_name(kind)
 
     params = [
         p
@@ -402,19 +429,20 @@ def find_input_and_context(
 def known_annotation_names(kind: ActionKind) -> dict[str, object]:
     """Genkit types a handler of this kind always takes or returns, by name.
 
-    A model gets a ModelRequest and returns a ModelResponse, an embedder
-    gets an EmbedRequest and returns an EmbedResponse, and a background
-    model's start, check, and cancel deal in Operations. When the handler
-    imports these only under TYPE_CHECKING, resolve_type_hints looks the
-    missing names up here, so ``ModelRequest[GardenConfig]`` keeps its
-    config type and any other missing name still raises.
+    A model gets a ModelRequest and ModelContext and returns a ModelResponse,
+    an embedder gets an EmbedRequest and returns an EmbedResponse, and a
+    background model's start, check, and cancel deal in Operations and
+    ModelContext. When the handler imports these only under TYPE_CHECKING,
+    resolve_type_hints looks the missing names up here, so
+    ``ModelRequest[GardenConfig]`` keeps its config type and any other missing
+    name still raises.
     """
     if kind == ActionKind.MODEL:
-        return {'ModelRequest': ModelRequest, 'ModelResponse': ModelResponse}
+        return {'ModelRequest': ModelRequest, 'ModelResponse': ModelResponse, 'ModelContext': ModelContext}
     if kind == ActionKind.BACKGROUND_MODEL:
-        return {'ModelRequest': ModelRequest, 'Operation': Operation}
+        return {'ModelRequest': ModelRequest, 'Operation': Operation, 'ModelContext': ModelContext}
     if kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
-        return {'Operation': Operation}
+        return {'Operation': Operation, 'ModelContext': ModelContext}
     if kind == ActionKind.EMBEDDER:
         return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse}
     return {}
@@ -477,7 +505,7 @@ def signature_of(fn: Callable[..., object]) -> inspect.Signature:
     """``inspect.signature(fn)``, without failing on a name missing at runtime.
 
     From Python 3.14 annotations are evaluated when read, so a plain
-    ``inspect.signature`` raises on a TYPE_CHECKING-only ``ctx: ToolRunContext``.
+    ``inspect.signature`` raises on a TYPE_CHECKING-only ``ctx: ToolContext``.
     """
     if sys.version_info >= (3, 14):
         import annotationlib
@@ -545,9 +573,9 @@ def _resolve_one(annotation: object, module_globals: dict[str, Any]) -> object:
 def _is_context_annotation(annotation: object) -> bool:
     """True if ``annotation`` marks the run-context parameter.
 
-    That's ActionRunContext or any subclass, written any of these ways:
-    ``ToolRunContext``, ``ActionRunContext[str]``, ``ToolRunContext | None``,
-    or as a string (see _string_names_context).
+    That's ActionRunContext (FlowContext) or any subclass, written any of these
+    ways: ``ToolContext``, ``FlowContext[str]``, ``ToolContext | None``, or as
+    a string (see _string_names_context).
     """
     # On 3.14 a name missing at runtime is a ForwardRef; use its text.
     forward_arg = getattr(annotation, '__forward_arg__', None)
@@ -559,20 +587,26 @@ def _is_context_annotation(annotation: object) -> bool:
     origin = get_origin(annotation)
     if origin is Union or origin is types.UnionType:
         return any(_is_context_annotation(arg) for arg in get_args(annotation))
-    # ActionRunContext[str] -> ActionRunContext
+    # FlowContext[str] -> ActionRunContext
     cls = origin if origin is not None else annotation
     return isinstance(cls, type) and issubclass(cls, ActionRunContext)
+
+
+# Public names for the run-context classes. FlowContext, ModelContext, and
+# AgentContext are aliases over ActionRunContext; ToolContext is listed so a
+# string annotation matches even before genkit._ai._tools is imported.
+_CONTEXT_ALIAS_NAMES = frozenset({'FlowContext', 'ToolContext', 'AgentContext', 'ModelContext'})
 
 
 def _string_names_context(annotation: str) -> bool:
     """True if a string annotation names a run-context class.
 
-    'ToolRunContext', 'ToolRunContext | None', 'Optional[ToolRunContext]',
-    'ActionRunContext[str]' and 'genkit.ToolRunContext' all do.
+    'ToolContext', 'FlowContext | None', 'Optional[ToolContext]',
+    'FlowContext[str]' and 'genkit.ToolContext' all do.
     """
     # The annotation couldn't be resolved to a class, so match by name against
-    # ActionRunContext and every subclass defined so far (ToolRunContext, ...).
-    context_names: set[str] = set()
+    # the public aliases, ActionRunContext and every subclass defined so far.
+    context_names: set[str] = set(_CONTEXT_ALIAS_NAMES)
     classes: list[type] = [ActionRunContext]
     while classes:
         cls = classes.pop()
@@ -585,7 +619,7 @@ def _string_names_context(annotation: str) -> bool:
             if name.startswith(prefix) and name.endswith(']'):
                 name = name[len(prefix) : -1].strip()  # Optional[X] -> X
         name = name.split('[', 1)[0]  # ActionRunContext[str] -> ActionRunContext
-        name = name.rsplit('.', 1)[-1]  # genkit.ToolRunContext -> ToolRunContext
+        name = name.rsplit('.', 1)[-1]  # genkit.ToolContext -> ToolContext
         if name in context_names:
             return True
     return False
@@ -705,10 +739,15 @@ def input_from_json(value: object) -> object:
 
 
 class ActionRunContext(Generic[ChunkT]):
-    """Execution context for an action.
+    """What an action sees while it runs: request context, streaming, and an abort signal.
 
-    Provides read-only access to action context (auth, metadata), streaming
-    support, and an abort signal for cooperative cancellation.
+    Apps use it as ``genkit.FlowContext``; model and background-model plugins
+    use ``genkit.model.ModelContext``. ``ChunkT`` is the type ``send_chunk`` accepts.
+
+        @ai.flow()
+        async def plate_dish(dish: str, ctx: FlowContext[str]) -> str:
+            ctx.send_chunk('searing')
+            return f'{dish} for {ctx.context.get("table", "walk-in")}'
     """
 
     def __init__(
@@ -722,33 +761,15 @@ class ActionRunContext(Generic[ChunkT]):
         self._context: dict[str, Any] = context if context is not None else {}
         self._streaming_callback = streaming_callback
         self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
-        self._init = init
-        self._input_stream = input_stream
+        # Bidi plumbing, read only by BidiAction: the session init value sent
+        # on connection open, and the live stream of per-turn inputs.
+        self._init: object | None = init
+        self._input_stream: AsyncIterator[object] | None = input_stream
 
     @property
     def context(self) -> dict[str, Any]:
-        """The action context."""
+        """The request context (auth, headers, ...) the caller attached."""
         return self._context
-
-    @property
-    def init(self) -> object | None:
-        """The session initialization value passed on connection open, if any.
-
-        For request-response actions this is None; for bidi streams (like live
-        agent chat) this carries whatever credentials/metadata the caller sent
-        in the handshake before any turns started.
-        """
-        return self._init
-
-    @property
-    def input_stream(self) -> AsyncIterator[object] | None:
-        """The incoming input stream for bidi actions, if any.
-
-        An action that receives inputs continuously across a session (e.g. live
-        agent chat) instead gets its turns over time here. Plain actions never
-        look at it — only bidi actions drain it turn by turn.
-        """
-        return self._input_stream
 
     @property
     def is_streaming(self) -> bool:
@@ -776,6 +797,24 @@ class ActionRunContext(Generic[ChunkT]):
     @staticmethod
     def _current_context() -> dict[str, Any] | None:
         return _action_context.get(None)
+
+
+# The app-facing name for a flow's ctx. Same class, so FlowContext[str] works.
+FlowContext = ActionRunContext
+
+# The context parameter passed to model and background-model functions.
+ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
+"""Annotation alias for ``ActionRunContext[ModelResponseChunk]``: the ctx a model function gets.
+
+- ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
+- ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
+- ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
+- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+
+Use it in annotations only. It's a subscripted generic, so
+``isinstance(ctx, ModelContext)`` raises TypeError; runtime checks should use
+``isinstance(ctx, ActionRunContext)``.
+"""
 
 
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
@@ -907,37 +946,58 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     async def run(
         self,
         input: InputT | None = NO_INPUT,
+        *,
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
-        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
-        input_stream: AsyncIterator[InputT] | None = None,
     ) -> ActionResponse[OutputT]:
-        """Execute the action with optional input validation.
+        """Run the action and return its result with trace ids.
 
         Args:
-            input: The input to the action. Will be validated against the input schema.
-                Omit it to use the function's own default. On a flow, an explicit
-                None is a value and is validated like any other.
-            on_chunk: Optional streaming callback for chunked responses.
-            context: Optional context dict for the action.
-            on_trace_start: Optional callback invoked when trace starts.
-            telemetry_labels: Custom labels to set as direct span attributes.
-            abort_signal: Optional shared abort event for cooperative cancellation.
-            init: Optional per-run initialization data (e.g. an agent's session
-                identity). Validated against the init schema and exposed to the
-                action fn via ``ActionRunContext.init``; plain actions ignore it.
-            input_stream: Optional live stream of per-turn inputs for a bidi
-                action. When omitted, a one-shot run is exactly the single ``input``;
-                only bidi actions read it. Exposed via ``ActionRunContext.input_stream``.
+            input: The input, validated against the input schema. Omit it to use
+                the function's own default. On a flow, an explicit None is a
+                value and is validated like any other.
+            on_chunk: Called with each chunk the action streams.
+            context: Request context (auth, headers, ...), read as ``ctx.context``.
+            telemetry_labels: Custom labels set as span attributes.
+            init: Session init value for a bidi action (e.g. a served agent's
+                session identity). Validated against the init schema; plain
+                actions ignore it.
 
         Returns:
-            ActionResponse containing the result and trace metadata.
+            ActionResponse with the result, trace id and span id.
 
         Raises:
             GenkitError: If input validation fails (INVALID_ARGUMENT status).
+        """
+        return await self._run(
+            input,
+            on_chunk=on_chunk,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            init=init,
+        )
+
+    async def _run(
+        self,
+        input: InputT | None = NO_INPUT,
+        *,
+        on_chunk: Callable[[ChunkT], None] | None = None,
+        context: dict[str, Any] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+        abort_signal: asyncio.Event | None = None,
+        init: InitT | None = None,
+        on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
+        input_stream: AsyncIterator[InputT] | None = None,
+    ) -> ActionResponse[OutputT]:
+        """``run`` plus the hooks only the Dev UI and bidi plumbing use.
+
+        on_trace_start: Called with (trace_id, span_id) once the span opens, so
+            the reflection server can show the live trace and wire up cancel.
+        input_stream: Live stream of per-turn inputs for a bidi action. When
+            omitted, a one-shot run is exactly the single ``input``. Stored on
+            ``ctx._input_stream``; only bidi actions read it.
         """
         # Only a flow treats an explicit None as a value; for every other action
         # None still means "no input".
@@ -959,20 +1019,22 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             token = _action_context.set(context)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
+        action_ctx = ActionRunContext(
+            context=_action_context.get(None),
+            streaming_callback=streaming_cb,
+            abort_signal=abort_signal,
+            init=init,
+            input_stream=input_stream,
+        )
 
         try:
             return await self._run_with_telemetry(
                 input,
-                ActionRunContext(
-                    context=_action_context.get(None),
-                    streaming_callback=streaming_cb,
-                    abort_signal=abort_signal,
-                    init=init,
-                    input_stream=input_stream,
-                ),
+                action_ctx,
                 on_trace_start,
                 telemetry_labels,
             )
+
         finally:
             if token is not None:
                 _action_context.reset(token)
@@ -980,8 +1042,29 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     def stream(
         self,
         input: InputT | None = NO_INPUT,
+        *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
+        init: InitT | None = None,
+    ) -> StreamResponse[ChunkT, OutputT]:
+        """Start the action and return its chunks (``.stream``) and result (``.response``).
+
+        Takes the same keyword arguments as ``run``, minus ``on_chunk``.
+        """
+        return self._stream(
+            input,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            init=init,
+        )
+
+    def _stream(
+        self,
+        input: InputT | None = NO_INPUT,
+        *,
+        context: dict[str, Any] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
@@ -1005,6 +1088,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             input=input,
             context=context,
             telemetry_labels=telemetry_labels,
+            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
             stop_on_early_exit=True,
@@ -1016,6 +1100,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input: InputT | None,
         context: dict[str, Any] | None,
         telemetry_labels: dict[str, object] | None,
+        abort_signal: asyncio.Event | None = None,
         init: InitT | None,
         input_stream: AsyncIterator[InputT] | None,
         stop_on_early_exit: bool,
@@ -1025,11 +1110,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         def send_chunk(c: ChunkT) -> None:
             channel.send(c)
 
-        resp = self.run(
-            input=input,
+        resp = self._run(
+            input,
+            on_chunk=send_chunk,
             context=context,
             telemetry_labels=telemetry_labels,
-            on_chunk=send_chunk,
+            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
         )
@@ -1265,8 +1351,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         attributes = {k: str(v) for k, v in (telemetry_labels or {}).items()}
         attributes.update({metadata_key(k): v for k, v in extra_metadata.items()})
-        if ctx.init is not None:
-            attributes[Attr.INIT] = to_json_attr(ctx.init)
+        if ctx._init is not None:
+            attributes[Attr.INIT] = to_json_attr(ctx._init)
 
         # A failure propagates as the body raised it. The trace id stays on
         # the span; nothing is written onto the caller's exception.
@@ -1312,10 +1398,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             # The wrapper takes (input, ctx) and forwards to the user's
             # function with self.params.call. Keep the sentinel so a
             # defaulted tool input is omitted there instead of becoming None.
-            output = await self._fn(input, ctx)
+            coro = self._fn(input, ctx)
         else:
-            output = await self._params.call(self._fn, input, ctx)
-        return output
+            coro = self._params.call(self._fn, input, ctx)
+        return await coro
 
 
 async def single_item_stream(item: InputT) -> AsyncIterator[InputT]:
@@ -1393,10 +1479,10 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
 class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
     """An Action extended with bidirectional streaming via stream_bidi().
 
-    Both one-shot calls and live sessions run through the same Action.run() /
-    stream() path: run() drives the fn with a single input, while stream_bidi()
-    is sugar that hands run() a live input stream and returns a connection
-    handle for sending per-turn inputs and receiving chunks.
+    One-shot calls and live sessions run the same fn: run() and stream() hand
+    it a single input as a one-item stream, while stream_bidi() starts the
+    stream path with a live input stream and returns a connection handle for
+    sending per-turn inputs and receiving chunks.
     """
 
     def __init__(
@@ -1437,28 +1523,29 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
 
         The bidi fn reads its per-turn inputs from an async stream and emits
         chunks through a callback — the same pair a plain action fn gets on its
-        ctx. A live chat supplies ``ctx.input_stream``; a one-shot run has just
+        ctx. A live chat supplies ``ctx._input_stream``; a one-shot run has just
         the single ``input``, which we hand over as a one-item stream. init
         (session identity) rides the run's init channel, separate from inputs.
         """
-        if ctx.input_stream is not None:
+        if ctx._input_stream is not None:
             # ctx carries the stream as AsyncIterator[object]; here we know it's
             # this action's InputT. (ty collapses InputT to object and sees this
             # as redundant; pyright needs it.)
-            input_stream = cast('AsyncIterator[InputT]', ctx.input_stream)  # ty: ignore[redundant-cast]
+            input_stream = cast('AsyncIterator[InputT]', ctx._input_stream)  # ty: ignore[redundant-cast]
         else:
             input_stream = single_item_stream(input)
-        return await self.bidi_fn(cast(InitT, ctx.init), input_stream, ctx.send_chunk)
+        return await self.bidi_fn(cast(InitT, ctx._init), input_stream, ctx.send_chunk)
 
     async def stream_bidi(
         self,
         init: InitT | None = None,
+        *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
     ) -> BidiConnection[InputT, ChunkT, OutputT]:
         """Start a bidirectional streaming session over the single stream() primitive.
 
-        Opens an input channel, kicks off ``stream(input_stream=channel)``, and
+        Opens an input channel, kicks off ``_stream(input_stream=channel)``, and
         returns a BidiConnection whose send/close push per-turn inputs into that
         channel while receive/output read the run's chunks and final result.
         ``init`` is the session identity for the whole connection; per-turn

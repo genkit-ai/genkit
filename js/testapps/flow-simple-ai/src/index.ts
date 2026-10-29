@@ -1137,13 +1137,13 @@ ai.defineFlow('googleSearchRetrieval', async (thing) => {
   return text;
 });
 
-ai.defineFlow('googleai-imagen', async (thing) => {
+ai.defineFlow('googleai-image', async (thing) => {
   const { message } = await ai.generate({
-    model: googleAI.model('imagen-4.0-generate-001'),
+    model: googleAI.model('gemini-nano-banana-2.1'),
     prompt:
       thing ??
       `Dark but cozy room. A programmer happily programming an AI library.`,
-    config: { numberOfImages: 4, aspectRatio: '16:9' },
+    config: { imageConfig: { aspectRatio: '16:9' } },
   });
 
   return message;

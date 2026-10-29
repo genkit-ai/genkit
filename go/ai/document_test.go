@@ -19,9 +19,11 @@ package ai
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/goccy/go-yaml"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -253,6 +255,147 @@ func TestNewDataPart(t *testing.T) {
 			t.Errorf("Data = %v, want %v", p2.Data, p.Data)
 		}
 	})
+}
+
+func TestDataPartRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+		json string
+	}{
+		{"nil", nil, "null"},
+		{"nil map", map[string]any(nil), "null"},
+		{"nil slice", []any(nil), "null"},
+		{"nil pointer", (*string)(nil), "null"},
+		{"false", false, "false"},
+		{"zero", 0, "0"},
+		{"empty string", "", `""`},
+		{"empty map", map[string]any{}, "{}"},
+		{"empty slice", []any{}, "[]"},
+		{"object", map[string]any{"answer": 42}, `{"answer":42}`},
+		{"array", []any{1, "two", nil}, `[1,"two",null]`},
+	}
+	formats := []struct {
+		name      string
+		marshal   func(any) ([]byte, error)
+		unmarshal func([]byte, any) error
+	}{
+		{"JSON", json.Marshal, json.Unmarshal},
+		{"YAML", func(v any) ([]byte, error) {
+			return yaml.MarshalWithOptions(v, yaml.UseJSONMarshaler())
+		}, yaml.Unmarshal},
+	}
+	for _, tt := range tests {
+		for _, format := range formats {
+			t.Run(tt.name+"/"+format.name, func(t *testing.T) {
+				p := NewDataPart(tt.data)
+				p.Metadata = map[string]any{"source": "test"}
+				b, err := format.marshal(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got Part
+				if err := format.unmarshal(b, &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Kind != PartData {
+					t.Fatalf("decoded part = %+v, want PartData (wire: %s)", got, b)
+				}
+				data, err := json.Marshal(got.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(data) != tt.json {
+					t.Errorf("Data = %s, want %s", data, tt.json)
+				}
+				if diff := cmp.Diff(p.Metadata, got.Metadata); diff != "" {
+					t.Errorf("metadata mismatch (-want +got):\n%s", diff)
+				}
+				// Re-encoding must also retain the data key, including null.
+				b2, err := format.marshal(&got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(b, b2) {
+					t.Errorf("round trip changed encoding:\n%s\n%s", b, b2)
+				}
+			})
+		}
+	}
+}
+
+func TestDataPartJSONPresence(t *testing.T) {
+	tests := []struct {
+		input string
+		kind  PartKind
+		data  string
+	}{
+		{`{}`, PartText, "null"},
+		{`{"metadata":{"data":null}}`, PartText, "null"},
+		{`{"data":null}`, PartData, "null"},
+		{`{"text":"hi","data":null}`, PartText, "null"},
+		{`{"text":"","data":null}`, PartText, "null"},
+		{`{"text":null,"data":null}`, PartData, "null"},
+		{`{"text":"hi","data":1}`, PartData, "1"},
+		{`{"custom":{},"data":null}`, PartCustom, "null"},
+		{`{"reasoning":"","data":null}`, PartReasoning, "null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			var got Part
+			if err := json.Unmarshal([]byte(tt.input), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Kind != tt.kind {
+				t.Errorf("Kind = %v, want %v", got.Kind, tt.kind)
+			}
+			data, err := json.Marshal(got.Data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tt.data {
+				t.Errorf("Data = %s, want %s", data, tt.data)
+			}
+		})
+	}
+}
+
+func TestDataPartYAMLPresence(t *testing.T) {
+	tests := []struct {
+		input string
+		kind  PartKind
+	}{
+		{"{}", PartText},
+		{"metadata:\n  data: null\n", PartText},
+		{"data: null\n", PartData},
+		{"data: ~\n", PartData},
+		{"data:\n", PartData},
+		{"text: hi\ndata: null\n", PartText},
+		{"text: ''\ndata: null\n", PartText},
+		{"text: null\ndata: null\n", PartData},
+		{"custom: {}\ndata: null\n", PartCustom},
+		{"reasoning: ''\ndata: null\n", PartReasoning},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			var got Part
+			if err := yaml.Unmarshal([]byte(tt.input), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Kind != tt.kind {
+				t.Errorf("Kind = %v, want %v", got.Kind, tt.kind)
+			}
+		})
+	}
+}
+
+func ExampleNewDataPart_null() {
+	b, err := json.Marshal(NewDataPart(nil))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+	// Output: {"data":null}
 }
 
 func TestNewCustomPart(t *testing.T) {
