@@ -783,8 +783,14 @@ def test_middleware_validation_raises_correct_errors() -> None:
     with pytest.raises(ValueError, match='middleware name must be one path-free token'):
         _MiddlewareMetadata(cls=PreMiddleware, name='invalid/name')
 
-    with pytest.raises(ValueError, match='middleware name must be a non-empty string'):
+    with pytest.raises(ValueError, match=r"PreMiddleware has no middleware name. Set `name = '...'` on the class"):
         _MiddlewareMetadata(cls=PreMiddleware, name='')
+
+    class Unnamed(Middleware):
+        pass
+
+    with pytest.raises(ValueError, match=r'or pass a name: ai.define_middleware\(Unnamed, name=...\)'):
+        local_ai.define_middleware(Unnamed)
 
     # 3. _MiddlewareMetadata keeps name and description
     desc = _MiddlewareMetadata(cls=PreMiddleware, name='custom_mw', description='custom desc')
@@ -1499,6 +1505,72 @@ async def test_wrap_generate_called_per_turn() -> None:
     )
     assert response2.text == 'final'
     assert iters_b == [0, 1]
+
+
+class _CourseConfig(BaseModel):
+    course: str = ''
+
+
+@pytest.mark.asyncio
+async def test_same_registered_middleware_twice_runs_both() -> None:
+    """use=[Mw(), Mw()] runs both instances with their own config."""
+    courses: list[str] = []
+
+    class CourseTag(Middleware[_CourseConfig]):
+        name = 'course_tag'
+
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            courses.append(self.config.course)
+            return await next_fn(params, ctx)
+
+    local_ai = Genkit()
+    local_ai.define_middleware(CourseTag)
+    pm, _ = define_scripted_model(local_ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    )
+
+    response = await local_ai.generate(
+        model='scriptedModel',
+        prompt='Plan dinner.',
+        use=[CourseTag(course='starter'), CourseTag(course='main')],
+    )
+
+    assert response.text == 'done'
+    assert courses == ['starter', 'main']
+
+
+def test_middleware_subclass_does_not_inherit_name() -> None:
+    """A subclass declares its own registry name instead of claiming its parent's."""
+
+    class AllergyCheck(Middleware):
+        name = 'allergy_check'
+        description = 'Blocks dishes with listed allergens.'
+
+    class LoggedAllergyCheck(AllergyCheck):
+        pass
+
+    assert LoggedAllergyCheck.name == ''
+    assert LoggedAllergyCheck.description is None
+
+    local_ai = Genkit()
+    local_ai.define_middleware(AllergyCheck)
+    with pytest.raises(ValueError, match='LoggedAllergyCheck has no middleware name'):
+        local_ai.define_middleware(LoggedAllergyCheck)
+
+    class AuditedAllergyCheck(AllergyCheck):
+        name = 'audited_allergy_check'
+
+    local_ai.define_middleware(AuditedAllergyCheck)
+    assert local_ai._registry.lookup_value('middleware', 'audited_allergy_check') is not None
 
 
 @pytest.mark.asyncio

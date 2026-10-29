@@ -293,8 +293,6 @@ def register_middleware(
     if use is None:
         return None
     refs: list[MiddlewareRef] = []
-    # Track how many times each name appears so duplicates get unique suffixes.
-    name_counts: dict[str, int] = {}
     # Build the class→name index once so resolving the use list is O(M+N).
     cls_index = middleware_class_index(registry)
     for i, entry in enumerate(use):
@@ -305,11 +303,10 @@ def register_middleware(
             # with any globally registered middleware.
             mw_cls = type(entry)
             registered = cls_index.get(mw_cls)
-            base_name = registered or f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
-            count = name_counts.get(base_name, 0)
-            name_counts[base_name] = count + 1
-            reg_name = base_name if count == 0 else f'{base_name}__{count}'
-            if registered is None and registry.lookup_value('middleware', reg_name) is None:
+            # Each ref carries its own config and resolves to a fresh instance,
+            # so the same registered name can appear more than once.
+            reg_name = registered or f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
+            if registered is None:
                 registry.register_value(
                     'middleware',
                     reg_name,
