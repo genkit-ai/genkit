@@ -145,6 +145,17 @@ async def test_generate_gemini_unknown_safety_setting_key_raises(sent: _Sent) ->
         (_GEMINI, {'function_calling_config': {'mode': 'ANY'}}, 'function_calling_config is not a config field'),
         (_GEMINI, {'google_search_retrieval': True}, 'google_search_retrieval was flattened; use google_search'),
         (_GEMINI, {'googleSearchRetrieval': {}}, 'googleSearchRetrieval was flattened; use googleSearch'),
+        (
+            _GEMINI,
+            {'speechConfig': {'voiceConfig': {}}},
+            'speechConfig was flattened into voice / speakers / languageCode, which only GeminiTtsConfig has; '
+            'build the model ref with gemini_tts()',
+        ),
+        (
+            _GEMINI,
+            {'image_config': {'aspect_ratio': '16:9'}},
+            'which only GeminiImageConfig has; build the model ref with gemini_image()',
+        ),
     ],
     ids=[
         'thinking_config',
@@ -158,6 +169,8 @@ async def test_generate_gemini_unknown_safety_setting_key_raises(sent: _Sent) ->
         'function_calling_config',
         'google_search_retrieval',
         'googleSearchRetrieval',
+        'speechConfig-on-gemini',
+        'image_config-on-gemini',
     ],
 )
 @pytest.mark.asyncio

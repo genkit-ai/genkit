@@ -156,3 +156,91 @@ def test_alias_without_validate_by_name_rejects_field_name_in_ref() -> None:
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert 'accepted keys: maxWarnings' in raised.value.original_message
     assert _definition(Mw, 'mw').instantiate({'maxWarnings': 1}).config.max_warnings == 1
+
+
+def test_accepted_keys_show_the_serialization_alias_when_it_is_accepted() -> None:
+    """A field the wire spells `validate` is listed as `validate`, not its Python name."""
+    from pydantic import AliasChoices, Field
+
+    class Cfg(GenkitConfig):
+        validation: str = Field(
+            'warn',
+            validation_alias=AliasChoices('validate', 'validation'),
+            serialization_alias='validate',
+        )
+        surface_id: str | None = None
+
+    class Mw(BaseMiddleware[Cfg]):
+        pass
+
+    with pytest.raises(GenkitError) as raised:
+        _definition(Mw, 'surfaces').instantiate({'validat': 'strict'})
+    assert raised.value.original_message.endswith('accepted keys: surfaceId, validate')
+
+
+@pytest.mark.parametrize(
+    'config, field',
+    [({'maxSpendCents': 'lots'}, 'maxSpendCents'), ({'max_spend_cents': -1}, 'max_spend_cents')],
+    ids=['wrong-type', 'bound'],
+)
+def test_bad_ref_value_is_invalid_argument_naming_middleware(config: dict[str, Any], field: str) -> None:
+    """A wrong type or bound from a .prompt file is INVALID_ARGUMENT, not a bare ValidationError."""
+    from pydantic import Field
+
+    class BoundedConfig(GenkitConfig):
+        max_spend_cents: int = Field(500, ge=0)
+
+    class Bounded(BaseMiddleware[BoundedConfig]):
+        pass
+
+    with pytest.raises(GenkitError) as raised:
+        _definition(Bounded, 'budget').instantiate(config)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.original_message == 'Middleware "budget" got invalid config'
+    assert field in str(raised.value)
+    assert isinstance(raised.value.__cause__, ValidationError)
+
+
+def test_missing_required_ref_field_is_invalid_argument() -> None:
+    """A .prompt `config: {}` for a middleware with a required field names the middleware."""
+
+    class SandboxConfig(GenkitConfig):
+        root_dir: str
+
+    class Sandbox(BaseMiddleware[SandboxConfig]):
+        pass
+
+    with pytest.raises(GenkitError) as raised:
+        _definition(Sandbox, 'sandbox').instantiate({})
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'rootDir' in str(raised.value)
+
+
+def test_prompt_use_metadata_dumps_inline_config_with_accepted_keys() -> None:
+    """Prompt metadata the Dev UI sends back skips computed fields and output-only aliases."""
+    from pydantic import Field, computed_field
+
+    from genkit._ai._prompt import _use_to_wire_metadata  # pyright: ignore[reportPrivateUsage]
+
+    class GuardConfig(BaseModel):
+        max_warnings: int = 3
+        label: str = Field('x', serialization_alias='displayLabel')
+
+        @computed_field  # type: ignore[prop-decorator]
+        @property
+        def doubled(self) -> int:
+            return self.max_warnings * 2
+
+    class Guard(BaseMiddleware[GuardConfig]):
+        pass
+
+    ai = Genkit()
+    ai.define_middleware(Guard, name='guard')
+    registry: Any = ai._registry
+
+    metadata = _use_to_wire_metadata(registry, [Guard(max_warnings=3, label='y')])
+
+    assert metadata == [{'name': 'guard', 'config': {'max_warnings': 3, 'label': 'y'}}]
+    assert metadata is not None
+    [rebuilt] = resolve_middleware_from_use(registry, [MiddlewareRef(**metadata[0])])
+    assert rebuilt.config == GuardConfig(max_warnings=3, label='y')

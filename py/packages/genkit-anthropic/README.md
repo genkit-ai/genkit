@@ -109,6 +109,11 @@ To pin one named tool, send Anthropic's object as
 `extra={'tool_choice': {'type': 'tool', 'name': 'lookup_menu'}}`; it replaces
 the translated value.
 
+With `thinking='enabled'` or `'adaptive'`, Anthropic accepts only `'auto'` and
+`'none'`, so `tool_choice='required'` raises `INVALID_ARGUMENT` before the
+request goes out. On a request with no tools, `tool_choice` (option or
+`extra`) is dropped, since the API rejects it there.
+
 ## Per-request API key
 
 To bill a call to someone else's Anthropic account, pass their key in

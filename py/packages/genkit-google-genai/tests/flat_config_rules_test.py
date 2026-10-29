@@ -157,7 +157,7 @@ async def test_search_start_time_without_end_time_raises(sent: _Sent) -> None:
 
 @pytest.mark.asyncio
 async def test_search_time_range_drops_sub_second_precision(sent: _Sent) -> None:
-    """`datetime.now()` works: the API rejects sub-second times, so microseconds are dropped."""
+    """`datetime.now()` works: the API rejects sub-second times, so the window is rounded outward."""
     start = datetime(2026, 1, 1, 8, 30, 15, 123456, tzinfo=timezone.utc)
     config = GeminiConfig(google_search_start_time=start, google_search_end_time=start.replace(day=2))
 
@@ -166,8 +166,35 @@ async def test_search_time_range_drops_sub_second_precision(sent: _Sent) -> None
     [tool] = sent.bodies[-1]['tools']
     assert tool['googleSearch']['timeRangeFilter'] == {
         'start_time': '2026-01-01T08:30:15+00:00',
-        'end_time': '2026-01-02T08:30:15+00:00',
+        'end_time': '2026-01-02T08:30:16+00:00',
     }
+
+
+@pytest.mark.asyncio
+async def test_search_time_range_within_one_second_stays_non_empty(sent: _Sent) -> None:
+    """Start and end in the same second don't collapse to an empty range."""
+    start = datetime(2024, 1, 1, 0, 0, 0, 100, tzinfo=timezone.utc)
+    config = GeminiConfig(google_search_start_time=start, google_search_end_time=start.replace(microsecond=900))
+
+    await _googleai().generate(model=_GEMINI, prompt='hi', config=config)
+
+    [tool] = sent.bodies[-1]['tools']
+    assert tool['googleSearch']['timeRangeFilter'] == {
+        'start_time': '2024-01-01T00:00:00+00:00',
+        'end_time': '2024-01-01T00:00:01+00:00',
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_time_range_whole_second_end_is_unchanged(sent: _Sent) -> None:
+    """An end time on a whole second is sent as is."""
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    config = GeminiConfig(google_search_start_time=start, google_search_end_time=start.replace(hour=12))
+
+    await _googleai().generate(model=_GEMINI, prompt='hi', config=config)
+
+    [tool] = sent.bodies[-1]['tools']
+    assert tool['googleSearch']['timeRangeFilter']['end_time'] == '2024-01-01T12:00:00+00:00'
 
 
 @pytest.mark.asyncio
