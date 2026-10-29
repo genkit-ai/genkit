@@ -46,7 +46,6 @@ from opentelemetry.util._once import Once
 from pydantic import BaseModel
 
 from genkit import (
-    ActionRunContext,
     FinishReason,
     Genkit,
     GenkitError,
@@ -59,7 +58,7 @@ from genkit import (
 )
 from genkit._ai._tools import run_tool_after_restart
 from genkit._core._action import Action
-from genkit.model import ModelRequest, ModelUsage
+from genkit.model import ModelContext, ModelRequest, ModelUsage
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     DirectHttpInstrumentation,
@@ -197,7 +196,7 @@ def _echo_response() -> ModelResponse:
 def _echo_app() -> Genkit:
     ai = Genkit()
 
-    async def echo_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def echo_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(_REPLY)]))
         return _echo_response()
 
@@ -774,7 +773,7 @@ async def test_generate_with_tool_spans_and_span_only_env_shows_redacted_tool_ar
         """Look up a record."""
         return _TOOL_RESULT
 
-    async def tool_model(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def tool_model(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         if any(message.role == Role.TOOL for message in request.messages):
             return _echo_response()
         return ModelResponse(
@@ -846,7 +845,7 @@ async def test_generate_that_raises_with_span_only_env_has_no_prompt_in_cloud_tr
     monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
     ai = Genkit()
 
-    async def boom(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def boom(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         raise RuntimeError(f'model rejected: {_PROMPT}')
 
     ai.define_model(_MODEL, boom)
@@ -905,7 +904,7 @@ async def test_tool_interrupt_payload_is_redacted_in_cloud_trace() -> None:
         """Ask a human to approve."""
         raise Interrupt({'echo': query})
 
-    async def tool_model(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def tool_model(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(

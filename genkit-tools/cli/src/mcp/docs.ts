@@ -15,11 +15,11 @@
  */
 
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
-import { ContentBlock } from '@modelcontextprotocol/sdk/types';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import z from 'zod';
 import { loadDocs, searchDocs } from '../utils/docs';
-import { McpRunToolEvent } from './analytics.js';
+import { McpRunToolEvent } from './analytics';
 
 export async function defineDocsTool(server: McpServer) {
   const documents = await loadDocs();
@@ -55,9 +55,6 @@ export async function defineDocsTool(server: McpServer) {
             let summary = ` - FilePath: ${file}\n   Title: ${doc.title}\n`;
             if (doc.description) {
               summary += `   Description: ${doc.description}\n`;
-            }
-            if (doc.headers) {
-              summary += `   Headers:\n     ${doc.headers.split('\n').join('\n     ')}\n`;
             }
             return summary;
           })

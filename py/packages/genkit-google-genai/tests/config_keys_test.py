@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""What a Gemini or Veo config key does: rejected, sent, or merged via extra.
+"""What a Gemini, Veo or Virtual Try-On config key does: rejected, sent, or merged via extra.
 
 Each generate test captures the HTTP body the google-genai SDK would send,
 so the pins hold on the wire, not on an intermediate config object.
@@ -26,14 +26,24 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from genkit_google_genai import GeminiConfig, GeminiImageConfig, GoogleAI, VeoConfig, VertexAI
+from genkit_google_genai import GeminiConfig, GeminiImageConfig, GoogleAI, VeoConfig, VertexAI, VirtualTryOnConfig
 from google.auth.credentials import AnonymousCredentials
 from google.genai import _api_client
 from pydantic import BaseModel
 
-from genkit import Genkit, GenkitError
+from genkit import Genkit, GenkitError, Message, Part, Role
 
 _GEMINI = 'googleai/gemini-2.5-flash'
+_TRY_ON = 'vertexai/virtual-try-on-001'
+_TRY_ON_MESSAGES = [
+    Message(
+        role=Role.USER,
+        content=[
+            Part.from_media('gs://in/person.png', content_type='image/png', metadata={'type': 'personImage'}),
+            Part.from_media('gs://in/shirt.png', content_type='image/png', metadata={'type': 'productImage'}),
+        ],
+    )
+]
 
 
 class _Sent:
@@ -207,6 +217,50 @@ async def test_generate_operation_veo_generate_audio_reaches_request(sent: _Sent
     assert sent.body['parameters'] == {'generateAudio': True}
 
 
+# -- virtual try-on -----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_virtual_try_on_unknown_config_key_raises_and_sends_nothing(sent: _Sent) -> None:
+    """`config={'addWatermark': True}` raises INVALID_ARGUMENT naming the key instead of riding into `parameters`."""
+    with pytest.raises(GenkitError) as raised:
+        await _vertexai().generate(model=_TRY_ON, messages=_TRY_ON_MESSAGES, config={'addWatermark': True})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert "'addWatermark'" in str(raised.value)
+    assert sent.bodies == []
+
+
+@pytest.mark.parametrize(
+    'config',
+    [{'api_key': 'sk-tenant'}, {'apiKey': 'sk-tenant'}, {'extra': {'api_key': 'sk-tenant'}}],
+    ids=['api_key', 'apiKey', 'extra'],
+)
+@pytest.mark.asyncio
+async def test_generate_virtual_try_on_api_key_in_config_points_to_context_secrets(
+    sent: _Sent, config: dict[str, Any]
+) -> None:
+    """A key in try-on config or `extra` raises INVALID_ARGUMENT pointing at context.secrets, and isn't sent."""
+    with pytest.raises(GenkitError) as raised:
+        await _vertexai().generate(model=_TRY_ON, messages=_TRY_ON_MESSAGES, config=config)
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert "context={'secrets': {'api_key': ...}}" in str(raised.value)
+    assert sent.bodies == []
+
+
+@pytest.mark.asyncio
+async def test_generate_virtual_try_on_extra_merges_into_request_parameters(sent: _Sent) -> None:
+    """`sampleCount=2` plus `extra={'parameters': {'addWatermark': True}}` sends both under `parameters`."""
+    await _vertexai().generate(
+        model=_TRY_ON,
+        messages=_TRY_ON_MESSAGES,
+        config={'sampleCount': 2, 'extra': {'parameters': {'addWatermark': True}}},
+    )
+
+    assert sent.body['parameters'] == {'sampleCount': 2, 'addWatermark': True}
+
+
 # -- google_search ------------------------------------------------------------
 
 
@@ -282,7 +336,7 @@ async def test_generate_gemini_google_search_retrieval_raises_naming_google_sear
 # -- Dev UI -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('config_class', [GeminiConfig, GeminiImageConfig, VeoConfig])
+@pytest.mark.parametrize('config_class', [GeminiConfig, GeminiImageConfig, VeoConfig, VirtualTryOnConfig])
 def test_config_form_advertises_no_additional_properties(config_class: type[BaseModel]) -> None:
     """The Dev UI config form says `additionalProperties: false`, so it doesn't offer free-form keys."""
     assert config_class.model_json_schema(by_alias=True)['additionalProperties'] is False

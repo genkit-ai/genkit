@@ -1600,7 +1600,7 @@ async def call_model(
                 turn=current_turn,
                 messages=len(params.request.messages),
             )
-        result = await turn_model.run(
+        result = await turn_model._run(
             input=params.request,
             context=c.custom_context,
             on_chunk=c.on_chunk,

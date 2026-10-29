@@ -18,12 +18,12 @@ import pytest
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import FinishReason, Genkit, Message, ModelResponse, Part
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRef, ModelRequest
 from genkit._core._operation import Operation
 from genkit._core._typing import GenerationCommonConfig, Role
-from genkit.model import ModelConfig, model_ref
+from genkit.model import ModelConfig, ModelContext, model_ref
 
 KEY = 'sk-tenant'
 SECRETS_HINT = "context={'secrets': {'api_key': ...}}"
@@ -99,7 +99,7 @@ class _Model:
         self.requests: list[ModelRequest] = []
 
     def define(self, ai: Genkit, *, name: str, config_schema: type[BaseModel] | None) -> None:
-        async def fn(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        async def fn(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
             self.requests.append(request)
             return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -347,11 +347,11 @@ async def test_generate_operation_unknown_config_key_raises() -> None:
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check, config_schema=StrictConfig)
@@ -777,11 +777,11 @@ async def test_generate_operation_config_api_key_raises() -> None:
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)
@@ -866,11 +866,11 @@ async def test_background_model_action_run_directly_with_config_api_key_raises()
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)

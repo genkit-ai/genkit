@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""A tool takes one typed input; the context arrives on a parameter annotated ToolRunContext or ActionRunContext."""
+"""A tool takes one typed input; the context arrives on a parameter annotated ToolContext or FlowContext."""
 
 import sys
 import typing
@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Part, ToolRunContext, tool
+from genkit import FlowContext, Genkit, GenkitError, Message, ModelResponse, Part, ToolContext, tool
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import FinishReason, Role, ToolRequest
 from genkit.testing import ScriptedModel, define_scripted_model
@@ -133,13 +133,13 @@ async def test_tool_with_pydantic_input_gets_model_instance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_with_input_then_tool_run_context_gets_both() -> None:
-    """`(input, ctx: ToolRunContext)` receives the input and a ToolRunContext."""
+async def test_tool_with_input_then_tool_context_gets_both() -> None:
+    """`(input, ctx: ToolContext)` receives the input and a ToolContext."""
     ai, pm = _app()
     seen: list[object] = []
 
     @ai.tool()
-    async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
+    async def weather(input: WeatherInput, ctx: ToolContext) -> str:
         seen.extend([input, type(ctx), ctx.context])
         return f'22{input.unit} in {input.city}'
 
@@ -148,18 +148,18 @@ async def test_tool_with_input_then_tool_run_context_gets_both() -> None:
     assert response.text == 'done'
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
     assert _advertised_schema(pm) == WEATHER_SCHEMA
-    assert seen == [WeatherInput(city='Paris'), ToolRunContext, {'user': 'u1'}]
+    assert seen == [WeatherInput(city='Paris'), ToolContext, {'user': 'u1'}]
     assert _tool_output(response) == '22C in Paris'
 
 
 @pytest.mark.asyncio
-async def test_tool_with_tool_run_context_first_then_input_gets_both() -> None:
-    """`(ctx: ToolRunContext, input)` receives the context and the input, and the advertised schema is the input's."""
+async def test_tool_with_tool_context_first_then_input_gets_both() -> None:
+    """`(ctx: ToolContext, input)` receives the context and the input, and the advertised schema is the input's."""
     ai, pm = _app()
     seen: list[object] = []
 
     @ai.tool()
-    async def weather(ctx: ToolRunContext, input: WeatherInput) -> str:
+    async def weather(ctx: ToolContext, input: WeatherInput) -> str:
         seen.extend([input, type(ctx), ctx.context])
         return f'22{input.unit} in {input.city}'
 
@@ -168,36 +168,36 @@ async def test_tool_with_tool_run_context_first_then_input_gets_both() -> None:
     assert response.text == 'done'
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
     assert _advertised_schema(pm) == WEATHER_SCHEMA
-    assert seen == [WeatherInput(city='Paris'), ToolRunContext, {'user': 'u1'}]
+    assert seen == [WeatherInput(city='Paris'), ToolContext, {'user': 'u1'}]
     assert _tool_output(response) == '22C in Paris'
 
 
 @pytest.mark.asyncio
-async def test_tool_with_action_run_context_annotation_gets_tool_run_context() -> None:
-    """`ctx: ActionRunContext` on a tool marks the context too, and it receives a ToolRunContext."""
+async def test_tool_with_flow_context_annotation_gets_tool_context() -> None:
+    """`ctx: FlowContext` on a tool marks the context too, and it receives a ToolContext."""
     ai, pm = _app()
     seen: list[object] = []
 
     @ai.tool()
-    async def weather(input: WeatherInput, ctx: ActionRunContext) -> str:
+    async def weather(input: WeatherInput, ctx: FlowContext) -> str:
         seen.extend([type(ctx), ctx.context])
         return f'22{input.unit} in {input.city}'
 
     response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
 
     assert _advertised_schema(pm) == WEATHER_SCHEMA
-    assert seen == [ToolRunContext, {'user': 'u1'}]
+    assert seen == [ToolContext, {'user': 'u1'}]
     assert _tool_output(response) == '22C in Paris'
 
 
 @pytest.mark.asyncio
-async def test_tool_with_only_tool_run_context_runs_with_context_and_no_input() -> None:
-    """`(ctx: ToolRunContext)` runs with the context instead of receiving the model's arguments in `ctx`."""
+async def test_tool_with_only_tool_context_runs_with_context_and_no_input() -> None:
+    """`(ctx: ToolContext)` runs with the context instead of receiving the model's arguments in `ctx`."""
     ai, pm = _app()
     seen: list[object] = []
 
     @ai.tool()
-    async def whoami(ctx: ToolRunContext) -> str:
+    async def whoami(ctx: ToolContext) -> str:
         seen.extend([type(ctx), ctx.context])
         return f'you are {ctx.context["user"]}'
 
@@ -206,7 +206,7 @@ async def test_tool_with_only_tool_run_context_runs_with_context_and_no_input() 
     assert response.text == 'done'
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
     assert _advertised_schema(pm) == {}
-    assert seen == [ToolRunContext, {'user': 'u1'}]
+    assert seen == [ToolContext, {'user': 'u1'}]
     assert _tool_output(response) == 'you are u1'
 
 
@@ -236,11 +236,11 @@ def test_tool_with_two_plain_parameters_raises_type_error_at_definition() -> Non
 
     with pytest.raises(TypeError, match="tool 'weather' takes one input, but 'unit' is a second parameter") as exc:
         ai.tool()(weather)
-    assert "annotate 'unit' as ToolRunContext" in str(exc.value)
+    assert "annotate 'unit' as ToolContext" in str(exc.value)
 
 
 def test_tool_with_unannotated_ctx_parameter_raises_type_error_at_definition() -> None:
-    """`(input, ctx)` with no annotation raises TypeError telling them to annotate ToolRunContext."""
+    """`(input, ctx)` with no annotation raises TypeError telling them to annotate ToolContext."""
     ai, _ = _app()
 
     async def weather(input: WeatherInput, ctx) -> str:  # noqa: ANN001
@@ -248,29 +248,29 @@ def test_tool_with_unannotated_ctx_parameter_raises_type_error_at_definition() -
 
     with pytest.raises(TypeError, match="'ctx' is a second parameter") as exc:
         ai.tool()(weather)
-    assert "annotate 'ctx' as ToolRunContext" in str(exc.value)
+    assert "annotate 'ctx' as ToolContext" in str(exc.value)
 
 
-def test_tool_with_two_tool_run_context_parameters_raises_type_error_at_definition() -> None:
-    """Two ToolRunContext parameters raise TypeError instead of picking one."""
+def test_tool_with_two_tool_context_parameters_raises_type_error_at_definition() -> None:
+    """Two ToolContext parameters raise TypeError instead of picking one."""
     ai, _ = _app()
 
-    async def weather(a: ToolRunContext, b: ToolRunContext) -> str:
+    async def weather(a: ToolContext, b: ToolContext) -> str:
         return ''
 
-    with pytest.raises(TypeError, match="tool 'weather' has two ToolRunContext parameters, 'a' and 'b'"):
+    with pytest.raises(TypeError, match="tool 'weather' has two ToolContext parameters, 'a' and 'b'"):
         ai.tool()(weather)
 
 
 @pytest.mark.asyncio
-async def test_tool_with_postponed_annotations_finds_tool_run_context() -> None:
-    """Under `from __future__ import annotations`, the string `'ToolRunContext'` still marks the context parameter."""
+async def test_tool_with_postponed_annotations_finds_tool_context() -> None:
+    """Under `from __future__ import annotations`, the string `'ToolContext'` still marks the context parameter."""
     ai, pm = _app()
     seen: list[object] = []
 
     # Postponed annotations are stored as these strings.
     @ai.tool()
-    async def weather(ctx: 'ToolRunContext', input: 'WeatherInput') -> 'str':
+    async def weather(ctx: 'ToolContext', input: 'WeatherInput') -> 'str':
         seen.extend([input, type(ctx), ctx.context])
         return f'22{input.unit} in {input.city}'
 
@@ -279,7 +279,7 @@ async def test_tool_with_postponed_annotations_finds_tool_run_context() -> None:
     assert response.text == 'done'
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
     assert _advertised_schema(pm) == WEATHER_SCHEMA
-    assert seen == [WeatherInput(city='Paris'), ToolRunContext, {'user': 'u1'}]
+    assert seen == [WeatherInput(city='Paris'), ToolContext, {'user': 'u1'}]
     assert _tool_output(response) == '22C in Paris'
 
 
@@ -355,7 +355,7 @@ def test_tool_with_input_model_defined_in_function_raises_type_error_naming_it()
         step: int
 
     # Postponed annotations are stored as this string, which can't see StepInput.
-    async def slow_work(input: 'StepInput', ctx: ToolRunContext) -> dict:
+    async def slow_work(input: 'StepInput', ctx: ToolContext) -> dict:
         return {'step': input.step}
 
     with pytest.raises(
@@ -366,7 +366,7 @@ def test_tool_with_input_model_defined_in_function_raises_type_error_naming_it()
 
 
 # A user module that imports the context type only for type checkers, so
-# 'ToolRunContext' can't be resolved at runtime but every other name can.
+# 'ToolContext' can't be resolved at runtime but every other name can.
 _TYPE_CHECKING_CONTEXT_MODULE = """
 from __future__ import annotations
 
@@ -375,14 +375,14 @@ from typing import TYPE_CHECKING
 from genkit import MultipartToolResponse
 
 if TYPE_CHECKING:
-    from genkit import ToolRunContext
+    from genkit import ToolContext
 
 
-async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
+async def weather(input: WeatherInput, ctx: ToolContext) -> str:
     return f'22{input.unit} in {input.city} for {ctx.context["user"]}'
 
 
-async def forecast(input: WeatherInput, ctx: ToolRunContext) -> MultipartToolResponse[Forecast]:
+async def forecast(input: WeatherInput, ctx: ToolContext) -> MultipartToolResponse[Forecast]:
     return MultipartToolResponse(output=Forecast(city=input.city, days=3))
 """
 
@@ -398,7 +398,7 @@ def _type_checking_context_module(*, postponed: bool = True) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_tool_with_type_checking_only_context_still_resolves_module_level_input() -> None:
-    """A `TYPE_CHECKING`-only `ToolRunContext` doesn't stop the module-level `WeatherInput` from resolving."""
+    """A `TYPE_CHECKING`-only `ToolContext` doesn't stop the module-level `WeatherInput` from resolving."""
     ai, pm = _app()
 
     ai.tool()(_type_checking_context_module()['weather'])
@@ -412,7 +412,7 @@ async def test_tool_with_type_checking_only_context_still_resolves_module_level_
 @pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
 @pytest.mark.asyncio
 async def test_tool_with_type_checking_only_context_runs_without_future_import() -> None:
-    """On 3.14, a `TYPE_CHECKING`-only `ToolRunContext` without the `__future__` import still runs."""
+    """On 3.14, a `TYPE_CHECKING`-only `ToolContext` without the `__future__` import still runs."""
     ai, pm = _app()
 
     ai.tool()(_type_checking_context_module(postponed=False)['weather'])
@@ -424,7 +424,7 @@ async def test_tool_with_type_checking_only_context_runs_without_future_import()
 
 
 def test_tool_with_type_checking_only_context_still_reads_multipart_return() -> None:
-    """A `TYPE_CHECKING`-only `ToolRunContext` doesn't hide a `-> MultipartToolResponse[Forecast]` return."""
+    """A `TYPE_CHECKING`-only `ToolContext` doesn't hide a `-> MultipartToolResponse[Forecast]` return."""
     ai, _ = _app()
 
     forecast = ai.tool()(_type_checking_context_module()['forecast'])
@@ -599,7 +599,7 @@ async def test_generate_context_reaches_tool_with_context_first() -> None:
     seen: list[Any] = []
 
     @ai.tool()
-    async def lookup(ctx: ToolRunContext, sku: str) -> str:
+    async def lookup(ctx: ToolContext, sku: str) -> str:
         seen.append(ctx.context['user'])
         return f'{sku} for {ctx.context["user"]}'
 
@@ -618,10 +618,78 @@ async def test_await_tool_with_input_and_context_called_directly_returns_result(
     ai, _ = _app()
 
     @ai.tool()
-    async def weather(input: WeatherInput, ctx: ToolRunContext) -> str:
+    async def weather(input: WeatherInput, ctx: ToolContext) -> str:
         return f'22{input.unit} in {input.city} ({type(ctx).__name__})'
 
     result = await weather(WeatherInput(city='Paris'))
 
-    assert result.output == '22C in Paris (ToolRunContext)'
+    assert result.output == '22C in Paris (ToolContext)'
     assert result.content is None
+
+
+@pytest.mark.asyncio
+async def test_tool_with_parameterized_tool_context_gets_tool_context() -> None:
+    """`ctx: ToolContext[int]` marks the context, and the tool gets a ToolContext."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool()
+    async def weather(input: WeatherInput, ctx: ToolContext[int]) -> str:
+        seen.extend([type(ctx), ctx.context])
+        return f'22{input.unit} in {input.city}'
+
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert seen == [ToolContext, {'user': 'u1'}]
+    assert _tool_output(response) == '22C in Paris'
+
+
+_TYPE_CHECKING_TOOL_CONTEXT_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from genkit import ToolContext
+
+
+async def weather(input: WeatherInput, ctx: ToolContext) -> str:
+    seen.extend([type(ctx), ctx.context])
+    return f'22{input.unit} in {input.city}'
+"""
+
+
+@pytest.mark.asyncio
+async def test_tool_with_type_checking_only_tool_context_gets_tool_context() -> None:
+    """A `TYPE_CHECKING`-only `ToolContext` stays the string `'ToolContext'` and still marks the context."""
+    ai, pm = _app()
+    seen: list[object] = []
+    module_globals: dict[str, Any] = {'WeatherInput': WeatherInput, 'seen': seen}
+    exec(_TYPE_CHECKING_TOOL_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+
+    ai.tool()(module_globals['weather'])
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert seen == [ToolContext, {'user': 'u1'}]
+    assert _tool_output(response) == '22C in Paris'
+
+
+@pytest.mark.asyncio
+async def test_bare_tool_decorator_without_parentheses_registers_and_runs() -> None:
+    """Bare `@ai.tool` (without parentheses) registers the tool by function name and supports `ToolContext[ChunkT]`."""
+    ai, pm = _app()
+    seen: list[object] = []
+
+    @ai.tool
+    async def weather(input: WeatherInput, ctx: ToolContext[int]) -> str:
+        seen.extend([type(ctx), ctx.context])
+        return f'22{input.unit} in {input.city}'
+
+    assert weather.name == 'weather'
+    response = await _model_calls_tool(ai, pm, name='weather', tool_input={'city': 'Paris'}, context={'user': 'u1'})
+
+    assert _advertised_schema(pm) == WEATHER_SCHEMA
+    assert seen == [ToolContext, {'user': 'u1'}]
+    assert _tool_output(response) == '22C in Paris'
