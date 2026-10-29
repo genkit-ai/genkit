@@ -44,8 +44,8 @@ def test_repr_omits_args() -> None:
 @pytest.mark.parametrize(
     'raw',
     [
-        pytest.param({'command': 42, 'env': {'API_KEY': SECRET}}, id='bad-sibling-field'),
-        pytest.param({'command': 'npx', 'env': {'API_KEY': SECRET, 'PORT': 8080}}, id='bad-env-entry'),
+        pytest.param({'env': {'API_KEY': SECRET}}, id='missing-command'),
+        pytest.param({'command': 'npx', 'env': f'API_KEY={SECRET}'}, id='env-not-a-mapping'),
         pytest.param({'command': 'npx', 'enviroment': {'API_KEY': SECRET}}, id='misspelled-env-key'),
     ],
 )
