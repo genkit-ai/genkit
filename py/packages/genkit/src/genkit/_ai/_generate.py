@@ -22,7 +22,6 @@ import asyncio
 import contextlib
 import copy
 import secrets
-import sys
 import time
 from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from dataclasses import dataclass
@@ -72,6 +71,7 @@ from genkit._core._background import (
     missing_operation_error,
     stamp_operation_action,
 )
+from genkit._core._compat import uncancel
 from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
@@ -1613,8 +1613,8 @@ async def run_model_until_aborted(
         watcher_task.cancel()
         # generate turns our own cancel into an ABORTED reply, so it mustn't
         # count against an enclosing asyncio.timeout() or TaskGroup.
-        if cancelled_by_abort.is_set() and this_task is not None and sys.version_info >= (3, 11):
-            this_task.uncancel()
+        if cancelled_by_abort.is_set():
+            uncancel(this_task)
 
 
 async def call_model(
