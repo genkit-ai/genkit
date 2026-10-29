@@ -364,7 +364,11 @@ class Interrupt(BaseException):
     """
 
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
-        super().__init__()
+        # Metadata goes in args so str(interrupt) and tracebacks show it.
+        if metadata is None:
+            super().__init__()
+        else:
+            super().__init__(metadata)
         self.metadata: dict[str, Any] = {} if metadata is None else metadata
 
 

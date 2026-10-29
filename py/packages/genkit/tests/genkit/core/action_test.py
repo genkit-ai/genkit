@@ -698,6 +698,9 @@ async def test_await_flow_that_raises_interrupt_raises_internal_genkit_error() -
 
     assert exc.value.status == 'INTERNAL'
     assert exc.value.message == 'Interrupt raised outside a tool'
+    assert (
+        str(exc.value) == "INTERNAL: Interrupt raised outside a tool: {'reason': 'needs approval', 'order_id': 'A-17'}"
+    )
     assert exc.value.cause is interrupt
     assert exc.value.__cause__ is interrupt
 
