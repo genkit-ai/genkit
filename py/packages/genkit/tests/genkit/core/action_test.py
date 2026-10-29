@@ -5,13 +5,15 @@
 
 """Tests for the action module."""
 
+import asyncio
+import inspect
 import json
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Genkit, Message, Part, PublicError
+from genkit import FlowContext, Genkit, Message, Part, PublicError
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -775,3 +777,149 @@ async def test_flow_bad_return_with_tracing_on_has_no_trace_id(hex_ids: None) ->
     assert exc.value.reason is RuntimeErrorReason.INVALID_OUTPUT
     assert exc.value.trace_id is None
     assert 'trace_id' not in (exc.value.details or {})
+
+
+def test_action_run_stream_and_stream_bidi_options_are_keyword_only() -> None:
+    """on_chunk, context, and telemetry_labels are keyword-only on run(), stream(), and stream_bidi()."""
+    run_params = inspect.signature(Action.run).parameters
+    for name in ('on_chunk', 'context', 'telemetry_labels'):
+        assert run_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in run_params
+
+    stream_params = inspect.signature(Action.stream).parameters
+    for name in ('context', 'telemetry_labels'):
+        assert stream_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in stream_params
+
+    bidi_params = inspect.signature(BidiAction.stream_bidi).parameters
+    for name in ('context', 'telemetry_labels'):
+        assert bidi_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in bidi_params
+
+
+@pytest.mark.asyncio
+async def test_action_run_and_stream_reject_abort_signal_kwarg() -> None:
+    """Passing abort_signal= to public run() or stream() raises TypeError."""
+
+    async def echo(x: str) -> str:
+        return x
+
+    action = Action(name='echo', kind=ActionKind.CUSTOM, fn=echo)
+    signal = asyncio.Event()
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        await action.run('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        action.stream('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+
+@pytest.mark.asyncio
+async def test_action_task_cancel_sets_ctx_abort_signal_in_except_and_finally() -> None:
+    """Cancelling a running action task sets ctx.abort_signal before except CancelledError and finally run."""
+    started = asyncio.Event()
+    seen_in_except: list[bool] = []
+    seen_in_finally: list[bool] = []
+
+    async def simmer(dish: str, ctx: FlowContext[str]) -> str:
+        started.set()
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            seen_in_except.append(ctx.abort_signal.is_set())
+            raise
+        finally:
+            seen_in_finally.append(ctx.abort_signal.is_set())
+        return dish
+
+    action = Action(name='simmer', kind=ActionKind.FLOW, fn=simmer)
+    task = asyncio.create_task(action.run('stock'))
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert seen_in_except == [True]
+    assert seen_in_finally == [True]
+
+
+@pytest.mark.asyncio
+async def test_action_timeout_sets_ctx_abort_signal_in_except_and_finally() -> None:
+    """Timing out a running action sets ctx.abort_signal inside its except CancelledError and finally blocks."""
+    seen_in_except: list[bool] = []
+    seen_in_finally: list[bool] = []
+
+    async def simmer(dish: str, ctx: FlowContext[str]) -> str:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            seen_in_except.append(ctx.abort_signal.is_set())
+            raise
+        finally:
+            seen_in_finally.append(ctx.abort_signal.is_set())
+        return dish
+
+    action = Action(name='simmer', kind=ActionKind.FLOW, fn=simmer)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(action.run('stock'), timeout=0.02)
+
+    assert seen_in_except == [True]
+    assert seen_in_finally == [True]
+
+
+@pytest.mark.asyncio
+async def test_stream_response_cancelling_one_awaiter_does_not_cancel_other_awaiter() -> None:
+    """Cancelling one task awaiting stream.response leaves other tasks awaiting stream.response intact."""
+    release = asyncio.Event()
+
+    async def slow_chef(dish: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk('prepping')
+        await release.wait()
+        return f'{dish} ready'
+
+    action = Action(name='slow_chef', kind=ActionKind.FLOW, fn=slow_chef)
+    stream = action.stream('risotto')
+
+    waiter_1 = asyncio.create_task(stream.response)
+    waiter_2 = asyncio.create_task(stream.response)
+    await asyncio.sleep(0.01)
+
+    waiter_1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter_1
+
+    release.set()
+    assert await waiter_2 == 'risotto ready'
+
+
+@pytest.mark.asyncio
+async def test_action_stream_async_with_calls_aclose() -> None:
+    """`async with action.stream(...) as stream:` calls `await stream.aclose()` on exit."""
+    closed: list[bool] = []
+
+    async def make_tea(leaf: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk(f'steeping {leaf}')
+        ctx.send_chunk(f'pouring {leaf}')
+        return f'{leaf} served'
+
+    action = Action(name='make_tea', kind=ActionKind.FLOW, fn=make_tea)
+    stream_resp = action.stream('oolong')
+
+    orig_aclose = stream_resp.aclose
+
+    async def tracked_aclose() -> None:
+        closed.append(True)
+        await orig_aclose()
+
+    stream_resp.aclose = tracked_aclose  # type: ignore[method-assign]
+
+    seen: list[str] = []
+    async with stream_resp as s:
+        async for chunk in s:
+            seen.append(chunk)
+            break
+
+    assert seen == ['steeping oolong']
+    assert closed == [True]
