@@ -42,7 +42,7 @@ class RequestData:
 
     Example:
         ```python
-        from genkit import PublicError
+        from genkit import FlowContext, PublicError
         from genkit.web import RequestData
         from genkit_django import genkit_django_handler
 

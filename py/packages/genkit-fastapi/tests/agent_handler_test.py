@@ -114,7 +114,18 @@ def test_agent_input_key_body_is_400() -> None:
 
     assert response.status_code == 400
     assert response.json() == {
-        'message': 'Action request must be wrapped in {"data": ...} object',
+        'message': 'Flow request must be wrapped in {"data": ...}',
+        'status': 'INVALID_ARGUMENT',
+    }
+
+
+def test_agent_non_object_body_is_400_with_flow_wording() -> None:
+    """POST a bare JSON string to an agent route gets the same 400 as a flow route."""
+    response = client(build_agent('bareBodyAgent')).post('/api/chat', json='hi')
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': 'Flow request must be wrapped in {"data": ...}',
         'status': 'INVALID_ARGUMENT',
     }
 
@@ -212,7 +223,7 @@ def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> Non
 @pytest.mark.parametrize(
     'path, body, message',
     [
-        pytest.param('/api/chat', {'foo': 'bar'}, 'Action request must be wrapped in {"data": ...} object', id='turn'),
+        pytest.param('/api/chat', {'foo': 'bar'}, 'Flow request must be wrapped in {"data": ...}', id='turn'),
         pytest.param(
             '/api/chat/getSnapshot',
             {'snapshotId': 's1', 'sessionId': 'x1'},

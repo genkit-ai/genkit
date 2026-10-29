@@ -36,16 +36,13 @@ StateT = TypeVar('StateT', bound=BaseModel)
 
 def extract_agent_input(body: dict[str, Any]) -> object:
     """Read the agent wire shapes: ``data``, ``message``, or top-level snapshot/session ids."""
-    if 'data' in body or not body:
-        return read_body(body)
-    if 'message' in body:
-        return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
-    if 'snapshotId' in body or 'sessionId' in body:
-        return body
-    raise PublicError(
-        'INVALID_ARGUMENT',
-        'Action request must be wrapped in {"data": ...} object',
-    )
+    if 'data' not in body:
+        if 'message' in body:
+            return {'message': {'role': 'user', 'content': [{'text': str(body['message'])}]}}
+        if 'snapshotId' in body or 'sessionId' in body:
+            return body
+    # {"data": ...}, {}, and any other shape get the same answer as a flow route.
+    return read_body(body)
 
 
 def resolve_session_init(body: dict[str, Any], query_params: Mapping[str, str]) -> object:

@@ -158,12 +158,10 @@ async def _handle_action_request(
         _log_failure(error=err, where='run')
         return json_error_response(err)
     try:
-        if extract_input is None:
-            action_input = read_body(body)
-        elif isinstance(body, dict):
+        if extract_input is not None and isinstance(body, dict):
             action_input = extract_input(cast(dict[str, Any], body))
         else:
-            raise PublicError('INVALID_ARGUMENT', 'Action request must be a JSON object')
+            action_input = read_body(body)
     except GenkitError as err:
         return json_error_response(err)
     body = cast(dict[str, Any], body)

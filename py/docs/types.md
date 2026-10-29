@@ -1,6 +1,6 @@
 # Types
 
-Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, genkit.evaluator, genkit.telemetry, and genkit.exp.agent.
+Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, genkit.evaluator, genkit.telemetry, genkit.web, and genkit.exp.agent.
 
 ## genkit
 
