@@ -40,7 +40,7 @@ from google.auth import default as google_auth_default
 from google.auth.transport.requests import Request
 
 from genkit import GenkitError
-from genkit.evaluator import Evaluator, EvaluatorRequest, EvaluatorResponse, Score, ScoreDetails
+from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorResponse, Score, ScoreDetails
 from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, StrEnum, loop_local_client, provider_error
 
 
@@ -224,17 +224,19 @@ class EvaluatorFactory:
             An async evaluator function.
         """
 
-        async def evaluator_fn(req: EvaluatorRequest) -> EvaluatorResponse:
+        async def evaluator_fn(
+            datapoint: BaseDataPoint,
+            options: dict[str, Any] | None = None,
+        ) -> EvaluatorResponse:
             """Evaluate a single datapoint.
 
             Args:
-                req: ``req.row`` is the evaluation data point; ``req.options``
-                    is ``{}`` when none were set.
+                datapoint: The evaluation data point.
+                options: Optional evaluation options.
 
             Returns:
                 The evaluation response with score.
             """
-            datapoint = req.row
             request_body = to_request(datapoint)
             response = await self.evaluate_instances(request_body)
             try:

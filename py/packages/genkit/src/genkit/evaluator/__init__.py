@@ -18,39 +18,28 @@
 
 Everything needed to call or write an evaluator lives here.
 
-Per-row evaluators take ``EvaluatorRequest[Cfg]`` (``req.row``, ``req.options``).
-Batch evaluators take ``BatchEvaluatorRequest[Cfg]`` (``req.dataset``,
-``req.options``), the request the evaluator action receives on the wire.
-
 Example:
     ```python
-    from pydantic import BaseModel
-
     from genkit import Genkit
-    from genkit.evaluator import BaseDataPoint, EvaluatorRequest, EvaluatorResponse, Score
+    from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
 
     ai = Genkit()
 
 
-    # 1. Declare the options and score one row
-    class AllergenConfig(BaseModel):
-        allergen: str = 'peanut'
-
-
-    async def allergen_check(req: EvaluatorRequest[AllergenConfig]) -> EvaluatorResponse:
-        ok = req.options.allergen not in str(req.row.output).lower()
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=ok)])
+    # 1. Score one datapoint
+    async def allergen_check(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
+        ok = 'peanut' not in str(datapoint.output).lower()
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=ok)])
 
 
     ai.define_evaluator(
-        name='allergen_check', display_name='Allergen check', definition='Flags an allergen.', fn=allergen_check
+        name='allergen_check', display_name='Allergen check', definition='Flags peanuts.', fn=allergen_check
     )
 
-    # 2. Run it over a dataset; config is validated into AllergenConfig
+    # 2. Run it over a dataset
     results = await ai.evaluate(
         evaluator='allergen_check',
         dataset=[BaseDataPoint(input='Suggest a dish.', output='Peanut noodles')],
-        config={'allergen': 'peanut'},
     )
     print(results[0].evaluation[0].score)
     # => False
@@ -62,9 +51,9 @@ from genkit._ai._evaluator import (
     Evaluator,
     EvaluatorRef,
 )
-from genkit._core._model import BatchEvaluatorRequest, EvaluatorRequest
 from genkit._core._typing import (
     BaseDataPoint,
+    EvaluatorRequest,
     EvaluatorResponse,
     Score,
     ScoreDetails,
@@ -76,7 +65,6 @@ __all__ = [
     'BaseDataPoint',
     # Request/Response types
     'EvaluatorRequest',
-    'BatchEvaluatorRequest',
     'EvaluatorResponse',
     # Score types
     'Score',

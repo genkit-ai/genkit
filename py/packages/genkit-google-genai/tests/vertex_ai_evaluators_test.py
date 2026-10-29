@@ -29,7 +29,7 @@ from genkit_google_genai._evaluators._evaluation import (
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 
 from genkit import Genkit, GenkitError
-from genkit.evaluator import BaseDataPoint, BatchEvaluatorRequest, EvaluatorRequest
+from genkit.evaluator import BaseDataPoint, EvaluatorRequest
 from genkit.plugin_api import ActionKind
 
 
@@ -182,7 +182,7 @@ async def test_evaluator_request_sends_empty_metric_spec() -> None:
         AsyncMock(return_value={'fluencyResult': {'score': 4.0}}),
     ) as mock_evaluate:
         await fluency.run(
-            BatchEvaluatorRequest(
+            EvaluatorRequest(
                 dataset=[BaseDataPoint(output='The soup is ready.', test_case_id='case1')], eval_run_id='r'
             )
         )
@@ -365,9 +365,7 @@ async def test_evaluator_fn_malformed_result_is_internal() -> None:
         patch.object(factory, 'evaluate_instances', AsyncMock(return_value={'unexpected': {}})),
         pytest.raises(GenkitError) as raised,
     ):
-        await evaluator_fn(
-            EvaluatorRequest(row=BaseDataPoint(input='Describe the tartine', output='Smoked salmon on rye'))
-        )
+        await evaluator_fn(BaseDataPoint(input='Describe the tartine', output='Smoked salmon on rye'))
 
     assert raised.value.status == 'INTERNAL'
     assert isinstance(raised.value.cause, KeyError)

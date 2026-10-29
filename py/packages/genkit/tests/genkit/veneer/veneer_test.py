@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from genkit import (
     Document,
+    FlowContext,
     Genkit,
     GenkitError,
     Interrupt,
@@ -24,10 +25,10 @@ from genkit import (
 )
 from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._model import text_from_message
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._action import ActionKind
 from genkit._core._model import ModelRequest, OutputConfig
-from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
+    EvaluatorRequest,
     EvaluatorResponse,
     FinishReason,
     ModelInfo,
@@ -41,13 +42,12 @@ from genkit._core._typing import (
 )
 from genkit.evaluator import (
     BaseDataPoint,
-    BatchEvaluatorRequest,
     EvaluatorRef,
-    EvaluatorRequest,
     ScoreDetails,
     ScoreStatus,
 )
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.model import ModelContext
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -1523,7 +1523,7 @@ def test_define_model_default_metadata(setup_test: SetupFixture) -> None:
     """Test that the define model function works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1544,7 +1544,7 @@ def test_define_model_with_schema(setup_test: SetupFixture) -> None:
         field_a: str = Field(description='a field')
         field_b: str = Field(description='b field')
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1581,7 +1581,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     """Test that the define model function with info works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1607,9 +1607,9 @@ async def test_define_evaluator_simple(setup_test: SetupFixture) -> None:
     """ai.define_evaluator(...) registers the evaluator, so ai.evaluate(evaluator='my_eval') scores each row."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(req: EvaluatorRequest) -> EvaluatorResponse:
+    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvaluatorResponse:
         return EvaluatorResponse(
-            test_case_id=req.row.test_case_id or '',
+            test_case_id=datapoint.test_case_id or '',
             evaluation=[Score(score=True, details=ScoreDetails(reasoning='I think it is true'))],
         )
 
@@ -1639,14 +1639,11 @@ def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
     class CustomOption(BaseModel):
         foo_bar: str = Field('baz', description='foo_bar field')
 
-    async def my_eval_fn(req: EvaluatorRequest) -> EvaluatorResponse:
+    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvaluatorResponse:
         return EvaluatorResponse(
-            test_case_id=req.row.test_case_id or '',
+            test_case_id=datapoint.test_case_id or '',
             evaluation=[
-                Score(
-                    score=True,
-                    details=ScoreDetails(reasoning=req.options.get('foo_bar', 'baz') if req.options else 'baz'),
-                )
+                Score(score=True, details=ScoreDetails(reasoning=options.get('foo_bar', 'baz') if options else 'baz'))
             ],
         )
 
@@ -1686,7 +1683,7 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
     """Test that the define batch evaluator function works."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(req: BatchEvaluatorRequest) -> list[EvaluatorResponse]:
+    async def my_eval_fn(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         eval_responses: list[EvaluatorResponse] = []
         for index in range(len(req.dataset)):
             datapoint = req.dataset[index]
@@ -1725,7 +1722,7 @@ async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: Se
     ai, *_ = setup_test
     seen: list[object] = []
 
-    async def my_eval(req: BatchEvaluatorRequest) -> list[EvaluatorResponse]:
+    async def my_eval(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         seen.append(req.options)
         return [
             EvaluatorResponse(
@@ -1741,7 +1738,7 @@ async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: Se
         fn=my_eval,
     )
     result = await action.run(
-        BatchEvaluatorRequest(
+        EvaluatorRequest(
             dataset=[BaseDataPoint(input='hi', output='hi', test_case_id='case1')],
             eval_run_id='run-1',
             options={'threshold': 0.8},
@@ -1756,7 +1753,7 @@ def test_batch_evaluator_with_second_parameter_raises_type_error(setup_test: Set
     """`(req, options)` raises at definition: options live on the request."""
     ai, *_ = setup_test
 
-    async def my_eval(req: BatchEvaluatorRequest, options: object | None) -> list[EvaluatorResponse]:
+    async def my_eval(req: EvaluatorRequest, options: object | None) -> list[EvaluatorResponse]:
         return []
 
     with pytest.raises(TypeError, match="evaluator 'my_eval' takes one input, but 'options' is a second parameter"):
@@ -1772,7 +1769,7 @@ def test_sync_batch_evaluator_raises_type_error_at_definition(setup_test: SetupF
     """A sync batch fn raises at definition, not when the first run awaits its list."""
     ai, *_ = setup_test
 
-    def my_eval(req: BatchEvaluatorRequest) -> list[EvaluatorResponse]:
+    def my_eval(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         return []
 
     with pytest.raises(TypeError, match="Got sync function for 'my_eval'"):
@@ -1790,7 +1787,7 @@ async def test_define_sync_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -1815,7 +1812,7 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -1837,8 +1834,8 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
 def _define_scoring_evaluator(ai: Genkit, name: str, scores: list[Score]) -> None:
     """Register a per-row evaluator that gives every row the same scores."""
 
-    async def eval_fn(req: EvaluatorRequest) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=list(scores))
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=list(scores))
 
     ai.define_evaluator(name=name, display_name=name, definition='fixed scores', fn=eval_fn)
 
@@ -1891,10 +1888,10 @@ async def test_evaluator_that_raises_reports_score_status_fail_with_error(setup_
     """A row whose evaluator raises comes back as one ScoreStatus.FAIL score with the error, and the next row runs."""
     ai, *_ = setup_test
 
-    async def my_eval_fn(req: EvaluatorRequest) -> EvaluatorResponse:
-        if req.row.test_case_id == 'case1':
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        if datapoint.test_case_id == 'case1':
             raise RuntimeError('row boom')
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=True)])
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     ai.define_evaluator(name='my_eval', display_name='my_eval', definition='first row raises', fn=my_eval_fn)
 
@@ -1967,9 +1964,9 @@ async def test_evaluate_with_base_data_point_dataset_keeps_test_case_id(setup_te
     ai, *_ = setup_test
     seen: list[str | None] = []
 
-    async def eval_fn(req: EvaluatorRequest) -> EvaluatorResponse:
-        seen.append(req.row.test_case_id)
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=True)])
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        seen.append(datapoint.test_case_id)
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     ai.define_evaluator(name='id_eval', display_name='id_eval', definition='echo ids', fn=eval_fn)
 
@@ -2052,9 +2049,9 @@ def _define_recording_evaluator(ai: Genkit, name: str) -> list[object]:
     """Register a per-row evaluator that records the settings it was handed."""
     seen: list[object] = []
 
-    async def eval_fn(req: EvaluatorRequest) -> EvaluatorResponse:
-        seen.append(req.options)
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=True)])
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        seen.append(options)
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     ai.define_evaluator(name=name, display_name=name, definition='records settings', fn=eval_fn)
     return seen
@@ -2064,7 +2061,7 @@ def _define_recording_batch_evaluator(ai: Genkit, name: str) -> list[object]:
     """Register a batch evaluator that records the settings it was handed."""
     seen: list[object] = []
 
-    async def eval_fn(req: BatchEvaluatorRequest) -> list[EvaluatorResponse]:
+    async def eval_fn(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         seen.append(req.options)
         return [
             EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)])
@@ -2102,104 +2099,25 @@ async def test_evaluate_batch_evaluator_gets_the_config_dict(setup_test: SetupFi
 
 
 @pytest.mark.asyncio
-async def test_evaluate_with_no_config_passes_empty_dict_to_evaluator(setup_test: SetupFixture) -> None:
-    """ai.evaluate with no ref settings and no config= hands the evaluator an empty dict."""
+async def test_evaluate_with_no_config_passes_none_to_evaluator(setup_test: SetupFixture) -> None:
+    """ai.evaluate with no ref settings and no config= hands the evaluator None."""
     ai, *_ = setup_test
-    seen = _define_recording_evaluator(ai, 'empty_eval')
+    seen = _define_recording_evaluator(ai, 'none_eval')
 
-    await ai.evaluate(evaluator='empty_eval', dataset=_one_row())
+    await ai.evaluate(evaluator='none_eval', dataset=_one_row())
 
-    assert seen == [{}]
+    assert seen == [None]
 
 
 @pytest.mark.asyncio
-async def test_evaluate_batch_with_no_config_passes_empty_dict_to_evaluator(setup_test: SetupFixture) -> None:
-    """The same empty dict reaches a batch evaluator."""
+async def test_evaluate_batch_with_no_config_passes_none_to_evaluator(setup_test: SetupFixture) -> None:
+    """The same None reaches a batch evaluator."""
     ai, *_ = setup_test
-    seen = _define_recording_batch_evaluator(ai, 'empty_batch_eval')
+    seen = _define_recording_batch_evaluator(ai, 'none_batch_eval')
 
-    await ai.evaluate(evaluator='empty_batch_eval', dataset=_one_row())
+    await ai.evaluate(evaluator='none_batch_eval', dataset=_one_row())
 
-    assert seen == [{}]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
-async def test_evaluate_with_explicit_none_config_passes_empty_dict(setup_test: SetupFixture, batch: bool) -> None:
-    """config=None on ai.evaluate is the same as leaving it out: the evaluator gets {}."""
-    ai, *_ = setup_test
-    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
-    seen = define(ai, 'explicit_none_eval')
-
-    await ai.evaluate(evaluator='explicit_none_eval', dataset=_one_row(), config=None)
-
-    assert seen == [{}]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
-async def test_evaluator_action_run_with_none_options_passes_empty_dict(setup_test: SetupFixture, batch: bool) -> None:
-    """A wire request with options=None (Dev UI / CLI, bypassing ai.evaluate) still hands the evaluator {}."""
-    ai, *_ = setup_test
-    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
-    seen = define(ai, 'wire_none_eval')
-    action = await ai._registry.resolve_evaluator('wire_none_eval')
-    assert action is not None
-
-    await action.run(BatchEvaluatorRequest(dataset=_one_row(), eval_run_id='run1', options=None))  # type: ignore[arg-type] - wire null
-
-    assert seen == [{}]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('bad_config', [[], [('threshold', 0.5)], 'strict'], ids=['empty_list', 'pairs', 'str'])
-async def test_evaluate_with_non_mapping_config_raises_invalid_argument(
-    setup_test: SetupFixture, bad_config: object
-) -> None:
-    """config= must be a dict or a BaseModel, same as generate; a list or str raises before the evaluator runs."""
-    ai, *_ = setup_test
-    seen = _define_recording_evaluator(ai, 'bad_cfg_eval')
-
-    with pytest.raises(GenkitError) as exc_info:
-        await ai.evaluate(evaluator='bad_cfg_eval', dataset=_one_row(), config=bad_config)  # type: ignore[arg-type]
-
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert seen == []
-
-
-@pytest.mark.asyncio
-async def test_evaluate_with_basemodel_config_passes_dict(setup_test: SetupFixture) -> None:
-    """A BaseModel config= is dumped, so the untyped evaluator still gets a dict."""
-
-    class AllergyCheckConfig(BaseModel):
-        strict: bool = False
-
-    ai, *_ = setup_test
-    seen = _define_recording_evaluator(ai, 'model_cfg_eval')
-
-    await ai.evaluate(evaluator='model_cfg_eval', dataset=_one_row(), config=AllergyCheckConfig(strict=True))  # type: ignore[arg-type]
-
-    assert seen == [{'strict': True}]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
-async def test_evaluator_action_run_with_non_mapping_options_raises_invalid_argument(
-    setup_test: SetupFixture, batch: bool
-) -> None:
-    """A wire BatchEvaluatorRequest whose options is a list fails the whole request, not one score per row."""
-    ai, *_ = setup_test
-    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
-    seen = define(ai, 'wire_bad_eval')
-    action = await ai._registry.resolve_evaluator('wire_bad_eval')
-    assert action is not None
-
-    wire = {'dataset': [row.model_dump(by_alias=True) for row in _one_row()], 'evalRunId': 'run1', 'options': []}
-    with pytest.raises(GenkitError) as exc_info:
-        await action.run(wire)  # type: ignore[arg-type]
-
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert seen == []
+    assert seen == [None]
 
 
 @pytest.mark.asyncio
@@ -2248,10 +2166,10 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     """Test that define_background_model correctly serializes info by alias and excludes None."""
     ai, _, _, *_ = setup_test
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     action = ai.define_background_model(
@@ -2282,10 +2200,10 @@ def test_background_model_factory_stashes_class_without_registering(setup_test: 
     class BgConfig(BaseModel):
         duration: int | None = None
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     action = background_model('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
@@ -2301,10 +2219,10 @@ async def test_generate_operation_with_model_info_long_running(
     """Verify generate_operation succeeds for a define_background_model."""
     ai, _, _, *_ = setup_test
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='op123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lr_model', start=start, check=check)
@@ -2754,47 +2672,3 @@ async def test_generate_resolved_sibling_survives_repeated_interrupts(
     tool_msg = next(m for m in response.messages if m.role == Role.TOOL)
     outputs = {p.tool_response.name: p.tool_response.output for p in tool_msg.content if p.tool_response}
     assert outputs == {'charge_card': 'charged#1', 'approve': 'approved'}
-
-
-class _AllergyCheckConfig(BaseModel):
-    strict: bool = False
-    allergens: list[str] = Field(default_factory=lambda: ['peanut'])
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
-async def test_evaluate_with_basemodel_config_passes_only_set_fields(setup_test: SetupFixture, batch: bool) -> None:
-    """An untyped evaluator gets the fields the caller set, same as an untyped model fn's config."""
-    ai, *_ = setup_test
-    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
-    seen = define(ai, 'set_fields_eval')
-
-    await ai.evaluate(evaluator='set_fields_eval', dataset=_one_row(), config=_AllergyCheckConfig(strict=True))  # type: ignore[arg-type]
-
-    assert seen == [{'strict': True}]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('batch', [False, True], ids=['per_row', 'batch'])
-async def test_evaluator_action_run_with_basemodel_options_matches_ai_evaluate(
-    setup_test: SetupFixture, batch: bool
-) -> None:
-    """BatchEvaluatorRequest(options=Cfg(...)) on the action matches ai.evaluate(config=Cfg(...))."""
-    ai, *_ = setup_test
-    define = _define_recording_batch_evaluator if batch else _define_recording_evaluator
-    seen = define(ai, 'action_cfg_eval')
-    action = await ai._registry.resolve_evaluator('action_cfg_eval')
-    assert action is not None
-
-    request = BatchEvaluatorRequest(dataset=_one_row(), eval_run_id='run1', options=_AllergyCheckConfig(strict=True))
-    await action.run(request)  # type: ignore[arg-type]
-
-    assert seen == [{'strict': True}]
-
-
-def test_eval_request_options_is_typed_dict() -> None:
-    """options is dict[str, Any]: .get needs no None guard, and the schema says object."""
-    request = BatchEvaluatorRequest(dataset=_one_row(), eval_run_id='run1')
-
-    assert request.options.get('strict', False) is False
-    assert to_json_schema(BatchEvaluatorRequest)['properties']['options']['type'] == 'object'

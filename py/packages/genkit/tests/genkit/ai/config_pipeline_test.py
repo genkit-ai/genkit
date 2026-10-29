@@ -29,23 +29,17 @@ from pydantic import BaseModel
 from genkit import Genkit, GenkitError
 from genkit._core._action import ActionRunContext
 from genkit._core._model import (
-    BatchEvaluatorRequest,
     EmbedRequest,
-    EvaluatorRequest,
     Message,
     ModelRequest,
     ModelResponse,
     Part,
 )
 from genkit._core._typing import (
-    BaseDataPoint,
     Embedding,
     EmbedResponse,
-    EvalResponse,
-    EvaluatorResponse,
     Operation,
     Role,
-    Score,
 )
 
 
@@ -63,28 +57,14 @@ class CrmEmbedConfig(BaseModel):
     task_type: str | None = None
 
 
-class AllergyJudgeConfig(BaseModel):
-    """An allergy-check evaluator's settings."""
-
-    strict: bool = True
-    allergens: list[str] = ['peanut']
-
-
 class MenuOnlyConfig(BaseModel):
     """A class no action here declares."""
 
     course: str | None = None
 
 
-ROWS = [BaseDataPoint(input='satay', output='contains peanut', test_case_id='row-1')]
-
-
 def _ok() -> ModelResponse:
     return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
-
-
-def _score() -> EvaluatorResponse:
-    return EvaluatorResponse(test_case_id='row-1', evaluation=[Score(score=1)])
 
 
 def _embedding() -> EmbedResponse:
@@ -129,38 +109,6 @@ def test_embedder_annotation_and_config_schema_must_agree() -> None:
         ai.define_embedder('crm', crm_search, config_schema=MenuOnlyConfig)
 
 
-def test_per_row_evaluator_annotation_and_config_schema_must_agree() -> None:
-    ai = Genkit()
-
-    async def allergy_check(request: EvaluatorRequest[AllergyJudgeConfig]) -> EvaluatorResponse:
-        return _score()
-
-    with pytest.raises(GenkitError, match=r"evaluator 'allergy': config_schema is .*MenuOnlyConfig"):
-        ai.define_evaluator(
-            name='allergy',
-            display_name='Allergy',
-            definition='Flags allergens.',
-            fn=allergy_check,
-            config_schema=MenuOnlyConfig,
-        )
-
-
-def test_batch_evaluator_annotation_and_config_schema_must_agree() -> None:
-    ai = Genkit()
-
-    async def allergy_batch(request: BatchEvaluatorRequest[AllergyJudgeConfig]) -> list[EvaluatorResponse]:
-        return [_score()]
-
-    with pytest.raises(GenkitError, match=r"evaluator 'allergy': config_schema is .*MenuOnlyConfig"):
-        ai.define_batch_evaluator(
-            name='allergy',
-            display_name='Allergy',
-            definition='Flags allergens.',
-            fn=allergy_batch,
-            config_schema=MenuOnlyConfig,
-        )
-
-
 def test_same_class_in_annotation_and_config_schema_is_fine() -> None:
     ai = Genkit()
 
@@ -181,29 +129,15 @@ def test_annotation_alone_sets_config_schema_and_dev_ui_form() -> None:
     async def crm_search(request: EmbedRequest[CrmEmbedConfig]) -> EmbedResponse:
         return _embedding()
 
-    async def allergy_check(request: EvaluatorRequest[AllergyJudgeConfig]) -> EvaluatorResponse:
-        return _score()
-
-    async def allergy_batch(request: BatchEvaluatorRequest[AllergyJudgeConfig]) -> list[EvaluatorResponse]:
-        return [_score()]
-
     model = ai.define_model(name='bistro', fn=bistro)
     embedder = ai.define_embedder('crm', crm_search)
-    per_row = ai.define_evaluator(name='row', display_name='Row', definition='d', fn=allergy_check)
-    batch = ai.define_batch_evaluator(name='batch', display_name='Batch', definition='d', fn=allergy_batch)
 
     assert model.config_schema is TableConfig
     assert embedder.config_schema is CrmEmbedConfig
-    assert per_row.config_schema is AllergyJudgeConfig
-    assert batch.config_schema is AllergyJudgeConfig
     model_meta = cast(dict[str, Any], model.metadata['model'])
     embedder_meta = cast(dict[str, Any], embedder.metadata['embedder'])
-    per_row_meta = cast(dict[str, Any], per_row.metadata['evaluator'])
-    batch_meta = cast(dict[str, Any], batch.metadata['evaluator'])
     assert model_meta['customOptions']['properties']['temperature']['default'] == 0.7
     assert embedder_meta['customOptions']['properties']['dimensions']['default'] == 768
-    assert per_row_meta['customOptions']['properties']['strict']['default'] is True
-    assert batch_meta['customOptions']['properties']['strict']['default'] is True
 
 
 def test_embedder_config_schema_sets_the_class_and_form() -> None:
@@ -234,37 +168,3 @@ async def test_unannotated_embedder_gets_a_request_from_a_raw_run() -> None:
     assert isinstance(seen['request'], EmbedRequest)
     assert seen['request'].options == {}
     assert seen['request'].input[0].text == 'acme corp'
-
-
-@pytest.mark.asyncio
-async def test_unannotated_batch_evaluator_gets_a_request_from_a_raw_run() -> None:
-    ai = Genkit()
-    seen: dict[str, Any] = {}
-
-    async def allergy_batch(request):  # noqa: ANN001, ANN202
-        seen['request'] = request
-        return [_score()]
-
-    action = ai.define_batch_evaluator(name='allergy', display_name='Allergy', definition='d', fn=allergy_batch)
-    response = await action.run({'dataset': [{'input': 'satay'}], 'evalRunId': 'run-1', 'options': None})  # type: ignore[arg-type]  # pyrefly: ignore[bad-argument-type] - raw wire JSON, as the Dev UI sends
-
-    assert isinstance(seen['request'], BatchEvaluatorRequest)
-    assert seen['request'].options == {}
-    assert isinstance(response.response, EvalResponse)
-
-
-@pytest.mark.asyncio
-async def test_typed_per_row_evaluator_gets_its_options_class() -> None:
-    ai = Genkit()
-    seen: dict[str, Any] = {}
-
-    async def allergy_check(request: EvaluatorRequest[AllergyJudgeConfig]) -> EvaluatorResponse:
-        seen['request'] = request
-        return _score()
-
-    action = ai.define_evaluator(name='allergy', display_name='Allergy', definition='d', fn=allergy_check)
-    await action.run({'dataset': [{'input': 'satay'}], 'evalRunId': 'run-1', 'options': {'strict': False}})  # type: ignore[arg-type]  # pyrefly: ignore[bad-argument-type] - raw wire JSON, as the Dev UI sends
-
-    assert isinstance(seen['request'], EvaluatorRequest)
-    assert seen['request'].row.input == 'satay'
-    assert seen['request'].options == AllergyJudgeConfig(strict=False, allergens=['peanut'])

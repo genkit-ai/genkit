@@ -18,22 +18,23 @@
 """Tests for the Gemini model implementation."""
 
 import base64
-from typing import Any, cast, get_args
+import math
+from datetime import date, datetime
+from typing import Annotated, Any, Literal, cast, get_args
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import httpx
 import pytest
 from genkit_google_genai._models import _gemini
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
+    GEMINI_CATALOG_IDS,
     GeminiConfig,
     GeminiImageConfig,
     GeminiModel,
     GeminiTtsConfig,
     GemmaConfig,
-    KnownGemini,
-    KnownGeminiImage,
-    KnownGeminiTts,
     KnownGemma,
     SpeechConfig,
     _to_finish_reason,
@@ -47,20 +48,15 @@ from google import genai
 from google.auth.exceptions import DefaultCredentialsError, RefreshError, TransportError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from pytest_mock import MockerFixture
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit._core._compat import StrEnum
-from genkit.model import Constrained, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
+from genkit.model import Constrained, ModelContext, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
 from genkit.plugin_api import to_json_schema
 
-ALL_VERSIONS = sorted({
-    *get_args(KnownGemini),
-    *get_args(KnownGeminiTts),
-    *get_args(KnownGeminiImage),
-    *get_args(KnownGemma),
-})
+ALL_VERSIONS = sorted({*GEMINI_CATALOG_IDS, *get_args(KnownGemma)})
 IMAGE_GENERATION_VERSIONS = ['gemini-2.5-flash']
 
 
@@ -103,7 +99,7 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
 
     gemini = GeminiModel(version, googleai_client_mock)
 
-    ctx = ActionRunContext()
+    ctx = ModelContext()
     response = await gemini.generate(request, ctx)
 
     # Determine expected config based on model type
@@ -147,13 +143,16 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
 
     resp = genai.types.GenerateContentResponse(candidates=[candidate])
 
+    async def stream() -> Any:  # noqa: ANN401
+        yield resp
+
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.vertexai = False
-    googleai_client_mock.aio.models.generate_content_stream.__aiter__.side_effect = [resp]
+    googleai_client_mock.aio.models.generate_content_stream.return_value = stream()
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel(version, googleai_client_mock)
 
-    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+    ctx = ModelContext(streaming_callback=on_chunk_mock)
     response = await gemini.generate(request, ctx)
 
     # Determine expected config based on model type
@@ -173,7 +172,9 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
     ])
     assert isinstance(response, ModelResponse)
     assert response.message is not None
-    assert response.message.content == []
+    assert response.message.content[0].text == response_text
+    on_chunk_mock.assert_called_once()
+    assert on_chunk_mock.call_args.args[0].content[0].text == response_text
 
 
 @pytest.mark.asyncio
@@ -211,7 +212,7 @@ async def test_generate_stream_captures_finish_reason_and_usage(mocker: MockerFi
 
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+    ctx = ModelContext(streaming_callback=on_chunk_mock)
 
     response = await gemini.generate(request, ctx)
     assert response.finish_reason == FinishReason.STOP
@@ -245,7 +246,7 @@ async def test_generate_stream_without_finish_reason(mocker: MockerFixture) -> N
 
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+    ctx = ModelContext(streaming_callback=on_chunk_mock)
 
     response = await gemini.generate(request, ctx)
     assert response.finish_reason == FinishReason.UNKNOWN
@@ -286,7 +287,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
 
     gemini = GeminiModel(version, googleai_client_mock)
 
-    ctx = ActionRunContext()
+    ctx = ModelContext()
     response = await gemini.generate(request, ctx)
 
     googleai_client_mock.assert_has_calls([
@@ -320,7 +321,7 @@ def test_convert_schema_property(mocker: MockerFixture) -> None:
     class Simple(BaseModel):
         foo: str = Field(description='foo field')
         bar: int = Field(description='bar field')
-        # Note: baz: list[str] | None generates anyOf schema which is not supported by _convert_schema_property yet
+        baz: list[str] | None = Field(None, description='baz field')
 
     assert gemini._convert_schema_property(to_json_schema(Simple)) == genai_types.Schema(
         type=genai_types.Type.OBJECT,
@@ -332,6 +333,12 @@ def test_convert_schema_property(mocker: MockerFixture) -> None:
             'bar': genai_types.Schema(
                 type=genai_types.Type.INTEGER,
                 description='bar field',
+            ),
+            'baz': genai_types.Schema(
+                type=genai_types.Type.ARRAY,
+                description='baz field',
+                nullable=True,
+                items=genai_types.Schema(type=genai_types.Type.STRING),
             ),
         },
         required=['foo', 'bar'],
@@ -419,7 +426,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     googleai_client_mock.aio.models.generate_content.return_value = resp
 
     gemini = GeminiModel(version, googleai_client_mock)
-    ctx = ActionRunContext()
+    ctx = ModelContext()
 
     response = await gemini.generate(request, ctx)
 
@@ -666,6 +673,8 @@ def test_stable_gemini_text_models_register_real_capabilities(model_name: str, e
         ('gemini-2.5-flash-preview-tts', 'Google AI - Gemini 2.5 Flash Preview TTS'),
         ('gemini-2.5-pro-preview-tts', 'Google AI - Gemini 2.5 Pro Preview TTS'),
         ('gemini-3.1-flash-tts-preview', 'Google AI - Gemini 3.1 Flash TTS Preview'),
+        ('gemini-3.8-flash-tts', 'Google AI - Gemini 3.8 Flash TTS'),
+        ('gemini-3.8-flash-lite-tts', 'Google AI - Gemini 3.8 Flash Lite TTS'),
     ],
 )
 def test_tts_models_register_per_name_capabilities(model_name: str, expected_label: str) -> None:
@@ -691,6 +700,8 @@ def test_tts_models_register_per_name_capabilities(model_name: str, expected_lab
         'gemini-2.5-flash-preview-tts',
         'gemini-2.5-pro-preview-tts',
         'gemini-3.1-flash-tts-preview',
+        'gemini-3.8-flash-tts',
+        'gemini-3.8-flash-lite-tts',
         'gemini-9.9-flash-preview-tts',
     ],
 )
@@ -1061,6 +1072,11 @@ def test_gemini_model__convert_schema_property(
             {'type': 'OBJECT', 'properties': {'user': {'$ref': '#/$defs/NonExistent'}}},
             None,
         ),
+        # Test Case 13: $ref to the document root
+        (
+            {'type': 'OBJECT', 'properties': {'user': {'$ref': '#'}}},
+            None,
+        ),
     ],
 )
 def test_gemini_model__convert_schema_property_raises_exception(
@@ -1069,8 +1085,696 @@ def test_gemini_model__convert_schema_property_raises_exception(
     gemini_model_instance: GeminiModel,
 ) -> None:
     """Test GeminiModel._convert_schema_property raises an exception for unresolvable schemas."""
-    with pytest.raises(ValueError, match=r'Failed to resolve schema for .*'):
+    with pytest.raises(GenkitError) as exc_info:
         gemini_model_instance._convert_schema_property(input_schema, defs)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'cannot be resolved' in exc_info.value.original_message
+
+
+class _LinkedList(BaseModel):
+    value: int
+    next: '_LinkedList | None' = None
+
+
+class _RequiredLinkedList(BaseModel):
+    value: int
+    next: '_RequiredLinkedList | None'
+
+
+class _Tree(BaseModel):
+    children: list['_Tree'] = []
+
+
+class _RequiredTree(BaseModel):
+    children: list['_RequiredTree']
+
+
+class _OptionalTree(BaseModel):
+    children: list['_OptionalTree'] | None = None
+
+
+class _Grid(BaseModel):
+    rows: list[list['_Grid']] = []
+
+
+class _Mixed(BaseModel):
+    x: list['_Mixed'] | int
+
+
+class _OptionalMixed(BaseModel):
+    x: list['_OptionalMixed'] | int | None = None
+
+
+class _NodeOrInt(BaseModel):
+    next: '_NodeOrInt | int'
+
+
+def test_gemini_model__create_tool_leaves_out_recursive_param(gemini_model_instance: GeminiModel) -> None:
+    """A property that refers back to a model that contains it is left out."""
+    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(_LinkedList))
+
+    gemini_tool, _ = gemini_model_instance._create_tool(tool)
+    declarations = gemini_tool.function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        required=['value'],
+        properties={'value': genai_types.Schema(type=genai_types.Type.INTEGER)},
+    )
+
+
+@pytest.mark.parametrize('model', [_Tree, _OptionalTree, _Grid])
+def test_gemini_model__create_tool_leaves_out_recursive_items(
+    model: type[BaseModel],
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """An array whose items refer back to a model that contains it is left out, as is an optional or nested one."""
+    tool = ToolDefinition(name='t', description='d', input_schema=to_json_schema(model))
+
+    gemini_tool, _ = gemini_model_instance._create_tool(tool)
+    declarations = gemini_tool.function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == genai_types.Schema(type=genai_types.Type.OBJECT, properties={})
+
+
+def test_gemini_model__convert_schema_property_strict_leaves_out_recursive_items(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode an optional array whose items refer back to a model that contains it is left out."""
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(_Tree), strict=True)
+
+    assert schema == genai_types.Schema(type=genai_types.Type.OBJECT, properties={})
+
+
+def test_gemini_model__convert_schema_property_strict_rejects_required_recursive_items(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a required array whose items refer back to a model that contains it raises naming it."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(to_json_schema(_RequiredTree), strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'children' in exc_info.value.original_message
+
+
+def test_gemini_model__convert_schema_property_strict_leaves_out_recursive_property(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode an optional recursive property is left out rather than raising."""
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(_LinkedList), strict=True)
+
+    assert schema is not None and list(schema.properties or {}) == ['value']
+
+
+def test_gemini_model__convert_schema_property_strict_rejects_required_recursive_property(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a required recursive property cannot be left out, so it raises naming the property."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(to_json_schema(_RequiredLinkedList), strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'next' in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, needle',
+    [
+        (to_json_schema(_Mixed), 'anyOf branch'),
+        (to_json_schema(_OptionalMixed), 'anyOf branch'),
+        (to_json_schema(_NodeOrInt), 'anyOf branch'),
+        ({'oneOf': [{'type': 'integer'}, {'type': 'array'}]}, 'oneOf branch'),
+        ({'type': ['string', 'integer', 'null']}, "type ['string', 'integer', 'null']"),
+    ],
+)
+def test_gemini_model__convert_schema_property_strict_rejects_union_losing_a_branch(
+    input_schema: dict[str, object],
+    needle: str,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a union with a branch that cannot be converted raises instead of narrowing to the others."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(input_schema, strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert needle in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        (
+            to_json_schema(_Mixed),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                required=['x'],
+                properties={'x': genai_types.Schema(type=genai_types.Type.INTEGER)},
+            ),
+        ),
+        ({'type': ['string', 'integer', 'null']}, genai_types.Schema(type=genai_types.Type.STRING, nullable=True)),
+    ],
+)
+def test_gemini_model__convert_schema_property_leaves_out_union_branch(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Without strict, a union branch that cannot be converted is left out and the others are kept."""
+    assert gemini_model_instance._convert_schema_property(input_schema) == expected
+
+
+@pytest.mark.parametrize('strict', [False, True])
+def test_gemini_model__convert_schema_property_null_type_list_branch_is_nullable(
+    strict: bool,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A branch typed ``['null']`` counts as a null branch and makes the union nullable."""
+    schema: dict[str, object] = {'anyOf': [{'type': 'integer'}, {'type': ['null']}]}
+
+    assert gemini_model_instance._convert_schema_property(schema, strict=strict) == genai_types.Schema(
+        type=genai_types.Type.INTEGER, nullable=True
+    )
+
+
+def test_gemini_model__convert_schema_property_expands_repeated_ref(gemini_model_instance: GeminiModel) -> None:
+    """A definition used by two sibling properties is expanded for both."""
+
+    class Point(BaseModel):
+        x: int
+
+    class Segment(BaseModel):
+        start: Point
+        end: Point
+
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(Segment))
+
+    assert schema is not None and schema.properties is not None
+    point = genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        required=['x'],
+        properties={'x': genai_types.Schema(type=genai_types.Type.INTEGER)},
+    )
+    assert schema.properties == {'start': point, 'end': point}
+
+
+@pytest.mark.parametrize('strict', [False, True])
+def test_gemini_model__convert_schema_property_keeps_ref_sibling_keywords(
+    strict: bool, gemini_model_instance: GeminiModel
+) -> None:
+    """Keywords next to a $ref apply to the schema it resolves to."""
+
+    class Color(StrEnum):
+        RED = 'red'
+        BLUE = 'blue'
+
+    class Paint(BaseModel):
+        color: Color = Field(Color.RED, description='Paint color')
+
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(Paint), strict=strict)
+
+    assert schema is not None and schema.properties is not None
+    assert schema.properties['color'] == genai_types.Schema(
+        type=genai_types.Type.STRING, enum=['red', 'blue'], default='red', description='Paint color'
+    )
+
+
+def test_gemini_model__convert_schema_property_keeps_keywords(gemini_model_instance: GeminiModel) -> None:
+    """anyOf, type lists, format, default, bounds and propertyOrdering survive conversion.
+
+    A type list without null is not nullable, and an optional untyped property
+    is left out.
+    """
+    schema: dict[str, object] = {
+        'type': 'object',
+        'title': 'Thing',
+        'additionalProperties': False,
+        'propertyOrdering': ['count', 'label', 'kind', 'ratio', 'tags'],
+        'required': ['count'],
+        'properties': {
+            'count': {'type': 'integer', 'title': 'Count', 'default': 1, 'minimum': 0, 'maximum': 10},
+            'label': {'type': ['string', 'null'], 'format': 'date-time'},
+            'pick': {'type': ['string', 'integer']},
+            'kind': {'anyOf': [{'type': 'string'}, {'type': 'integer'}], 'description': 'string or int'},
+            'ratio': {
+                'anyOf': [{'type': 'number', 'minimum': 0.5, 'maximum': 1.5}, {'type': 'null'}],
+                'title': 'Ratio',
+            },
+            'tags': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 3},
+            'anything': {'title': 'Anything'},
+        },
+    }
+
+    assert gemini_model_instance._convert_schema_property(schema) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        property_ordering=['count', 'label', 'kind', 'ratio', 'tags'],
+        required=['count'],
+        properties={
+            'count': genai_types.Schema(type=genai_types.Type.INTEGER, default=1, minimum=0.0, maximum=10.0),
+            'label': genai_types.Schema(type=genai_types.Type.STRING, format='date-time', nullable=True),
+            'pick': genai_types.Schema(type=genai_types.Type.STRING),
+            'kind': genai_types.Schema(
+                any_of=[
+                    genai_types.Schema(type=genai_types.Type.STRING),
+                    genai_types.Schema(type=genai_types.Type.INTEGER),
+                ],
+                description='string or int',
+            ),
+            'ratio': genai_types.Schema(type=genai_types.Type.NUMBER, nullable=True, minimum=0.5, maximum=1.5),
+            'tags': genai_types.Schema(
+                type=genai_types.Type.ARRAY,
+                items=genai_types.Schema(type=genai_types.Type.STRING),
+                min_items=1,
+                max_items=3,
+            ),
+        },
+    )
+    assert gemini_model_instance._convert_schema_property({}) is None
+
+
+@pytest.mark.parametrize(
+    'input_schema, keyword',
+    [
+        ({'type': 'integer', 'minimum': 'zero'}, 'minimum'),
+        ({'type': 'object', 'propertyOrdering': 'ab'}, 'propertyOrdering'),
+        ({'type': 'number', 'default': math.inf}, 'default'),
+        ({'type': 'number', 'maximum': math.nan}, 'maximum'),
+        ({'type': 'number', 'minimum': 10**400}, 'minimum'),
+        ({'type': 'array', 'items': {'type': 'string'}, 'minItems': math.inf}, 'minItems'),
+    ],
+)
+def test_gemini_model__convert_schema_property_rejects_bad_keyword_value(
+    input_schema: dict[str, object],
+    keyword: str,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a keyword value that cannot be coerced raises INVALID_ARGUMENT naming the keyword."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(input_schema, strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert keyword in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        ({'type': 'integer', 'minimum': 'zero'}, genai_types.Schema(type=genai_types.Type.INTEGER)),
+        ({'type': 'object', 'propertyOrdering': 'ab'}, genai_types.Schema(type=genai_types.Type.OBJECT, properties={})),
+        ({'type': 'number', 'default': math.inf}, genai_types.Schema(type=genai_types.Type.NUMBER)),
+        ({'type': 'number', 'maximum': math.nan}, genai_types.Schema(type=genai_types.Type.NUMBER)),
+        ({'type': 'number', 'minimum': 10**400}, genai_types.Schema(type=genai_types.Type.NUMBER)),
+        (
+            {'type': 'array', 'items': {'type': 'string'}, 'minItems': math.inf},
+            genai_types.Schema(type=genai_types.Type.ARRAY, items=genai_types.Schema(type=genai_types.Type.STRING)),
+        ),
+    ],
+)
+def test_gemini_model__convert_schema_property_leaves_out_bad_keyword_value(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Without strict, a keyword value that cannot be coerced is left out."""
+    assert gemini_model_instance._convert_schema_property(input_schema) == expected
+
+
+def test_gemini_model__convert_schema_property_non_object_property(gemini_model_instance: GeminiModel) -> None:
+    """A property whose schema is not an object is left out, and raises in strict mode when it is required."""
+    schema: dict[str, object] = {
+        'type': 'object',
+        'properties': {'x': 'string', 'y': {'type': 'string'}},
+        'required': ['x', 'y'],
+    }
+
+    assert gemini_model_instance._convert_schema_property(schema) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        required=['y'],
+        properties={'y': genai_types.Schema(type=genai_types.Type.STRING)},
+    )
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(schema, strict=True)
+    assert 'required property x' in exc_info.value.original_message
+
+
+@pytest.mark.parametrize('raw_type', ['bogus', None, 123])
+def test_gemini_model__convert_schema_property_rejects_unsupported_type(
+    raw_type: object,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A type the Gemini Schema cannot express raises INVALID_ARGUMENT."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property({'type': raw_type})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'is not supported' in exc_info.value.original_message
+
+
+def test_gemini_model__convert_schema_property_discriminated_union(gemini_model_instance: GeminiModel) -> None:
+    """A pydantic discriminated union (oneOf of $refs with const tags) becomes any_of of enum-tagged objects."""
+
+    class Cat(BaseModel):
+        kind: Literal['cat']
+        meows: int
+
+    class Dog(BaseModel):
+        kind: Literal['dog']
+        barks: bool
+
+    class Pets(BaseModel):
+        pet: Annotated[Cat | Dog, Field(discriminator='kind')]
+
+    assert gemini_model_instance._convert_schema_property(to_json_schema(Pets)) == genai_types.Schema(
+        type=genai_types.Type.OBJECT,
+        required=['pet'],
+        properties={
+            'pet': genai_types.Schema(
+                any_of=[
+                    genai_types.Schema(
+                        type=genai_types.Type.OBJECT,
+                        required=['kind', 'meows'],
+                        properties={
+                            'kind': genai_types.Schema(type=genai_types.Type.STRING, enum=['cat']),
+                            'meows': genai_types.Schema(type=genai_types.Type.INTEGER),
+                        },
+                    ),
+                    genai_types.Schema(
+                        type=genai_types.Type.OBJECT,
+                        required=['kind', 'barks'],
+                        properties={
+                            'kind': genai_types.Schema(type=genai_types.Type.STRING, enum=['dog']),
+                            'barks': genai_types.Schema(type=genai_types.Type.BOOLEAN),
+                        },
+                    ),
+                ],
+            ),
+        },
+    )
+
+
+def test_gemini_model__convert_schema_property_non_string_const_keeps_type(gemini_model_instance: GeminiModel) -> None:
+    """A const the Gemini enum cannot hold leaves the property typed but unconstrained."""
+    assert gemini_model_instance._convert_schema_property({'type': 'integer', 'const': 1}) == genai_types.Schema(
+        type=genai_types.Type.INTEGER
+    )
+
+
+def test_gemini_model__convert_schema_property_keeps_only_string_enums(gemini_model_instance: GeminiModel) -> None:
+    """Non-string or mixed members leave a bare type; a typeless string enum with null is a nullable STRING enum."""
+
+    class Pick(BaseModel):
+        tag: Literal['a', None]
+
+    convert = gemini_model_instance._convert_schema_property
+
+    assert convert({'type': 'integer', 'enum': [1, 2]}) == genai_types.Schema(type=genai_types.Type.INTEGER)
+    assert convert({'type': 'string', 'enum': ['a', 1]}) == genai_types.Schema(type=genai_types.Type.STRING)
+    pick = convert(to_json_schema(Pick), strict=True)
+    assert pick is not None and pick.properties is not None
+    assert pick.properties['tag'] == genai_types.Schema(type=genai_types.Type.STRING, nullable=True, enum=['a'])
+
+
+def test_gemini_model__convert_schema_property_keeps_pydantic_string_formats(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """The format pydantic emits for datetime, date, UUID and HttpUrl fields is carried through."""
+
+    class Stamps(BaseModel):
+        at: datetime
+        day: date
+        ident: UUID
+        link: HttpUrl
+
+    schema = gemini_model_instance._convert_schema_property(to_json_schema(Stamps))
+
+    assert schema is not None and schema.properties is not None
+    assert {name: prop.format for name, prop in schema.properties.items()} == {
+        'at': 'date-time',
+        'day': 'date',
+        'ident': 'uuid',
+        'link': 'uri',
+    }
+    assert all(prop.type == genai_types.Type.STRING for prop in schema.properties.values())
+
+
+def test_gemini_model__convert_schema_property_rejects_required_untyped_property(
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a required property with no type cannot be left out, so it raises naming the property."""
+
+    class Payload(BaseModel):
+        data: Any
+        note: Any = None
+
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(to_json_schema(Payload), strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'data' in exc_info.value.original_message
+
+
+class _RequiredAny(BaseModel):
+    value: Any
+    count: int
+
+
+class _RequiredValues(BaseModel):
+    count: int
+    values: list[Any]
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        (
+            to_json_schema(_RequiredAny),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                required=['count'],
+                properties={'count': genai_types.Schema(type=genai_types.Type.INTEGER)},
+            ),
+        ),
+        (
+            to_json_schema(_RequiredValues),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                required=['count'],
+                properties={'count': genai_types.Schema(type=genai_types.Type.INTEGER)},
+            ),
+        ),
+        (
+            to_json_schema(_RequiredTree),
+            genai_types.Schema(type=genai_types.Type.OBJECT, properties={}),
+        ),
+        (
+            to_json_schema(_RequiredLinkedList),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                required=['value'],
+                properties={'value': genai_types.Schema(type=genai_types.Type.INTEGER)},
+            ),
+        ),
+    ],
+)
+def test_gemini_model__create_tool_drops_left_out_param_from_required(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A required tool parameter that is left out is dropped from the declaration's required list."""
+    tool = ToolDefinition(name='t', description='d', input_schema=input_schema)
+
+    gemini_tool, _ = gemini_model_instance._create_tool(tool)
+    declarations = gemini_tool.function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == expected
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected, wrapped',
+    [
+        (to_json_schema(list[Any]), genai_types.Schema(type=genai_types.Type.OBJECT, properties={}), False),
+        (
+            to_json_schema(int),
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={'input': genai_types.Schema(type=genai_types.Type.INTEGER)},
+                required=['input'],
+            ),
+            True,
+        ),
+    ],
+)
+def test_gemini_model__create_tool_wraps_only_a_converted_input(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    wrapped: bool,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A non-object input is wrapped after conversion; one that converts to None makes a tool with no arguments."""
+    tool = ToolDefinition(name='t', description='d', input_schema=input_schema)
+
+    gemini_tool, wire = gemini_model_instance._create_tool(tool)
+    declarations = gemini_tool.function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == expected
+    assert wire.wrapped is wrapped
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        (
+            {
+                'type': 'object',
+                'properties': {'id': {'type': 'string'}, 'name': {'type': 'string'}},
+                'anyOf': [{'required': ['id']}, {'required': ['name']}],
+            },
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={
+                    'id': genai_types.Schema(type=genai_types.Type.STRING),
+                    'name': genai_types.Schema(type=genai_types.Type.STRING),
+                },
+            ),
+        ),
+        (
+            {
+                'type': 'object',
+                'properties': {
+                    'mode': {
+                        'type': 'string',
+                        'oneOf': [{'const': 'fast', 'title': 'Fast'}, {'const': 'slow', 'title': 'Slow'}],
+                    },
+                },
+                'required': ['mode'],
+            },
+            genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                required=['mode'],
+                properties={'mode': genai_types.Schema(type=genai_types.Type.STRING)},
+            ),
+        ),
+    ],
+    ids=['anyOf-required', 'titled-oneOf'],
+)
+def test_gemini_model__create_tool_keeps_type_next_to_union(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """A node with its own type converts by that type and leaves out a sibling anyOf or oneOf, strict or not."""
+    tool = ToolDefinition(name='t', description='d', input_schema=input_schema)
+
+    gemini_tool, _ = gemini_model_instance._create_tool(tool)
+    declarations = gemini_tool.function_declarations
+
+    assert declarations is not None
+    assert declarations[0].parameters == expected
+    assert gemini_model_instance._convert_schema_property(input_schema, strict=True) == expected
+
+
+@pytest.mark.parametrize(
+    'input_schema',
+    [
+        {'allOf': [{'type': 'string'}]},
+        {'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}},
+        {'type': 'array', 'items': {'not': {'type': 'null'}}},
+    ],
+)
+def test_gemini_model__convert_schema_property_rejects_untyped_constraint(
+    input_schema: dict[str, object],
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode a node that constrains without a type raises instead of dropping out of its parent."""
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property(input_schema, strict=True)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'no type' in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, expected',
+    [
+        ({'allOf': [{'type': 'string'}]}, None),
+        (
+            {'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}},
+            genai_types.Schema(type=genai_types.Type.OBJECT, properties={}),
+        ),
+        ({'type': 'array', 'items': {'not': {'type': 'null'}}}, None),
+    ],
+)
+def test_gemini_model__convert_schema_property_leaves_out_untyped_constraint(
+    input_schema: dict[str, object],
+    expected: genai_types.Schema | None,
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """Without strict, a node that constrains without a type is left out of its parent."""
+    assert gemini_model_instance._convert_schema_property(input_schema) == expected
+
+
+@pytest.mark.parametrize(
+    'annotations',
+    [
+        {'title': 'Note', 'default': None},
+        {'description': 'd', 'examples': [1], 'deprecated': True},
+        {'readOnly': True, 'writeOnly': False, '$comment': 'c'},
+        {'$schema': 'https://json-schema.org/draft/2020-12/schema', '$id': 'note', '$defs': {}},
+    ],
+)
+def test_gemini_model__convert_schema_property_strict_leaves_out_annotation_only_property(
+    annotations: dict[str, object],
+    gemini_model_instance: GeminiModel,
+) -> None:
+    """In strict mode an optional property with only annotations and no type is left out rather than raising."""
+    schema: dict[str, object] = {'type': 'object', 'properties': {'note': annotations, 'text': {'type': 'string'}}}
+
+    assert gemini_model_instance._convert_schema_property(schema, strict=True) == genai_types.Schema(
+        type=genai_types.Type.OBJECT, properties={'text': genai_types.Schema(type=genai_types.Type.STRING)}
+    )
+
+
+@pytest.mark.parametrize('additional', [True, {}, {'type': 'integer'}])
+def test_gemini_model__convert_schema_property_strict_map(
+    additional: object, gemini_model_instance: GeminiModel
+) -> None:
+    """In strict mode a map is left out when optional and raises naming it when required."""
+    schema: dict[str, object] = {
+        'type': 'object',
+        'properties': {
+            'scores': {'type': 'object', 'additionalProperties': additional},
+            'name': {'type': 'string'},
+        },
+    }
+
+    assert gemini_model_instance._convert_schema_property(schema, strict=True) == genai_types.Schema(
+        type=genai_types.Type.OBJECT, properties={'name': genai_types.Schema(type=genai_types.Type.STRING)}
+    )
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._convert_schema_property({**schema, 'required': ['scores']}, strict=True)
+    assert 'required property scores' in exc_info.value.original_message
+
+
+@pytest.mark.parametrize(
+    'input_schema, strict',
+    [
+        ({'type': 'object', 'additionalProperties': {'type': 'integer'}}, False),
+        ({'type': 'object', 'additionalProperties': False}, True),
+    ],
+    ids=['map-without-strict', 'closed-object-strict'],
+)
+def test_gemini_model__convert_schema_property_keeps_object_without_properties(
+    input_schema: dict[str, object], strict: bool, gemini_model_instance: GeminiModel
+) -> None:
+    """A map without strict, and an object closed by additionalProperties false, stay an empty OBJECT."""
+    assert gemini_model_instance._convert_schema_property(input_schema, strict=strict) == genai_types.Schema(
+        type=genai_types.Type.OBJECT, properties={}
+    )
 
 
 @pytest.mark.asyncio
@@ -1219,39 +1923,251 @@ async def test_gemini_model__config_extra_rides_on_extra_body(
     assert cfg.http_options.extra_body == {'generationConfig': {'fooBar': 1}}
 
 
-def _json_output_request() -> ModelRequest:
+# A pydantic-style schema exercising anyOf, type lists, $ref, $defs and numeric bounds.
+_STRUCTURED_SCHEMA: dict[str, Any] = {
+    '$schema': 'http://json-schema.org/draft-07/schema#',
+    'type': 'object',
+    'title': 'Thing',
+    'properties': {
+        'a': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None},
+        'n': {'type': 'integer', 'minimum': 1, 'maximum': 5},
+        't': {'type': ['string', 'null'], 'format': 'date-time'},
+        'p': {'$ref': '#/$defs/P'},
+    },
+    '$defs': {'P': {'type': 'string', 'enum': ['x', 'y']}},
+    'required': ['n'],
+    'additionalProperties': False,
+}
+
+_STRUCTURED_RESPONSE_SCHEMA = genai_types.Schema(
+    type=genai_types.Type.OBJECT,
+    required=['n'],
+    properties={
+        'a': genai_types.Schema(type=genai_types.Type.STRING, nullable=True),
+        'n': genai_types.Schema(type=genai_types.Type.INTEGER, minimum=1.0, maximum=5.0),
+        't': genai_types.Schema(type=genai_types.Type.STRING, format='date-time', nullable=True),
+        'p': genai_types.Schema(type=genai_types.Type.STRING, enum=['x', 'y']),
+    },
+)
+
+
+def _output_request(
+    *,
+    format: str | None = None,
+    json_schema: dict[str, Any] | None = None,
+    constrained: bool | None = None,
+    content_type: str | None = None,
+) -> ModelRequest:
     return ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        output=OutputConfig(
-            format='json',
-            json_schema={'type': 'object', 'properties': {'name': {'type': 'string'}}},
-            constrained=True,
-        ),
+        output=OutputConfig(format=format, json_schema=json_schema, constrained=constrained, content_type=content_type),
     )
 
 
 @pytest.mark.asyncio
-async def test_gemini_model__json_output_sets_constrained_config() -> None:
-    """A standard Gemini model receives response_mime_type and response_schema for JSON output."""
-    model = GeminiModel(version='gemini-2.5-flash', client=MagicMock(spec=genai.Client))
+async def test_gemini_model__json_constrained_sends_schema_verbatim(gemini_model_instance: GeminiModel) -> None:
+    """Constrained JSON output sends the JSON Schema untouched as response_json_schema."""
+    request = _output_request(
+        format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True, content_type='application/json'
+    )
 
-    cfg = await model._genkit_to_googleai_cfg(_json_output_request())
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
 
     assert cfg is not None
     assert cfg.response_mime_type == 'application/json'
-    assert cfg.response_schema is not None
+    assert cfg.response_json_schema == _STRUCTURED_SCHEMA
+    assert cfg.response_schema is None
 
 
 @pytest.mark.asyncio
 async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
-    """A TTS model receives neither response_mime_type nor response_schema for JSON output."""
+    """A TTS model receives neither response_mime_type nor a schema for JSON output."""
     model = GeminiModel(version='gemini-2.5-flash-preview-tts', client=MagicMock(spec=genai.Client))
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True)
 
-    cfg = await model._genkit_to_googleai_cfg(_json_output_request())
+    cfg = await model._genkit_to_googleai_cfg(request)
 
     assert cfg is not None
     assert cfg.response_mime_type is None
     assert cfg.response_schema is None
+    assert cfg.response_json_schema is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__array_format_is_json_mode(gemini_model_instance: GeminiModel) -> None:
+    """The array format reaches the API as JSON mode via its application/json content type."""
+    schema = {'type': 'array', 'items': {'type': 'string'}}
+    request = _output_request(format='array', json_schema=schema, constrained=True, content_type='application/json')
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema == schema
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__content_type_alone_turns_on_json_mode(gemini_model_instance: GeminiModel) -> None:
+    """A request carrying only the application/json content type still reaches JSON mode."""
+    request = _output_request(content_type='application/json')
+
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+async def test_gemini_model__json_unconstrained_sets_mime_type_only(legacy_response_schema: bool) -> None:
+    """Unconstrained JSON output turns on JSON mode without a schema."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=legacy_response_schema)
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=False)
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema is None
+    assert cfg.response_schema is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__legacy_response_schema_sends_converted_schema() -> None:
+    """With legacy_response_schema the converted schema goes out as response_schema."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=True)
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True)
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema is None
+    assert cfg.response_schema == _STRUCTURED_RESPONSE_SCHEMA
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'json_schema, needle',
+    [
+        ({'description': 'anything'}, 'response_schema'),
+        ({'type': 'object', 'required': ['data'], 'properties': {'data': {'title': 'Data'}}}, 'data'),
+        ({'type': 'object', 'properties': {'x': {'allOf': [{'type': 'string'}]}}}, 'no type'),
+        ({'type': 'array'}, 'cannot be converted'),
+        (to_json_schema(list[Any]), 'cannot be converted'),
+        (to_json_schema(tuple[int, str]), 'cannot be converted'),
+        (to_json_schema(_Mixed), 'anyOf branch'),
+        (to_json_schema(dict[str, int]), 'cannot be converted'),
+    ],
+)
+async def test_gemini_model__legacy_unconvertible_output_schema_raises(
+    json_schema: dict[str, Any], needle: str
+) -> None:
+    """A schema that response_schema cannot hold raises INVALID_ARGUMENT."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=True)
+    request = _output_request(format='json', json_schema=json_schema, constrained=True)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await model._genkit_to_googleai_cfg(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert needle in exc_info.value.original_message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+@pytest.mark.parametrize('schema_type', ['string', 'enum'])
+@pytest.mark.parametrize(
+    'enum_output',
+    [{'format': 'enum'}, {'content_type': 'text/enum'}, {'format': 'enum', 'content_type': 'text/enum'}],
+    ids=['format', 'content_type', 'both'],
+)
+async def test_gemini_model__enum_output_sets_text_x_enum(
+    enum_output: dict[str, str], schema_type: str, legacy_response_schema: bool
+) -> None:
+    """Constrained enum output sends text/x.enum with a string schema listing the values."""
+    model = GeminiModel('version', MagicMock(spec=genai.Client), legacy_response_schema=legacy_response_schema)
+    request = _output_request(json_schema={'type': schema_type, 'enum': ['a', 'b']}, constrained=True, **enum_output)
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type == 'text/x.enum'
+    assert cfg.response_schema == genai_types.Schema(type=genai_types.Type.STRING, enum=['a', 'b'])
+    assert cfg.response_json_schema is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'enum_output',
+    [
+        {'format': 'enum'},
+        {'content_type': 'text/enum'},
+        {'format': 'enum', 'json_schema': {'type': 'string', 'enum': ['a', 'b']}, 'constrained': False},
+    ],
+    ids=['no-schema', 'content-type-only', 'unconstrained'],
+)
+async def test_gemini_model__enum_output_without_constrained_schema_sends_neither(
+    enum_output: dict[str, Any], gemini_model_instance: GeminiModel
+) -> None:
+    """Enum output without a constrained schema sends neither text/x.enum nor a schema."""
+    cfg = await gemini_model_instance._genkit_to_googleai_cfg(_output_request(**enum_output))
+
+    assert cfg is not None
+    assert cfg.response_mime_type is None
+    assert cfg.response_schema is None
+    assert cfg.response_json_schema is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_model__constrained_output_skipped_without_model_support() -> None:
+    """A no-tools constrained model with tools attached gets no MIME type and no schema."""
+    model = GeminiModel('gemini-2.5-flash-lite', MagicMock(spec=genai.Client))
+    request = _output_request(format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True)
+    request.tools = [ToolDefinition(name='t', description='d', input_schema={'type': 'object'})]
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.response_mime_type is None
+    assert cfg.response_json_schema is None
+    assert cfg.response_schema is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [False, True])
+async def test_generate_json_output_pins_request_body(mocker: MockerFixture, legacy_response_schema: bool) -> None:
+    """The client receives JSON mode plus the schema in one response field, and nothing else."""
+    version = 'gemini-2.5-flash'
+    request = _output_request(
+        format='json', json_schema=_STRUCTURED_SCHEMA, constrained=True, content_type='application/json'
+    )
+    candidate = genai.types.Candidate(content=genai.types.Content(parts=[genai.types.Part(text='{"n": 1}')]))
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(
+        candidates=[candidate]
+    )
+    gemini = GeminiModel(version, googleai_client_mock, legacy_response_schema=legacy_response_schema)
+
+    response = await gemini.generate(request, ModelContext())
+
+    if legacy_response_schema:
+        expected_config = genai.types.GenerateContentConfig(
+            response_mime_type='application/json',
+            response_schema=_STRUCTURED_RESPONSE_SCHEMA,
+        )
+    else:
+        expected_config = genai.types.GenerateContentConfig(
+            response_mime_type='application/json',
+            response_json_schema=_STRUCTURED_SCHEMA,
+        )
+    googleai_client_mock.aio.models.generate_content.assert_called_once_with(
+        model=version,
+        contents=[genai.types.Content(parts=[genai.types.Part(text='hi')], role=Role.USER)],
+        config=expected_config,
+    )
+    assert response.message is not None
+    assert response.message.content[0].text == '{"n": 1}'
 
 
 @pytest.mark.parametrize(
@@ -1259,6 +2175,8 @@ async def test_gemini_model__tts_json_output_skips_constrained_config() -> None:
     [
         ('gemini-2.5-flash-preview-tts', GeminiTtsConfig),
         ('gemini-3.1-flash-tts-preview', GeminiTtsConfig),
+        ('gemini-3.8-flash-tts', GeminiTtsConfig),
+        ('gemini-3.8-flash-lite-tts', GeminiTtsConfig),
         ('gemini-2.0-flash-preview-image-generation', GeminiImageConfig),
         ('gemini-3-pro-image', GeminiImageConfig),
         ('gemini-3.1-flash-image', GeminiImageConfig),
@@ -1330,7 +2248,7 @@ async def test_streaming_generate_classifies_error_on_first_chunk(
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content_stream.return_value = failing_stream()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+    ctx = ModelContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(request, ctx)
@@ -1354,7 +2272,7 @@ async def test_streaming_generate_classifies_mid_stream_error(mocker: MockerFixt
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content_stream.return_value = mid_stream_fail()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+    ctx = ModelContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(request, ctx)
@@ -1372,7 +2290,7 @@ async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> 
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(request, ActionRunContext())
+        await gemini.generate(request, ModelContext())
     assert raised.value.status == 'UNAVAILABLE'
 
 
@@ -1506,7 +2424,7 @@ async def test_generate_keeps_caller_response_modalities_on_tts_model(mocker: Mo
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['AUDIO', 'TEXT']
@@ -1524,7 +2442,7 @@ async def test_generate_keeps_caller_response_modalities_on_image_model(mocker: 
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['IMAGE']
@@ -1554,7 +2472,7 @@ async def test_generate_defaults_the_tts_voice_where_one_is_needed(
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     client_mock = _tts_client_mock(mocker, vertexai=vertexai)
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -1574,7 +2492,7 @@ async def test_generate_sends_no_voice_to_gemini_api_tts_that_picks_its_own(
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     client_mock = _tts_client_mock(mocker, vertexai=False)
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['AUDIO']
@@ -1590,7 +2508,7 @@ async def test_generate_defaults_the_tts_voice_next_to_a_language_code(mocker: M
     )
     client_mock = _tts_client_mock(mocker, vertexai=False)
 
-    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -1611,7 +2529,7 @@ async def test_generate_keeps_the_caller_tts_voice(mocker: MockerFixture) -> Non
     )
     client_mock = _tts_client_mock(mocker, vertexai=True)
 
-    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -1637,7 +2555,7 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
     )
     client_mock = _tts_client_mock(mocker, vertexai=True)
 
-    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -1740,7 +2658,7 @@ async def test_generate_credential_failure_is_unauthenticated(mocker: MockerFixt
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAUTHENTICATED'
     assert raised.value.cause is auth_error
@@ -1753,7 +2671,7 @@ async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: 
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content_stream.side_effect = revoked
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+    ctx = ModelContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ctx)
@@ -1777,7 +2695,7 @@ async def test_generate_metadata_server_refresh_error_is_unavailable(mocker: Moc
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is blip
@@ -1792,7 +2710,7 @@ async def test_generate_retryable_refresh_error_is_unavailable(mocker: MockerFix
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is flaky
@@ -1807,7 +2725,7 @@ async def test_generate_bare_auth_transport_error_is_unavailable(mocker: MockerF
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is blip
@@ -1818,7 +2736,7 @@ async def _generate_failure(mocker: MockerFixture, failure: BaseException, *, st
     client_mock.aio.models.generate_content.side_effect = failure
     client_mock.aio.models.generate_content_stream.side_effect = failure
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock()) if streaming else ActionRunContext()
+    ctx = ModelContext(streaming_callback=mocker.MagicMock()) if streaming else ModelContext()
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ctx)
     return raised.value
@@ -1901,6 +2819,74 @@ async def test_429_retry_info_sets_retry_delay(
 
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.response_metadata == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'body', 'status'),
+    [
+        (
+            400,
+            {'error': {'code': 400, 'message': 'User location is not supported', 'status': 'FAILED_PRECONDITION'}},
+            'FAILED_PRECONDITION',
+        ),
+        (409, {'error': {'code': 409, 'message': 'exists', 'status': 'ALREADY_EXISTS'}}, 'ALREADY_EXISTS'),
+        (500, {'error': {'code': 500, 'message': 'lost', 'status': 'DATA_LOSS'}}, 'DATA_LOSS'),
+        (500, {'error': {'code': 500, 'message': 'unknown', 'status': 'UNKNOWN'}}, 'INTERNAL'),
+        (402, {'error': {'code': 402, 'message': 'Prepay credit depleted', 'status': 'RESOURCE_EXHAUSTED'}}, 'UNKNOWN'),
+        (502, {'message': '<html>Bad Gateway</html>', 'status': 'Bad Gateway'}, 'INTERNAL'),
+    ],
+)
+async def test_error_body_status_picks_among_statuses_sharing_the_code(
+    mocker: MockerFixture, code: int, body: dict[str, Any], status: str
+) -> None:
+    """The body's status narrows a shared HTTP code and never overrides a different code."""
+    error = await _generate_failure(mocker, APIError(code, body))
+
+    assert error.status == status
+
+
+@pytest.mark.asyncio
+async def test_rejected_api_key_is_unauthenticated(mocker: MockerFixture) -> None:
+    """A 400 INVALID_ARGUMENT whose ErrorInfo reason is API_KEY_INVALID is UNAUTHENTICATED."""
+    message = 'API key not valid. Please pass a valid API key.'
+    localized = {'@type': 'type.googleapis.com/google.rpc.LocalizedMessage', 'locale': 'en-US', 'message': message}
+    error_info = {
+        '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+        'reason': 'API_KEY_INVALID',
+        'domain': 'googleapis.com',
+        'metadata': {'service': 'generativelanguage.googleapis.com'},
+    }
+    details = [localized, error_info]
+    body = {'error': {'code': 400, 'message': message, 'status': 'INVALID_ARGUMENT', 'details': details}}
+    rejected = APIError(400, body)
+
+    error = await _generate_failure(mocker, rejected)
+
+    assert error.status == 'UNAUTHENTICATED'
+    assert error.original_message == message
+    assert error.cause is rejected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'status', 'reason'),
+    [
+        (403, 'PERMISSION_DENIED', 'API_KEY_SERVICE_BLOCKED'),
+        (403, 'PERMISSION_DENIED', 'SERVICE_DISABLED'),
+        (429, 'RESOURCE_EXHAUSTED', 'RATE_LIMIT_EXCEEDED'),
+    ],
+)
+async def test_other_error_info_reasons_keep_the_body_status(
+    mocker: MockerFixture, code: int, status: str, reason: str
+) -> None:
+    """An ErrorInfo reason other than API_KEY_INVALID leaves the body's status as it is."""
+    error_info = {'@type': 'type.googleapis.com/google.rpc.ErrorInfo', 'reason': reason}
+    body = {'error': {'code': code, 'message': 'request refused', 'status': status, 'details': [error_info]}}
+
+    error = await _generate_failure(mocker, APIError(code, body))
+
+    assert error.status == status
 
 
 @pytest.mark.asyncio
@@ -2006,3 +2992,280 @@ async def test_request_client_unknown_failure_stays_raw() -> None:
             )
 
     assert raised.value is boom
+
+
+# ---------------------------------------------------------------------------
+# Blocked prompts and replies with no candidates
+# ---------------------------------------------------------------------------
+
+
+def _text_chunk(
+    text: str, finish_reason: genai_types.FinishReason | None = None
+) -> genai_types.GenerateContentResponse:
+    candidate = genai_types.Candidate(
+        content=genai_types.Content(parts=[genai_types.Part(text=text)]),
+        finish_reason=finish_reason,
+    )
+    return genai_types.GenerateContentResponse(candidates=[candidate])
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_prompt(mocker: MockerFixture) -> None:
+    """A prompt the service refused returns BLOCKED with the reason, the feedback, and usage."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        block_reason=genai_types.BlockedReason.SAFETY,
+        block_reason_message='unsafe prompt',
+    )
+    usage = genai_types.GenerateContentResponseUsageMetadata(prompt_token_count=7, total_token_count=7)
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(
+        candidates=[], prompt_feedback=feedback, usage_metadata=usage
+    )
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    response = await gemini.generate(_hi_request(), ModelContext())
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'unsafe prompt'
+    assert response.message is not None
+    assert response.message.role == Role.MODEL
+    assert [p.text for p in response.message.content] == ['']
+    assert response.candidates == []
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY', 'blockReasonMessage': 'unsafe prompt'}}
+    assert response.usage is not None
+    assert response.usage.input_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_generate_blocked_prompt_default_message(mocker: MockerFixture) -> None:
+    """Without a service message the finish message names the block reason."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        block_reason=genai_types.BlockedReason.PROHIBITED_CONTENT
+    )
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(prompt_feedback=feedback)
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    response = await gemini.generate(_hi_request(), ModelContext())
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'prompt blocked: PROHIBITED_CONTENT'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'feedback',
+    [
+        None,
+        genai_types.GenerateContentResponsePromptFeedback(
+            block_reason=genai_types.BlockedReason.BLOCKED_REASON_UNSPECIFIED
+        ),
+    ],
+)
+async def test_generate_no_candidates_without_block_is_internal(
+    mocker: MockerFixture, feedback: genai_types.GenerateContentResponsePromptFeedback | None
+) -> None:
+    """No candidates and no block reason, BLOCKED_REASON_UNSPECIFIED included, raise INTERNAL."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(prompt_feedback=feedback)
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ModelContext())
+    assert raised.value.status == 'INTERNAL'
+    assert raised.value.original_message == 'Model returned no candidates.'
+    assert raised.value.cause is None
+
+
+@pytest.mark.asyncio
+async def test_generate_candidate_without_content(mocker: MockerFixture) -> None:
+    """A candidate that stopped before producing content is a normal response with its finish reason."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(
+        candidates=[genai_types.Candidate(finish_reason=genai_types.FinishReason.MAX_TOKENS)]
+    )
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    response = await gemini.generate(_hi_request(), ModelContext())
+
+    assert response.finish_reason == FinishReason.LENGTH
+    assert response.message is not None
+    assert response.message.content[0].text == ''
+
+
+@pytest.mark.asyncio
+async def test_generate_with_candidates_ignores_block_reason(mocker: MockerFixture) -> None:
+    """Candidates win over a block reason in the prompt feedback."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(block_reason=genai_types.BlockedReason.SAFETY)
+    answer = _text_chunk('Hello', genai_types.FinishReason.STOP)
+    answer.prompt_feedback = feedback
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = answer
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    response = await gemini.generate(_hi_request(), ModelContext())
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.content[0].text == 'Hello'
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY'}}
+
+
+@pytest.mark.asyncio
+async def test_generate_without_prompt_feedback_leaves_custom_empty(mocker: MockerFixture) -> None:
+    """A response with no prompt feedback keeps the default empty custom payload."""
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content.return_value = _text_chunk('Hello', genai_types.FinishReason.STOP)
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    response = await gemini.generate(_hi_request(), ModelContext())
+
+    assert response.custom == {}
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_blocked_prompt(mocker: MockerFixture) -> None:
+    """A streamed blocked prompt returns BLOCKED, keeps an earlier chunk's block reason, and streams nothing."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(block_reason=genai_types.BlockedReason.SAFETY)
+    usage = genai_types.GenerateContentResponseUsageMetadata(prompt_token_count=3, total_token_count=3)
+
+    async def feedback_only() -> Any:  # noqa: ANN401
+        yield genai_types.GenerateContentResponse(prompt_feedback=feedback)
+        yield genai_types.GenerateContentResponse(usage_metadata=usage)
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = feedback_only()
+    gemini = GeminiModel('gemini-2.5-flash', client)
+    on_chunk = mocker.MagicMock()
+
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
+
+    assert response.finish_reason == FinishReason.BLOCKED
+    assert response.finish_message == 'prompt blocked: SAFETY'
+    assert response.message is not None
+    assert [p.text for p in response.message.content] == ['']
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY'}}
+    assert response.usage is not None
+    assert response.usage.input_tokens == 3
+    on_chunk.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_no_candidates_without_block_is_internal(mocker: MockerFixture) -> None:
+    """Chunks that carry no candidate and no block reason raise INTERNAL."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        safety_ratings=[
+            genai_types.SafetyRating(
+                category=genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                probability=genai_types.HarmProbability.NEGLIGIBLE,
+            )
+        ]
+    )
+    usage = genai_types.GenerateContentResponseUsageMetadata(prompt_token_count=3, total_token_count=3)
+
+    async def no_candidates() -> Any:  # noqa: ANN401
+        yield genai_types.GenerateContentResponse(prompt_feedback=feedback)
+        yield genai_types.GenerateContentResponse(usage_metadata=usage)
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = no_candidates()
+    gemini = GeminiModel('gemini-2.5-flash', client)
+    on_chunk = mocker.MagicMock()
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
+    assert raised.value.status == 'INTERNAL'
+    assert raised.value.original_message == 'Model returned no candidates.'
+    on_chunk.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_empty_stream_is_unavailable(mocker: MockerFixture) -> None:
+    """A stream that ends without a single chunk raises UNAVAILABLE."""
+
+    async def no_chunks() -> Any:  # noqa: ANN401
+        for chunk in ():
+            yield chunk
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = no_chunks()
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    with pytest.raises(GenkitError) as raised:
+        await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.original_message == 'Model stream returned no responses.'
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_candidate_without_content(mocker: MockerFixture) -> None:
+    """A streamed candidate that stopped before producing content is a normal response with its finish reason."""
+
+    async def contentless() -> Any:  # noqa: ANN401
+        yield genai_types.GenerateContentResponse(
+            candidates=[genai_types.Candidate(finish_reason=genai_types.FinishReason.MAX_TOKENS)]
+        )
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = contentless()
+    gemini = GeminiModel('gemini-2.5-flash', client)
+    on_chunk = mocker.MagicMock()
+
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
+
+    assert response.finish_reason == FinishReason.LENGTH
+    on_chunk.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_block_reason_after_candidates_is_not_blocked(mocker: MockerFixture) -> None:
+    """A block reason arriving after streamed candidates does not turn the answer into BLOCKED."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(block_reason=genai_types.BlockedReason.SAFETY)
+
+    async def answer_then_feedback() -> Any:  # noqa: ANN401
+        yield _text_chunk('Hello', genai_types.FinishReason.STOP)
+        yield genai_types.GenerateContentResponse(prompt_feedback=feedback)
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = answer_then_feedback()
+    gemini = GeminiModel('gemini-2.5-flash', client)
+    on_chunk = mocker.MagicMock()
+
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.content[0].text == 'Hello'
+    assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY'}}
+    assert on_chunk.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_generate_exposes_prompt_feedback_without_block(mocker: MockerFixture) -> None:
+    """Prompt feedback that only carries safety ratings leaves the answer intact and is exposed in custom."""
+    feedback = genai_types.GenerateContentResponsePromptFeedback(
+        safety_ratings=[
+            genai_types.SafetyRating(
+                category=genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                probability=genai_types.HarmProbability.NEGLIGIBLE,
+            )
+        ]
+    )
+    answer = _text_chunk('Hello', genai_types.FinishReason.STOP)
+    answer.prompt_feedback = feedback
+
+    async def single_chunk() -> Any:  # noqa: ANN401
+        yield answer
+
+    client = mocker.AsyncMock()
+    client.aio.models.generate_content_stream.return_value = single_chunk()
+    gemini = GeminiModel('gemini-2.5-flash', client)
+
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.content[0].text == 'Hello'
+    assert response.custom == {
+        'promptFeedback': {'safetyRatings': [{'category': 'HARM_CATEGORY_HARASSMENT', 'probability': 'NEGLIGIBLE'}]}
+    }

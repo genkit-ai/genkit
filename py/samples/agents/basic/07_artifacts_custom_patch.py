@@ -32,9 +32,10 @@ from __future__ import annotations
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, FinishReason, Part
+from genkit import FinishReason, Part
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -56,7 +57,7 @@ class ResearchState(BaseModel):
     insights_count: int = 0
 
 
-async def research_agent_fn(sess: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+async def research_agent_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         # Extract user input text if present
         prompt_text = ''

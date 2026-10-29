@@ -44,7 +44,6 @@ from genkit._core._dap import DapFn, DapMetadata, DynamicActionProvider
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
-    BatchEvaluatorRequest,
     EmbedRequest,
     ModelRequest,
     ModelResponse,
@@ -55,6 +54,7 @@ from genkit._core._typing import (
     ActionMetadata,
     EmbedResponse,
     EvalResponse,
+    EvaluatorRequest,
     Operation,
 )
 
@@ -292,7 +292,6 @@ class Registry:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
-        config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
     ) -> Action[InputT, OutputT, ChunkT]:
         """Register a new action with the registry.
@@ -309,7 +308,6 @@ class Registry:
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.
-            config_schema: Optional config class (or JSON schema) the action takes.
             _strict_io: Treat None as a value and validate the return.
 
         Returns:
@@ -323,7 +321,6 @@ class Registry:
             description=description,
             metadata=metadata,
             span_metadata=span_metadata,
-            config_schema=config_schema,
             _strict_io=_strict_io,
         )
         action_typed = cast(Action[InputT, OutputT, ChunkT], action)
@@ -889,7 +886,7 @@ class Registry:
             action,
         )
 
-    async def resolve_evaluator(self, name: str) -> Action[BatchEvaluatorRequest, EvalResponse, Never] | None:
+    async def resolve_evaluator(self, name: str) -> Action[EvaluatorRequest, EvalResponse, Never] | None:
         """Resolve an evaluator action by name with full type information.
 
         Args:
@@ -901,7 +898,7 @@ class Registry:
         action = await self.resolve_action(ActionKind.EVALUATOR, name)
         if action is None:
             return None
-        return cast(Action[BatchEvaluatorRequest, EvalResponse, Never], action)
+        return cast(Action[EvaluatorRequest, EvalResponse, Never], action)
 
 
 def define_dynamic_action_provider(

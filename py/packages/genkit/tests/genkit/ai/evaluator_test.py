@@ -25,7 +25,6 @@ from genkit import Genkit, GenkitError
 from genkit.evaluator import (
     BaseDataPoint,
     BatchEvaluator,
-    BatchEvaluatorRequest,
     Evaluator,
     EvaluatorRequest,
     EvaluatorResponse,
@@ -38,10 +37,10 @@ class ThresholdOptions(BaseModel):
     threshold: float = 0.5
 
 
-async def _exact_match(req: EvaluatorRequest) -> EvaluatorResponse:
+async def _exact_match(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
     return EvaluatorResponse(
-        test_case_id=req.row.test_case_id or '',
-        evaluation=[Score(score=req.row.output == req.row.reference)],
+        test_case_id=datapoint.test_case_id or '',
+        evaluation=[Score(score=datapoint.output == datapoint.reference)],
     )
 
 
@@ -89,7 +88,7 @@ async def test_evaluator_action_runs_fn_per_datapoint() -> None:
     """Running the built action over two rows returns two scored rows, in dataset order."""
     action = Evaluator('t/e', _exact_match, display_name='Exact match', definition='output equals reference')
 
-    result = await action.run(BatchEvaluatorRequest(dataset=_two_rows(), eval_run_id='run-1'))
+    result = await action.run(EvaluatorRequest(dataset=_two_rows(), eval_run_id='run-1'))
 
     rows = result.response.root
     assert [row.test_case_id for row in rows] == ['case1', 'case2']
@@ -100,8 +99,8 @@ async def test_evaluator_action_runs_fn_per_datapoint() -> None:
 def test_evaluator_sync_fn_raises_type_error() -> None:
     """Evaluator(...) rejects a sync fn when built, instead of failing every row at run time."""
 
-    def sync_match(req: EvaluatorRequest) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=True)])
+    def sync_match(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     with pytest.raises(TypeError, match="Got sync function for 't/e'"):
         Evaluator('t/e', cast(Any, sync_match), display_name='Exact match', definition='output equals reference')
@@ -170,8 +169,8 @@ async def test_plugin_returning_evaluator_registers_it_on_app() -> None:
     assert [score.score for score in results[1].evaluation] == [False]
 
 
-async def _exact_match_batch(req: BatchEvaluatorRequest) -> list[EvaluatorResponse]:
-    return [await _exact_match(EvaluatorRequest(row=row, options=req.options)) for row in req.dataset]
+async def _exact_match_batch(req: EvaluatorRequest) -> list[EvaluatorResponse]:
+    return [await _exact_match(datapoint, None) for datapoint in req.dataset]
 
 
 class ExactMatchBatchPlugin(Plugin):
@@ -208,7 +207,7 @@ async def test_batch_evaluator_builds_action_without_registering() -> None:
 def test_batch_evaluator_sync_fn_raises_type_error() -> None:
     """BatchEvaluator(...) rejects a sync fn when built."""
 
-    def sync_batch(req: BatchEvaluatorRequest) -> list[EvaluatorResponse]:
+    def sync_batch(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         return []
 
     with pytest.raises(TypeError, match="Got sync function for 't/b'"):
@@ -238,124 +237,3 @@ async def test_plugin_returning_batch_evaluator_registers_it_on_app() -> None:
     assert [row.test_case_id for row in results] == ['case1', 'case2']
     assert [score.score for score in results[0].evaluation] == [True]
     assert [score.score for score in results[1].evaluation] == [False]
-
-
-# -----------------------------------------------------------------------------
-# Signatures: per-row takes EvaluatorRequest[Cfg], batch takes BatchEvaluatorRequest[Cfg]
-# -----------------------------------------------------------------------------
-
-
-class AllergenConfig(BaseModel):
-    allergen: str = 'peanut'
-
-
-def _dishes() -> list[BaseDataPoint]:
-    return [
-        BaseDataPoint(input='dish?', output='Peanut noodles', test_case_id='noodles'),
-        BaseDataPoint(input='dish?', output='Smoked salmon tartine', test_case_id='tartine'),
-    ]
-
-
-async def _allergen_free(req: EvaluatorRequest[AllergenConfig]) -> EvaluatorResponse:
-    ok = req.options.allergen not in str(req.row.output).lower()
-    return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=ok)])
-
-
-async def _allergen_free_batch(req: BatchEvaluatorRequest[AllergenConfig]) -> list[EvaluatorResponse]:
-    return [await _allergen_free(EvaluatorRequest[AllergenConfig](row=row, options=req.options)) for row in req.dataset]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('kind', ['per_row', 'batch'])
-async def test_typed_evaluator_validates_dict_config_into_the_class(kind: str) -> None:
-    """A dict config becomes AllergenConfig on req.options; unset fields keep their defaults."""
-    ai = Genkit()
-    if kind == 'per_row':
-        action = ai.define_evaluator('allergen', _allergen_free, display_name='Allergen', definition='d')
-    else:
-        action = ai.define_batch_evaluator('allergen', _allergen_free_batch, display_name='Allergen', definition='d')
-
-    assert action.config_schema is AllergenConfig
-    default = await ai.evaluate(evaluator='allergen', dataset=_dishes())
-    salmon = await ai.evaluate(evaluator='allergen', dataset=_dishes(), config={'allergen': 'salmon'})
-
-    assert [row.evaluation[0].score for row in default] == [False, True]
-    assert [row.evaluation[0].score for row in salmon] == [True, False]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('kind', ['per_row', 'batch'])
-async def test_typed_evaluator_bad_config_is_invalid_argument(kind: str) -> None:
-    """A config that doesn't validate into the class fails the whole request with INVALID_ARGUMENT."""
-    ai = Genkit()
-    if kind == 'per_row':
-        ai.define_evaluator('allergen', _allergen_free, display_name='Allergen', definition='d')
-    else:
-        ai.define_batch_evaluator('allergen', _allergen_free_batch, display_name='Allergen', definition='d')
-
-    with pytest.raises(GenkitError) as raised:
-        await ai.evaluate(evaluator='allergen', dataset=_dishes(), config={'allergen': ['peanut']})
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-
-
-@pytest.mark.asyncio
-async def test_per_row_evaluator_gets_one_request_per_row() -> None:
-    """define_evaluator calls fn with EvaluatorRequest(row=..., options=...) for each row, in order."""
-    ai = Genkit()
-    seen: list[EvaluatorRequest[AllergenConfig]] = []
-
-    async def record(req: EvaluatorRequest[AllergenConfig]) -> EvaluatorResponse:
-        seen.append(req)
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=True)])
-
-    ai.define_evaluator('record', record, display_name='Record', definition='d')
-    await ai.evaluate(evaluator='record', dataset=_dishes(), config={'allergen': 'sesame'})
-
-    assert [type(req) for req in seen] == [EvaluatorRequest[AllergenConfig]] * 2
-    assert [req.row.test_case_id for req in seen] == ['noodles', 'tartine']
-    assert [req.options for req in seen] == [AllergenConfig(allergen='sesame')] * 2
-
-
-def test_old_two_param_per_row_signature_raises_type_error_naming_the_new_form() -> None:
-    """(row, options) was the pre-1.0 per-row form; defining one says to take EvaluatorRequest[Cfg]."""
-
-    async def allergen_free(row: BaseDataPoint, options: AllergenConfig) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id='', evaluation=[])
-
-    with pytest.raises(TypeError, match=r'async def allergen_free\(req: EvaluatorRequest\[YourConfig\]\)'):
-        Evaluator('t/e', cast(Any, allergen_free), display_name='Allergen', definition='d')
-
-
-def test_per_row_signature_with_only_a_data_point_raises_type_error() -> None:
-    """(row: BaseDataPoint) is also the old form: the fn would get an EvaluatorRequest, not a row."""
-
-    async def allergen_free(row: BaseDataPoint) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id='', evaluation=[])
-
-    with pytest.raises(TypeError, match="evaluator 't/e' takes one EvaluatorRequest"):
-        Evaluator('t/e', cast(Any, allergen_free), display_name='Allergen', definition='d')
-
-
-def test_per_row_fn_typed_batch_request_raises_type_error() -> None:
-    """A BatchEvaluatorRequest fn passed to Evaluator points at define_batch_evaluator."""
-    with pytest.raises(TypeError, match='register .*_allergen_free_batch.* with define_batch_evaluator'):
-        Evaluator('t/e', cast(Any, _allergen_free_batch), display_name='Allergen', definition='d')
-
-
-def test_batch_fn_typed_per_row_request_raises_type_error() -> None:
-    """An EvaluatorRequest fn passed to BatchEvaluator points at BatchEvaluatorRequest."""
-    with pytest.raises(TypeError, match="batch evaluator 't/b': EvaluatorRequest is one row"):
-        BatchEvaluator('t/b', cast(Any, _allergen_free), display_name='Allergen', definition='d')
-
-
-def test_action_input_schema_matches_the_wire_eval_request() -> None:
-    """Both forms publish the wire request as input: dataset / evalRunId / options, titled EvaluatorRequest."""
-    per_row = Evaluator('t/e', _allergen_free, display_name='Allergen', definition='d')
-    batch = BatchEvaluator('t/b', _allergen_free_batch, display_name='Allergen', definition='d')
-
-    for action in (per_row, batch):
-        schema = cast(dict[str, Any], action.input_schema)
-        assert schema['title'] == 'EvaluatorRequest[AllergenConfig]'
-        assert list(schema['properties']) == ['dataset', 'evalRunId', 'options']
-        assert schema['required'] == ['dataset', 'evalRunId']

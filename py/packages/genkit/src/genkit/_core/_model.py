@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
+from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     BaseModel,
@@ -53,7 +53,6 @@ from genkit._core._schema import parse_schema
 from genkit._core._typing import (
     AgentFinishReason,
     Artifact as ArtifactData,
-    BaseDataPoint,
     DocumentData,
     FinishReason,
     GenerateActionOutputConfig,
@@ -123,7 +122,7 @@ ToolChoice = Literal['auto', 'required', 'none']
 # responses the model may well have completed.
 #
 # Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go).
-ABNORMAL_FINISH_REASONS = frozenset({
+ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset({
     FinishReason.BLOCKED,
     FinishReason.ABORTED,
     FinishReason.FAILED,
@@ -965,7 +964,7 @@ class Artifact(GenkitModel):
 
 
 def options_dict(value: object) -> dict[str, Any]:
-    """The options dict an untyped embedder or evaluator receives.
+    """The options dict an untyped embedder receives.
 
     ``None`` is ``{}``. A mapping is copied. A BaseModel is dumped with only
     the fields the caller set, the same as an untyped model fn's config, so a
@@ -987,7 +986,7 @@ def options_dict(value: object) -> dict[str, Any]:
 
 
 def check_options_value(cls: type, value: object) -> object:
-    """The before-validator for ``options`` on EmbedRequest and the evaluator requests.
+    """The before-validator for ``options`` on EmbedRequest.
 
     Untyped, options is always a dict (see options_dict). Typed, it follows
     ModelRequest's config rule, and ``None`` is ``{}`` so the fn gets the
@@ -1016,7 +1015,6 @@ class EmbedRequest(GenkitModel, Generic[RequestOptionsT]):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
     input: list[Document]
-    # validate_default so EmbedRequest[Cfg]() builds Cfg() instead of keeping {}.
     options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
 
     def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
@@ -1030,86 +1028,6 @@ class EmbedRequest(GenkitModel, Generic[RequestOptionsT]):
         if not isinstance(v, list):
             return v
         return [as_document(d) for d in v]
-
-    @field_validator('options', mode='before')
-    @classmethod
-    def _check_options_type(cls, v: object) -> object:
-        return check_options_value(cls, v)
-
-
-def _batch_evaluator_request_schema(schema: JsonDict, cls: type) -> None:
-    """The action input schema, titled as before the Python class was renamed.
-
-    The shared schema calls this type EvalRequest and Python used to call it
-    EvaluatorRequest, so the Dev UI and reflection see the same JSON schema.
-    """
-    _untyped_options_schema(schema, cls)
-    title = schema.get('title')
-    if isinstance(title, str) and title.startswith('BatchEvaluatorRequest'):
-        schema['title'] = title.removeprefix('Batch')
-
-
-class BatchEvaluatorRequest(GenkitModel, Generic[RequestOptionsT]):
-    """What an evaluator action receives: the whole dataset plus options.
-
-    The wire ``EvalRequest`` (``dataset``, ``evalRunId``, ``options``). A batch
-    evaluator's fn takes it as is. A per-row evaluator's fn gets one
-    ``EvaluatorRequest`` per row instead. Bare ``BatchEvaluatorRequest`` has
-    ``options`` as ``dict[str, Any]`` so evaluators read it without a None
-    guard. ``BatchEvaluatorRequest[JudgeConfig]`` validates it into ``JudgeConfig``.
-    See ``Genkit.define_batch_evaluator`` for an example.
-    """
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_batch_evaluator_request_schema)
-    dataset: list[BaseDataPoint]
-    eval_run_id: str
-    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
-
-    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
-        """``BatchEvaluatorRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
-        check_config_type_arg(request='BatchEvaluatorRequest', field='options', typevar_values=typevar_values)
-        return super().__class_getitem__(typevar_values)
-
-    @field_validator('options', mode='before')
-    @classmethod
-    def _check_options_type(cls, v: object) -> object:
-        return check_options_value(cls, v)
-
-
-class EvaluatorRequest(GenkitModel, Generic[RequestOptionsT]):
-    """What a per-row evaluator's fn receives: one dataset row plus options.
-
-    Python only, never on the wire: the action receives a
-    ``BatchEvaluatorRequest`` and builds one of these per row. Bare
-    ``EvaluatorRequest`` has ``options`` as a dict.
-    ``EvaluatorRequest[RelevanceConfig]`` gives a validated ``RelevanceConfig``.
-
-    Example:
-        ```python
-        # 1. Score one row against the configured keyword
-        async def relevance(req: EvaluatorRequest[RelevanceConfig]) -> EvaluatorResponse:
-            hit = req.options.keyword in str(req.row.output).lower()
-            return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=hit)])
-
-
-        # 2. Register it; RelevanceConfig is the Dev UI options form
-        ai.define_evaluator('relevance', relevance, display_name='Relevance', definition='Mentions the keyword.')
-
-        # 3. Run it over a dataset
-        rows = await ai.evaluate(evaluator='relevance', dataset=dataset, config={'keyword': 'salmon'})
-        print(rows[0].evaluation[0].score)
-        # => True
-        ```
-    """
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
-    row: BaseDataPoint
-    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
-
-    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
-        """``EvaluatorRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
-        check_config_type_arg(request='EvaluatorRequest', field='options', typevar_values=typevar_values)
-        return super().__class_getitem__(typevar_values)
 
     @field_validator('options', mode='before')
     @classmethod

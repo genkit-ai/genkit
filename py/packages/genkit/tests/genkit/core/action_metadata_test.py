@@ -27,7 +27,7 @@ from genkit import Genkit, ModelResponse
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._typing import EvalResponse
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
-from genkit.evaluator import BatchEvaluatorRequest, Evaluator, EvaluatorRequest, EvaluatorResponse, Score
+from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorRequest, EvaluatorResponse, Score
 from genkit.model import ModelRequest, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 
@@ -113,8 +113,8 @@ def test_action_metadata_input_schema_class_raises_validation_error() -> None:
 async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     """Rows from the model/embedder/evaluator builders carry their request schema to /api/actions."""
 
-    async def score_row(req: EvaluatorRequest) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=True)])
+    async def score_row(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     model_row = model_action_metadata(name='acme/m')
     embedder_row = embedder_action_metadata(name='acme/e')
@@ -132,9 +132,9 @@ async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     assert listed['/embedder/acme/e']['inputSchema'] == to_json_schema(EmbedRequest)
     assert listed['/embedder/acme/e']['outputSchema'] == to_json_schema(EmbedResponse)
 
-    assert evaluator_row.input_schema == to_json_schema(BatchEvaluatorRequest)
+    assert evaluator_row.input_schema == to_json_schema(EvaluatorRequest)
     assert evaluator_row.output_schema == to_json_schema(EvalResponse)
-    assert listed['/evaluator/acme/ev']['inputSchema'] == to_json_schema(BatchEvaluatorRequest)
+    assert listed['/evaluator/acme/ev']['inputSchema'] == to_json_schema(EvaluatorRequest)
     assert listed['/evaluator/acme/ev']['outputSchema'] == to_json_schema(EvalResponse)
 
 

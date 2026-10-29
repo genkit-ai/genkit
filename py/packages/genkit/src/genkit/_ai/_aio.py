@@ -78,7 +78,7 @@ from genkit._ai._prompt import (
     to_generate_options,
 )
 from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
+from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._background import (
     BackgroundAction,
     CancelModelOpFn,
@@ -89,10 +89,11 @@ from genkit._core._background import (
     define_background_model,
     missing_operation_error,
 )
-from genkit._core._channel import Channel, run_loop
+from genkit._core._channel import run_loop, start_stream
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._flow import Flow
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import (
     BaseMiddleware,
@@ -100,7 +101,6 @@ from genkit._core._middleware import (
     _validate_middleware_key_segment,
 )
 from genkit._core._model import (
-    BatchEvaluatorRequest,
     Document,
     EmbedRequest,
     ModelConfigDict,
@@ -127,6 +127,7 @@ from genkit._core._tool import Tool
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
+    EvaluatorRequest,
     EvaluatorResponse,
     MiddlewareRef,
     ModelInfo,
@@ -134,7 +135,7 @@ from genkit._core._typing import (
     Role,
 )
 
-from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
+from ._decorators import _FlowDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -289,55 +290,104 @@ class Genkit:
         name: str | None = None,
         *,
         description: str | None = None,
-        chunk_type: None = None,
     ) -> _FlowDecorator: ...
+
+    # Overload order matters; see _FlowDecorator.__call__ for why the
+    # `object` shapes come before the context shapes.
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        name: str | None = None,
-        *,
-        description: str | None = None,
-        chunk_type: type[ChunkT],
-    ) -> _FlowDecoratorWithChunk[ChunkT]: ...
+        func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[..., Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, Any]: ...
 
     def flow(
         self,
-        name: str | None = None,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
         *,
         description: str | None = None,
-        chunk_type: type[Any] | None = None,
-    ) -> _FlowDecorator | _FlowDecoratorWithChunk[Any]:
+    ) -> _FlowDecorator | Flow[Any, Any, Any]:
         """Decorator to register an async function as a flow.
 
+        Can be used bare (``@ai.flow``) or with arguments (``@ai.flow()``,
+        ``@ai.flow('custom_name', description='...')``).
+
         A flow takes at most one input. To read the request context or stream
-        chunks, add a parameter annotated ``ActionRunContext``, in any position.
+        chunks, add a parameter annotated ``FlowContext``, in any position.
         Any other second parameter raises ``TypeError`` when the flow is defined.
 
         Args:
-            name: Optional name for the flow. Defaults to the function name.
+            name: Optional name for the flow (or the function itself when used
+                as ``@ai.flow``). Defaults to the function name.
             description: Optional description for the flow.
-            chunk_type: Optional type for streaming chunks. When provided,
-                the returned Action will be typed as Action[InputT, OutputT, ChunkT].
 
         Example:
-            from genkit import Genkit
+            from genkit import FlowContext, Genkit
             from genkit_google_genai import GoogleAI
 
             ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
 
-            @ai.flow()
+            @ai.flow
             async def my_flow(prompt: str) -> str:
                 res = await ai.generate(prompt=prompt)
                 return res.text
 
-            @ai.flow(chunk_type=str)
-            async def streaming_flow(x: int, ctx: ActionRunContext) -> str:
+            @ai.flow
+            async def streaming_flow(x: int, ctx: FlowContext[str]) -> str:
                 ctx.send_chunk('progress')
                 return 'done'
         """
-        if chunk_type is not None:
-            return _FlowDecoratorWithChunk(self._registry, name, description, chunk_type)
+        if not isinstance(name, str) and name is not None:
+            return _FlowDecorator(self._registry, None, description)(name)
         return _FlowDecorator(self._registry, name, description)
 
     def define_helper(self, name: str, fn: Callable[..., Any]) -> None:
@@ -377,25 +427,44 @@ class Genkit:
             metadata=metadata,
         )
 
+    @overload
     def tool(
         self,
         name: str | None = None,
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool]:
+    ) -> Callable[[Callable[..., Any]], Tool]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[..., Any],
+        /,
+    ) -> Tool: ...
+
+    def tool(
+        self,
+        name: str | Callable[..., Any] | None = None,
+        *,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Callable[[Callable[..., Any]], Tool] | Tool:
         """Decorator to register a function as a tool.
+
+        Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
+        ``@ai.tool('custom_name', description='...')``).
 
         The return annotation is what the model binds as ``outputSchema``.
 
         A tool takes at most one input, and that input's type is the schema the
         model fills in. For several fields, use one Pydantic model. To read the
         request context or interrupt, add a parameter annotated
-        ``ToolRunContext``, in any position. Any other second parameter raises
+        ``ToolContext``, in any position. Any other second parameter raises
         ``TypeError`` when the tool is defined.
 
         Example:
-            @ai.tool()
+            @ai.tool
             async def current_weather(city: str) -> str:
                 return f'Sunny in {city}'
 
@@ -403,19 +472,29 @@ class Genkit:
                 city: str
                 days: int = 3
 
-            @ai.tool()
-            async def forecast(input: Forecast, ctx: ToolRunContext) -> str:
+            @ai.tool
+            async def forecast(input: Forecast, ctx: ToolContext) -> str:
                 user = ctx.context.get('user_id')
                 return f'{input.days}-day forecast for {input.city} ({user})'
 
             res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
+        if callable(name):
+            return define_tool(
+                self._registry,
+                name,
+                None,
+                description,
+                input_schema=input_schema,
+            )
+
+        tool_name: str | None = name
 
         def wrapper(func: Callable[..., Any]) -> Tool:
             return define_tool(
                 self._registry,
                 func,
-                name,
+                tool_name,
                 description,
                 input_schema=input_schema,
             )
@@ -485,7 +564,7 @@ class Genkit:
     def define_evaluator(
         self,
         name: str,
-        fn: EvaluatorFn,
+        fn: EvaluatorFn[Any],
         *,
         display_name: str,
         definition: str,
@@ -496,21 +575,12 @@ class Genkit:
     ) -> Evaluator:
         """Register an evaluator that scores one dataset row at a time.
 
-        ``fn`` takes one ``EvaluatorRequest``: ``req.row`` is the dataset row
-        and ``req.options`` the call's config. Annotate it as
-        ``EvaluatorRequest[Cfg]`` to get a validated ``Cfg`` (and a Dev UI
-        options form); bare ``EvaluatorRequest`` gives a dict.
-
         Example:
             ```python
-            # 1. Score whether the answer mentions the configured dish
-            class DishConfig(BaseModel):
-                dish: str = 'salmon'
-
-
-            async def mentions_dish(req: EvaluatorRequest[DishConfig]) -> EvaluatorResponse:
-                hit = req.options.dish in str(req.row.output).lower()
-                return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=hit)])
+            # 1. Score whether the answer mentions the expected dish
+            async def mentions_dish(row: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+                hit = row.reference.lower() in str(row.output).lower()
+                return EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=hit)])
 
 
             # 2. Register it under a name
@@ -518,11 +588,11 @@ class Genkit:
                 'mentions_dish',
                 mentions_dish,
                 display_name='Mentions dish',
-                definition='Whether the answer names the configured dish.',
+                definition='Whether the answer names the expected dish.',
             )
 
-            # 3. Run it over a dataset; config is validated into DishConfig
-            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset, config={'dish': 'tartine'})
+            # 3. Run it over a dataset
+            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset)
             # => [EvaluatorResponse(test_case_id='...', evaluation=[Score(score=True)]), ...]
             ```
         """
@@ -550,38 +620,10 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> BatchEvaluator:
-        """Register a batch evaluator that scores the whole dataset in one call.
+        """Register a batch evaluator.
 
-        ``fn`` takes one ``BatchEvaluatorRequest`` (``req.dataset``,
-        ``req.options``) and returns ``list[EvaluatorResponse]``. Annotate it as
-        ``BatchEvaluatorRequest[Cfg]`` to get a validated ``Cfg``. A second
-        parameter raises ``TypeError`` when defined.
-
-        Example:
-            ```python
-            # 1. Score every answer in one call
-            async def mentions_dish(req: BatchEvaluatorRequest[DishConfig]) -> list[EvaluatorResponse]:
-                return [
-                    EvaluatorResponse(
-                        test_case_id=row.test_case_id or '',
-                        evaluation=[Score(score=req.options.dish in str(row.output).lower())],
-                    )
-                    for row in req.dataset
-                ]
-
-
-            # 2. Register it under a name
-            ai.define_batch_evaluator(
-                'mentions_dish_batch',
-                mentions_dish,
-                display_name='Mentions dish (batch)',
-                definition='Whether each answer names the configured dish.',
-            )
-
-            # 3. Run it over a dataset
-            rows = await ai.evaluate(evaluator='mentions_dish_batch', dataset=dataset, config={'dish': 'tartine'})
-            # => [EvaluatorResponse(test_case_id='...', evaluation=[Score(score=True)]), ...]
-            ```
+        The function takes one ``EvaluatorRequest`` and returns ``list[EvaluatorResponse]``.
+        Read options from ``req.options``. A second parameter raises ``TypeError`` when defined.
         """
         return define_batch_evaluator(
             self._registry,
@@ -1701,7 +1743,7 @@ class Genkit:
         With ``output_schema=Recipe``, each ``chunk.output`` is a partial of
         that type: same attributes, any field may still be ``None`` or a
         prefix. Guard the field you are about to use. The finished
-        ``Recipe`` is only ``(await stream.response).output``, and it's ``None``
+        ``Recipe`` is only ``(await result.response).output``, and it's ``None``
         when the reply isn't a ``Recipe``.
 
         If the model fails partway through, the ``async for`` still ends
@@ -1711,14 +1753,13 @@ class Genkit:
         chunks you already received are the record of what was shown.
 
         Example:
-            stream = ai.generate_stream(prompt='Write a haiku about rain.')
-            async for chunk in stream.stream:
+            result = ai.generate_stream(prompt='Write a haiku about rain.')
+            async for chunk in result:
                 print(chunk.text)
-            final = await stream.response
+            final = await result.response
         """
-        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
 
-        async def _run_generate() -> ModelResponse[Any]:
+        async def _run_generate(send_chunk: Callable[[ModelResponseChunk], None]) -> ModelResponse[Any]:
             return await self._generate(
                 model=model,
                 prompt=prompt,
@@ -1740,13 +1781,11 @@ class Genkit:
                 output_constrained=output_constrained,
                 use=use,
                 docs=docs,
-                on_chunk=lambda c: channel.send(c),
+                on_chunk=send_chunk,
             )
 
-        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
-        channel.set_close_future(response_future)
-
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+        channel, task = start_stream(_run_generate)
+        return ModelStreamResponse[Any](stream=channel, response=task)
 
     async def _generate(
         self,
@@ -1932,8 +1971,8 @@ class Genkit:
         scores.
 
         ``config`` is merged over the ``EvaluatorRef``'s config (the call
-        wins per key) and handed to the evaluator as ``req.options``. When
-        neither sets anything, the evaluator gets ``{}``. An evaluator name
+        wins per key) and handed to the evaluator as its second argument. When
+        neither sets anything, the evaluator gets ``None``. An evaluator name
         that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
@@ -1954,7 +1993,11 @@ class Genkit:
             evaluator_name = evaluator
             ref_config = None
 
-        final_options: dict[str, object] = {**normalize_config(config=ref_config), **normalize_config(config=config)}
+        # same rule as _embedder_options: None when nothing was set, matching
+        # what the CLI / Dev UI send, so `options is None` is the one check.
+        final_options: dict[str, object] | None = None
+        if ref_config is not None or config is not None:
+            final_options = {**(ref_config or {}), **(config or {})}
 
         eval_action = await self._registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
@@ -1968,7 +2011,7 @@ class Genkit:
             eval_run_id = str(uuid.uuid4())
 
         response = await eval_action.run(
-            BatchEvaluatorRequest(
+            EvaluatorRequest(
                 dataset=dataset,
                 options=final_options,
                 eval_run_id=eval_run_id,

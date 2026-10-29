@@ -22,6 +22,7 @@ from genkit._ai._model import (
     model_action_metadata,
     model_ref,
 )
+from genkit._core._action import ModelContext
 from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
     ABNORMAL_FINISH_REASONS,
@@ -50,9 +51,10 @@ __all__ = [
     'ABNORMAL_FINISH_REASONS',
     # Errors
     'StreamingCallbackError',
-    # Request types
+    # Request and context types
     'BackgroundAction',
     'GenerateActionOptions',
+    'ModelContext',
     'ModelRequest',
     'OutputConfig',
     # Usage and metadata

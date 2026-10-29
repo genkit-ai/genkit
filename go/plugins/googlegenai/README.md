@@ -518,17 +518,14 @@ resp, err := genkit.Generate(ctx, g,
 
 ### Generating Text and Images
 
-Some Gemini models (like `gemini-3.1-flash-image`) can output images natively alongside text.
+Gemini image models (`gemini-*-image`, like `gemini-3.1-flash-image`) output
+images natively alongside text. They default `ResponseModalities` to
+`["TEXT", "IMAGE"]`; set it in the config to ask for something else.
 
 ```go
-import "google.golang.org/genai"
-
 resp, err := genkit.Generate(ctx, g,
     ai.WithModelName("googleai/gemini-3.1-flash-image"),
     ai.WithPrompt("Create a picture of a futuristic city and describe it"),
-    ai.WithConfig(&genai.GenerateContentConfig{
-        ResponseModalities: []string{"IMAGE", "TEXT"},
-    }),
 )
 
 for _, part := range resp.Message.Content {

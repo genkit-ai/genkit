@@ -42,7 +42,7 @@ from genkit._ai._agents._client import (
     AgentTurn,
     DetachedTask,
 )
-from genkit._ai._agents._runtime import AgentFn, AgentInitError, SessionRunner
+from genkit._ai._agents._runtime import AgentContext, AgentFn, AgentInitError, SessionRunner
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
@@ -103,6 +103,7 @@ __all__ = [
     'remote_agent',
     # Agent function protocol
     'AgentFn',
+    'AgentContext',
     'SessionRunner',
     'TurnContext',
     'TurnResult',
