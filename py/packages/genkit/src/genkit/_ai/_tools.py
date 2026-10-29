@@ -313,7 +313,7 @@ async def run_tool_request(
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
         return (
-            await tool.run(
+            await tool._run(
                 tool_req.input,
                 context=run_context,
                 telemetry_labels=telemetry_labels,

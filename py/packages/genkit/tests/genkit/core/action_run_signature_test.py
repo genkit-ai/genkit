@@ -66,8 +66,25 @@ async def test_stream_bidi_with_keyword_context_reaches_the_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_abort_signal_reaches_the_action() -> None:
-    """`stream(abort_signal=ev)` hands `ev` to the action as `ctx.abort_signal`, so setting it stops the run."""
+async def test_run_rejects_public_abort_signal_kwarg() -> None:
+    """`run(abort_signal=...)` raises TypeError; cancellation uses standard asyncio task cancellation."""
+    abort = asyncio.Event()
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        await _kitchen().run('salmon', abort_signal=abort)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+
+def test_stream_rejects_public_abort_signal_kwarg() -> None:
+    """`stream(abort_signal=...)` raises TypeError; cancellation uses standard asyncio stream/task cancellation."""
+    abort = asyncio.Event()
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        _kitchen().stream('salmon', abort_signal=abort)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+
+@pytest.mark.asyncio
+async def test_private_stream_abort_signal_reaches_the_action() -> None:
+    """`_stream(abort_signal=ev)` hands `ev` to the action as `ctx.abort_signal`, so setting it stops the run."""
 
     async def simmer(dish: str, ctx: FlowContext[str]) -> str:
         ctx.send_chunk('simmering')
@@ -75,7 +92,7 @@ async def test_stream_abort_signal_reaches_the_action() -> None:
         return f'{dish} pulled off the heat'
 
     abort = asyncio.Event()
-    result = Action(ActionKind.CUSTOM, 'simmer', simmer).stream('stock', abort_signal=abort)
+    result = Action(ActionKind.CUSTOM, 'simmer', simmer)._stream('stock', abort_signal=abort)
 
     first = await anext(aiter(result.stream))
     abort.set()
