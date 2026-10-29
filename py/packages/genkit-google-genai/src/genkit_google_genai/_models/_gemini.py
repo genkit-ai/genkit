@@ -19,7 +19,7 @@
 import asyncio
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from functools import cached_property
 from typing import Annotated, Any, Any as JsonAny, Literal, TypeAlias, cast, get_args
@@ -252,7 +252,7 @@ ThinkingLevel: TypeAlias = Literal['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']
 ImageAspectRatio: TypeAlias = Literal[
     '1:1', '1:4', '1:8', '2:3', '3:2', '3:4', '4:1', '4:3', '4:5', '5:4', '8:1', '9:16', '16:9', '21:9'
 ]
-ImageSize: TypeAlias = Literal['1K', '2K', '4K']
+ImageSize: TypeAlias = Literal['512', '1K', '2K', '4K']
 ProminentPeople: TypeAlias = Literal['PROMINENT_PEOPLE_UNSPECIFIED', 'ALLOW_PROMINENT_PEOPLE', 'BLOCK_PROMINENT_PEOPLE']
 PhishBlockThreshold: TypeAlias = Literal[
     'PHISH_BLOCK_THRESHOLD_UNSPECIFIED',
@@ -322,6 +322,11 @@ _FLATTENED_KEYS: dict[str, tuple[str, ...]] = {
     'file_search': ('file_search_store_names', 'file_search_metadata_filter', 'file_search_top_k'),
     'google_search_retrieval': ('google_search',),
 }
+# Flat fields that only a family subclass declares, and that subclass's constructor.
+_FLATTENED_KEY_OWNERS: dict[str, tuple[str, str]] = {
+    'speech_config': ('GeminiTtsConfig', 'gemini_tts'),
+    'image_config': ('GeminiImageConfig', 'gemini_image'),
+}
 _TOOL_CHOICE_KEYS = frozenset({'function_calling_config', 'tool_config'})
 
 # Settings the Gemini API rejects (google-genai raises before sending). The
@@ -366,21 +371,62 @@ def _pop_prefixed(config: dict[str, Any], prefix: str) -> dict[str, Any]:
     return {key[len(prefix) :]: config.pop(key) for key in [k for k in config if k.startswith(prefix)]}
 
 
-def _flattened_key_error(key: str, value: object) -> GenkitError | None:
-    """The error for a nested key the flat fields replaced, or None if *key* isn't one."""
+def present_items(values: Iterable[str] | None) -> list[str]:
+    """Non-empty entries of a list field; an untouched Dev UI list sends ``['']``."""
+    return [v for v in values or [] if v]
+
+
+def file_search_fields(
+    store_names: Iterable[str] | None, options: Mapping[str, Any], *, prefix: str = ''
+) -> tuple[list[str], dict[str, Any]]:
+    """Store names and the set file_search options; options without a store raise.
+
+    ``options`` uses the names after ``file_search_`` (``metadata_filter``,
+    ``top_k``). Shared by Gemini and Deep Research.
+    """
+    stores = present_items(store_names)
+    set_options = {key: value for key, value in options.items() if value is not None}
+    if set_options and not stores:
+        names = ', '.join(f'file_search_{k}' for k in set_options)
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{prefix}{names} needs file_search_store_names',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    return stores, set_options
+
+
+def flattened_key_error(key: str, value: object, fields: Collection[str]) -> GenkitError | None:
+    """The error for a nested key the flat fields replaced, or None if *key* isn't one.
+
+    *fields* are the config class's field names; a hint only names fields
+    that class has. Repeats the caller's casing, so a .prompt file gets
+    camelCase names.
+    """
     snake = to_snake(key)
     camel = snake != key
 
-    def names(fields: tuple[str, ...]) -> str:
-        return ' / '.join(to_camel(f) if camel else f for f in fields)
+    def names(flat: Iterable[str]) -> str:
+        return ' / '.join(to_camel(f) if camel else f for f in flat)
 
     if snake in _TOOL_CHOICE_KEYS:
         message = f"{key} is not a config field; pass ai.generate(tool_choice='auto' | 'required' | 'none')"
     elif snake in _FLATTENED_KEYS:
-        message = f'{key} was flattened; use {names(_FLATTENED_KEYS[snake])}'
-    elif snake == 'google_search' and isinstance(value, Mapping):
-        message = f'{key} takes True or False; set options with {names(_GOOGLE_SEARCH_OPTIONS)}'
-    elif snake in ('code_execution', 'url_context') and isinstance(value, Mapping):
+        flat = _FLATTENED_KEYS[snake]
+        if all(f in fields for f in flat):
+            message = f'{key} was flattened; use {names(flat)}'
+        elif snake in _FLATTENED_KEY_OWNERS:
+            owner, constructor = _FLATTENED_KEY_OWNERS[snake]
+            message = (
+                f'{key} was flattened into {names(flat)}, which only {owner} has; '
+                f'build the model ref with {constructor}()'
+            )
+        else:
+            return None
+    elif snake == 'google_search' and isinstance(value, Mapping) and snake in fields:
+        options = [o for o in _GOOGLE_SEARCH_OPTIONS if o in fields]
+        message = f'{key} takes True or False' + (f'; set options with {names(options)}' if options else '')
+    elif snake in ('code_execution', 'url_context') and isinstance(value, Mapping) and snake in fields:
         message = f'{key} takes True or False'
     else:
         return None
@@ -544,7 +590,7 @@ class GeminiConfig(ModelConfig):
         """Name the flat fields when a caller passes a nested key they replaced."""
         if isinstance(data, Mapping):
             for key, value in cast(Mapping[str, Any], data).items():
-                if isinstance(key, str) and (error := _flattened_key_error(key, value)) is not None:
+                if isinstance(key, str) and (error := flattened_key_error(key, value, cls.model_fields)) is not None:
                     raise error
         return data
 
@@ -693,7 +739,7 @@ class GeminiTtsConfig(GeminiConfig):
 
         # 2. Synthesize multi-speaker podcast audio
         res = await ai.generate(
-            model=GoogleAI.gemini('gemini-2.5-flash-preview-tts'),
+            model=GoogleAI.gemini_tts('gemini-2.5-flash-preview-tts'),
             prompt='Host: Welcome to Morning Roaster. Chef: Today we review Ethiopian beans.',
             config=GeminiTtsConfig(
                 speakers={'Host': 'Kore', 'Chef': 'Puck'},
@@ -742,7 +788,7 @@ class GeminiImageConfig(GeminiConfig):
 
         # 2. Generate architectural artwork with specified aspect ratio and size
         res = await ai.generate(
-            model=GoogleAI.gemini('gemini-2.5-flash-preview-image-generation'),
+            model=GoogleAI.gemini_image('gemini-2.5-flash-preview-image-generation'),
             prompt='A modern minimalist espresso bar with warm cedar accents.',
             config=GeminiImageConfig(
                 aspect_ratio='16:9',
@@ -2468,9 +2514,8 @@ class GeminiModel:
         SDK path; the plugin knows the backend, so it raises first.
         """
         if self._client.vertexai:
-            stores = [s for s in config.get('file_search_store_names') or [] if s]
             fields = [
-                *(('file_search_store_names',) if stores else ()),
+                *(('file_search_store_names',) if present_items(config.get('file_search_store_names')) else ()),
                 *(
                     name
                     for name in ('file_search_metadata_filter', 'file_search_top_k')
@@ -2483,7 +2528,8 @@ class GeminiModel:
         fields = [
             name
             for name in _VERTEX_ONLY_FIELDS
-            if config.get(name) is not None and (name != 'google_search_exclude_domains' or any(config.get(name) or []))
+            if config.get(name) is not None
+            and (name != 'google_search_exclude_domains' or present_items(config.get(name)))
         ]
         if any(s.get('method') is not None for s in config.get('safety_settings') or []):
             fields.append('safety_settings[].method')
@@ -2519,7 +2565,7 @@ class GeminiModel:
         if 'types' in search and not search['types']:
             search.pop('types')
         if 'exclude_domains' in search:
-            domains = [d for d in search.pop('exclude_domains') or [] if d]
+            domains = present_items(search.pop('exclude_domains'))
             if domains:
                 search['exclude_domains'] = domains
         if config.pop('google_search', None) or search:
@@ -2531,24 +2577,24 @@ class GeminiModel:
                 raise self._invalid_config('set google_search_start_time and google_search_end_time together')
             if start is not None:
                 # The API rejects sub-second precision ("Granularity of nano is
-                # not supported"), so datetime.now() would fail as sent.
+                # not supported"), so datetime.now() would fail as sent. Round
+                # outward so the window only grows and never collapses to empty.
                 options['time_range_filter'] = {
                     'start_time': start.replace(microsecond=0),
-                    'end_time': end.replace(microsecond=0),
+                    'end_time': end.replace(microsecond=0) + timedelta(seconds=1) if end.microsecond else end,
                 }
             options.update(search)  # exclude_domains, blocking_confidence
             tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch(**options)))
 
         # File Search. Empty store names (an untouched Dev UI list) mean off.
         file_search = _pop_prefixed(config, 'file_search_')
-        stores = [s for s in file_search.pop('store_names', None) or [] if s]
+        stores, options = file_search_fields(
+            file_search.pop('store_names', None), file_search, prefix=f'{self._version}: '
+        )
         if stores:
             tools.append(
-                genai_types.Tool(file_search=genai_types.FileSearch(file_search_store_names=stores, **file_search))
+                genai_types.Tool(file_search=genai_types.FileSearch(file_search_store_names=stores, **options))
             )
-        elif file_search:
-            names = ', '.join(f'file_search_{k}' for k in file_search)
-            raise self._invalid_config(f'{names} needs file_search_store_names')
 
         if config.pop('url_context', None):
             tools.append(genai_types.Tool(url_context=genai_types.UrlContext()))
@@ -2556,8 +2602,8 @@ class GeminiModel:
     def _nest_generation_fields(self, config: dict[str, Any], extra: Mapping[str, Any] | None) -> None:
         """Group the flat thinking, image and speech fields into their nested request objects.
 
-        Mutates *config*. The dicts match what the nested Genkit classes used
-        to dump, so the request body is unchanged.
+        Mutates *config*. The dicts use google-genai's snake_case names for
+        ThinkingConfig, ImageConfig and SpeechConfig.
         """
         thinking = {key: config.pop(key) for key in _THINKING_FIELDS if key in config}
         if thinking:

@@ -2643,7 +2643,7 @@ def test_image_choice_literals_match_the_docs() -> None:
         '16:9',
         '21:9',
     )
-    assert get_args(_gemini.ImageSize) == ('1K', '2K', '4K')
+    assert get_args(_gemini.ImageSize) == ('512', '1K', '2K', '4K')
 
 
 def test_gemini_config_form_lists_every_safety_setting_key() -> None:

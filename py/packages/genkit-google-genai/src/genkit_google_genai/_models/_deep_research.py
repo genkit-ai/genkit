@@ -28,6 +28,7 @@ from genkit_google_genai._interactions._client import (
 )
 from genkit_google_genai._interactions._converters import from_interaction
 from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._gemini import file_search_fields, flattened_key_error
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
     api_key_for_context,
@@ -41,10 +42,10 @@ from genkit_google_genai._models._interactions_utils import (
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 from pydantic import ConfigDict, WithJsonSchema, field_validator, model_validator, with_config
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic.alias_generators import to_snake
 from typing_extensions import NotRequired, TypedDict
 
-from genkit import ActionRunContext, GenkitError, Operation, RuntimeErrorReason
+from genkit import ActionRunContext, GenkitError, Operation
 from genkit.model import BackgroundAction, ModelRef, ModelRequest, model_ref
 from genkit.plugin_api import Action, ActionKind, GenkitConfig, to_json_schema
 
@@ -125,16 +126,11 @@ class DeepResearchConfig(GenkitConfig):
     def reject_nested_file_search(cls, data: object) -> object:
         """Name the flat fields for the old nested key instead of the generic unknown-key error."""
         if isinstance(data, Mapping):
-            for key in ('file_search', 'fileSearch'):
-                if key in data:
-                    names = ('file_search_store_names', 'file_search_metadata_filter', 'file_search_top_k')
-                    if key == 'fileSearch':
-                        names = tuple(to_camel(n) for n in names)
-                    raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message=f'{key} was flattened; use {" / ".join(names)}',
-                        reason=RuntimeErrorReason.INVALID_INPUT,
-                    )
+            for key, value in cast(Mapping[str, Any], data).items():
+                if isinstance(key, str) and to_snake(key) == 'file_search':
+                    error = flattened_key_error(key, value, cls.model_fields)
+                    if error is not None:
+                        raise error
         return data
 
     @field_validator('mcp_servers', mode='before')
@@ -192,23 +188,12 @@ def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchC
             tools.append({'type': tool_type})
     # The create body is snake_case, the same names the Gemini FileSearch tool takes.
     # Empty store names (an untouched Dev UI list) mean off.
-    stores = [s for s in config.file_search_store_names or [] if s]
-    file_search_options = {
-        key: value
-        for key, value in (
-            ('metadata_filter', config.file_search_metadata_filter),
-            ('top_k', config.file_search_top_k),
-        )
-        if value is not None
-    }
+    stores, file_search_options = file_search_fields(
+        config.file_search_store_names,
+        {'metadata_filter': config.file_search_metadata_filter, 'top_k': config.file_search_top_k},
+    )
     if stores:
         tools.append({'type': 'file_search', 'file_search_store_names': stores, **file_search_options})
-    elif file_search_options:
-        names = ', '.join(f'file_search_{k}' for k in file_search_options)
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'{names} needs file_search_store_names',
-        )
     for mcp_server in config.mcp_servers or []:
         tools.append({'type': 'mcp_server', **{k: v for k, v in mcp_server.items() if v is not None}})
 
