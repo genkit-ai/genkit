@@ -482,6 +482,107 @@ describe('Vertex AI Gemini', () => {
         assert.deepStrictEqual(apiRequest.labels, myLabels);
       });
 
+      // The platform's generateContent has no `store` field and never stores
+      // anything, so only `store: true` warns. The warning is logged once per
+      // model and field, so each test uses its own unlisted image model name
+      // (image models stay on generateContent) per client.
+      it('warns once that store: true is ignored on generateContent models, and not for store: false', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel(
+          `gemini-store-config-${clientOptions.kind}-image`,
+          clientOptions
+        );
+        const storeWarnings = () =>
+          warnStub
+            .getCalls()
+            .filter((c) =>
+              String(c.args[0]).includes('store is not supported')
+            );
+
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { store: false } });
+        assert.strictEqual(storeWarnings().length, 0);
+
+        for (let i = 0; i < 2; i++) {
+          mockFetchResponse(defaultApiResponse);
+          await model.run({ ...minimalRequest, config: { store: true } });
+          const apiRequest: GenerateContentRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.strictEqual('store' in apiRequest, false);
+        }
+        assert.strictEqual(storeWarnings().length, 1);
+      });
+
+      it('warns that the plugin store: true option is ignored on generateContent models', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel(
+          `gemini-store-plugin-${clientOptions.kind}-image`,
+          clientOptions,
+          { store: true }
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual('store' in apiRequest, false);
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('store is not supported')),
+          'plugin store: true should warn'
+        );
+      });
+
+      it('does not warn for a plugin store: false, or when the request overrides store: true with false', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const pluginFalse = defineModel(
+          `gemini-store-plugin-false-${clientOptions.kind}-image`,
+          clientOptions,
+          { store: false }
+        );
+        mockFetchResponse(defaultApiResponse);
+        await pluginFalse.run(minimalRequest);
+
+        const overridden = defineModel(
+          `gemini-store-overridden-${clientOptions.kind}-image`,
+          clientOptions,
+          { store: true }
+        );
+        mockFetchResponse(defaultApiResponse);
+        await overridden.run({ ...minimalRequest, config: { store: false } });
+
+        assert.ok(
+          !warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('store is not supported')),
+          'store: false should not warn'
+        );
+      });
+
+      it('warns that previousInteractionId is ignored on generateContent models', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: { previousInteractionId: 'v1_abc123' },
+        });
+
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) =>
+              String(c.args[0]).includes(
+                'previousInteractionId is not supported'
+              )
+            ),
+          'previousInteractionId should warn'
+        );
+      });
+
       it('handles retrievalConfig', async () => {
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {

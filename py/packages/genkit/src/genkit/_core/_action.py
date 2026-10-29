@@ -42,9 +42,9 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
-from genkit._core._channel import Channel, CloseableQueue
+from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
 from genkit._core._model import (
@@ -201,7 +201,36 @@ OutputT_co = TypeVar('OutputT_co', covariant=True)
 
 
 class StreamResponse(Generic[ChunkT_co, OutputT_co]):
-    """Wrapper for streaming action results."""
+    """Chunks from a running action, then its result.
+
+    Returned by ``Action.stream()`` for every action kind: flows, tools,
+    models, and the rest.
+
+    - Chunks are single-pass. Once a loop has read them, a second ``async for``
+      yields nothing (or re-raises, if the run failed).
+    - ``.response`` can be awaited any number of times, before or after
+      iterating. Chunks sent before you iterate are buffered.
+    - If the run raises, both the loop and ``.response`` raise it.
+      ``ModelStreamResponse`` (``generate_stream``, ``prompt.stream``) reports
+      model failures on ``.response`` instead; see its docstring.
+
+    Example:
+        ```python
+        @ai.flow()
+        async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
+            ctx.send_chunk('Out for delivery')
+            return f'Order {order_id} delivered'
+
+
+        result = track_order.stream('A-1042')
+        async for update in result:
+            print(update)
+        # => Out for delivery
+
+        print(await result.response)
+        # => Order A-1042 delivered
+        ```
+    """
 
     def __init__(
         self,
@@ -213,11 +242,29 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
     @property
     def stream(self) -> AsyncIterator[ChunkT_co]:
+        """The chunks, in order. Iterating the response itself reads the same stream."""
         return self._stream
 
     @property
     def response(self) -> Awaitable[OutputT_co]:
+        """The final result, available once the run ends."""
         return self._response
+
+    def __aiter__(self) -> AsyncIterator[ChunkT_co]:
+        # `async for chunk in result` reads `.stream`, so callers can skip the hop.
+        return self._stream.__aiter__()
+
+    async def aclose(self) -> None:
+        """Close the stream and release any underlying resources."""
+        aclose = getattr(self._stream, 'aclose', None)
+        if aclose is not None:
+            await aclose()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
 
 class ActionMetadataKey(StrEnum):
@@ -1033,9 +1080,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """Start the action and return its chunks (``.stream``) and result (``.response``).
+        """Start the action and return a ``StreamResponse``: iterate it for chunks, await ``.response`` for the result.
 
-        Takes the same keyword arguments as ``run``, minus ``on_chunk``.
+        Takes the same keyword arguments as ``run``, minus ``on_chunk``. If the
+        action raises, both the loop and ``.response`` raise.
         """
         return self._stream(
             input,
@@ -1055,40 +1103,20 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
         """``stream`` plus ``input_stream``, which ``BidiAction.stream_bidi`` feeds."""
-        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel()
 
-        def send_chunk(c: ChunkT) -> None:
-            channel.send(c)
+        async def run(send_chunk: Callable[[ChunkT], None]) -> ActionResponse[OutputT]:
+            return await self._run(
+                input,
+                on_chunk=send_chunk,
+                context=context,
+                telemetry_labels=telemetry_labels,
+                abort_signal=abort_signal,
+                init=init,
+                input_stream=input_stream,
+            )
 
-        resp = self._run(
-            input,
-            on_chunk=send_chunk,
-            context=context,
-            telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
-            init=init,
-            input_stream=input_stream,
-        )
-        channel.set_close_future(asyncio.create_task(resp))
-
-        # Mirror the run's terminal state onto .response so a caller awaiting it
-        # sees the same success/error/cancel the run ended with, instead of
-        # hanging (or dropping the error on the floor) when the run raises.
-        result_future: asyncio.Future[OutputT] = asyncio.Future()
-
-        def _resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
-            if result_future.done():
-                return
-            if closed.cancelled():
-                result_future.cancel()
-            elif (exc := closed.exception()) is not None:
-                result_future.set_exception(exc)
-            else:
-                result_future.set_result(closed.result().response)
-
-        channel.closed.add_done_callback(_resolve_response)
-
-        return StreamResponse(stream=channel, response=result_future)
+        channel, task = start_stream(run)
+        return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
 
     def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
         if self._params.input is not None:
