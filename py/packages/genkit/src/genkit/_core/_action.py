@@ -23,7 +23,7 @@ import re
 import sys
 import time
 import types
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -42,7 +42,7 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
@@ -246,13 +246,28 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
         return self._stream
 
     @property
-    def response(self) -> Awaitable[OutputT_co]:
+    def response(self) -> Coroutine[Any, Any, OutputT_co]:
         """The final result, available once the run ends."""
-        return self._response
+        return self._await_response()
+
+    async def _await_response(self) -> OutputT_co:
+        return await asyncio.shield(self._response)
 
     def __aiter__(self) -> AsyncIterator[ChunkT_co]:
         # `async for chunk in result` reads `.stream`, so callers can skip the hop.
         return self._stream.__aiter__()
+
+    async def aclose(self) -> None:
+        """Close the stream and release any underlying resources."""
+        aclose = getattr(self._stream, 'aclose', None)
+        if aclose is not None:
+            await aclose()
+
+    async def __aenter__(self) -> Self:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        await self.aclose()
 
 
 class ActionMetadataKey(StrEnum):

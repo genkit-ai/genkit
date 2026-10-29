@@ -864,3 +864,59 @@ async def test_action_timeout_sets_ctx_abort_signal_in_except_and_finally() -> N
 
     assert seen_in_except == [True]
     assert seen_in_finally == [True]
+
+
+@pytest.mark.asyncio
+async def test_stream_response_cancelling_one_awaiter_does_not_cancel_other_awaiter() -> None:
+    """Cancelling one task awaiting stream.response leaves other tasks awaiting stream.response intact."""
+    release = asyncio.Event()
+
+    async def slow_chef(dish: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk('prepping')
+        await release.wait()
+        return f'{dish} ready'
+
+    action = Action(name='slow_chef', kind=ActionKind.FLOW, fn=slow_chef)
+    stream = action.stream('risotto')
+
+    waiter_1 = asyncio.create_task(stream.response)
+    waiter_2 = asyncio.create_task(stream.response)
+    await asyncio.sleep(0.01)
+
+    waiter_1.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter_1
+
+    release.set()
+    assert await waiter_2 == 'risotto ready'
+
+
+@pytest.mark.asyncio
+async def test_action_stream_async_with_calls_aclose() -> None:
+    """`async with action.stream(...) as stream:` calls `await stream.aclose()` on exit."""
+    closed: list[bool] = []
+
+    async def make_tea(leaf: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk(f'steeping {leaf}')
+        ctx.send_chunk(f'pouring {leaf}')
+        return f'{leaf} served'
+
+    action = Action(name='make_tea', kind=ActionKind.FLOW, fn=make_tea)
+    stream_resp = action.stream('oolong')
+
+    orig_aclose = stream_resp.aclose
+
+    async def tracked_aclose() -> None:
+        closed.append(True)
+        await orig_aclose()
+
+    stream_resp.aclose = tracked_aclose  # type: ignore[method-assign]
+
+    seen: list[str] = []
+    async with stream_resp as s:
+        async for chunk in s:
+            seen.append(chunk)
+            break
+
+    assert seen == ['steeping oolong']
+    assert closed == [True]

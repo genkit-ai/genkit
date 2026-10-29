@@ -60,24 +60,45 @@ class Channel(Generic[T_co, R]):
     def __aiter__(self) -> AsyncIterator[T_co]:
         return self
 
+    def _cleanup_pop_task(self, pop_task: asyncio.Future[T_co]) -> None:
+        if not pop_task.done():
+            pop_task.cancel()
+            return
+        if pop_task.cancelled():
+            return
+        if pop_task.exception() is None:
+            self.queue._queue.appendleft(pop_task.result())  # type: ignore[attr-defined]
+
     async def __anext__(self) -> T_co:
         if not self.queue.empty():
             return self.queue.get_nowait()
 
         pop_task = asyncio.ensure_future(self._pop())
         if not self._close_future:
-            return await pop_task
+            try:
+                return await pop_task
+            except BaseException:
+                self._cleanup_pop_task(pop_task)
+                raise
 
-        finished, _ = await asyncio.wait(
-            [pop_task, self._close_future],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        try:
+            finished, _ = await asyncio.wait(
+                [pop_task, self._close_future],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            self._cleanup_pop_task(pop_task)
+            raise
 
         if pop_task in finished:
             return pop_task.result()
 
+        self._cleanup_pop_task(pop_task)
         if self._close_future in finished:
-            _ = pop_task.cancel()
+            if self._close_future.cancelled():
+                if not self.queue.empty():
+                    return self.queue.get_nowait()
+                raise StopAsyncIteration
             # generate_stream's async for is how callers see the run. If the
             # generate task died, that has to show up here, not as an empty
             # stream that only fails later on .response.
