@@ -31,7 +31,7 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import GenkitError, ToolRunContext
+from genkit import GenkitError, ToolContext
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore, SnapshotStatus
 
@@ -47,7 +47,7 @@ chatty = ai.define_agent(
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+async def slow_work(_: dict, ctx: ToolContext) -> dict:
     for _i in range(30):
         if ctx.abort_signal.is_set():  # chat.abort() reaches the tool here so it can bail out
             raise GenkitError(status='ABORTED', message='Task aborted')

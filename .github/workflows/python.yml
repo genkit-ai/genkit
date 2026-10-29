@@ -20,7 +20,7 @@ on:
   pull_request:
     paths:
       - "py/**"
-      - "genkit-tools/**"
+      - "genkit-tools/genkit-schema.json"
       - ".github/workflows/python.yml"
 
 permissions:

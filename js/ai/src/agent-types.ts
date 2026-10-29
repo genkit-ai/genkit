@@ -28,8 +28,9 @@
 //      and `AgentOutput` are generic interfaces (`<S>`) so callers can type the
 //      custom session state, rather than the tools file's non-generic
 //      `z.infer` aliases.
-//   2. The structured error shape is defined here as `RuntimeErrorSchema`
-//      (the JS runtime has no shared error-types module to import it from).
+//   2. The structured error shape (`RuntimeErrorSchema`) lives in
+//      ./model-types.ts, where a model response carries it too, and is
+//      re-exported here.
 //
 
 import { z } from '@genkit-ai/core';
@@ -38,26 +39,14 @@ import {
   MessageSchema,
   ModelResponseChunkSchema,
   PartSchema,
+  RuntimeErrorSchema,
   type GenerationUsage,
   type MessageData,
+  type RuntimeError,
 } from './model-types.js';
 import { ToolRequestPartSchema, ToolResponsePartSchema } from './parts.js';
 
-/**
- * Schema for the canonical Genkit error wire shape (`{status, message,
- * details}`). This is the form runtimes use when an error travels as data
- * inside another value (e.g. agent outputs and session snapshots).
- */
-export const RuntimeErrorSchema = z.object({
-  /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
-  status: z.string().optional(),
-  /** Human-readable error message. */
-  message: z.string(),
-  /** Optional structured details describing the failure. */
-  details: z.any().optional(),
-});
-/** Structured error carried as data inside agent outputs and snapshots. */
-export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
+export { RuntimeErrorSchema, type RuntimeError } from './model-types.js';
 
 /**
  * Schema for tracking persistent artifacts generated during a session turn.
@@ -83,18 +72,32 @@ export type Artifact = z.infer<typeof ArtifactSchema>;
  *   The snapshot's state is empty until the background work finishes, at
  *   which point it is rewritten with the cumulative final state and a
  *   terminal status.
+ * - `aborting`: the `abort` companion action stopped a detached invocation
+ *   and its worker is winding down toward the write that stamps the state
+ *   on the row. Not terminal and not yet resumable: the worker keeps
+ *   refreshing `heartbeatAt` while it drains, and the row settles as
+ *   `aborted`.
  * - `completed`: the snapshot captures a settled state.
- * - `aborted`: the snapshot's invocation was aborted via the `abort` companion
- *   action while detached.
- * - `failed`: the invocation terminated with an error. The snapshot's `error`
- *   field describes the failure and resume is rejected with that same error.
- * - `expired`: a `pending` snapshot whose detached background worker is
- *   presumed dead because its heartbeat went stale. Computed on read from a
- *   stale `heartbeatAt`; never persisted (the dead worker can no longer write
- *   a terminal status itself).
+ * - `aborted`: the caller stopped the invocation: an attached caller aborted
+ *   the signal it passed, a detached one called the `abort` companion action,
+ *   or the run reached a limit the caller set, such as a prompt agent's
+ *   `maxTurns`. Its `error`, when the stopped
+ *   turn recorded one, says what stopped it, and its state is what the run
+ *   committed before the stop: the turn in flight rolled back unless it
+ *   committed. Resume is permitted, as for `failed`.
+ * - `failed`: a turn ended with an error. The snapshot's `error` field
+ *   describes the failure, and its state is what the turn committed before
+ *   it: the conversation trimmed back to the last completed tool round.
+ *   Resume is permitted, so whether the failure is worth another attempt is
+ *   the client's decision, taken from `error.status`.
+ * - `expired`: a `pending` or `aborting` snapshot whose detached background
+ *   worker is presumed dead because its heartbeat went stale. Computed on
+ *   read from a stale `heartbeatAt`; never persisted (the dead worker can no
+ *   longer write a terminal status itself).
  */
 export const SnapshotStatusSchema = z.enum([
   'pending',
+  'aborting',
   'completed',
   'aborted',
   'failed',
@@ -112,7 +115,8 @@ export type SnapshotStatus = z.infer<typeof SnapshotStatusSchema>;
  * The first group mirrors the model-level `FinishReason` so a turn backed by a
  * single `generate` call can forward its reason verbatim. The remaining values
  * are agent-specific outcomes with no `generate`-level equivalent: `aborted`
- * (the turn/invocation was aborted), `detached` (the turn was moved to the
+ * (the caller stopped the turn or invocation, including by a limit it set,
+ * such as `maxTurns`), `detached` (the turn was moved to the
  * background), and `failed` (the turn ended in an error).
  */
 export const AgentFinishReasonSchema = z.enum([
@@ -173,6 +177,12 @@ export interface SessionState<S = unknown> {
 
 /**
  * Schema for agent input messages and commands.
+ *
+ * An input with neither `message` nor `resume` continues the conversation
+ * from where it stands, which is how a failed turn is re-attempted: resume
+ * the `failed` snapshot, send an empty input, and the agent runs the turn
+ * again on the messages it committed. It is rejected on a conversation with
+ * no messages to continue.
  */
 export const AgentInputSchema = z.object({
   /** User's input message for this turn. */
@@ -209,8 +219,10 @@ export const AgentInitSchema = z.object({
  * `sessionId` (resume the session's latest snapshot - the simple case used by
  * `useChat`-style clients). When both are provided, `snapshotId` selects the
  * snapshot to resume and `sessionId` acts as an ownership guard: the snapshot
- * must belong to that session. For client-managed agents (no store) provide
- * the full `state`.
+ * must belong to that session. A `failed` or `aborted` snapshot resumes with
+ * what its run committed; a `pending` or `aborting` one is rejected while
+ * its detached invocation is still writing to it. For client-managed agents (no store) provide the
+ * full `state`.
  *
  * Runtime variant of {@link AgentInitSchema}, generic over the custom state
  * type `S`.
@@ -252,10 +264,12 @@ export const AgentOutputSchema = z.object({
   /** The reason the invocation finished (e.g. `stop`, `interrupted`). */
   finishReason: AgentFinishReasonSchema.optional(),
   /**
-   * Present when `finishReason` is `failed`. Carries the original error
-   * details (RuntimeError shape; the runtime resolves gracefully instead of
-   * throwing). The accompanying `state`/`snapshotId` hold the last-good state -
-   * the state the failed turn started with.
+   * Present when `finishReason` is `failed` or `aborted`. Carries the original
+   * error details (RuntimeError shape; the runtime resolves gracefully instead
+   * of throwing): what broke, or what stopped the run. The accompanying
+   * `state`/`snapshotId` hold the resume point: what the turn committed, or
+   * the last committed turn's state when the turn ended before committing
+   * anything.
    */
   error: RuntimeErrorSchema.optional(),
   /**
@@ -276,12 +290,29 @@ export interface AgentOutput<S = unknown> {
   sessionId?: string;
   artifacts?: Artifact[];
   message?: MessageData;
+  /**
+   * ID of the most recent turn-end snapshot for this invocation. Empty when
+   * no store is configured, or when nothing has been committed yet: a
+   * first-turn failure that rolled back on a fresh session. On a resumed
+   * session whose first turn rolls back it is the resumed snapshot's id. When
+   * `finishReason` is `detached` it is the pending detach snapshot. When
+   * `failed` or `aborted`, it is the resume point: the turn's own snapshot
+   * when the turn committed anything, otherwise the last committed turn's
+   * snapshot.
+   */
   snapshotId?: string;
+  /**
+   * Final conversation state (only when client-managed). When `finishReason`
+   * is `failed` or `aborted`, this is the resume point: what the turn
+   * committed, or the last committed turn's state when the turn ended before
+   * committing anything.
+   */
   state?: SessionState<S>;
   finishReason?: AgentFinishReason;
   /**
-   * Present when `finishReason` is `failed`. Carries the original error
-   * details (RuntimeError shape); `state`/`snapshotId` hold the last-good state.
+   * Present when `finishReason` is `failed` or `aborted`. Carries the original
+   * error details (RuntimeError shape): what broke, or what stopped the run;
+   * `state`/`snapshotId` hold the resume point.
    */
   error?: RuntimeError;
   /**
@@ -296,6 +327,12 @@ export interface AgentOutput<S = unknown> {
  * Schema identifying a turn termination event.
  */
 export const TurnEndSchema = z.object({
+  /**
+   * ID of the snapshot persisted at the end of this turn, whether it
+   * succeeded or failed. Empty if no snapshot was written (no store
+   * configured, a turn that failed before committing anything, or snapshots
+   * were suspended after detach).
+   */
   snapshotId: z.string().optional(),
   /** The reason this turn finished (e.g. `stop`, `interrupted`). */
   finishReason: AgentFinishReasonSchema.optional(),
@@ -445,11 +482,22 @@ export interface SessionSnapshot<S = unknown> {
 
 /**
  * Schema for the input of an agent's `getSnapshot` companion action. Provide
- * exactly one of `snapshotId` or `sessionId`.
+ * exactly one of `snapshotId` or `sessionId`. The `waitForSnapshot` companion
+ * action takes the same request but requires `snapshotId`, and ignores
+ * `metadataOnly`: a settled snapshot is what a wait is for.
  */
 export const GetSnapshotRequestSchema = z.object({
   snapshotId: z.string().optional(),
   sessionId: z.string().optional(),
+  /**
+   * Returns the snapshot's metadata only: status, finish reason, parent,
+   * session, timestamps, and error, with no state. The read is shaped exactly
+   * as a full read (status defaulting and heartbeat expiry need only the
+   * metadata), and a store that can read a row without loading its state
+   * does so. For callers that dispatch on where a task stands, this skips
+   * loading and serializing a potentially large conversation history.
+   */
+  metadataOnly: z.boolean().optional(),
 });
 
 /**

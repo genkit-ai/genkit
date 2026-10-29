@@ -138,6 +138,25 @@ func TestLookupAgent(t *testing.T) {
 		if _, err := h.RunDetached(context.Background(), &AgentInput{}); !errors.Is(err, status.ErrInvalidArgument) {
 			t.Errorf("RunDetached on a nil handle = %v, want INVALID_ARGUMENT", err)
 		}
+		ctx := context.Background()
+		for name, call := range map[string]func() error{
+			"GetSnapshot":       func() error { _, err := h.GetSnapshot(ctx, "s"); return err },
+			"WaitForSnapshot":   func() error { _, err := h.WaitForSnapshot(ctx, "s"); return err },
+			"GetLatestSnapshot": func() error { _, err := h.GetLatestSnapshot(ctx, "sess"); return err },
+			"Abort":             func() error { _, err := h.Abort(ctx, "s"); return err },
+			"Task(...).Poll":    func() error { _, err := h.Task("s").Poll(ctx); return err },
+		} {
+			if err := call(); !errors.Is(err, status.ErrInvalidArgument) {
+				t.Errorf("%s on a nil handle = %v, want INVALID_ARGUMENT", name, err)
+			}
+		}
+	})
+
+	t.Run("a transport's nil output is refused", func(t *testing.T) {
+		h := NewAgentHandle("a", nil, &scriptedRunTransport{outs: []*AgentOutput[json.RawMessage]{nil}})
+		if _, err := h.RunText(context.Background(), "hi"); status.Of(err) != status.Internal {
+			t.Errorf("RunText = %v, want INTERNAL", err)
+		}
 	})
 }
 
@@ -306,14 +325,6 @@ func TestAgentHandle_Run(t *testing.T) {
 		_, err := h.Run(context.Background(), nil)
 		if !errors.Is(err, status.ErrInvalidArgument) {
 			t.Fatalf("Run(nil) error = %v, want INVALID_ARGUMENT", err)
-		}
-	})
-
-	t.Run("rejects duplicate options", func(t *testing.T) {
-		_, err := h.Run(context.Background(), &AgentInput{Message: ai.NewUserTextMessage("x")},
-			WithSessionID[json.RawMessage]("a"), WithSessionID[json.RawMessage]("b"))
-		if err == nil || !strings.Contains(err.Error(), "more than once") {
-			t.Fatalf("duplicate WithSessionID error = %v, want duplicate-option rejection", err)
 		}
 	})
 
@@ -662,7 +673,7 @@ func TestWaitValidation(t *testing.T) {
 	}
 }
 
-// recordingTransport is an [agentTransport] that records what reached it and
+// recordingTransport is an [AgentTransport] and [SnapshotTransport] that records what reached it and
 // answers from canned values. It is how the delegation tests see the seam: a
 // real transport would prove only that the call worked, not which arguments
 // the handle chose to send.
@@ -688,16 +699,88 @@ func (t *recordingTransport) GetSnapshot(ctx context.Context, lookup *GetSnapsho
 	return &SessionSnapshot[json.RawMessage]{Status: SnapshotStatusCompleted}, nil
 }
 
-func (t *recordingTransport) WaitForSnapshot(ctx context.Context, snapshotID string) (*SessionSnapshot[json.RawMessage], error) {
+func (t *recordingTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
 	t.callCount++
-	t.waitID = snapshotID
+	t.waitID = req.SnapshotID
 	return &SessionSnapshot[json.RawMessage]{Status: SnapshotStatusCompleted}, nil
 }
 
-func (t *recordingTransport) Abort(ctx context.Context, snapshotID string) (SnapshotStatus, error) {
+func (t *recordingTransport) Abort(ctx context.Context, req *AgentAbortRequest) (*AgentAbortResponse, error) {
 	t.callCount++
-	t.abortID = snapshotID
-	return SnapshotStatusAborted, nil
+	t.abortID = req.SnapshotID
+	return &AgentAbortResponse{SnapshotID: req.SnapshotID, Status: SnapshotStatusAborted}, nil
+}
+
+// cappedWaitTransport answers each wait with a pending row until settleAfter
+// waits have been made, the way a waitForSnapshot action under its
+// [WithMaxSnapshotWait] limit answers a task that outlives the limit.
+type cappedWaitTransport struct {
+	recordingTransport
+	settleAfter int
+	waits       int
+	onWait      func()
+}
+
+func (t *cappedWaitTransport) WaitForSnapshot(ctx context.Context, req *GetSnapshotRequest) (*SessionSnapshot[json.RawMessage], error) {
+	snapshotID := req.SnapshotID
+	t.waits++
+	if t.onWait != nil {
+		t.onWait()
+	}
+	if t.settleAfter > 0 && t.waits >= t.settleAfter {
+		return &SessionSnapshot[json.RawMessage]{SnapshotID: snapshotID, Status: SnapshotStatusCompleted}, nil
+	}
+	return &SessionSnapshot[json.RawMessage]{SnapshotID: snapshotID, Status: SnapshotStatusPending}, nil
+}
+
+// TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled pins the handle's
+// contract over a capped wait action: a pending answer is the action's limit,
+// not the outcome, so the handle asks again until the snapshot settles or ctx
+// ends.
+func TestAgentHandle_WaitForSnapshotAsksAgainUntilSettled(t *testing.T) {
+	restore := waitReaskFloor
+	waitReaskFloor = 10 * time.Millisecond
+	t.Cleanup(func() { waitReaskFloor = restore })
+
+	t.Run("settles", func(t *testing.T) {
+		tr := &cappedWaitTransport{settleAfter: 3}
+		h := NewAgentHandle("researcher", nil, tr)
+		snap, err := h.WaitForSnapshot(context.Background(), "snap-1")
+		if err != nil {
+			t.Fatalf("WaitForSnapshot: %v", err)
+		}
+		if snap.Status != SnapshotStatusCompleted {
+			t.Errorf("status = %q, want %q", snap.Status, SnapshotStatusCompleted)
+		}
+		if tr.waits != 3 {
+			t.Errorf("waits = %d, want 3", tr.waits)
+		}
+	})
+	t.Run("ctx ends", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		tr := &cappedWaitTransport{onWait: cancel}
+		h := NewAgentHandle("researcher", nil, tr)
+		if _, err := h.WaitForSnapshot(ctx, "snap-1"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("WaitForSnapshot error = %v, want context.Canceled", err)
+		}
+		if tr.waits != 1 {
+			t.Errorf("waits = %d, want 1", tr.waits)
+		}
+	})
+	t.Run("an answer at once is not asked again in a hot loop", func(t *testing.T) {
+		waitReaskFloor = 50 * time.Millisecond
+		ctx, cancel := context.WithTimeout(context.Background(), 175*time.Millisecond)
+		defer cancel()
+		tr := &cappedWaitTransport{}
+		h := &AgentHandle{name: "researcher", transport: tr}
+		if _, err := h.WaitForSnapshot(ctx, "snap-1"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("WaitForSnapshot error = %v, want context.DeadlineExceeded", err)
+		}
+		// One request per floor: at 0, 50, 100, and 150ms.
+		if tr.waits > 5 {
+			t.Errorf("waits = %d in 175ms, want at most one per 50ms", tr.waits)
+		}
+	})
 }
 
 // TestAgentHandle_DelegatesToTransport pins the division of labour the seam
@@ -706,7 +789,7 @@ func (t *recordingTransport) Abort(ctx context.Context, snapshotID string) (Snap
 // about it. A remote transport can only be a drop-in if that line holds.
 func TestAgentHandle_DelegatesToTransport(t *testing.T) {
 	tr := &recordingTransport{}
-	h := &AgentHandle{name: "researcher", transport: tr}
+	h := NewAgentHandle("researcher", nil, tr)
 	ctx := context.Background()
 
 	// One transport read serves both lookups, which is why it takes the

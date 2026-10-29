@@ -27,7 +27,7 @@ from openai import APIError, AsyncOpenAI
 from openai.types import Model
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Embedding, GenkitError, ModelResponse
+from genkit import Embedding, GenkitError, ModelResponse
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -37,6 +37,7 @@ from genkit.embedder import (
     embedder_action_metadata,
 )
 from genkit.model import (
+    ModelContext,
     ModelInfo,
     ModelRef,
     ModelRequest,
@@ -371,16 +372,23 @@ class OpenAI(Plugin):
                 take, or repeats ``api_key`` or ``base_url``.
         """
         options = _client_kwargs(api_key=api_key, base_url=base_url, client_options=client_options)
+        self._options = options
         self._plugin_api_key: str | None = options.get('api_key')
-        self._runtime_client = loop_local_client(lambda: AsyncOpenAI(**options))
-        # Only used when the plugin has no key of its own. Its placeholder key is
-        # never sent: every call through it swaps in the caller's key first.
-        tenant_only_options: dict[str, Any] = {**options, 'api_key': 'unset'}
-        self._tenant_only_client = loop_local_client(lambda: AsyncOpenAI(**tenant_only_options))
         plugin_headers: dict[str, str] = dict(options.get('default_headers') or {})
         self._tenant_headers = {k: v for k, v in plugin_headers.items() if k.lower() not in _PLUGIN_ACCOUNT_HEADERS}
         self._pins_authorization = any(k.lower() == 'authorization' for k in plugin_headers)
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncOpenAI:
+        return AsyncOpenAI(**self._options)
+
+    @loop_local_client
+    def _tenant_only_client(self) -> AsyncOpenAI:
+        # Only used when the plugin has no key of its own. Its placeholder key is
+        # never sent: every call through it swaps in the caller's key first.
+        params: dict[str, Any] = {**self._options, 'api_key': 'unset'}
+        return AsyncOpenAI(**params)
 
     def _has_plugin_key(self) -> bool:
         return bool(self._plugin_api_key or os.environ.get('OPENAI_API_KEY'))
@@ -474,7 +482,7 @@ class OpenAI(Plugin):
 
         return None
 
-    def _client_for_call(self, request: ModelRequest, ctx: ActionRunContext) -> AsyncOpenAI:
+    def _client_for_call(self, request: ModelRequest, ctx: ModelContext) -> AsyncOpenAI:
         """The plugin's client, or a copy carrying the caller's ``context.secrets`` key.
 
         A tenant who passed their own key is the one who should be billed. The
@@ -541,7 +549,7 @@ class OpenAI(Plugin):
         """
         model_info = self.get_model_info(name) or {}
 
-        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[OpenAIConfig], ctx: ModelContext) -> ModelResponse:
             catalog = SUPPORTED_OPENAI_MODELS.get(cast(KnownGpt, name))
             supports = catalog.supports if catalog is not None else get_default_openai_model_info(name).supports
             openai_model = OpenAIModelHandler(OpenAIModel(name, self._client_for_call(request, ctx), supports=supports))
@@ -579,7 +587,7 @@ class OpenAI(Plugin):
         """
         info_dict, config_schema = _get_multimodal_info_dict(name, model_type, supported_models)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             model_instance = model_class(name, self._client_for_call(request, ctx))
             return await model_instance.generate(request, ctx)
 
