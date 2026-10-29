@@ -26,7 +26,6 @@ from __future__ import annotations
 from typing import Any, ClassVar, Generic
 
 from pydantic import ConfigDict, Field
-from pydantic.alias_generators import to_camel
 from typing_extensions import TypeVar
 
 from genkit._core._base import GenkitModel
@@ -67,11 +66,9 @@ class Operation(GenkitModel, Generic[OutputT]):
     """
 
     # Pin the schema description to the generated one. Without it Pydantic copies
-    # this docstring into every background model's outputSchema.
+    # this docstring into every background model's outputSchema. Pydantic
+    # merges this with GenkitModel's config.
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel,
-        extra='forbid',
-        populate_by_name=True,
         json_schema_extra={'description': 'Model for operation data.'},
     )
     action: str | None = None

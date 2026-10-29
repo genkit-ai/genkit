@@ -56,27 +56,28 @@ def stamp_operation_action(*, operation: Operation, name: str) -> None:
 
 
 def as_model_operation(operation: Operation, *, name: str, status: StatusName) -> Operation[ModelResponse]:
-    """The same handle as an ``Operation[ModelResponse]``, with ``output`` validated.
+    """The same handle as an ``Operation[ModelResponse]``, with every field validated.
 
-    A model fn may return a plain ``Operation`` or set ``op.output = {...}``,
-    which skips validation; both are converted here. ``status`` says whose
-    mistake a bad output is: INTERNAL for what a model fn returned,
-    INVALID_ARGUMENT for a handle the caller passed in.
+    A model fn may return a plain ``Operation`` or assign ``op.output = {...}``
+    or ``op.error = ...``, which skips validation, so the handle is always
+    rebuilt. Nested model instances are not revalidated, so this is cheap.
+    ``status`` says whose mistake a bad field is: INTERNAL (reason
+    INVALID_OUTPUT) for what a model fn returned, INVALID_ARGUMENT (reason
+    INVALID_INPUT) for a handle the caller passed in.
 
     Raises:
-        GenkitError: ``status`` when ``output`` isn't a ModelResponse.
+        GenkitError: ``status`` naming the first field that fails.
     """
-    output: object = operation.output
-    # Assignment skips validation, so an Operation[ModelResponse] can still hold a dict.
-    if type(operation) is Operation[ModelResponse] and (output is None or isinstance(output, ModelResponse)):
-        return operation
     fields = {field: getattr(operation, field) for field in operation.model_fields_set}
     try:
-        return Operation[ModelResponse](**fields)
+        return Operation[ModelResponse].model_validate(fields)
     except ValidationError as e:
         raise GenkitError(
             status=status,
-            message=f"'{name}': Operation.output must be a ModelResponse, got {type(output).__name__}.",
+            message=f"'{name}': invalid Operation: {_first_validation_error(e)}",
+            reason=RuntimeErrorReason.INVALID_INPUT
+            if status == 'INVALID_ARGUMENT'
+            else RuntimeErrorReason.INVALID_OUTPUT,
         ) from e
 
 
@@ -494,41 +495,45 @@ def _first_validation_error(error: ValidationError) -> str:
     return f'{loc}: {first["msg"]}{more}'
 
 
-def require_operation(*, value: object) -> Operation:
+def require_operation(*, value: object) -> Operation[ModelResponse]:
     """A poll handle: a live Operation, or the dict a stored one dumped to.
 
-    A dict is validated as strictly as the check/cancel action input
-    (``extra='forbid'``), so a typo'd key like ``Done`` fails here with the
-    field named instead of loading as ``done=None``.
+    Either is validated as an ``Operation[ModelResponse]`` as strictly as the
+    check/cancel action input (``extra='forbid'``), so a typo'd key like
+    ``Done`` or a bad ``output`` fails here with the field named, before any
+    action runs. Background models built from plain Actions get the same
+    check.
     """
-    if isinstance(value, Operation):
-        return value
     if isinstance(value, ModelResponse):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='got ModelResponse; pass response.operation',
             reason=RuntimeErrorReason.INVALID_INPUT,
         )
-    if isinstance(value, Mapping):
+    if isinstance(value, Operation):
+        fields: dict[str, object] = {field: getattr(value, field) for field in value.model_fields_set}
+    elif isinstance(value, Mapping):
         if 'id' not in value and not _MODEL_RESPONSE_KEYS.isdisjoint(value):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message='got a ModelResponse dump; pass response.operation',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        try:
-            return Operation.model_validate(dict(value))
-        except ValidationError as e:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'invalid Operation: {_first_validation_error(e)}',
-                reason=RuntimeErrorReason.INVALID_INPUT,
-            ) from e
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'got {type(value).__name__}, expected Operation',
-        reason=RuntimeErrorReason.INVALID_INPUT,
-    )
+        fields = dict(value)
+    else:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'got {type(value).__name__}, expected Operation',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        )
+    try:
+        return Operation[ModelResponse].model_validate(fields)
+    except ValidationError as e:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'invalid Operation: {_first_validation_error(e)}',
+            reason=RuntimeErrorReason.INVALID_INPUT,
+        ) from e
 
 
 async def resolve_operation_model(
@@ -587,7 +592,7 @@ async def check_operation(
         GenkitError: If the handle is not an Operation or a dict that
             validates as one, is missing action, or the action is not found.
     """
-    # Validate a stored dict once; the action only ever sees an Operation.
+    # Validate the handle, output included, before any action span opens.
     operation = require_operation(value=operation)
     bg_model = await resolve_operation_model(registry, operation)
     return await bg_model.check(
