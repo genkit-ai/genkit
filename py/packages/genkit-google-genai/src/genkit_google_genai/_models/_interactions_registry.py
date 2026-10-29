@@ -61,7 +61,7 @@ LYRIA_INFO = ModelInfo(
 
 
 # Quote autocomplete needs a Literal, so this alias is the Lyria catalog.
-# ``lyria_model`` takes ``KnownLyria | str`` so unlisted ids still work.
+# ``lyria`` takes ``KnownLyria | str`` so unlisted ids still work.
 KnownLyria: TypeAlias = Literal[
     'lyria-3-clip-preview',
     'lyria-3-pro-preview',

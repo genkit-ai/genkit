@@ -31,6 +31,7 @@ from genkit._core._typing import (
     EvaluatorRequest,
     EvaluatorResponse,
     FinishReason,
+    MiddlewareRef,
     ModelInfo,
     Operation,
     Role,
@@ -46,7 +47,7 @@ from genkit.evaluator import (
     ScoreDetails,
     ScoreStatus,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelContext
 from genkit.testing import (
     EchoModel,
@@ -1028,12 +1029,12 @@ async def test_generate_with_middleware() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='pre_mw')
-    class PreMiddleware(BaseMiddleware):
+    class PreMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1048,12 +1049,12 @@ async def test_generate_with_middleware() -> None:
             )
 
     @ai.middleware(name='post_mw')
-    class PostMiddleware(BaseMiddleware):
+    class PostMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             resp: ModelResponse = await next_fn(params, ctx)
             assert resp.message is not None
@@ -1068,7 +1069,7 @@ async def test_generate_with_middleware() -> None:
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
+        use=cast(Any, [MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')]),
     )
 
     assert response.text == want
@@ -1076,7 +1077,7 @@ async def test_generate_with_middleware() -> None:
     stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
+        use=cast(Any, [MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')]),
     )
 
     assert (await stream_result.response).text == want
@@ -1090,12 +1091,12 @@ async def test_generate_passes_through_current_action_context() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1104,7 +1105,7 @@ async def test_generate_passes_through_current_action_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1116,7 +1117,7 @@ async def test_generate_passes_through_current_action_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[MiddlewareRef(name='inject_ctx')],
+            use=cast(Any, [MiddlewareRef(name='inject_ctx')]),
         )
 
     action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
@@ -1133,12 +1134,12 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1147,7 +1148,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1159,7 +1160,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[MiddlewareRef(name='inject_ctx')],
+            use=cast(Any, [MiddlewareRef(name='inject_ctx')]),
             context={'bar': 'baz'},
         )
 
@@ -1176,12 +1177,12 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
     define_scripted_model(ai)
     define_echo_model(ai)
 
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1190,7 +1191,7 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -2308,12 +2309,12 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
     _define_echo_request_tool(ai)
 
     @ai.middleware(name='raising_mw')
-    class RaisingMiddleware(BaseMiddleware):
+    class RaisingMiddleware(Middleware):
         async def wrap_generate(
             self,
             params: Any,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[Any, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[Any, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             raise ValueError('hook exploded')
 
@@ -2321,7 +2322,7 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
         model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
-        use=[MiddlewareRef(name='raising_mw')],
+        use=cast(Any, [MiddlewareRef(name='raising_mw')]),
         **_echo_request_kwargs(),
     )
 

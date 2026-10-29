@@ -1691,7 +1691,6 @@ dependencies = [
     { name = "boto3" },
     { name = "botocore" },
     { name = "genkit" },
-    { name = "structlog" },
 ]
 
 [package.metadata]
@@ -1699,7 +1698,6 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.37.24" },
     { name = "botocore", specifier = ">=1.37.24" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]
@@ -1826,7 +1824,6 @@ dependencies = [
     { name = "google-genai" },
     { name = "httpx" },
     { name = "pydantic" },
-    { name = "structlog" },
     { name = "typing-extensions" },
 ]
 
@@ -1836,7 +1833,6 @@ requires-dist = [
     { name = "google-genai", specifier = ">=2.14.0,<3" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.11" },
-    { name = "structlog", specifier = ">=25.2.0" },
     { name = "typing-extensions", specifier = ">=4.2" },
 ]
 
@@ -1875,14 +1871,12 @@ source = { editable = "packages/genkit-ollama" }
 dependencies = [
     { name = "genkit" },
     { name = "ollama" },
-    { name = "structlog" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "ollama", specifier = ">=0.5.3,<1.0" },
-    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]

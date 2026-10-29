@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import genkit.plugin_api
 from genkit import Genkit, get_logger
 from genkit._core._action import _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -186,6 +187,13 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         assert recording.last.action_type == 'flowStep'
     finally:
         reset_instrumentation()
+
+
+def test_get_logger_lives_only_in_genkit() -> None:
+    """`get_logger` is app-facing: exported from `genkit`, not from `genkit.plugin_api`."""
+    assert 'get_logger' in genkit.__all__
+    assert 'get_logger' not in genkit.plugin_api.__all__
+    assert not hasattr(genkit.plugin_api, 'get_logger')
 
 
 @pytest.mark.asyncio

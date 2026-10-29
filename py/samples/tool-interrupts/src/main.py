@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from genkit import Genkit, Interrupt, ToolContext
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
 class TransferRequest(BaseModel):

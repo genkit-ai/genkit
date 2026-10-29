@@ -17,11 +17,11 @@
 """Config classes expose Genkit types only, and still send what the SDK types sent.
 
 Enum fields are Literals of the google-genai enum values and nested messages
-are Genkit mirrors. These tests pin the Literals to the installed SDK and check
-the values that need conversion (bytes, datetimes) on the HTTP body.
+are flat fields. These tests check that no google-genai class leaks into a
+config annotation or schema, and that values needing conversion (datetimes,
+enum strings) reach the HTTP body.
 """
 
-import enum
 import json
 import types
 from collections.abc import Iterator
@@ -30,7 +30,6 @@ from unittest.mock import patch
 
 import pytest
 from genkit_google_genai import GeminiConfig, GeminiImageConfig, GeminiTtsConfig, GemmaConfig, VeoConfig, VertexAI
-from genkit_google_genai._models import _gemini, _veo
 from google.auth.credentials import AnonymousCredentials
 from google.genai import _api_client, types as genai_types
 from pydantic import BaseModel
@@ -40,20 +39,7 @@ from genkit import Genkit
 _PUBLIC_CONFIGS: list[type[BaseModel]] = [GeminiConfig, GeminiTtsConfig, GeminiImageConfig, GemmaConfig, VeoConfig]
 
 
-@pytest.mark.parametrize(
-    ('literal', 'sdk_enum'),
-    [
-        (_gemini.HarmBlockMethod, genai_types.HarmBlockMethod),
-        (_gemini.ProminentPeople, genai_types.ProminentPeople),
-        (_gemini.PhishBlockThreshold, genai_types.PhishBlockThreshold),
-        (_veo.VideoCompressionQuality, genai_types.VideoCompressionQuality),
-        (_veo.ImageResizeMode, genai_types.ImageResizeMode),
-    ],
-    ids=lambda v: getattr(v, '__name__', None),
-)
-def test_config_literal_lists_exactly_the_sdk_enum_values(literal: object, sdk_enum: type[enum.Enum]) -> None:
-    """Each Literal alias equals its google-genai enum's value set, so a new SDK value fails CI."""
-    assert set(get_args(literal)) == {e.value for e in sdk_enum}
+# googlegenai_gemini_test.py pins each Literal to its google-genai enum.
 
 
 def _reachable(annotation: object, seen: set[type]) -> None:
@@ -94,63 +80,12 @@ def test_public_config_schema_defs_are_genkit_classes(config_class: type[BaseMod
     assert defs <= genkit_names
 
 
-def test_tool_options_build_the_sdk_tool() -> None:
-    """A google_search options dict dumps to kwargs genai_types.GoogleSearch accepts unchanged."""
-    config = GeminiConfig.model_validate({
-        'googleSearch': {
-            'excludeDomains': ['spam.example'],
-            'timeRangeFilter': {'startTime': '2024-01-01T00:00:00Z'},
-            'searchTypes': {'webSearch': {}},
-            'blockingConfidence': 'BLOCK_LOW_AND_ABOVE',
-        }
-    })
-
-    dumped = config.model_dump(exclude_none=True)['google_search']
-    tool = genai_types.Tool(google_search=genai_types.GoogleSearch(**dumped))
-
-    assert tool.google_search == genai_types.GoogleSearch.model_validate({
-        'excludeDomains': ['spam.example'],
-        'timeRangeFilter': {'startTime': '2024-01-01T00:00:00Z'},
-        'searchTypes': {'webSearch': {}},
-        'blockingConfidence': 'BLOCK_LOW_AND_ABOVE',
-    })
-
-
-@pytest.mark.parametrize(
-    'replicated',
-    [
-        {'voiceSampleAudio': 'YWJj', 'consentAudio': 'ZGVm'},
-        {'voice_sample_audio': b'abc', 'consent_audio': b'def'},
-    ],
-    ids=['base64-str', 'raw-bytes'],
-)
-def test_replicated_voice_audio_decodes_like_the_sdk(replicated: dict[str, Any]) -> None:
-    """Base64 strings decode once and raw bytes pass through, matching genai_types.ReplicatedVoiceConfig."""
-    config = GeminiTtsConfig.model_validate({'speechConfig': {'voiceConfig': {'replicatedVoiceConfig': replicated}}})
-
-    dumped = config.model_dump(exclude_none=True)['speech_config']
-    sent = genai_types.SpeechConfig(**dumped).voice_config
-    assert sent is not None
-
-    assert sent.replicated_voice_config == genai_types.ReplicatedVoiceConfig.model_validate(replicated)
-    assert sent.replicated_voice_config is not None
-    assert sent.replicated_voice_config.voice_sample_audio == b'abc'
-
-
-def test_replicated_voice_audio_json_round_trip() -> None:
-    """JSON input decodes base64 and JSON output re-encodes it."""
-    voice = _gemini.ReplicatedVoiceConfig.model_validate_json('{"voiceSampleAudio": "YWJj"}')
-
-    assert voice.voice_sample_audio == b'abc'
-    assert voice.model_dump(mode='json', by_alias=True, exclude_none=True) == {'voiceSampleAudio': 'YWJj'}
-
-
 def test_sdk_enum_member_still_validates_as_its_literal() -> None:
     """A google-genai enum member passed at runtime is stored as its plain string value."""
-    image = _gemini.ImageConfig.model_validate({'prominent_people': genai_types.ProminentPeople.BLOCK_PROMINENT_PEOPLE})
+    config = GeminiImageConfig.model_validate({'prominent_people': genai_types.ProminentPeople.BLOCK_PROMINENT_PEOPLE})
 
-    assert image.prominent_people == 'BLOCK_PROMINENT_PEOPLE'
-    assert type(image.prominent_people) is str
+    assert config.prominent_people == 'BLOCK_PROMINENT_PEOPLE'
+    assert type(config.prominent_people) is str
 
 
 # -- on the wire ---------------------------------------------------------------
@@ -182,15 +117,15 @@ def _vertexai() -> Genkit:
 
 @pytest.mark.asyncio
 async def test_generate_google_search_time_range_reaches_request(sent_bodies: list[dict[str, Any]]) -> None:
-    """`timeRangeFilter` with an ISO start time is sent as the SDK sends an Interval."""
+    """`google_search_start_time` / `_end_time` as ISO strings are sent as the SDK sends an Interval."""
     await _vertexai().generate(
         model='vertexai/gemini-2.5-flash',
         prompt='hi',
         config={
-            'google_search': {
-                'exclude_domains': ['spam.example'],
-                'time_range_filter': {'start_time': '2024-01-01T00:00:00Z'},
-            }
+            'google_search': True,
+            'google_search_exclude_domains': ['spam.example'],
+            'google_search_start_time': '2024-01-01T00:00:00Z',
+            'google_search_end_time': '2024-02-01T00:00:00Z',
         },
     )
 
@@ -199,25 +134,10 @@ async def test_generate_google_search_time_range_reaches_request(sent_bodies: li
     [tool] = sent_bodies[-1]['tools']
     exclude_domains, time_range = tool['googleSearch'].values()
     assert exclude_domains == ['spam.example']
-    [start_time] = time_range.values()
-    assert start_time.startswith('2024-01-01T00:00:00')
-
-
-@pytest.mark.asyncio
-async def test_generate_tts_replicated_voice_sends_audio_base64_once(sent_bodies: list[dict[str, Any]]) -> None:
-    """`voiceSampleAudio='YWJj'` goes out as 'YWJj', not base64 of the base64 text."""
-    await _vertexai().generate(
-        model='vertexai/gemini-2.5-flash-preview-tts',
-        prompt='hi',
-        config={
-            'speechConfig': {
-                'voiceConfig': {'replicatedVoiceConfig': {'voiceSampleAudio': 'YWJj', 'mimeType': 'audio/wav'}}
-            }
-        },
-    )
-
-    voice = sent_bodies[-1]['generationConfig']['speechConfig']['voiceConfig']['replicatedVoiceConfig']
-    assert voice['voiceSampleAudio'] == 'YWJj'
+    assert sorted(time_range.values()) == [
+        '2024-01-01T00:00:00+00:00',
+        '2024-02-01T00:00:00+00:00',
+    ]
 
 
 @pytest.mark.asyncio

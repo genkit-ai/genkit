@@ -25,7 +25,7 @@ from genkit.web import RequestData
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 

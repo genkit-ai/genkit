@@ -23,7 +23,7 @@ Example:
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
 
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
     @ai.flow()
     async def my_flow(prompt: str) -> str:
@@ -46,7 +46,6 @@ from genkit._ai._tools import (
     tool,
 )
 from genkit._core._action import FlowContext, StreamResponse
-from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._flow import Flow
 from genkit._core._logger import get_logger
@@ -99,9 +98,9 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
-    'get_logger',
-    # Custom output formats and dynamic providers
+    # Custom output formats
     'FormatDef',
     'FormatterConfig',
-    'DynamicActionProvider',
+    # Log lines that reach the Dev UI trace panel
+    'get_logger',
 ]

@@ -58,10 +58,10 @@ from genkit import (
 )
 from genkit._ai._tools import run_tool_after_restart
 from genkit._core._action import Action
+from genkit._core._telemetry._http import DirectHttpInstrumentation
 from genkit.model import ModelContext, ModelRequest, ModelUsage
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
-    DirectHttpInstrumentation,
     configure_instrumentation,
     is_instrumented_by,
     reset_instrumentation,

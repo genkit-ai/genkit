@@ -1,12 +1,13 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Internal logger for genkit core. Not part of public API."""
+"""Genkit logging. ``get_logger`` is public via ``genkit.plugin_api``; the rest is internal."""
 
 from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 import structlog
@@ -135,9 +136,13 @@ _EMIT_LEVELS: dict[str, int] = {
     'warn': logging.WARNING,
     'error': logging.ERROR,
     'critical': logging.CRITICAL,
+    'fatal': logging.CRITICAL,
     'exception': logging.ERROR,
     'msg': logging.INFO,
 }
+
+# structlog's async twins: ``ainfo``, ``adebug``, ``afatal``, ...
+_ASYNC_EMIT_LEVELS: dict[str, int] = {f'a{name}': level for name, level in _EMIT_LEVELS.items()}
 
 
 class ExportTee:
@@ -157,6 +162,10 @@ class ExportTee:
     def unbind(self, *keys: str) -> ExportTee:
         kept = {k: v for k, v in self._attrs.items() if k not in keys}
         return ExportTee(self._bound.unbind(*keys), attrs=kept)
+
+    def try_unbind(self, *keys: str) -> ExportTee:
+        kept = {k: v for k, v in self._attrs.items() if k not in keys}
+        return ExportTee(self._bound.try_unbind(*keys), attrs=kept)
 
     def new(self, **new_values: object) -> ExportTee:
         return ExportTee(self._bound.new(**new_values), attrs=dict(new_values))
@@ -190,6 +199,23 @@ class ExportTee:
                 return target(level, event, *args, **kw)
 
             return emit_log
+        if name == 'alog' and callable(target):
+            alog = cast(Callable[..., Awaitable[object]], target)
+
+            async def aemit_log(level: int, event: str, *args: object, **kw: object) -> object:
+                self._emit(level, event, args, kw)
+                return await alog(level, event, *args, **kw)
+
+            return aemit_log
+        if name in _ASYNC_EMIT_LEVELS and callable(target):
+            aemit_level = _ASYNC_EMIT_LEVELS[name]
+            amethod = cast(Callable[..., Awaitable[object]], target)
+
+            async def aemit_then(event: str, *args: object, **kw: object) -> object:
+                self._emit(aemit_level, event, args, kw)
+                return await amethod(event, *args, **kw)
+
+            return aemit_then
         if name not in _EMIT_LEVELS or not callable(target):
             return target
         emit_level = _EMIT_LEVELS[name]
@@ -212,7 +238,33 @@ def _interpolate_event(event: str, args: tuple[object, ...]) -> str:
 
 
 def get_logger(name: str | None = None) -> FilteringBoundLogger:
-    """Return a structlog bound logger that also feeds the Dev UI log sink."""
+    """Return a structlog logger whose lines also reach the Dev UI trace panel.
+
+    Same calls and kwargs as ``structlog.get_logger``. Under ``genkit start``,
+    each line is also exported to the Dev UI with the active trace and span IDs.
+
+    Example:
+        ```python
+        from genkit import Genkit, get_logger
+
+        # 1. Create a module logger
+        ai = Genkit()
+        logger = get_logger(__name__)
+
+
+        # 2. Log inside a flow; lines attach to the flow's trace
+        @ai.flow()
+        async def lookup_menu(restaurant_id: str) -> int:
+            logger.info('menu lookup', restaurant_id=restaurant_id, items=12)
+            # => console: menu lookup  restaurant_id=r-42 items=12
+            # => Dev UI:  same line, attached to the lookup_menu trace
+
+            logger.debug('cache miss', restaurant_id=restaurant_id)
+            # => console: nothing unless GENKIT_LOG=debug
+            # => Dev UI:  cache miss, still exported under `genkit start`
+            return 12
+        ```
+    """
     return cast(FilteringBoundLogger, ExportTee(structlog.get_logger(name)))
 
 

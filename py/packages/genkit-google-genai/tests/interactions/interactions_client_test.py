@@ -38,7 +38,7 @@ from genkit_google_genai._interactions._options import ClientOptions
 from google.genai.interactions import Interaction
 
 from genkit import GenkitError
-from genkit.plugin_api import GENKIT_CLIENT_HEADER
+from genkit.plugin_api import GENKIT_USER_AGENT
 from genkit.web import error_body, error_status
 
 
@@ -68,7 +68,7 @@ def test_headers_set_api_revision_and_strip_reserved_custom() -> None:
     built = httpx.Headers(result)
     assert built['Api-Revision'] == API_REVISION
     assert built['x-goog-api-key'] == 'k'
-    assert built['x-goog-api-client'] == GENKIT_CLIENT_HEADER
+    assert built['x-goog-api-client'] == GENKIT_USER_AGENT
     assert built['x-custom'] == '1'
 
 

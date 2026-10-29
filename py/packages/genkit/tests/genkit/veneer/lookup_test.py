@@ -11,11 +11,12 @@ from collections.abc import Awaitable, Callable
 import pytest
 
 from genkit import FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit._core._typing import MiddlewareRef
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import GenerateActionOptions, ModelContext, ModelRequest, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 
-NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
+NextModel = Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]]
 
 
 def _answer(text: str) -> ModelResponse:
@@ -223,9 +224,9 @@ async def test_middleware_ctx_ai_is_the_app_on_every_generate_path() -> None:
     _define_answering_model(ai, 'test/echo', 'from echo')
     seen: list[object] = []
 
-    class PeekAi(BaseMiddleware):
+    class PeekAi(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             seen.append(ctx.ai)
             return await next_fn(params, ctx)
@@ -261,9 +262,9 @@ async def test_middleware_ctx_ai_lookup_model_finds_app_model() -> None:
     _define_answering_model(ai, 'test/echo', 'from echo')
     _define_answering_model(ai, 'test/other', 'from other')
 
-    class SwapModel(BaseMiddleware):
+    class SwapModel(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             other = await ctx.ai.lookup_model('test/other')
             assert other is not None
@@ -283,9 +284,9 @@ async def test_middleware_ctx_ai_lookup_value_sees_app_value() -> None:
     ai.define_value(kind='greeting', name='default', value='hello')
     seen: list[object | None] = []
 
-    class ReadValue(BaseMiddleware):
+    class ReadValue(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             seen.append(ctx.ai.lookup_value(kind='greeting', name='default'))
             seen.append(ctx.ai.lookup_value(kind='greeting', name='missing'))

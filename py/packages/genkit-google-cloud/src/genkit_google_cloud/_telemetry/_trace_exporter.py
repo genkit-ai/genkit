@@ -22,12 +22,13 @@ for Google Cloud Trace integration.
 
 from collections.abc import Callable, Sequence
 
-import structlog
 from google.api_core import exceptions as core_exceptions, retry as retries
 from google.cloud.trace_v2 import BatchWriteSpansRequest
 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
+
+from genkit import get_logger
 
 from ._adjusting_exporter import AdjustingTraceExporter, RedactedSpan
 from ._constants import (
@@ -38,7 +39,7 @@ from ._constants import (
     TRACE_RETRY_MULTIPLIER,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class GenkitGCPExporter(CloudTraceSpanExporter):

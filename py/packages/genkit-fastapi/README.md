@@ -30,7 +30,7 @@ from genkit import Genkit
 from genkit_fastapi import serve_flow
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 app = FastAPI()
 
 
@@ -62,7 +62,7 @@ from genkit.exp import Genkit
 from genkit_fastapi.exp import serve_agent
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 app = FastAPI()
 
 
@@ -73,7 +73,7 @@ async def get_weather(location: str) -> str:
 
 weather_agent = ai.define_agent(
     name='weatherAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='You are a helpful weather assistant.',
     tools=[get_weather],
 )

@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from genkit import Document, Genkit, Message, Part
 from genkit._core._action import _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext, ModelHookParams
+from genkit._core._middleware import GenerateHookParams, Middleware, MiddlewareContext, ModelHookParams
 from genkit._core._model import ModelRequest, ModelResponse, ModelResponseChunk
 from genkit._core._typing import (
     FinishReason,
@@ -116,12 +116,12 @@ async def test_generate_returns_the_job_without_polling(ai: Genkit) -> None:
     assert checks == []
 
 
-class ReadsMessage(BaseMiddleware):
+class ReadsMessage(Middleware):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         response = await next_fn(params, ctx)
         _ = response.message
@@ -140,12 +140,12 @@ async def test_generate_boxes_before_wrap_model(ai: Genkit) -> None:
     assert response.message is None
 
 
-class DropsOperation(BaseMiddleware):
+class DropsOperation(Middleware):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         resp = await next_fn(params, ctx)
         return ModelResponse(message=resp.message, finish_reason=resp.finish_reason)
@@ -183,12 +183,12 @@ async def test_generate_operation_raises_when_wrap_model_drops_ticket(ai: Genkit
     assert operation_info.value.status == 'FAILED_PRECONDITION'
 
 
-class DropsGenerate(BaseMiddleware):
+class DropsGenerate(Middleware):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         resp = await next_fn(params, ctx)
         return ModelResponse(message=resp.message, finish_reason=resp.finish_reason)
@@ -226,12 +226,12 @@ async def test_generate_operation_raises_when_wrap_generate_drops_ticket(ai: Gen
     assert operation_info.value.status == 'FAILED_PRECONDITION'
 
 
-class RaisesAfterStart(BaseMiddleware):
+class RaisesAfterStart(Middleware):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         await next_fn(params, ctx)
         raise GenkitError(
@@ -260,12 +260,12 @@ async def test_generate_keeps_operation_when_wrap_generate_raises_after_start(ai
     assert response.operation.error.message == 'hook after start'
 
 
-class RaisesAfterStartModel(BaseMiddleware):
+class RaisesAfterStartModel(Middleware):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         await next_fn(params, ctx)
         raise GenkitError(
@@ -305,12 +305,12 @@ async def test_generate_operation_failed_start_is_not_a_clean_start(ai: Genkit) 
     assert raised.value.original_message == 'hook after start'
 
 
-class SwallowsStart(BaseMiddleware):
+class SwallowsStart(Middleware):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         try:
             return await next_fn(params, ctx)
@@ -464,20 +464,20 @@ async def test_generate_operation_raises_when_start_returns_no_ticket(ai: Genkit
     assert exc_info.value.status == 'FAILED_PRECONDITION'
 
 
-class DenyStart(BaseMiddleware):
+class DenyStart(Middleware):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         raise RuntimeError('nope')
 
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         return await next_fn(params, ctx)
 
@@ -927,14 +927,14 @@ class RerouteConfig(BaseModel):
     turn: int | None = None
 
 
-class Reroute(BaseMiddleware[RerouteConfig]):
+class Reroute(Middleware[RerouteConfig]):
     """Tries to swap ``params.options.model``. The door already bound the action."""
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         if self.config.turn is not None and params.iteration != self.config.turn:
             return await next_fn(params, ctx)
@@ -1058,12 +1058,12 @@ async def test_wrap_generate_in_place_model_assignment_keeps_the_named_model(ai:
     register_plain(ai, name='flash', text='from-flash')
     register_plain(ai, name='pro', text='from-pro')
 
-    class InPlace(BaseMiddleware):
+    class InPlace(Middleware):
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             params.options.model = 'pro'
             return await next_fn(params, ctx)
@@ -1285,12 +1285,12 @@ async def test_wrap_generate_on_resume_sees_the_model_message_and_resume(ai: Gen
     register_plain(ai)
     seen: list[dict[str, object]] = []
 
-    class ResumeSpy(BaseMiddleware):
+    class ResumeSpy(Middleware):
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             messages = params.options.messages
             seen.append({
@@ -1315,12 +1315,12 @@ async def test_wrap_generate_on_resume_sees_the_model_message_and_resume(ai: Gen
 async def test_wrap_generate_short_circuit_cannot_skip_a_missing_model(ai: Genkit) -> None:
     """A missing name fails at the door, before a hook can return a cached reply."""
 
-    class ReturnsFlashWithoutNext(BaseMiddleware):
+    class ReturnsFlashWithoutNext(Middleware):
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             return ModelResponse(
                 message=Message(role=Role.MODEL, content=[Part.from_text('FLASH')]),
