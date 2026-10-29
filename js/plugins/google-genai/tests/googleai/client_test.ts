@@ -31,20 +31,18 @@ import {
   generateContent,
   generateContentStream,
   getGoogleAIUrl,
-  imagenPredict,
   listModels,
   veoCheckOperation,
   veoPredict,
 } from '../../src/googleai/client.js';
 import {
   ClientOptions,
+  CreateInteractionRequest,
   EmbedContentRequest,
   EmbedContentResponse,
   GenerateContentRequest,
   GenerateContentResponse,
   GenerateContentStreamResult,
-  ImagenPredictRequest,
-  ImagenPredictResponse,
   Model,
   VeoOperation,
   VeoPredictRequest,
@@ -300,6 +298,37 @@ describe('Google AI Client', () => {
       const headers = fetchSpy.firstCall.args[1].headers;
       assert.strictEqual(headers['X-Custom-Header'], 'test');
       assert.strictEqual(headers['x-goog-api-key'], apiKey);
+    });
+  });
+
+  describe('createInteraction headers', () => {
+    const request: CreateInteractionRequest = {
+      model: 'gemini-flash-latest',
+      input: 'hi',
+    };
+
+    it('sends the Api-Revision header', async () => {
+      mockFetchResponse({ status: 'completed', steps: [] });
+      await createInteraction(apiKey, request);
+      const headers = fetchSpy.lastCall.args[1].headers;
+      assert.strictEqual(headers['Api-Revision'], '2026-05-20');
+    });
+
+    it('does not let custom headers in any case change protected headers', async () => {
+      mockFetchResponse({ status: 'completed', steps: [] });
+      await createInteraction(apiKey, request, {
+        customHeaders: {
+          'api-revision': '2025-01-01',
+          'X-Goog-Api-Key': 'other-key',
+          'x-custom': 'a',
+        },
+      });
+
+      // fetch merges case variants of a header, so check the merged value.
+      const headers = new Headers(fetchSpy.lastCall.args[1].headers);
+      assert.strictEqual(headers.get('api-revision'), '2026-05-20');
+      assert.strictEqual(headers.get('x-goog-api-key'), apiKey);
+      assert.strictEqual(headers.get('x-custom'), 'a');
     });
   });
 
@@ -922,64 +951,6 @@ describe('Google AI Client', () => {
         capturedSignal!.aborted,
         true,
         'The passed signal should be aborted after the original controller is aborted'
-      );
-    });
-  });
-
-  describe('imagenPredict', () => {
-    const model = 'imagen-3.0-generate-001';
-    const request: ImagenPredictRequest = {
-      instances: [{ prompt: 'A cat sitting on a mat' }],
-      parameters: { sampleCount: 1 },
-    };
-
-    it('should return ImagenPredictResponse', async () => {
-      const mockResponse: ImagenPredictResponse = {
-        predictions: [
-          { bytesBase64Encoded: 'base64string', mimeType: 'image/png' },
-        ],
-      };
-      mockFetchResponse(mockResponse);
-
-      const result = await imagenPredict(apiKey, model, request);
-      assert.deepStrictEqual(result, mockResponse);
-
-      const expectedUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:predict`;
-      sinon.assert.calledOnceWithExactly(fetchSpy, expectedUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'x-goog-api-client': getGenkitClientHeader(),
-        },
-        redirect: 'manual',
-        body: JSON.stringify(request),
-      });
-    });
-
-    it('should throw on API error', async () => {
-      const errorResponse = { error: { message: 'Imagen failed' } };
-      mockFetchResponse(errorResponse, false, 400, 'Bad Request');
-
-      await assert.rejects(
-        imagenPredict(apiKey, model, request),
-        (err: any) => {
-          assert.strictEqual(err.name, 'GenkitError');
-          assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-          assert.match(
-            err.message,
-            /Error fetching from .* \[400 Bad Request\] Imagen failed/
-          );
-          return true;
-        }
-      );
-    });
-
-    it('should throw on network error', async () => {
-      fetchSpy.rejects(new Error('Network issue'));
-      await assert.rejects(
-        imagenPredict(apiKey, model, request),
-        /Failed to fetch from .* Network issue/
       );
     });
   });

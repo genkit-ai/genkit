@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
 from genkit_google_genai._evaluators._evaluation import VertexAIEvaluationMetricType
@@ -38,7 +39,8 @@ from genkit_google_genai._models._gemini import (
 )
 from google import genai
 from google.auth.credentials import Credentials
-from google.auth.exceptions import DefaultCredentialsError
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.genai.errors import APIError
 from google.genai.types import HttpOptions
 from pydantic import ValidationError
 
@@ -969,3 +971,91 @@ def test_vertexai_positional_project_raises_type_error() -> None:
     """VertexAI('my-project') raises TypeError instead of treating the project as credentials."""
     with pytest.raises(TypeError):
         VertexAI('my-project')  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_googleai_init_rejected_key_is_unauthenticated(googleai_plugin_instance: GoogleAI) -> None:
+    """A bad API key fails the model listing in init with UNAUTHENTICATED, not a raw SDK error."""
+    message = 'API key not valid. Please pass a valid API key.'
+    error_info = {
+        '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+        'reason': 'API_KEY_INVALID',
+        'domain': 'googleapis.com',
+        'metadata': {'service': 'generativelanguage.googleapis.com'},
+    }
+    localized = {'@type': 'type.googleapis.com/google.rpc.LocalizedMessage', 'locale': 'en-US', 'message': message}
+    details = [error_info, localized]
+    rejected = APIError(
+        400, {'error': {'code': 400, 'message': message, 'status': 'INVALID_ARGUMENT', 'details': details}}
+    )
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=rejected)
+    googleai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await googleai_plugin_instance.init()
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is rejected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('failure', 'status'),
+    [
+        (APIError(503, {'error': {'code': 503, 'message': 'overloaded', 'status': 'UNAVAILABLE'}}), 'UNAVAILABLE'),
+        (RefreshError('invalid_grant: Token has been expired or revoked.'), 'UNAUTHENTICATED'),
+        (httpx.ConnectError('[Errno 61] Connection refused'), 'UNAVAILABLE'),
+    ],
+)
+async def test_vertexai_init_classifies_model_listing_failure(
+    vertexai_plugin_instance: VertexAI, failure: Exception, status: str
+) -> None:
+    """Model listing in init maps provider, credential, and connection failures like a generate call."""
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=failure)
+    vertexai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await vertexai_plugin_instance.init()
+
+    assert raised.value.status == status
+    assert raised.value.cause is failure
+    assert raised.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_vertexai_init_listing_unknown_failure_stays_raw(vertexai_plugin_instance: VertexAI) -> None:
+    """A listing failure that is not a provider, credential, or connection error keeps its own type."""
+    boom = RuntimeError('SDK bug')
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=boom)
+    vertexai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(RuntimeError) as raised:
+        await vertexai_plugin_instance.init()
+
+    assert raised.value is boom
+
+
+async def _pager_failing_after(first: Any, failure: BaseException) -> AsyncIterator[Any]:
+    yield first
+    raise failure
+
+
+@pytest.mark.asyncio
+async def test_googleai_init_classifies_failure_while_paging_models(googleai_plugin_instance: GoogleAI) -> None:
+    """An API error the pager raises after the first page is classified too."""
+    first = MagicMock()
+    first.name = 'models/gemini-2.5-flash'
+    first.supported_actions = ['generateContent']
+    denied = APIError(403, {'error': {'code': 403, 'message': 'denied', 'status': 'PERMISSION_DENIED'}})
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=lambda: _pager_failing_after(first, denied))
+    googleai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await googleai_plugin_instance.init()
+
+    assert raised.value.status == 'PERMISSION_DENIED'
+    assert raised.value.cause is denied

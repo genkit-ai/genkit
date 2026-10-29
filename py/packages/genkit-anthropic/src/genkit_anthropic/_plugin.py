@@ -194,8 +194,12 @@ class Anthropic(Plugin):
         else:
             _reject_v1_suffix(os.environ.get('ANTHROPIC_BASE_URL'), source='ANTHROPIC_BASE_URL')
         self._default_api_version: Literal['stable', 'beta'] | None = api_version
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**options))
+        self._options = options
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncAnthropic:
+        return AsyncAnthropic(**self._options)
 
     async def init(self) -> list[Action]:
         """Initialize plugin.

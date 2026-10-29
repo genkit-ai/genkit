@@ -28,10 +28,6 @@ import {
   GeminiTtsConfigSchema,
   GemmaConfigSchema,
 } from '../../src/googleai/gemini.js';
-import {
-  TEST_ONLY as IMAGEN_TEST_ONLY,
-  ImagenConfigSchema,
-} from '../../src/googleai/imagen.js';
 import { googleAI } from '../../src/googleai/index.js';
 import { Model } from '../../src/googleai/types.js';
 import { MISSING_API_KEY_ERROR } from '../../src/googleai/utils.js';
@@ -82,20 +78,19 @@ describe('GoogleAI Plugin', () => {
       }
     });
 
-    it('should register all known Imagen models', async () => {
+    it('should register all hidden Gemini models', async () => {
       const ai = genkit({ plugins: [googleAI()] });
-      for (const modelName in IMAGEN_TEST_ONLY.KNOWN_MODELS) {
+      for (const modelName in GEMINI_TEST_ONLY.HIDDEN_MODELS) {
         const modelPath = `/model/googleai/${modelName}`;
-        const expectedBaseName = `googleai/${modelName}`;
         const model = await ai.registry.lookupAction(modelPath);
         assert.ok(model, `${modelName} should be registered at ${modelPath}`);
-        assert.strictEqual(model?.__action.name, expectedBaseName);
+        assert.strictEqual(model?.__action.name, `googleai/${modelName}`);
       }
     });
 
-    it('should register all known Veo models', async () => {
+    it('should register all known and hidden Veo models', async () => {
       const ai = genkit({ plugins: [googleAI()] });
-      for (const modelName in VEO_TEST_ONLY.KNOWN_MODELS) {
+      for (const modelName in VEO_TEST_ONLY.ALL_MODELS) {
         const modelPath = `/background-model/googleai/${modelName}`;
         const expectedBaseName = `googleai/${modelName}`;
         const model = await ai.registry.lookupAction(modelPath);
@@ -155,8 +150,6 @@ describe('GoogleAI Plugin', () => {
   describe('Resolver via lookupAction', () => {
     const testGeminiModelName = 'gemini-custom-pro';
     const testGeminiModelPath = `/model/googleai/${testGeminiModelName}`;
-    const testImagenModelName = 'imagen-custom';
-    const testImagenModelPath = `/model/googleai/${testImagenModelName}`;
     const testVeoModelName = 'veo-custom';
     const testVeoModelPath = `/background-model/googleai/${testVeoModelName}`;
     const testEmbedderName = 'embedding-custom-001';
@@ -175,19 +168,6 @@ describe('GoogleAI Plugin', () => {
       );
     });
 
-    it('should register a new Imagen model when looked up', async () => {
-      const ai = genkit({ plugins: [googleAI()] });
-      const model = await ai.registry.lookupAction(testImagenModelPath);
-      assert.ok(
-        model,
-        `${testImagenModelName} should be resolvable and registered`
-      );
-      assert.strictEqual(
-        model?.__action.name,
-        `googleai/${testImagenModelName}`
-      );
-    });
-
     it('should register a new Veo model when looked up', async () => {
       const ai = genkit({ plugins: [googleAI()] });
       const model = await ai.registry.lookupAction(testVeoModelPath);
@@ -196,6 +176,17 @@ describe('GoogleAI Plugin', () => {
         `${testVeoModelName} should be resolvable and registered`
       );
       assert.strictEqual(model?.__action.name, `googleai/${testVeoModelName}`);
+    });
+
+    it('should throw a clear error for shut-down Imagen models', async () => {
+      const ai = genkit({ plugins: [googleAI()] });
+      await assert.rejects(
+        ai.generate({
+          model: 'googleai/imagen-4.0-generate-001',
+          prompt: 'a cat',
+        }),
+        /Imagen models on the Gemini API have been shut down\. Use gemini-nano-banana-2\.1/
+      );
     });
 
     it('should register a new Embedder when looked up', async () => {
@@ -285,37 +276,6 @@ describe('GoogleAI Plugin', () => {
       assert.ok(
         modelRef.info?.supports?.multiturn,
         'Gemma model should support multiturn'
-      );
-    });
-
-    it('should return an Imagen model reference with correct schema', () => {
-      const modelRef = googleAI.model('imagen-new-model');
-      assert.strictEqual(
-        modelRef.configSchema,
-        ImagenConfigSchema,
-        'Should have ImagenConfigSchema'
-      );
-    });
-
-    it('should have config values for imagen model', () => {
-      const modelRef = googleAI.model('imagen-new-model', {
-        numberOfImages: 4,
-        aspectRatio: '16:9',
-      });
-      assert.strictEqual(
-        modelRef.configSchema,
-        ImagenConfigSchema,
-        'Should have ImagenConfigSchema'
-      );
-      assert.strictEqual(
-        modelRef.config?.numberOfImages,
-        4,
-        'should have 4 images'
-      );
-      assert.strictEqual(
-        modelRef.config?.aspectRatio,
-        '16:9',
-        'should be 16:9'
       );
     });
 
@@ -485,10 +445,6 @@ describe('GoogleAI Plugin', () => {
           supportedGenerationMethods: ['embedContent'],
         },
         {
-          name: 'models/imagen-4.0-generate-001',
-          supportedGenerationMethods: ['predict'],
-        },
-        {
           name: 'models/veo-3.1-generate-preview',
           supportedGenerationMethods: ['predictLongRunning'],
         },
@@ -508,7 +464,6 @@ describe('GoogleAI Plugin', () => {
         actionNames,
         [
           'googleai/gemini-2.5-pro',
-          'googleai/imagen-4.0-generate-001',
           'googleai/gemini-embedding-001',
           'googleai/veo-3.1-generate-preview',
         ].sort()
@@ -523,11 +478,6 @@ describe('GoogleAI Plugin', () => {
         (a) => a.name === 'googleai/gemini-embedding-001'
       );
       assert.strictEqual(embedderAction?.actionType, 'embedder');
-
-      const imagenAction = actions.find(
-        (a) => a.name === 'googleai/imagen-4.0-generate-001'
-      );
-      assert.strictEqual(imagenAction?.actionType, 'model');
 
       const veoAction = actions.find(
         (a) => a.name === 'googleai/veo-3.1-generate-preview'
@@ -544,11 +494,6 @@ describe('GoogleAI Plugin', () => {
         {
           name: 'models/gemini-pro-deprecated',
           supportedGenerationMethods: ['generateContent'],
-          description: 'This model is deprecated.',
-        },
-        {
-          name: 'models/imagen-deprecated',
-          supportedGenerationMethods: ['predict'],
           description: 'This model is deprecated.',
         },
         {

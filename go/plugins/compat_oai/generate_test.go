@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -727,6 +728,80 @@ func TestWithMessagesPreservesReasoningContent(t *testing.T) {
 	}
 	if got := message["content"]; got != "Final answer" {
 		t.Errorf("content = %v, want %q", got, "Final answer")
+	}
+}
+
+// TestReasoningContentRoundTrip covers #6761: DeepSeek often answers a tool
+// call with an empty reasoning_content, and rejects a replayed tool call it
+// cannot match to its own reply unless the turn carries that field. An empty
+// field has to come back as an empty reasoning part and go out again, while a
+// reply with no reasoning field must not gain one, since not every provider
+// accepts it.
+func TestReasoningContentRoundTrip(t *testing.T) {
+	const toolCall = `"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":"{\"filePath\":\"notes.txt\"}"}}]`
+	streamBody := func(reasoning string) string {
+		return `data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":` + reasoning + `},"finish_reason":null}]}
+
+data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"content":"Reading it.","reasoning_content":null},"finish_reason":null}]}
+
+data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{` + toolCall + `},"finish_reason":null}]}
+
+data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+
+`
+	}
+	completeBody := func(reasoning string) string {
+		return `{"id":"1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"Reading it.","reasoning_content":` + reasoning + `,` + toolCall + `},"finish_reason":"tool_calls"}]}`
+	}
+
+	for _, tc := range []struct {
+		name          string
+		contentType   string
+		body          string
+		stream        bool
+		wantReasoning bool
+	}{
+		{"streaming empty", "text/event-stream", streamBody(`""`), true, true},
+		{"complete empty", "application/json", completeBody(`""`), false, true},
+		{"streaming null", "text/event-stream", streamBody(`null`), true, false},
+		{"complete null", "application/json", completeBody(`null`), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var handleChunk func(context.Context, *ai.ModelResponseChunk) error
+			if tc.stream {
+				handleChunk = func(context.Context, *ai.ModelResponseChunk) error { return nil }
+			}
+			user := ai.NewUserTextMessage("Read notes.txt")
+			req := &ai.ModelRequest{Messages: []*ai.Message{user}}
+			resp, err := newStubGen(t, tc.contentType, tc.body).
+				WithMessages(req.Messages).
+				Generate(context.Background(), req, handleChunk)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if got := slices.ContainsFunc(resp.Message.Content, (*ai.Part).IsReasoning); got != tc.wantReasoning {
+				t.Fatalf("response has a reasoning part = %v, want %v (content %#v)", got, tc.wantReasoning, resp.Message.Content)
+			}
+
+			g := newGen().WithMessages([]*ai.Message{user, resp.Message})
+			if g.err != nil {
+				t.Fatalf("WithMessages() error = %v", g.err)
+			}
+			data, err := json.Marshal(g.messages[1])
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			var message map[string]any
+			if err := json.Unmarshal(data, &message); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			got, ok := message["reasoning_content"]
+			if ok != tc.wantReasoning || (ok && got != "") {
+				t.Errorf("replayed assistant turn = %s, want reasoning_content present = %v and empty", data, tc.wantReasoning)
+			}
+		})
 	}
 }
 

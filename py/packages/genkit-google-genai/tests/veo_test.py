@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from genkit_google_genai._constants import multi_regional_base_url
 from genkit_google_genai._models._veo import (
-    KnownVeo,
+    KnownGoogleAIVeo,
+    KnownVertexAIVeo,
     VeoConfig,
     VeoModel,
     _from_veo_operation,
@@ -87,10 +88,10 @@ class TestIsVeoModel:
         assert is_veo_model('devotional-hymn') is False
 
 
-class TestKnownVeo:
-    """Every id in the ``KnownVeo`` catalog routes to the Veo family."""
+class TestKnownVeoIds:
+    """Every id in both backends' Veo catalogs routes to the Veo family."""
 
-    @pytest.mark.parametrize('version', get_args(KnownVeo))
+    @pytest.mark.parametrize('version', get_args(KnownGoogleAIVeo) + get_args(KnownVertexAIVeo))
     def test_known_ids_are_veo_models(self, version: str) -> None:
         """Each autocomplete id is recognized as a Veo model."""
         assert is_veo_model(version) is True

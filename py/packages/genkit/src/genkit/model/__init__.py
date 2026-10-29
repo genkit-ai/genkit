@@ -18,11 +18,11 @@
 
 from genkit._ai._generate import StreamingCallbackError
 from genkit._ai._model import (
-    ModelContext,
     model,
     model_action_metadata,
     model_ref,
 )
+from genkit._core._action import ModelContext
 from genkit._core._background import BackgroundAction, background_model
 from genkit._core._model import (
     ABNORMAL_FINISH_REASONS,
