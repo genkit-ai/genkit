@@ -18,12 +18,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from genkit import Genkit, get_logger
-from genkit._core._action import ActionRunContext, _action_context
+from genkit._core._action import _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import Operation
 from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
+from genkit.model import ModelContext
 from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
@@ -278,10 +279,10 @@ async def test_check_operation_round_trips_persisted_dump() -> None:
     """model_dump(by_alias=True) -> model_validate is the supported save/reload path."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-rt', start=start, check=check)
@@ -339,13 +340,13 @@ async def test_cancel_operation_round_trips_persisted_dump() -> None:
     """Cancel accepts the same save/reload path as check."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
-    async def cancel(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-cancel-rt', start=start, check=check, cancel=cancel)
@@ -377,10 +378,10 @@ async def test_cancel_operation_dump_is_invalid_argument() -> None:
 async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
     """The wrapper's UNIMPLEMENTED propagates through the veneer unchanged."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -398,10 +399,10 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
 async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
     """A real no-cancel BackgroundAction raises UNIMPLEMENTED from .cancel."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -419,10 +420,10 @@ async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
 async def test_background_action_check_rejects_non_operation() -> None:
     """BackgroundAction.check uses the same require_operation gate as the veneer."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -447,10 +448,10 @@ async def test_background_action_check_rejects_non_operation() -> None:
 async def test_background_action_cancel_rejects_non_operation() -> None:
     """A dump must not AttributeError on .action before UNIMPLEMENTED."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -469,7 +470,7 @@ async def test_current_context() -> None:
 
     context: dict[str, object] = {'auth': {'uid': '123'}}
 
-    # Simulate being inside an action run using ActionRunContext internal mechanism
+    # Simulate being inside an action run using ModelContext internal mechanism
     token = _action_context.set(context)
     try:
         assert Genkit.current_context() == context

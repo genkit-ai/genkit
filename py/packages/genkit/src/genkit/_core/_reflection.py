@@ -142,8 +142,8 @@ class ActionRunner:
                 else None
             )
             # A bidi action's fn already gives a single-turn view of a connection
-            # when driven through run() (seed one input, stream chunks, return the
-            # output), so the HTTP path just needs run(). The only bidi-specific
+            # when driven through _run() (seed one input, stream chunks, return the
+            # output), so the HTTP path just needs _run(). The only bidi-specific
             # step is normalizing the agent payload: minting a session id for a
             # server-store agent and defaulting an absent turn to an empty input.
             input_val = self.payload.get('input')
@@ -155,7 +155,7 @@ class ActionRunner:
                 else:
                     input_val = AgentInput.model_validate(as_agent_input_dict(input_val))
 
-            output = await self.action.run(
+            output = await self.action._run(
                 input=input_from_json(input_val),
                 on_chunk=on_chunk,
                 context=self.payload.get('context', {}),

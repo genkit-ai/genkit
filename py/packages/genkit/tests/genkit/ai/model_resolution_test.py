@@ -31,12 +31,11 @@ from genkit._ai._model import (
     resolve_model_name,
     resolve_model_ref,
 )
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import EmbedRequest, Message, ModelRequest, ModelResponse, Part
 from genkit._core._registry import Registry
 from genkit._core._typing import EmbedResponse, Operation, Role
-from genkit.model import model_ref
+from genkit.model import ModelContext, model_ref
 
 
 class CustomConfig(BaseModel):
@@ -359,7 +358,7 @@ def test_resolve_model_arg_rejects_non_name_explicit_model() -> None:
         resolve_model_arg(model=123, registry=registry)
 
 
-async def _echo_fn(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+async def _echo_fn(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
     return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('echo')]))
 
 
@@ -416,10 +415,10 @@ def test_resolve_model_arg_names_the_kind_of_a_non_model_action() -> None:
 def test_resolve_model_arg_points_a_background_model_at_generate_operation() -> None:
     """A define_background_model result says to use generate_operation."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='op', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -470,7 +469,7 @@ def test_resolve_call_model_explicit_string_ignores_default_ref_config() -> None
     assert resolved.config_schema is None
 
 
-async def _unused_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+async def _unused_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
     raise AssertionError('model fn should not run')
 
 

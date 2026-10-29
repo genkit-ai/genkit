@@ -28,8 +28,8 @@ from genkit_amazon_bedrock._converters import (
 )
 from genkit_amazon_bedrock._stream import consume_converse_stream
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, Part, Role
-from genkit.model import ModelRequest, ToolDefinition
+from genkit import FinishReason, GenkitError, Message, Part, Role
+from genkit.model import ModelContext, ModelRequest, ToolDefinition
 
 pytestmark = pytest.mark.asyncio
 
@@ -79,9 +79,9 @@ def metadata(usage: dict[str, Any]) -> dict[str, Any]:
     return {'metadata': {'usage': usage}}
 
 
-def streaming_ctx() -> tuple[ActionRunContext, list[Any]]:
+def streaming_ctx() -> tuple[ModelContext, list[Any]]:
     chunks: list[Any] = []
-    return ActionRunContext(streaming_callback=chunks.append), chunks
+    return ModelContext(streaming_callback=chunks.append), chunks
 
 
 async def test_text_deltas_stream_and_accumulate() -> None:
@@ -334,7 +334,7 @@ async def test_non_streaming_context_sends_no_chunks() -> None:
     response = await consume_converse_stream(
         events(text_delta(0, 'hi'), tool_start(1, 'call_1', 'noop'), tool_delta(1, '{}'), tool_stop(1)),
         text_request(),
-        ActionRunContext(),
+        ModelContext(),
     )
 
     assert response.message is not None
@@ -349,5 +349,5 @@ async def test_chunk_callback_error_aborts_the_stream() -> None:
         await consume_converse_stream(
             events(text_delta(0, 'hi')),
             text_request(),
-            ActionRunContext(streaming_callback=explode),
+            ModelContext(streaming_callback=explode),
         )

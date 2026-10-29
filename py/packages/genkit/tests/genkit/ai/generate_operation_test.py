@@ -50,7 +50,6 @@ from typing import Any
 import pytest
 
 from genkit import Document, Genkit, Message, ModelResponse, Part
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest
 from genkit._core._typing import (
@@ -59,6 +58,7 @@ from genkit._core._typing import (
     Role,
     Supports,
 )
+from genkit.model import ModelContext
 
 
 @pytest.fixture
@@ -97,7 +97,7 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
     """
 
     # Define a standard model without long_running support
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
@@ -131,7 +131,7 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
     """Test that models without supports info are rejected."""
 
     # Define a model without any ModelInfo
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
@@ -152,7 +152,7 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
 def test_define_model_rejects_long_running(ai: Genkit) -> None:
     """A chat model cannot advertise a background job. Use define_background_model."""
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(role=Role.MODEL, content=[Part.from_text('Hello')]),
         )
@@ -171,10 +171,10 @@ def test_define_model_rejects_long_running(ai: Genkit) -> None:
 async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
     """Test successful generate_operation with a background model."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='test-operation-123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lro-model', start=start, check=check)
@@ -191,10 +191,10 @@ async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
 async def test_generate_operation_with_default_model() -> None:
     """Test generate_operation uses default model when set."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='default-op-456', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai_with_default = Genkit(model='default-lro-model')
@@ -211,12 +211,12 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
     """Test that generate_operation passes all options to generate()."""
     captured_request: ModelRequest | None = None
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         nonlocal captured_request
         captured_request = request
         return Operation(id='opt-test-789', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='options-test-model', start=start, check=check)
@@ -257,10 +257,10 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
 async def test_generate_operation_rejects_tool_loop_and_output_args(ai: Genkit, arg: str) -> None:
     """A background start runs no tool loop and check_operation parses no output, so these are not parameters."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='op', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='veo-like', start=start, check=check)
@@ -275,12 +275,12 @@ async def test_generate_operation_forwards_docs(ai: Genkit) -> None:
     """Docs reach a background start as context on the request."""
     captured: ModelRequest | None = None
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         nonlocal captured
         captured = request
         return Operation(id='op-docs', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='research-like', start=start, check=check)
