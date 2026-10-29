@@ -1,6 +1,6 @@
 # Types
 
-Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, genkit.evaluator, genkit.telemetry, and genkit.exp.agent.
+Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, genkit.telemetry, and genkit.exp.agent.
 
 ## genkit
 
@@ -121,22 +121,6 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.plugin_api.ActionKind
 
 ::: genkit.plugin_api.StatusName
-
-## genkit.evaluator
-
-::: genkit.evaluator.BaseDataPoint
-
-::: genkit.evaluator.EvaluatorRequest
-
-::: genkit.evaluator.EvaluatorResponse
-
-::: genkit.evaluator.Score
-
-::: genkit.evaluator.ScoreDetails
-
-::: genkit.evaluator.ScoreStatus
-
-::: genkit.evaluator.EvaluatorRef
 
 ## genkit.telemetry
 

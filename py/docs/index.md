@@ -141,26 +141,6 @@
 
 ::: genkit.plugin_api.is_dev_environment
 
-## genkit.evaluator
-
-::: genkit.evaluator.BaseDataPoint
-
-::: genkit.evaluator.EvaluatorRequest
-
-::: genkit.evaluator.EvaluatorResponse
-
-::: genkit.evaluator.Score
-
-::: genkit.evaluator.ScoreDetails
-
-::: genkit.evaluator.ScoreStatus
-
-::: genkit.evaluator.Evaluator
-
-::: genkit.evaluator.BatchEvaluator
-
-::: genkit.evaluator.EvaluatorRef
-
 ## genkit.telemetry
 
 ::: genkit.telemetry.run_in_new_span

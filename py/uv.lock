@@ -17,7 +17,6 @@ members = [
     "basic-flows",
     "context",
     "django-hello",
-    "evaluators",
     "fastapi-bugbot",
     "flask-hello",
     "gemini-code-execution",
@@ -27,7 +26,6 @@ members = [
     "genkit-amazon-bedrock",
     "genkit-anthropic",
     "genkit-django",
-    "genkit-evaluators",
     "genkit-fastapi",
     "genkit-flask",
     "genkit-google-cloud",
@@ -1367,25 +1365,6 @@ wheels = [
 ]
 
 [[package]]
-name = "evaluators"
-version = "0.1.0"
-source = { editable = "samples/evaluators" }
-dependencies = [
-    { name = "genkit" },
-    { name = "genkit-evaluators" },
-    { name = "genkit-google-genai" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "genkit", editable = "packages/genkit" },
-    { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
-    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
-    { name = "pydantic", specifier = ">=2.10.5" },
-]
-
-[[package]]
 name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1591,9 +1570,6 @@ anthropic = [
 django = [
     { name = "genkit-django" },
 ]
-evaluators = [
-    { name = "genkit-evaluators" },
-]
 fastapi = [
     { name = "genkit-fastapi" },
 ]
@@ -1630,7 +1606,6 @@ requires-dist = [
     { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
     { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
     { name = "genkit-django", marker = "extra == 'django'", editable = "packages/genkit-django" },
-    { name = "genkit-evaluators", marker = "extra == 'evaluators'", editable = "packages/genkit-evaluators" },
     { name = "genkit-fastapi", marker = "extra == 'fastapi'", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
@@ -1653,7 +1628,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "otel", "ollama", "openai", "vertex-ai"]
+provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "otel", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-a2ui"
@@ -1733,21 +1708,6 @@ requires-dist = [
     { name = "django", specifier = ">=4.2" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "pydantic", specifier = ">=2.10.5" },
-]
-
-[[package]]
-name = "genkit-evaluators"
-version = "0.12.0"
-source = { editable = "packages/genkit-evaluators" }
-dependencies = [
-    { name = "genkit" },
-    { name = "jsonata-python" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "genkit", editable = "packages/genkit" },
-    { name = "jsonata-python", specifier = ">=0.6.0" },
 ]
 
 [[package]]
@@ -1953,7 +1913,6 @@ dependencies = [
     { name = "genkit-amazon-bedrock" },
     { name = "genkit-anthropic" },
     { name = "genkit-django" },
-    { name = "genkit-evaluators" },
     { name = "genkit-fastapi" },
     { name = "genkit-flask" },
     { name = "genkit-google-cloud" },
@@ -2022,7 +1981,6 @@ requires-dist = [
     { name = "genkit-amazon-bedrock", editable = "packages/genkit-amazon-bedrock" },
     { name = "genkit-anthropic", editable = "packages/genkit-anthropic" },
     { name = "genkit-django", editable = "packages/genkit-django" },
-    { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
     { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
@@ -3045,15 +3003,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/77/e8/a3f261a66e4663f22700bc8a17c08cb83e91fbf086726e7a228398968981/json5-0.13.0.tar.gz", hash = "sha256:b1edf8d487721c0bf64d83c28e91280781f6e21f4a797d3261c7c828d4c165bf", size = 52441, upload-time = "2026-01-01T19:42:14.99Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/9e/038522f50ceb7e74f1f991bf1b699f24b0c2bbe7c390dd36ad69f4582258/json5-0.13.0-py3-none-any.whl", hash = "sha256:9a08e1dd65f6a4d4c6fa82d216cf2477349ec2346a38fd70cc11d2557499fbcc", size = 36163, upload-time = "2026-01-01T19:42:13.962Z" },
-]
-
-[[package]]
-name = "jsonata-python"
-version = "0.6.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b9/45/7f095befed14d95db05d56a1164b9e2c41d87faefad7277454e4fd3b2daf/jsonata_python-0.6.1.tar.gz", hash = "sha256:416a65731f31f7cf427f3711bb1bf9117174985f9795e198020cce1a38d32984", size = 362705, upload-time = "2025-12-26T21:25:12.436Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/04/708bf06353fb43734440c3928e7e3358d1686f15cc3078c3d9a09aa33ae2/jsonata_python-0.6.1-py3-none-any.whl", hash = "sha256:21d80d0b34f1753935371c79b140406d45a2d4ad9dd5c29e4138dbf58991e6ef", size = 83706, upload-time = "2025-12-26T21:25:11.003Z" },
 ]
 
 [[package]]

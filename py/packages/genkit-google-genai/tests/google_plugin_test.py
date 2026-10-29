@@ -28,7 +28,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
-from genkit_google_genai._evaluators._evaluation import VertexAIEvaluationMetricType
 from genkit_google_genai._google import _inject_attribution_headers, _plugin_client, googleai_name, vertexai_name
 from genkit_google_genai._models._embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit_google_genai._models._gemini import (
@@ -857,43 +856,6 @@ async def test_vertexai_list_known_embedders(vertexai_plugin_instance: VertexAI)
     # the non-callable embedders the catalog over-lists.
     assert vertexai_name('multimodalembedding@001') in listed
     assert vertexai_name('gemini-embedding-2') not in listed
-
-
-@pytest.mark.asyncio
-async def test_vertexai_resolve_evaluator(vertexai_plugin_instance: VertexAI) -> None:
-    """Test resolve action for evaluator."""
-    plugin = vertexai_plugin_instance
-
-    action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name='fluency')
-    assert action is not None
-    assert action.kind == ActionKind.EVALUATOR
-    assert action.name == vertexai_name('fluency')
-
-
-@pytest.mark.asyncio
-async def test_vertexai_listed_evaluator_metadata_matches_resolved(vertexai_plugin_instance: VertexAI) -> None:
-    """The Dev UI shows the same evaluator name and definition before and after resolve."""
-    plugin = vertexai_plugin_instance
-    mock_client = MagicMock()
-    _set_async_model_list(mock_client, [])
-    plugin._runtime_client = lambda: mock_client
-
-    listed = {
-        a.name: a for a in await plugin.list_actions() if isinstance(a, Action) and a.kind == ActionKind.EVALUATOR
-    }
-
-    assert sorted(listed) == sorted(vertexai_name(m.lower()) for m in VertexAIEvaluationMetricType)
-    for name, listed_action in listed.items():
-        action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name=name.removeprefix('vertexai/'))
-        assert action is not None
-        assert listed_action.metadata is not None
-        assert listed_action.metadata['evaluator'] == action.metadata['evaluator']
-    assert listed[vertexai_name('fluency')].metadata.get('evaluator') == {
-        'evaluatorDefinition': 'Assesses the language mastery of an output',
-        'evaluatorDisplayName': 'Fluency',
-        'evaluatorIsBilled': True,
-        'label': vertexai_name('fluency'),
-    }
 
 
 def test_config_schema_rejects_unknown_fields() -> None:

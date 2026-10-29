@@ -23,7 +23,6 @@ from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._telemetry._log_exporter import build_log_record
 from genkit._core._typing import Operation
-from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
 from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
@@ -514,17 +513,3 @@ def test_genkit_two_positional_args_says_got_2() -> None:
         match=r'Genkit\(\) takes no positional arguments, got 2\.',
     ):
         Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]
-
-
-def test_define_evaluator_takes_name_and_fn_positionally() -> None:
-    """define_evaluator(name, fn, *, ...) matches define_model; options stay keyword-only."""
-    ai = Genkit()
-
-    async def exact(row: BaseDataPoint, options: object | None) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)])
-
-    action = ai.define_evaluator('exact', exact, display_name='Exact', definition='Matches exactly.')
-    assert action.name == 'exact'
-
-    with pytest.raises(TypeError):
-        ai.define_evaluator('exact2', exact, 'Exact', 'Matches exactly.')  # type: ignore[misc]  # pyright: ignore[reportCallIssue]

@@ -1,4 +1,0 @@
-[
-  {"testCaseId": "match", "input": "x", "output": "banana", "reference": "ba?a?a"},
-  {"testCaseId": "no_match", "input": "x", "output": "apple", "reference": "ba?a?a"}
-]

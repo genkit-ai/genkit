@@ -25,9 +25,7 @@ from pydantic import BaseModel, ValidationError
 
 from genkit import Genkit, ModelResponse
 from genkit._core._reflection import create_reflection_asgi_app
-from genkit._core._typing import EvalResponse
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder_action_metadata
-from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorRequest, EvaluatorResponse, Score
 from genkit.model import ModelRequest, model_action_metadata
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, to_json_schema
 
@@ -110,17 +108,12 @@ def test_action_metadata_input_schema_class_raises_validation_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
-    """Rows from the model/embedder/evaluator builders carry their request schema to /api/actions."""
-
-    async def score_row(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
-
+async def test_listed_model_embedder_send_request_schema() -> None:
+    """Rows from the model/embedder builders carry their request schema to /api/actions."""
     model_row = model_action_metadata(name='acme/m')
     embedder_row = embedder_action_metadata(name='acme/e')
-    evaluator_row = Evaluator('acme/ev', score_row, display_name='Acme', definition='Scores acme rows.')
 
-    listed = await api_actions(Genkit(plugins=[ListingPlugin([model_row, embedder_row, evaluator_row])]))
+    listed = await api_actions(Genkit(plugins=[ListingPlugin([model_row, embedder_row])]))
 
     assert model_row.input_schema == to_json_schema(ModelRequest)
     assert model_row.output_schema == to_json_schema(ModelResponse)
@@ -131,11 +124,6 @@ async def test_listed_model_embedder_evaluator_send_request_schema() -> None:
     assert embedder_row.output_schema == to_json_schema(EmbedResponse)
     assert listed['/embedder/acme/e']['inputSchema'] == to_json_schema(EmbedRequest)
     assert listed['/embedder/acme/e']['outputSchema'] == to_json_schema(EmbedResponse)
-
-    assert evaluator_row.input_schema == to_json_schema(EvaluatorRequest)
-    assert evaluator_row.output_schema == to_json_schema(EvalResponse)
-    assert listed['/evaluator/acme/ev']['inputSchema'] == to_json_schema(EvaluatorRequest)
-    assert listed['/evaluator/acme/ev']['outputSchema'] == to_json_schema(EvalResponse)
 
 
 @pytest.mark.asyncio

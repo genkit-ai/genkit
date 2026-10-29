@@ -25,7 +25,6 @@ import signal
 import socket
 import sys
 import threading
-import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
@@ -35,15 +34,6 @@ import uvicorn
 from pydantic import BaseModel
 
 from genkit._ai._embedding import EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
-from genkit._ai._evaluator import (
-    BatchEvaluator,
-    BatchEvaluatorFn,
-    Evaluator,
-    EvaluatorFn,
-    EvaluatorRef,
-    define_batch_evaluator,
-    define_evaluator,
-)
 from genkit._ai._formats._builtin import built_in_formats
 from genkit._ai._formats._types import FormatDef
 from genkit._ai._generate import (
@@ -123,10 +113,7 @@ from genkit._core._telemetry._http import maybe_inject_dev_instrumentation
 from genkit._core._telemetry._instrumentation import run_in_new_span
 from genkit._core._tool import Tool
 from genkit._core._typing import (
-    BaseDataPoint,
     Embedding,
-    EvaluatorRequest,
-    EvaluatorResponse,
     MiddlewareRef,
     ModelInfo,
     Operation,
@@ -479,82 +466,6 @@ class Genkit:
             name,
             description=description,
             input_schema=input_schema,
-        )
-
-    def define_evaluator(
-        self,
-        name: str,
-        fn: EvaluatorFn[Any],
-        *,
-        display_name: str,
-        definition: str,
-        is_billed: bool = False,
-        config_schema: type[BaseModel] | dict[str, object] | None = None,
-        metadata: dict[str, object] | None = None,
-        description: str | None = None,
-    ) -> Evaluator:
-        """Register an evaluator that scores one dataset row at a time.
-
-        Example:
-            ```python
-            # 1. Score whether the answer mentions the expected dish
-            async def mentions_dish(row: BaseDataPoint, options: object | None) -> EvaluatorResponse:
-                hit = row.reference.lower() in str(row.output).lower()
-                return EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=hit)])
-
-
-            # 2. Register it under a name
-            ai.define_evaluator(
-                'mentions_dish',
-                mentions_dish,
-                display_name='Mentions dish',
-                definition='Whether the answer names the expected dish.',
-            )
-
-            # 3. Run it over a dataset
-            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset)
-            # => [EvaluatorResponse(test_case_id='...', evaluation=[Score(score=True)]), ...]
-            ```
-        """
-        return define_evaluator(
-            self._registry,
-            name=name,
-            display_name=display_name,
-            definition=definition,
-            fn=fn,
-            is_billed=is_billed,
-            config_schema=config_schema,
-            metadata=metadata,
-            description=description,
-        )
-
-    def define_batch_evaluator(
-        self,
-        name: str,
-        fn: BatchEvaluatorFn,
-        *,
-        display_name: str,
-        definition: str,
-        is_billed: bool = False,
-        config_schema: type[BaseModel] | dict[str, object] | None = None,
-        metadata: dict[str, object] | None = None,
-        description: str | None = None,
-    ) -> BatchEvaluator:
-        """Register a batch evaluator.
-
-        The function takes one ``EvaluatorRequest`` and returns ``list[EvaluatorResponse]``.
-        Read options from ``req.options``. A second parameter raises ``TypeError`` when defined.
-        """
-        return define_batch_evaluator(
-            self._registry,
-            name=name,
-            display_name=display_name,
-            definition=definition,
-            fn=fn,
-            is_billed=is_billed,
-            config_schema=config_schema,
-            metadata=metadata,
-            description=description,
         )
 
     def define_model(
@@ -1874,70 +1785,6 @@ class Genkit:
             await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
         ).response
         return response.embeddings
-
-    async def evaluate(
-        self,
-        *,
-        evaluator: str | EvaluatorRef,
-        dataset: list[BaseDataPoint],
-        config: dict[str, object] | None = None,
-        eval_run_id: str | None = None,
-    ) -> list[EvaluatorResponse]:
-        """Evaluate a dataset using the specified evaluator.
-
-        Returns a list of rows. A per-row evaluator gives one row per
-        datapoint, in dataset order. A batch evaluator gives the rows its
-        function returned, as returned. Each row's ``evaluation`` is a list of
-        scores.
-
-        ``config`` is merged over the ``EvaluatorRef``'s config (the call
-        wins per key) and handed to the evaluator as its second argument. When
-        neither sets anything, the evaluator gets ``None``. An evaluator name
-        that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
-
-        Example:
-            from genkit.evaluator import BaseDataPoint
-
-            results = await ai.evaluate(
-                evaluator='my_eval',
-                dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
-            )
-            for row in results:
-                for score in row.evaluation:
-                    print(row.test_case_id, score.score)
-        """
-        if isinstance(evaluator, EvaluatorRef):
-            evaluator_name = evaluator.name
-            ref_config = evaluator.config
-        else:
-            evaluator_name = evaluator
-            ref_config = None
-
-        # same rule as _embedder_options: None when nothing was set, matching
-        # what the CLI / Dev UI send, so `options is None` is the one check.
-        final_options: dict[str, object] | None = None
-        if ref_config is not None or config is not None:
-            final_options = {**(ref_config or {}), **(config or {})}
-
-        eval_action = await self._registry.resolve_evaluator(evaluator_name)
-        if eval_action is None:
-            raise GenkitError(
-                status='NOT_FOUND',
-                message=f"Evaluator '{evaluator_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
-            )
-
-        if not eval_run_id:
-            eval_run_id = str(uuid.uuid4())
-
-        response = await eval_action.run(
-            EvaluatorRequest(
-                dataset=dataset,
-                options=final_options,
-                eval_run_id=eval_run_id,
-            ),
-        )
-        return response.response.root
 
     @staticmethod
     def current_context() -> dict[str, Any] | None:

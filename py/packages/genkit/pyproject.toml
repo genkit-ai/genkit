@@ -78,7 +78,6 @@ a2ui                  = ["genkit-a2ui"]
 amazon-bedrock        = ["genkit-amazon-bedrock"]
 anthropic             = ["genkit-anthropic"]
 django                = ["genkit-django"]
-evaluators            = ["genkit-evaluators"]
 fastapi               = ["genkit-fastapi"]
 flask                 = ["genkit-flask"]
 google-cloud          = ["genkit-google-cloud"]
@@ -107,7 +106,6 @@ DEP002 = [
   "genkit-amazon-bedrock",
   "genkit-anthropic",
   "genkit-django",
-  "genkit-evaluators",
   "genkit-fastapi",
   "genkit-flask",
   "genkit-google-cloud",
@@ -134,7 +132,6 @@ genkit-a2ui                         = { workspace = true }
 genkit-amazon-bedrock               = { workspace = true }
 genkit-anthropic                    = { workspace = true }
 genkit-django                       = { workspace = true }
-genkit-evaluators                   = { workspace = true }
 genkit-fastapi                      = { workspace = true }
 genkit-flask                        = { workspace = true }
 genkit-google-cloud                 = { workspace = true }
