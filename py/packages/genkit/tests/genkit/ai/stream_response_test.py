@@ -270,8 +270,8 @@ async def test_model_action_stream_returns_stream_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_cancelling_one_response_waiter_does_not_cancel_run() -> None:
-    """Cancelling one `await stream.response` waiter on ModelStreamResponse does not cancel another waiter."""
+async def test_generate_stream_cancelling_shielded_waiter_does_not_cancel_run() -> None:
+    """Cancelling a shielded waiter on stream.response does not cancel the underlying stream."""
     ai = Genkit()
     release = asyncio.Event()
 
@@ -286,14 +286,13 @@ async def test_generate_stream_cancelling_one_response_waiter_does_not_cancel_ru
     ai.define_model(name='slow', fn=slow_model)
 
     async with ai.generate_stream(model='slow', prompt='Cook') as stream:
-        waiter_1 = asyncio.create_task(stream.response)
-        waiter_2 = asyncio.create_task(stream.response)
+        waiter = asyncio.ensure_future(asyncio.shield(stream.response))
         await asyncio.sleep(0.01)
 
-        waiter_1.cancel()
+        waiter.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await waiter_1
+            await waiter
 
         release.set()
-        res = await waiter_2
+        res = await stream.response
         assert res.text == 'Simmering done'
