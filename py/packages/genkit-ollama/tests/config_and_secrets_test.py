@@ -236,12 +236,9 @@ async def test_generate_ollama_without_secrets_sends_configured_headers(server: 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('header_name', ['Authorization', 'authorization'])
-async def test_generate_ollama_secrets_key_replaces_configured_authorization_header(
-    server: Server, header_name: str
-) -> None:
-    """A secrets key wins over a static `Authorization` header; the plugin's other headers still go."""
-    ai = make_ai(request_headers={header_name: 'Bearer plugin', 'X-Org': 'acme'})
+async def test_generate_ollama_secrets_key_keeps_other_configured_headers(server: Server) -> None:
+    """A secrets key goes out next to the plugin's non-auth headers."""
+    ai = make_ai(request_headers={'X-Org': 'acme'})
 
     await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
 
@@ -250,11 +247,46 @@ async def test_generate_ollama_secrets_key_replaces_configured_authorization_hea
 
 
 @pytest.mark.asyncio
-async def test_generate_ollama_secrets_key_replaces_header_callable_authorization(server: Server) -> None:
-    """A secrets key also wins over an `Authorization` header from a `request_headers` callable."""
+@pytest.mark.parametrize('header_name', ['Authorization', 'authorization'])
+async def test_generate_ollama_secrets_key_with_pinned_authorization_fails_precondition(
+    server: Server, header_name: str
+) -> None:
+    """A static `Authorization` in `request_headers` is proxy auth; a secrets key fails instead of replacing it."""
+    ai = make_ai(request_headers={header_name: 'Bearer plugin'})
+
+    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'FAILED_PRECONDITION'
+    assert 'Authorization' in response.error.message
+    assert 'tenant' not in response.error.message
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_ollama_secrets_key_with_callable_authorization_fails_precondition(server: Server) -> None:
+    """An `Authorization` from a `request_headers` callable is refused the same way; nothing is sent."""
 
     def headers() -> dict[str, str]:
         return {'Authorization': 'Bearer minted', 'X-Org': 'acme'}
+
+    ai = make_ai(request_headers=headers)
+
+    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'FAILED_PRECONDITION'
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_ollama_secrets_key_keeps_callable_non_auth_headers(server: Server) -> None:
+    """A callable that returns no `Authorization` still runs next to a secrets key."""
+
+    def headers() -> dict[str, str]:
+        return {'X-Org': 'acme'}
 
     ai = make_ai(request_headers=headers)
 
@@ -278,9 +310,12 @@ async def test_generate_ollama_secrets_key_wins_over_ollama_api_key_env(
 
 
 @pytest.mark.asyncio
-async def test_generate_ollama_secrets_key_does_not_leak_to_next_call(server: Server) -> None:
-    """A following call with no secrets sends the plugin's header again."""
-    ai = make_ai(request_headers={'Authorization': 'Bearer plugin'})
+async def test_generate_ollama_secrets_key_does_not_leak_to_next_call(
+    server: Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A following call with no secrets sends the plugin's key again."""
+    monkeypatch.setenv('OLLAMA_API_KEY', 'plugin')
+    ai = make_ai()
 
     await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
     await ai.generate(model=MODEL, prompt='hi')
@@ -302,18 +337,64 @@ async def test_generate_ollama_concurrent_tenants_each_use_their_key(server: Ser
 
 
 @pytest.mark.asyncio
-async def test_generate_ollama_secrets_without_api_key_raises_invalid_argument(server: Server) -> None:
-    """`context={'secrets': {}}` fails the call with INVALID_ARGUMENT on `response.error`, and nothing is sent."""
+@pytest.mark.parametrize(
+    'context',
+    [
+        {'secrets': {}},
+        {'secrets': {'stripe_key': 'sk-other'}},
+        {'api_key': 'openai-tenant'},
+        {'auth': {'uid': 'u1'}, 'apiKey': 'x'},
+    ],
+)
+async def test_generate_ollama_context_without_secrets_key_runs_on_plugin_headers(
+    server: Server, context: dict[str, Any]
+) -> None:
+    """Secrets without a key, or keys outside `secrets`, leave the plugin's headers alone.
+
+    Context is inherited from the flow, so an auth context provider or a key
+    meant for another provider must not break an inner Ollama call.
+    """
+    ai = make_ai(request_headers={'Authorization': 'Bearer plugin'})
+
+    response = await ai.generate(model=MODEL, prompt='hi', context=context)
+
+    assert response.text == 'ok'
+    assert server.last_authorization == 'Bearer plugin'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('value', ['', '   ', 42, 'two words'])
+async def test_generate_ollama_unusable_secrets_key_raises_invalid_argument(server: Server, value: object) -> None:
+    """A `context.secrets.api_key` that is set but blank, not a string, or has whitespace fails; nothing is sent."""
     ai = make_ai()
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {}})
+    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': value}})
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert 'context.secrets' in response.error.message
-    assert response.message is None
+    assert 'context.secrets.api_key' in response.error.message
     assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_ollama_stop_wins_over_stop_sequences(server: Server) -> None:
+    """`stop=['A']` with `stop_sequences=['B']` sends `['A']`, like `num_predict` over `max_output_tokens`."""
+    ai = make_ai()
+
+    await ai.generate(model=MODEL, prompt='hi', config={'stop': ['A'], 'stop_sequences': ['B']})
+
+    assert server.last_options == {'stop': ['A']}
+
+
+@pytest.mark.asyncio
+async def test_generate_ollama_stop_sequences_maps_to_stop(server: Server) -> None:
+    """`stop_sequences=['B']` alone sends `stop: ['B']`."""
+    ai = make_ai()
+
+    await ai.generate(model=MODEL, prompt='hi', config={'stop_sequences': ['B']})
+
+    assert server.last_options == {'stop': ['B']}
 
 
 @pytest.mark.asyncio

@@ -14,101 +14,80 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-request API key on ``context.secrets``.
+"""Per-request API key on ``context.secrets`` for the Ollama plugin.
 
 A tenant key travels with the call, not the config, so it never lands in a
 trace: ``context={'secrets': {'api_key': tenant_key}}``. Hosted Ollama reads
-it as ``Authorization: Bearer <key>``.
+it as ``Authorization: Bearer <key>``. A key on ``config`` (including
+``config.extra``) is rejected by Genkit before the model action runs.
+
+Same rules as ``genkit_openai._secrets``.
 """
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import cast
 
 from genkit import GenkitError
 
-SECRETS_SLOT = "Pass the key as context={'secrets': {'api_key': ...}}."
+SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
+
+_KEY_SLOTS = ('api_key', 'apiKey')
+_BAD_KEY_CHARS = ('\r', '\n', '\0', ' ', '\t')
 
 
-def misplaced_key_error() -> GenkitError:
-    return GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'API key belongs in context.secrets, not config or the top-level context. {SECRETS_SLOT}',
-    )
-
-
-def reject_config_api_key(config: object) -> None:
-    """Raise when ``request.config`` carries an API key.
-
-    Core already rejects this before the model action runs; this is the
-    backstop for callers that hit the plugin directly. Left alone the key
-    would be dropped and the call would run on the plugin's header.
-    ``config.extra`` isn't checked: it goes out as sampler options as written.
-    """
-    if config is None:
-        return
-    if isinstance(config, Mapping):
-        bag = cast(Mapping[str, object], config)
-        has_key = bag.get('api_key') is not None or bag.get('apiKey') is not None
-    else:
-        extra = getattr(config, 'model_extra', None) or {}
-        has_key = (
-            getattr(config, 'api_key', None) is not None
-            or extra.get('api_key') is not None
-            or extra.get('apiKey') is not None
+def _clean_key(value: object, slot: str) -> str:
+    if not isinstance(value, str):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'context.secrets.{slot} must be a string. {SECRETS_HINT}',
         )
-    if has_key:
-        raise misplaced_key_error()
+    cleaned = value.strip()
+    if not cleaned:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'context.secrets.{slot} is blank. {SECRETS_HINT}',
+        )
+    if any(c in cleaned for c in _BAD_KEY_CHARS):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'context.secrets.{slot} contains invalid whitespace or control characters. {SECRETS_HINT}',
+        )
+    return cleaned
 
 
-def string_secret(value: object) -> str | None:
-    if value is None or value == '':
-        return None
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        if any(c in cleaned for c in ('\r', '\n', '\0', ' ', '\t')):
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'context.secrets.api_key contains invalid whitespace or control characters. {SECRETS_SLOT}',
-            )
-        return cleaned
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=f'context.secrets.api_key must be a string. {SECRETS_SLOT}',
-    )
-
-
-def context_api_key(context: dict[str, Any] | None) -> str | None:
+def context_api_key(context: Mapping[str, object] | None) -> str | None:
     """Read the per-request key from ``context.secrets``.
 
-    ``api_key`` is the documented slot; ``apiKey`` works too. A key on the
-    top-level context or ``context['config']`` raises, because quietly
-    running that call on the plugin's own header would bill the wrong account.
+    ``api_key`` is the documented slot; ``apiKey`` works too. ``secrets``
+    without either runs on the plugin's headers, so apps can keep other
+    secrets there. A key that is set but blank or not a string raises.
+    Top-level context entries like ``context['api_key']`` are ignored, so
+    app-level auth context providers and keys meant for other providers don't
+    break an Ollama call made inside the same flow.
+
+    Args:
+        context: The action context (``ctx.context``).
+
+    Returns:
+        The trimmed key, or None when ``context.secrets`` has no key.
+
+    Raises:
+        GenkitError: ``INVALID_ARGUMENT`` when ``secrets`` is not a mapping or
+            the key is not a usable string.
     """
     if not context:
         return None
-
-    nested = context.get('config')
-    if isinstance(nested, dict) and (nested.get('api_key') is not None or nested.get('apiKey') is not None):
-        raise misplaced_key_error()
-    if context.get('api_key') is not None or context.get('apiKey') is not None:
-        raise misplaced_key_error()
-
-    if 'secrets' not in context:
+    secrets = context.get('secrets')
+    if secrets is None:
         return None
-    secrets = context['secrets']
-    if not isinstance(secrets, dict):
+    if not isinstance(secrets, Mapping):
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'context.secrets must be a dict. {SECRETS_SLOT}',
+            message=f'context.secrets must be a dict. {SECRETS_HINT}',
         )
-    key = string_secret(secrets.get('api_key'))
-    if key is None:
-        key = string_secret(secrets.get('apiKey'))
-    if key is None:
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'context.secrets is set but has no api_key. {SECRETS_SLOT}',
-        )
-    return key
+    bag = cast(Mapping[str, object], secrets)
+    for slot in _KEY_SLOTS:
+        value = bag.get(slot)
+        if value is not None:
+            return _clean_key(value, slot)
+    return None
