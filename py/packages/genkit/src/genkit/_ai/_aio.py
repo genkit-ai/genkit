@@ -435,6 +435,15 @@ class Genkit:
         input_schema: type[BaseModel] | dict[str, object] | None = None,
     ) -> _ToolDecorator: ...
 
+    # Same order as Genkit.flow: the `object` shapes catch `(ctx, x: Any)` and
+    # `(x: Any)` / `(x: object)` before a ctx shape can claim them.
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT, ChunkT]: ...
+
     @overload
     def tool(
         self,
@@ -448,6 +457,13 @@ class Genkit:
         func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]],
         /,
     ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT]: ...
 
     @overload
     def tool(

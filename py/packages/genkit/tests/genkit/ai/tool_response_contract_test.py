@@ -25,7 +25,9 @@ from genkit import (
     Tool,
     ToolContext,
 )
+from genkit._ai._tools import define_tool, tool
 from genkit._core._action import Action
+from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
 from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import ActionKind
@@ -666,3 +668,73 @@ async def test_tool_response_with_non_part_in_parts_raises_invalid_part_naming_t
     assert generated.error is not None
     assert generated.error.status == 'INVALID_ARGUMENT'
     assert generated.finish_message == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
+
+
+class _Order(BaseModel):
+    dish: str
+
+
+@pytest.mark.asyncio
+async def test_tool_input_type_inference_across_shapes() -> None:
+    """Each handler shape types the tool's input as written, through every tool entry point.
+
+    `(x: Any)` / `(x: object)` also accept a ToolContext, and `(ctx, x: Any)`
+    fits `(input, ctx)` with the ctx as the input. Neither should land there.
+    """
+    ai = Genkit()
+
+    async def echo_any(x: Any) -> str:  # noqa: ANN401
+        return str(x)
+
+    async def echo_object(x: object) -> str:
+        return str(x)
+
+    async def whoami(ctx: ToolContext[str]) -> str:
+        return str(ctx.context.get('user'))
+
+    async def stream_any(ctx: ToolContext[str], x: Any) -> str:  # noqa: ANN401
+        ctx.send_chunk('looking')
+        return str(x)
+
+    async def any_then_ctx(x: Any, ctx: ToolContext[str]) -> str:  # noqa: ANN401
+        return str(x)
+
+    async def check_order(x: _Order) -> str:
+        return x.dish
+
+    async def stream_order(x: _Order, ctx: ToolContext[str]) -> str:
+        return x.dish
+
+    async def specials() -> str:
+        return 'risotto'
+
+    # 1. @ai.tool, bare and called.
+    # ty types `(ctx, x: Any)` as Unknown: it matches overloads with different
+    # returns, and the typing spec's overload rule for Any makes that
+    # ambiguous. No arrangement fixes it without breaking `(ctx: ToolContext)`.
+    assert_type(ai.tool(echo_any), Tool[Any, str, Any])
+    assert_type(ai.tool(echo_object), Tool[Any, str, Any])
+    assert_type(ai.tool(whoami), Tool[Any, str, str])
+    assert_type(ai.tool(stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(ai.tool()(stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(ai.tool()(echo_object), Tool[Any, str, Any])
+    assert_type(ai.tool(any_then_ctx), Tool[Any, str, str])
+    assert_type(ai.tool(check_order), Tool[_Order, str, Any])
+    assert_type(ai.tool(stream_order), Tool[_Order, str, str])
+    assert_type(ai.tool(specials), Tool[None, str, Any])
+
+    # 2. define_tool and the ephemeral tool().
+    assert_type(define_tool(Registry(), stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(define_tool(Registry(), echo_object), Tool[Any, str, Any])
+    assert_type(tool(stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(tool(echo_any), Tool[Any, str, Any])
+
+    # 3. Tool(fn). ty doesn't solve overloaded generic constructors yet (see
+    # test_tool_constructor_infers_types_from_function).
+    assert_type(Tool(stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
+    assert_type(Tool(echo_object), Tool[Any, str, Any])  # ty: ignore[type-assertion-failure]
+    assert_type(Tool(echo_any), Tool[Any, str, Any])  # ty: ignore[type-assertion-failure]
+
+    # 4. Any/object tools take any input at the call site.
+    assert await Tool(echo_object)(5) == '5'
+    assert await Tool(stream_any)({'dish': 'soup'}) == "{'dish': 'soup'}"

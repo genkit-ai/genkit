@@ -110,6 +110,11 @@ class _ToolDecorator:
     # since a ``ctx`` function also fits ``[InputT]``.
     @overload
     def __call__(
+        self, func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]]
+    ) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(
         self, func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]]
     ) -> Tool[InputT, OutputT, ChunkT]: ...
 
@@ -117,6 +122,9 @@ class _ToolDecorator:
     def __call__(
         self, func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]]
     ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Tool[Any, OutputT]: ...
 
     @overload
     def __call__(self, func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]]) -> Tool[Any, OutputT, ChunkT]: ...
