@@ -180,6 +180,25 @@ def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
     )
 
 
+def _tool_call_key(tool_call: Any, accumulated: dict[int, Any]) -> int:  # noqa: ANN401
+    """The slot a streamed tool call fragment accumulates into.
+
+    OpenAI sends an ``index`` on every fragment. Some OpenAI-compatible endpoints
+    (Gemini) omit it: a fragment with a new ``id`` (or, lacking an id, a function name)
+    then starts a new call, and any other fragment continues the latest one.
+    """
+    if tool_call.index is not None:
+        return tool_call.index
+    if not accumulated:
+        return 0
+    latest = max(accumulated)
+    if tool_call.id:
+        starts_new_call = tool_call.id != accumulated[latest].id
+    else:
+        starts_new_call = bool(tool_call.function and tool_call.function.name)
+    return latest + 1 if starts_new_call else latest
+
+
 def _failure_message(extras: dict[str, Any] | None) -> str | None:
     """The message of an error object a provider attached to a choice.
 
@@ -598,16 +617,15 @@ class OpenAIModel:
             if delta.tool_calls:
                 for tool_call in delta.tool_calls:
                     fragment = (tool_call.function.arguments or '') if tool_call.function else ''
+                    key = _tool_call_key(tool_call, tool_calls)
                     # Accumulate fragmented tool call arguments
-                    if tool_call.index not in tool_calls:
-                        tool_calls[tool_call.index] = tool_call
+                    if key not in tool_calls:
+                        tool_calls[key] = tool_call
                     else:
-                        existing = tool_calls[tool_call.index]
+                        existing = tool_calls[key]
                         if hasattr(existing, 'function') and existing.function and tool_call.function:
                             existing.function.arguments = (existing.function.arguments or '') + fragment
-                    parts.append(
-                        MessageConverter.tool_call_to_genkit(tool_calls[tool_call.index], args_segment=fragment)
-                    )
+                    parts.append(MessageConverter.tool_call_to_genkit(tool_calls[key], args_segment=fragment))
 
             if parts:
                 callback(ModelResponseChunk(role=Role.MODEL, content=parts))
