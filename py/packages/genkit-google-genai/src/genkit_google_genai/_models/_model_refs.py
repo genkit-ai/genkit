@@ -26,8 +26,10 @@ config sails through until the API rejects it.
 
 from typing import TypeVar
 
+from genkit_google_genai._models._embedder import EmbeddingConfig
 from genkit_google_genai._models._routing import classify_family, is_imagen_model_name, strip_ref_prefixes
-from pydantic import BaseModel
+from genkit_google_genai._models._sdk_config import sdk_config_error
+from pydantic import BaseModel, ValidationError
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -111,13 +113,16 @@ def family_embedder_ref(
     *,
     namespace: str,
     plugin_class: str,
-    config: dict[str, object] | None,
+    config: EmbeddingConfig | dict[str, object] | None,
     version: str | None,
 ) -> EmbedderRef:
     """Strip, gate, and build an EmbedderRef for ai.embed().
 
     This deliberately returns an EmbedderRef, not a ModelRef: an embedder id
-    must never end up in generate(model=...).
+    must never end up in generate(model=...). ``config`` is validated as an
+    ``EmbeddingConfig`` and stored as a snake_case dict, the form
+    ``ai.embed()`` merges with per-call config; an invalid dict raises
+    INVALID_ARGUMENT here rather than at embed time.
     """
     if not isinstance(name, str):
         raise GenkitError(
@@ -131,4 +136,12 @@ def family_embedder_ref(
         raise wrong_family_error(
             plugin_class=plugin_class, method='embedding', family='embedder', local=local, actual=actual
         )
+    if isinstance(config, EmbeddingConfig):
+        config = config.model_dump(exclude_none=True)
+    elif config is not None:
+        try:
+            parsed = EmbeddingConfig.model_validate(config)
+        except ValidationError as e:
+            raise sdk_config_error(action_name=f'{plugin_class}.embedding', error=e) from e
+        config = parsed.model_dump(exclude_none=True)
     return EmbedderRef(name=f'{namespace}/{local}', config=config, version=version)

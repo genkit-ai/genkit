@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-import { GenkitToolsError } from '@genkit-ai/tools-common/manager';
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { McpRunToolEvent } from './analytics.js';
+import { waitForRuntime } from '../utils/manager-utils';
+import { McpRunToolEvent } from './analytics';
 import {
   McpToolOptions,
+  formatMcpError,
   getCommonSchema,
   resolveProjectRoot,
-} from './utils.js';
+} from './utils';
 
 export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(
@@ -63,16 +64,12 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
           timeout: options.timeout,
         });
       } catch (err) {
-        const errStr =
-          err instanceof GenkitToolsError
-            ? err.formatError()
-            : JSON.stringify(err);
         return {
           isError: true,
           content: [
             {
               type: 'text',
-              text: `Error: ${errStr}`,
+              text: `Error: ${formatMcpError(err)}`,
             },
           ],
         };
@@ -120,7 +117,36 @@ export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
           };
         }
 
-        await runtimeManager.processManager[action]();
+        try {
+          if (action === 'restart') {
+            const existingRuntimeIds = new Set(
+              runtimeManager.listRuntimes().map((r) => r.id)
+            );
+            await runtimeManager.processManager.restart();
+            const processPromise =
+              runtimeManager.processManager.waitForProcess?.();
+            if (options.timeout !== 0 && processPromise) {
+              await waitForRuntime(
+                runtimeManager,
+                processPromise,
+                options.timeout,
+                existingRuntimeIds
+              );
+            }
+          } else {
+            await runtimeManager.processManager.kill();
+          }
+        } catch (err) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `Error: ${formatMcpError(err)}`,
+              },
+            ],
+          };
+        }
         return {
           content: [{ type: 'text', text: `Done.` }],
         };

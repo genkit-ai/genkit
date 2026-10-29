@@ -10,9 +10,9 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool
+from genkit import FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool
 from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
-from genkit.model import GenerateActionOptions, ModelRequest, model
+from genkit.model import GenerateActionOptions, ModelContext, ModelRequest, model
 from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
 
 NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
@@ -26,7 +26,7 @@ def _answer(text: str) -> ModelResponse:
 
 
 def _define_answering_model(ai: Genkit, name: str, text: str) -> None:
-    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return _answer(text)
 
     ai.define_model(name=name, fn=fn)
@@ -44,7 +44,7 @@ class LazyPlugin(Plugin):
         if action_type != ActionKind.MODEL or name != 'fast':
             return None
 
-        async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             return _answer('from lazy fast')
 
         return model(name, fn)
@@ -94,10 +94,10 @@ async def test_lookup_model_does_not_return_background_models() -> None:
     """A background model runs through `generate_operation`, so `lookup_model` returns None for it."""
     ai = Genkit()
 
-    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='op-1')
 
-    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(operation: Operation, ctx: ModelContext) -> Operation:
         return operation
 
     ai.define_background_model('veo', start=start, check=check)

@@ -148,12 +148,6 @@ func TestSpanMetadataInlineMedia(t *testing.T) {
 	media := func(url string) map[string]any {
 		return map[string]any{"media": map[string]string{"url": url}}
 	}
-	sm := &spanMetadata{
-		Input:  media("data:image/png;base64,input-bytes"),
-		Init:   media("data:image/png;base64,init-bytes"),
-		Output: media("data:image/png;base64,output-bytes"),
-	}
-
 	tests := []struct {
 		env  string
 		want map[string]string
@@ -179,6 +173,13 @@ func TestSpanMetadataInlineMedia(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.env, func(t *testing.T) {
 			t.Setenv("GENKIT_ENV", tt.env)
+			// Fresh per case: encodings are cached on the span, and the
+			// environment never changes mid-run outside tests.
+			sm := &spanMetadata{
+				Input:  media("data:image/png;base64,input-bytes"),
+				Init:   media("data:image/png;base64,init-bytes"),
+				Output: media("data:image/png;base64,output-bytes"),
+			}
 			for _, kv := range append(sm.attributes(), sm.inputAttributes()...) {
 				want, ok := tt.want[string(kv.Key)]
 				if !ok {

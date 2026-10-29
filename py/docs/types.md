@@ -36,7 +36,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.Tool
 
-::: genkit.ToolRunContext
+::: genkit.ToolContext
 
 ::: genkit.Interrupt
 
@@ -44,7 +44,7 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 
 ::: genkit.MultipartToolResponse
 
-::: genkit.ActionRunContext
+::: genkit.FlowContext
 
 ::: genkit.Prompt
 
@@ -69,6 +69,8 @@ Types exported from genkit, genkit.model, genkit.embedder, genkit.plugin_api, ge
 ::: genkit.model.BackgroundAction
 
 ::: genkit.model.GenerateActionOptions
+
+::: genkit.model.ModelContext
 
 ::: genkit.model.ModelRequest
 
