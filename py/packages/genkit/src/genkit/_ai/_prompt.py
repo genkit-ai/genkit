@@ -155,8 +155,15 @@ class PromptGenerateOptions(PromptSettings, ModelSettings, total=False):
 class ModelStreamResponse(StreamResponse[ModelResponseChunk[OutputT], ModelResponse[OutputT]], Generic[OutputT]):
     """Chunks of a model reply, then the full ``ModelResponse``.
 
-    Returned by ``ai.generate_stream()`` and ``prompt.stream()``. If a tool or
-    later turn fails, ``.response`` still resolves, with ``error`` set.
+    Returned by ``ai.generate_stream()`` and ``prompt.stream()``. Iteration
+    and ``.response`` follow ``StreamResponse``; failures don't:
+
+    - **Before the request** (unknown model, bad config, ...): the loop and
+      ``.response`` both raise the ``GenkitError`` (``NOT_FOUND``, ...).
+    - **Model or tool failure on any turn, including the first**: the loop
+      ends normally and ``.response`` resolves with ``error`` set and
+      ``finish_reason == FAILED``. The chunks already received are the record
+      of what was shown.
 
     Example:
         ```python
