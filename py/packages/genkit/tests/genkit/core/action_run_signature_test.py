@@ -4,11 +4,13 @@
 """Action.run and Action.stream take the input positionally and everything else by keyword."""
 
 import asyncio
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 
 import pytest
 
 from genkit import FlowContext
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action, ActionKind, BidiAction, get_current_context
 
 
 async def _plate(dish: str, ctx: FlowContext[str]) -> str:
@@ -35,15 +37,32 @@ def test_stream_with_positional_context_raises_type_error() -> None:
         _kitchen().stream('salmon', {'table': 4})  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]  # pyrefly: ignore[bad-argument-count]
 
 
+async def _table_echo(init: str, inputs: AsyncIterator[str], send_chunk: Callable[[str], None]) -> dict[str, Any]:
+    async for dish in inputs:
+        send_chunk(dish)
+    return {'init': init, 'context': get_current_context()}
+
+
 @pytest.mark.asyncio
-async def test_run_with_keywords_streams_chunks_and_returns() -> None:
-    """`run(input, on_chunk=..., context=...)` streams to on_chunk and returns the result."""
-    chunks: list[str] = []
+async def test_stream_bidi_with_positional_context_raises_type_error() -> None:
+    """`stream_bidi(init, context)` raises TypeError; options after init are keyword-only, like run/stream."""
+    session: BidiAction[str, dict[str, Any], str, str] = BidiAction(ActionKind.CUSTOM, 'table', _table_echo)
 
-    result = await _kitchen().run('salmon', on_chunk=chunks.append, context={'table': 4})
+    with pytest.raises(TypeError, match='positional argument'):
+        await session.stream_bidi('table-4', {'table': 4})  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]  # pyrefly: ignore[bad-argument-count]
 
-    assert chunks == ['plating salmon']
-    assert result.response == 'salmon served'
+
+@pytest.mark.asyncio
+async def test_stream_bidi_with_keyword_context_reaches_the_session() -> None:
+    """`stream_bidi(init, context=...)` runs the session with that request context."""
+    session: BidiAction[str, dict[str, Any], str, str] = BidiAction(ActionKind.CUSTOM, 'table', _table_echo)
+
+    conn = await session.stream_bidi('table-4', context={'table': 4})
+    await conn.send('soup')
+    await conn.close()
+
+    assert [chunk async for chunk in conn.receive()] == ['soup']
+    assert await conn.output() == {'init': 'table-4', 'context': {'table': 4}}
 
 
 @pytest.mark.asyncio
