@@ -94,8 +94,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import ollama as ollama_api
-from pydantic import ConfigDict, ValidationError
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic import ValidationError
+from pydantic.alias_generators import to_snake
 
 from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit.model import ModelConfig, ModelContext, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
