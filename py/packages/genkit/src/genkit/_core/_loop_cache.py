@@ -21,7 +21,7 @@ import functools
 import threading
 import weakref
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
 
 from typing_extensions import Self
 
@@ -33,9 +33,11 @@ class _LoopLocal(Generic[S, T]):
     """One cached instance per event loop; on a class, one per (object, loop).
 
     Called directly it is the module-level getter. Read as a class attribute it
-    binds to the instance like ``functools.cached_property``: the bound getter
-    is stored in the instance ``__dict__`` under the method name. Assigning the
-    attribute (e.g. a test stub) replaces it for that instance.
+    binds to the instance like ``functools.cached_property``: the bound getter,
+    itself a per-loop cache, is stored in the instance ``__dict__`` under the
+    method name, so later reads skip ``__get__``. It is a non-data descriptor:
+    assigning the attribute (e.g. a test stub) shadows it for that instance, and
+    ``del`` drops the bound getter and its per-loop clients.
     """
 
     def __init__(self, factory: Callable[..., T]) -> None:
@@ -65,19 +67,20 @@ class _LoopLocal(Generic[S, T]):
     def __get__(self, instance: object, owner: type | None = None) -> Any:  # noqa: ANN401
         if instance is None or self._name is None:
             return self
-        cached = instance.__dict__.get(self._name)
-        if cached is not None:
-            return cached
+        # Only reached until the bound getter lands in instance.__dict__, which
+        # then shadows this non-data descriptor. setdefault keeps concurrent
+        # first reads on one bound getter.
         bound: _LoopLocal[Any, T] = _LoopLocal(functools.partial(self._factory, instance))
         functools.update_wrapper(bound, self, updated=())  # pyright: ignore[reportArgumentType]
         with self._lock:
             return instance.__dict__.setdefault(self._name, bound)
 
-    def __set__(self, instance: S, value: Callable[[], T]) -> None:
-        # Lets tests stub the client: plugin._client = lambda: fake_client
-        if self._name is None:
-            raise AttributeError('loop_local_client method has no name')
-        instance.__dict__[self._name] = value  # pyright: ignore[reportAttributeAccessIssue]
+    if TYPE_CHECKING:
+        # Declared for type checkers only, so `plugin._client = lambda: stub`
+        # and `del plugin._client` type-check. At runtime the descriptor stays
+        # non-data and both act on the instance __dict__.
+        def __set__(self, instance: S, value: Callable[[], T]) -> None: ...
+        def __delete__(self, instance: S) -> None: ...
 
 
 @overload

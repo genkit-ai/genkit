@@ -17,6 +17,7 @@
 """Tests for the per-event-loop client cache."""
 
 import asyncio
+from unittest import mock
 from unittest.mock import MagicMock
 
 import httpx
@@ -103,6 +104,44 @@ async def test_instance_attribute_overrides_method_form() -> None:
     """Tests stub the client by assigning the attribute, as with cached_property."""
     bistro = _Bistro('k1')
     stub = MagicMock()
-    bistro.client = lambda: stub  # type: ignore[method-assign]
+    bistro.client = lambda: stub
     assert bistro.client() is stub
     assert bistro.builds == 0
+
+
+def test_method_form_stays_loop_local_after_first_read() -> None:
+    """The bound getter cached in __dict__ is itself per-loop."""
+    bistro = _Bistro('k1')
+    getter = bistro.client
+
+    async def grab() -> httpx.AsyncClient:
+        assert bistro.client is getter
+        return bistro.client()
+
+    first, second = asyncio.run(grab()), asyncio.run(grab())
+    assert first is not second
+    assert bistro.builds == 2
+
+
+@pytest.mark.asyncio
+async def test_del_drops_bound_getter_and_rebuilds() -> None:
+    bistro = _Bistro('k1')
+    first = bistro.client()
+    del bistro.client
+    second = bistro.client()
+    assert second is not first
+    assert bistro.builds == 2
+    await first.aclose()
+    await second.aclose()
+
+
+@pytest.mark.asyncio
+async def test_patch_object_on_unread_attribute_restores() -> None:
+    bistro = _Bistro('k1')
+    stub = MagicMock()
+    with mock.patch.object(bistro, 'client', lambda: stub):
+        assert bistro.client() is stub
+    real = bistro.client()
+    assert real is not stub
+    assert bistro.builds == 1
+    await real.aclose()
