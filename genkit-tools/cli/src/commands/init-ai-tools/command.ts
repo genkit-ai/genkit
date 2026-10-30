@@ -46,8 +46,6 @@ const AGENT_CHOICES: AIToolChoice[] = Object.values(AI_TOOLS).map((tool) => ({
 const SUPPORTED_RUNTIMES: Record<string, string> = {
   nodejs: 'Node.js',
   go: 'Go',
-  python: 'Python',
-  dart: 'Dart',
 };
 
 /**

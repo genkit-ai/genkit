@@ -19,10 +19,8 @@ import { existsSync, readFileSync } from 'fs';
 import { Runtime } from '@genkit-ai/tools-common/manager';
 import * as crypto from 'crypto';
 import { writeFile } from 'fs/promises';
-import { GENKIT_CONTEXT as DartContext } from './context/dart';
 import { GENKIT_CONTEXT as GoContext } from './context/go';
 import { GENKIT_CONTEXT as NodeContext } from './context/nodejs';
-import { GENKIT_CONTEXT as PythonContext } from './context/python';
 
 /** Shared location for the GENKIT.md context file */
 export const GENKIT_PROMPT_PATH = 'GENKIT.md';
@@ -155,10 +153,6 @@ export function getGenkitContext(runtime: Runtime): string {
       return NodeContext;
     case 'go':
       return GoContext;
-    case 'python':
-      return PythonContext;
-    case 'dart':
-      return DartContext;
     default:
       throw new Error(`Unexpected runtime provided: ${runtime}`);
   }
