@@ -24,6 +24,9 @@
   },
   "author": "genkit",
   "license": "Apache-2.0",
+  "files": [
+    "lib/"
+  ],
   "dependencies": {
     "@genkit-ai/tools-common": "workspace:*",
     "@asteasolutions/zod-to-openapi": "^7.0.0",

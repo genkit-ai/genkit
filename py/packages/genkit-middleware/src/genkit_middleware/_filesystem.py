@@ -38,7 +38,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import AliasChoices, BaseModel as PydanticBaseModel, Field
 
 from genkit import (
     Interrupt,
@@ -49,14 +49,14 @@ from genkit import (
     Part,
     Role,
     Tool,
-    tool,
 )
 from genkit.middleware import (
-    BaseMiddleware,
     GenerateHookParams,
-    GenerateMiddlewareContext,
+    Middleware,
+    MiddlewareContext,
     ToolHookParams,
 )
+from genkit.plugin_api import GenkitConfig
 
 # ---------------------------------------------------------------------------
 # Tool input schemas (module-level so Pydantic can resolve annotations)
@@ -104,21 +104,29 @@ _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB — absolute ceiling for readin
 _MAX_READ_SLICE_BYTES = 256 * 1024  # 256 KB — max bytes returned per slice
 
 
-class FilesystemConfig(PydanticBaseModel):
+class FilesystemConfig(GenkitConfig):
     """Sandbox root and write/tool naming options."""
 
-    root_dir: str
+    # The wire key is rootDirectory (matches JS and Go); Python keeps root_dir.
+    # alias= would rename the kwarg for type checkers, so use the split aliases.
+    root_dir: str = Field(
+        validation_alias=AliasChoices('rootDirectory', 'root_dir'),
+        serialization_alias='rootDirectory',
+    )
     allow_write_access: bool = False
     tool_name_prefix: str = ''
 
 
-class Filesystem(BaseMiddleware[FilesystemConfig]):
+class Filesystem(Middleware[FilesystemConfig]):
     """Filesystem middleware with sandboxed file operations.
 
     Contributes ``list_files``, ``read_file``, and optionally ``write_file``
     and ``edit_file``. Tool errors are queued as user messages so the model
     can self-correct on the next turn.
     """
+
+    name = 'filesystem'
+    description = 'Sandboxed filesystem operations'
 
     def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init__(**kwargs)
@@ -268,7 +276,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             fh.write(content)
         return f'File {file_path} edited successfully.'
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         """Return filesystem tools for this generate() call."""
 
         async def list_files(input: _ListFilesInput) -> list[dict[str, Any]]:
@@ -283,12 +291,12 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             )
 
         tools_out = [
-            tool(
+            Tool(
                 list_files,
                 name=self._tool_name('list_files'),
                 description='List files and directories under a path (optional recursive).',
             ),
-            tool(
+            Tool(
                 read_file,
                 name=self._tool_name('read_file'),
                 description='Read a text file, optionally from an offset/limit in lines.',
@@ -308,12 +316,12 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 )
 
             tools_out += [
-                tool(
+                Tool(
                     write_file,
                     name=self._tool_name('write_file'),
                     description='Create or overwrite a text file with the given content.',
                 ),
-                tool(
+                Tool(
                     edit_file,
                     name=self._tool_name('edit_file'),
                     description='Apply search/replace edits to an existing text file.',
@@ -325,8 +333,8 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Drain queued user messages into the request before the next model turn."""
         if not self._message_queue:
@@ -353,8 +361,8 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Catch filesystem tool errors and enqueue them as user messages."""
         if params.tool.name not in self._filesystem_tool_names():

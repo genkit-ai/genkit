@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -2275,4 +2276,37 @@ func TestGenerateWithCacheNameOnly(t *testing.T) {
 			t.Errorf("inline contents = %q, want the whole request", got)
 		}
 	})
+}
+
+func TestToGeminiRequestResponseModalities(t *testing.T) {
+	req := func(config any) *ai.ModelRequest {
+		return &ai.ModelRequest{
+			Config:   config,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("draw a cat"))},
+		}
+	}
+	textImage := []string{"TEXT", "IMAGE"}
+	tests := []struct {
+		name   string
+		model  string
+		config any
+		want   []string
+	}{
+		{"image model defaults", "gemini-3.1-flash-image", nil, textImage},
+		{"vertex resource path defaults", "projects/p/locations/global/gemini-3-pro-image", nil, textImage},
+		{"caller modalities win", "gemini-2.5-flash-image", &genai.GenerateContentConfig{ResponseModalities: []string{"IMAGE"}}, []string{"IMAGE"}},
+		{"text model untouched", "gemini-2.5-flash", nil, nil},
+		{"project ID does not classify model", "projects/my-tts-app/locations/us-central1/gemini-2.5-flash", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gcc, err := toGeminiRequestFromRaw(req(tt.config), nil, tt.model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(gcc.ResponseModalities, tt.want) {
+				t.Errorf("ResponseModalities = %v, want %v", gcc.ResponseModalities, tt.want)
+			}
+		})
+	}
 }

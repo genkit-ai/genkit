@@ -20,7 +20,7 @@ on:
   pull_request:
     paths:
       - "py/**"
-      - "genkit-tools/**"
+      - "genkit-tools/genkit-schema.json"
       - ".github/workflows/python.yml"
 
 permissions:
@@ -121,7 +121,7 @@ jobs:
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: cd py && uv run pyright packages/*/src
+        run: cd py && uv run pyright
 
   # =============================================================================
   # Security and compliance checks

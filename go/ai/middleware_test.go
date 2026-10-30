@@ -31,6 +31,7 @@ import (
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -867,7 +868,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 			})
 			var toolCalls int32
 			tool := defineCountingTool(t, r, "myTool", &toolCalls)
-			spans := collectSpans(t)
+			spans := tracingtest.Capture(t)
 
 			shortCircuit := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 				return &Hooks{WrapTool: tt.hook}, nil
@@ -891,7 +892,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 				t.Errorf("tool ran %d times, want 0 (hook short-circuited)", got)
 			}
 
-			toolSpans := spans.allByName(tool.Name())
+			toolSpans := spans.ByName(tool.Name())
 			if len(toolSpans) != 1 {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
@@ -943,7 +944,7 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 			})
 			var toolCalls int32
 			tool := defineCountingTool(t, r, "myTool", &toolCalls)
-			spans := collectSpans(t)
+			spans := tracingtest.Capture(t)
 
 			rewriter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 				return &Hooks{WrapTool: tt.hook}, nil
@@ -960,7 +961,7 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 			if got := atomic.LoadInt32(&toolCalls); got != 1 {
 				t.Errorf("tool ran %d times, want 1", got)
 			}
-			toolSpans := spans.allByName(tool.Name())
+			toolSpans := spans.ByName(tool.Name())
 			if len(toolSpans) != 1 {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
@@ -1386,7 +1387,7 @@ func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
 	})
 	var toolCalls int32
 	tool := defineCountingTool(t, r, "myTool", &toolCalls)
-	spans := collectSpans(t)
+	spans := tracingtest.Capture(t)
 
 	var seen []int
 	clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
@@ -1413,10 +1414,10 @@ func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
 	if !slices.Equal(seen, want) {
 		t.Errorf("hook saw %v messages per iteration, want %v", seen, want)
 	}
-	if got := len(spans.allByName("clobbered")); got != 0 {
+	if got := len(spans.ByName("clobbered")); got != 0 {
 		t.Errorf("got %d spans named %q, want 0: a hook's step name must not rename the loop's spans", got, "clobbered")
 	}
-	if got := len(spans.allByName("generate")); got != len(want) {
+	if got := len(spans.ByName("generate")); got != len(want) {
 		t.Errorf("got %d generate spans, want %d (one per iteration)", got, len(want))
 	}
 }

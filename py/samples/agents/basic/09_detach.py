@@ -30,9 +30,10 @@ import asyncio
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, FinishReason, GenkitError, ToolRunContext
+from genkit import FinishReason, GenkitError, ToolContext
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -55,7 +56,7 @@ store = InMemorySessionStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+async def slow_work(_: dict, ctx: ToolContext) -> dict:
     for _i in range(10):
         if ctx.abort_signal.is_set():
             raise GenkitError(status='ABORTED', message='Task aborted')
@@ -63,10 +64,10 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
     return {'done': True}
 
 
-async def long_task_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def long_task_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     # Define tool inside turn handler closure so it can mutate custom session state on each step:
     @ai.tool(name='slowWork', description='Simulate long background work.')
-    async def slow_work_closure(_: dict, tool_ctx: ToolRunContext) -> dict:
+    async def slow_work_closure(_: dict, tool_ctx: ToolContext) -> dict:
         for i in range(1, 11):
             if tool_ctx.abort_signal.is_set():
                 raise GenkitError(status='ABORTED', message='Task aborted')
@@ -78,7 +79,7 @@ async def long_task_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
         history = await sess.get_messages()
         messages = history or None
         res = await ai.generate(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             system='When asked for a long task, call slowWork.',
             messages=messages,
             tools=[slow_work_closure],

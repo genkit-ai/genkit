@@ -20,8 +20,9 @@ import pytest
 
 from genkit import GenkitError
 from genkit._core import _error as error_mod
-from genkit._core._error import PublicError, get_callable_json, get_http_status
+from genkit._core._error import PublicError
 from genkit.plugin_api import StatusName, provider_error
+from genkit.web import error_body, error_status
 
 # 2023-11-14 22:13:20 GMT
 _NOW = 1_700_000_000.0
@@ -170,8 +171,8 @@ def test_provider_error_is_internal_error_over_http() -> None:
     assert isinstance(error, GenkitError)
     assert not isinstance(error, PublicError)
     assert error.status == 'UNAUTHENTICATED'
-    assert get_http_status(error) == 500
-    assert get_callable_json(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
 
 
 def test_provider_error_names_the_type_when_the_error_has_no_text() -> None:

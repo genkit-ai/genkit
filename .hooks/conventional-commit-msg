@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-#
-# Copyright 2025 Google LLC
-# SPDX-License-Identifier: Apache-2.0
-
-set -euo pipefail
-
-cat "$1" | convco check --from-stdin

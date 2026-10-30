@@ -36,12 +36,11 @@ from genkit_google_genai._models._interactions_utils import (
 )
 from genkit_google_genai._models._sdk_config import deep_merge
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import Field, field_validator
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import ModelRequest, model, model_action_metadata
-from genkit.plugin_api import Action
+from genkit import ModelResponse
+from genkit.model import Model, ModelContext, ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
 
@@ -53,14 +52,13 @@ CREATE_OPTION_KEYS = (
 )
 
 
-class AntigravityConfig(BaseModel):
+class AntigravityConfig(GenkitConfig):
     """Antigravity model configuration.
 
     Unknown keys are rejected. An API field this class doesn't declare goes in
     ``extra``, which is deep-merged into the create body.
     """
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -84,12 +82,12 @@ def create_antigravity_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> Action:
+) -> Model:
     """Build a foreground model action for Antigravity."""
     version = extract_version(name)
     info = antigravity_model_info(version)
 
-    async def run(request: ModelRequest[AntigravityConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[AntigravityConfig], ctx: ModelContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
         config = request.config or AntigravityConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
@@ -98,6 +96,7 @@ def create_antigravity_action(
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         raw_extra = dumped.pop('extra', None)
         extra: dict[str, Any] = raw_extra if isinstance(raw_extra, dict) else {}
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
         create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         create_kwargs: dict[str, Any] = {
             'agent': version,
@@ -110,13 +109,9 @@ def create_antigravity_action(
         created = await create_interaction(api_key, deep_merge(create_kwargs, extra), merged_options)
         return from_interaction_sync(created)
 
-    return model(
+    return Model(
         name,
         run,
+        info=info,
         config_schema=AntigravityConfig,
-        metadata=model_action_metadata(
-            name=name,
-            info=info.model_dump(by_alias=True),
-            config_schema=AntigravityConfig,
-        ).metadata,
     )

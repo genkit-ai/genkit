@@ -18,7 +18,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal, cast
 
 from genkit_google_genai._interactions._client import (
     cancel_interaction,
@@ -27,6 +28,7 @@ from genkit_google_genai._interactions._client import (
 )
 from genkit_google_genai._interactions._converters import from_interaction
 from genkit_google_genai._interactions._options import ClientOptions
+from genkit_google_genai._models._gemini import file_search_fields, flattened_key_error
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
@@ -41,11 +43,13 @@ from genkit_google_genai._models._interactions_utils import (
 )
 from genkit_google_genai._models._sdk_config import deep_merge
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-from pydantic.alias_generators import to_camel
+from pydantic import ConfigDict, Field, WithJsonSchema, field_validator, model_validator, with_config
+from pydantic.alias_generators import to_snake
+from typing_extensions import NotRequired, TypedDict
 
-from genkit import ActionRunContext, GenkitError, Operation
-from genkit.model import BackgroundAction, ModelRef, ModelRequest, background_model, model_ref
+from genkit import GenkitError, Operation
+from genkit.model import BackgroundModel, ModelContext, ModelRef, ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 AGENT_CONFIG_KEYS = (
     'thinking_summaries',
@@ -56,7 +60,9 @@ TOOL_CONFIG_KEYS = (
     'google_search',
     'url_context',
     'code_execution',
-    'file_search',
+    'file_search_store_names',
+    'file_search_metadata_filter',
+    'file_search_top_k',
     'mcp_servers',
 )
 CREATE_OPTION_KEYS = (
@@ -66,32 +72,42 @@ CREATE_OPTION_KEYS = (
 )
 
 
-class McpServerConfig(BaseModel):
-    """MCP server configuration for Deep Research."""
+@with_config(ConfigDict(extra='allow'))
+class McpServerConfig(TypedDict):
+    """One ``mcp_servers`` entry for Deep Research.
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
-    name: str | None = None
-    url: str | None = None
-    headers: dict[str, str] | None = None
-    allowed_tools: list[str] | None = None
-
-
-class FileSearchConfig(BaseModel):
-    """File search store configuration for Deep Research."""
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
-    file_search_store_names: list[str]
-
-
-class DeepResearchConfig(BaseModel):
-    """Deep Research model configuration.
-
-    Unknown keys are rejected, including inside ``file_search`` and
-    ``mcp_servers``. An API field this class doesn't declare goes in ``extra``,
-    which is deep-merged into the create body.
+    A TypedDict so a dict literal type-checks without importing it. Keys
+    the Interactions API adds later pass through.
     """
 
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
+    name: NotRequired[str]
+    url: NotRequired[str]
+    headers: NotRequired[dict[str, str]]
+    allowed_tools: NotRequired[list[str]]
+
+
+_MCP_SERVERS_SCHEMA = WithJsonSchema({
+    'type': 'array',
+    'items': {
+        'type': 'object',
+        'properties': {
+            'name': {'type': 'string'},
+            'url': {'type': 'string'},
+            'headers': {'type': 'object', 'additionalProperties': {'type': 'string'}},
+            'allowedTools': {'type': 'array', 'items': {'type': 'string'}},
+        },
+    },
+    'description': 'MCP servers Deep Research may call.',
+})
+
+
+class DeepResearchConfig(GenkitConfig):
+    """Deep Research model configuration.
+
+    Unknown keys are rejected. An API field this class doesn't declare goes in
+    ``extra``, which is deep-merged into the create body.
+    """
+
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -106,9 +122,34 @@ class DeepResearchConfig(BaseModel):
     google_search: bool | None = None
     url_context: bool | None = None
     code_execution: bool | None = None
-    file_search: FileSearchConfig | None = None
-    mcp_servers: list[McpServerConfig] | None = None
+    file_search_store_names: list[str] | None = None
+    file_search_metadata_filter: str | None = None
+    file_search_top_k: int | None = None
+    mcp_servers: Annotated[list[McpServerConfig] | None, _MCP_SERVERS_SCHEMA] = None
     extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
+
+    @model_validator(mode='before')
+    @classmethod
+    def reject_nested_file_search(cls, data: object) -> object:
+        """Name the flat fields for the old nested key instead of the generic unknown-key error."""
+        if isinstance(data, Mapping):
+            for key, value in cast(Mapping[str, Any], data).items():
+                if isinstance(key, str) and to_snake(key) == 'file_search':
+                    error = flattened_key_error(key, value, cls.model_fields)
+                    if error is not None:
+                        raise error
+        return data
+
+    @field_validator('mcp_servers', mode='before')
+    @classmethod
+    def snake_case_mcp_keys(cls, value: object) -> object:
+        """Accept ``allowedTools`` from .prompt files; the create body is snake_case."""
+        if not isinstance(value, list):
+            return value
+        return [
+            {to_snake(k): v for k, v in cast(Mapping[str, Any], entry).items()} if isinstance(entry, Mapping) else entry
+            for entry in cast(list[object], value)
+        ]
 
     @field_validator('thinking_summaries', 'visualization', mode='before')
     @classmethod
@@ -126,9 +167,8 @@ class DeepResearchConfig(BaseModel):
 def deep_research_model(version: str) -> ModelRef:
     """Return a ModelRef for a Deep Research version (namespaced or bare)."""
     clean = extract_version(version)
-    return model_ref(
-        name=clean,
-        namespace='googleai',
+    return ModelRef(
+        name=f'googleai/{clean}',
         info=deep_research_model_info(clean),
         config_schema=DeepResearchConfig,
     )
@@ -152,31 +192,33 @@ def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchC
     for tool_type in ('google_search', 'url_context', 'code_execution'):
         if getattr(config, tool_type, None):
             tools.append({'type': tool_type})
-    if config.file_search is not None:
-        # Create body is snake_case. Dumping by alias would send
-        # fileSearchStoreNames and the stores would never attach.
-        tools.append({'type': 'file_search', **config.file_search.model_dump(exclude_none=True)})
+    # The create body is snake_case, the same names the Gemini FileSearch tool takes.
+    # Empty store names (an untouched Dev UI list) mean off.
+    stores, file_search_options = file_search_fields(
+        config.file_search_store_names,
+        {'metadata_filter': config.file_search_metadata_filter, 'top_k': config.file_search_top_k},
+    )
+    if stores:
+        tools.append({'type': 'file_search', 'file_search_store_names': stores, **file_search_options})
     for mcp_server in config.mcp_servers or []:
-        tools.append({'type': 'mcp_server', **mcp_server.model_dump(exclude_none=True)})
+        tools.append({'type': 'mcp_server', **{k: v for k, v in mcp_server.items() if v is not None}})
 
     return tools
 
 
-def create_deep_research_background_action(
+def create_deep_research_background_model(
     target: str | ModelRef,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> BackgroundAction:
+) -> BackgroundModel:
     """Wire Deep Research start/check/cancel as Actions that re-read secrets."""
     name = target.name if isinstance(target, ModelRef) else target
     version = extract_version(name)
     info = deep_research_model_info(version)
-    # A saved handle is `/background-model/googleai/<id>`, so the registered
-    # name is always `googleai/<id>` even when the caller passed the bare id.
     full_name = name if '/' in name else f'googleai/{name}'
 
-    async def start(request: ModelRequest[DeepResearchConfig], ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest[DeepResearchConfig], ctx: ModelContext) -> Operation:
         reject_request_config_api_key(request.config)
         config = request.config or DeepResearchConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
@@ -185,6 +227,7 @@ def create_deep_research_background_action(
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         raw_extra = dumped.pop('extra', None)
         extra: dict[str, Any] = raw_extra if isinstance(raw_extra, dict) else {}
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
         agent_fields, _tool_fields, create_options, _ = partition_keys(
             dumped,
             AGENT_CONFIG_KEYS,
@@ -207,22 +250,22 @@ def create_deep_research_background_action(
         interaction = await create_interaction(api_key, deep_merge(create_kwargs, extra), options)
         return from_interaction(interaction)
 
-    def _op_key_and_options(ctx: ActionRunContext) -> tuple[str, ClientOptions]:
+    def _op_key_and_options(ctx: ModelContext) -> tuple[str, ClientOptions]:
         call_config = ctx.context.get('config')
         options = client_options.merge(call_config if isinstance(call_config, dict) else None)
         return api_key_for_context(ctx.context, plugin_api_key), options
 
-    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(operation: Operation, ctx: ModelContext) -> Operation:
         api_key, options = _op_key_and_options(ctx)
         interaction = await get_interaction(api_key, operation.id, options)
         return from_interaction(interaction)
 
-    async def cancel(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def cancel(operation: Operation, ctx: ModelContext) -> Operation:
         api_key, options = _op_key_and_options(ctx)
         interaction = await cancel_interaction(api_key, operation.id, options)
         return from_interaction(interaction)
 
-    return background_model(
+    return BackgroundModel(
         full_name,
         start=start,
         check=check,

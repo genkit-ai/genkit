@@ -271,7 +271,7 @@ export class GenkitAI {
    *
    * ```ts
    * let operation = await ai.generateOperation({
-   *   model: googleAI.model('veo-3.1-generate-preview'),
+   *   model: vertexAI.model('veo-3.1-generate-001'),
    *   prompt: 'A banana riding a bicycle.',
    * });
    *
