@@ -23,7 +23,7 @@ Example:
     from genkit import Genkit
     from genkit_google_genai import GoogleAI
 
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
     @ai.flow()
     async def my_flow(prompt: str) -> str:
@@ -43,11 +43,8 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import (
     MultipartToolResponse,
     ToolContext,
-    tool,
 )
 from genkit._core._action import FlowContext, StreamResponse
-from genkit._core._context import ContextProvider, RequestData
-from genkit._core._dap import DynamicActionProvider
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._flow import Flow
 from genkit._core._logger import get_logger
@@ -59,14 +56,9 @@ from genkit._core._model import (
     Part,
     ToolChoice,
 )
+from genkit._core._operation import Operation
 from genkit._core._tool import Tool
-from genkit._core._typing import (
-    Embedding,
-    FinishReason,
-    Media,
-    Operation,
-    Role,
-)
+from genkit._core._typing import Embedding, FinishReason, Media, Role
 
 __all__ = [
     'Genkit',
@@ -88,7 +80,6 @@ __all__ = [
     'Embedding',
     'Operation',
     # Tools and HITL
-    'tool',
     'Tool',
     'ToolContext',
     'Interrupt',
@@ -100,12 +91,9 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
-    'get_logger',
-    # HTTP request context for flow handlers
-    'ContextProvider',
-    'RequestData',
-    # Custom output formats and dynamic providers
+    # Custom output formats
     'FormatDef',
     'FormatterConfig',
-    'DynamicActionProvider',
+    # Log lines that reach the Dev UI trace panel
+    'get_logger',
 ]

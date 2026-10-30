@@ -813,7 +813,8 @@ async def test_list_actions_probes_each_model_and_skips_embedders() -> None:
     def supports(name: str) -> dict[str, Any]:
         metadata = rows[name].metadata
         assert metadata is not None
-        return cast(dict[str, Any], metadata['model']['supports'])
+        model_meta = cast(dict[str, Any], metadata['model'])
+        return cast(dict[str, Any], model_meta['supports'])
 
     assert supports('ollama/llava')['media'] is True
     assert supports('ollama/gemma2')['tools'] is False
@@ -859,7 +860,8 @@ async def test_list_actions_reprobes_a_repulled_model() -> None:
 
     assert show.await_count == 2
     assert actions[0].metadata is not None
-    assert cast(dict[str, Any], actions[0].metadata['model']['supports'])['tools'] is True
+    model_meta = cast(dict[str, Any], actions[0].metadata['model'])
+    assert cast(dict[str, Any], model_meta['supports'])['tools'] is True
 
 
 @pytest.mark.asyncio

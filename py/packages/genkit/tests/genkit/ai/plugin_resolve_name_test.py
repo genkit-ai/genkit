@@ -26,16 +26,16 @@ from collections.abc import Callable
 import pytest
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.embedder import EmbedRequest, EmbedResponse, embedder
-from genkit.model import ModelContext, ModelRequest, background_model, model
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
+from genkit.model import BackgroundModel, Model, ModelContext, ModelRequest
+from genkit.plugin_api import Action, ActionKind, Plugin
 
 
 def _answering_model(name: str, text: str) -> Action:
-    async def fn(request: ModelRequest) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
-    return model(name, fn)
+    return Model(name, fn)
 
 
 class RecordingPlugin(Plugin):
@@ -64,7 +64,7 @@ class RecordingPlugin(Plugin):
             return None
         return _answering_model(self.build(name), f'resolved {name}')
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -76,7 +76,7 @@ class VideoPlugin(Plugin):
     def __init__(self) -> None:
         self.seen: list[tuple[ActionKind, str]] = []
 
-    def _video(self, model_id: str):  # noqa: ANN202
+    def _video(self, model_id: str) -> BackgroundModel:
         async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
             return Operation(id='job-1', done=False)
 
@@ -86,7 +86,7 @@ class VideoPlugin(Plugin):
         async def cancel(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True, metadata={'cancelled': True})
 
-        return background_model(model_id, start=start, check=check, cancel=cancel)
+        return BackgroundModel(model_id, start=start, check=check, cancel=cancel)
 
     async def init(self) -> list[Action]:
         return []
@@ -101,7 +101,7 @@ class VideoPlugin(Plugin):
             return self._video('veo-x').cancel_action
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -274,9 +274,9 @@ async def test_plugin_embedder_helper_returns_action_named_with_plugin_prefix() 
             async def fn(request: EmbedRequest) -> EmbedResponse:
                 return EmbedResponse(embeddings=[])
 
-            return embedder(name, fn)
+            return Embedder(name, fn)
 
-        async def list_actions(self) -> list[ActionMetadata]:
+        async def list_actions(self) -> list[Action]:
             return []
 
     action = await EmbedPlugin().embedder('embed-1')

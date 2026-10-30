@@ -21,14 +21,22 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import FinishReason, Genkit, Message, ModelResponse, Part, Role, Tool, tool
+from genkit import (
+    FinishReason,
+    Genkit,
+    Message,
+    ModelResponse,
+    Part,
+    Role,
+    Tool,
+)
 from genkit._ai._generate import CallScope
 from genkit.exp import Genkit as ExpGenkit
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import ActionKind
 
-NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
+NextModel = Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]]
 
 
 def _define_tool_caller(ai: Genkit, name: str = 'caller') -> None:
@@ -59,7 +67,7 @@ def _inline_lookup(answer: str, delay: float = 0.0) -> Tool:
         await asyncio.sleep(delay)
         return answer
 
-    return tool(lookup)
+    return Tool(lookup)
 
 
 def test_call_scope_registry_is_a_fresh_child_of_its_ai() -> None:
@@ -99,7 +107,7 @@ async def test_concurrent_generate_calls_keep_inline_tools_apart() -> None:
 
 @pytest.mark.asyncio
 async def test_inline_tool_on_prompt_call_runs_and_does_not_outlive_the_call() -> None:
-    """`prompt(tools=[tool(fn)])` resolves the tool for that call only."""
+    """`prompt(tools=[Tool(fn)])` resolves the tool for that call only."""
     ai = Genkit()
     _define_tool_caller(ai)
     prompt = ai.define_prompt(model='caller', prompt='hi')
@@ -139,9 +147,9 @@ async def test_middleware_ctx_ai_is_the_app_inside_an_agent_turn() -> None:
 
     ai.define_model(name='echo', fn=echo)
 
-    class PeekAi(BaseMiddleware):
+    class PeekAi(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             seen.append(ctx.ai)
             return await next_fn(params, ctx)

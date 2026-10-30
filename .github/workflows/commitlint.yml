@@ -35,6 +35,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
@@ -44,12 +45,11 @@ jobs:
           node-version: 24.x
           cache: 'pnpm'
 
-      - name: Install commitlint
-        run: |
-          pnpm install --save-dev @commitlint/cli @commitlint/config-conventional
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
 
       - name: Validate PR title (used as squash commit message)
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          echo "$PR_TITLE" | npx commitlint
+          echo "$PR_TITLE" | pnpm exec commitlint

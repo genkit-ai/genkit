@@ -485,6 +485,27 @@ async def test_model_garden_list_actions_with_openai_extra_lists_llama_models() 
 
 
 @pytest.mark.asyncio
+async def test_model_garden_list_actions_needs_no_project_and_skips_adc() -> None:
+    """Listing works with no project and never probes ADC; the project is looked up when a model runs."""
+    with patch.dict('os.environ', {}, clear=True):
+        plugin = ModelGarden(location='us-central1')
+
+    with patch(_ADC, side_effect=AssertionError('listing must not probe ADC')):
+        actions = await plugin.list_actions()
+
+    assert [a.name for a in actions] == [f'modelgarden/{model}' for model in SUPPORTED_OPENAI_COMPAT_MODELS]
+
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(text='hi')])])
+    with (
+        patch(_ADC, side_effect=DefaultCredentialsError('no ADC')),
+        pytest.raises(GenkitError, match=r'ModelGarden\(project=\.\.\.\) or set GOOGLE_CLOUD_PROJECT') as raised,
+    ):
+        await actions[0].run(request)
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
 async def test_resolve_uncataloged_openai_compat_model_advertises_default_supports() -> None:
     """An uncataloged OpenAI-compatible model advertises, in camelCase, the label and supports its handler runs with."""
     ai = Genkit(plugins=[ModelGarden(project='p')])

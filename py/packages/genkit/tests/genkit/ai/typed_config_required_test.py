@@ -30,11 +30,12 @@ from pydantic import BaseModel, ConfigDict
 from genkit import FinishReason, Genkit, Part
 from genkit._core._error import GenkitError
 from genkit._core._model import Message, ModelRequest, ModelResponse
-from genkit._core._typing import Operation, Role
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
-from genkit.model import ModelContext, model_ref
+from genkit._core._operation import Operation
+from genkit._core._typing import Role
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import ModelContext, ModelRef
 
-NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
+NextModel = Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]]
 
 Kind = Literal['model', 'background']
 Declared = Literal['annotation', 'config_schema', 'class_only', 'json_schema']
@@ -136,12 +137,10 @@ def voice_of(config: object) -> object:
     return config.voice if isinstance(config, BaseModel) else dict(config)['voice']  # type: ignore[arg-type,attr-defined]
 
 
-class DefaultVoice(BaseMiddleware):
+class DefaultVoice(Middleware):
     """Fills a house voice when the caller left it out."""
 
-    async def wrap_model(
-        self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
-    ) -> ModelResponse:
+    async def wrap_model(self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel) -> ModelResponse:
         config = params.request.config
         if isinstance(config, dict) and 'voice' not in config:
             params.request.config = {**config, 'voice': 'echo'}
@@ -235,7 +234,7 @@ async def test_missing_field_message_is_the_same_for_class_and_dict(kind: Kind, 
 async def test_model_ref_version_passes_a_schema_that_does_not_name_it(kind: Kind, declared: Declared) -> None:
     """ModelRef.version rides in config; a strict schema without a version field still runs."""
     tts = Tts(Genkit(), kind=kind, declared=declared, config_class=StrictVoice)
-    ref = model_ref('acme/tts', config_schema=StrictVoice, version='v2')
+    ref = ModelRef(name='acme/tts', config_schema=StrictVoice, version='v2')
 
     assert await tts.failure(model=ref, config={'voice': 'echo'}) is None
     assert [dict(config) for config in tts.seen] == [{'voice': 'echo', 'version': 'v2'}]  # type: ignore[call-overload]

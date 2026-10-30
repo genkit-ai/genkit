@@ -239,12 +239,18 @@ class SessionRunner(Generic[StateT]):
 
 # The context a custom agent fn receives; ctx.send_chunk() takes an AgentStreamChunk.
 AgentContext = ActionRunContext[AgentStreamChunk]
+"""Execution context passed to a custom agent function.
+
+An alias for :class:`~genkit.ActionRunContext[AgentStreamChunk]`. Provides access
+to streaming agent chunks, caller context data, and cancellation signals.
+"""
 
 # AgentFn — custom agent entrypoint; receives SessionRunner + AgentContext.
 AgentFn = Callable[
     [SessionRunner, AgentContext],
     Awaitable[AgentResult],
 ]
+"""Custom agent entrypoint: takes a `SessionRunner` and the run context, returns an `AgentResult`."""
 
 
 # ---------------------------------------------------------------------------
