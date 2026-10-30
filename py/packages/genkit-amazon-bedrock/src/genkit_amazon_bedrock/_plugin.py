@@ -24,17 +24,13 @@ InvokeModel.
 
 from typing import TYPE_CHECKING, Literal
 
-import structlog
-
-from genkit import ActionRunContext, ModelResponse
-from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
-from genkit.model import ModelRequest, model as create_model, model_action_metadata
+from genkit import ModelResponse, get_logger
+from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
+from genkit.model import Model, ModelContext, ModelRequest
 from genkit.plugin_api import (
     Action,
     ActionKind,
-    ActionMetadata,
     Plugin,
-    to_json_schema,
 )
 from genkit_amazon_bedrock._config import (
     DEFAULT_TOTAL_TIMEOUT,
@@ -55,7 +51,7 @@ from genkit_amazon_bedrock._transport import BedrockTransport
 if TYPE_CHECKING:
     import boto3.session
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 BEDROCK_PLUGIN_NAME = 'bedrock'
 
@@ -209,14 +205,14 @@ class Bedrock(Plugin):
         model_info = get_model_info(model_id, model_type)
         config_schema = _config_schema(model_type)
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             if model_type == 'image':
                 image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
                 return await image_model.generate(request, ctx)
             model = BedrockModel(model_id=model_id, transport=self._transport)
             return await model.generate(request, ctx)
 
-        return create_model(
+        return Model(
             _action_name(model_id),
             _generate,
             config_schema=config_schema,
@@ -227,23 +223,22 @@ class Bedrock(Plugin):
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(config_schema),
                 },
             },
         )
 
     def _create_embedder_action(self, model_id: str) -> Action:
         async def _embed(request: EmbedRequest) -> EmbedResponse:
-            embedder = BedrockEmbedder(model_id=model_id, transport=self._transport)
-            return await embedder.embed(request)
+            embedder_client = BedrockEmbedder(model_id=model_id, transport=self._transport)
+            return await embedder_client.embed(request)
 
-        return embedder(
+        return Embedder(
             _action_name(model_id),
             _embed,
             info=get_embedder_info(model_id),
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         """List configured Bedrock models and embedders.
 
         Only explicitly configured entries are listed, and only those this
@@ -255,25 +250,17 @@ class Bedrock(Plugin):
         read.
 
         Returns:
-            ActionMetadata for each configured model and embedder.
+            Action for each configured model and embedder.
         """
-        actions: list[ActionMetadata] = []
+        actions: list[Action] = []
         for model_id in self.models:
             if looks_like_embedding_model(model_id) or is_rerank_model(model_id):
                 continue
             model_type = _model_type(model_id)
-            actions.append(
-                model_action_metadata(
-                    name=_action_name(model_id),
-                    info=get_model_info(model_id, model_type).model_dump(by_alias=True, exclude_none=True),
-                    config_schema=_config_schema(model_type),
-                )
-            )
+            actions.append(self._create_model_action(model_id, model_type))
         models = len(actions)
         actions.extend(
-            embedder_action_metadata(_action_name(model_id), get_embedder_info(model_id))
-            for model_id in self.embedders
-            if is_embedding_model(model_id)
+            self._create_embedder_action(model_id) for model_id in self.embedders if is_embedding_model(model_id)
         )
         logger.debug(
             'Bedrock actions listed',

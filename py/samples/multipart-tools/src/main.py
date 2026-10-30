@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from genkit import Genkit, MultipartToolResponse, Part
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 # 1x1 PNG so the tool message has real media without a camera.
 _PNG = Part.from_media(

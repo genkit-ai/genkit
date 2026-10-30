@@ -38,6 +38,7 @@ export interface TraceListOptions {
   status?: number;
   type?: string;
   name?: string;
+  sessionId?: string;
   continuationToken?: string;
 }
 
@@ -56,6 +57,7 @@ export const traceList = new Command('trace:list')
   .option('--status <status>', 'filter by root span status', parseTraceStatus)
   .option('--type <type>', 'filter by root span type')
   .option('--name <name>', 'filter by root span name')
+  .option('--session-id <sessionId>', 'filter by agent session ID')
   .option('--continuation-token <token>', 'continuation token for pagination')
   .action(async (options: TraceListOptions) => {
     const projectRoot = await findProjectRoot();
@@ -71,6 +73,9 @@ export const traceList = new Command('trace:list')
         }
         if (options.name) {
           eqFilter['name'] = [options.name];
+        }
+        if (options.sessionId) {
+          eqFilter['sessionId'] = [options.sessionId];
         }
 
         const filter: TraceQueryFilter = {

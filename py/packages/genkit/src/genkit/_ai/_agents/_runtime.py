@@ -42,7 +42,7 @@ from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
 from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._json_patch import diff_json
-from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
+from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason, StatusName
 from genkit._core._logger import get_logger
@@ -237,11 +237,20 @@ class SessionRunner(Generic[StateT]):
         await self.session.update_custom(fn)
 
 
-# AgentFn — custom agent entrypoint; receives SessionRunner + ActionRunContext.
+# The context a custom agent fn receives; ctx.send_chunk() takes an AgentStreamChunk.
+AgentContext = ActionRunContext[AgentStreamChunk]
+"""Execution context passed to a custom agent function.
+
+An alias for :class:`~genkit.ActionRunContext[AgentStreamChunk]`. Provides access
+to streaming agent chunks, caller context data, and cancellation signals.
+"""
+
+# AgentFn — custom agent entrypoint; receives SessionRunner + AgentContext.
 AgentFn = Callable[
-    [SessionRunner, ActionRunContext],
+    [SessionRunner, AgentContext],
     Awaitable[AgentResult],
 ]
+"""Custom agent entrypoint: takes a `SessionRunner` and the run context, returns an `AgentResult`."""
 
 
 # ---------------------------------------------------------------------------
@@ -816,9 +825,9 @@ class AgentRuntime:
         """
         detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         abort_signal = asyncio.Event()
-        action_ctx = ActionRunContext(
+        action_ctx: AgentContext = ActionRunContext(
             context=get_current_context(),
-            streaming_callback=cast(StreamingCallback, self.send_chunk),
+            streaming_callback=self.send_chunk,
             abort_signal=abort_signal,
         )
 
@@ -1041,7 +1050,7 @@ class AgentRuntime:
 async def generate_prompt_agent_turn(
     *,
     session_runner: SessionRunner,
-    ctx: ActionRunContext,
+    ctx: AgentContext,
     scope: CallScope,
     options: GenerateActionOptions,
     history: list[Message],

@@ -5,13 +5,15 @@
 
 """Tests for the action module."""
 
+import asyncio
+import inspect
 import json
 from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Genkit, Message, Part, PublicError
+from genkit import FlowContext, Genkit, Message, Part, PublicError
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -772,3 +774,69 @@ async def test_flow_bad_return_with_tracing_on_has_no_trace_id(hex_ids: None) ->
     assert exc.value.reason is RuntimeErrorReason.INVALID_OUTPUT
     assert exc.value.trace_id is None
     assert 'trace_id' not in (exc.value.details or {})
+
+
+def test_action_run_stream_and_stream_bidi_options_are_keyword_only() -> None:
+    """on_chunk, context, and telemetry_labels are keyword-only on run(), stream(), and stream_bidi()."""
+    run_params = inspect.signature(Action.run).parameters
+    for name in ('on_chunk', 'context', 'telemetry_labels'):
+        assert run_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in run_params
+
+    stream_params = inspect.signature(Action.stream).parameters
+    for name in ('context', 'telemetry_labels'):
+        assert stream_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in stream_params
+
+    bidi_params = inspect.signature(BidiAction.stream_bidi).parameters
+    for name in ('context', 'telemetry_labels'):
+        assert bidi_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in bidi_params
+
+
+@pytest.mark.asyncio
+async def test_action_run_and_stream_reject_abort_signal_kwarg() -> None:
+    """Passing abort_signal= to public run() or stream() raises TypeError."""
+
+    async def echo(x: str) -> str:
+        return x
+
+    action = Action(name='echo', kind=ActionKind.CUSTOM, fn=echo)
+    signal = asyncio.Event()
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        await action.run('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        action.stream('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+
+@pytest.mark.asyncio
+async def test_action_stream_async_with_calls_aclose() -> None:
+    """`async with action.stream(...) as stream:` calls `await stream.aclose()` on exit."""
+    closed: list[bool] = []
+
+    async def make_tea(leaf: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk(f'steeping {leaf}')
+        ctx.send_chunk(f'pouring {leaf}')
+        return f'{leaf} served'
+
+    action = Action(name='make_tea', kind=ActionKind.FLOW, fn=make_tea)
+    stream_resp = action.stream('oolong')
+
+    orig_aclose = stream_resp.aclose
+
+    async def tracked_aclose() -> None:
+        closed.append(True)
+        await orig_aclose()
+
+    stream_resp.aclose = tracked_aclose  # type: ignore[method-assign]
+
+    seen: list[str] = []
+    async with stream_resp as s:
+        async for chunk in s:
+            seen.append(chunk)
+            break
+
+    assert seen == ['steeping oolong']
+    assert closed == [True]

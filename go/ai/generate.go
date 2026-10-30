@@ -507,9 +507,14 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 	// Tools contributed by middleware bundles are registered on a child
 	// registry so this Generate() call sees them while outer callers do not.
 	// Duplicate names across multiple middleware are rejected explicitly.
-	toolDefMap := make(map[string]*ToolDefinition)
+	//
+	// Definitions keep declaration order (request tools, then middleware
+	// tools) so identical calls send identical bytes, which provider-side
+	// prompt caching depends on.
+	toolNames := make(map[string]bool)
+	toolDefs := make([]*ToolDefinition, 0, len(opts.Tools))
 	for _, t := range opts.Tools {
-		if _, ok := toolDefMap[t]; ok {
+		if toolNames[t] {
 			return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: duplicate tool %q", t)
 		}
 
@@ -518,7 +523,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			return nil, status.Errorf(ErrToolNotFound, "ai.GenerateWithRequest: tool %q not found", t)
 		}
 
-		toolDefMap[t] = tool.Definition()
+		toolNames[t] = true
+		toolDefs = append(toolDefs, tool.Definition())
 	}
 	var middlewareTools []Tool
 	for _, mw := range mws {
@@ -526,10 +532,10 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 			continue
 		}
 		for _, t := range mw.hooks.Tools {
-			if _, ok := toolDefMap[t.Name()]; ok {
+			if toolNames[t.Name()] {
 				return nil, status.Errorf(status.ErrInvalidArgument, "ai.GenerateWithRequest: tool %q is contributed by middleware but already declared elsewhere", t.Name())
 			}
-			toolDefMap[t.Name()] = nil // Reserves the name; the definition is captured after registration.
+			toolNames[t.Name()] = true
 			middlewareTools = append(middlewareTools, t)
 		}
 	}
@@ -542,12 +548,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		// a registry.
 		for _, t := range middlewareTools {
 			t.Register(r)
-			toolDefMap[t.Name()] = t.Definition()
+			toolDefs = append(toolDefs, t.Definition())
 		}
-	}
-	toolDefs := make([]*ToolDefinition, 0, len(toolDefMap))
-	for _, t := range toolDefMap {
-		toolDefs = append(toolDefs, t)
 	}
 
 	maxTurns := opts.MaxTurns
@@ -619,7 +621,7 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 		}
 		fn = backgroundModelToModelFn(bm.Start)
 	} else {
-		fn = m.Generate
+		fn = fillRequest()(m.Generate)
 	}
 
 	// The run's total counts every model action call made under it: model
@@ -814,7 +816,8 @@ func generateWithRequest(ctx context.Context, r api.Registry, opts *GenerateActi
 					// The response rides back with its original message and
 					// finish reason, not marked aborted: the model finished,
 					// post-processing did not, and the raw output is often
-					// exactly what the caller needs to see.
+					// exactly what the caller needs to see. A background
+					// model's response is the one that leaves Request unset.
 					if resp.Request == nil {
 						resp.Request = req
 					}

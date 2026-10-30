@@ -31,9 +31,10 @@ from genkit._core._model import GenerateActionOptions
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     FinishReason,
+    MiddlewareRef,
     MultipartToolResponse as MultipartToolResponseData,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
 from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
@@ -364,12 +365,12 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='deny_mw')
-    class DenyMW(BaseMiddleware):
+    class DenyMW(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             return MultipartToolResponse(output='denied')
 
@@ -416,12 +417,12 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='capture_mw')
-    class CaptureMW(BaseMiddleware):
+    class CaptureMW(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             seen.append(params.tool_request_part)
             return await next_fn(params, ctx)

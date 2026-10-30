@@ -18,8 +18,8 @@ from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext, create_action_key
 from genkit._core._dap import DapValue
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._operation import Operation
 from genkit._core._registry import Registry, define_dynamic_action_provider
-from genkit._core._typing import ActionMetadata, Operation
 from genkit.plugin_api import Plugin
 
 
@@ -163,8 +163,11 @@ async def test_resolve_action_from_plugin() -> None:
 
             return Action(name=name, fn=model_fn, kind=action_type)
 
-        async def list_actions(self) -> list[ActionMetadata]:
-            return [ActionMetadata(action_type=ActionKind.MODEL, name='myplugin/foo')]
+        async def list_actions(self) -> list[Action]:
+            async def model_fn() -> None:
+                pass
+
+            return [Action(kind=ActionKind.MODEL, name='myplugin/foo', fn=model_fn)]
 
     ai = Genkit(plugins=[MyPlugin()])
 
@@ -324,8 +327,11 @@ async def test_child_resolvable_includes_parent_plugin() -> None:
         async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
             return None
 
-        async def list_actions(self) -> list[ActionMetadata]:
-            return [ActionMetadata(action_type=ActionKind.MODEL, name='parentplugin/my-model')]
+        async def list_actions(self) -> list[Action]:
+            async def fn() -> None:
+                pass
+
+            return [Action(kind=ActionKind.MODEL, name='parentplugin/my-model', fn=fn)]
 
     parent = Registry()
     parent.register_plugin(ParentPlugin())
@@ -349,11 +355,15 @@ async def test_child_resolvable_local_tool_shadows_parent_plugin_metadata() -> N
         async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
             return None
 
-        async def list_actions(self) -> list[ActionMetadata]:
+        async def list_actions(self) -> list[Action]:
+            async def fn() -> None:
+                pass
+
             return [
-                ActionMetadata(
-                    action_type=ActionKind.TOOL,
+                Action(
+                    kind=ActionKind.TOOL,
                     name='parentplugin/shared-name',
+                    fn=fn,
                     description='from parent plugin',
                 )
             ]
@@ -390,11 +400,15 @@ async def test_child_dap_child_row_does_not_shadow_parent_plugin_metadata() -> N
         async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
             return None
 
-        async def list_actions(self) -> list[ActionMetadata]:
+        async def list_actions(self) -> list[Action]:
+            async def fn() -> None:
+                pass
+
             return [
-                ActionMetadata(
-                    action_type=ActionKind.TOOL,
+                Action(
+                    kind=ActionKind.TOOL,
                     name='parentplugin/mcp-tool',
+                    fn=fn,
                     description='stale parent schema',
                 )
             ]
@@ -533,7 +547,7 @@ async def test_resolve_model_finds_plugin_background_model() -> None:
         async def init(self) -> list[Action]:
             return []
 
-        async def list_actions(self) -> list[ActionMetadata]:
+        async def list_actions(self) -> list[Action]:
             return []
 
         async def resolve(self, action_type: ActionKind, name: str) -> Action | None:

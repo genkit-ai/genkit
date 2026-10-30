@@ -67,6 +67,7 @@ type RunnerProtectedMethods = {
   fromAnthropicContentBlockChunk: (
     event: MessageStreamEvent
   ) => Part | undefined;
+  fromAnthropicContentBlock: (contentBlock: any) => Part;
   fromAnthropicStopReason: (reason: Message['stop_reason']) => any;
   fromAnthropicResponse: (message: Message) => GenerateResponseData;
 };
@@ -221,6 +222,26 @@ describe('toAnthropicMessageContent', () => {
       },
       cache_control: undefined,
     });
+  });
+
+  it('should send back empty reasoning that has a signature', () => {
+    const result = testRunner.toAnthropicMessageContent({
+      reasoning: '',
+      metadata: { thoughtSignature: 'sig_empty' },
+    });
+
+    assert.deepStrictEqual(result, {
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+  });
+
+  it('should throw a signature error for empty reasoning without a signature', () => {
+    assert.throws(
+      () => testRunner.toAnthropicMessageContent({ reasoning: '' }),
+      /thinking parts require a signature/
+    );
   });
 });
 
@@ -638,6 +659,42 @@ describe('toAnthropicMessages', () => {
       },
     },
   ];
+
+  it('should round-trip an empty thinking block from a response', () => {
+    const thinkingPart = testRunner.fromAnthropicContentBlock({
+      type: 'thinking',
+      thinking: '',
+      signature: 'sig_empty',
+    });
+
+    const { messages } = testRunner.toAnthropicMessages([
+      { role: 'user', content: [{ text: 'What is the weather?' }] },
+      {
+        role: 'model',
+        content: [
+          thinkingPart,
+          {
+            toolRequest: {
+              ref: 'toolu_1',
+              name: 'getWeather',
+              input: { city: 'Paris' },
+            },
+          },
+        ],
+      },
+    ]);
+
+    assert.deepStrictEqual(messages[1].content, [
+      { type: 'thinking', thinking: '', signature: 'sig_empty' },
+      {
+        type: 'tool_use',
+        id: 'toolu_1',
+        name: 'getWeather',
+        input: { city: 'Paris' },
+        cache_control: undefined,
+      },
+    ]);
+  });
 
   for (const test of testCases) {
     it(test.should, () => {

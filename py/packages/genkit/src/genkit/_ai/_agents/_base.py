@@ -32,6 +32,7 @@ from genkit._ai._agents._preamble import (
     tag_history_for_render,
 )
 from genkit._ai._agents._runtime import (
+    AgentContext,
     AgentFn,
     AgentInitError,
     AgentRuntime,
@@ -66,9 +67,9 @@ from genkit._ai._prompt import (
     prepare_prompt,
     register_prompt_actions,
 )
-from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
+from genkit._core._action import Action, ActionKind, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -91,7 +92,6 @@ from genkit._core._typing import (
     AgentAbortResponse,
     AgentFinishReason,
     GetSnapshotRequest,
-    MiddlewareRef,
     Role,
     SnapshotStatus,
     ToolRequest,
@@ -347,7 +347,7 @@ def define_agent(
     model: ModelRef[ModelRefConfigT] | Action | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    use: Sequence[Middleware] | None = None,
     config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
@@ -413,7 +413,7 @@ def define_prompt_agent(
     The agent name and prompt name are the same string.
     """
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             history = await session_runner.get_messages()
             resume_respond = None

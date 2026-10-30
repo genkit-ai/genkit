@@ -43,6 +43,7 @@ describe('trace:list command', () => {
     traceList.setOptionValue('status', undefined);
     traceList.setOptionValue('type', undefined);
     traceList.setOptionValue('name', undefined);
+    traceList.setOptionValue('sessionId', undefined);
     traceList.setOptionValue('continuationToken', undefined);
 
     mockManager = {
@@ -127,6 +128,8 @@ describe('trace:list command', () => {
       'Flow',
       '--name',
       'myFlow',
+      '--session-id',
+      'session-123',
     ]);
 
     expect(mockManager.listTraces).toHaveBeenCalledWith({
@@ -137,6 +140,7 @@ describe('trace:list command', () => {
           status: [2],
           type: ['Flow'],
           name: ['myFlow'],
+          sessionId: ['session-123'],
         },
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
