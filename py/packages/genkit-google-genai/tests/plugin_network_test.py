@@ -28,7 +28,7 @@ import pytest
 from genkit_google_genai import GeminiConfig, GoogleAI, VertexAI
 from google.oauth2.credentials import Credentials
 
-from genkit import Genkit
+from genkit import FinishReason, Genkit
 from genkit.plugin_api import GENKIT_CLIENT_HEADER
 
 MODEL_LIST = {'models': [{'name': 'models/gemini-2.5-flash', 'supportedActions': ['generateContent']}]}
@@ -39,6 +39,8 @@ ANTIGRAVITY_DONE = {
     'status': 'completed',
     'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'Built it'}]}],
 }
+EMBEDDING = {'embeddings': [{'values': [0.1, 0.2, 0.3]}]}
+UNAVAILABLE = {'error': {'code': 503, 'message': 'The model is overloaded.', 'status': 'UNAVAILABLE'}}
 GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
 
 
@@ -55,6 +57,8 @@ class FakeGoogleApi:
             return httpx.Response(200, json=self.model_list)
         if request.url.path.endswith('/interactions'):
             return httpx.Response(200, json=ANTIGRAVITY_DONE)
+        if 'embedcontent' in request.url.path.lower():
+            return httpx.Response(200, json=EMBEDDING)
         return httpx.Response(200, json=CANDIDATE)
 
     def client(self, **kwargs: Any) -> httpx.AsyncClient:  # noqa: ANN401
@@ -66,6 +70,21 @@ class FakeGoogleApi:
 
     def last_post(self) -> httpx.Request:
         return [r for r in self.requests if r.method == 'POST'][-1]
+
+
+class FlakyGoogleApi(FakeGoogleApi):
+    """FakeGoogleApi whose first ``failures`` POSTs return 503 UNAVAILABLE."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == 'POST' and self.failures:
+            self.failures -= 1
+            self.requests.append(request)
+            return httpx.Response(503, json=UNAVAILABLE)
+        return super().__call__(request)
 
 
 def vertex_ai(**kwargs: Any) -> VertexAI:  # noqa: ANN401
@@ -287,6 +306,7 @@ def test_http_client_works_across_event_loops(local_google_api: tuple[FakeGoogle
     async def order() -> tuple[str, str]:
         dish = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
         page = await ai.generate(model='googleai/antigravity-preview-05-2026', prompt='Build a landing page.')
+        assert dish.error is None and page.error is None
         return dish.text, page.text
 
     assert asyncio.run(order()) == ('Smoked Salmon Tartine', 'Built it')
@@ -379,3 +399,62 @@ async def test_sub_millisecond_timeout_rounds_up_to_one_millisecond() -> None:
 
     assert gemini_timeout['read'] == 0.001
     assert interactions_timeout['read'] == 0.001
+
+
+@pytest.mark.asyncio
+async def test_max_retries_retries_an_overloaded_model_call() -> None:
+    """GoogleAI(max_retries=1) retries a 503 on generate and returns the second attempt's answer."""
+    api = FlakyGoogleApi(failures=1)
+    ai = Genkit(plugins=[GoogleAI(api_key='k', max_retries=1, http_client=api.client)])
+
+    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
+
+    assert response.text == 'Smoked Salmon Tartine'
+    assert api.urls('POST') == [GENERATE_URL, GENERATE_URL]
+
+
+@pytest.mark.asyncio
+async def test_max_retries_covers_embeddings() -> None:
+    """max_retries also retries ai.embed, which genkit_middleware.Retry doesn't cover."""
+    api = FlakyGoogleApi(failures=1)
+    ai = Genkit(plugins=[GoogleAI(api_key='k', max_retries=1, http_client=api.client)])
+
+    embeddings = await ai.embed(embedder='googleai/gemini-embedding-001', content='Smoked Salmon Tartine')
+
+    assert embeddings[0].embedding == [0.1, 0.2, 0.3]
+    assert len(api.urls('POST')) == 2
+
+
+@pytest.mark.asyncio
+async def test_no_max_retries_makes_one_attempt() -> None:
+    """Without max_retries, a 503 fails after one request, as google-genai does by default."""
+    api = FlakyGoogleApi(failures=1)
+    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client=api.client)])
+
+    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'UNAVAILABLE'
+    assert api.urls('POST') == [GENERATE_URL]
+
+
+@pytest.mark.parametrize('plugin_class', [GoogleAI, vertex_ai])
+def test_max_retries_maps_to_attempts_including_the_first(plugin_class: Any) -> None:  # noqa: ANN401
+    """max_retries=4 is HttpRetryOptions(attempts=5); max_retries=0 sets no retry options."""
+    retrying = plugin_class(api_key='k', max_retries=4)
+    no_retries = plugin_class(api_key='k', max_retries=0)
+
+    assert retrying._client_kwargs['http_options'].retry_options.attempts == 5
+    assert no_retries._client_kwargs['http_options'].retry_options is None
+
+
+@pytest.mark.parametrize('plugin_class', [GoogleAI, vertex_ai])
+@pytest.mark.parametrize('max_retries', [-1, 1.5, True])
+def test_max_retries_not_a_non_negative_int_raises_value_error(
+    plugin_class: Any,  # noqa: ANN401
+    max_retries: Any,  # noqa: ANN401
+) -> None:
+    """max_retries=-1, 1.5 or True raises ValueError at construction."""
+    with pytest.raises(ValueError, match='max_retries must be a non-negative integer'):
+        plugin_class(api_key='k', max_retries=max_retries)

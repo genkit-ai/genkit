@@ -60,7 +60,7 @@ from google.auth import default as google_auth_default
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError
 from google.genai.errors import APIError
-from google.genai.types import HttpOptions, Model as GenaiModel
+from google.genai.types import HttpOptions, HttpRetryOptions, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
@@ -631,6 +631,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         base_url: str | None = None,
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
+        max_retries: int | None = None,
         http_client: Callable[[], httpx.AsyncClient] | None = None,
         legacy_response_schema: bool = False,
     ) -> None:
@@ -661,6 +662,26 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 **milliseconds**, so divide by 1000 when migrating:
                 ``HttpOptions(timeout=30000)`` becomes ``timeout=30``. Passing
                 ``timeout=30000`` waits over 8 hours.
+            max_retries: How many times to retry a failed request after the
+                first attempt. Defaults to None: no retries, which is
+                google-genai's default. Same name and meaning as
+                ``max_retries`` on Genkit's OpenAI and Anthropic plugins.
+                Retries use google-genai's backoff (about 1, 2, 4 seconds,
+                doubling up to 60, with jitter) on HTTP 408, 429, 500, 502,
+                503 and 504 and on connection errors and timeouts, so each
+                attempt gets its own ``timeout``. Covers Gemini, Imagen, Veo
+                (including operation polling), Virtual Try-On, embedders and
+                model listing. Interactions models (Deep Research,
+                Antigravity, Lyria) don't retry.
+
+                ``genkit_middleware.Retry`` also retries model calls; with
+                both on, attempts multiply. Use ``max_retries`` for
+                embeddings, polling and listing, and ``Retry`` when you need
+                per-status control over model calls.
+
+                Migrating from ``http_options``: ``HttpRetryOptions`` counts
+                the first attempt, so ``HttpRetryOptions(attempts=5)``
+                becomes ``max_retries=4``.
             http_client: A function with no arguments that returns an
                 ``httpx.AsyncClient``, for proxies, mTLS, or a custom
                 transport. Genkit calls it once per event loop and reuses that
@@ -704,6 +725,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 api_version=api_version,
                 headers=headers,
                 timeout=timeout,
+                max_retries=max_retries,
             ),
         }
         self._http_client = _loop_local_http_client(http_client)
@@ -1110,6 +1132,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         base_url: str | None = None,
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
+        max_retries: int | None = None,
         http_client: Callable[[], httpx.AsyncClient] | None = None,
         legacy_response_schema: bool = False,
     ) -> None:
@@ -1143,6 +1166,26 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 **milliseconds**, so divide by 1000 when migrating:
                 ``HttpOptions(timeout=30000)`` becomes ``timeout=30``. Passing
                 ``timeout=30000`` waits over 8 hours.
+            max_retries: How many times to retry a failed request after the
+                first attempt. Defaults to None: no retries, which is
+                google-genai's default. Same name and meaning as
+                ``max_retries`` on Genkit's OpenAI and Anthropic plugins.
+                Retries use google-genai's backoff (about 1, 2, 4 seconds,
+                doubling up to 60, with jitter) on HTTP 408, 429, 500, 502,
+                503 and 504 and on connection errors and timeouts, so each
+                attempt gets its own ``timeout``. Covers Gemini, Imagen, Veo
+                (including operation polling), Virtual Try-On, embedders and
+                model listing. Interactions models (Deep Research,
+                Antigravity, Lyria) don't retry.
+
+                ``genkit_middleware.Retry`` also retries model calls; with
+                both on, attempts multiply. Use ``max_retries`` for
+                embeddings, polling and listing, and ``Retry`` when you need
+                per-status control over model calls.
+
+                Migrating from ``http_options``: ``HttpRetryOptions`` counts
+                the first attempt, so ``HttpRetryOptions(attempts=5)``
+                becomes ``max_retries=4``.
             http_client: A function with no arguments that returns an
                 ``httpx.AsyncClient``, for proxies, mTLS, or a custom
                 transport. Genkit calls it once per event loop and reuses that
@@ -1176,6 +1219,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             api_version=api_version,
             headers=headers,
             timeout=timeout,
+            max_retries=max_retries,
         )
         self._http_client = _loop_local_http_client(http_client)
         self._base_url_pinned = bool(opts.base_url)
@@ -1543,6 +1587,7 @@ def _plugin_http_options(
     api_version: str | None = None,
     headers: Mapping[str, str] | None = None,
     timeout: float | None = None,
+    max_retries: int | None = None,
 ) -> HttpOptions:
     """Build the SDK's HttpOptions from the plugin's network arguments.
 
@@ -1553,11 +1598,19 @@ def _plugin_http_options(
     OpenAI and Anthropic SDKs, grpc-python and Genkit's Ollama plugin all take
     float seconds. google-genai's ``HttpOptions.timeout`` (milliseconds) is the
     outlier, so the conversion happens here, once.
+
+    ``max_retries`` follows the OpenAI and Anthropic SDKs (retries after the
+    first attempt) and maps onto ``HttpRetryOptions.attempts``, which counts
+    the first attempt. google-genai's backoff and status codes are kept.
     """
     # 0 would mean no timeout to google-genai but an instant failure to the
     # Interactions client, so only a positive, finite budget is accepted.
     if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
         raise ValueError(f'timeout must be a positive, finite number of seconds, got {timeout!r}')
+    if max_retries is not None and (
+        isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0
+    ):
+        raise ValueError(f'max_retries must be a non-negative integer, got {max_retries!r}')
 
     merged = dict(headers or {})
     for name in ('x-goog-api-client', 'user-agent'):
@@ -1571,4 +1624,5 @@ def _plugin_http_options(
         api_version=api_version or None,
         headers=merged,
         timeout=math.ceil(timeout * 1000) if timeout is not None else None,
+        retry_options=HttpRetryOptions(attempts=max_retries + 1) if max_retries else None,
     )
