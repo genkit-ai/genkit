@@ -6,16 +6,16 @@
 // "googleai") and Google Cloud Vertex AI ([VertexAI], provider "vertexai").
 //
 // Both plugins implement [api.DynamicPlugin] and resolve any model or embedder
-// ID served by the backend on demand when referenced by its
-// "<provider>/<model-id>" name (for example, "googleai/gemini-flash-latest" or
-// "vertexai/gemini-3.8-flash"), including newly released models not listed in
-// internal capability tables.
+// ID served by the backend on demand when referenced with its required
+// "<provider>/<model-id>" prefix (for example, "googleai/gemini-flash-latest"
+// or "vertexai/gemini-3.8-flash"), including newly released models not listed
+// in internal capability tables.
 //
 // Example:
 //
 //	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 //
-//	helloFlow := genkit.DefineFlow(g, "hello", func(ctx context.Context, name string) (string, error) {
+//	genkit.DefineFlow(g, "helloFlow", func(ctx context.Context, name string) (string, error) {
 //		return genkit.GenerateText(ctx, g,
 //			ai.WithModelName("googleai/gemini-flash-latest"),
 //			ai.WithPrompt("Say hello to %s", name),
@@ -71,7 +71,15 @@ func rejectBackgroundModel(provider, id string) error {
 	return nil
 }
 
-// GoogleAI is a Genkit plugin for interacting with the Google AI service.
+// GoogleAI is a Genkit plugin for interacting with the Google AI (Gemini
+// Developer API) service under the "googleai" provider prefix.
+//
+// GoogleAI implements [api.DynamicPlugin] and resolves any model or embedder ID
+// served by the Gemini API on demand when referenced as "googleai/<model-id>"
+// (for example, ai.WithModelName("googleai/gemini-flash-latest") or
+// genkit.WithDefaultModel("googleai/gemini-3.8-flash")), including newly
+// released models not listed in internal capability tables. The "googleai/"
+// prefix is always required when referencing a model or embedder.
 type GoogleAI struct {
 	APIKey     string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
 	APIVersion string // API version to use ("v1", "v1beta", or "v1alpha"). If empty, the genai SDK default (v1beta) is used. Can be overridden per-request via config.HTTPOptions.APIVersion.
@@ -90,12 +98,13 @@ type GoogleAI struct {
 	// wrapping its transport with otelhttp.NewTransport. Optional.
 	HTTPClient *http.Client
 
-	// Models overrides what the plugin knows about a model, keyed by model ID.
-	// Every model the backend serves already works without an entry here:
-	// known IDs carry curated capabilities and the rest take the defaults for
-	// their kind. Supply an entry only to correct or extend what the plugin
-	// resolves, most often to describe a model released after this version of
-	// the plugin.
+	// Models overrides what the plugin knows about a model, keyed by bare
+	// model ID (without the "googleai/" prefix; callers still reference the
+	// model as "googleai/<model-id>"). Every model the backend serves already
+	// works without an entry here: known IDs carry curated capabilities and
+	// the rest take the defaults for their kind. Supply an entry only to
+	// correct or extend what the plugin resolves, most often to describe a
+	// model released after this version of the plugin.
 	//
 	//	&googlegenai.GoogleAI{Models: map[string]ai.ModelOptions{
 	//		"gemini-flash-latest": {Supports: &ai.ModelSupports{Tools: true, Multiturn: true}},
@@ -109,7 +118,9 @@ type GoogleAI struct {
 	Models map[string]ai.ModelOptions
 
 	// Embedders overrides what the plugin knows about an embedder, keyed by
-	// embedder ID. It works exactly as Models does.
+	// bare embedder ID (without the "googleai/" prefix; callers still
+	// reference the embedder as "googleai/<embedder-id>"). It works exactly as
+	// Models does.
 	Embedders map[string]ai.EmbedderOptions
 
 	gclient *genai.Client // Client for the Google AI service.
@@ -117,7 +128,15 @@ type GoogleAI struct {
 	initted bool          // Whether the plugin has been initialized.
 }
 
-// VertexAI is a Genkit plugin for interacting with the Google Vertex AI service.
+// VertexAI is a Genkit plugin for interacting with the Google Cloud Vertex AI
+// service under the "vertexai" provider prefix.
+//
+// VertexAI implements [api.DynamicPlugin] and resolves any model or embedder ID
+// served by Vertex AI on demand when referenced as "vertexai/<model-id>" (for
+// example, ai.WithModelName("vertexai/gemini-3.8-flash") or
+// genkit.WithDefaultModel("vertexai/gemini-3.8-flash")), including newly
+// released models not listed in internal capability tables. The "vertexai/"
+// prefix is always required when referencing a model or embedder.
 type VertexAI struct {
 	ProjectID  string // Google Cloud project to use for Vertex AI. If empty, the value of the environment variable GOOGLE_CLOUD_PROJECT will be consulted.
 	Location   string // Location of the Vertex AI service. If empty, GOOGLE_CLOUD_LOCATION and GOOGLE_CLOUD_REGION environment variables will be consulted, in that order. Accepts a regional location (e.g. "us-central1"), a multi-region location ("us" or "eu"), or "global".
@@ -149,15 +168,18 @@ type VertexAI struct {
 	// Mutually exclusive with Credentials. Optional.
 	HTTPClient *http.Client
 
-	// Models overrides what the plugin knows about a model, keyed by model ID;
-	// see [GoogleAI.Models]. Tuned Gemini endpoints are keyed in either the
-	// short form `endpoints/ID` or the full resource path
-	// `projects/PROJECT/locations/LOCATION/endpoints/ID`, whichever form the
-	// request names them by.
+	// Models overrides what the plugin knows about a model, keyed by bare
+	// model ID (without the "vertexai/" prefix; callers still reference the
+	// model as "vertexai/<model-id>"); see [GoogleAI.Models]. Tuned Gemini
+	// endpoints are keyed in either the short form `endpoints/ID` or the full
+	// resource path `projects/PROJECT/locations/LOCATION/endpoints/ID`,
+	// whichever form the request names them by.
 	Models map[string]ai.ModelOptions
 
 	// Embedders overrides what the plugin knows about an embedder, keyed by
-	// embedder ID; see [GoogleAI.Embedders].
+	// bare embedder ID (without the "vertexai/" prefix; callers still
+	// reference the embedder as "vertexai/<embedder-id>"); see
+	// [GoogleAI.Embedders].
 	Embedders map[string]ai.EmbedderOptions
 
 	gclient *genai.Client // Client for the Vertex AI service.
@@ -214,12 +236,14 @@ func httpClientOrDefault(c *http.Client) *http.Client {
 	return http.DefaultClient
 }
 
-// Name returns the name of the plugin.
+// Name returns the provider name of the plugin ("googleai"). Model and
+// embedder references for this plugin use the "googleai/<id>" prefix.
 func (ga *GoogleAI) Name() string {
 	return googleAIProvider
 }
 
-// Name returns the name of the plugin.
+// Name returns the provider name of the plugin ("vertexai"). Model and
+// embedder references for this plugin use the "vertexai/<id>" prefix.
 func (v *VertexAI) Name() string {
 	return vertexAIProvider
 }
