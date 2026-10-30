@@ -22,10 +22,9 @@ Bedrock Converse and ConverseStream APIs; embedders and image generation use
 InvokeModel.
 """
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal
 
-from genkit import GenkitError, ModelResponse, get_logger
+from genkit import ModelResponse, get_logger
 from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
 from genkit.model import Model, ModelContext, ModelRequest
 from genkit.plugin_api import (
@@ -55,23 +54,6 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 BEDROCK_PLUGIN_NAME = 'bedrock'
-
-
-def _reject_secrets_api_key(context: dict[str, Any]) -> None:
-    # A caller passing a tenant's key expects the tenant to pay. Bedrock bills
-    # the app's AWS account no matter what, so running the call anyway would
-    # charge the wrong account without anyone noticing.
-    secrets = context.get('secrets')
-    if not isinstance(secrets, Mapping):
-        return
-    bag = cast(Mapping[str, object], secrets)
-    if bag.get('api_key') is not None or bag.get('apiKey') is not None:
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=(
-                "bedrock authenticates with AWS credentials; a per-request api_key in context.secrets isn't supported"
-            ),
-        )
 
 
 def _action_name(model_id: str) -> str:
@@ -224,7 +206,6 @@ class Bedrock(Plugin):
         config_schema = _config_schema(model_type)
 
         async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
-            _reject_secrets_api_key(ctx.context)
             if model_type == 'image':
                 image_model = BedrockImageModel(model_id=model_id, transport=self._transport)
                 return await image_model.generate(request, ctx)

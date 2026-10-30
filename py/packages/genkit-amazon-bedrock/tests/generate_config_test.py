@@ -29,6 +29,7 @@ from genkit import Genkit, GenkitError
 CHAT_MODEL = 'bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0'
 IMAGE_MODEL = 'bedrock/stability.sd3-5-large-v1:0'
 NOVA_CANVAS = 'bedrock/amazon.nova-canvas-v1:0'
+TITAN_IMAGE = 'bedrock/amazon.titan-image-generator-v2:0'
 THINKING = {'thinking': {'type': 'enabled', 'budget_tokens': 2048}}
 
 
@@ -172,8 +173,10 @@ async def test_generate_bedrock_image_extra_adds_negative_text_next_to_prompt() 
         (NOVA_CANVAS, {'taskType': 'INPAINTING'}, 'taskType'),
         (NOVA_CANVAS, {'textToImageParams': {'text': 'a shipwreck'}}, 'textToImageParams.text'),
         (NOVA_CANVAS, {'textToImageParams': 'a shipwreck'}, 'textToImageParams'),
+        (TITAN_IMAGE, {'taskType': 'INPAINTING'}, 'taskType'),
+        (TITAN_IMAGE, {'textToImageParams': {'text': 'a shipwreck'}}, 'textToImageParams.text'),
     ],
-    ids=['stability_prompt', 'nova_task_type', 'nova_text', 'nova_params_not_mapping'],
+    ids=['stability_prompt', 'nova_task_type', 'nova_text', 'nova_params_not_mapping', 'titan_task_type', 'titan_text'],
 )
 async def test_generate_bedrock_image_extra_prompt_field_fails_invalid_argument(
     model: str, extra: dict[str, Any], field: str
@@ -186,6 +189,19 @@ async def test_generate_bedrock_image_extra_prompt_field_fails_invalid_argument(
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
     assert repr(field) in response.error.message
+    assert transport.invoke_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_bedrock_image_extra_not_a_mapping_fails_invalid_argument() -> None:
+    """`config={'extra': 'oops'}` fails with INVALID_ARGUMENT instead of an AttributeError, and sends nothing."""
+    ai, transport = bedrock_app()
+
+    response = await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'extra': 'oops'})
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert "config['extra'] must be a mapping" in response.error.message
     assert transport.invoke_calls == []
 
 
@@ -239,43 +255,22 @@ def test_bedrock_config_with_old_additional_fields_name_raises_validation_error(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('key_name', ['api_key', 'apiKey'])
-async def test_generate_bedrock_secrets_api_key_fails_invalid_argument(key_name: str) -> None:
-    """A per-request key in `context.secrets` fails with INVALID_ARGUMENT on `.error` and sends nothing to AWS."""
-    ai, transport = bedrock_app()
-
-    response = await ai.generate(model=CHAT_MODEL, prompt='hi', context={'secrets': {key_name: 'tenant-key'}})
-
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert 'AWS credentials' in response.error.message
-    assert transport.converse_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_bedrock_image_secrets_api_key_fails_invalid_argument() -> None:
-    """The same key on a Bedrock image model fails the same way and sends nothing."""
-    ai, transport = bedrock_app()
-
-    response = await ai.generate(model=IMAGE_MODEL, prompt='a reef', context={'secrets': {'api_key': 'tenant-key'}})
-
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert transport.invoke_calls == []
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     'context',
-    [None, {'secrets': {'db_password': 'x'}}],
-    ids=['no_context', 'secrets_without_api_key'],
+    [
+        None,
+        {'secrets': {'db_password': 'x'}},
+        {'secrets': {'api_key': 'sk-openai'}},
+        {'secrets': {'apiKey': 'sk-openai'}},
+    ],
+    ids=['no_context', 'other_secrets', 'api_key', 'apiKey'],
 )
-async def test_generate_bedrock_without_secrets_api_key_uses_aws_credentials(context: dict[str, Any] | None) -> None:
-    """No key in `context.secrets` runs on the app's AWS credentials as before."""
+@pytest.mark.parametrize('model', [CHAT_MODEL, IMAGE_MODEL], ids=['chat', 'image'])
+async def test_generate_bedrock_ignores_secrets_api_key(model: str, context: dict[str, Any] | None) -> None:
+    """Bedrock runs on the app's AWS credentials; a `secrets.api_key` meant for another provider doesn't fail it."""
     ai, transport = bedrock_app()
 
-    response = await ai.generate(model=CHAT_MODEL, prompt='hi', context=context)
+    response = await ai.generate(model=model, prompt='hi', context=context)
 
     assert response.error is None
-    assert response.text == 'ok'
-    assert len(transport.converse_calls) == 1
+    assert len(transport.converse_calls) + len(transport.invoke_calls) == 1
