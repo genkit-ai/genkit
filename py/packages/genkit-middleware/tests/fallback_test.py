@@ -22,8 +22,17 @@ import pytest
 from genkit_middleware import Fallback
 from pydantic import Field, ValidationError
 
-from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
+from genkit import (
+    FinishReason,
+    Genkit,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
+from genkit.middleware import MiddlewareContext, ModelHookParams
 from genkit.model import ModelConfig, ModelContext, ModelRef, ModelRequest
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
@@ -354,11 +363,11 @@ async def test_fallback_stops_when_aborted() -> None:
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
-    ctx = GenerateMiddlewareContext(ai=ai)
+    ctx = MiddlewareContext(ai=ai)
     ctx.abort_signal.set()
     fallback = Fallback(models=['backup1', 'backup2'])
 
-    async def next_fn(_params: ModelHookParams, _ctx: GenerateMiddlewareContext) -> ModelResponse:
+    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     with pytest.raises(GenkitError, match='primary down'):
@@ -388,10 +397,10 @@ async def test_fallback_halts_subsequent_models_on_abort() -> None:
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
-    ctx = GenerateMiddlewareContext(ai=ai)
+    ctx = MiddlewareContext(ai=ai)
     fallback = Fallback(models=['backup1', 'backup2'])
 
-    async def next_fn(_params: ModelHookParams, _ctx: GenerateMiddlewareContext) -> ModelResponse:
+    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     with pytest.raises(GenkitError, match='backup1 down'):
@@ -475,3 +484,11 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
 
     assert backup_calls == 0
     assert response.finish_reason == FinishReason.FAILED
+
+
+def test_fallback_model_ref_entry_dumps_camel_case_config_keys() -> None:
+    """A ModelRef entry in Fallback writes camelCase config keys in the middleware ref."""
+    ref = ModelRef(name='echo/b', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=5, top_k=3))
+    fb = Fallback(models=[ref])
+    dumped = fb.config.model_dump(by_alias=True, exclude_none=True, mode='json')
+    assert dumped['models'] == [{'name': 'echo/b', 'config': {'maxOutputTokens': 5, 'topK': 3}}]

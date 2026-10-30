@@ -24,11 +24,11 @@ import pytest
 from genkit import FinishReason, Genkit, Message, ModelResponse, Part, Role, Tool, tool
 from genkit._ai._generate import CallScope
 from genkit.exp import Genkit as ExpGenkit
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import ActionKind
 
-NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
+NextModel = Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]]
 
 
 def _define_tool_caller(ai: Genkit, name: str = 'caller') -> None:
@@ -139,9 +139,9 @@ async def test_middleware_ctx_ai_is_the_app_inside_an_agent_turn() -> None:
 
     ai.define_model(name='echo', fn=echo)
 
-    class PeekAi(BaseMiddleware):
+    class PeekAi(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             seen.append(ctx.ai)
             return await next_fn(params, ctx)

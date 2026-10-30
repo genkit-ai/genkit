@@ -22,10 +22,9 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import GenkitError, ModelResponse
+from genkit import GenkitError, ModelResponse, get_logger
 from genkit.model import ModelContext, ModelRef, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import (
     Action,
@@ -40,7 +39,7 @@ from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude
 from genkit_anthropic._models import AnthropicModel, pinned_credential_header
 from genkit_anthropic._secrets import context_api_key, reject_config_api_key
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
 
@@ -136,10 +135,8 @@ class Anthropic(Plugin):
     name = ANTHROPIC_PLUGIN_NAME
 
     @classmethod
-    def claude_model(
-        cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None
-    ) -> ModelRef[AnthropicConfig]:
-        """Typed ref for a Claude model, e.g. ``Anthropic.claude_model('claude-sonnet-4-5')``.
+    def claude(cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None) -> ModelRef[AnthropicConfig]:
+        """Typed ref for a Claude model, e.g. ``Anthropic.claude('claude-sonnet-4-5')``.
 
         Unknown ids are allowed so new Claude releases work before this
         plugin learns their names; every Anthropic generate model takes
@@ -148,10 +145,10 @@ class Anthropic(Plugin):
         # str(None) is 'None', and unknown ids are allowed, so a non-string
         # would mint a real-looking ref instead of failing here.
         if not isinstance(name, str):
-            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name must be a string.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude: model name must be a string.')
         local = _strip_ref_prefixes(name)
         if not local:
-            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name is required.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude: model name is required.')
         return ModelRef(name=f'{ANTHROPIC_PLUGIN_NAME}/{local}', config_schema=AnthropicConfig, config=config)
 
     def __init__(

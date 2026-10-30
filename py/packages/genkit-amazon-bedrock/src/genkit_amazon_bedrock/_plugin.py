@@ -24,9 +24,7 @@ InvokeModel.
 
 from typing import TYPE_CHECKING, Literal
 
-import structlog
-
-from genkit import ModelResponse
+from genkit import ModelResponse, get_logger
 from genkit.embedder import EmbedRequest, EmbedResponse, embedder, embedder_action_metadata
 from genkit.model import ModelContext, ModelRequest, model as create_model, model_action_metadata
 from genkit.plugin_api import (
@@ -55,7 +53,7 @@ from genkit_amazon_bedrock._transport import BedrockTransport
 if TYPE_CHECKING:
     import boto3.session
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 BEDROCK_PLUGIN_NAME = 'bedrock'
 

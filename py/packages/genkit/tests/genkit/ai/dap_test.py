@@ -33,11 +33,11 @@ from genkit._core._action import Action, ActionKind
 from genkit._core._dap import (
     DapMetadata,
     DapValue,
-    DynamicActionProvider,
     is_dynamic_action_provider,
 )
 from genkit._core._registry import Registry, define_dynamic_action_provider
 from genkit._core._typing import ActionMetadata
+from genkit.plugin_api import DynamicActionProvider
 
 
 @pytest.fixture

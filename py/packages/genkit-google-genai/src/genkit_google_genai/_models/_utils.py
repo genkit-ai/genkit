@@ -48,7 +48,6 @@ kept in mind when modifying media handling or tool conversion logic:
 """
 
 import base64
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
@@ -57,11 +56,11 @@ from urllib.parse import urlparse, urlsplit, urlunsplit
 import httpx
 from google import genai
 
-from genkit import GenkitError, Part
+from genkit import GenkitError, Part, get_logger
 from genkit.model import ToolRequest, ToolResponse
 from genkit.plugin_api import loop_local_client
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # TODO(#4360): Replace with downloadRequestMedia middleware.

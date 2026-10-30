@@ -479,19 +479,26 @@ def model(
     Plugin ``init`` / ``resolve`` return this. ``define_model`` registers it.
     The config class stays on the action so ``generate(model='name', config=)``
     can isinstance-check a Pydantic instance against a string model name.
+    It comes from ``config_schema`` or the fn's ``ModelRequest[Cfg]``
+    annotation; given both, they must be the same class.
     """
     model_options = _model_options(name=name, info=info, config_schema=config_schema, metadata=metadata)
     model_meta: dict[str, object] = metadata.copy() if metadata else {}
     model_meta['model'] = model_options
 
     if not config_schema:
-        return Action(
+        action = Action(
             kind=ActionKind.MODEL,
             name=name,
             fn=fn,
             metadata=model_meta,
             description=get_func_description(fn, description),
+            config_schema=config_schema,
         )
+        # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
+        if 'customOptions' not in model_options and action.config_schema is not None:
+            model_options['customOptions'] = to_json_schema(action.config_schema)
+        return action
 
     schema = config_schema
     # Action rejects a sync fn, but it only sees the async wrapper below.
@@ -517,6 +524,8 @@ def model(
         description=get_func_description(fn, description),
         config_schema=config_schema,
     )
+    if 'customOptions' not in model_options and action.config_schema is not None:
+        model_options['customOptions'] = to_json_schema(action.config_schema)
     return action
 
 

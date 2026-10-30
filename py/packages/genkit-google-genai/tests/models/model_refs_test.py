@@ -86,13 +86,13 @@ _RETIRED_GEMINI = {
 _RETIRED_IMAGE = {'gemini-2.5-flash-image-preview', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'}
 
 _BACKEND_IDS: dict[tuple[type, str], set[str] | None] = {
-    (GoogleAI, 'gemini_model'): _SHARED_GEMINI | _GOOGLEAI_LATEST,
-    (VertexAI, 'gemini_model'): _SHARED_GEMINI,
-    (GoogleAI, 'gemini_tts_model'): _SHARED_TTS,
-    (VertexAI, 'gemini_tts_model'): _SHARED_TTS,
-    (GoogleAI, 'gemini_image_model'): _SHARED_IMAGE,
-    (VertexAI, 'gemini_image_model'): _SHARED_IMAGE,
-    (GoogleAI, 'gemma_model'): {
+    (GoogleAI, 'gemini'): _SHARED_GEMINI | _GOOGLEAI_LATEST,
+    (VertexAI, 'gemini'): _SHARED_GEMINI,
+    (GoogleAI, 'gemini_tts'): _SHARED_TTS,
+    (VertexAI, 'gemini_tts'): _SHARED_TTS,
+    (GoogleAI, 'gemini_image'): _SHARED_IMAGE,
+    (VertexAI, 'gemini_image'): _SHARED_IMAGE,
+    (GoogleAI, 'gemma'): {
         'gemma-3-1b-it',
         'gemma-3-4b-it',
         'gemma-3-12b-it',
@@ -101,23 +101,23 @@ _BACKEND_IDS: dict[tuple[type, str], set[str] | None] = {
         'gemma-4-26b-a4b-it',
         'gemma-4-31b-it',
     },
-    (VertexAI, 'gemma_model'): None,
-    (GoogleAI, 'veo_model'): {
+    (VertexAI, 'gemma'): None,
+    (GoogleAI, 'veo'): {
         'veo-3.1-generate-preview',
         'veo-3.1-fast-generate-preview',
         'veo-3.1-lite-generate-preview',
     },
-    (VertexAI, 'veo_model'): {'veo-3.1-generate-001', 'veo-3.1-fast-generate-001', 'veo-3.1-lite-generate-001'},
+    (VertexAI, 'veo'): {'veo-3.1-generate-001', 'veo-3.1-fast-generate-001', 'veo-3.1-lite-generate-001'},
 }
 
 
 class TestHappyPaths:
     """Each constructor mints its family's typed ref under its own namespace."""
 
-    def test_gemini_model_both_plugins(self) -> None:
+    def test_gemini_both_plugins(self) -> None:
         """Same constructor name works on both plugins, each stamping its namespace."""
-        googleai_ref = GoogleAI.gemini_model('gemini-2.5-flash')
-        vertexai_ref = VertexAI.gemini_model('gemini-2.5-flash')
+        googleai_ref = GoogleAI.gemini('gemini-2.5-flash')
+        vertexai_ref = VertexAI.gemini('gemini-2.5-flash')
 
         assert isinstance(googleai_ref, ModelRef)
         assert googleai_ref.name == 'googleai/gemini-2.5-flash'
@@ -126,18 +126,18 @@ class TestHappyPaths:
 
     def test_unlisted_ids_still_mint_refs(self) -> None:
         """An id missing from the ``Known*`` Literal still works, so a new release needs no SDK bump."""
-        assert GoogleAI.gemini_model('gemini-9.9-flash').name == 'googleai/gemini-9.9-flash'
-        assert GoogleAI.veo_model('veo-9.9-generate-001').name == 'googleai/veo-9.9-generate-001'
-        assert GoogleAI.lyria_model('lyria-9-preview').name == 'googleai/lyria-9-preview'
+        assert GoogleAI.gemini('gemini-9.9-flash').name == 'googleai/gemini-9.9-flash'
+        assert GoogleAI.veo('veo-9.9-generate-001').name == 'googleai/veo-9.9-generate-001'
+        assert GoogleAI.lyria('lyria-9-preview').name == 'googleai/lyria-9-preview'
 
     def test_family_constructors_type_their_config(self) -> None:
         """Each family constructor carries its own config schema."""
-        tts = GoogleAI.gemini_tts_model('gemini-2.5-flash-preview-tts')
-        image = VertexAI.gemini_image_model('gemini-2.5-flash-image')
-        gemma = GoogleAI.gemma_model('gemma-3-12b-it')
-        veo = GoogleAI.veo_model('veo-3.1-fast-generate-preview')
-        vertex_gemma = VertexAI.gemma_model('gemma-3-12b-it')
-        vertex_veo = VertexAI.veo_model('veo-3.1-generate-001')
+        tts = GoogleAI.gemini_tts('gemini-2.5-flash-preview-tts')
+        image = VertexAI.gemini_image('gemini-2.5-flash-image')
+        gemma = GoogleAI.gemma('gemma-3-12b-it')
+        veo = GoogleAI.veo('veo-3.1-fast-generate-preview')
+        vertex_gemma = VertexAI.gemma('gemma-3-12b-it')
+        vertex_veo = VertexAI.veo('veo-3.1-generate-001')
 
         assert tts.config_schema is GeminiTtsConfig
         assert image.config_schema is GeminiImageConfig
@@ -153,16 +153,16 @@ class TestHappyPaths:
     def test_config_instance_rides_along(self) -> None:
         """A default config passed at construction survives into the ref."""
         config = GeminiConfig(temperature=0.3)
-        ref = GoogleAI.gemini_model('gemini-2.5-flash', config=config)
+        ref = GoogleAI.gemini('gemini-2.5-flash', config=config)
         assert ref.config == config
 
-    def test_unknown_id_allowed_on_gemini_model_and_embedding(self) -> None:
+    def test_unknown_id_allowed_on_gemini_and_embedding(self) -> None:
         """A brand-new release must work before this plugin learns its name."""
-        assert GoogleAI.gemini_model('totally-new-model').name == 'googleai/totally-new-model'
+        assert GoogleAI.gemini('totally-new-model').name == 'googleai/totally-new-model'
         assert GoogleAI.embedding('totally-new-embedder').name == 'googleai/totally-new-embedder'
 
         with pytest.raises(GenkitError):
-            GoogleAI.gemma_model('totally-new-model')
+            GoogleAI.gemma('totally-new-model')
 
 
 class TestStripThenPrefix:
@@ -180,13 +180,13 @@ class TestStripThenPrefix:
     )
     def test_cross_plugin_paste_cannot_smuggle_namespace(self, pasted: str) -> None:
         """Every pasted prefix form lands on this plugin, not the pasted one."""
-        assert GoogleAI.gemini_model(pasted).name == 'googleai/gemini-2.5-flash'
-        assert VertexAI.gemini_model(pasted).name == 'vertexai/gemini-2.5-flash'
+        assert GoogleAI.gemini(pasted).name == 'googleai/gemini-2.5-flash'
+        assert VertexAI.gemini(pasted).name == 'vertexai/gemini-2.5-flash'
 
     def test_empty_after_strip_is_rejected(self) -> None:
         """A bare prefix with no id left is an invalid argument."""
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.gemini_model('googleai/')
+            GoogleAI.gemini('googleai/')
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'model name is required' in str(exc_info.value)
 
@@ -203,7 +203,7 @@ class TestStripThenPrefix:
     def test_non_string_name_is_rejected(self) -> None:
         """A non-string must not become a name via str() (None → 'None')."""
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.gemini_model(None)  # type: ignore[arg-type]
+            GoogleAI.gemini(None)  # type: ignore[arg-type]
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'must be a string' in str(exc_info.value)
 
@@ -234,59 +234,59 @@ class TestClosedRejectSet:
             'gemma-3-12b-it',  # wrong family: Gemma
         ],
     )
-    def test_gemini_model_rejects(self, bad_id: str) -> None:
-        """gemini_model refuses every id whose action validates another schema."""
+    def test_gemini_rejects(self, bad_id: str) -> None:
+        """gemini refuses every id whose action validates another schema."""
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.gemini_model(bad_id)
+            GoogleAI.gemini(bad_id)
         assert exc_info.value.status == 'INVALID_ARGUMENT'
 
     def test_error_points_at_the_right_constructor(self) -> None:
         """Rejections tell the caller which constructor to use instead."""
-        with pytest.raises(GenkitError, match=r'gemini_tts_model'):
-            GoogleAI.gemini_model('gemini-2.5-flash-preview-tts')
-        with pytest.raises(GenkitError, match=r'VertexAI\.gemini_model'):
-            VertexAI.gemma_model('gemini-2.5-flash')
+        with pytest.raises(GenkitError, match=r'gemini_tts\('):
+            GoogleAI.gemini('gemini-2.5-flash-preview-tts')
+        with pytest.raises(GenkitError, match=r'VertexAI\.gemini\('):
+            VertexAI.gemma('gemini-2.5-flash')
         with pytest.raises(GenkitError, match=r'embedding'):
-            GoogleAI.gemini_model('gemini-embedding-001')
-        with pytest.raises(GenkitError, match=r'veo_model'):
-            GoogleAI.gemini_model('veo-3.1-generate-preview')
-        with pytest.raises(GenkitError, match=r'lyria_model'):
-            GoogleAI.gemini_model('lyria-002')
-        with pytest.raises(GenkitError, match=r'deep_research_model'):
-            GoogleAI.gemini_model('deep-research-pro-preview')
-        with pytest.raises(GenkitError, match=r'antigravity_model'):
-            GoogleAI.gemini_model('antigravity-code-1')
+            GoogleAI.gemini('gemini-embedding-001')
+        with pytest.raises(GenkitError, match=r'veo\('):
+            GoogleAI.gemini('veo-3.1-generate-preview')
+        with pytest.raises(GenkitError, match=r'lyria\('):
+            GoogleAI.gemini('lyria-002')
+        with pytest.raises(GenkitError, match=r'deep_research\('):
+            GoogleAI.gemini('deep-research-pro-preview')
+        with pytest.raises(GenkitError, match=r'antigravity\('):
+            GoogleAI.gemini('antigravity-code-1')
         with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
-            VertexAI.gemini_model('lyria-002')
+            VertexAI.gemini('lyria-002')
         with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
-            VertexAI.gemini_model('deep-research-pro-preview')
+            VertexAI.gemini('deep-research-pro-preview')
         with pytest.raises(GenkitError, match=r'is not a supported model'):
-            GoogleAI.gemini_model('imagegeneration@006')
+            GoogleAI.gemini('imagegeneration@006')
         with pytest.raises(GenkitError, match=r'has no ref constructor in this plugin'):
-            GoogleAI.gemini_model('virtual-try-on-001')
-        with pytest.raises(GenkitError, match=r'virtual_try_on_model'):
-            VertexAI.gemini_model('virtual-try-on-001')
-        with pytest.raises(GenkitError, match=r'GoogleAI\.gemini_image_model'):
-            GoogleAI.gemini_model('imagen-4.0-generate-001')
-        with pytest.raises(GenkitError, match=r'for image generation use VertexAI\.gemini_image_model\(\)'):
-            VertexAI.gemini_model('imagen-3.0-generate-002')
+            GoogleAI.gemini('virtual-try-on-001')
+        with pytest.raises(GenkitError, match=r'virtual_try_on\('):
+            VertexAI.gemini('virtual-try-on-001')
+        with pytest.raises(GenkitError, match=r'GoogleAI\.gemini_image\('):
+            GoogleAI.gemini('imagen-4.0-generate-001')
+        with pytest.raises(GenkitError, match=r'for image generation use VertexAI\.gemini_image\(\)'):
+            VertexAI.gemini('imagen-3.0-generate-002')
         with pytest.raises(GenkitError, match=r'is not a gemma model'):
-            GoogleAI.gemma_model('totally-new-model')
+            GoogleAI.gemma('totally-new-model')
 
     def test_family_constructors_reject_other_families(self) -> None:
         """Non-gemini constructors take only their own family ids."""
         with pytest.raises(GenkitError):
-            GoogleAI.gemini_tts_model('gemini-2.5-flash')
+            GoogleAI.gemini_tts('gemini-2.5-flash')
         with pytest.raises(GenkitError):
-            GoogleAI.gemma_model('gemini-2.5-flash')
+            GoogleAI.gemma('gemini-2.5-flash')
         with pytest.raises(GenkitError):
-            VertexAI.gemini_image_model('imagen-3.0-generate-002')
+            VertexAI.gemini_image('imagen-3.0-generate-002')
         with pytest.raises(GenkitError):
-            GoogleAI.veo_model('gemini-2.5-flash')
+            GoogleAI.veo('gemini-2.5-flash')
         with pytest.raises(GenkitError):
-            GoogleAI.veo_model('totally-new-model')
+            GoogleAI.veo('totally-new-model')
         with pytest.raises(GenkitError, match=r'model name must be a string'):
-            GoogleAI.deep_research_model(None)  # type: ignore[arg-type]
+            GoogleAI.deep_research(None)  # type: ignore[arg-type]
 
 
 class TestEmbeddingConstructor:
@@ -337,7 +337,7 @@ class TestEmbeddingConstructor:
 
     def test_embedding_rejects_generate_models(self) -> None:
         """Generate-model ids cannot mint an EmbedderRef."""
-        with pytest.raises(GenkitError, match=r'gemini_model'):
+        with pytest.raises(GenkitError, match=r'gemini\('):
             GoogleAI.embedding('gemini-2.5-flash')
         with pytest.raises(GenkitError):
             VertexAI.embedding('imagen-3.0-generate-002')
@@ -384,15 +384,15 @@ class TestKnownIdLiterals:
         assert 'gemini-3.1-flash-tts-preview' not in get_args(KnownGoogleAIGemini)
 
     def test_gemini_3_8_tts_ids_autocomplete_on_the_tts_constructor(self) -> None:
-        """The 3.8 TTS ids are offered by ``gemini_tts_model``, not ``gemini_model``."""
+        """The 3.8 TTS ids are offered by ``gemini_tts``, not ``gemini``."""
         ids = {'gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts'}
         assert ids <= set(get_args(KnownGeminiTts))
         assert not ids & set(get_args(KnownGoogleAIGemini))
         for name in ids:
-            assert GoogleAI.gemini_tts_model(name).config_schema is GeminiTtsConfig
+            assert GoogleAI.gemini_tts(name).config_schema is GeminiTtsConfig
 
-    def test_gemma_4_autocompletes_on_gemma_model(self) -> None:
-        """The gemma-4 ids are offered by ``gemma_model``."""
+    def test_gemma_4_autocompletes_on_gemma(self) -> None:
+        """The gemma-4 ids are offered by ``gemma``."""
         assert {'gemma-4-26b-a4b-it', 'gemma-4-31b-it'} <= set(get_args(KnownGemma))
 
 
@@ -426,7 +426,7 @@ class TestPerBackendAutocomplete:
         """The ``name`` annotation pins the exact id set for this backend and family."""
         assert _autocomplete_ids(getattr(plugin, method)) == _BACKEND_IDS[(plugin, method)]
 
-    @pytest.mark.parametrize('method', ['gemini_model', 'gemma_model', 'veo_model'])
+    @pytest.mark.parametrize('method', ['gemini', 'gemma', 'veo'])
     def test_backends_share_the_signature_except_name(self, method: str) -> None:
         """Per-backend signatures differ only in the ``name`` annotation."""
         assert _signature_without_name_type(getattr(GoogleAI, method)) == _signature_without_name_type(
@@ -435,11 +435,11 @@ class TestPerBackendAutocomplete:
 
 
 class TestVirtualTryOnConstructor:
-    """virtual_try_on_model lives on VertexAI only."""
+    """virtual_try_on lives on VertexAI only."""
 
     def test_mints_a_vertex_ref(self) -> None:
         """The ref carries the Vertex namespace and the try-on config schema."""
-        ref = VertexAI.virtual_try_on_model('virtual-try-on-001')
+        ref = VertexAI.virtual_try_on('virtual-try-on-001')
         assert isinstance(ref, ModelRef)
         assert ref.name == 'vertexai/virtual-try-on-001'
         assert ref.config_schema is VirtualTryOnConfig
@@ -447,35 +447,33 @@ class TestVirtualTryOnConstructor:
     @pytest.mark.parametrize('name', ['vertexai/virtual-try-on-001', 'models/virtual-try-on-001'])
     def test_strips_pasted_prefixes(self, name: str) -> None:
         """A pasted prefix resolves to the same ref as the bare id."""
-        assert VertexAI.virtual_try_on_model(name).name == 'vertexai/virtual-try-on-001'
+        assert VertexAI.virtual_try_on(name).name == 'vertexai/virtual-try-on-001'
 
     @pytest.mark.parametrize('bad_id', ['gemini-2.5-flash', 'veo-3.0-generate-001', 'imagen-4.0-generate-001'])
     def test_rejects_other_families(self, bad_id: str) -> None:
         """Only virtual-try-on ids mint this ref."""
         with pytest.raises(GenkitError) as exc_info:
-            VertexAI.virtual_try_on_model(bad_id)
+            VertexAI.virtual_try_on(bad_id)
         assert exc_info.value.status == 'INVALID_ARGUMENT'
 
     def test_not_offered_on_googleai(self) -> None:
         """Virtual Try-On has no Google AI backend, so it has no constructor there."""
-        assert not hasattr(GoogleAI, 'virtual_try_on_model')
+        assert not hasattr(GoogleAI, 'virtual_try_on')
 
 
 class TestNoImagenSurface:
-    """Imagen has no export or module, and imagen_model only raises."""
+    """Imagen has no export or module, and imagen only raises."""
 
     def test_no_imagen_exports(self) -> None:
         """The package exposes no Imagen name."""
         assert not {name for name in genkit_google_genai.__all__ if 'Imagen' in name}
 
     @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
-    def test_imagen_model_raises_with_the_image_hint(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
-        """imagen_model raises INVALID_ARGUMENT pointing at gemini_image_model."""
+    def test_imagen_raises_with_the_image_hint(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """imagen raises INVALID_ARGUMENT pointing at gemini_image."""
         cls = plugin.__name__
-        with pytest.raises(
-            GenkitError, match=rf'{cls}\.imagen_model: .* use {cls}\.gemini_image_model\(\)'
-        ) as exc_info:
-            plugin.imagen_model('imagen-4.0-generate-001')
+        with pytest.raises(GenkitError, match=rf'{cls}\.imagen: .* use {cls}\.gemini_image\(\)') as exc_info:
+            plugin.imagen('imagen-4.0-generate-001')
         assert exc_info.value.status == 'INVALID_ARGUMENT'
 
     def test_no_imagen_module(self) -> None:
@@ -486,17 +484,17 @@ class TestNoImagenSurface:
     @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
     def test_every_constructor_rejects_imagen_ids(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
         """An imagen- id is refused by every other family constructor with the image hint."""
-        for method in ('gemini_model', 'gemini_tts_model', 'gemma_model'):
-            with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
+        for method in ('gemini', 'gemini_tts', 'gemma'):
+            with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image\(\)'):
                 getattr(plugin, method)('imagen-4.0-generate-001')
-        with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image_model\(\)'):
+        with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image\(\)'):
             plugin.embedding('imagen-4.0-generate-001')
 
     @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
-    def test_gemini_image_model_does_not_suggest_itself(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
-        """gemini_image_model refuses an imagen- id without pointing back at itself."""
+    def test_gemini_image_does_not_suggest_itself(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:
+        """gemini_image refuses an imagen- id without pointing back at itself."""
         with pytest.raises(GenkitError) as exc_info:
-            plugin.gemini_image_model('imagen-4.0-generate-001')
+            plugin.gemini_image('imagen-4.0-generate-001')
         assert 'is not a supported model' in str(exc_info.value)
         assert 'for image generation' not in str(exc_info.value)
 
@@ -504,6 +502,6 @@ class TestNoImagenSurface:
     def test_other_unsupported_ids_omit_the_image_hint(self, bad_id: str) -> None:
         """Only imagen- ids are redirected to image generation."""
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.gemini_model(bad_id)
+            GoogleAI.gemini(bad_id)
         assert 'is not a supported model' in str(exc_info.value)
-        assert 'gemini_image_model' not in str(exc_info.value)
+        assert 'gemini_image' not in str(exc_info.value)
