@@ -320,7 +320,7 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 // VertexAI is a dynamic plugin ([api.DynamicPlugin]): Init registers no
 // actions up front, and [VertexAI.ResolveAction] dynamically resolves any
 // model or embedder ID served by Vertex AI on demand (for example, via
-// ai.WithModelName("vertexai/gemini-flash-latest"), [ModelRef], or
+// ai.WithModelName("vertexai/gemini-3.8-flash"), [ModelRef], or
 // [VertexAIModel]), including newly released models not listed in internal
 // capability tables. Configure [VertexAI.Models] or [VertexAI.Embedders] only
 // when you need to override the capabilities advertised for a specific ID.
