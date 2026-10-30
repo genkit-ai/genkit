@@ -43,3 +43,8 @@ print(res.text)
 ```
 
 Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+
+Every call runs on those Google Cloud credentials. A per-request key in
+`context={'secrets': {'api_key': ...}}` fails with `INVALID_ARGUMENT` before
+any request is sent, so a tenant's key never runs on the app's account. Other
+entries in `context.secrets` are ignored.

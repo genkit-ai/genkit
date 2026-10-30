@@ -28,6 +28,7 @@ from genkit_anthropic import AnthropicConfig
 # model class instead of copying it.
 from genkit_anthropic._model_info import get_model_info as get_anthropic_model_info
 from genkit_anthropic._models import AnthropicModel
+from genkit_vertexai._model_garden._secrets import reject_secrets_api_key
 
 from genkit import ModelResponse
 from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, ModelSupports
@@ -72,6 +73,7 @@ class AnthropicModelGarden:
         """
 
         async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+            reject_secrets_api_key(ctx.context)
             model = AnthropicModel(
                 model_name=self._model_name,
                 client=cast(AsyncAnthropic, self._runtime_client()),
