@@ -6,6 +6,7 @@
 import asyncio
 import datetime
 import gc
+import json
 import logging
 import warnings
 from collections.abc import AsyncIterator
@@ -14,10 +15,11 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from genkit import FlowContext, Genkit, Message, Part, PublicError
+from genkit import Document, FlowContext, Genkit, Message, ModelResponse, Part, PublicError
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk
-from genkit._core._typing import AgentFinishReason, Role, TurnEnd
+from genkit._core._typing import AgentFinishReason, FinishReason, Role, TurnEnd
+from genkit.testing import define_scripted_model
 
 
 class Meta(BaseModel):
@@ -90,6 +92,58 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
     assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
         ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing'),
     ]
+
+
+def _define_chef(ai: Genkit) -> None:
+    reply = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_text('Pad thai, no peanuts.')]),
+    )
+    define_scripted_model(
+        ai,
+        responses=[reply],
+        chunks=[[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Pad thai')])]],
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_drops_request_from_result() -> None:
+    """The result frame leaves out the echoed request (system prompt, docs); `.response` keeps it."""
+    ai = Genkit()
+    _define_chef(ai)
+
+    stream = ai.generate_stream(
+        model='scriptedModel',
+        system='Comp VIPs up to $50.',
+        prompt='Dinner?',
+        docs=[Document.from_text('Supplier contract: peanut oil, $2.10/L')],
+    )
+    lines = await _lines(stream.to_sse())
+
+    events = [json.loads(line.removeprefix('data: ')) for line in lines]
+    assert [next(iter(e)) for e in events] == ['message', 'result']
+    assert 'request' not in events[1]['result']
+    assert events[1]['result']['message'] == {'role': 'model', 'content': [{'text': 'Pad thai, no peanuts.'}]}
+    assert 'Comp VIPs' not in lines[1]
+    assert 'Supplier contract' not in lines[1]
+    response = await stream.response
+    assert response.request is not None
+    assert response.request.docs is not None
+
+
+@pytest.mark.asyncio
+async def test_flow_to_sse_sends_the_flow_result_as_returned() -> None:
+    """A flow's result goes out as the flow returned it, same as serve_flow's JSON `result`."""
+    ai = Genkit()
+    _define_chef(ai)
+
+    @ai.flow()
+    async def ask_chef(prompt: str) -> ModelResponse:
+        return await ai.generate(model='scriptedModel', system='Comp VIPs up to $50.', prompt=prompt)
+
+    lines = await _lines(ask_chef.stream('Dinner?').to_sse())
+
+    assert 'request' in json.loads(lines[-1].removeprefix('data: '))['result']
 
 
 def _turn(
