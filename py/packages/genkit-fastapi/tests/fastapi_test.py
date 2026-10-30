@@ -24,14 +24,17 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
 from genkit_fastapi.exp import to_sse
 from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from genkit import FlowContext, Genkit, GenkitError, PublicError
+from genkit import FlowContext, Genkit, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, PublicError
+from genkit._core._typing import FinishReason, Role
 from genkit.plugin_api import provider_error
+from genkit.testing import define_scripted_model
 from genkit.web import RequestData
 
 
@@ -998,3 +1001,44 @@ def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> Non
         ('genkit_fastapi._handler', 'served flow stream failed'),
     ]
     assert caplog.records[0].exc_info is not None
+
+
+def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
+    """The README's chat route: chunks and result are plain text, and no request rides along."""
+    ai = Genkit()
+    reply = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_text('Pad thai, no peanuts.')]),
+    )
+    define_scripted_model(
+        ai,
+        responses=[reply],
+        chunks=[
+            [
+                ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Pad thai')]),
+                ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(', no peanuts.')]),
+            ]
+        ],
+    )
+
+    @ai.flow()
+    async def ask_chef(prompt: str, ctx: FlowContext[str]) -> str:
+        stream = ai.generate_stream(model='scriptedModel', system='Comp VIPs up to $50.', prompt=prompt)
+        async for chunk in stream:
+            ctx.send_chunk(chunk.text)
+        return (await stream.response).text
+
+    app = FastAPI()
+
+    @app.post('/chat/stream')
+    async def chat_stream(prompt: str) -> StreamingResponse:
+        stream = ask_chef.stream(prompt, context={'user_id': 'u_42'})
+        return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
+
+    response = TestClient(app).post('/chat/stream', params={'prompt': 'Dinner?'})
+
+    assert response.text == (
+        'data: {"message":"Pad thai"}\n\n'
+        'data: {"message":", no peanuts."}\n\n'
+        'data: {"result":"Pad thai, no peanuts."}\n\n'
+    )
