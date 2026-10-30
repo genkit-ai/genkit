@@ -23,6 +23,7 @@ from pydantic import Field, model_validator
 
 from genkit import GenkitError
 from genkit.model import ModelConfig
+from genkit.plugin_api import GenkitConfig
 
 DEFAULT_MAX_RETRIES = 3
 # Socket read timeout: the gap botocore tolerates between two reads, which
@@ -38,7 +39,12 @@ DEFAULT_MAX_POOL_CONNECTIONS = 50
 
 
 class BedrockConfig(ModelConfig):
-    """Per-call configuration for Bedrock models.
+    """Per-call configuration for Bedrock text models (the Converse API).
+
+    Image models take their own family's class instead: ``NovaCanvasConfig``,
+    ``TitanImageConfig`` or ``StabilityImageConfig``. ``Bedrock.text()`` and
+    the image ref constructors (``Bedrock.nova_canvas()``, ...) bind the
+    right one.
 
     Unknown keys are rejected: only the declared fields reach the Converse
     API, so a tolerated typo (``maxTokens`` for ``maxOutputTokens``) would run
@@ -56,13 +62,22 @@ class BedrockConfig(ModelConfig):
 _NESTED_IMAGE_KEYS = ('imageGenerationConfig', 'image_generation_config')
 
 
-class _AmazonImageConfig(ModelConfig):
+_EXTRA_DESCRIPTION = (
+    'Bedrock body fields this class does not declare, in wire names, deep-merged into the InvokeModel body after '
+    "everything else (for example {'textToImageParams': {'negativeText': 'blurry'}}). Nested objects merge key by "
+    'key. Fields built from the prompt are rejected. Not checked otherwise; do not put secrets here.'
+)
+
+
+class _AmazonImageConfig(GenkitConfig):
     """Fields Titan Image and Nova Canvas share; the plugin nests them under ``imageGenerationConfig``.
 
     The camelCase aliases are the Bedrock wire names, so ``number_of_images``
-    is sent as ``imageGenerationConfig.numberOfImages``. Genkit's generic
-    knobs (``temperature``, ``top_p``, ...) are accepted and ignored, as on
-    the OpenAI image configs: the image APIs take none of them.
+    is sent as ``imageGenerationConfig.numberOfImages``.
+
+    Extends ``GenkitConfig``, like ``VeoConfig``, not ``ModelConfig``: the
+    image APIs take none of Genkit's generic knobs, so ``temperature`` or
+    ``top_p`` raise as unknown keys instead of being dropped.
     """
 
     number_of_images: int | None = Field(default=None, ge=1, le=5, description='Images to generate. Default 1.')
@@ -74,6 +89,7 @@ class _AmazonImageConfig(ModelConfig):
     )
     seed: int | None = Field(default=None, ge=0, le=2147483646, description='Initial noise seed. Default 0.')
     quality: Literal['standard', 'premium'] | None = Field(default=None, description='Image quality tier.')
+    extra: dict[str, Any] | None = Field(default=None, description=_EXTRA_DESCRIPTION)
 
     @model_validator(mode='before')
     @classmethod
@@ -164,11 +180,12 @@ class NovaCanvasConfig(_AmazonImageConfig):
 StabilityAspectRatio = Literal['16:9', '1:1', '21:9', '2:3', '3:2', '4:5', '5:4', '9:16', '9:21']
 
 
-class StabilityImageConfig(ModelConfig):
+class StabilityImageConfig(GenkitConfig):
     """Per-call configuration for Stable Diffusion 3.5, Stable Image Core and Stable Image Ultra.
 
     Field names are the Stability wire names and are sent at the top level of
-    the request body. Genkit's generic knobs are accepted and ignored.
+    the request body. Extends ``GenkitConfig``, so Genkit's generic knobs
+    (``temperature``, ...) raise as unknown keys.
 
     Example:
         ```python
@@ -195,6 +212,7 @@ class StabilityImageConfig(ModelConfig):
     output_format: Literal['png', 'jpeg', 'webp'] | None = Field(
         default=None, description='Output format. Default png. webp is Stable Diffusion 3.5 only.'
     )
+    extra: dict[str, Any] | None = Field(default=None, description=_EXTRA_DESCRIPTION)
 
 
 ImageConfig = TitanImageConfig | NovaCanvasConfig | StabilityImageConfig

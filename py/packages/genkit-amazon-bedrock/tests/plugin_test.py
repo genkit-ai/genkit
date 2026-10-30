@@ -376,9 +376,9 @@ async def test_image_config_survives_the_action_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
-    # The framework coerces a raw mapping into ModelConfig, so its own knobs
-    # arrive as declared fields; only this path proves they are dropped.
+async def test_genkit_generic_config_on_an_image_action_raises() -> None:
+    # Image configs extend GenkitConfig, not ModelConfig, so temperature is an
+    # unknown key on the action itself, not just at generate().
     plugin = Bedrock(region='us-east-1', models=['stability.sd3-5-large-v1:0'])
     transport = FakeImageTransport()
     plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
@@ -389,13 +389,12 @@ async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
         'messages': [{'role': 'user', 'content': [{'text': 'a coral reef'}]}],
         'config': {'aspect_ratio': '16:9', 'temperature': 0.9},
     })
-    await action.run(request)
+    with pytest.raises(GenkitError) as exc_info:
+        await action.run(request)
 
-    assert json.loads(transport.calls[0]['body']) == {
-        'prompt': 'a coral reef',
-        'output_format': 'png',
-        'aspect_ratio': '16:9',
-    }
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'temperature' in str(exc_info.value)
+    assert transport.calls == []
 
 
 @pytest.mark.parametrize('spelling', ['api_key', 'apiKey'])

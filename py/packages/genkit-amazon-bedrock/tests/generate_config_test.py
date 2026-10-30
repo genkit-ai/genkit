@@ -245,18 +245,13 @@ async def test_generate_bedrock_image_extra_not_a_mapping_fails_invalid_argument
                 'negative_prompt': 'blurry',
             },
         ),
-        (
-            IMAGE_MODEL,
-            {'aspect_ratio': '16:9', 'temperature': 0.4},
-            {'prompt': 'a reef', 'output_format': 'png', 'aspect_ratio': '16:9'},
-        ),
     ],
-    ids=['nova_typed', 'titan_dict', 'stability_typed', 'stability_dict_generic_knob_ignored'],
+    ids=['nova_typed', 'titan_dict', 'stability_typed'],
 )
 async def test_generate_bedrock_image_config_reaches_the_wire(
     model: str, config: Any, expected: dict[str, Any]
 ) -> None:  # noqa: ANN401
-    """Typed and dict configs map to each family's wire body; Genkit's generic knobs are dropped."""
+    """Typed and dict configs map to each family's wire body."""
     ai, transport = bedrock_app()
 
     response = await ai.generate(model=model, prompt='a reef', config=config)
@@ -272,8 +267,10 @@ async def test_generate_bedrock_image_config_reaches_the_wire(
         (IMAGE_MODEL, {'aspect_ratio': '16:9', 'style_preset': 'photographic'}, "'style_preset'"),
         (NOVA_CANVAS, {'imageGenerationConfg': {'seed': 7}}, "'imageGenerationConfg'"),
         (TITAN_IMAGE, {'number_of_image': 2}, "'number_of_image'"),
+        (IMAGE_MODEL, {'aspect_ratio': '16:9', 'temperature': 0.4}, "'temperature'"),
+        (NOVA_CANVAS, {'maxOutputTokens': 10}, "'maxOutputTokens'"),
     ],
-    ids=['stability_unlisted_field', 'nova_typo', 'titan_typo'],
+    ids=['stability_unlisted_field', 'nova_typo', 'titan_typo', 'stability_temperature', 'nova_max_output_tokens'],
 )
 async def test_generate_bedrock_image_unknown_key_fails_and_points_to_extra(
     model: str, config: dict[str, Any], needle: str
