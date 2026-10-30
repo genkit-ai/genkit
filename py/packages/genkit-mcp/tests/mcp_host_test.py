@@ -641,13 +641,15 @@ async def test_close_is_final(tmp_path: Path) -> None:
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     with pytest.raises(GenkitError, match=closed) as connecting:
         await host.connect('gamma', server(tmp_path, pid_name='gamma'))
+    with pytest.raises(GenkitError, match=closed) as connecting_disabled:
+        await host.connect('gamma', {'command': 'npx', 'disabled': True})
     with pytest.raises(GenkitError, match=closed) as reconnecting:
         await host.reconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as disconnecting:
         await host.disconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as naming:
         host.tool_name('alpha', 'echo')
-    for raised in (listing, selecting, connecting, reconnecting, disconnecting, naming):
+    for raised in (listing, selecting, connecting, connecting_disabled, reconnecting, disconnecting, naming):
         assert raised.value.status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 
@@ -850,7 +852,7 @@ async def test_an_mcp_servers_block_of_stdio_servers_is_accepted_as_it_is(tmp_pa
 async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_path: Path) -> None:
     """A misspelt env must not launch the server without its secret, nor print the secret."""
     secret = 'sk-distinctive-secret-7f3a'
-    loaded: dict[str, Any] = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
+    loaded = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
     with pytest.raises(ValueError, match="MCP host 'hosted': server 'alpha' is not a stdio entry") as raised:
         McpHost('hosted', mcp_servers={'alpha': loaded})
     assert 'enviroment' in str(raised.value)
@@ -865,7 +867,6 @@ async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_pa
     [
         {'url': 'https://mcp.example.com/sse?token=sk-distinctive-secret-7f3a'},
         {'type': 'sse', 'command': 'npx'},
-        {'command': 'npx', 'disabled': True},
     ],
 )
 async def test_an_entry_which_is_not_stdio_is_refused_by_name(tmp_path: Path, entry: dict[str, Any]) -> None:
@@ -873,6 +874,112 @@ async def test_an_entry_which_is_not_stdio_is_refused_by_name(tmp_path: Path, en
     with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry") as raised:
         McpHost('hosted', mcp_servers={**servers(tmp_path, 'alpha'), 'linear': json.loads(json.dumps(entry))})
     assert 'sk-distinctive-secret-7f3a' not in str(raised.value)
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_server_is_never_started_or_listed(tmp_path: Path) -> None:
+    """A block can switch a server off without editing it out, and the host leaves it alone."""
+    block = json.loads(
+        json.dumps({
+            'mcpServers': {
+                'alpha': {**server(tmp_path, pid_name='alpha'), 'disabled': False},
+                'beta': {**server(tmp_path, pid_name='beta'), 'disabled': True},
+            }
+        })
+    )
+    ai = Genkit()
+    host = define_mcp_host(ai, 'hosted', mcp_servers=block['mcpServers'])
+    try:
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        assert list(host._clients) == ['alpha']
+        assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'alpha').pid]
+        with pytest.raises(ValueError, match="holds no server named 'beta'"):
+            host.tool_name('beta', 'echo')
+    finally:
+        await host.close()
+
+    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert not (tmp_path / 'beta.pid').exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'entry',
+    [
+        {'url': 'https://mcp.example.com/sse?token=sk-distinctive-secret-7f3a', 'disabled': True},
+        {'command': 'npx', 'disabled': 'sometimes'},
+        {'disabled': True},
+    ],
+)
+async def test_a_disabled_entry_is_still_refused_when_it_is_not_stdio(tmp_path: Path, entry: dict[str, Any]) -> None:
+    """Switching a server off does not switch off checking its entry."""
+    with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry") as raised:
+        McpHost('hosted', mcp_servers={**servers(tmp_path, 'alpha'), 'linear': json.loads(json.dumps(entry))})
+    assert 'sk-distinctive-secret-7f3a' not in str(raised.value)
+
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry"):
+            await host.connect('linear', json.loads(json.dumps(entry)))
+    finally:
+        await host.close()
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_server_name_no_model_would_accept_is_refused(tmp_path: Path) -> None:
+    refused = "'my server' cannot prefix an MCP tool name"
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        McpHost('hosted', mcp_servers={'my server': {'command': 'npx', 'disabled': True}})
+
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(ValueError, match=re.escape(refused)):
+            await host.connect('my server', {'command': 'npx', 'disabled': True})
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_connect_with_a_disabled_entry_removes_the_server_of_that_name(tmp_path: Path) -> None:
+    """Connecting an entry that says off leaves no server of that name running or listed."""
+    ai = Genkit()
+    host = define_mcp_host(
+        ai,
+        'hosted',
+        mcp_servers=servers(tmp_path, 'alpha', 'beta'),
+        cache_ttl_millis=LONG_TTL_MILLIS,
+    )
+    try:
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        assert len(server_processes()) == 2
+
+        await host.connect(
+            'beta', json.loads(json.dumps({**server(tmp_path, pid_name='replacement'), 'disabled': True}))
+        )
+
+        assert list(host._clients) == ['alpha']
+        assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'alpha').pid]
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+    finally:
+        await host.close()
+
+    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert not (tmp_path / 'replacement.pid').exists()
+
+
+@pytest.mark.asyncio
+async def test_connect_with_a_disabled_entry_for_a_new_name_starts_nothing(tmp_path: Path) -> None:
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
+    try:
+        await host.connect('beta', json.loads(json.dumps({**server(tmp_path, pid_name='beta'), 'disabled': True})))
+        assert list(host._clients) == ['alpha']
+        assert tool_names(await host.get_active_tools()) == hosted('alpha')
+    finally:
+        await host.close()
+
+    assert not (tmp_path / 'beta.pid').exists()
     assert server_processes() == []
 
 

@@ -16,6 +16,7 @@
 
 """Tests for McpStdioServerConfig validation and redaction."""
 
+import json
 from typing import Any
 
 import pytest
@@ -78,6 +79,15 @@ def test_claude_desktop_stdio_block_passes_through() -> None:
 
     assert config.type == 'stdio'
     assert config.env == {'API_KEY': SECRET}
+
+
+@pytest.mark.parametrize(
+    ('raw', 'disabled'),
+    [({}, False), ({'disabled': False}, False), ({'disabled': None}, False), ({'disabled': True}, True)],
+)
+def test_only_a_true_disabled_switches_a_server_off(raw: dict[str, Any], disabled: bool) -> None:
+    config = McpStdioServerConfig.model_validate(json.loads(json.dumps({'command': 'npx', **raw})))
+    assert bool(config.disabled) is disabled
 
 
 def test_non_stdio_type_fails_validation() -> None:
