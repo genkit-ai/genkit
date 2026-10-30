@@ -141,7 +141,7 @@ async def test_list_actions_lists_configured_chat_and_image_models() -> None:
         'bedrock/amazon.nova-lite-v1:0',
         'bedrock/amazon.titan-image-generator-v1',
     ]
-    assert [a.action_type for a in actions] == [ActionKind.MODEL, ActionKind.MODEL]
+    assert [a.kind for a in actions] == [ActionKind.MODEL, ActionKind.MODEL]
     assert actions[1].metadata is not None
     image_metadata = cast(dict[str, Any], actions[1].metadata['model'])
     assert image_metadata['supports']['output'] == ['media']
@@ -258,7 +258,7 @@ async def test_list_actions_includes_configured_embedders() -> None:
         'bedrock/amazon.titan-embed-text-v2:0',
         'bedrock/cohere.embed-english-v3',
     ]
-    assert [a.action_type for a in actions[1:]] == [ActionKind.EMBEDDER, ActionKind.EMBEDDER]
+    assert [a.kind for a in actions[1:]] == [ActionKind.EMBEDDER, ActionKind.EMBEDDER]
 
 
 @pytest.mark.asyncio
@@ -278,10 +278,8 @@ async def test_everything_listed_can_actually_resolve() -> None:
         'bedrock/cohere.embed-english-v3',
     ]
     for metadata in listed:
-        assert metadata.action_type is not None
-        assert (
-            await plugin.resolve(ActionKind(metadata.action_type), metadata.name.removeprefix('bedrock/')) is not None
-        )
+        assert metadata.kind is not None
+        assert await plugin.resolve(ActionKind(metadata.kind), metadata.name.removeprefix('bedrock/')) is not None
 
 
 @pytest.mark.asyncio

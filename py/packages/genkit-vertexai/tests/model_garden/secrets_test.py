@@ -25,8 +25,8 @@ from genkit_vertexai import ModelGarden
 from genkit_vertexai._model_garden._plugin import ModelGardenModel
 from genkit_vertexai._model_garden._secrets import reject_secrets_api_key
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelRequest
+from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelContext, ModelRequest
 
 CLAUDE_MODEL = 'modelgarden/anthropic/claude-sonnet-4-5@20250929'
 
@@ -50,7 +50,7 @@ async def test_generate_model_garden_claude_secrets_api_key_fails_invalid_argume
     vertex_client.assert_not_called()
 
 
-def openai_compatible_handler() -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
+def openai_compatible_handler() -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
     return ModelGardenModel(
         model='meta/llama-3.1-405b-instruct-maas', location='us-east5', project='my-project'
     ).to_openai_compatible_model()
@@ -67,7 +67,7 @@ async def test_generate_model_garden_openai_compatible_secrets_api_key_raises_in
 
     with patch.object(ModelGardenModel, 'create_client') as create_client:
         with pytest.raises(GenkitError) as exc_info:
-            await generate(hi_request(), ActionRunContext(context={'secrets': {'api_key': 'tenant-key'}}))
+            await generate(hi_request(), ModelContext(context={'secrets': {'api_key': 'tenant-key'}}))
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'Google Cloud credentials' in str(exc_info.value)
@@ -82,7 +82,7 @@ async def test_generate_model_garden_secrets_without_api_key_runs_on_google_cred
 
     with patch.object(ModelGardenModel, 'create_client', create_client):
         with pytest.raises(RuntimeError, match='reached the client'):
-            await generate(hi_request(), ActionRunContext(context={'secrets': {'db_password': 'x'}}))
+            await generate(hi_request(), ModelContext(context={'secrets': {'db_password': 'x'}}))
 
     create_client.assert_called_once()
 

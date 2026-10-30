@@ -182,13 +182,15 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     projectRoot: string,
     processManager?: ProcessManager,
     disableRealtimeTelemetry: boolean = false,
-    private readonly reflectionSecret?: string
+    private readonly reflectionSecret?: string,
+    suppressRuntimeTelemetry: boolean = false
   ) {
     super(
       telemetryServerUrl,
       projectRoot,
       processManager,
-      disableRealtimeTelemetry
+      disableRealtimeTelemetry,
+      suppressRuntimeTelemetry
     );
   }
 
@@ -201,7 +203,8 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       options.projectRoot,
       options.processManager,
       options.disableRealtimeTelemetry,
-      options.reflectionSecret
+      options.reflectionSecret,
+      options.suppressRuntimeTelemetry
     );
     await manager.startWebSocketServer(
       options.reflectionV2Port,
@@ -414,7 +417,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
         JSON.stringify({
           jsonrpc: '2.0',
           result: {
-            telemetryServerUrl: this.telemetryServerUrl,
+            telemetryServerUrl: this.runtimeTelemetryServerUrl,
           },
           id: request.id,
         })

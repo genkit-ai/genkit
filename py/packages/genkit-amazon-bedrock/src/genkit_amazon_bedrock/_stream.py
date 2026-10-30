@@ -27,10 +27,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-import structlog
-
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelRequest, ToolDefinition, ToolRequest
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
+from genkit.model import ModelContext, ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock._converters import (
     bedrock_reasoning_part,
     coerce_tool_input,
@@ -39,7 +37,7 @@ from genkit_amazon_bedrock._converters import (
     usage_log_fields,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -59,7 +57,7 @@ class _StreamBlock:
 async def consume_converse_stream(
     events: AsyncIterator[dict[str, Any]],
     request: ModelRequest[Any],
-    ctx: ActionRunContext | None = None,
+    ctx: ModelContext | None = None,
     model_id: str | None = None,
 ) -> ModelResponse:
     """Reassembles a ConverseStream into a ModelResponse, streaming chunks.

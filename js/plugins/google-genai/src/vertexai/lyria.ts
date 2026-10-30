@@ -24,24 +24,23 @@ import {
 } from 'genkit';
 import { ModelAction, ModelInfo } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
-import { isKnownKey } from '../common/utils.js';
-import { createInteraction, lyriaPredict } from './client.js';
-import { fromLyriaResponse, toLyriaPredictRequest } from './converters.js';
 import {
   ensureToolIds,
   fromInteractionSync,
-  toInteractionTurn,
-} from './interaction-converters.js';
-import {
-  CreateInteractionRequest,
-  ResponseModality,
-} from './interaction-types.js';
+  toInteractionResponseFormat,
+  toInteractionSteps,
+} from '../common/interaction-converters.js';
+import { CreateInteractionRequest } from '../common/interaction-types.js';
+import { isKnownKey } from '../common/utils.js';
+import { createInteraction, lyriaPredict } from './client.js';
+import { fromLyriaResponse, toLyriaPredictRequest } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
   calculateRequestOptions,
   checkModelName,
   extractVersion,
   shouldUseLegacyEndpoint,
+  toInteractionsClientOptions,
 } from './utils.js';
 
 export const LyriaConfigSchema = z
@@ -86,7 +85,7 @@ export const Lyria3ConfigSchema = z
     responseModalities: z
       .array(z.enum(['TEXT', 'IMAGE', 'AUDIO']))
       .describe(
-        'The modalities to be used in response. Defaults to AUDIO and TEXT for Lyria.'
+        "The modalities to be used in response. When not set, the server's default (AUDIO and TEXT) is used."
       )
       .optional(),
   })
@@ -169,6 +168,17 @@ const KNOWN_MODELS = {
 };
 export type KnownModels = keyof typeof KNOWN_MODELS;
 
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`). Remove a model once the server returns 404 for it.
+const HIDDEN_MODELS = {} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
+
 export type LyriaModelName = `lyria-${string}`;
 export function isLyriaModelName(value?: string): value is LyriaModelName {
   return !!value?.startsWith('lyria-');
@@ -180,8 +190,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -209,7 +219,7 @@ export function listKnownModels(
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
 ) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, clientOptions, pluginOptions)
   );
 }
@@ -252,20 +262,23 @@ export function defineModel(
         const messages = [...request.messages];
         if (messages.length === 0) throw new Error('No messages provided');
 
-        let responseModalitiesConverted: ResponseModality[] = ['audio', 'text'];
-        if (request.config?.responseModalities) {
-          responseModalitiesConverted = request.config.responseModalities.map(
-            (m) => m.toLowerCase() as ResponseModality
-          );
-        }
-
         const req: CreateInteractionRequest = {
           model: extractVersion(ref),
-          input: ensureToolIds(messages).map(toInteractionTurn),
-          response_modalities: responseModalitiesConverted,
+          input: toInteractionSteps(ensureToolIds(messages)),
+          // Nothing by default: the server returns the lyrics, caption and
+          // audio. An audio entry without a `bit_rate` is rejected here
+          // with a 400 ("bit_rate must be positive", seen live Oct 2026),
+          // although the Gemini API accepts it.
+          response_format: toInteractionResponseFormat({
+            modalities: request.config?.responseModalities,
+          }),
         };
 
-        const response = await createInteraction(req, clientOpt);
+        // Lyria 3 is only on global: a defaulted location becomes global.
+        const response = await createInteraction(
+          req,
+          toInteractionsClientOptions(clientOpt)
+        );
 
         return fromInteractionSync(response);
       } else {
@@ -280,4 +293,6 @@ export const TEST_ONLY = {
   KNOWN_MODELS,
   KNOWN_LYRIA_LEGACY_MODELS,
   KNOWN_LYRIA_INTERACTIONS_MODELS,
+  HIDDEN_MODELS,
+  ALL_MODELS,
 };

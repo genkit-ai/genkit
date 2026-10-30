@@ -17,7 +17,6 @@
 """Configuration types for the Amazon Bedrock plugin."""
 
 from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
 
 from genkit.model import ModelConfig
 
@@ -43,12 +42,6 @@ class BedrockConfig(ModelConfig):
     ``extra``, which is sent as-is as Converse ``additionalModelRequestFields``
     (e.g. Claude extended thinking).
     """
-
-    model_config = ConfigDict(
-        alias_generator=to_camel,
-        populate_by_name=True,
-        extra='forbid',
-    )
 
     tool_choice: str | None = None
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""

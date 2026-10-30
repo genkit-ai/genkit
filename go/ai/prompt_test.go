@@ -1221,7 +1221,7 @@ Hello, {{name}}!
 	}
 
 	// Verify the prompt in the subdirectory was registered correctly
-	subPrompt := LookupPrompt(reg, "test-namespace/sub_example")
+	subPrompt := LookupPrompt(reg, "test-namespace/subdir/sub_example")
 	if subPrompt == nil {
 		t.Fatalf("Prompt in subdirectory was not registered")
 	}
@@ -1278,9 +1278,85 @@ Hello, {{name}}!
 		t.Fatalf("Prompt 'test-namespace/example' was not registered")
 	}
 
-	nestedPrompt := LookupPrompt(reg, "test-namespace/nested")
+	nestedPrompt := LookupPrompt(reg, "test-namespace/sub/nested")
 	if nestedPrompt == nil {
-		t.Fatalf("Nested prompt 'test-namespace/nested' was not registered")
+		t.Fatalf("Nested prompt 'test-namespace/sub/nested' was not registered")
+	}
+}
+
+func TestLoadPromptDirFromFS_NestedPrompts(t *testing.T) {
+	file := func(text string) *fstest.MapFile {
+		return &fstest.MapFile{Data: []byte("---\nmodel: test/chat\n---\n" + text)}
+	}
+	fsys := fstest.MapFS{
+		"prompts/main.prompt":           file("root main"),
+		"prompts/a/main.prompt":         file("a main"),
+		"prompts/a/chat.prompt":         file("a chat"),
+		"prompts/a/chat.casual.prompt":  file("a chat casual"),
+		"prompts/b/chat.prompt":         file("b chat"),
+		"prompts/v1.0/greet.fun.prompt": file("v1.0 greet fun"),
+	}
+
+	reg := registry.New()
+	LoadPromptDirFromFS(reg, fsys, "prompts", "ns")
+
+	tests := []struct {
+		lookup   string
+		wantName string
+	}{
+		{"ns/main", "ns/main"},                     // a root prompt keeps its name
+		{"ns/a/main", "ns/a/main"},                 // full names always resolve
+		{"ns/b/chat", "ns/b/chat"},                 // same file name, no collision
+		{"ns/chat", "ns/a/chat"},                   // file name falls back to the first nested prompt
+		{"ns/chat.casual", "ns/a/chat.casual"},     // fallback keeps the variant
+		{"ns/v1.0/greet.fun", "ns/v1.0/greet.fun"}, // a dot in a directory is not a variant
+	}
+	for _, tc := range tests {
+		t.Run(tc.lookup, func(t *testing.T) {
+			p := LookupPrompt(reg, tc.lookup)
+			if p == nil {
+				t.Fatalf("LookupPrompt(%q) = nil, want %q", tc.lookup, tc.wantName)
+			}
+			if got := p.Name(); got != tc.wantName {
+				t.Errorf("LookupPrompt(%q).Name() = %q, want %q", tc.lookup, got, tc.wantName)
+			}
+		})
+	}
+
+	// The stored metadata must split the variant the same way as the name.
+	meta := LookupPrompt(reg, "ns/v1.0/greet.fun").(*prompt).Desc().Metadata["prompt"].(map[string]any)
+	if meta["name"] != "ns/v1.0/greet" || meta["variant"] != "fun" {
+		t.Errorf("metadata name, variant = %q, %q, want %q, %q", meta["name"], meta["variant"], "ns/v1.0/greet", "fun")
+	}
+}
+
+func TestLoadPromptDirFromFS_NestedPartials(t *testing.T) {
+	fsys := fstest.MapFS{
+		"prompts/main.prompt":         &fstest.MapFile{Data: []byte("---\nmodel: test/chat\n---\n{{> a/system}}|{{> b/system}}|{{> system}}|{{> greeting}}|{{> a/greeting}}|{{> tone}}")},
+		"prompts/_greeting.prompt":    &fstest.MapFile{Data: []byte("root greeting")},
+		"prompts/a/_greeting.prompt":  &fstest.MapFile{Data: []byte("a greeting")},
+		"prompts/a/_system.prompt":    &fstest.MapFile{Data: []byte("a system")},
+		"prompts/b/_system.prompt":    &fstest.MapFile{Data: []byte("b system")},
+		"prompts/b/deep/_tone.prompt": &fstest.MapFile{Data: []byte("deep tone")},
+	}
+
+	reg := registry.New()
+	LoadPromptDirFromFS(reg, fsys, "prompts", "")
+
+	p := LookupPrompt(reg, "main")
+	if p == nil {
+		t.Fatal("prompt \"main\" was not registered")
+	}
+	opts, err := p.Render(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+
+	// Full names always resolve; short names go to the root partial first, then to
+	// the first nested partial in walk order.
+	want := "a system|b system|a system|root greeting|a greeting|deep tone"
+	if got := opts.Messages[0].Text(); got != want {
+		t.Errorf("rendered text = %q, want %q", got, want)
 	}
 }
 
@@ -1358,6 +1434,10 @@ Test content
 	lookedUp := LookupPrompt(reg, "ns/single")
 	if lookedUp == nil {
 		t.Fatalf("Prompt 'ns/single' was not registered")
+	}
+	// Tooling such as the Dev UI and the agents middleware reads the descriptor.
+	if got, want := lookedUp.(api.Action).Desc().Description, "A single prompt test"; got != want {
+		t.Errorf("Desc().Description = %q, want %q", got, want)
 	}
 }
 
