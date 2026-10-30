@@ -15,6 +15,10 @@
 
 ::: genkit.embedder
 
+## genkit.formats
+
+::: genkit.formats
+
 ## genkit.plugin_api
 
 ::: genkit.plugin_api

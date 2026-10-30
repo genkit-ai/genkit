@@ -241,9 +241,10 @@ async def test_prompt_with_kitchensink() -> None:
         description='a prompt descr',
     )
 
+    # output_constrained=True with no schema: there is nothing to constrain to, so it goes out false.
     want_txt = (
         '[ECHO] system: "pirate" user: "history" user: "hi" tools=testTool '
-        'tool_choice=required output={"format":"json","constrained":true,'
+        'tool_choice=required output={"format":"json","constrained":false,'
         '"contentType":"application/json"}'
     )
 

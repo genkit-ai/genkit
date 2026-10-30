@@ -31,7 +31,7 @@ from pydantic import BaseModel, ValidationError
 
 from genkit._ai import _aio
 from genkit._ai._background_model import ensure_model_operation
-from genkit._ai._formats._types import FormatDef, Formatter
+from genkit._ai._formats._types import FormatHandler, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
     Message,
@@ -99,6 +99,7 @@ from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._tool import Tool
 from genkit._core._typing import (
+    ConstrainedSupport,
     FinishReason,
     GenerateActionOutputConfig,
     MiddlewareRef,
@@ -166,7 +167,7 @@ def log_output_parse(
     model: str | None,
     finish_reason: FinishReason | None,
     finish_message: str | None,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
     message: Message | None,
 ) -> None:
     """Warn on an abnormal finish; debug when the formatter cannot parse."""
@@ -881,7 +882,7 @@ class ChunkAccumulator:
     def __init__(
         self,
         message_index: int,
-        formatter: Formatter[Any, Any] | None,
+        formatter: FormatHandler[Any, Any] | None,
         schema_type: type[BaseModel] | None = None,
     ) -> None:
         self.message_index = message_index
@@ -1006,7 +1007,7 @@ class ResolvedTurn:
 
     model: Action
     tools: list[Action]
-    formatter: Formatter[Any, Any] | None = None
+    formatter: FormatHandler[Any, Any] | None = None
 
 
 @dataclass
@@ -1330,7 +1331,11 @@ async def resolve_door(
             ),
             reason=RuntimeErrorReason.INVALID_RESUME,
         )
-    options, formatter = apply_format(options=options, format_def=format_def)
+    options, formatter = apply_format(
+        options=options,
+        format_def=format_def,
+        model_supports_constrained=supports_constrained(turn_model, has_tools=bool(turn_tools)),
+    )
     assert_valid_tool_names(turn_tools)
     return options, ResolvedTurn(model=turn_model, tools=turn_tools, formatter=formatter)
 
@@ -1657,7 +1662,7 @@ def stop_after_model(
     response: ModelResponse,
     options: GenerateActionOptions,
     current_turn: int,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
 ) -> ModelResponse | None:
     """Return when this model call is the whole turn (ticket, no tools, or they asked to stop)."""
     generated_msg = response.message
@@ -1845,7 +1850,7 @@ def stamp_output(
     response: ModelResponse,
     options: GenerateActionOptions,
     call: GenerateRun,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
 ) -> ModelResponse:
     """Put format and schema on the response they get back."""
     out = call.output
@@ -1873,8 +1878,9 @@ def stamp_output(
 def apply_format(
     *,
     options: GenerateActionOptions,
-    format_def: FormatDef | None,
-) -> tuple[GenerateActionOptions, Formatter[Any, Any] | None]:
+    format_def: Formatter | None,
+    model_supports_constrained: bool,
+) -> tuple[GenerateActionOptions, FormatHandler[Any, Any] | None]:
     """Apply format definition to request, injecting instructions and output config."""
     if not format_def:
         return options, None
@@ -1889,25 +1895,32 @@ def apply_format(
     str_instructions = raw_instructions if isinstance(raw_instructions, str) else None
     instructions = resolve_instructions(formatter=formatter, instructions=str_instructions)
 
-    should_inject = False
-    if options.output and options.output.instructions is not None:
-        should_inject = bool(options.output.instructions)
-    elif format_def.config.default_instructions is not None:
-        should_inject = format_def.config.default_instructions
-    elif instructions:
-        should_inject = True
+    # The request's final output shape: the format sets it, the caller can override constrained.
+    output_format = format_def.config.format or (options.output.format if options.output else None)
+    json_schema = options.output.json_schema if options.output else None
+    requested = (
+        options.output.constrained
+        if options.output and options.output.constrained is not None
+        else format_def.config.constrained
+    )
+    # Native mode only when asked for, there is a schema, and the model can do it.
+    constrained = bool(requested) and json_schema is not None and model_supports_constrained
 
-    if should_inject and instructions is not None:
+    if raw_instructions is not None:
+        should_inject = bool(raw_instructions)
+    else:
+        # Natively constrained JSON already follows the schema; everything else needs the
+        # text. Same rule as Go's generate.
+        should_inject = not (constrained and output_format == 'json')
+
+    if should_inject and instructions:
         out_request.messages = inject_instructions(out_request.messages, instructions)  # type: ignore[arg-type]
 
     # Ensure output is set before modifying its properties
     if out_request.output is None:
         return (out_request, formatter)
 
-    if format_def.config.constrained is not None:
-        out_request.output.constrained = format_def.config.constrained
-    if options.output and options.output.constrained is not None:
-        out_request.output.constrained = options.output.constrained
+    out_request.output.constrained = constrained
 
     if format_def.config.content_type is not None:
         out_request.output.content_type = format_def.config.content_type
@@ -1917,7 +1930,15 @@ def apply_format(
     return (out_request, formatter)
 
 
-def resolve_instructions(*, formatter: Formatter[Any, Any], instructions: str | None) -> str | None:
+def supports_constrained(model: Action | None, *, has_tools: bool) -> bool:
+    """Whether the model declares native constrained output for this request."""
+    model_options = model.metadata.get('model') if model else None
+    supports = cast(dict[str, object], model_options).get('supports') if isinstance(model_options, dict) else None
+    value = cast(dict[str, object], supports).get('constrained') if isinstance(supports, dict) else None
+    return value == ConstrainedSupport.ALL or (value == ConstrainedSupport.NO_TOOLS and not has_tools)
+
+
+def resolve_instructions(*, formatter: FormatHandler[Any, Any], instructions: str | None) -> str | None:
     """Return custom instructions if provided, otherwise use formatter defaults."""
     if instructions is not None:
         return instructions
@@ -1998,7 +2019,7 @@ async def resolve_parameters(
     *,
     registry: Registry,
     options: GenerateActionOptions,
-) -> tuple[Action, list[Action], FormatDef | None]:
+) -> tuple[Action, list[Action], Formatter | None]:
     """Resolve model, tools, and format from registry for a generation request."""
     model_action = await resolve_model_action(registry, options.model)
 
@@ -2006,7 +2027,7 @@ async def resolve_parameters(
     # can wrap that call; it cannot add names we have not resolved.
     tools = await resolve_tools_from_options(registry, options.tools)
 
-    format_def: FormatDef | None = None
+    format_def: Formatter | None = None
     if options.output and options.output.format:
         looked_up_format = registry.lookup_value('format', options.output.format)
         if looked_up_format is None:
@@ -2015,7 +2036,7 @@ async def resolve_parameters(
                 message=f'Unable to resolve format {options.output.format}',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        format_def = cast(FormatDef, looked_up_format)
+        format_def = cast(Formatter, looked_up_format)
 
     if options.output and options.output.json_schema is not None:
         json_schema = options.output.json_schema
