@@ -46,30 +46,13 @@ See Also:
     - Anthropic documentation: https://docs.anthropic.com/
 """
 
-from genkit_anthropic._config import (
-    AnthropicConfig,
-    AnyToolChoice,
-    AutoToolChoice,
-    OutputConfig,
-    RequestMetadata,
-    SpecificToolChoice,
-    TaskBudget,
-    ThinkingConfig,
-    ToolChoice,
-    ToolChoiceNone,
-)
+from genkit_anthropic._config import AnthropicConfig, Effort, ThinkingDisplay, ThinkingMode
 from genkit_anthropic._plugin import Anthropic
 
 __all__ = [
     'Anthropic',
     'AnthropicConfig',
-    'AutoToolChoice',
-    'AnyToolChoice',
-    'OutputConfig',
-    'RequestMetadata',
-    'SpecificToolChoice',
-    'TaskBudget',
-    'ThinkingConfig',
-    'ToolChoice',
-    'ToolChoiceNone',
+    'Effort',
+    'ThinkingDisplay',
+    'ThinkingMode',
 ]
