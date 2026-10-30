@@ -18,3 +18,7 @@
 
 Exposes the tools of a stdio MCP server as Genkit ``tool.v2`` actions.
 """
+
+from genkit_mcp._client import McpClient, define_mcp_client
+
+__all__ = ['McpClient', 'define_mcp_client']
