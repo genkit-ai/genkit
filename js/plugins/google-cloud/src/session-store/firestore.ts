@@ -23,6 +23,7 @@ import {
 } from '@google-cloud/firestore';
 import {
   GenkitError,
+  SessionDeletedError,
   applyPatch,
   diff,
   type JsonPatch,
@@ -196,6 +197,20 @@ interface PointerDoc {
 }
 
 /**
+ * Left in place of a session's pointer by {@link FirestoreSessionStore.deleteSession}.
+ * It holds no session content. While it exists the session reads as missing and
+ * writers that continue the old chain are rejected; a fresh root snapshot
+ * overwrites it.
+ */
+interface TombstoneDoc {
+  deletedAt: string;
+}
+
+function isTombstone(data: PointerDoc | TombstoneDoc): data is TombstoneDoc {
+  return 'deletedAt' in data;
+}
+
+/**
  * Chain metadata about a parent snapshot needed to extend the chain - the
  * nearest checkpoint, its shard count and the diff segment leading to the
  * parent. Deliberately excludes the parent's (potentially large) state so it
@@ -327,7 +342,9 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
             this.pointersCol(options).doc(sessionId)
           );
           if (!pointerSnap.exists) return undefined;
-          const pointer = pointerSnap.data() as PointerDoc;
+          const pointerData = pointerSnap.data() as PointerDoc | TombstoneDoc;
+          if (isTombstone(pointerData)) return undefined;
+          const pointer = pointerData;
           // Reconstruct straight from the pointer's checkpoint metadata - one
           // batched round-trip, no extra read of the leaf document.
           const reconstructed = await this.reconstructFrom(
@@ -391,9 +408,18 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
       // Reads phase 2: the per-session pointer (current leaf metadata).
       const pointerRef = this.pointersCol(options).doc(sessionId);
       const pointerSnap = await tx.get(pointerRef);
-      const pointer = pointerSnap.exists
-        ? (pointerSnap.data() as PointerDoc)
+      const pointerData = pointerSnap.exists
+        ? (pointerSnap.data() as PointerDoc | TombstoneDoc)
         : undefined;
+      // A deleted session only accepts a fresh root snapshot; a late writer
+      // continuing the old chain (or rewriting a row mid-delete) must not
+      // resurrect it.
+      const tombstoned = !!pointerData && isTombstone(pointerData);
+      if (tombstoned && (result.parentId || existing)) {
+        throw new SessionDeletedError(sessionId);
+      }
+      const pointer =
+        pointerData && !isTombstone(pointerData) ? pointerData : undefined;
 
       let kind: 'diff' | 'checkpoint';
       let checkpointId: string;
@@ -560,14 +586,43 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
     options?: SessionStoreOptions
   ): void | (() => void) {
     const ref = this.snapshotsCol(options).doc(snapshotId);
+    let last: SessionSnapshot<S> | undefined;
+    let seen = false;
+    let reportedDeleted = false;
+    let lastSessionId: string | undefined;
+    // A snapshot we watched disappearing means its session was deleted: report
+    // it as aborted so a watching worker stops, even if we never managed to
+    // load its content.
+    const reportDeleted = () => {
+      if (reportedDeleted) return;
+      reportedDeleted = true;
+      callback({
+        createdAt: new Date().toISOString(),
+        sessionId: lastSessionId,
+        ...last,
+        snapshotId,
+        status: 'aborted',
+      } as SessionSnapshot<S>);
+    };
     return ref.onSnapshot(async (docSnap) => {
-      if (!docSnap.exists) return;
+      if (!docSnap.exists) {
+        if (seen) reportDeleted();
+        return;
+      }
+      seen = true;
+      lastSessionId = (docSnap.data() as SnapshotDoc | undefined)?.sessionId;
       try {
         const snapshot = await this.getSnapshot({
           snapshotId,
           context: options?.context,
         });
-        if (snapshot) callback(snapshot);
+        if (snapshot) {
+          last = snapshot;
+          callback(snapshot);
+        } else {
+          // The document existed a moment ago but cannot be loaded now.
+          reportDeleted();
+        }
       } catch (err) {
         // Swallow errors so a transient read failure (network / permission)
         // doesn't surface as an unhandled promise rejection and crash the
@@ -578,6 +633,117 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
         );
       }
     });
+  }
+
+  /**
+   * Permanently deletes every snapshot, checkpoint shard and the pointer of a
+   * session.
+   *
+   * A large session exceeds what one transaction can write, so the delete is a
+   * sequence of steps that is safe to retry and never strands data:
+   *
+   * 1. In a transaction, replace a live pointer with a {@link TombstoneDoc}. Every
+   *    save reads the pointer in its own transaction, so this serializes the
+   *    delete against concurrent saves and makes later writers that continue
+   *    the old chain fail with {@link SessionDeletedError}.
+   * 2. Find the session's snapshots (equality query on `sessionId`, served by
+   *    the automatic single-field index) plus, for rows written before
+   *    snapshot-level ids existed, the chain the pointer named.
+   * 3. Delete the checkpoint shards. Their ids are only discoverable from the
+   *    snapshot documents, so these go first.
+   * 4. Delete the snapshot documents last, so an interrupted delete can be
+   *    re-run and still finds everything left over.
+   *
+   * The tombstone stays afterwards (it holds no session content) so a straggler
+   * cannot recreate the session; a new root snapshot clears it. A session with
+   * no live pointer gets no tombstone. Rows outside the pointer's current chain
+   * that lack a top-level `sessionId` (written before snapshot-level ids
+   * existed) are not found.
+   *
+   * @returns `true` if any session data was removed.
+   */
+  async deleteSession(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<boolean> {
+    if (!sessionId || !sessionId.trim()) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: 'deleteSession requires a non-empty sessionId.',
+      });
+    }
+    const pointerRef = this.pointersCol(options).doc(sessionId);
+    const snapshots = this.snapshotsCol(options);
+    const shards = this.shardsCol(options);
+
+    // Step 1: tombstone the pointer, remembering the chain it named.
+    const previous = await this.db.runTransaction(async (tx) => {
+      const snap = await tx.get(pointerRef);
+      const data = snap.exists
+        ? (snap.data() as PointerDoc | TombstoneDoc)
+        : undefined;
+      const live = data && !isTombstone(data) ? data : undefined;
+      // Only a session that has a live pointer needs a tombstone. Writing one
+      // for an id that never existed (or is already tombstoned) would just
+      // leave a stray document behind.
+      if (live) {
+        tx.set(pointerRef, {
+          deletedAt: new Date().toISOString(),
+        } satisfies TombstoneDoc);
+      }
+      return live;
+    });
+
+    // Step 2: collect what to delete.
+    const snapshotIds = new Set<string>();
+    const shardCounts = new Map<string, number>();
+    const noteCheckpoint = (checkpointId: string, count: number) => {
+      shardCounts.set(
+        checkpointId,
+        Math.max(shardCounts.get(checkpointId) ?? 0, count)
+      );
+    };
+    if (previous) {
+      snapshotIds.add(previous.checkpointId);
+      for (const id of previous.segmentPath) snapshotIds.add(id);
+      snapshotIds.add(previous.currentSnapshotId);
+      noteCheckpoint(previous.checkpointId, previous.checkpointShardCount);
+    }
+    const owned = await snapshots
+      .where('sessionId', '==', sessionId)
+      .select('checkpointId', 'checkpointShardCount')
+      .get();
+    for (const doc of owned.docs) {
+      snapshotIds.add(doc.id);
+      const d = doc.data() as Pick<
+        SnapshotDoc,
+        'checkpointId' | 'checkpointShardCount'
+      >;
+      if (d.checkpointId)
+        noteCheckpoint(d.checkpointId, d.checkpointShardCount);
+    }
+
+    // Steps 3 and 4: shards, then snapshot documents.
+    const shardRefs: DocumentReference[] = [];
+    for (const [checkpointId, count] of shardCounts) {
+      for (let i = 0; i < count; i++) {
+        shardRefs.push(shards.doc(`${checkpointId}_${i}`));
+      }
+    }
+    await this.deleteAll(shardRefs);
+    await this.deleteAll([...snapshotIds].map((id) => snapshots.doc(id)));
+
+    return !!previous || owned.size > 0;
+  }
+
+  /** Deletes the given documents in batches under Firestore's write limit. */
+  private async deleteAll(refs: DocumentReference[]): Promise<void> {
+    const BATCH_SIZE = 400;
+    for (let i = 0; i < refs.length; i += BATCH_SIZE) {
+      const batch = this.db.batch();
+      for (const ref of refs.slice(i, i + BATCH_SIZE)) batch.delete(ref);
+      await batch.commit();
+    }
   }
 
   /**

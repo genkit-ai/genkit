@@ -14,7 +14,11 @@
  * limitations under the License.
  */
 
-import { getAsyncContext, type ActionContext } from '@genkit-ai/core';
+import {
+  GenkitError,
+  getAsyncContext,
+  type ActionContext,
+} from '@genkit-ai/core';
 
 import { EventEmitter } from '@genkit-ai/core/async';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -52,6 +56,20 @@ export type SessionSnapshotInput<S = unknown> = Omit<
 > & {
   snapshotId?: string;
 };
+
+/**
+ * Thrown by a {@link SessionStore} when a snapshot continues the chain of a
+ * session that was deleted with {@link SessionStore.deleteSession}.
+ */
+export class SessionDeletedError extends GenkitError {
+  constructor(sessionId: string) {
+    super({
+      status: 'FAILED_PRECONDITION',
+      message: `Session '${sessionId}' was deleted; refusing to write a snapshot that continues it.`,
+    });
+    this.name = 'SessionDeletedError';
+  }
+}
 
 /**
  * Options provided to the session store methods.
@@ -151,6 +169,29 @@ export interface SessionStore<S = unknown> {
     callback: (snapshot: SessionSnapshot<S>) => void,
     options?: SessionStoreOptions
   ): void | (() => void);
+
+  /**
+   * Permanently removes every persisted snapshot of a session.
+   *
+   * Optional capability: stores that cannot delete simply omit it.
+   *
+   * - Deletes the whole session (all snapshots, any checkpoint data and the
+   *   session pointer). Single-snapshot deletion is not supported because
+   *   later snapshots may depend on earlier ones.
+   * - Idempotent: deleting a session that does not exist is not an error.
+   * - Subscribers registered through {@link SessionStore.onSnapshotStateChange}
+   *   for a deleted snapshot are notified with `status: 'aborted'` so that an
+   *   in-flight detached run stops.
+   * - Once deleted, new snapshots whose `parentId` no longer exists are
+   *   rejected, so a late writer cannot resurrect the session.
+   *
+   * @returns `true` if anything was removed, `false` if the session had no
+   *   persisted data.
+   */
+  deleteSession?(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<boolean>;
 }
 
 /**
