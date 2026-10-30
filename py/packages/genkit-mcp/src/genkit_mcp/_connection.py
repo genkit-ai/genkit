@@ -28,7 +28,6 @@ from importlib import metadata
 from typing import Any, Generic, TypeVar, cast
 
 import anyio
-import structlog
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.shared.exceptions import McpError
@@ -40,6 +39,7 @@ from mcp.types import (
     Tool as McpTool,
 )
 
+from genkit import get_logger
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._errors import (
     _ClientError,
@@ -54,7 +54,7 @@ if sys.version_info < (3, 11):
 
 _T = TypeVar('_T')
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 _TRANSPORT_ERRORS = (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream)
 
