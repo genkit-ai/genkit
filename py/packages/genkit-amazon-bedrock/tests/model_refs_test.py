@@ -153,7 +153,7 @@ def test_profiles_and_arns_route_like_resolve(constructor: RefConstructor, model
         (Bedrock.text, 'amazon.titan-image-generator-v1', 'use Bedrock.titan_image()'),
         (Bedrock.titan_image, 'amazon.nova-canvas-v1:0', 'use Bedrock.nova_canvas()'),
         (Bedrock.stability, 'amazon.nova-lite-v1:0', 'text models take Bedrock.text()'),
-        (Bedrock.stability, 'stability.stable-image-inpaint-v1:0', 'not a Stability text-to-image model'),
+        (Bedrock.stability, 'stability.stable-image-inpaint-v1:0', 'image editing service'),
         (Bedrock.text, 'amazon.titan-embed-text-v2:0', 'use Bedrock.embedding()'),
         (Bedrock.stability, 'cohere.embed-english-v3', 'use Bedrock.embedding()'),
         (Bedrock.embedding, 'amazon.nova-lite-v1:0', 'use Bedrock.text()'),

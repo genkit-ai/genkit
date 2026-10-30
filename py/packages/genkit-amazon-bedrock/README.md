@@ -328,7 +328,7 @@ response = await ai.generate(
 image = response.media[0].url  # data:image/png;base64,...
 ```
 
-The plugin infers the route from the ID: one of the two families below takes
+The plugin infers the route from the ID: one of the three families below takes
 the InvokeModel path, and anything else goes through Converse. Listing is
 optional here too, so a bare `ai.generate(model='bedrock/<id>')` routes the same
 way; listing only adds the model to the Dev UI. The prompt is the text of the
@@ -440,7 +440,7 @@ request shape with Nova Canvas. The legacy Stable Diffusion XL schema
 (`text_prompts`/`artifacts`) is not ported. Stability editing services
 (inpaint, erase, background removal, and the rest) are not text-to-image
 and are out of scope. Nova Canvas may return fewer images than
-`numberOfImages` asked for; content-filtered images are dropped
+`number_of_images` asked for; content-filtered images are dropped
 silently.
 
 ## Troubleshooting

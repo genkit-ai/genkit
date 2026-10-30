@@ -68,7 +68,6 @@ _FAMILY_CONFIG: dict[ImageFamily, type[ImageConfig]] = {
 }
 
 # Every declared field but extra reaches the body; extra is merged separately.
-_AMAZON_IMAGE_FIELDS: set[str] = set(NovaCanvasConfig.model_fields) - {'extra'}
 _STABILITY_IMAGE_FIELDS: set[str] = set(StabilityImageConfig.model_fields) - {'extra'}
 
 
@@ -205,7 +204,9 @@ def build_amazon_image_body(prompt: str, config: TitanImageConfig | NovaCanvasCo
     }
     if isinstance(config, NovaCanvasConfig):
         image_generation_config['quality'] = 'standard'
-    image_generation_config.update(config.model_dump(by_alias=True, exclude_none=True, include=_AMAZON_IMAGE_FIELDS))
+    # Read the fields off the config's own class: Titan and Nova share this builder.
+    fields = set(type(config).model_fields) - {'extra'}
+    image_generation_config.update(config.model_dump(by_alias=True, exclude_none=True, include=fields))
 
     return {
         'taskType': 'TEXT_IMAGE',

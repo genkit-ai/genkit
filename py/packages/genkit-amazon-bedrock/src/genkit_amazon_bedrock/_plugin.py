@@ -152,9 +152,14 @@ def _ref_local_id(name: object, *, family: RefFamily) -> str:
     if actual == 'rerank':
         hint = f"'{local}' is a rerank model; this plugin has no rerank action."
     elif actual == 'text' and family != 'embedding':
-        # Image editing services and unknown IDs land here too: they route to
-        # Converse, so text() is the only constructor that fits.
-        hint = f"'{local}' is not {_REF_CONSTRUCTOR[family][1]} text-to-image model; text models take Bedrock.text()."
+        if 'stable-image-' in local and 'core' not in local and 'ultra' not in local:
+            hint = f"'{local}' is an image editing service; the plugin supports text-to-image only."
+        else:
+            # Unknown IDs land here too: they route to Converse, so text() is
+            # the only constructor that fits.
+            hint = (
+                f"'{local}' is not {_REF_CONSTRUCTOR[family][1]} text-to-image model; text models take Bedrock.text()."
+            )
     else:
         constructor, label = _REF_CONSTRUCTOR[actual]
         hint = f"'{local}' is {label} model; use Bedrock.{constructor}()."
