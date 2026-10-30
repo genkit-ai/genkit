@@ -17,16 +17,17 @@ from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._tools import (
     Interrupt,
     MultipartToolResponse,
-    ToolRunContext,
+    ToolContext,
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, Resume
 from genkit._core._typing import (
     FinishReason,
     Media,
+    MiddlewareRef,
     Role,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
 from genkit.testing import define_scripted_model
 
 
@@ -61,7 +62,7 @@ WIRE_PNG = {'media': {'contentType': 'image/png', 'url': 'data:image/png;base64,
 
 @pytest.mark.asyncio
 async def test_normal_two_arg_tools_see_no_resume_context() -> None:
-    """Two tools in one batch, no interrupt: ``ToolRunContext`` should stay empty of resume fields.
+    """Two tools in one batch, no interrupt: ``ToolContext`` should stay empty of resume fields.
 
     The model asks for both tools in one turn; each tool records whether it thinks it's a resume
     (it shouldn't), and we compare the whole conversation to the expected wire.
@@ -71,12 +72,12 @@ async def test_normal_two_arg_tools_see_no_resume_context() -> None:
     seen: list[tuple[bool, object | None, object | None]] = []
 
     @ai.tool(name='u1')
-    async def u1(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def u1(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append((ctx.is_resumed(), ctx.resumed_metadata, ctx.original_input))
         return 'a'
 
     @ai.tool(name='u2')
-    async def u2(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def u2(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append((ctx.is_resumed(), ctx.resumed_metadata, ctx.original_input))
         return 'b'
 
@@ -869,12 +870,12 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
         return 'described'
 
     @ai.middleware(name='multipart_media')
-    class MultipartMedia(BaseMiddleware):
+    class MultipartMedia(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             response = await next_fn(params, ctx)
             requested = params.tool_request_part.tool_request
@@ -1415,12 +1416,12 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
     if with_passthrough:
 
         @ai.middleware(name='passthrough_mw')
-        class PassthroughMW(BaseMiddleware):
+        class PassthroughMW(Middleware):
             async def wrap_tool(
                 self,
                 params: ToolHookParams,
-                ctx: GenerateMiddlewareContext,
-                next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+                ctx: MiddlewareContext,
+                next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
             ) -> MultipartToolResponse:
                 return await next_fn(params, ctx)
 
@@ -1512,7 +1513,7 @@ async def test_resume_restart_empty_resumed_metadata_reruns_the_tool() -> None:
     seen: list[tuple[bool, object | None]] = []
 
     @ai.tool(name='intr')
-    async def intr(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def intr(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append((ctx.is_resumed(), ctx.resumed_metadata))
         if not ctx.is_resumed():
             raise Interrupt({'reason': 'x'})

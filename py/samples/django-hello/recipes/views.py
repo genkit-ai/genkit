@@ -20,11 +20,12 @@ from genkit_django import genkit_django_handler
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, ModelResponse, RequestData
+from genkit import FlowContext, Genkit, ModelResponse
+from genkit.web import RequestData
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 
@@ -39,7 +40,7 @@ async def auth_context(request: RequestData) -> dict[str, object]:
 
 @genkit_django_handler(ai, context_provider=auth_context)
 @ai.flow()
-async def say_hi(input: SayHiInput, ctx: ActionRunContext) -> ModelResponse:
+async def say_hi(input: SayHiInput, ctx: FlowContext) -> ModelResponse:
     username = ctx.context.get('username', 'guest')
     stream = ai.generate_stream(
         prompt=f'tell a medium sized joke about {input.name} for user {username}',

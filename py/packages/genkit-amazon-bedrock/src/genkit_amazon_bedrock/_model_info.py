@@ -27,7 +27,7 @@ release.
 
 from typing import Literal, NamedTuple
 
-from genkit.model import Constrained, ModelInfo, Stage, Supports
+from genkit.model import ConstrainedSupport, ModelInfo, ModelStage, ModelSupports
 
 INFERENCE_PROFILE_PREFIXES = (
     'global.',
@@ -171,8 +171,8 @@ def get_model_info(
     if model_type == 'image':
         return ModelInfo(
             label=model_label(model_name),
-            stage=Stage.STABLE,
-            supports=Supports(
+            stage=ModelStage.STABLE,
+            supports=ModelSupports(
                 multiturn=False,
                 tools=False,
                 tool_choice=False,
@@ -180,25 +180,25 @@ def get_model_info(
                 # Genkit reads media as an input capability; these take text only.
                 media=False,
                 output=['media'],
-                constrained=Constrained.NONE,
+                constrained=ConstrainedSupport.NONE,
             ),
         )
 
     capability = MODEL_CAPABILITIES.get(strip_inference_profile_prefix(model_name))
-    stage = Stage.STABLE if capability is not None else Stage.UNSTABLE
+    stage = ModelStage.STABLE if capability is not None else ModelStage.UNSTABLE
     if capability is None:
         capability = ModelCapability(multimodal=True, tools=True)
 
     return ModelInfo(
         label=model_label(model_name),
         stage=stage,
-        supports=Supports(
+        supports=ModelSupports(
             multiturn=True,
             tools=capability.tools,
             tool_choice=capability.tools,
             system_role=True,
             media=capability.multimodal,
-            constrained=Constrained.NONE,
+            constrained=ConstrainedSupport.NONE,
         ),
     )
 

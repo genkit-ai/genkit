@@ -41,7 +41,7 @@ from google.auth.transport.requests import Request
 
 from genkit import GenkitError
 from genkit.evaluator import BaseDataPoint, Evaluator, EvaluatorResponse, Score, ScoreDetails
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, Action, StrEnum, loop_local_client, provider_error
+from genkit.plugin_api import GENKIT_USER_AGENT, Action, StrEnum, loop_local_client, provider_error
 
 
 @loop_local_client
@@ -158,7 +158,7 @@ class EvaluatorFactory:
         headers = {
             'Authorization': f'Bearer {token}',
             'Content-Type': 'application/json',
-            'X-Goog-Api-Client': GENKIT_CLIENT_HEADER,
+            'X-Goog-Api-Client': GENKIT_USER_AGENT,
         }
 
         request = {

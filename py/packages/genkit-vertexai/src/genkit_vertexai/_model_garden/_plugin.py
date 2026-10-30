@@ -36,9 +36,9 @@ from genkit_vertexai._model_garden._model_info import (
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelInfo, ModelRequest, model as create_model, model_action_metadata
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin, loop_local_client
+from genkit import GenkitError, ModelResponse
+from genkit.model import Model, ModelContext, ModelInfo, ModelRequest
+from genkit.plugin_api import Action, ActionKind, Plugin, loop_local_client
 
 if TYPE_CHECKING:
     from genkit_vertexai._model_garden._client import CachedOpenAI
@@ -139,14 +139,15 @@ class ModelGardenModel:
                 model is deployed.
         """
         self.name = model
+        self._location = location
+        self._project = project
 
-        def _new_cached_client() -> 'CachedOpenAI':
-            # _client.py imports openai, which is an extra; load it on first generate.
-            from genkit_vertexai._model_garden._client import CachedOpenAI
+    @loop_local_client
+    def _runtime_client(self) -> 'CachedOpenAI':
+        # _client.py imports openai, which is an extra; load it on first generate.
+        from genkit_vertexai._model_garden._client import CachedOpenAI
 
-            return CachedOpenAI(location=location, project=project)
-
-        self._runtime_client = loop_local_client(_new_cached_client)
+        return CachedOpenAI(location=self._location, project=self._project)
 
     async def create_client(self) -> 'AsyncOpenAI':
         """Return the per-loop AsyncOpenAI client, refreshing the token only when expired.
@@ -179,7 +180,7 @@ class ModelGardenModel:
             ),
         }
 
-    def to_openai_compatible_model(self) -> Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse]]:
+    def to_openai_compatible_model(self) -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
         """Convert the Model Garden model into an OpenAI-compatible Genkit model function.
 
         Returns:
@@ -187,7 +188,7 @@ class ModelGardenModel:
             ``OpenAIModel`` instance) that can be used by Genkit.
         """
 
-        async def _generate(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             # Private import across packages, on purpose. The [openai] extra
             # pins genkit-openai to this package's exact version, so Model
             # Garden reuses the OpenAI-compatible model class instead of
@@ -316,7 +317,7 @@ class ModelGarden(Plugin):
 
             location, project = await self._location_and_project(name)
             claude = AnthropicModelGarden(model=name, location=location, project=project)
-            return create_model(
+            return Model(
                 full_name,
                 claude.get_handler(),
                 config_schema=claude.get_config_schema(),
@@ -328,23 +329,36 @@ class ModelGarden(Plugin):
 
         location, project = await self._location_and_project(name)
         openai_compat = ModelGardenModel(model=name, location=location, project=project)
-        return create_model(
+        return Model(
             full_name,
             openai_compat.to_openai_compatible_model(),
             config_schema=OpenAIConfig,
             info=_openai_compat_model_info(name),
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
-        """Generate a list of available actions or models.
+    def _deferred_openai_compat_handler(
+        self, name: str
+    ) -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
+        """A handler that looks up region and project when it runs, not when it is built."""
+
+        async def generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+            location, project = await self._location_and_project(name)
+            handler = ModelGardenModel(model=name, location=location, project=project).to_openai_compatible_model()
+            return await handler(request, ctx)
+
+        return generate
+
+    async def list_actions(self) -> list[Action]:
+        """The OpenAI-compatible Model Garden models, for the Dev UI.
+
+        Listing needs no project and makes no ADC lookup: each model finds its
+        project when it runs, and fails then with FAILED_PRECONDITION if there
+        is none.
 
         Returns:
-            list[ActionMetadata]: A list of ActionMetadata objects, each with the following attributes:
-                - name (str): The name of the action or model.
-                - kind (ActionKind): The type or category of the action.
-                - info (dict): The metadata dictionary describing the model configuration and properties.
-                - config_schema (type): The schema class used for validating the model's configuration.
-            Empty when the ``openai`` extra isn't installed, so the Dev UI only lists models that can run.
+            One Model per supported OpenAI-compatible model. Empty when the
+            ``openai`` extra isn't installed, so the Dev UI only lists models
+            that can run.
         """
         try:
             with _requires_extra(_OPENAI_EXTRA):
@@ -353,10 +367,11 @@ class ModelGarden(Plugin):
             return []
 
         return [
-            model_action_metadata(
-                name=model_garden_name(model),
-                info=model_info.model_dump(by_alias=True, exclude_none=True),
+            Model(
+                model_garden_name(name),
+                self._deferred_openai_compat_handler(name),
                 config_schema=OpenAIConfig,
+                info=info,
             )
-            for model, model_info in SUPPORTED_OPENAI_COMPAT_MODELS.items()
+            for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()
         ]
