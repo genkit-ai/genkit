@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from unittest import mock
 
@@ -25,7 +26,8 @@ import httpx
 import pytest
 
 from genkit import Part
-from genkit._ai._agents._transports._http import HttpAgentTransport
+from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
+from genkit._core._error import GenkitError
 from genkit._core._model import AgentInit, AgentInput, Message
 
 URL = 'http://example.test/weatherAgent'
@@ -214,3 +216,105 @@ async def test_timeout_none_waits_indefinitely_but_still_bounds_connect() -> Non
         await _run_turn(transport)
 
     assert client.calls[0]['timeout'] == httpx.Timeout(None, connect=10.0)
+
+
+# ---------------------------------------------------------------------------
+# Failures talking to the server are GenkitError, classified by cause.
+# ---------------------------------------------------------------------------
+
+
+def _mock_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def _refuse(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError('connection refused', request=request)
+
+
+def _time_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout('read timed out', request=request)
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_connection_refused_raises_unavailable() -> None:
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=_mock_client(_refuse)):
+        with pytest.raises(GenkitError) as exc:
+            await transport.get_snapshot(snapshot_id='snap-1')
+    assert exc.value.status == 'UNAVAILABLE'
+    assert isinstance(exc.value.cause, httpx.ConnectError)
+
+
+@pytest.mark.asyncio
+async def test_abort_snapshot_timeout_raises_deadline_exceeded() -> None:
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=_mock_client(_time_out)):
+        with pytest.raises(GenkitError) as exc:
+            await transport.abort_snapshot('snap-1')
+    assert exc.value.status == 'DEADLINE_EXCEEDED'
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_non_json_body_raises_internal() -> None:
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    client = _mock_client(lambda _req: httpx.Response(200, text='<html>proxy page</html>'))
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        with pytest.raises(GenkitError) as exc:
+            await transport.get_snapshot(snapshot_id='snap-1')
+    assert exc.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_wrong_shape_raises_internal() -> None:
+    """Valid JSON that isn't a snapshot is GenkitError, not a raw pydantic error."""
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    client = _mock_client(lambda _req: httpx.Response(200, json={'result': {'snapshotId': 42}}))
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        with pytest.raises(GenkitError) as exc:
+            await transport.get_snapshot(snapshot_id='snap-1')
+    assert exc.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_server_error_keeps_server_status() -> None:
+    """A wire error from the server passes through with its own status, not re-wrapped."""
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    body = '{"error": {"status": "PERMISSION_DENIED", "message": "not your session"}}'
+    client = _mock_client(lambda _req: httpx.Response(403, text=body))
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        with pytest.raises(GenkitError) as exc:
+            await transport.get_snapshot(snapshot_id='snap-1')
+    assert exc.value.status == 'PERMISSION_DENIED'
+    assert exc.value.cause is None
+
+
+@pytest.mark.asyncio
+async def test_run_turn_connection_refused_raises_unavailable() -> None:
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=_mock_client(_refuse)):
+        with pytest.raises(GenkitError) as exc:
+            await _run_turn(transport)
+    assert exc.value.status == 'UNAVAILABLE'
+
+
+@pytest.mark.asyncio
+async def test_run_turn_stream_ends_without_result_raises_unavailable() -> None:
+    """The server sent a chunk, then the stream closed before a result."""
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    chunk = 'data: {"message": {"modelChunk": {"content": [{"text": "Booking for "}]}}}\n\n'
+    client = _mock_client(lambda _req: httpx.Response(200, text=chunk))
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+        with pytest.raises(GenkitError) as exc:
+            await _run_turn(transport)
+    assert exc.value.status == 'UNAVAILABLE'
+
+
+@pytest.mark.asyncio
+async def test_remote_chat_send_connection_refused_raises_unavailable_and_keeps_history() -> None:
+    """End to end: chat.send over HTTP raises GenkitError and leaves the chat as it was."""
+    chat = remote_agent(URL, state_management='client').chat()
+    with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=_mock_client(_refuse)):
+        with pytest.raises(GenkitError) as exc:
+            await chat.send('book a table for 4')
+    assert exc.value.status == 'UNAVAILABLE'
+    assert chat.messages == []

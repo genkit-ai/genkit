@@ -28,10 +28,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from _ai import ai
+from _ai import ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp import current_session
 
 
@@ -135,7 +135,7 @@ task_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_task_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_task_agent(text: str, ctx: FlowContext) -> dict[str, Any]:
     """Seed an empty list, run one turn, and hand back the live typed state."""
     chat = task_agent.chat(state={'custom': {'tasks': [], 'next_id': 1}, 'messages': [], 'artifacts': []})
     turn = chat.send_stream(text or 'Add a task: buy groceries')
@@ -144,7 +144,7 @@ async def test_task_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
             ctx.send_chunk(chunk.text)
     res = await turn
     state = res.state
-    return {'text': res.text, 'tasks': state.model_dump()['tasks'] if state else []}
+    return {'text': reply_text(res), 'tasks': state.model_dump()['tasks'] if state else []}
 
 
 if __name__ == '__main__':

@@ -25,7 +25,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._client import (
@@ -98,6 +98,22 @@ def stream_error_from_payload(data: dict[str, Any]) -> GenkitError:
     return error_from_wire(error)
 
 
+def transport_error(e: Exception) -> GenkitError:
+    """Classify a failure talking to the agent server as GenkitError.
+
+    A timeout is ``DEADLINE_EXCEEDED`` and a refused or dropped connection
+    is ``UNAVAILABLE``: the server never reported a failure. A drop after
+    the request was sent may still have run the turn server-side, so these
+    are not safe to blindly resend. Anything else goes through
+    ``error_from_exception``.
+    """
+    if isinstance(e, httpx.TimeoutException):
+        return GenkitError(status='DEADLINE_EXCEEDED', message='Timed out talking to the agent server', cause=e)
+    if isinstance(e, httpx.TransportError):
+        return GenkitError(status='UNAVAILABLE', message='Lost connection to the agent server', cause=e)
+    return error_from_exception(e)
+
+
 class HttpAgentTransport(AgentTransport[StateT]):
     """Client-side agent transport that talks to a remote agent over HTTP."""
 
@@ -145,6 +161,14 @@ class HttpAgentTransport(AgentTransport[StateT]):
 
     async def _post_json(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         """POST JSON to a one-shot action endpoint and return the parsed body."""
+        try:
+            return await self._post_json_raw(url=url, input_val=input_val)
+        except GenkitError:
+            raise
+        except Exception as e:
+            raise transport_error(e) from e
+
+    async def _post_json_raw(self, *, url: str, input_val: dict[str, Any]) -> Any:  # noqa: ANN401
         client = _agent_client()
         # Same callable/flow envelope as run_turn: handlers expect {"data": ...}.
         response = await client.post(
@@ -236,14 +260,14 @@ class HttpAgentTransport(AgentTransport[StateT]):
                         stream_queue.put_nowait(chunk)
                     else:
                         err = GenkitError(
-                            status='INTERNAL',
+                            status='UNAVAILABLE',
                             message='HTTP stream ended prematurely before agent turn completed',
                         )
                         if not output_future.done():
                             output_future.set_exception(err)
                         stream_queue.put_nowait(err)
             except Exception as e:
-                err = e if isinstance(e, GenkitError) else error_from_exception(e)
+                err = transport_error(e)
                 if not output_future.done():
                     output_future.set_exception(err)
                 stream_queue.put_nowait(err)
@@ -281,14 +305,27 @@ class HttpAgentTransport(AgentTransport[StateT]):
         )
         if result is None:
             return None
-        return SessionSnapshot.model_validate(result)
+        return _parse_response(SessionSnapshot, result, endpoint='getSnapshot')
 
     async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts the specified snapshot on the server."""
         result = await self._post_json(url=self.abort_url, input_val={'snapshotId': snapshot_id})
         if result is None:
             return None
-        return AgentAbortResponse.model_validate(result).status
+        return _parse_response(AgentAbortResponse, result, endpoint='abort').status
+
+
+_ModelT = TypeVarExt('_ModelT', bound=BaseModel)
+
+
+def _parse_response(model: type[_ModelT], result: Any, *, endpoint: str) -> _ModelT:  # noqa: ANN401
+    """Validate a one-shot response body, raising GenkitError on a shape mismatch."""
+    try:
+        return model.model_validate(result)
+    except ValidationError as e:
+        raise GenkitError(
+            status='INTERNAL', message=f'Unexpected {endpoint} response from the agent server', cause=e
+        ) from e
 
 
 def remote_agent(

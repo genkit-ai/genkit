@@ -22,21 +22,18 @@ import pytest
 
 from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
-from genkit._ai._agents._client import AgentError
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason, runtime_error_reason
 from genkit._core._model import AgentInit, AgentInput, AgentResult, Message, SessionSnapshot, SessionState
-from genkit._core._registry import Registry
 from genkit._core._typing import (
     AgentFinishReason,
     SnapshotStatus,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore, TurnContext, TurnResult
+from genkit.exp.agent import AgentContext, InMemorySessionStore, TurnContext, TurnResult
 
 
-async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def echo_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = ''
         if inp.message and inp.message.content:
@@ -50,9 +47,9 @@ async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentRe
 
 @pytest.mark.asyncio
 async def test_missing_snapshot_resolves_as_failed_agent_output() -> None:
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = define_custom_agent(registry, 'missingSnap', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'missingSnap', echo_fn, store=store)
 
     conn = await agent.stream_bidi(AgentInit(snapshot_id='does-not-exist'))
     out = await conn.output()
@@ -67,7 +64,7 @@ async def test_missing_snapshot_resolves_as_failed_agent_output() -> None:
 
 @pytest.mark.asyncio
 async def test_non_resumable_snapshot_resolves_as_failed_agent_output() -> None:
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
     failed = SessionSnapshot(
         snapshot_id='snap-failed',
@@ -79,7 +76,7 @@ async def test_non_resumable_snapshot_resolves_as_failed_agent_output() -> None:
     saved = await store.save_snapshot(failed.snapshot_id, lambda existing: failed)
     assert saved is not None
 
-    agent = define_custom_agent(registry, 'badStatus', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'badStatus', echo_fn, store=store)
     conn = await agent.stream_bidi(AgentInit(snapshot_id=saved.snapshot_id))
     out = await conn.output()
 
@@ -93,9 +90,9 @@ async def test_non_resumable_snapshot_resolves_as_failed_agent_output() -> None:
 
 @pytest.mark.asyncio
 async def test_state_on_server_managed_agent_raises_agent_init_error() -> None:
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = define_custom_agent(registry, 'serverOnly', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'serverOnly', echo_fn, store=store)
 
     conn = await agent.stream_bidi(AgentInit(state=SessionState(custom={'x': 1})))
     with pytest.raises(AgentInitError) as exc:
@@ -107,9 +104,9 @@ async def test_state_on_server_managed_agent_raises_agent_init_error() -> None:
 
 def test_chat_rejects_state_on_server_managed_agent() -> None:
     """App-facing chat() refuses a state seed the same way the wire path does."""
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = define_custom_agent(registry, 'serverChatSeed', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'serverChatSeed', echo_fn, store=store)
 
     with pytest.raises(AgentInitError) as exc:
         agent.chat(state={'x': 1})
@@ -120,9 +117,9 @@ def test_chat_rejects_state_on_server_managed_agent() -> None:
 
 def test_chat_rejects_messages_on_server_managed_agent() -> None:
     """Bundled messages seed must be named as 'messages', not blamed as 'state'."""
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = define_custom_agent(registry, 'serverChatMessages', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'serverChatMessages', echo_fn, store=store)
 
     with pytest.raises(AgentInitError) as exc:
         agent.chat(messages=[Message(role='user', content=[Part.from_text('hi')])])
@@ -134,9 +131,9 @@ def test_chat_rejects_messages_on_server_managed_agent() -> None:
 
 def test_chat_rejects_messages_mixed_with_snapshot_id() -> None:
     """messages= + snapshot_id= is AgentInitError naming 'messages', not 'state'."""
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = define_custom_agent(registry, 'serverChatMix', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'serverChatMix', echo_fn, store=store)
 
     with pytest.raises(AgentInitError) as exc:
         agent.chat(
@@ -151,8 +148,8 @@ def test_chat_rejects_messages_mixed_with_snapshot_id() -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> None:
-    registry = Registry()
-    agent = define_custom_agent(registry, 'clientOnly', echo_fn, store=None)
+    ai = Genkit()
+    agent = define_custom_agent(ai, 'clientOnly', echo_fn, store=None)
 
     conn = await agent.stream_bidi(AgentInit(snapshot_id='snap-1'))
     with pytest.raises(AgentInitError) as exc:
@@ -165,17 +162,18 @@ async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> 
 
 
 @pytest.mark.asyncio
-async def test_chat_surfaces_missing_snapshot_as_agent_error() -> None:
-    """App-facing chat API wraps the failed AgentOutput into AgentError."""
-    registry = Registry()
+async def test_send_to_missing_snapshot_returns_failed_response() -> None:
+    """chat(snapshot_id='gone').send returns the miss on res.error."""
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = define_custom_agent(registry, 'missingSnapChat', echo_fn, store=store)
+    agent = define_custom_agent(ai, 'missingSnapChat', echo_fn, store=store)
 
-    with pytest.raises(AgentError) as exc:
-        await agent.chat(snapshot_id='gone').send('hi')
+    res = await agent.chat(snapshot_id='gone').send('hi')
 
-    assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert res.error is not None
+    assert res.error.status == 'NOT_FOUND'
+    assert res.error.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
 
 
 @pytest.mark.asyncio

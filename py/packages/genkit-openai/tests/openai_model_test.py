@@ -33,9 +33,16 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelRequest, OutputConfig, Supports, ToolRequest
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Operation, Part, Role
+from genkit.model import (
+    GenerationUsage,
+    ModelConfig,
+    ModelContext,
+    ModelRequest,
+    ModelSupports,
+    OutputConfig,
+    ToolRequest,
+)
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -74,7 +81,7 @@ def test_openai_model_text_only_supports_json_request_sends_text() -> None:
     model = OpenAIModel(
         model='some-text-only-compat',
         client=MagicMock(),
-        supports=Supports(output=['text']),
+        supports=ModelSupports(output=['text']),
     )
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
@@ -882,7 +889,7 @@ async def test__generate_stream_refusal_wins_over_a_failure_message(sample_reque
 @pytest.mark.asyncio
 async def test_generate_classifies_an_unreadable_message(sample_request: ModelRequest) -> None:
     """A message with nothing to read at all is still INTERNAL, so retry runs."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
     model = OpenAIModel(model='gpt-4', client=_mock_completion(_completion(content=None)))
 
@@ -901,7 +908,7 @@ async def test_generate_classifies_an_unreadable_message(sample_request: ModelRe
 @pytest.mark.asyncio
 async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     """Tests for generate."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=stream)
 
     mock_response = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('mocked')]))
@@ -924,7 +931,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
 @pytest.mark.asyncio
 async def test_generate_classifies_bad_config_type() -> None:
     """A config type we cannot send is INVALID_ARGUMENT so retry skips it."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
     model = OpenAIModel(model='gpt-4', client=MagicMock())
 
@@ -944,7 +951,7 @@ async def test_generate_classifies_bad_config_type() -> None:
 @pytest.mark.asyncio
 async def test_generate_no_choices_reaches_the_caller(sample_request: ModelRequest) -> None:
     """generate()'s error handling lets the no-choices error through unchanged."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
 
     mock_response = MagicMock()
@@ -1762,7 +1769,7 @@ async def _stream_through_sdk(sse_body: str, sample_request: ModelRequest) -> tu
     client = AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0)
     model = OpenAIModel(model='gpt-4o', client=client)
     chunks: list[str] = []
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=True)
     ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
 
@@ -1858,7 +1865,7 @@ async def test_generate_classifies_a_stream_cut_mid_read(
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     model = OpenAIModel(model='gpt-4o', client=AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0))
     chunks: list[str] = []
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=True)
     ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
 

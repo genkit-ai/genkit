@@ -46,7 +46,7 @@ import { traceGet } from './commands/trace-get';
 import { traceList } from './commands/trace-list';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
-import { detectCLIRuntime } from './utils/runtime-detector.js';
+import { detectCLIRuntime } from './utils/runtime-detector';
 import { showUpdateNotification } from './utils/updates';
 import { version } from './utils/version';
 

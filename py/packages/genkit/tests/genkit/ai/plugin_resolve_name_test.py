@@ -25,17 +25,17 @@ from collections.abc import Callable
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.embedder import EmbedRequest, EmbedResponse, embedder
-from genkit.model import ModelRequest, background_model, model
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+from genkit import Genkit, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.embedder import Embedder, EmbedRequest, EmbedResponse
+from genkit.model import BackgroundModel, Model, ModelContext, ModelRequest
+from genkit.plugin_api import Action, ActionKind, Plugin
 
 
 def _answering_model(name: str, text: str) -> Action:
-    async def fn(request: ModelRequest) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
-    return model(name, fn)
+    return Model(name, fn)
 
 
 class RecordingPlugin(Plugin):
@@ -64,7 +64,7 @@ class RecordingPlugin(Plugin):
             return None
         return _answering_model(self.build(name), f'resolved {name}')
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -76,17 +76,17 @@ class VideoPlugin(Plugin):
     def __init__(self) -> None:
         self.seen: list[tuple[ActionKind, str]] = []
 
-    def _video(self, model_id: str):  # noqa: ANN202
-        async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    def _video(self, model_id: str) -> BackgroundModel:
+        async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
             return Operation(id='job-1', done=False)
 
-        async def check(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def check(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True)
 
-        async def cancel(op: Operation, ctx: ActionRunContext) -> Operation:
+        async def cancel(op: Operation, ctx: ModelContext) -> Operation:
             return Operation(id=op.id, done=True, metadata={'cancelled': True})
 
-        return background_model(model_id, start=start, check=check, cancel=cancel)
+        return BackgroundModel(model_id, start=start, check=check, cancel=cancel)
 
     async def init(self) -> list[Action]:
         return []
@@ -101,7 +101,7 @@ class VideoPlugin(Plugin):
             return self._video('veo-x').cancel_action
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -128,10 +128,10 @@ async def test_generate_plugin_slash_id_keeps_full_path() -> None:
 
     assert response.text == 'resolved anthropic/claude'
     assert (ActionKind.MODEL, 'anthropic/claude') in plugin.seen
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/anthropic/claude')
+    action = await ai.lookup_model('myplug/anthropic/claude')
     assert action is not None
     assert action.name == 'myplug/anthropic/claude'
-    assert await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/claude') is None
+    assert await ai.lookup_model('myplug/claude') is None
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_generate_plugin_resolve_returning_prefixed_name_registers_once() 
     response = await ai.generate(model='myplug/x', prompt='hi')
 
     assert response.text == 'resolved x'
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x')
+    action = await ai.lookup_model('myplug/x')
     assert action is not None
     assert action.name == 'myplug/x'
 
@@ -157,7 +157,7 @@ async def test_generate_plugin_resolve_returning_bare_name_gets_prefix() -> None
     response = await ai.generate(model='myplug/x', prompt='hi')
 
     assert response.text == 'resolved x'
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x')
+    action = await ai.lookup_model('myplug/x')
     assert action is not None
     assert action.name == 'myplug/x'
 
@@ -171,7 +171,7 @@ async def test_generate_plugin_resolve_returning_other_name_is_found_under_reque
     response = await ai.generate(model='myplug/x', prompt='hi')
 
     assert response.text == 'resolved x'
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x')
+    action = await ai.lookup_model('myplug/x')
     assert action is not None
     assert action.name == 'myplug/x'
 
@@ -198,7 +198,7 @@ async def test_generate_plugin_id_starting_with_plugin_name_is_found() -> None:
 
     assert response.text == 'resolved myplug/x'
     assert (ActionKind.MODEL, 'myplug/x') in plugin.seen
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/myplug/x')
+    action = await ai.lookup_model('myplug/myplug/x')
     assert action is not None
     assert action.name == 'myplug/myplug/x'
 
@@ -227,7 +227,7 @@ async def test_plugin_init_name_with_other_prefix_keeps_full_path() -> None:
     response = await ai.generate(model='myplug/other/x', prompt='hi')
 
     assert response.text == 'init other/x'
-    assert await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/x') is None
+    assert await ai.lookup_model('myplug/x') is None
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(model='myplug/x', prompt='hi')
     assert exc_info.value.status == 'NOT_FOUND'
@@ -243,7 +243,7 @@ async def test_plugin_init_slash_names_keep_full_path() -> None:
 
     assert response.text == 'init endpoints/1'
     assert plugin.seen == []
-    assert await ai.registry.resolve_action(ActionKind.MODEL, 'myplug/1') is None
+    assert await ai.lookup_model('myplug/1') is None
 
 
 @pytest.mark.asyncio
@@ -274,9 +274,9 @@ async def test_plugin_embedder_helper_returns_action_named_with_plugin_prefix() 
             async def fn(request: EmbedRequest) -> EmbedResponse:
                 return EmbedResponse(embeddings=[])
 
-            return embedder(name, fn)
+            return Embedder(name, fn)
 
-        async def list_actions(self) -> list[ActionMetadata]:
+        async def list_actions(self) -> list[Action]:
             return []
 
     action = await EmbedPlugin().embedder('embed-1')

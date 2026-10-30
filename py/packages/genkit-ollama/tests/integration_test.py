@@ -22,7 +22,6 @@ import ollama as ollama_api
 import pytest
 
 from genkit import Genkit, Message, ModelResponse, Part, Role
-from genkit.plugin_api import ActionKind
 
 
 @pytest.mark.asyncio
@@ -31,7 +30,7 @@ async def test_adding_ollama_chat_model_to_genkit_veneer(
     genkit_veneer_chat_model: Genkit,
 ) -> None:
     """Test adding ollama chat model to genkit veneer."""
-    action = await genkit_veneer_chat_model.registry.resolve_action(ActionKind.MODEL, ollama_model)
+    action = await genkit_veneer_chat_model.lookup_model(ollama_model)
     assert action is not None
 
 

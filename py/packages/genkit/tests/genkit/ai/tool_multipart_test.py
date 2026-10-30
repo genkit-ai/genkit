@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, Part
-from genkit._ai._generate import generate_action, to_tool_definition
+from genkit._ai._generate import CallScope, generate_action, to_tool_definition
 from genkit._ai._tools import (
     ORIGINAL_OUTPUT_SCHEMA_KEY,
     MultipartToolResponse,
@@ -31,9 +31,10 @@ from genkit._core._model import GenerateActionOptions
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import (
     FinishReason,
+    MiddlewareRef,
     MultipartToolResponse as MultipartToolResponseData,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
 from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
@@ -256,7 +257,7 @@ async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict |
         )
     )
     await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'go'}]})],
@@ -319,7 +320,7 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
     )
 
     response = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
@@ -349,8 +350,8 @@ async def test_tool_registers_under_tool() -> None:
     assert create_action_key(ActionKind.TOOL, 'weather') == '/tool.v2/weather'
     assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL, 'weather')
 
-    by_name = await ai.registry.resolve_action(ActionKind.TOOL, 'weather')
-    by_key = await ai.registry.resolve_action_by_key('/tool.v2/weather')
+    by_name = await ai._registry.resolve_action(ActionKind.TOOL, 'weather')
+    by_key = await ai._registry.resolve_action_by_key('/tool.v2/weather')
     assert by_name is weather.action()
     assert by_key is weather.action()
 
@@ -364,12 +365,12 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='deny_mw')
-    class DenyMW(BaseMiddleware):
+    class DenyMW(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             return MultipartToolResponse(output='denied')
 
@@ -394,7 +395,7 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
     )
 
     res = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
@@ -416,12 +417,12 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='capture_mw')
-    class CaptureMW(BaseMiddleware):
+    class CaptureMW(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             seen.append(params.tool_request_part)
             return await next_fn(params, ctx)
@@ -447,7 +448,7 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     )
 
     res = await generate_action(
-        ai.registry,
+        CallScope(ai),
         GenerateActionOptions(
             model='scriptedModel',
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],

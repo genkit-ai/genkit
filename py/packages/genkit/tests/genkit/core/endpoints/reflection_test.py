@@ -46,14 +46,14 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, Field
 
-from genkit import ActionRunContext, Genkit, PublicError
+from genkit import FlowContext, Genkit, PublicError
 from genkit._core._action import ActionKind
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import ModelConfig
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
-from genkit._core._typing import ActionMetadata, BaseDataPoint, EvalFnResponse, EvalRequest, Score
-from genkit.model import model_ref
+from genkit._core._typing import ActionMetadata, BaseDataPoint, EvaluatorRequest, EvaluatorResponse, Score
+from genkit.model import ModelRef
 
 
 @pytest.fixture
@@ -157,7 +157,7 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
             await on_trace_start('test_trace_id', 'test_span_id')
         return mock_output
 
-    mock_action.run.side_effect = side_effect
+    mock_action._run.side_effect = side_effect
 
     async def mock_resolve_action_by_key(key: str) -> AsyncMock:
         return mock_action
@@ -174,7 +174,7 @@ async def test_run_action_standard(asgi_client: AsyncClient, mock_registry: Magi
     assert response_data['telemetry']['spanId'] == 'test_span_id'
     assert response.headers['X-Genkit-Trace-Id'] == 'test_trace_id'
     assert response.headers['X-Genkit-Span-Id'] == 'test_span_id'
-    mock_action.run.assert_called_once_with(
+    mock_action._run.assert_called_once_with(
         input={'data': 'test'},
         context={},
         on_trace_start=ANY,
@@ -191,14 +191,14 @@ async def test_run_action_context_reaches_flow_and_subflow() -> None:
     caller = {'auth': {'uid': 'u_42', 'tier': 'gold'}, 'locale': 'en-US'}
 
     @ai.flow()
-    async def allergy_check(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def allergy_check(dish: str, ctx: FlowContext) -> dict[str, Any]:
         return dict(ctx.context)
 
     @ai.flow()
-    async def order_dish(dish: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def order_dish(dish: str, ctx: FlowContext) -> dict[str, Any]:
         return {'flow': dict(ctx.context), 'subflow': await allergy_check(dish)}
 
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post(
             '/api/runAction',
@@ -221,7 +221,7 @@ async def test_run_action_rejects_non_object_context() -> None:
         calls += 1
         return dish
 
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post(
             '/api/runAction',
@@ -260,7 +260,7 @@ async def test_run_action_streaming(
         mock_output.span_id = 'stream_span_id'
         return mock_output
 
-    mock_action.run.side_effect = mock_streaming
+    mock_action._run.side_effect = mock_streaming
     mock_registry.resolve_action_by_key.return_value = mock_action
 
     response = await asgi_client.post(
@@ -313,7 +313,7 @@ async def test_run_action_streaming_primitive_types(
         mock_output.span_id = 'stream_span_id'
         return mock_output
 
-    mock_action.run.side_effect = mock_streaming
+    mock_action._run.side_effect = mock_streaming
     mock_registry.resolve_action_by_key.return_value = mock_action
 
     response = await asgi_client.post(
@@ -334,7 +334,7 @@ async def test_run_action_streaming_primitive_types(
 
 # Real-registry tests for the /api/values?type=middleware endpoint. The other
 # endpoint tests above use a MagicMock registry, but here we want to exercise
-# the actual GenerateMiddleware serialization path the Dev UI consumes — mocking
+# the actual MiddlewareMetadata serialization path the Dev UI consumes — mocking
 # would defeat the point.
 
 
@@ -349,7 +349,7 @@ async def _registry_asgi_client(registry: Registry) -> AsyncClient:
 async def test_values_middleware_includes_derived_config_schema() -> None:
     """The Dev UI's /api/values?type=middleware response carries each middleware's configSchema.
 
-    The schema is derived from the middleware class's pydantic fields by ``GenerateMiddleware(cls=...)``.
+    The schema is derived from the middleware class's pydantic fields by ``MiddlewareMetadata(cls=...)``.
     """
 
     ai = Genkit()
@@ -360,10 +360,10 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
         isolate_config: bool = False
 
     @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
-    class _Fallback(BaseMiddleware[_FallbackConfig]):
+    class _Fallback(Middleware[_FallbackConfig]):
         pass
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -374,7 +374,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
         config_schema = entry['configSchema']
         assert config_schema['type'] == 'object'
         # Author-defined fields show up; framework-injected ones (registry,
-        # custom_context / on_chunk) must not leak into the form.
+        # context / on_chunk) must not leak into the form.
         assert set(config_schema['properties'].keys()) == {'models', 'statuses', 'isolate_config'}
     finally:
         await client.aclose()
@@ -391,13 +391,13 @@ async def test_values_middleware_uses_class_docstring_as_description_fallback() 
     ai = Genkit()
 
     @ai.middleware(name='docstring_mw')
-    class _DocMw(BaseMiddleware):
+    class _DocMw(Middleware):
         """Logs every model call with a configurable prefix.
 
         Extra paragraphs end up in the description verbatim.
         """
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -419,10 +419,10 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     ai = Genkit()
 
     @ai.middleware(name='no_op')
-    class _NoOp(BaseMiddleware):
+    class _NoOp(Middleware):
         pass
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.get('/api/values?type=middleware')
         assert response.status_code == 200
@@ -443,8 +443,8 @@ async def test_values_default_model_ref_is_name() -> None:
     registry.register_value(
         'defaultModel',
         'defaultModel',
-        model_ref(
-            'echoModel',
+        ModelRef(
+            name='echoModel',
             config_schema=ModelConfig,
             version='001',
             config=ModelConfig(temperature=0.7),
@@ -495,17 +495,18 @@ async def test_no_cors_headers_returned(asgi_client: AsyncClient) -> None:
     assert 'access-control-allow-origin' not in preflight.headers
 
 
-# What `genkit eval:run` and the Dev UI send: an EvalRequest posted to
+# What `genkit eval:run` and the Dev UI send: an EvaluatorRequest posted to
 # /api/runAction for the evaluator's action key.
 
 
 def _define_always_true_evaluators(ai: Genkit) -> None:
-    async def row_eval(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
-        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
+    async def row_eval(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
-    async def batch_eval(req: EvalRequest) -> list[EvalFnResponse]:
+    async def batch_eval(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         return [
-            EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)]) for row in req.dataset
+            EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)])
+            for row in req.dataset
         ]
 
     ai.define_evaluator(name='row_eval', display_name='row_eval', definition='always true', fn=row_eval)
@@ -518,7 +519,7 @@ async def test_reflection_run_evaluator_returns_json_array_of_rows(evaluator: st
     """Per-row and batch evaluators run through /api/runAction both return a JSON array of rows."""
     ai = Genkit()
     _define_always_true_evaluators(ai)
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     body = {
         'key': f'/evaluator/{evaluator}',
         'input': {
@@ -544,7 +545,7 @@ async def test_reflection_run_evaluator_returns_json_array_of_rows(evaluator: st
 async def test_reflection_run_slash_retriever_key_returns_404() -> None:
     """Running '/retriever/x' from the Dev UI gets a 404 'Action not found', not a server error."""
     ai = Genkit()
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.post('/api/runAction', json={'key': '/retriever/x', 'input': 'q'})
     finally:
@@ -564,7 +565,7 @@ async def test_reflection_run_unparseable_key_returns_404(key: str) -> None:
     async def x() -> str:
         return 'ok'
 
-    client = await _registry_asgi_client(ai.registry)
+    client = await _registry_asgi_client(ai._registry)
     try:
         response = await client.post('/api/runAction', json={'key': key, 'input': None})
     finally:
@@ -587,7 +588,7 @@ async def test_dev_ui_run_of_failing_flow_returns_message_and_trace_id(hex_ids: 
     """A Dev UI runAction of `missing` returns the body's message, code INTERNAL, and the run's trace id."""
     ai = Genkit()
     _define_missing(ai)
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post('/api/runAction', json={'key': '/flow/missing', 'input': 'acme'})
@@ -608,7 +609,7 @@ async def test_dev_ui_run_of_public_error_flow_returns_its_status_and_trace_id(h
     async def order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'no order {order_id}')
 
-    app = create_reflection_asgi_app(ai.registry)
+    app = create_reflection_asgi_app(ai._registry)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         response = await client.post('/api/runAction', json={'key': '/flow/order', 'input': '99'})

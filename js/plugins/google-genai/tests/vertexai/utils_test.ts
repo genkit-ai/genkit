@@ -35,6 +35,7 @@ import {
   checkSupportedResourceMethod,
   getApiKeyFromEnvVar,
   getDerivedOptions,
+  toInteractionsClientOptions,
 } from '../../src/vertexai/utils.js';
 
 // Helper to assert GenkitError properties
@@ -165,10 +166,31 @@ describe('Vertex AI Utils', () => {
         assert.strictEqual(options.kind, 'regional');
         assert.strictEqual(options.projectId, 'env-project');
         assert.strictEqual(options.location, 'env-location');
+        // A location from the environment is chosen, not defaulted.
+        assert.strictEqual(options.locationDefaulted, undefined);
         sinon.assert.calledOnce(mockAuthClass);
         const authOptions = mockAuthClass.lastCall.args[0];
         assert.strictEqual(authOptions.projectId, 'env-project');
         sinon.assert.notCalled(authInstance.getProjectId);
+      });
+
+      it('marks the location as defaulted when none is set', async () => {
+        process.env.GCLOUD_PROJECT = 'env-project';
+        const options = (await getDerivedOptions(
+          undefined,
+          mockAuthClass as any
+        )) as RegionalClientOptions;
+        assert.strictEqual(options.location, 'us-central1');
+        assert.strictEqual(options.locationDefaulted, true);
+      });
+
+      it('does not mark a location set in the plugin options', async () => {
+        const options = (await getDerivedOptions(
+          { projectId: 'p', location: 'us-central1' },
+          mockAuthClass as any
+        )) as RegionalClientOptions;
+        assert.strictEqual(options.location, 'us-central1');
+        assert.strictEqual(options.locationDefaulted, undefined);
       });
 
       it('should use default location when only projectId is available', async () => {
@@ -630,6 +652,15 @@ describe('Vertex AI Utils', () => {
       });
     });
 
+    it('should allow the Interactions API in Express', () => {
+      assert.doesNotThrow(() => {
+        checkSupportedResourceMethod({
+          clientOptions: expressOptions,
+          resourcePath: 'locations/global/interactions',
+        });
+      });
+    });
+
     it('should allow any method for non-Express options', () => {
       const methods = [
         'countTokens',
@@ -649,6 +680,42 @@ describe('Vertex AI Utils', () => {
       });
     });
   });
+  describe('toInteractionsClientOptions', () => {
+    const defaulted: RegionalClientOptions = {
+      kind: 'regional',
+      location: 'us-central1',
+      projectId: 'p',
+      authClient: {} as any,
+      locationDefaulted: true,
+    };
+
+    it('turns a defaulted regional location into global', () => {
+      const result = toInteractionsClientOptions(defaulted);
+      assert.strictEqual(result.kind, 'global');
+      assert.ok(result.kind !== 'express');
+      if (result.kind !== 'express') {
+        assert.strictEqual(result.location, 'global');
+        assert.strictEqual(result.projectId, 'p');
+      }
+      assert.ok(!('locationDefaulted' in result));
+    });
+
+    it('keeps a chosen location', () => {
+      const chosen: RegionalClientOptions = {
+        ...defaulted,
+        locationDefaulted: undefined,
+      };
+      assert.strictEqual(toInteractionsClientOptions(chosen), chosen);
+    });
+
+    it('treats a request location as chosen, even us-central1', () => {
+      const result = calculateRequestOptions(defaulted, {
+        location: 'us-central1',
+      });
+      assert.strictEqual(toInteractionsClientOptions(result).kind, 'regional');
+    });
+  });
+
   describe('calculateRequestOptions', () => {
     const regionalClientOptions: RegionalClientOptions = {
       kind: 'regional',

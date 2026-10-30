@@ -29,9 +29,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from _ai import ai
+from _ai import ai, reply_text
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import InMemorySessionStore
 
 branching_agent = ai.define_agent(
@@ -42,7 +42,7 @@ branching_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_branching_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_branching_agent(text: str, ctx: FlowContext) -> dict[str, Any]:
     """Establish a root turn, then fork two branches off the same snapshot."""
     root = branching_agent.chat()
     res1 = await root.send(text or 'Hello!')
@@ -59,7 +59,7 @@ async def test_branching_agent(text: str, ctx: ActionRunContext) -> dict[str, An
     await branch_b.send('My name is John.')
     res_b = await branch_b.send('What is my name? One word.')
 
-    return {'fork_point': fork_point, 'branch_a': res_a.text, 'branch_b': res_b.text}
+    return {'fork_point': fork_point, 'branch_a': reply_text(res_a), 'branch_b': reply_text(res_b)}
 
 
 if __name__ == '__main__':

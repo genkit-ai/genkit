@@ -39,21 +39,18 @@ from genkit_google_genai._models._interactions_utils import (
     require_interaction_steps,
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
-from typing_extensions import Never
+from pydantic import field_validator
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind
+from genkit import ModelResponse
+from genkit.model import Model, ModelContext, ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 CREATE_OPTION_KEYS = ('response_modalities',)
 
 
-class LyriaConfig(BaseModel):
+class LyriaConfig(GenkitConfig):
     """Google AI Interactions Lyria model configuration."""
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
     base_url: str | None = None
     api_version: str | None = None
     # Milliseconds — applied to the HTTP call, not the create body.
@@ -73,18 +70,19 @@ def create_lyria_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> Action[ModelRequest[LyriaConfig], ModelResponse, Never]:
+) -> Model:
     """Build a foreground model action for Interactions Lyria."""
     version = extract_version(name)
     info = lyria_model_info(version)
 
-    async def run(request: ModelRequest[LyriaConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[LyriaConfig], ctx: ModelContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
         config = request.config or LyriaConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         modalities = create_options.get('response_modalities') or ['audio', 'text']
         system_instruction, turns = split_system_instruction(request.messages or [])
         steps = to_interaction_steps(ensure_tool_ids(turns))
@@ -92,7 +90,6 @@ def create_lyria_action(
             'model': version,
             'input': steps,
             'response_modalities': modalities,
-            **passthrough,
         }
         if system_instruction:
             create_kwargs['system_instruction'] = system_instruction
@@ -104,13 +101,9 @@ def create_lyria_action(
         created = await create_interaction(api_key, create_kwargs, merged_options)
         return from_interaction_sync(created)
 
-    return Action(
-        kind=ActionKind.MODEL,
-        name=name,
-        fn=run,
-        metadata=model_action_metadata(
-            name=name,
-            info=info.model_dump(by_alias=True),
-            config_schema=LyriaConfig,
-        ).metadata,
+    return Model(
+        name,
+        run,
+        info=info,
+        config_schema=LyriaConfig,
     )

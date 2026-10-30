@@ -16,29 +16,66 @@
 
 """Anthropic plugin for Genkit."""
 
-from typing import Any, Literal, cast
+import inspect
+import os
+from collections.abc import Mapping
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
-import structlog
 from anthropic import AsyncAnthropic
 
-from genkit import ActionRunContext, GenkitError, ModelResponse
-from genkit.model import ModelRef, ModelRequest, model as create_model, model_action_metadata, model_ref
+from genkit import GenkitError, ModelResponse, get_logger
+from genkit.model import Model, ModelContext, ModelRef, ModelRequest
 from genkit.plugin_api import (
     Action,
     ActionKind,
-    ActionMetadata,
     Plugin,
     loop_local_client,
-    to_json_schema,
 )
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import SUPPORTED_ANTHROPIC_MODELS, KnownClaude, get_model_info
 from genkit_anthropic._models import AnthropicModel, pinned_credential_header
 from genkit_anthropic._secrets import context_api_key, reject_config_api_key
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 ANTHROPIC_PLUGIN_NAME = 'anthropic'
+
+_CLIENT_OPTION_KEYS = frozenset(inspect.signature(AsyncAnthropic.__init__).parameters) - {'self'}
+
+
+def _client_kwargs(
+    *, api_key: str | None, base_url: str | None, client_options: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Merge the typed settings into ``client_options`` for ``AsyncAnthropic``.
+
+    Raises:
+        TypeError: A ``client_options`` key ``AsyncAnthropic`` doesn't take, or
+            ``api_key``/``base_url`` given both as an argument and in ``client_options``.
+    """
+    options = dict(client_options or {})
+    for key in options:
+        if key not in _CLIENT_OPTION_KEYS:
+            raise TypeError(
+                f'Anthropic got an unexpected client_options key {key!r}; '
+                f'AsyncAnthropic accepts {", ".join(sorted(k for k in _CLIENT_OPTION_KEYS if not k.startswith("_")))}'
+            )
+    for name, value in (('api_key', api_key), ('base_url', base_url)):
+        if value is None:
+            continue
+        if name in options:
+            raise TypeError(f'Anthropic got {name} both as an argument and in client_options; pass it once')
+        options[name] = value
+    return options
+
+
+def _reject_v1_suffix(base_url: str | None, *, source: str) -> None:
+    """The SDK appends ``/v1/messages``, so a base URL ending in ``/v1`` would send ``/v1/v1/messages``."""
+    if base_url and urlsplit(base_url).path.rstrip('/').endswith('/v1'):
+        raise ValueError(
+            f'{source} {base_url!r} ends in /v1, but the Anthropic SDK appends /v1/messages itself; '
+            'pass the origin, e.g. https://claude-proxy.example.com'
+        )
 
 
 def _has_credential(client: AsyncAnthropic) -> bool:
@@ -96,10 +133,8 @@ class Anthropic(Plugin):
     name = ANTHROPIC_PLUGIN_NAME
 
     @classmethod
-    def claude_model(
-        cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None
-    ) -> ModelRef[AnthropicConfig]:
-        """Typed ref for a Claude model, e.g. ``Anthropic.claude_model('claude-sonnet-4-5')``.
+    def claude(cls, name: KnownClaude | str, *, config: AnthropicConfig | None = None) -> ModelRef[AnthropicConfig]:
+        """Typed ref for a Claude model, e.g. ``Anthropic.claude('claude-sonnet-4-5')``.
 
         Unknown ids are allowed so new Claude releases work before this
         plugin learns their names; every Anthropic generate model takes
@@ -108,42 +143,58 @@ class Anthropic(Plugin):
         # str(None) is 'None', and unknown ids are allowed, so a non-string
         # would mint a real-looking ref instead of failing here.
         if not isinstance(name, str):
-            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name must be a string.')
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude: model name must be a string.')
         local = _strip_ref_prefixes(name)
         if not local:
-            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude_model: model name is required.')
-        return model_ref(local, config_schema=AnthropicConfig, namespace=ANTHROPIC_PLUGIN_NAME, config=config)
+            raise GenkitError(status='INVALID_ARGUMENT', message='Anthropic.claude: model name is required.')
+        return ModelRef(name=f'{ANTHROPIC_PLUGIN_NAME}/{local}', config_schema=AnthropicConfig, config=config)
 
     def __init__(
         self,
-        models: list[str] | None = None,
         *,
+        api_key: str | None = None,
+        base_url: str | None = None,
         api_version: Literal['stable', 'beta'] | None = None,
-        **anthropic_params: object,
+        client_options: Mapping[str, Any] | None = None,
     ) -> None:
         """Initializes Anthropic plugin with given configuration.
 
+        Any Claude model id resolves on demand, so there is no model list to pass.
+
         Args:
-            models: List of model names to register. Defaults to all supported models.
+            api_key: Anthropic API key. Defaults to ``ANTHROPIC_API_KEY``.
+            base_url: Anthropic API origin with no ``/v1`` suffix, e.g.
+                ``https://claude-proxy.example.com``; the SDK appends
+                ``/v1/messages``. Defaults to ``ANTHROPIC_BASE_URL``, then the
+                public API. A value ending in ``/v1`` raises.
             api_version: Default API surface unless overridden by per-request
                 config. An explicit config ``apiVersion`` always takes
                 precedence. Defaults to stable.
-            **anthropic_params: Additional parameters passed to the AsyncAnthropic client.
-                This may include api_key, base_url, timeout, and other configuration
-                settings required by Anthropic's API.
+            client_options: Other ``AsyncAnthropic`` settings, such as
+                ``auth_token``, ``timeout``, ``max_retries``, ``default_headers``,
+                or ``http_client``.
 
         Raises:
             ValueError: If ``api_version`` is not ``'stable'``, ``'beta'``, or
-                ``None``.
+                ``None``, or the base URL ends in ``/v1``.
+            TypeError: If ``client_options`` has a key ``AsyncAnthropic`` doesn't
+                take, or repeats ``api_key`` or ``base_url``.
         """
         if api_version not in (None, 'stable', 'beta'):
             raise ValueError("api_version must be 'stable', 'beta', or None")
 
-        self.models = models or list(SUPPORTED_ANTHROPIC_MODELS.keys())
+        options = _client_kwargs(api_key=api_key, base_url=base_url, client_options=client_options)
+        if 'base_url' in options:
+            _reject_v1_suffix(options['base_url'], source='base_url')
+        else:
+            _reject_v1_suffix(os.environ.get('ANTHROPIC_BASE_URL'), source='ANTHROPIC_BASE_URL')
         self._default_api_version: Literal['stable', 'beta'] | None = api_version
-        self._anthropic_params = anthropic_params
-        self._runtime_client = loop_local_client(lambda: AsyncAnthropic(**cast(dict[str, Any], self._anthropic_params)))
-        self._list_actions_cache: list[ActionMetadata] | None = None
+        self._options = options
+        self._list_actions_cache: list[Action] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> AsyncAnthropic:
+        return AsyncAnthropic(**self._options)
 
     async def init(self) -> list[Action]:
         """Initialize plugin.
@@ -179,7 +230,7 @@ class Anthropic(Plugin):
         """
         model_info = get_model_info(name)
 
-        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(request: ModelRequest[AnthropicConfig], ctx: ModelContext) -> ModelResponse:
             # A key in config is the more specific error, so it wins over a missing plugin key.
             reject_config_api_key(request.config)
             client = self._runtime_client()
@@ -193,34 +244,18 @@ class Anthropic(Plugin):
             )
             return await model.generate(request, ctx)
 
-        return create_model(
+        return Model(
             anthropic_name(name),
             _generate,
             config_schema=AnthropicConfig,
+            info=model_info,
             metadata={
                 'model': {
                     'supports': (
                         model_info.supports.model_dump(by_alias=True, exclude_none=True) if model_info.supports else {}
                     ),
-                    'customOptions': to_json_schema(AnthropicConfig),
                 },
             },
-        )
-
-    def _model_metadata(self, model_id: str) -> ActionMetadata:
-        """Build ActionMetadata for a single (bare, unprefixed) Anthropic model id.
-
-        Args:
-            model_id: Bare model id (no ``anthropic/`` prefix).
-
-        Returns:
-            ActionMetadata for the model, using curated info if known, else a
-            generic fallback.
-        """
-        return model_action_metadata(
-            name=anthropic_name(model_id),
-            info=get_model_info(model_id).model_dump(by_alias=True, exclude_none=True),
-            config_schema=AnthropicConfig,
         )
 
     async def _fetch_dynamic_model_ids(self) -> list[str]:
@@ -239,7 +274,7 @@ class Anthropic(Plugin):
                 model_ids.append(model.id)
         return model_ids
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         """List available Anthropic models.
 
         Queries the Anthropic API for currently available models and returns
@@ -252,7 +287,7 @@ class Anthropic(Plugin):
         API.
 
         Returns:
-            List of ActionMetadata for all discovered/supported models.
+            List of Action objects for all discovered/supported models.
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
@@ -261,7 +296,7 @@ class Anthropic(Plugin):
             model_ids = await self._fetch_dynamic_model_ids()
         except Exception as e:
             logger.warning('Failed to list Anthropic models from API, using static model list', error=str(e))
-            return [self._model_metadata(model_id) for model_id in SUPPORTED_ANTHROPIC_MODELS]
+            return [self._create_model_action(model_id) for model_id in SUPPORTED_ANTHROPIC_MODELS]
 
         seen: set[str] = set()
         ordered_ids: list[str] = []
@@ -274,6 +309,6 @@ class Anthropic(Plugin):
                 seen.add(model_id)
                 ordered_ids.append(model_id)
 
-        actions = [self._model_metadata(model_id) for model_id in ordered_ids]
+        actions = [self._create_model_action(model_id) for model_id in ordered_ids]
         self._list_actions_cache = actions
         return actions

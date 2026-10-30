@@ -1,0 +1,73 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Connection configuration for MCP servers."""
+
+import os
+from typing import Literal, TypedDict
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class McpStdioServerConfig(BaseModel):
+    """How to launch an MCP server as a child process over stdio.
+
+    Not exported: the public functions take these fields as keyword arguments
+    and build this model from them. Field names match the stdio ``mcpServers``
+    entries used by Claude Desktop and Cursor, so an existing entry passes
+    through unchanged. Any other key fails validation, and validation error
+    messages never echo input values.
+
+    Attributes:
+        type: Transport marker some `mcpServers` blocks carry; only ``stdio``.
+        command: Executable to run, for example ``npx`` or ``uv``.
+        args: Arguments passed to ``command``. Omitted from ``repr``, since
+            some servers take credentials as arguments.
+        env: Extra environment for the child process, merged over the minimal
+            set that ``mcp.client.stdio.get_default_environment()`` returns.
+            ``None`` leaves the child with that minimal set alone: the parent
+            environment is never inherited, so a variable the server needs, an
+            API key for example, has to be listed here even when this process
+            already has it. Omitted from ``repr``.
+        cwd: Working directory for the child process.
+    """
+
+    model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
+
+    type: Literal['stdio'] | None = None
+    command: str
+    args: list[str] | None = Field(default=None, repr=False)
+    env: dict[str, str] | None = Field(default=None, repr=False)
+    cwd: str | os.PathLike[str] | None = None
+
+
+class _McpServerCommand(TypedDict):
+    command: str
+
+
+class McpServerEntry(_McpServerCommand, total=False):
+    """One stdio entry of an ``mcpServers`` block, as Claude Desktop and Cursor write it.
+
+    The shape :func:`define_mcp_host` takes for each server and
+    :meth:`McpHost.connect` takes for one. Only ``command`` is required. A host
+    validates each entry into :class:`McpStdioServerConfig`, so an unknown key
+    fails there.
+    """
+
+    args: list[str]
+    env: dict[str, str]
+    cwd: str
+    type: Literal['stdio']

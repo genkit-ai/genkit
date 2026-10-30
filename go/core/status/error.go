@@ -179,18 +179,31 @@ func (e *Error) Unwrap() error {
 //
 //	errors.Is(err, ai.ErrMaxTurnsExceeded) // the specific sentinel
 //	errors.Is(err, status.ErrAborted)      // the base it derives from
+//
+// An Error with no sentinel, one decoded from the wire or built as a struct
+// literal, matches the base sentinel of its status, because the status is all
+// it carries: a NOT_FOUND from another process matches [ErrNotFound], and
+// matches no domain sentinel derived from it.
 func (e *Error) Is(target error) bool {
 	// errors.Is calls this whenever the interface is non-nil, including when it
 	// holds a nil *Error, so the nil check has to be here rather than at the
 	// call site.
-	if e == nil || e.sentinel == nil {
+	if e == nil {
 		return false
 	}
-	return errors.Is(e.sentinel, target)
+	s := e.sentinel
+	if s == nil {
+		// Nil for a status that is not canonical, which matches nothing.
+		if s = baseSentinels[e.Status]; s == nil {
+			return false
+		}
+	}
+	return errors.Is(s, target)
 }
 
 // Sentinel returns the sentinel that classified e, or nil if it was decoded
-// from the wire rather than constructed in this process.
+// from the wire rather than constructed in this process. [Error.Is] still
+// matches such an error against the base sentinel of its status.
 func (e *Error) Sentinel() *Sentinel {
 	if e == nil {
 		return nil

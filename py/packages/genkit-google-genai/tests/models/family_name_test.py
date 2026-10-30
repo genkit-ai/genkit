@@ -31,6 +31,7 @@ from genkit_google_genai._models._routing import (
     is_unsupported_image_model_name,
 )
 from genkit_google_genai._models._veo import is_veo_model
+from genkit_google_genai._models._virtual_try_on import is_virtual_try_on_model
 
 
 @pytest.mark.parametrize(
@@ -41,8 +42,8 @@ from genkit_google_genai._models._veo import is_veo_model
         ('vertexai/imagegeneration@006', True),
         ('imagetext@001', True),
         ('vertexai/imagetext@001', True),
-        ('virtual-try-on-001', True),
-        ('vertexai/virtual-try-on-001', True),
+        ('virtual-try-on-001', False),
+        ('vertexai/virtual-try-on-001', False),
         ('imagen-3.0-generate-002', True),
         ('IMAGEN-4.0-generate-001', True),
         ('googleai/imagen-4.0-generate-001', True),
@@ -50,7 +51,7 @@ from genkit_google_genai._models._veo import is_veo_model
         ('gemini-2.5-flash-image', False),
         ('gemini-2.5-flash-image-preview', False),
         ('gemini-2.5-flash', False),
-        ('veo-3.0-generate-001', False),
+        ('veo-3.1-generate-001', False),
     ],
 )
 def test_is_unsupported_image_model_name(name: str, expected: bool) -> None:
@@ -141,9 +142,9 @@ def test_is_gemini_model(name: str, expected: bool) -> None:
 @pytest.mark.parametrize(
     ('name', 'expected'),
     [
-        ('veo-3.0-generate-001', True),
+        ('veo-3.1-generate-001', True),
         ('googleai/veo-3.1-generate-preview', True),
-        ('VEO-2.0-generate-001', True),
+        ('VEO-3.1-generate-001', True),
         ('gemini-2.0-flash', False),
         ('devotional-hymn', False),
     ],
@@ -168,6 +169,23 @@ def test_is_lyria_model(name: str, expected: bool) -> None:
 
 
 @pytest.mark.parametrize(
+    ('name', 'expected'),
+    [
+        ('virtual-try-on-001', True),
+        ('VIRTUAL-TRY-ON-001', True),
+        ('vertexai/virtual-try-on-001', True),
+        ('publishers/google/models/virtual-try-on-001', True),
+        ('gemini-2.5-flash', False),
+        ('imagen-3.0-generate-002', False),
+        ('veo-3.0-generate-001', False),
+    ],
+)
+def test_is_virtual_try_on_model(name: str, expected: bool) -> None:
+    """Virtual Try-On is the ``virtual-try-on-`` prefix on the local name."""
+    assert is_virtual_try_on_model(name) is expected
+
+
+@pytest.mark.parametrize(
     'name',
     [
         'lyria-002',
@@ -180,7 +198,7 @@ def test_is_lyria_model(name: str, expected: bool) -> None:
         'virtual-try-on-001',
         'imagen-3.0-generate-002',
         'vertexai/imagen-4.0-generate-001',
-        'veo-3.0-generate-001',
+        'veo-3.1-generate-001',
         'googleai/lyria-002',
         'models/deep-research-pro-preview',
         'googleai/deep-research-pro-preview',
@@ -204,6 +222,9 @@ def test_unroutable_ids_fail_closed(name: str) -> None:
         ('antigravity-preview-05-2026', 'antigravity'),
         ('publishers/google/models/antigravity-preview-05-2026', 'antigravity'),
         ('lyria-002', 'lyria'),
+        ('virtual-try-on-001', 'virtual-try-on'),
+        ('vertexai/virtual-try-on-001', 'virtual-try-on'),
+        ('publishers/google/models/virtual-try-on-001', 'virtual-try-on'),
         ('imagetext@001', 'unsupported'),
         ('imagen-4.0-generate-001', 'unsupported'),
     ],

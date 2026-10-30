@@ -20,14 +20,14 @@ Keeping interfaces here instead of in their implementation modules breaks
 circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Middleware cycle:
 
     1. Registry (_registry.py) imports Plugin (_plugin.py) to manage plugins.
-    2. Plugin (_plugin.py) imports GenerateMiddleware (_middleware.py) to type-hint list_middleware.
-    3. BaseMiddleware/GenerateMiddleware (_middleware.py) need to annotate their request-scoped
+    2. Plugin (_plugin.py) imports Middleware (_middleware.py) to type-hint list_middleware.
+    3. Middleware/_MiddlewareMetadata (_middleware.py) need to annotate their request-scoped
        registry attribute, which refers back to Registry.
 
     If _middleware.py imported Registry from _registry.py directly, it would complete the
     import cycle: _registry -> _plugin -> _middleware -> _registry.
 
-    Solution: BaseMiddleware type-hints with RegistryLike from this leaf module, breaking the cycle.
+    Solution: Middleware type-hints with RegistryLike from this leaf module, breaking the cycle.
 """
 
 from __future__ import annotations
@@ -36,7 +36,8 @@ from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._model import Artifact, Message
+from genkit._core._model import Artifact, Message, ModelRequest, ModelResponse, ModelResponseChunk
+from genkit._core._tool import Tool
 
 
 @runtime_checkable
@@ -104,9 +105,20 @@ class SessionLike(Protocol):
 
 
 class GenkitLike(Protocol):
-    """Structural interface for the Genkit instance exposed on middleware context."""
+    """The ``Genkit`` instance as middleware sees it on ``ctx.ai``.
 
-    @property
-    def registry(self) -> RegistryLike:
-        """The call-scoped registry for this generate invocation."""
+    At runtime ``ctx.ai`` is the app's ``Genkit``. This protocol lists the
+    methods middleware is meant to call; ``_core`` can't import ``Genkit``.
+    """
+
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+        """Return the model action registered under ``name``, or None."""
+        ...
+
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None."""
+        ...
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
         ...

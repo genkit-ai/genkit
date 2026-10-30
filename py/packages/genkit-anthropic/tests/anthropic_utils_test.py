@@ -37,7 +37,7 @@ from genkit_anthropic._utils import (
 )
 
 from genkit import Part
-from genkit.model import ModelUsage
+from genkit.model import GenerationUsage
 
 # ---------------------------------------------------------------------------
 # get_cache_control tests
@@ -112,28 +112,13 @@ class TestGetThinkingSignature:
         assert get_thinking_signature(part) is None
 
     def test_reads_thought_signature(self) -> None:
-        """Reads JS-style thoughtSignature metadata."""
-        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig-js'})
-        assert get_thinking_signature(part) == 'sig-js'
-
-    def test_falls_back_to_signature(self) -> None:
-        """Reads Go-style signature metadata when thoughtSignature is absent."""
-        part = Part.from_text('hello', metadata={'signature': 'sig-go'})
-        assert get_thinking_signature(part) == 'sig-go'
-
-    def test_prefers_thought_signature(self) -> None:
-        """Prefers JS-style metadata when both aliases are present."""
-        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig-js', 'signature': 'sig-go'})
-        assert get_thinking_signature(part) == 'sig-js'
-
-    def test_decodes_bytes_signature(self) -> None:
-        """Decodes Go-style raw byte signatures."""
-        part = Part.from_text('hello', metadata={'signature': b'sig-go'})
-        assert get_thinking_signature(part) == 'sig-go'
+        """Reads thoughtSignature metadata."""
+        part = Part.from_text('hello', metadata={'thoughtSignature': 'sig'})
+        assert get_thinking_signature(part) == 'sig'
 
     def test_returns_none_for_non_string_signature(self) -> None:
         """Returns None when signature metadata is not string-like."""
-        part = Part.from_text('hello', metadata={'signature': 123})
+        part = Part.from_text('hello', metadata={'thoughtSignature': 123})
         assert get_thinking_signature(part) is None
 
 
@@ -297,7 +282,7 @@ class TestBuildCacheUsage:
 
     def test_basic_usage_without_cache(self) -> None:
         """Builds usage without cache tokens."""
-        basic = ModelUsage(input_characters=10, output_characters=20)
+        basic = GenerationUsage(input_characters=10, output_characters=20)
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -312,7 +297,7 @@ class TestBuildCacheUsage:
 
     def test_usage_with_cache_creation(self) -> None:
         """Includes cache_creation_input_tokens in custom."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -325,7 +310,7 @@ class TestBuildCacheUsage:
 
     def test_usage_with_cache_read(self) -> None:
         """Includes cache_read_input_tokens in custom."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -338,7 +323,7 @@ class TestBuildCacheUsage:
 
     def test_usage_with_both_cache_fields(self) -> None:
         """Includes both cache token fields when both are present."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,
@@ -352,7 +337,7 @@ class TestBuildCacheUsage:
 
     def test_zero_cache_tokens_are_excluded(self) -> None:
         """Zero cache tokens don't appear in custom field."""
-        basic = ModelUsage()
+        basic = GenerationUsage()
         result = build_cache_usage(
             input_tokens=100,
             output_tokens=50,

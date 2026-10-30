@@ -8,14 +8,14 @@ import pytest
 from genkit import Genkit, Part
 from genkit._ai._tools import (
     Interrupt,
-    ToolRunContext,
+    ToolContext,
     _tool_original_input,
     _tool_resumed_metadata,
     restart_interrupt_error,
     run_tool_after_restart,
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._middleware import MiddlewareContext
 from genkit.plugin_api import ActionKind
 
 
@@ -62,16 +62,16 @@ def test_restart_resumed_defaults_to_true() -> None:
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context() -> None:
-    """``run_tool_after_restart``: ``metadata.resumed is True`` → ``ToolRunContext.resumed_metadata`` is ``{}``."""
+    """``run_tool_after_restart``: ``metadata.resumed is True`` → ``ToolContext.resumed_metadata`` is ``{}``."""
     ai = Genkit()
     captured: list[tuple[dict | None, object | None]] = []
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         captured.append((ctx.resumed_metadata, ctx.original_input))
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='t2', ref='x', input={'q': 1}, metadata={'resumed': True})
@@ -83,16 +83,16 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_resumed_dict() -> None:
-    """Restart TRP with ``metadata.resumed`` dict is passed through to ``ToolRunContext.resumed_metadata``."""
+    """Restart TRP with ``metadata.resumed`` dict is passed through to ``ToolContext.resumed_metadata``."""
     ai = Genkit()
     captured: list[dict | None] = []
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         captured.append(ctx.resumed_metadata)
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='t2', ref='x', input={}, metadata={'resumed': {'by': 'x'}})
@@ -107,11 +107,11 @@ async def test_run_tool_after_restart_replaced_input() -> None:
     captured: list[tuple[object, object | None]] = []
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         captured.append((inp, ctx.original_input))
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = Part.from_tool_request(
@@ -129,10 +129,10 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
     ai = Genkit()
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='t2', ref='x', input={}, metadata={'resumed': True})
@@ -147,10 +147,10 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
     ai = Genkit()
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         raise Interrupt()
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='t2', ref='x', input={}, metadata={'resumed': True})
@@ -179,10 +179,10 @@ async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None
     ai = Genkit()
 
     @ai.tool(name='t3')
-    async def t3(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t3(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         raise Interrupt({'message': 'Tool not in approved list: t3'})
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t3')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t3')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='t3', ref='x', input={}, metadata={'resumed': True})
@@ -262,7 +262,7 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
     async def t_ref(inp: dict) -> str:  # noqa: ARG001
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t_ref')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t_ref')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='t_ref', ref='wire-ref-99', input={}, metadata={'resumed': True})
@@ -275,21 +275,21 @@ async def test_run_tool_after_restart_response_preserves_ref() -> None:
 async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input() -> None:
     """``run_tool_after_restart`` returns a Part whose ref matches the restart TRP;
     ``tool_request.input`` is what ``tool.run`` receives, and ``metadata.replacedInput`` is
-    ``ToolRunContext.original_input`` (prior interrupted input).
+    ``ToolContext.original_input`` (prior interrupted input).
     """
     ai = Genkit()
     received_inputs: list[dict] = []
     original_inputs: list[object | None] = []
 
     @ai.tool(name='transfer')
-    async def transfer(inp: dict, ctx: ToolRunContext) -> str:
+    async def transfer(inp: dict, ctx: ToolContext) -> str:
         received_inputs.append(dict(inp))
         original_inputs.append(ctx.original_input)
         if not inp.get('confirmed'):
             raise Interrupt({'reason': 'needs_approval'})
         return f'transferred {inp.get("amount")}'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
     assert action is not None
 
     prior = {'amount': 100, 'confirmed': False}
@@ -314,20 +314,20 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_pipes_generate_context() -> None:
-    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolRunContext.context``."""
+    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolContext.context``."""
     ai = Genkit()
     seen: list[dict[str, object]] = []
 
     @ai.tool(name='ctx_restart_tool')
-    async def ctx_restart_tool(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def ctx_restart_tool(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(dict(ctx.context))
         return 'resumed_ok'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_restart_tool')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='ctx_restart_tool')
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='ctx_restart_tool', ref='r1', input={}, metadata={'resumed': True})
-    mw_ctx = GenerateMiddlewareContext(ai, custom_context={'auth_role': 'admin'})
+    mw_ctx = MiddlewareContext(ai, context={'auth_role': 'admin'})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]

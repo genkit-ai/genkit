@@ -24,12 +24,12 @@ import math
 import random
 from collections.abc import Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from genkit import GenkitError
-from genkit._ai._generate import StreamingCallbackError
-from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit import GenkitError, ModelResponse
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.plugin_api import GenkitConfig
+from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 _DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
@@ -40,7 +40,7 @@ async def sleep_unless_stopped(seconds: float, abort_signal: asyncio.Event) -> N
         await asyncio.wait_for(abort_signal.wait(), seconds)
 
 
-class RetryConfig(BaseModel):
+class RetryConfig(GenkitConfig):
     """Knobs for retry backoff and which error statuses are retried."""
 
     max_retries: int = Field(default=3, ge=0)
@@ -51,14 +51,17 @@ class RetryConfig(BaseModel):
     no_jitter: bool = False
 
 
-class Retry(BaseMiddleware[RetryConfig]):
+class Retry(Middleware[RetryConfig]):
     """Retry middleware with exponential backoff for transient failures."""
+
+    name = 'retry'
+    description = 'Retries model calls on transient failures with exponential backoff'
 
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Retry the model call up to max_retries times on transient failures."""
         current_delay_ms = float(self.config.initial_delay_ms)
@@ -73,7 +76,7 @@ class Retry(BaseMiddleware[RetryConfig]):
                 # The caller's own on_chunk failure is not retried. A
                 # GenkitError is retried only when its status is listed. Any
                 # other exception is retried.
-                if isinstance(e, StreamingCallbackError):
+                if caused_by_caller_callback(e):
                     raise
                 if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise

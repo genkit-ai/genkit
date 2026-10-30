@@ -12,17 +12,18 @@ at ``context.secrets``.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
-from genkit import Genkit, Message, ModelResponse, Part
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit import FinishReason, Genkit, Message, ModelResponse, Part
+from genkit._core._action import ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import ModelRef, ModelRequest
-from genkit._core._typing import GenerationCommonConfig, Operation, Role
-from genkit.model import ModelConfig, model_ref
+from genkit._core._operation import Operation
+from genkit._core._typing import GenerationCommonConfig, Role
+from genkit.model import ModelConfig, ModelContext
 
 KEY = 'sk-tenant'
 SECRETS_HINT = "context={'secrets': {'api_key': ...}}"
@@ -98,7 +99,7 @@ class _Model:
         self.requests: list[ModelRequest] = []
 
     def define(self, ai: Genkit, *, name: str, config_schema: type[BaseModel] | None) -> None:
-        async def fn(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+        async def fn(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
             self.requests.append(request)
             return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -305,7 +306,7 @@ async def test_model_ref_for_model_without_config_class_accepts_any_dict() -> No
 async def test_model_ref_with_declared_schema_config_typo_raises() -> None:
     """A ModelRef with StrictConfig plus `config={'temprature': 0.2}` raises like the string name."""
     ai, fn = _ai_with_model()
-    ref = model_ref('strict', config_schema=StrictConfig)
+    ref = ModelRef(name='strict', config_schema=StrictConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
@@ -315,9 +316,9 @@ async def test_model_ref_with_declared_schema_config_typo_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_model_ref_config_typo_raises() -> None:
-    """A typo in the call-site dict next to `model_ref(..., config=...)` raises like a string model name."""
+    """A typo in the call-site dict next to `ModelRef(..., config=...)` raises like a string model name."""
     ai, fn = _ai_with_model()
-    ref = model_ref('strict', config_schema=StrictConfig, config=StrictConfig(temperature=0.5))
+    ref = ModelRef(name='strict', config_schema=StrictConfig, config=StrictConfig(temperature=0.5))
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
@@ -346,11 +347,11 @@ async def test_generate_operation_unknown_config_key_raises() -> None:
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check, config_schema=StrictConfig)
@@ -606,21 +607,24 @@ async def test_generate_incomplete_nested_setting_raises_naming_the_missing_fiel
 
 
 @pytest.mark.asyncio
-async def test_generate_missing_required_top_level_field_in_one_layer_still_runs() -> None:
-    """A required top-level field missing from the call dict still runs; another layer may supply it."""
+async def test_generate_missing_required_top_level_field_fails_the_turn_not_the_call() -> None:
+    """A required top-level field no layer supplies doesn't raise; the model action fails the turn."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
     response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
 
-    assert response.text == 'ok'
-    assert _config_value(fn.requests[-1].config, 'temperature') == 0.2
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert "'must'" in response.error.message
+    assert fn.requests == []
 
 
 @pytest.mark.asyncio
 async def test_generate_ref_with_shared_config_class_accepts_model_declared_setting() -> None:
-    """`model_ref(..., config_schema=ModelConfig)` with the model's `safety_settings` runs."""
+    """`ModelRef(..., config_schema=ModelConfig)` with the model's `safety_settings` runs."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
-    ref = model_ref('gem', config_schema=ModelConfig)
+    ref = ModelRef(name='gem', config_schema=ModelConfig)
 
     response = await ai.generate(
         model=ref,
@@ -638,7 +642,7 @@ async def test_generate_ref_with_shared_config_class_accepts_model_declared_sett
 async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_class() -> None:
     """The same ModelConfig ref with `{'temprature': 0.2}` raises INVALID_ARGUMENT naming temprature."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
-    ref = model_ref('gem', config_schema=ModelConfig)
+    ref = ModelRef(name='gem', config_schema=ModelConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'temprature': 0.2})
@@ -650,7 +654,7 @@ async def test_generate_ref_with_shared_config_class_rejects_typo_via_model_clas
 async def test_generate_ref_with_plugin_class_still_checks_against_that_class() -> None:
     """A ref that names another plugin's class still rejects this model's settings."""
     ai, fn = _ai_with_model(config_schema=GeminiLikeConfig, name='gem')
-    ref = model_ref('gem', config_schema=OtherConfig)
+    ref = ModelRef(name='gem', config_schema=OtherConfig)
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi', config={'safety_settings': [{'category': 'HARM'}]})
@@ -718,9 +722,9 @@ async def test_generate_plugin_class_that_declares_api_key_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_model_ref_with_api_key_in_its_config_raises() -> None:
-    """`model_ref('legacy', config=LegacyConfig(api_key=k))` raises when generate uses it, with no call-site config."""
+    """A ModelRef whose config carries api_key raises at generate, with no call-site config."""
     ai, fn = _ai_with_model(config_schema=LegacyConfig, name='legacy')
-    ref = model_ref('legacy', config_schema=LegacyConfig, config=LegacyConfig(api_key=KEY))
+    ref = ModelRef(name='legacy', config_schema=LegacyConfig, config=LegacyConfig(api_key=KEY))
 
     with pytest.raises(GenkitError) as err:
         await ai.generate(model=ref, prompt='hi')
@@ -773,11 +777,11 @@ async def test_generate_operation_config_api_key_raises() -> None:
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)
@@ -820,7 +824,7 @@ async def test_prompt_call_config_api_key_raises() -> None:
 async def test_util_generate_action_config_api_key_raises(name: str) -> None:
     """The registered `/util/generate` action (Dev UI, reflection) raises the same error; the model never runs."""
     ai, fn = _ai_with_model(config_schema=StrictConfig if name == 'strict' else None, name=name)
-    action = await ai.registry.resolve_action(ActionKind.UTIL, 'generate')
+    action = await ai._registry.resolve_action(ActionKind.UTIL, 'generate')
     assert action is not None
 
     with pytest.raises(GenkitError) as err:
@@ -846,11 +850,12 @@ async def test_util_generate_action_config_api_key_raises(name: str) -> None:
 async def test_model_action_run_directly_with_config_api_key_raises(request_input: object) -> None:
     """Running the model action itself, outside generate, raises the same error; the model fn never runs."""
     ai, fn = _ai_with_model(config_schema=None, name='loose')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'loose')
+    action = await ai.lookup_model('loose')
     assert action is not None
 
     with pytest.raises(GenkitError) as err:
-        await action.run(request_input)
+        # Wire-shaped inputs on purpose: run() validates whatever it is handed.
+        await action.run(cast(Any, request_input))
 
     _assert_points_to_secrets(err, fn)
 
@@ -861,15 +866,15 @@ async def test_background_model_action_run_directly_with_config_api_key_raises()
     ai = Genkit()
     started: list[ModelRequest] = []
 
-    async def start(request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         started.append(request)
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='bg', start=start, check=check)
-    action = await ai.registry.resolve_action(ActionKind.BACKGROUND_MODEL, 'bg')
+    action = await ai._registry.resolve_action(ActionKind.BACKGROUND_MODEL, 'bg')
     assert action is not None
 
     with pytest.raises(GenkitError) as err:

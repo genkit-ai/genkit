@@ -22,6 +22,7 @@ import pytest
 from genkit_otel import GenAiInstrumentation
 from genkit_otel._gen_ai_attributes import (
     CAPTURE_CONTENT_ENV_VAR,
+    CONTENT_ATTRIBUTES,
     GEN_AI_OPERATION_DETAILS_EVENT,
     GenAiAttr,
     GenkitAttr,
@@ -30,16 +31,17 @@ from opentelemetry._logs import LogRecord
 from opentelemetry.trace import StatusCode
 
 from genkit import FinishReason, Interrupt, Message, ModelResponse, Part, Role
-from genkit.model import Candidate, ModelRequest, ModelUsage, OutputConfig
-from genkit.telemetry import SpanMetadata, SpanNext
+from genkit.model import GenerationUsage, ModelRequest, OutputConfig
+from genkit.telemetry import SpanContext, SpanMetadata, SpanNext
 
 
 def test_content_capturing_mode_is_on_the_package_door() -> None:
-    """from genkit_otel import gives GenAiInstrumentation and the ContentCapturingMode type."""
+    """from genkit_otel import gives GenAiInstrumentation and ContentCapturingMode; content keys are on the class."""
     import genkit_otel
     from genkit_otel import ContentCapturingMode
 
     assert genkit_otel.__all__ == ['ContentCapturingMode', 'GenAiInstrumentation']
+    assert GenAiInstrumentation.CONTENT_ATTRIBUTES is CONTENT_ATTRIBUTES
     assert get_args(ContentCapturingMode) == ('NO_CONTENT', 'SPAN_ONLY', 'EVENT_ONLY', 'SPAN_AND_EVENT')
 
 
@@ -63,7 +65,7 @@ def _model_response(
     *,
     finish_reason: FinishReason | None = None,
     message: Message | None = None,
-    usage: ModelUsage | None = None,
+    usage: GenerationUsage | None = None,
 ) -> ModelResponse:
     return ModelResponse(
         finish_reason=finish_reason or FinishReason.STOP,
@@ -129,7 +131,7 @@ async def test_records_usage_and_finish_reason(harness) -> None:
         lambda span=None: _awaitable(
             _model_response(
                 finish_reason=FinishReason.LENGTH,
-                usage=ModelUsage(input_tokens=10, output_tokens=20),
+                usage=GenerationUsage(input_tokens=10, output_tokens=20),
             )
         ),
     )
@@ -443,57 +445,6 @@ async def test_capture_action_io_records_raw_io_on_all_span_types(harness) -> No
     assert 'in' in harness.attr(flow, GenkitAttr.INPUT)
     assert 'out' in harness.attr(flow, GenkitAttr.OUTPUT)
     assert harness.attr(flow, GenAiAttr.INPUT_MESSAGES) is None
-
-
-@pytest.mark.asyncio
-async def test_captures_legacy_candidates_message(harness) -> None:
-    instr = harness.instrumentation(content_capturing_mode='SPAN_ONLY')
-    legacy = ModelResponse(
-        finish_reason=FinishReason.STOP,
-        candidates=[
-            Candidate(
-                index=0,
-                finish_reason=FinishReason.STOP,
-                message=Message(role=Role.MODEL, content=[Part.from_text('legacy answer')]),
-            )
-        ],
-    )
-    await _run_model(
-        instr,
-        'googleai/gemini-flash-latest',
-        _model_request(),
-        lambda span=None: _awaitable(legacy),
-    )
-    span = harness.span_named('chat gemini-flash-latest')
-    assert span is not None
-    assert 'legacy answer' in harness.attr(span, GenAiAttr.OUTPUT_MESSAGES)
-
-
-@pytest.mark.asyncio
-async def test_reports_tool_calls_from_legacy_candidates(harness) -> None:
-    instr = harness.instrumentation()
-    legacy = ModelResponse(
-        finish_reason=FinishReason.STOP,
-        candidates=[
-            Candidate(
-                index=0,
-                finish_reason=FinishReason.STOP,
-                message=Message(
-                    role=Role.MODEL,
-                    content=[Part.from_tool_request('lookup', input={})],
-                ),
-            )
-        ],
-    )
-    await _run_model(
-        instr,
-        'googleai/gemini-flash-latest',
-        _model_request(),
-        lambda span=None: _awaitable(legacy),
-    )
-    span = harness.span_named('chat gemini-flash-latest')
-    assert span is not None
-    assert list(harness.attr(span, GenAiAttr.RESPONSE_FINISH_REASONS)) == ['tool_calls']
 
 
 @pytest.mark.asyncio
@@ -849,3 +800,67 @@ async def test_default_construction_enforces_dual_pii_barriers(harness) -> None:
     assert harness.attr(span, GenAiAttr.SYSTEM_INSTRUCTIONS) is None
     assert harness.attr(span, GenkitAttr.INPUT) is None
     assert harness.attr(span, GenkitAttr.OUTPUT) is None
+
+
+@pytest.mark.asyncio
+async def test_every_attribute_holding_content_is_in_content_attributes(harness) -> None:
+    """With every capture switch on, each span attribute that holds the secret is listed.
+
+    A trace store that drops content (the Cloud Trace exporter) blanks
+    GenAiInstrumentation.CONTENT_ATTRIBUTES. A new content attribute fails
+    here until it is listed.
+    """
+    secret = 'allergy-peanut-table-4'
+    instr = harness.instrumentation(
+        content_capturing_mode='SPAN_AND_EVENT',
+        capture_action_io=True,
+        emit_tool_spans=True,
+    )
+
+    # 1. Model call with a system line, a user prompt, and a reply.
+    request = _model_request(
+        messages=[
+            Message(role=Role.SYSTEM, content=[Part.from_text(f'system {secret}')]),
+            Message(role=Role.USER, content=[Part.from_text(f'user {secret}')]),
+        ]
+    )
+    reply = Message(role=Role.MODEL, content=[Part.from_text(f'reply {secret}')])
+
+    async def answer(span: SpanContext | None = None) -> object:
+        return _model_response(message=reply)
+
+    await _run_model(instr, 'googleai/gemini-flash-latest', request, answer)
+
+    # 2. Tool call that returns the secret.
+    async def lookup(span: SpanContext | None = None) -> object:
+        return f'result {secret}'
+
+    await instr.run_in_new_span(
+        SpanMetadata(name='lookup', action_type='tool.v2', input={'query': secret}),
+        lookup,
+    )
+
+    # 3. Tool that interrupts with the secret, the way Action records it.
+    async def approve(span: SpanContext | None = None) -> object:
+        assert span is not None
+        span.set_metadata({'interrupt': {'echo': secret}})
+        raise Interrupt({'echo': secret})
+
+    with pytest.raises(Interrupt):
+        await instr.run_in_new_span(SpanMetadata(name='approve', action_type='tool.v2', input=secret), approve)
+
+    # 4. Resumed tool, the way _tools.py records the resume payload.
+    async def resumed(span: SpanContext | None = None) -> object:
+        assert span is not None
+        span.set_metadata({'resumed': {'note': secret}})
+        return 'ok'
+
+    await instr.run_in_new_span(SpanMetadata(name='resume', action_type='tool.v2'), resumed)
+
+    holding = {
+        key
+        for span in harness.spans.get_finished_spans()
+        for key, value in (span.attributes or {}).items()
+        if secret in str(value)
+    }
+    assert holding == GenAiInstrumentation.CONTENT_ATTRIBUTES

@@ -15,31 +15,34 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from genkit import Part
+from genkit._ai._agents._base import Agent, define_custom_agent
 from genkit._ai._agents._client import (
     AgentChat,
-    AgentError,
+    AgentClient,
     AgentInterrupt,
     AgentTransport,
     DetachedTask,
     TurnDriver,
 )
-from genkit._ai._agents._runtime import AgentInitError
-from genkit._ai._agents._types import StateManagement
+from genkit._ai._agents._runtime import AgentInitError, SessionRunner
+from genkit._ai._agents._types import StateManagement, TurnResult
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError
+from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._model import (
     AgentInit,
     AgentInput,
     AgentOutput,
+    AgentResult,
     AgentStreamChunk,
+    Artifact,
     Message,
     ModelResponse,
     ModelResponseChunk,
@@ -60,7 +63,7 @@ from genkit._core._typing import (
     TurnEnd,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore
+from genkit.exp.agent import AgentContext, InMemorySessionStore
 from genkit.testing import define_scripted_model
 
 # ---------------------------------------------------------------------------
@@ -648,10 +651,10 @@ async def test_server_managed_failed_turn_rolls_back_optimistic_user_message() -
     transport.push_chunk(
         AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-good', finish_reason=AgentFinishReason.FAILED))
     )
-    with pytest.raises(AgentError) as exc_info:
-        await turn.response
+    res = await turn.response
 
-    assert exc_info.value.snapshot_id == 'snap-good'
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert res.snapshot_id == 'snap-good'
     assert chat.messages == []
     assert chat.snapshot_id == 'snap-good'
 
@@ -1280,8 +1283,8 @@ async def test_agent_turn_stream_and_response_accessors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_background_resolves_output_when_on_turn_error_raises() -> None:
-    """If ``on_turn_error`` itself raises, ``await turn.response`` must not hang."""
+async def test_run_background_resolves_output_when_rollback_raises() -> None:
+    """If ``rollback`` itself raises, ``await turn.response`` must not hang."""
 
     async def boom_run_turn(
         *,
@@ -1290,8 +1293,8 @@ async def test_run_background_resolves_output_when_on_turn_error_raises() -> Non
     ) -> tuple[AsyncIterable[AgentStreamChunk], Awaitable[AgentOutput]]:
         raise RuntimeError('transport failed')
 
-    def broken_on_turn_error(e: Exception) -> Exception:
-        raise RuntimeError('on_turn_error failed') from e
+    def broken_rollback() -> None:
+        raise RuntimeError('rollback failed')
 
     driver = TurnDriver(
         inp=AgentInput(),
@@ -1299,12 +1302,12 @@ async def test_run_background_resolves_output_when_on_turn_error_raises() -> Non
         run_turn=boom_run_turn,
         commit_output=lambda _raw: (_ for _ in ()).throw(AssertionError('commit_output should not run')),
         commit_custom_patch=lambda _patch: None,
-        on_turn_error=broken_on_turn_error,
+        rollback=broken_rollback,
         chunks=CloseableQueue(),
     )
     turn = driver.start()
 
-    with pytest.raises(RuntimeError, match='on_turn_error failed'):
+    with pytest.raises(RuntimeError, match='rollback failed'):
         await asyncio.wait_for(turn.response, timeout=1.0)
 
 
@@ -1558,3 +1561,602 @@ async def test_inprocess_undrained_streams_stay_isolated() -> None:
     assert await text_chunks(turn2) == ['TWO-A', 'TWO-B']
     assert (await turn2.response).text == 'TWO-FINAL'
     assert await text_chunks(turn1) == ['ONE-A', 'ONE-B']
+
+
+# ---------------------------------------------------------------------------
+# A failed turn returns AgentResponse.error instead of raising
+# ---------------------------------------------------------------------------
+
+
+class _TaskState(BaseModel):
+    title: str
+    done: bool = False
+
+
+def _input_text(inp: AgentInput) -> str:
+    message = inp.message
+    if message is None:
+        return ''
+    return ''.join(part.text for part in (message.content or []) if part.text)
+
+
+def _ok_message(parts: list[Part] | None = None) -> Message:
+    return Message(role='model', content=parts or [Part.from_text('ok')])
+
+
+def _define_turns(
+    ai: Genkit,
+    name: str,
+    handle: Callable[[SessionRunner, AgentInput], Awaitable[TurnResult | None]],
+    *,
+    store: InMemorySessionStore | None,
+    state_schema: type[BaseModel] | None = None,
+) -> Agent:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
+        async def turn(inp: AgentInput, __: Any) -> TurnResult | None:  # noqa: ANN401
+            return await handle(session_runner, inp)
+
+        await session_runner.run(turn)
+        return await session_runner.result()
+
+    return define_custom_agent(ai, name, fn, store=store, state_schema=state_schema)
+
+
+def _flaky(
+    ai: Genkit,
+    name: str,
+    *,
+    store: InMemorySessionStore | None,
+    reply: Message | None = None,
+    fail: Exception | None = None,
+) -> Agent:
+    """'fail' raises, 'block' is blocked, 'pause' interrupts, anything else replies."""
+    boom = fail or GenkitError(status='INTERNAL', message='boom')
+    model_reply = reply or _ok_message()
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        text = _input_text(inp).lower()
+        if inp.resume is not None or 'fail' in text:
+            raise boom
+        if 'block' in text:
+            return TurnResult(finish_reason=AgentFinishReason.BLOCKED)
+        if 'pause' in text:
+            await session_runner.add_messages([
+                Message(
+                    role='model',
+                    content=[
+                        Part(
+                            tool_request=ToolRequest(name='approve', ref='r1', input={'ok': True}),
+                            metadata={'interrupt': True},
+                        )
+                    ],
+                )
+            ])
+            return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
+        await session_runner.add_messages([model_reply])
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    return _define_turns(ai, name, handle, store=store)
+
+
+def _assert_failed(res: Any, *, message: str) -> GenkitRuntimeError:  # noqa: ANN401
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert isinstance(res.error, GenkitRuntimeError)
+    assert res.error.message == message
+    assert res.message is None
+    assert res.text == ''
+    assert res.data is None
+    assert res.media is None
+    assert res.reasoning == ''
+    assert res.tool_requests == []
+    assert res.interrupts == []
+    return res.error
+
+
+class _DroppingTransport(AgentTransport[Any]):
+    """Dies before a turn result exists."""
+
+    state_management: StateManagement = 'client'
+
+    async def run_turn(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[Any], Awaitable[AgentOutput]]:
+        del agent_input, init
+        raise ConnectionError('socket closed')
+
+    async def get_snapshot(self, *, snapshot_id: str | None = None, session_id: str | None = None) -> None:
+        del snapshot_id, session_id
+        return None
+
+    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
+        del snapshot_id
+        return None
+
+
+class _MidStreamDropTransport(_DroppingTransport):
+    """Streams a reply chunk and a custom patch, then the connection dies."""
+
+    async def run_turn(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[Any], Awaitable[AgentOutput]]:
+        del agent_input, init
+
+        async def chunks() -> AsyncIterator[AgentStreamChunk]:
+            yield AgentStreamChunk(model_chunk=ModelResponseChunk(content=[Part.from_text('Booking for ')]))
+            yield AgentStreamChunk(
+                custom_patch=JsonPatch(root=[JsonPatchOperation(op=JsonPatchOp.REPLACE, path='/n', value=99)])
+            )
+            raise ConnectionError('socket closed mid-turn')
+
+        # Never resolves: the stream dies before a turn result exists.
+        output: asyncio.Future[AgentOutput] = asyncio.get_running_loop().create_future()
+        return chunks(), output
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_turn_with_reason_reads_reason() -> None:
+    """A failed turn whose error carries a reason exposes it on res.error.reason."""
+    agent = _flaky(
+        Genkit(),
+        'failReason',
+        store=InMemorySessionStore(),
+        fail=GenkitError(status='INTERNAL', message='tool died', reason=RuntimeErrorReason.TOOL_FAILED),
+    )
+    res = await agent.chat().send('please fail now')
+    err = _assert_failed(res, message='tool died')
+    assert err.status == 'INTERNAL'
+    assert err.reason is RuntimeErrorReason.TOOL_FAILED
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_turn_keeps_last_good_snapshot_id() -> None:
+    """res.snapshot_id and chat.snapshot_id both stay on the last completed snapshot."""
+    agent = _flaky(Genkit(), 'failSnap', store=InMemorySessionStore())
+    chat = agent.chat()
+    ok = await chat.send('hello')
+    last_good = ok.snapshot_id
+    assert last_good is not None
+
+    res = await chat.send('please fail now')
+    _assert_failed(res, message='boom')
+    assert res.snapshot_id == last_good
+    assert chat.snapshot_id == last_good
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_turn_drops_unanswered_prompt() -> None:
+    """chat.messages and res.messages end at the last completed turn."""
+    agent = _flaky(Genkit(), 'failDrop', store=InMemorySessionStore())
+    chat = agent.chat()
+    await chat.send('hello')
+    before = list(chat.messages)
+
+    res = await chat.send('please fail now')
+    _assert_failed(res, message='boom')
+    assert chat.messages == before
+    assert res.messages == before
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_client_managed_turn_returns_last_good_state() -> None:
+    """Without a store, res.state is the state before the failed turn."""
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        if 'fail' in _input_text(inp).lower():
+            await session_runner.update_custom(lambda _prev: {'n': 999})
+            raise GenkitError(status='INTERNAL', message='boom')
+        prev = await session_runner.get_custom()
+        n = prev.get('n', 0) if isinstance(prev, dict) else 0
+        await session_runner.update_custom(lambda _prev: {'n': n + 1})
+        await session_runner.add_messages([_ok_message()])
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(Genkit(), 'failState', handle, store=None)
+    chat = agent.chat(state={'n': 0})
+    ok = await chat.send('hello')
+    assert ok.state == {'n': 1}
+
+    res = await chat.send('please fail now')
+    _assert_failed(res, message='boom')
+    assert res.state == {'n': 1}
+    assert chat.state == {'n': 1}
+
+
+@pytest.mark.asyncio
+async def test_send_after_failed_turn_continues_from_last_good_snapshot() -> None:
+    """The next send succeeds and builds on the last good turn."""
+    agent = _flaky(Genkit(), 'failContinue', store=InMemorySessionStore())
+    chat = agent.chat()
+    first = await chat.send('hello')
+    failed = await chat.send('please fail now')
+    _assert_failed(failed, message='boom')
+
+    again = await chat.send('hello again')
+    assert again.finish_reason == AgentFinishReason.STOP
+    assert again.error is None
+    assert again.text == 'ok'
+    assert again.snapshot_id not in (None, first.snapshot_id)
+    texts = [part.text for message in chat.messages for part in message.content if part.text]
+    assert 'hello again' in texts
+    assert 'please fail now' not in texts
+
+
+@pytest.mark.asyncio
+async def test_send_stream_on_failed_turn_ends_stream_and_response_has_error() -> None:
+    """The chunk stream ends normally and await turn.response returns with .error set."""
+    agent = _flaky(Genkit(), 'failStream', store=InMemorySessionStore())
+    chat = agent.chat()
+    await chat.send('hello')
+    turn = chat.send_stream('please fail now')
+    async for _chunk in turn.stream:
+        pass
+    res = await turn.response
+    _assert_failed(res, message='boom')
+
+
+@pytest.mark.asyncio
+async def test_resume_on_failed_turn_returns_response_with_error() -> None:
+    """chat.resume(...) that fails returns a response with .error."""
+    agent = _flaky(Genkit(), 'failResume', store=InMemorySessionStore())
+    chat = agent.chat()
+    paused = await chat.send('please pause')
+    assert paused.finish_reason == AgentFinishReason.INTERRUPTED
+    assert paused.interrupts
+
+    res = await chat.resume(respond=[paused.interrupts[0].respond({'approved': True})])
+    _assert_failed(res, message='boom')
+    # An approve loop keyed on res.interrupts would otherwise retry forever.
+    assert res.interrupts == []
+
+
+@pytest.mark.asyncio
+async def test_send_on_successful_turn_has_no_error() -> None:
+    """A normal turn returns res.error is None."""
+    agent = _flaky(Genkit(), 'okTurn', store=InMemorySessionStore())
+    res = await agent.chat().send('hello')
+    assert res.finish_reason == AgentFinishReason.STOP
+    assert res.error is None
+    assert res.text == 'ok'
+    assert res.message is not None
+
+
+@pytest.mark.asyncio
+async def test_send_on_blocked_turn_returns_blocked_without_raising() -> None:
+    """A blocked turn still returns with finish_reason == 'blocked'."""
+    agent = _flaky(Genkit(), 'blockedTurn', store=InMemorySessionStore())
+    res = await agent.chat().send('please block this')
+    assert res.finish_reason == AgentFinishReason.BLOCKED
+    assert res.error is None
+
+
+@pytest.mark.asyncio
+async def test_send_with_snapshot_id_on_agent_without_store_raises_genkit_error() -> None:
+    """An init the server rejects as misuse raises GenkitError with FAILED_PRECONDITION."""
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(Genkit(), 'noStore', handle, store=None)
+    chat = agent.chat(snapshot_id='snap-1')
+    with pytest.raises(GenkitError) as exc:
+        await chat.send('hi')
+    assert exc.value.status == 'FAILED_PRECONDITION'
+    assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
+    # Same type the client raises for client-side misuse; no wrapper in between.
+    assert isinstance(exc.value, AgentInitError)
+    assert chat.messages == []
+
+
+async def _chat_after_one_good_turn(name: str) -> AgentChat[Any]:
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del inp
+        await session_runner.update_custom(lambda _prev: {'n': 1})
+        await session_runner.add_messages([_ok_message()])
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(Genkit(), name, handle, store=None)
+    chat = agent.chat(state={'n': 0})
+    ok = await chat.send('hello')
+    assert ok.state == {'n': 1}
+    return chat
+
+
+@pytest.mark.asyncio
+async def test_send_over_dropped_connection_raises_unavailable_and_keeps_last_good_state() -> None:
+    """No turn result: GenkitError(UNAVAILABLE), and the chat stays at the last good turn."""
+    chat = await _chat_after_one_good_turn('dropConn')
+    messages_before = list(chat.messages)
+
+    chat._transport = _DroppingTransport()  # noqa: SLF001
+    with pytest.raises(GenkitError) as exc:
+        await chat.send('next')
+    assert exc.value.status == 'UNAVAILABLE'
+    assert isinstance(exc.value.cause, ConnectionError)
+    assert chat.state == {'n': 1}
+    assert chat.messages == messages_before
+
+
+@pytest.mark.asyncio
+async def test_send_mid_stream_drop_rolls_back_prompt_and_streamed_patch() -> None:
+    """A drop after a streamed patch undoes the patch and the unanswered prompt."""
+    chat = await _chat_after_one_good_turn('midDrop')
+    messages_before = list(chat.messages)
+
+    chat._transport = _MidStreamDropTransport()  # noqa: SLF001
+    with pytest.raises(GenkitError) as exc:
+        await chat.send('book a table for 4')
+    assert exc.value.status == 'UNAVAILABLE'
+    assert chat.state == {'n': 1}
+    assert chat.messages == messages_before
+
+
+@pytest.mark.asyncio
+async def test_send_stream_mid_stream_drop_raises_genkit_error_on_stream_and_response() -> None:
+    """Streaming surfaces the same GenkitError on .stream and .response, with the same rollback."""
+    chat = await _chat_after_one_good_turn('midDropStream')
+    messages_before = list(chat.messages)
+
+    chat._transport = _MidStreamDropTransport()  # noqa: SLF001
+    turn = chat.send_stream('book a table for 4')
+    seen: list[str] = []
+    with pytest.raises(GenkitError) as stream_exc:
+        async for chunk in turn.stream:
+            seen.append(chunk.text or '')
+    with pytest.raises(GenkitError) as response_exc:
+        await turn.response
+    assert seen[0] == 'Booking for '
+    assert stream_exc.value is response_exc.value
+    assert response_exc.value.status == 'UNAVAILABLE'
+    assert chat.state == {'n': 1}
+    assert chat.messages == messages_before
+
+
+class _BadFinalStateTransport(_DroppingTransport):
+    """Completes the turn, but the final custom state fails the chat's schema."""
+
+    async def run_turn(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[Any], Awaitable[AgentOutput]]:
+        del agent_input, init
+
+        async def no_chunks() -> AsyncIterator[AgentStreamChunk]:
+            empty: list[AgentStreamChunk] = []
+            for chunk in empty:
+                yield chunk
+
+        output: asyncio.Future[AgentOutput] = asyncio.get_running_loop().create_future()
+        output.set_result(
+            AgentOutput(
+                finish_reason=AgentFinishReason.STOP,
+                snapshot_id='snap-2',
+                message=_ok_message(),
+                state=SessionState(
+                    session_id='sess-2',
+                    custom={'title': 'Dinner for 4', 'done': 'not-a-bool'},
+                    artifacts=[Artifact(name='receipt', parts=[Part.from_text('total: $80')])],
+                ),
+            )
+        )
+        return no_chunks(), output
+
+
+@pytest.mark.asyncio
+async def test_send_when_final_state_fails_schema_restores_every_field() -> None:
+    """commit_output raises after folding in the output; the chat still goes fully back.
+
+    Restoring only messages and custom would leave snapshot_id, session_id,
+    and artifacts on the new turn, so the next send would resume from a
+    snapshot the local history doesn't have.
+    """
+    chat = AgentChat(
+        _BadFinalStateTransport(),
+        AgentInit(state=SessionState(session_id='sess-1', custom={'title': 'Dinner for 2'})),
+        state_schema=_TaskState,
+    )
+    chat._snapshot_id = 'snap-1'  # noqa: SLF001
+    chat._resume_snapshot_id = 'snap-1'  # noqa: SLF001
+    messages = chat.messages
+
+    with pytest.raises(GenkitError):
+        await chat.send('make it 4')
+
+    assert chat.messages == []
+    assert chat.messages is messages
+    assert chat.state == _TaskState(title='Dinner for 2')
+    assert chat.session_id == 'sess-1'
+    assert chat.snapshot_id == 'snap-1'
+    assert chat._resume_snapshot_id == 'snap-1'  # noqa: SLF001
+    assert chat.artifacts == []
+
+
+@pytest.mark.asyncio
+async def test_send_with_invalid_custom_state_returns_response_with_error() -> None:
+    """A custom state that fails the schema comes back on res.error, not as a raise."""
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(Genkit(), 'badState', handle, store=None, state_schema=_TaskState)
+    res = await agent.chat(state={'done': 'nope'}).send('hi')  # type: ignore[arg-type]
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert isinstance(res.error, GenkitRuntimeError)
+    assert res.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert res.error.status == 'INVALID_ARGUMENT'
+    assert res.state is None
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_turn_after_data_reply_has_no_data() -> None:
+    """res.data on a failed turn is None, not the previous turn's data."""
+    agent = _flaky(
+        Genkit(),
+        'failData',
+        store=InMemorySessionStore(),
+        reply=_ok_message([Part.from_text('ok'), Part.from_data({'n': 1})]),
+    )
+    chat = agent.chat()
+    ok = await chat.send('hello')
+    assert ok.data == {'n': 1}
+
+    res = await chat.send('please fail now')
+    _assert_failed(res, message='boom')
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_turn_without_error_still_has_error() -> None:
+    """A custom agent that returns FAILED without raising still reads as failed on res.error."""
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        return TurnResult(finish_reason=AgentFinishReason.FAILED)
+
+    agent = _define_turns(Genkit(), 'silentFail', handle, store=InMemorySessionStore())
+    res = await agent.chat().send('hi')
+
+    err = _assert_failed(res, message='Agent turn failed.')
+    assert err.status == 'UNKNOWN'
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_server_managed_turn_rolls_back_custom_patches() -> None:
+    """Custom patches streamed during a failed turn are undone, matching the resume snapshot."""
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        if 'fail' in _input_text(inp).lower():
+            await session_runner.update_custom(lambda _prev: {'n': 999})
+            raise GenkitError(status='INTERNAL', message='boom')
+        await session_runner.update_custom(lambda _prev: {'n': 1})
+        await session_runner.add_messages([_ok_message()])
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    store = InMemorySessionStore()
+    agent = _define_turns(Genkit(), 'failPatch', handle, store=store)
+    chat = agent.chat()
+    ok = await chat.send('hello')
+    assert ok.state == {'n': 1}
+
+    res = await chat.send('please fail now')
+    _assert_failed(res, message='boom')
+    assert res.state == {'n': 1}
+    assert chat.state == {'n': 1}
+    snapshot = await store.get_snapshot(snapshot_id=res.snapshot_id)
+    assert snapshot is not None
+    assert snapshot.state is not None
+    assert snapshot.state.custom == {'n': 1}
+
+
+class _ScriptedTransport(AgentTransport[Any]):
+    """Hands back canned turn outputs, like a remote server would."""
+
+    def __init__(self, outputs: list[AgentOutput], *, state_management: StateManagement) -> None:
+        self.outputs = outputs
+        self.state_management = state_management
+
+    async def run_turn(
+        self,
+        *,
+        agent_input: AgentInput,
+        init: AgentInit,
+    ) -> tuple[AsyncIterable[Any], Awaitable[AgentOutput]]:
+        del agent_input, init
+
+        async def no_chunks() -> AsyncIterator[Any]:
+            for chunk in ():
+                yield chunk
+
+        async def output() -> AgentOutput:
+            return self.outputs.pop(0)
+
+        return no_chunks(), output()
+
+    async def get_snapshot(self, *, snapshot_id: str | None = None, session_id: str | None = None) -> None:
+        del snapshot_id, session_id
+        return None
+
+    async def abort_snapshot(self, snapshot_id: str) -> SnapshotStatus | None:
+        del snapshot_id
+        return None
+
+
+@pytest.mark.asyncio
+async def test_send_on_aborted_turn_hides_previous_reply_and_keeps_last_snapshot() -> None:
+    """An aborted turn shows no message, no text, and the last completed snapshot id."""
+    # 1. A remote server answers once, then reports the next turn aborted.
+    #    Its output still carries the previous reply and no snapshot id.
+    previous = _ok_message([Part.from_text('Smoked Salmon Tartine')])
+    transport = _ScriptedTransport(
+        [
+            AgentOutput(finish_reason=AgentFinishReason.STOP, snapshot_id='s1', message=previous),
+            AgentOutput(finish_reason=AgentFinishReason.ABORTED, message=previous),
+        ],
+        state_management='server',
+    )
+    chat = AgentClient(transport).chat()
+    await chat.send('suggest a dish')
+    history = list(chat.messages)
+
+    # 2. The aborted turn does not read as an answer.
+    res = await chat.send('something without nuts')
+    assert res.finish_reason == AgentFinishReason.ABORTED
+    assert res.message is None
+    assert res.text == ''
+
+    # 3. The caller still resumes from s1, and the unanswered prompt is gone.
+    assert res.snapshot_id == 's1'
+    assert chat.snapshot_id == 's1'
+    assert chat.messages == history
+
+
+@pytest.mark.asyncio
+async def test_send_on_aborted_turn_with_invalid_state_returns_none_state() -> None:
+    """An aborted turn whose custom state fails the schema returns state None instead of raising."""
+    transport = _ScriptedTransport(
+        [
+            AgentOutput(
+                finish_reason=AgentFinishReason.ABORTED,
+                state=SessionState(custom={'done': 'nope'}),
+            ),
+        ],
+        state_management='client',
+    )
+    chat = AgentClient(transport, state_schema=_TaskState).chat()
+
+    res = await chat.send('mark the order done')
+
+    assert res.finish_reason == AgentFinishReason.ABORTED
+    assert res.state is None
+
+
+@pytest.mark.asyncio
+async def test_send_on_failed_turn_without_snapshot_falls_back_to_last_completed() -> None:
+    """A failed turn with no id reports the last completed snapshot, not an earlier failed row."""
+    # 1. s1 completes, then a failed turn writes its own row f1.
+    # 2. The next failed turn carries no id at all.
+    transport = _ScriptedTransport(
+        [
+            AgentOutput(finish_reason=AgentFinishReason.STOP, snapshot_id='s1', message=_ok_message()),
+            AgentOutput(finish_reason=AgentFinishReason.FAILED, snapshot_id='f1'),
+            AgentOutput(finish_reason=AgentFinishReason.FAILED),
+        ],
+        state_management='server',
+    )
+    chat = AgentClient(transport).chat()
+    await chat.send('suggest a dish')
+    await chat.send('something without nuts')
+
+    res = await chat.send('something without dairy')
+
+    # 3. f1 can't be resumed, so the caller is pointed at s1.
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert res.snapshot_id == 's1'

@@ -25,12 +25,14 @@ from typing import Any, Generic
 from pydantic import BaseModel
 
 # Internal imports from sibling modules
+from genkit._ai import _aio
 from genkit._ai._agents._client import AgentClient
 from genkit._ai._agents._preamble import (
     apply_preamble_tags,
     tag_history_for_render,
 )
 from genkit._ai._agents._runtime import (
+    AgentContext,
     AgentFn,
     AgentInitError,
     AgentRuntime,
@@ -65,9 +67,9 @@ from genkit._ai._prompt import (
     prepare_prompt,
     register_prompt_actions,
 )
-from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction, BidiFn, get_current_context
+from genkit._core._action import Action, ActionKind, BidiAction, BidiFn, get_current_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -90,7 +92,6 @@ from genkit._core._typing import (
     AgentAbortResponse,
     AgentFinishReason,
     GetSnapshotRequest,
-    MiddlewareRef,
     Role,
     SnapshotStatus,
     ToolRequest,
@@ -222,7 +223,7 @@ class Agent(
 
 
 def define_custom_agent(
-    registry: Registry,
+    ai: _aio.Genkit,
     name: str,
     fn: AgentFn,
     *,
@@ -289,6 +290,7 @@ def define_custom_agent(
         state_transform=state_transform,
         state_schema=state_schema,
     )
+    registry = ai._registry
     registry.register_action_from_instance(agent)
 
     if store is not None:
@@ -339,13 +341,13 @@ def register_snapshot_actions(*, registry: Registry, name: str, agent: Agent) ->
 
 
 def define_agent(
-    registry: Registry,
+    ai: _aio.Genkit,
     name: str,
     *,
     model: ModelRef[ModelRefConfigT] | Action | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    use: Sequence[Middleware] | None = None,
     config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,
@@ -366,8 +368,9 @@ def define_agent(
     read and write via the session — the chat's ``state``, ``response.state``,
     and streamed ``chunk.custom`` come back as that model instead of a dict.
     """
+    registry = ai._registry
     executable_prompt = Prompt(
-        registry,
+        ai,
         name=name,
         model=model,
         config=config,
@@ -379,7 +382,7 @@ def define_agent(
     )
     register_prompt_actions(registry, executable_prompt, name, None)
     return define_prompt_agent(
-        registry=registry,
+        ai,
         name=name,
         store=store,
         state_transform=state_transform,
@@ -391,7 +394,7 @@ def define_agent(
 
 
 def define_prompt_agent(
-    registry: Registry,
+    ai: _aio.Genkit,
     name: str,
     *,
     store: SessionStore[StateT] | None = None,
@@ -410,7 +413,7 @@ def define_prompt_agent(
     The agent name and prompt name are the same string.
     """
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
             history = await session_runner.get_messages()
             resume_respond = None
@@ -422,7 +425,7 @@ def define_prompt_agent(
                 resume_restart = inp.resume.restart or None
                 resume_metadata = inp.resume.metadata or None
 
-            executable = await lookup_prompt(registry, name)
+            executable = await lookup_prompt(ai._registry, name)
             call_opts: PromptGenerateOptions = {
                 'messages': tag_history_for_render(history),
                 'resume_respond': resume_respond,
@@ -440,7 +443,7 @@ def define_prompt_agent(
             return await generate_prompt_agent_turn(
                 session_runner=session_runner,
                 ctx=ctx,
-                registry=prepared.registry,
+                scope=prepared.scope,
                 options=options,
                 history=history,
             )
@@ -449,7 +452,7 @@ def define_prompt_agent(
         return await session_runner.result()
 
     return define_custom_agent(
-        registry=registry,
+        ai,
         name=name,
         fn=agent_fn,
         store=store,

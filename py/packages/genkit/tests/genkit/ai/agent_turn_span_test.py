@@ -24,17 +24,15 @@ from collections.abc import Sequence
 
 import pytest
 
-from genkit import Part
+from genkit import Genkit, Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._types import TurnContext, TurnResult
-from genkit._core._action import ActionRunContext
 from genkit._core._model import AgentInput, AgentResult, Message, SessionState
-from genkit._core._registry import Registry
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._http import ActiveSpan
-from genkit.exp.agent import AgentFinishReason, InMemorySessionStore
+from genkit.exp.agent import AgentContext, AgentFinishReason, InMemorySessionStore
 
 UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 SESSION_ID_ATTR = metadata_key('agent:sessionId')
@@ -49,11 +47,11 @@ def _by_name(spans: Sequence[ActiveSpan], name: str) -> ActiveSpan:
 
 def _counter_agent(
     *,
-    registry: Registry,
+    ai: Genkit,
     name: str,
     store: InMemorySessionStore | None,
 ):
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(_: AgentInput, __: TurnContext) -> TurnResult | None:
             def bump(custom: dict | None) -> dict:
                 return {'count': (custom or {}).get('count', 0) + 1}
@@ -65,7 +63,7 @@ def _counter_agent(
         await session_runner.run(handle_turn)
         return await session_runner.result()
 
-    return define_custom_agent(registry, name, fn, store=store)
+    return define_custom_agent(ai, name, fn, store=store)
 
 
 def test_session_mints_session_id_when_missing() -> None:
@@ -95,9 +93,9 @@ async def test_run_turn_span_output_is_session_state_with_store(
     exporter,
 ) -> None:
     """Session store: root span has session id; runTurn output is the stored state."""
-    registry = Registry()
+    ai = Genkit()
     store = InMemorySessionStore()
-    agent = _counter_agent(registry=registry, name='turnSpanStore', store=store)
+    agent = _counter_agent(ai=ai, name='turnSpanStore', store=store)
 
     out = await agent.chat().send('hi')
     assert out.snapshot_id
@@ -126,8 +124,8 @@ async def test_run_turn_span_output_is_session_state_client_managed(
     exporter,
 ) -> None:
     """No store: root span still has session id; runTurn output is the in-memory state."""
-    registry = Registry()
-    agent = _counter_agent(registry=registry, name='turnSpanClient', store=None)
+    ai = Genkit()
+    agent = _counter_agent(ai=ai, name='turnSpanClient', store=None)
 
     out = await agent.chat().send('hi')
     assert out.raw.state is not None
@@ -154,8 +152,8 @@ async def test_run_turn_span_output_is_session_state_client_managed(
 @pytest.mark.asyncio
 async def test_agent_turn_output_is_the_returned_state(exporter) -> None:
     """runTurn-N's genkit:output is exactly the session state that turn handed back to the client."""
-    registry = Registry()
-    agent = _counter_agent(registry=registry, name='turnSpanReturned', store=None)
+    ai = Genkit()
+    agent = _counter_agent(ai=ai, name='turnSpanReturned', store=None)
 
     chat = agent.chat()
     await chat.send('one')
@@ -172,8 +170,8 @@ async def test_agent_turn_output_is_the_returned_state(exporter) -> None:
 @pytest.mark.asyncio
 async def test_client_managed_preserves_session_id_across_turns() -> None:
     """Two send() calls on the same chat keep the same session_id."""
-    registry = Registry()
-    agent = _counter_agent(registry=registry, name='preserveClientSid', store=None)
+    ai = Genkit()
+    agent = _counter_agent(ai=ai, name='preserveClientSid', store=None)
 
     chat = agent.chat()
     out1 = await chat.send('one')

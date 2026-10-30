@@ -16,42 +16,43 @@
 
 """Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
+from genkit._ai._background_model import BackgroundModel
+from genkit._ai._generate import StreamingCallbackError
 from genkit._ai._model import (
-    model,
-    model_action_metadata,
-    model_ref,
+    Model,
 )
-from genkit._core._background import BackgroundAction, background_model
+from genkit._core._action import ModelContext
 from genkit._core._model import (
-    Candidate,
     GenerateActionOptions,
+    GenerationUsage,
     ModelConfig,
     ModelRef,
     ModelRequest,
-    ModelUsage,
     OutputConfig,
-    get_basic_usage_stats,
 )
 from genkit._core._typing import (
-    Constrained,
+    ConstrainedSupport,
     ModelInfo,
+    ModelStage,
+    ModelSupports,
     OperationError,
-    Stage,
-    Supports,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
 )
 
 __all__ = [
-    # Request types
-    'BackgroundAction',
+    # Errors
+    'StreamingCallbackError',
+    # Models, request and context types
+    'Model',
+    'BackgroundModel',
     'GenerateActionOptions',
+    'ModelContext',
     'ModelRequest',
     'OutputConfig',
     # Usage and metadata
-    'ModelUsage',
-    'Candidate',
+    'GenerationUsage',
     # Long-running operations
     'OperationError',
     # Tool types
@@ -60,15 +61,9 @@ __all__ = [
     'ToolResponse',
     # Model info
     'ModelInfo',
-    'Supports',
-    'Constrained',
-    'Stage',
-    # Factory functions and metadata
-    'model',
-    'background_model',
-    'model_action_metadata',
-    'model_ref',
-    'get_basic_usage_stats',
+    'ModelSupports',
+    'ConstrainedSupport',
+    'ModelStage',
     # Reference types
     'ModelRef',
     # Config

@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from datetime import date
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -39,8 +39,8 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Prompt,
-    ToolRunContext,
-    tool,
+    Tool,
+    ToolContext,
 )
 from genkit._ai._model import ModelRequest, text_from_message
 from genkit._ai._prompt import (
@@ -58,17 +58,15 @@ from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import GenerateActionOptions, ModelConfig, resume_options_to_resume
 from genkit._core._registry import define_dynamic_action_provider
-from genkit._core._typing import Role
+from genkit._core._typing import MiddlewareRef, Role
 from genkit.exp import Genkit as ExpGenkit
 from genkit.exp.agent import InMemorySessionStore
 from genkit.middleware import (
-    BaseMiddleware,
-    GenerateMiddleware,
-    GenerateMiddlewareContext,
-    MiddlewareRef,
+    Middleware,
+    MiddlewareContext,
     ModelHookParams,
 )
-from genkit.plugin_api import MiddlewarePlugin
+from genkit.plugin_api import Plugin
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -77,12 +75,14 @@ from genkit.testing import (
 )
 
 
-class _PreMiddleware(BaseMiddleware):
+class _PreMiddleware(Middleware):
+    name = 'pre_mw'
+
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         txt = ''.join(text_from_message(m) for m in params.request.messages)
         return await next_fn(
@@ -95,12 +95,14 @@ class _PreMiddleware(BaseMiddleware):
         )
 
 
-class _PostMiddleware(BaseMiddleware):
+class _PostMiddleware(Middleware):
+    name = 'post_mw'
+
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         resp: ModelResponse = await next_fn(params, ctx)
         assert resp.message is not None
@@ -111,12 +113,20 @@ class _PostMiddleware(BaseMiddleware):
         )
 
 
-class PrePostMiddlewarePlugin(MiddlewarePlugin):
+class PrePostPlugin(Plugin):
     name = 'extension-middleware'
-    middleware = [
-        GenerateMiddleware(cls=_PreMiddleware, name='pre_mw'),
-        GenerateMiddleware(cls=_PostMiddleware, name='post_mw'),
-    ]
+
+    async def init(self) -> list[Action]:
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        return None
+
+    async def list_actions(self) -> list[Action]:
+        return []
+
+    def list_middleware(self) -> list[type[Middleware]]:
+        return [_PreMiddleware, _PostMiddleware]
 
 
 def setup_test() -> tuple[Genkit, EchoModel, ScriptedModel]:
@@ -354,16 +364,16 @@ async def test_load_prompt_variant() -> None:
         variant_prompt = prompt_dir / 'greeting.casual.prompt'
         variant_prompt.write_text("---\nmodel: echoModel\n---\nHey {{name}}, what's up?")
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         # Test base prompt
-        base_exec = await prompt(ai.registry, 'greeting')
+        base_exec = await prompt(ai._registry, 'greeting')
         base_response = await base_exec({'name': 'Alice'})
         assert 'Hello' in base_response.text
         assert 'Alice' in base_response.text
 
         # Test variant prompt
-        casual_exec = await prompt(ai.registry, 'greeting', variant='casual')
+        casual_exec = await prompt(ai._registry, 'greeting', variant='casual')
         casual_response = await casual_exec({'name': 'Bob'})
         assert 'Hey' in casual_response.text or "what's up" in casual_response.text.lower()
         assert 'Bob' in casual_response.text
@@ -386,15 +396,23 @@ async def test_load_nested_prompt() -> None:
         admin_prompt = sub_dir / 'dashboard.prompt'
         admin_prompt.write_text('---\nmodel: echoModel\n---\nWelcome Admin {{name}}')
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        dotted_dir = prompt_dir / 'v1.0'
+        dotted_dir.mkdir()
+        (dotted_dir / 'greet.fun.prompt').write_text('---\nmodel: echoModel\n---\nHello from v1.0')
+
+        load_prompt_folder(ai, prompt_dir)
 
         # Test loading nested prompt
         # Based on logic: name = "admin/dashboard"
-        admin_exec = await prompt(ai.registry, 'admin/dashboard')
+        admin_exec = await prompt(ai._registry, 'admin/dashboard')
         response = await admin_exec({'name': 'SuperUser'})
 
         assert 'Welcome Admin' in response.text
         assert 'SuperUser' in response.text
+
+        # The variant comes from the file name, not from a dot in the directory.
+        rendered = await (await prompt(ai._registry, 'v1.0/greet', variant='fun')).render()
+        assert text_from_message(rendered.messages[0]) == 'Hello from v1.0'
 
 
 @pytest.mark.asyncio
@@ -414,13 +432,39 @@ async def test_load_and_use_partial() -> None:
         prompt_file = prompt_dir / 'story.prompt'
         prompt_file.write_text('---\nmodel: echoModel\n---\n{{>greeting}} Tell me about {{topic}}.')
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        story_exec = await prompt(ai.registry, 'story')
+        story_exec = await prompt(ai._registry, 'story')
         response = await story_exec({'topic': 'space'})
 
         # The partial should be included in the output
         assert 'Hello from partial' in response.text or 'space' in response.text
+
+
+@pytest.mark.asyncio
+async def test_load_nested_partials() -> None:
+    """Nested partials register under their full name and, when free, their short name."""
+    ai, *_ = setup_test()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / 'prompts'
+        (prompt_dir / 'a').mkdir(parents=True)
+        (prompt_dir / 'b').mkdir()
+        (prompt_dir / '_greeting.prompt').write_text('root greeting')
+        (prompt_dir / 'a' / '_greeting.prompt').write_text('a greeting')
+        (prompt_dir / 'a' / '_system.prompt').write_text('a system')
+        (prompt_dir / 'b' / '_system.prompt').write_text('b system')
+        (prompt_dir / 'main.prompt').write_text(
+            '---\nmodel: echoModel\n---\n{{> a/system}}|{{> b/system}}|{{> system}}|{{> greeting}}|{{> a/greeting}}'
+        )
+
+        load_prompt_folder(ai, prompt_dir)
+
+        rendered = await (await prompt(ai._registry, 'main')).render()
+
+        # Full names always resolve; short names go to the root partial first,
+        # then to the first nested partial in walk order.
+        assert text_from_message(rendered.messages[0]) == 'a system|b system|a system|root greeting|a greeting'
 
 
 @pytest.mark.asyncio
@@ -479,10 +523,10 @@ async def test_prompt_action_binds_dap_selector() -> None:
     async def dap_fn() -> DapValue:
         return {'tool': [echo]}
 
-    define_dynamic_action_provider(ai.registry, 'mcp', dap_fn)
+    define_dynamic_action_provider(ai._registry, 'mcp', dap_fn)
 
     ai.define_prompt(name='withDap', prompt='ping', tools=['mcp:tool/echo'])
-    prompt_action = await ai.registry.resolve_action(ActionKind.PROMPT, 'withDap')
+    prompt_action = await ai._registry.resolve_action(ActionKind.PROMPT, 'withDap')
     assert prompt_action is not None
 
     result = await prompt_action.run()
@@ -490,7 +534,7 @@ async def test_prompt_action_binds_dap_selector() -> None:
     assert isinstance(request, ModelRequest)
     assert request.tools is not None
     assert [t.name for t in request.tools] == ['echo']
-    assert 'echo' not in ai.registry._entries.get(ActionKind.TOOL, {})
+    assert 'echo' not in ai._registry._entries.get(ActionKind.TOOL, {})
 
 
 @pytest.mark.asyncio
@@ -1100,7 +1144,7 @@ def test_with_overrides_applies_every_prompt_setting() -> None:
         'tools': ['grill'],
         'tool_choice': 'none',
         'docs': [Document.from_text('allergen chart')],
-        'use': [MiddlewareRef(name='allergy_check')],
+        'use': [_PreMiddleware()],
         'max_turns': 2,
         'return_tool_requests': True,
         'resume_respond': [answer],
@@ -1357,18 +1401,18 @@ def _allergy_check_prompt(ai: Genkit, pm: ScriptedModel, seen: list[tuple[str, d
     """A prompt whose model calls `check_allergies` once. Middleware and the tool record the context they ran with."""
 
     # The engine builds middleware from its class, so the recorder closes over `seen` instead of holding it.
-    class RecordContext(BaseMiddleware):
+    class RecordContext(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
-            seen.append(('middleware', dict(ctx.custom_context)))
+            seen.append(('middleware', dict(ctx.context)))
             return await next_fn(params, ctx)
 
     @ai.tool(name='check_allergies')
-    async def check_allergies(_: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def check_allergies(_: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(('tool', dict(ctx.context)))
         return 'no nuts'
 
@@ -1447,7 +1491,7 @@ async def test_registered_prompt_action_fills_auth_from_run_context(kind: Action
     """The Dev UI runs a prompt through its action with context=; the template fills from it."""
     ai, _ = _setup_prompt_call()
     ai.define_prompt(name='order', prompt='Order for {{@auth.uid}}.')
-    action = await ai.registry.resolve_action(kind, 'order')
+    action = await ai._registry.resolve_action(kind, 'order')
     assert action is not None
 
     rendered = (await action.run(None, context={'auth': {'uid': 'chef-1'}})).response
@@ -1600,7 +1644,7 @@ async def test_prompt_inline_tool_object_runs(where: str) -> None:
         ran.append('check_stock')
         return 'in stock'
 
-    check_stock_tool = tool(check_stock, name='check_stock')
+    check_stock_tool = Tool(check_stock, name='check_stock')
     pm.responses = [_tool_call_reply('check_stock', 'r1'), _text_reply('done')]
     if where == 'definition':
         res = await ai.define_prompt(prompt='hi', tools=[check_stock_tool])()
@@ -1610,7 +1654,7 @@ async def test_prompt_inline_tool_object_runs(where: str) -> None:
     assert ran == ['check_stock']
     assert res.text == 'done'
     # Registered on the call's child registry only.
-    assert await ai.registry.resolve_action(ActionKind.TOOL, 'check_stock') is None
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'check_stock') is None
 
 
 @pytest.mark.asyncio
@@ -1645,7 +1689,7 @@ async def test_prompt_input_schema_reaches_registered_actions() -> None:
     ai.define_prompt(name='order', prompt='Order {{dish}}', input_schema=OrderInput)
 
     for kind in (ActionKind.PROMPT, ActionKind.EXECUTABLE_PROMPT):
-        action = await ai.registry.resolve_action(kind, 'order')
+        action = await ai._registry.resolve_action(kind, 'order')
         assert action is not None
         schema = cast(dict[str, Any], action.input_schema)
         assert schema['properties'].keys() == {'dish'}
@@ -1657,7 +1701,7 @@ async def test_prompt_compiles_each_template_once() -> None:
     ai, _ = _setup_prompt_call()
     p = ai.define_prompt(system='You are a waiter.', prompt='Suggest a {{course}}.')
 
-    with patch.object(ai.registry.dotprompt, 'compile', wraps=ai.registry.dotprompt.compile) as compile_spy:
+    with patch.object(ai._registry.dotprompt, 'compile', wraps=ai._registry.dotprompt.compile) as compile_spy:
         await p.render({'course': 'starter'})
         await p.render({'course': 'dessert'})
 
@@ -1685,7 +1729,7 @@ async def test_define_prompt_description_reaches_registered_actions() -> None:
     ai.define_prompt(name='suggestDish', description='Suggests a dish for a guest.', prompt='hi')
 
     for kind in (ActionKind.PROMPT, ActionKind.EXECUTABLE_PROMPT):
-        action = await ai.registry.resolve_action(kind, 'suggestDish')
+        action = await ai._registry.resolve_action(kind, 'suggestDish')
         assert action is not None
         assert action.description == 'Suggests a dish for a guest.'
 
@@ -1701,7 +1745,7 @@ async def test_file_prompt_description_reaches_registered_actions() -> None:
         define_echo_model(ai)
 
         for kind in (ActionKind.PROMPT, ActionKind.EXECUTABLE_PROMPT):
-            action = await ai.registry.resolve_action(kind, 'dessert')
+            action = await ai._registry.resolve_action(kind, 'dessert')
             assert action is not None
             assert action.description == 'Suggests a dessert.'
 
@@ -1737,14 +1781,14 @@ async def test_file_based_prompt_registers_two_actions() -> None:
         prompt_file.write_text('hello {{name}}')
 
         # Load prompts from directory
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         # Actions are registered with registry_definition_key (e.g., "filePrompt")
         # We need to look them up by kind and name (without the /prompt/ prefix)
         action_name = 'filePrompt'  # registry_definition_key format
 
-        prompt_action = await ai.registry.resolve_action(ActionKind.PROMPT, action_name)
-        executable_prompt_action = await ai.registry.resolve_action(ActionKind.EXECUTABLE_PROMPT, action_name)
+        prompt_action = await ai._registry.resolve_action(ActionKind.PROMPT, action_name)
+        executable_prompt_action = await ai._registry.resolve_action(ActionKind.EXECUTABLE_PROMPT, action_name)
 
         assert prompt_action is not None
         assert executable_prompt_action is not None
@@ -1764,11 +1808,11 @@ async def test_prompt_and_executable_prompt_return_types() -> None:
         prompt_file = prompt_dir / 'testPrompt.prompt'
         prompt_file.write_text('hello {{name}}')
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
         action_name = 'testPrompt'
 
-        prompt_action = await ai.registry.resolve_action(ActionKind.PROMPT, action_name)
-        executable_prompt_action = await ai.registry.resolve_action(ActionKind.EXECUTABLE_PROMPT, action_name)
+        prompt_action = await ai._registry.resolve_action(ActionKind.PROMPT, action_name)
+        executable_prompt_action = await ai._registry.resolve_action(ActionKind.EXECUTABLE_PROMPT, action_name)
 
         assert prompt_action is not None
         assert executable_prompt_action is not None
@@ -1792,9 +1836,9 @@ async def test_lookup_prompt_returns_prompt() -> None:
         prompt_file = prompt_dir / 'lookupTest.prompt'
         prompt_file.write_text('hi {{name}}')
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        executable = await lookup_prompt(ai.registry, 'lookupTest')
+        executable = await lookup_prompt(ai._registry, 'lookupTest')
         assert isinstance(executable, Prompt)
 
         response = await executable({'name': 'World'})
@@ -1813,7 +1857,7 @@ async def test_prompt_function_uses_lookup_prompt() -> None:
         prompt_file = prompt_dir / 'promptFuncTest.prompt'
         prompt_file.write_text('hello {{name}}')
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         # Use ai.prompt() to look up the file-based prompt
         executable = ai.prompt('promptFuncTest')
@@ -1841,8 +1885,8 @@ Hello {{name}}!
 
         # Verify the prompt is registered
         # File-based prompts are registered with an empty namespace by default
-        prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.PROMPT)
-        executable_prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
+        prompt_actions = await ai._registry.resolve_actions_by_kind(ActionKind.PROMPT)
+        executable_prompt_actions = await ai._registry.resolve_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
         assert 'test' in prompt_actions
         assert 'test' in executable_prompt_actions
 
@@ -1853,8 +1897,8 @@ async def test_automatic_prompt_loading_default_none() -> None:
     ai = Genkit(prompt_dir=None)
 
     # Check that no prompts are registered (assuming a clean environment)
-    prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.PROMPT)
-    executable_prompt_actions = await ai.registry.resolve_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
+    prompt_actions = await ai._registry.resolve_actions_by_kind(ActionKind.PROMPT)
+    executable_prompt_actions = await ai._registry.resolve_actions_by_kind(ActionKind.EXECUTABLE_PROMPT)
     assert len(prompt_actions) == 0
     assert len(executable_prompt_actions) == 0
 
@@ -1868,8 +1912,8 @@ async def test_automatic_prompt_loading_defaults_mock() -> None:
         mock_path_instance.is_dir.return_value = True
         mock_path.return_value = mock_path_instance
 
-        Genkit()
-        mock_load.assert_called_once_with(ANY, dir_path=mock_path_instance)
+        ai = Genkit()
+        mock_load.assert_called_once_with(ai, dir_path=mock_path_instance)
 
 
 @pytest.mark.asyncio
@@ -1909,14 +1953,14 @@ async def test_variant_prompt_loading_does_not_recurse() -> None:
         variant = prompt_dir / 'recipe.robot.prompt'
         variant.write_text('---\nmodel: echoModel\n---\nYou are a robot chef. Make a recipe for {{food}}.')
 
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         # Should resolve without RecursionError
-        base_exec = await prompt(ai.registry, 'recipe')
+        base_exec = await prompt(ai._registry, 'recipe')
         base_response = await base_exec({'food': 'pizza'})
         assert 'pizza' in base_response.text
 
-        robot_exec = await prompt(ai.registry, 'recipe', variant='robot')
+        robot_exec = await prompt(ai._registry, 'recipe', variant='robot')
         robot_response = await robot_exec({'food': 'pizza'})
         assert 'pizza' in robot_response.text
 
@@ -1960,16 +2004,16 @@ def test_parse_dotprompt_use_invalid(raw: object) -> None:
 @pytest.mark.asyncio
 async def test_load_prompt_with_use_middleware() -> None:
     """Dotprompt frontmatter ``use`` runs middleware on prompt execution."""
-    ai = Genkit(model='echoModel', plugins=[PrePostMiddlewarePlugin()])
+    ai = Genkit(model='echoModel', plugins=[PrePostPlugin()])
     define_echo_model(ai)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'with_mw.prompt').write_text('---\nmodel: echoModel\nuse:\n  - pre_mw\n  - post_mw\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        with_mw = await prompt(ai.registry, 'with_mw')
+        with_mw = await prompt(ai._registry, 'with_mw')
         response = await with_mw()
 
     assert response.text == '[ECHO] user: "PRE hi" POST'
@@ -1984,9 +2028,9 @@ async def test_load_prompt_with_use_middleware_not_registered() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'missing_mw.prompt').write_text('---\nmodel: echoModel\nuse:\n  - missing_mw\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        missing = await prompt(ai.registry, 'missing_mw')
+        missing = await prompt(ai._registry, 'missing_mw')
         with pytest.raises(GenkitError, match='missing_mw') as raised:
             await missing()
         assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
@@ -2002,10 +2046,10 @@ async def test_load_prompt_with_use_not_a_list_raises_invalid_input() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'bad_use.prompt').write_text('---\nmodel: echoModel\nuse: not-a-list\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         with pytest.raises(GenkitError, match='must be a list') as raised:
-            await prompt(ai.registry, 'bad_use')
+            await prompt(ai._registry, 'bad_use')
         assert raised.value.status == 'INVALID_ARGUMENT'
         assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
         assert 'INVALID_INPUT' not in raised.value.original_message
@@ -2020,10 +2064,10 @@ async def test_load_prompt_with_empty_use_entry_raises_invalid_input() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'empty_use.prompt').write_text('---\nmodel: echoModel\nuse:\n  - ""\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         with pytest.raises(GenkitError, match='empty string') as raised:
-            await prompt(ai.registry, 'empty_use')
+            await prompt(ai._registry, 'empty_use')
         assert raised.value.status == 'INVALID_ARGUMENT'
         assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
         assert 'INVALID_INPUT' not in raised.value.original_message
@@ -2038,10 +2082,10 @@ async def test_load_prompt_with_use_missing_name_raises_invalid_input() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'no_name.prompt').write_text('---\nmodel: echoModel\nuse:\n  - config: x\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         with pytest.raises(GenkitError, match='missing required `name`') as raised:
-            await prompt(ai.registry, 'no_name')
+            await prompt(ai._registry, 'no_name')
         assert raised.value.status == 'INVALID_ARGUMENT'
         assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
         assert 'INVALID_INPUT' not in raised.value.original_message
@@ -2056,10 +2100,10 @@ async def test_load_prompt_with_numeric_use_entry_raises_invalid_input() -> None
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'num_use.prompt').write_text('---\nmodel: echoModel\nuse:\n  - 42\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
         with pytest.raises(GenkitError, match='must be a string or map') as raised:
-            await prompt(ai.registry, 'num_use')
+            await prompt(ai._registry, 'num_use')
         assert raised.value.status == 'INVALID_ARGUMENT'
         assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
         assert 'INVALID_INPUT' not in raised.value.original_message
@@ -2076,9 +2120,9 @@ async def test_load_prompt_with_use_middleware_metadata() -> None:
         (prompt_dir / 'with_meta.prompt').write_text(
             '---\nmodel: echoModel\nuse:\n  - mw1\n  - name: mw2\n    config:\n      foo: bar\n---\nhi\n'
         )
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        with_meta = await prompt(ai.registry, 'with_meta')
+        with_meta = await prompt(ai._registry, 'with_meta')
 
         assert with_meta._def.use == [  # pyright: ignore[reportPrivateUsage]
             MiddlewareRef(name='mw1'),
@@ -2102,9 +2146,9 @@ async def test_load_prompt_metadata_tool_defs_empty_array() -> None:
         prompt_dir = Path(tmpdir) / 'prompts'
         prompt_dir.mkdir()
         (prompt_dir / 'no_tools.prompt').write_text('---\nmodel: echoModel\n---\nhi\n')
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        no_tools = await prompt(ai.registry, 'no_tools')
+        no_tools = await prompt(ai._registry, 'no_tools')
         prompt_action = no_tools._prompt_action  # pyright: ignore[reportPrivateUsage]
         assert prompt_action is not None
         action_md = cast(dict[str, Any], prompt_action.metadata)
@@ -2191,9 +2235,9 @@ async def test_load_prompt_with_output_instructions() -> None:
             '    type: object\n    properties:\n      foo:\n        type: integer\n'
             '  instructions: true\n---\nhi\n'
         )
-        load_prompt_folder(ai.registry, prompt_dir)
+        load_prompt_folder(ai, prompt_dir)
 
-        loaded = await prompt(ai.registry, 'with_instructions')
+        loaded = await prompt(ai._registry, 'with_instructions')
         assert loaded._def.output_instructions is True  # pyright: ignore[reportPrivateUsage]
 
         rendered = await loaded.render()

@@ -33,24 +33,13 @@ from genkit_anthropic._models import AnthropicModel
 from genkit_anthropic._plugin import anthropic_name
 
 from genkit import Genkit, Message, ModelResponse, Part, Role
-from genkit.model import Constrained, ModelRequest, ToolDefinition
+from genkit.model import ConstrainedSupport, ModelRequest, ToolDefinition
 from genkit.plugin_api import ActionKind
 
 
 def test_anthropic_name() -> None:
     """Test anthropic_name helper function."""
     assert anthropic_name('claude-sonnet-4') == 'anthropic/claude-sonnet-4'
-
-
-def test_init_with_api_key() -> None:
-    """Test plugin initialization with API key."""
-    plugin = Anthropic(api_key='test-key')
-
-    async def _get_api_key() -> str | None:
-        return plugin._runtime_client().api_key
-
-    assert asyncio.run(_get_api_key()) == 'test-key'
-    assert plugin.models == list(SUPPORTED_MODELS.keys())
 
 
 def test_init_without_api_key_raises() -> None:
@@ -66,23 +55,6 @@ def test_init_without_api_key_raises() -> None:
         assert asyncio.run(_has_client())
 
 
-def test_init_with_env_var() -> None:
-    """Test plugin initialization with environment variable."""
-    with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'env-key'}):
-        plugin = Anthropic()
-
-        async def _get_api_key() -> str | None:
-            return plugin._runtime_client().api_key
-
-        assert asyncio.run(_get_api_key()) == 'env-key'
-
-
-def test_custom_models() -> None:
-    """Test plugin initialization with custom models."""
-    plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
-    assert plugin.models == ['claude-sonnet-4']
-
-
 @patch('genkit_anthropic._plugin.AsyncAnthropic')
 def test_api_version_is_stored_without_leaking_to_sdk(mock_client_ctor: MagicMock) -> None:
     """Plugin API version is a model default, not an AsyncAnthropic kwarg."""
@@ -95,7 +67,6 @@ def test_api_version_is_stored_without_leaking_to_sdk(mock_client_ctor: MagicMoc
 
     assert asyncio.run(_get_client()) is mock_client
     assert plugin._default_api_version == 'beta'
-    assert 'api_version' not in plugin._anthropic_params
     mock_client_ctor.assert_called_once_with(api_key='test-key')
 
 
@@ -131,7 +102,7 @@ async def test_plugin_beta_default_routes_action_run_to_beta_surface(mock_client
 @pytest.mark.asyncio
 async def test_plugin_init() -> None:
     """Test plugin init method."""
-    plugin = Anthropic(api_key='test-key', models=['claude-sonnet-4'])
+    plugin = Anthropic(api_key='test-key')
 
     # init() should return an empty list (using lazy loading)
     result = await plugin.init()
@@ -219,7 +190,7 @@ def test_supported_models() -> None:
         assert info.versions == [model_name]
         assert info.supports is not None
         assert info.supports.output == ['text', 'json']
-        assert info.supports.constrained == Constrained.ALL
+        assert info.supports.constrained == ConstrainedSupport.ALL
 
 
 def test_mythos_excluded_but_resolvable() -> None:
@@ -305,13 +276,15 @@ async def test_list_actions_dynamic_union_dedup_and_fallback_info() -> None:
     # Curated info preserved for a known id returned by the API.
     sonnet_action = next(a for a in actions if a.name == 'anthropic/claude-sonnet-4')
     assert sonnet_action.metadata is not None
-    assert sonnet_action.metadata['model']['label'] == 'Anthropic - Claude Sonnet 4'
+    sonnet_model = cast(dict[str, Any], sonnet_action.metadata['model'])
+    assert sonnet_model['label'] == 'Anthropic - Claude Sonnet 4'
 
     # Unknown ids get the generic fallback info, not curated.
     mythos_action = next(a for a in actions if a.name == 'anthropic/claude-mythos-5')
     assert mythos_action.metadata is not None
-    assert mythos_action.metadata['model']['label'] == 'Anthropic - claude-mythos-5'
-    assert mythos_action.metadata['model']['supports']['output'] == ['text']
+    mythos_model = cast(dict[str, Any], mythos_action.metadata['model'])
+    assert mythos_model['label'] == 'Anthropic - claude-mythos-5'
+    assert mythos_model['supports']['output'] == ['text']
 
 
 @pytest.mark.asyncio
@@ -389,10 +362,13 @@ _ANTHROPIC_CONFIG_KEYS = {
     'apiVersion',
     'betas',
     'maxOutputTokens',
-    'tool_choice',
-    'metadata',
+    'disableParallelToolUse',
     'thinking',
-    'output_config',
+    'thinkingBudget',
+    'thinkingDisplay',
+    'effort',
+    'taskBudget',
+    'userId',
 }
 
 
@@ -445,7 +421,7 @@ async def test_generate_anthropic_resolved_model_sends_id_unchanged(monkeypatch:
     ai = Genkit(plugins=[Anthropic(api_key='test-key')])
 
     response = await ai.generate(model='anthropic/claude-unlisted-test', prompt='hi')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'anthropic/claude-unlisted-test')
+    action = await ai.lookup_model('anthropic/claude-unlisted-test')
 
     assert response.text == 'ok'
     assert seen == ['claude-unlisted-test']
@@ -466,7 +442,7 @@ async def test_generate_anthropic_double_prefixed_id_sends_prefixed_model(monkey
     ai = Genkit(plugins=[Anthropic(api_key='test-key')])
 
     await ai.generate(model='anthropic/anthropic/claude-x', prompt='hi')
-    action = await ai.registry.resolve_action(ActionKind.MODEL, 'anthropic/anthropic/claude-x')
+    action = await ai.lookup_model('anthropic/anthropic/claude-x')
 
     assert seen == ['anthropic/claude-x']
     assert action is not None

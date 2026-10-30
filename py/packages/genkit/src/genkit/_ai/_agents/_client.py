@@ -25,7 +25,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, G
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
@@ -40,7 +40,6 @@ from genkit._core._error import (
     RuntimeErrorReason,
     StatusCodes,
     StatusName,
-    runtime_error_reason,
 )
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -77,6 +76,27 @@ OutputT = TypeVar('OutputT')
 # returns), never takes it in, so it's covariant.
 StateT_co = TypeVar('StateT_co', bound=BaseModel, covariant=True)
 
+# A failed or aborted turn landed no reply: the chat rolls back the prompt,
+# keeps resuming from the last completed snapshot, and the response shows no
+# message. Every check for "did this turn answer?" reads this one set.
+_NO_REPLY = frozenset({AgentFinishReason.FAILED, AgentFinishReason.ABORTED})
+
+# A custom agent can return TurnResult(finish_reason=FAILED) without raising.
+# Same fallback JS uses when it raises AgentError for that turn.
+_UNEXPLAINED_FAILURE = GenkitRuntimeError(status='UNKNOWN', message='Agent turn failed.')
+
+
+@dataclass(frozen=True)
+class _TurnCheckpoint:
+    """Chat fields a turn can change, so a raised turn can put them back."""
+
+    messages: list[Message]
+    custom: Any
+    artifacts: list[Artifact]
+    session_id: str | None
+    snapshot_id: str | None
+    resume_snapshot_id: str | None
+
 
 class SessionState(SessionStateVeneer, Generic[StateT]):
     """Session state generic over custom state."""
@@ -89,7 +109,7 @@ class SessionSnapshot(SessionSnapshotVeneer, Generic[StateT]):
 
     # Narrows the wire model's plain SessionState to the typed one so snap.state.custom
     # reads as the declared model; the runtime shape is identical (same JSON fields).
-    state: SessionState[StateT] | None = None  # pyrefly: ignore[bad-override]
+    state: SessionState[StateT] | None = None  # pyright: ignore[reportIncompatibleVariableOverride] # pyrefly: ignore[bad-override]
 
     @field_validator('state', mode='before')
     @classmethod
@@ -224,22 +244,22 @@ class AgentResponse(Generic[StateT]):
     @property
     def text(self) -> str:
         """Full text content of the response message."""
-        return text_of(self.raw.message.content) if self.raw.message else ''
+        return text_of(self.message.content) if self.message else ''
 
     @property
     def reasoning(self) -> str:
         """Concatenated reasoning the model exposed for this turn."""
-        return reasoning_of(self.raw.message.content) if self.raw.message else ''
+        return reasoning_of(self.message.content) if self.message else ''
 
     @property
     def media(self) -> Media | None:
         """First media part of the response message, if any."""
-        return first_media_of(self.raw.message.content) if self.raw.message else None
+        return first_media_of(self.message.content) if self.message else None
 
     @property
     def data(self) -> Any:  # noqa: ANN401
         """Structured-output value of the response message, if the model returned one."""
-        return first_data_of(self.raw.message.content) if self.raw.message else None
+        return first_data_of(self.message.content) if self.message else None
 
     @property
     def finish_reason(self) -> AgentFinishReason | None:
@@ -267,45 +287,42 @@ class AgentResponse(Generic[StateT]):
         return self.raw.artifacts or []
 
     @property
+    def error(self) -> GenkitRuntimeError | None:
+        """Why this turn failed, or None when it didn't.
+
+        Same fields generate puts on ``response.error`` (status, message,
+        details, and reason), so one check reads both. A failed turn that
+        carried no error still gets one, so ``if res.error:`` never reads a
+        failure as success.
+        """
+        if self.raw.error is not None:
+            return self.raw.error
+        if self.raw.finish_reason == AgentFinishReason.FAILED:
+            return _UNEXPLAINED_FAILURE
+        return None
+
+    @property
     def message(self) -> Message | None:
-        """The response message."""
+        """The response message.
+
+        A failed or aborted turn's wire message is the previous reply.
+        Showing it would look like this turn answered, so this is None and
+        every accessor that reads the reply (text, data, interrupts, ...)
+        comes back empty.
+        """
+        if self.raw.finish_reason in _NO_REPLY:
+            return None
         return self.raw.message
 
     @property
     def tool_requests(self) -> list[Part]:
         """Tool requests in the response message."""
-        return tool_requests_of(self.raw.message.content) if self.raw.message else []
+        return tool_requests_of(self.message.content) if self.message else []
 
     @property
     def interrupts(self) -> list[AgentInterrupt[Any, Any]]:
         """Tool requests that paused this turn."""
-        return agent_interrupts_from_message(self.raw.message)
-
-
-class AgentError(Exception):
-    """Raised when a turn fails. Carries the last-good state so the session is recoverable."""
-
-    def __init__(
-        self,
-        *,
-        message: str,
-        status: str,
-        details: Any = None,  # noqa: ANN401
-        state: Any = None,  # noqa: ANN401
-        snapshot_id: str | None = None,
-        response: AgentResponse[Any],
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.status = status
-        self.details = details
-        self.state = state
-        self.snapshot_id = snapshot_id
-        self.response = response
-
-    @property
-    def reason(self) -> RuntimeErrorReason | None:
-        return runtime_error_reason(self.details)
+        return agent_interrupts_from_message(self.message)
 
 
 HTTP_TO_STATUS: dict[int, StatusName] = {code: name for name, code in _STATUS_CODE_MAP.items()}
@@ -370,47 +387,20 @@ def error_from_http(*, status_code: int, body: str) -> GenkitError:
 
 
 def error_from_exception(e: Exception) -> GenkitError:
-    """Normalize an arbitrary exception into GenkitError for transport boundaries."""
+    """Normalize an arbitrary exception into GenkitError for transport boundaries.
+
+    A ``GenkitError`` passes through unchanged. A dropped socket is
+    ``UNAVAILABLE``: the server never reported a failure, though the turn
+    may still have run.
+    """
     if isinstance(e, GenkitError):
         return e
+    if isinstance(e, ConnectionError):
+        return GenkitError(status='UNAVAILABLE', message='Connection to the agent was lost', cause=e)
     message = str(e)
     match = re.match(r'^([A-Z_]+):', message)
     status = coerce_status_name(match.group(1) if match else None)
     return GenkitError(status=status, message=message, cause=e)
-
-
-def to_agent_error(
-    e: Exception,
-    *,
-    messages: list[Message],
-    state: Any,  # noqa: ANN401
-    snapshot_id: str | None,
-) -> AgentError:
-    """Wrap a transport or runtime failure as an AgentError with last-good session context."""
-    if isinstance(e, AgentError):
-        return e
-    if isinstance(e, GenkitError):
-        message = e.original_message
-        status = e.status
-        details = e.details
-    else:
-        message = str(e)
-        wrapped = error_from_exception(e)
-        status = wrapped.status
-        details = e
-    raw = AgentOutput(
-        finish_reason=AgentFinishReason.FAILED,
-        error=GenkitRuntimeError(status=status, message=message, details=details),
-    )
-    response = AgentResponse(raw=raw, messages=list(messages), state=state)
-    return AgentError(
-        message=message,
-        status=status,
-        details=details,
-        state=state,
-        snapshot_id=snapshot_id,
-        response=response,
-    )
 
 
 def agent_interrupts_from_message(message: Message | None) -> list[AgentInterrupt[Any, Any]]:
@@ -834,7 +824,7 @@ class TurnDriver(Generic[StateT]):
         commit_output: Callable[[AgentOutput], AgentResponse[StateT]],
         commit_custom_patch: Callable[[Any], StateT | None],
         accumulate_chunk: Callable[[AgentStreamChunk], None] | None = None,
-        on_turn_error: Callable[[Exception], Exception] | None = None,
+        rollback: Callable[[], None] | None = None,
         chunks: CloseableQueue[AgentChunk[StateT] | Exception] | None = None,
     ) -> None:
         self.inp = inp
@@ -843,7 +833,7 @@ class TurnDriver(Generic[StateT]):
         self.commit_output = commit_output
         self.commit_custom_patch = commit_custom_patch
         self.accumulate_chunk = accumulate_chunk
-        self.on_turn_error = on_turn_error
+        self.rollback = rollback
         self.accumulated_text = ''
         self.output: asyncio.Future[AgentResponse[StateT]] = asyncio.get_running_loop().create_future()
         # Only the streaming path needs a caller-facing chunk queue; send() still
@@ -873,6 +863,7 @@ class TurnDriver(Generic[StateT]):
         ``self.output`` is otherwise only touched by ``abort()``, so the
         ``done()`` guards let abort win a race without the result being set twice.
         """
+        output: Awaitable[AgentOutput] | None = None
         try:
             stream, output = await self.run_turn(agent_input=self.inp, init=self.init)
             async for chunk in stream:
@@ -889,13 +880,33 @@ class TurnDriver(Generic[StateT]):
                 self.output.cancel()
             raise
         except Exception as e:
-            wrapped = self.on_turn_error(e) if self.on_turn_error is not None else e
+            # Transports fail the stream and the output future together. We
+            # raise from the stream, so mark the future's copy as seen or
+            # asyncio logs "Future exception was never retrieved".
+            if isinstance(output, asyncio.Future) and output.done() and not output.cancelled():
+                output.exception()
+            # No turn result: undo local changes, then raise one type for every
+            # transport. GenkitError passes through as-is (AgentInitError stays
+            # AgentInitError); anything else is wrapped with cause=e.
+            #
+            # There is deliberately no AgentError here. A turn that ran and
+            # failed returns res.error, so a raise only means "no turn result",
+            # which is what ai.generate raises GenkitError for. An agent-specific
+            # wrapper only duplicated status/details/reason, copied
+            # chat.state / chat.snapshot_id (still on the chat after _restore),
+            # and hid GenkitError: `except GenkitError` missed it and a
+            # server-side PublicError lost its type, so web handlers sent a 500.
+            if self.rollback is not None:
+                self.rollback()
+            wrapped = error_from_exception(e)
             if self.chunks is not None:
                 # Streaming path: callers retrieve the error via turn.response / stream.
                 # send() never exposes self.output, so leave it untouched and re-raise.
                 if not self.output.done():
                     self.output.set_exception(wrapped)
                 self.chunks.put_nowait(wrapped)
+            if wrapped is e:
+                raise
             raise wrapped from e
         finally:
             # Closing wakes the stream consumer once buffered chunks drain, so the
@@ -920,7 +931,7 @@ class TurnDriver(Generic[StateT]):
             await self.run()
         except Exception as e:
             # Normal turn failures already resolve ``self.output`` inside ``run``.
-            # If ``on_turn_error`` (or anything else) blows up before that, resolve
+            # If ``rollback`` (or anything else) blows up before that, resolve
             # here so ``await turn.response`` can't hang forever with an empty log.
             if not self.output.done():
                 logger.exception('TurnDriver background run failed without resolving output')
@@ -964,6 +975,10 @@ class TurnDriver(Generic[StateT]):
             raise RuntimeError('TurnDriver.stream() requires a chunks queue')
         async for item in chunks:
             if isinstance(item, Exception):
+                # The caller saw the error here. If they never await
+                # .response, asyncio would log its copy as never retrieved.
+                if self.output.done() and not self.output.cancelled():
+                    self.output.exception()
                 raise item
             yield item
 
@@ -1103,9 +1118,17 @@ class AgentChat(Generic[StateT]):
     ) -> AgentResponse[StateT]:
         """Runs a turn and returns the completed response.
 
-        Primary path (like ``Action.run`` / ``ai.generate``). Pumps the transport
-        so custom-state patches and message stitching still apply; does not expose
-        a chunk stream. For incremental chunks use :meth:`send_stream`.
+        A turn that finishes failed still returns: ``finish_reason`` is
+        ``failed`` and ``.error`` says why. It raises ``GenkitError`` only
+        when the call never got a turn result (dropped connection, init
+        misuse), and puts the chat back where it was before the send. A
+        dropped connection may still have run the turn server-side, so
+        reload with ``chat(session_id=...)`` before resending a turn whose
+        tools have side effects. Cancelling or timing out the call is a
+        client-side detach instead: it raises ``CancelledError`` /
+        ``TimeoutError`` and keeps the prompt. Pumps the transport so custom-state
+        patches and message stitching still apply; does not expose a chunk
+        stream. For incremental chunks use :meth:`send_stream`.
         """
         return await self._start_turn(input).run()
 
@@ -1139,11 +1162,16 @@ class AgentChat(Generic[StateT]):
         # records it there, so a client-managed payload that also bundled it would
         # land the same message in history twice.
         init = self._wire_init()
+        # If the turn raises, put back everything below (see _restore).
+        checkpoint = self._checkpoint()
         # Optimistically append the user message so it shows immediately; remember
         # the prior length so a turn that lands no reply (server-side failed/aborted)
         # can roll it back. This length-based rollback assumes turns are single-flight
         # — overlapping sends on one session would race on this list and corrupt it.
         message_count_before = len(self.messages)
+        # Streamed custom patches land on _custom as they arrive. Keep the
+        # pre-turn value so a turn that lands no reply can undo them.
+        custom_before = checkpoint.custom
         if inp.message:
             self.messages.append(inp.message)
 
@@ -1152,10 +1180,12 @@ class AgentChat(Generic[StateT]):
             inp=inp,
             init=init,
             run_turn=self._transport.run_turn,
-            commit_output=lambda raw: self._commit_output(raw=raw, message_count_before=message_count_before),
+            commit_output=lambda raw: self._commit_output(
+                raw=raw, message_count_before=message_count_before, custom_before=custom_before
+            ),
             commit_custom_patch=self._commit_custom_patch,
             accumulate_chunk=self._turn_accumulator.add,
-            on_turn_error=self._on_turn_error,
+            rollback=lambda: self._restore(checkpoint),
             chunks=chunks,
         )
 
@@ -1207,6 +1237,7 @@ class AgentChat(Generic[StateT]):
         # Optimistically append the user message so the local history reflects the
         # detached turn; the reply is retrieved later by polling the snapshot.
         message_count_before = len(self.messages)
+        custom_before = copy.deepcopy(self._custom)
         if inp.message:
             self.messages.append(inp.message)
 
@@ -1225,7 +1256,7 @@ class AgentChat(Generic[StateT]):
         # that snapshot. Abort stops the server turn but keeps the prompt —
         # it was still asked. Use chat(session_id=...) to resume from the last
         # completed turn.
-        self._update_from_output(raw=raw_output, message_count_before=message_count_before)
+        self._update_from_output(raw=raw_output, message_count_before=message_count_before, custom_before=custom_before)
 
         if not raw_output.snapshot_id:
             raise ValueError('detach did not return a snapshot_id.')
@@ -1296,6 +1327,11 @@ class AgentChat(Generic[StateT]):
         reconstructs the resume handle every request.
         """
         if self._transport.state_management == 'client':
+            # snapshot_id on an agent with no store is misuse. Send the id
+            # so the server rejects the init; a state blob would look like
+            # a brand-new session and the caller would never see why.
+            if self._resume_snapshot_id:
+                return AgentInit(snapshot_id=self._resume_snapshot_id)
             # No server store, so the client is the source of truth: ship the
             # full live state every turn.
             return AgentInit(state=self._session_state())
@@ -1314,29 +1350,73 @@ class AgentChat(Generic[StateT]):
         patch_list = patch.root if hasattr(patch, 'root') else patch
         self._custom = apply_json_patch(doc=self._custom, patch=patch_list)
 
-    def _commit_output(self, *, raw: AgentOutput, message_count_before: int) -> AgentResponse[StateT]:
-        """Folds a turn's final output into the session and builds the turn result."""
-        self._update_from_output(raw=raw, message_count_before=message_count_before)
-        response: AgentResponse[StateT] = AgentResponse(raw=raw, messages=list(self.messages), state=self.state)
-        if raw.finish_reason == AgentFinishReason.FAILED:
-            err = raw.error
-            raise AgentError(
-                message=err.message if err else 'Agent turn failed.',
-                status=err.status if err and err.status else 'UNKNOWN',
-                details=err.details if err else None,
-                state=self.state,
-                snapshot_id=self._snapshot_id,
-                response=response,
-            )
-        return response
+    def _commit_output(
+        self,
+        *,
+        raw: AgentOutput,
+        message_count_before: int,
+        custom_before: Any,  # noqa: ANN401
+    ) -> AgentResponse[StateT]:
+        """Folds a turn's final output into the session and builds the turn result.
 
-    def _on_turn_error(self, e: Exception) -> Exception:
-        return to_agent_error(
-            e,
-            messages=self.messages,
-            state=self.state,
+        A failed turn returns with the last good snapshot or state. The
+        caller reads why on ``.error`` and sends again from there.
+        """
+        self._update_from_output(raw=raw, message_count_before=message_count_before, custom_before=custom_before)
+        raw = self._with_resume_snapshot(raw)
+        return AgentResponse(raw=raw, messages=list(self.messages), state=self._response_state(raw))
+
+    def _with_resume_snapshot(self, raw: AgentOutput) -> AgentOutput:
+        """Put the last completed snapshot id on a failed or aborted turn that omitted one.
+
+        A new connection whose first turn fails has no snapshot of its own.
+        The chat is still on the previous completed one, and that is the
+        id the caller resumes from.
+        """
+        if raw.finish_reason in _NO_REPLY and raw.snapshot_id is None and self._resume_snapshot_id is not None:
+            return raw.model_copy(update={'snapshot_id': self._resume_snapshot_id})
+        return raw
+
+    def _response_state(self, raw: AgentOutput) -> StateT | None:
+        """Typed custom state for the response, or None when it can't be read.
+
+        Invalid custom state is itself the failed turn. Validating that
+        blob again would raise and hide the error the turn returned.
+        """
+        try:
+            return self.state
+        except ValidationError:
+            if raw.finish_reason not in _NO_REPLY:
+                raise
+            return None
+
+    def _checkpoint(self) -> _TurnCheckpoint:
+        """Everything a turn can change on the chat, taken before ``send`` touches it."""
+        return _TurnCheckpoint(
+            messages=list(self._messages),
+            custom=copy.deepcopy(self._custom),
+            artifacts=list(self._artifacts),
+            session_id=self._session_id,
             snapshot_id=self._snapshot_id,
+            resume_snapshot_id=self._resume_snapshot_id,
         )
+
+    def _restore(self, checkpoint: _TurnCheckpoint) -> None:
+        """Put the chat back where it was before a turn that raised.
+
+        Usually the raise comes before any output, so only the optimistic
+        prompt and streamed patches need undoing. But ``commit_output`` can
+        also raise after the output was folded in (e.g. the final custom
+        state fails ``state_schema``), so every field goes back, or the next
+        send would resume from a snapshot the local history doesn't have.
+        """
+        # In place: callers may hold a reference to chat.messages.
+        self._messages[:] = checkpoint.messages
+        self._custom = checkpoint.custom
+        self._artifacts = checkpoint.artifacts
+        self._session_id = checkpoint.session_id
+        self._snapshot_id = checkpoint.snapshot_id
+        self._resume_snapshot_id = checkpoint.resume_snapshot_id
 
     def _commit_custom_patch(self, patch: Any) -> StateT | None:  # noqa: ANN401
         """Applies a streamed custom-state patch and returns the new custom state."""
@@ -1363,27 +1443,34 @@ class AgentChat(Generic[StateT]):
             else:
                 self.artifacts.append(art)
 
-    def _update_from_output(self, *, raw: AgentOutput, message_count_before: int) -> None:
-        # message_count_before is the history length captured before this turn's
-        # optimistic user-message push, so a turn that lands no reply can roll
-        # that push back (see send()).
+    def _update_from_output(
+        self,
+        *,
+        raw: AgentOutput,
+        message_count_before: int,
+        custom_before: Any,  # noqa: ANN401
+    ) -> None:
+        # message_count_before and custom_before are the history length and
+        # custom state from before this turn, so a turn that lands no reply
+        # can roll back the optimistic user message and any streamed custom
+        # patches (see send()).
         if raw.snapshot_id is not None:
             self._snapshot_id = raw.snapshot_id
             # A failed/aborted row is inspectable, not a place the next
             # send() can resume from. Keep the last completed id.
             # Everything else was asked — including a blocked refusal —
             # so the prompt stays and send continues from that snapshot.
-            if raw.finish_reason not in {
-                AgentFinishReason.FAILED,
-                AgentFinishReason.ABORTED,
-            }:
+            if raw.finish_reason not in _NO_REPLY:
                 self._resume_snapshot_id = raw.snapshot_id
 
-        if raw.finish_reason in (AgentFinishReason.FAILED, AgentFinishReason.ABORTED):
+        if raw.finish_reason in _NO_REPLY:
             # No reply landed this turn, so drop the optimistic user message
             # rather than strand it unanswered; the next turn resumes from before
-            # it. The durable snapshot still holds the truth.
+            # it. The durable snapshot still holds the truth. Its custom state
+            # is the pre-turn one too; a client-managed output that carries
+            # state overwrites this below.
             self._rollback_optimistic(message_count_before)
+            self._custom = custom_before
         else:
             self._append_turn_messages(raw)
 

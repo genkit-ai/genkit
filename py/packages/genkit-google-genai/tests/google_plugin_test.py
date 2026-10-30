@@ -25,9 +25,17 @@ from dataclasses import dataclass
 from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
-from genkit_google_genai._google import _inject_attribution_headers, _plugin_client, googleai_name, vertexai_name
+from genkit_google_genai._evaluators._evaluation import VertexAIEvaluationMetricType
+from genkit_google_genai._google import (
+    GenaiModels,
+    _inject_attribution_headers,
+    _plugin_client,
+    googleai_name,
+    vertexai_name,
+)
 from genkit_google_genai._models._embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
@@ -37,14 +45,15 @@ from genkit_google_genai._models._gemini import (
 )
 from google import genai
 from google.auth.credentials import Credentials
-from google.auth.exceptions import DefaultCredentialsError
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.genai.errors import APIError
 from google.genai.types import HttpOptions
 from pydantic import ValidationError
 
 from genkit import Document, Genkit, GenkitError, Message, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.model import ModelInfo, ModelRequest
-from genkit.plugin_api import GENKIT_CLIENT_HEADER, ActionKind
+from genkit.model import BackgroundModel, ModelInfo, ModelRequest
+from genkit.plugin_api import GENKIT_USER_AGENT, Action, ActionKind
 
 
 async def _get_runtime_client(plugin: GoogleAI | VertexAI) -> object:
@@ -158,15 +167,15 @@ async def test_googleai_initialize(mock_client_cls: MagicMock) -> None:
 
     # init returns known models and embedders
     assert len(result) > 0, 'Should initialize with known models and embedders'
-    assert all(action.action_type is not None for action in result), 'All actions should have an action_type'
+    assert all(action.kind is not None for action in result), 'All actions should have a kind'
     assert all(hasattr(action, 'name') for action in result), 'All actions should have a name'
     assert all(action.name.startswith('googleai/') for action in result), (
         "All actions should be namespaced with 'googleai/'"
     )
 
     # Verify we have both models and embedders
-    model_actions = [a for a in result if a.action_type == ActionKind.MODEL]
-    embedder_actions = [a for a in result if a.action_type == ActionKind.EMBEDDER]
+    model_actions = [a for a in result if a.kind == ActionKind.MODEL]
+    embedder_actions = [a for a in result if a.kind == ActionKind.EMBEDDER]
     assert len(model_actions) > 0, 'Should have at least one model'
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
@@ -327,7 +336,7 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
         MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-2-preview'),
         MockModel(supported_actions=['embedContent'], name='models/gemini-embedding-001'),
         MockModel(supported_actions=['generateContent'], name='models/gemini-2.0-flash-tts'),  # TTS
-        MockModel(supported_actions=['generateVideos'], name='models/veo-2.0-generate-001'),  # Veo
+        MockModel(supported_actions=['generateVideos'], name='models/veo-3.1-generate-preview'),  # Veo
     ]
 
     mock_client = MagicMock()
@@ -343,24 +352,27 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     # Check Embedder
     action2 = next(a for a in result if a.name == googleai_name('gemini-embedding-001'))
     assert action2 is not None
-    assert action2.action_type == ActionKind.EMBEDDER
+    assert action2.kind == ActionKind.EMBEDDER
     assert action2.metadata is not None
-    assert action2.metadata['embedder']['dimensions'] == 3072
-    assert action2.metadata['embedder']['supports']['input'] == ['text']
+    embedder2_meta = cast(dict[str, Any], action2.metadata['embedder'])
+    assert embedder2_meta['dimensions'] == 3072
+    assert embedder2_meta['supports']['input'] == ['text']
 
     action2b = next(a for a in result if a.name == googleai_name('gemini-embedding-2'))
     assert action2b is not None
-    assert action2b.action_type == ActionKind.EMBEDDER
+    assert action2b.kind == ActionKind.EMBEDDER
     assert action2b.metadata is not None
-    assert action2b.metadata['embedder']['dimensions'] == 3072
-    assert action2b.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
+    embedder2b_meta = cast(dict[str, Any], action2b.metadata['embedder'])
+    assert embedder2b_meta['dimensions'] == 3072
+    assert embedder2b_meta['supports']['input'] == ['text', 'image', 'video']
 
     action2c = next(a for a in result if a.name == googleai_name('gemini-embedding-2-preview'))
     assert action2c is not None
-    assert action2c.action_type == ActionKind.EMBEDDER
+    assert action2c.kind == ActionKind.EMBEDDER
     assert action2c.metadata is not None
-    assert action2c.metadata['embedder']['dimensions'] == 3072
-    assert action2c.metadata['embedder']['supports']['input'] == ['text', 'image', 'video']
+    embedder2c_meta = cast(dict[str, Any], action2c.metadata['embedder'])
+    assert embedder2c_meta['dimensions'] == 3072
+    assert embedder2c_meta['supports']['input'] == ['text', 'image', 'video']
 
     # Check TTS
     action3 = next(a for a in result if a.name == googleai_name('gemini-2.0-flash-tts'))
@@ -370,9 +382,9 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
     # assert action1.config_schema == GeminiConfig
 
     # Check Veo
-    action4 = next((a for a in result if a.name == googleai_name('veo-2.0-generate-001')), None)
+    action4 = next((a for a in result if a.name == googleai_name('veo-3.1-generate-preview')), None)
     assert action4 is not None
-    assert action4.action_type == ActionKind.BACKGROUND_MODEL
+    assert action4.kind == ActionKind.BACKGROUND_MODEL
 
 
 @pytest.mark.parametrize(
@@ -381,102 +393,109 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
         (
             None,
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {},
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'existing-header': 'value'}},
             {
                 'existing-header': 'value',
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'x-goog-api-client': 'initial-client'}},
             {
-                'x-goog-api-client': f'initial-client {GENKIT_CLIENT_HEADER}',
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': f'initial-client {GENKIT_USER_AGENT}',
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'user-agent': 'initial-agent'}},
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': f'initial-agent {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': f'initial-agent {GENKIT_USER_AGENT}',
             },
         ),
         (
             {'headers': {'x-goog-api-client': 'old', 'user-agent': 'old-ua'}},
             {
-                'x-goog-api-client': f'old {GENKIT_CLIENT_HEADER}',
-                'user-agent': f'old-ua {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': f'old {GENKIT_USER_AGENT}',
+                'user-agent': f'old-ua {GENKIT_USER_AGENT}',
             },
         ),
         (
             HttpOptions(),
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             HttpOptions(headers={'other': 'value'}),
             {
                 'other': 'value',
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             HttpOptions(headers={'x-goog-api-client': 'initial'}),
             {
-                'x-goog-api-client': f'initial {GENKIT_CLIENT_HEADER}',
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': f'initial {GENKIT_USER_AGENT}',
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             HttpOptions(headers={'user-agent': 'initial-u'}),
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': f'initial-u {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': f'initial-u {GENKIT_USER_AGENT}',
             },
         ),
         (
             HttpOptions(headers={'x-goog-api-client': 'pre', 'user-agent': 'pre-u'}),
             {
-                'x-goog-api-client': f'pre {GENKIT_CLIENT_HEADER}',
-                'user-agent': f'pre-u {GENKIT_CLIENT_HEADER}',
+                'x-goog-api-client': f'pre {GENKIT_USER_AGENT}',
+                'user-agent': f'pre-u {GENKIT_USER_AGENT}',
             },
         ),
         (
             HttpOptions(timeout=10),
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'timeout': 5},
             {
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
             {'headers': {'one': '1'}},
             {
                 'one': '1',
-                'x-goog-api-client': GENKIT_CLIENT_HEADER,
-                'user-agent': GENKIT_CLIENT_HEADER,
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
+            },
+        ),
+        (
+            HttpOptions(headers={'X-Goog-Api-Client': 'custom-client', 'User-Agent': 'custom-agent'}),
+            {
+                'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
+                'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
             },
         ),
     ],
@@ -590,7 +609,7 @@ async def test_vertexai_initialize(vertexai_plugin_instance: VertexAI) -> None:
     result = await plugin.list_actions()
 
     assert len(result) > 0, 'Should initialize with known models and embedders'
-    assert all(action.action_type is not None for action in result), 'All actions should have an action_type'
+    assert all(action.kind is not None for action in result), 'All actions should have a kind'
 
     # ... (rest of test unchanged)
 
@@ -600,8 +619,8 @@ async def test_vertexai_initialize(vertexai_plugin_instance: VertexAI) -> None:
     )
 
     # Verify we have both models and embedders
-    model_actions = [a for a in result if a.action_type == ActionKind.MODEL]
-    embedder_actions = [a for a in result if a.action_type == ActionKind.EMBEDDER]
+    model_actions = [a for a in result if a.kind == ActionKind.MODEL]
+    embedder_actions = [a for a in result if a.kind == ActionKind.EMBEDDER]
     assert len(model_actions) > 0, 'Should have at least one model'
     assert len(embedder_actions) > 0, 'Should have at least one embedder'
 
@@ -741,7 +760,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     m3.description = 'Imagen'
 
     m4 = MagicMock()
-    m4.name = 'publishers/google/models/veo-2.0-generate-001'
+    m4.name = 'publishers/google/models/veo-3.1-generate-001'
     m4.supported_actions = ['generateVideos']  # Veo uses generateVideos
     m4.description = 'Veo'
 
@@ -762,7 +781,7 @@ async def test_vertexai_list_actions(vertexai_plugin_instance: VertexAI) -> None
     assert not any(a.name == vertexai_name('imagen-3.0-generate-001') for a in result)
 
     # Verify Veo
-    action4 = next(a for a in result if a.name == vertexai_name('veo-2.0-generate-001'))
+    action4 = next(a for a in result if a.name == vertexai_name('veo-3.1-generate-001'))
     assert action4 is not None
     # from genkit_google_genai._models._veo import VeoConfigSchema
     # assert action4.config_schema == VeoConfigSchema
@@ -792,7 +811,7 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
             mock_model('publishers/google/models/gemini-embedding-001'),
             mock_model('publishers/google/models/gemini-embedding-2'),
             mock_model('publishers/google/models/imagen-3.0-generate-002'),
-            mock_model('publishers/google/models/veo-2.0-generate-001'),
+            mock_model('publishers/google/models/veo-3.1-generate-001'),
         ],
     )
     vertexai_plugin_instance._runtime_client = lambda: mock_client
@@ -803,12 +822,12 @@ async def test_vertexai_list_actions_without_supported_actions(vertexai_plugin_i
     # Gemini text model discovered despite supported_actions=None.
     assert vertexai_name('gemini-2.5-pro') in names
     # Veo discovered; Imagen is not advertised.
-    assert vertexai_name('veo-2.0-generate-001') in names
+    assert vertexai_name('veo-3.1-generate-001') in names
     assert vertexai_name('imagen-3.0-generate-002') not in names
 
     # gemini-embedding-001 is registered as an embedder, not a gemini model.
     embedder = next(a for a in result if a.name == vertexai_name('gemini-embedding-001'))
-    assert embedder.action_type == ActionKind.EMBEDDER
+    assert embedder.kind == ActionKind.EMBEDDER
     # Non-callable embedders over-listed by the catalog must not leak into Gemini text models.
     assert vertexai_name('gemini-embedding-2') not in names
 
@@ -818,10 +837,11 @@ async def test_googleai_resolve_background_model(googleai_plugin_instance: Googl
     """Test resolve action for background model."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.BACKGROUND_MODEL, name='veo-2.0-generate-001')
-    assert action is not None
+    action_model = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'veo-3.1-generate-preview')
+    assert isinstance(action_model, BackgroundModel)
+    action = action_model.start_action
     assert action.kind == ActionKind.BACKGROUND_MODEL
-    assert action.name == googleai_name('veo-2.0-generate-001')
+    assert action.name == googleai_name('veo-3.1-generate-preview')
 
 
 @pytest.mark.asyncio
@@ -829,10 +849,14 @@ async def test_googleai_resolve_check_operation(googleai_plugin_instance: Google
     """Test resolve action for check operation."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.CHECK_OPERATION, name='veo-2.0-generate-001/check')
+    # The plugin resolves only the start key; the registry files check with it.
+    with patch('genkit_google_genai._google._list_genai_models', new=AsyncMock(return_value=GenaiModels())):
+        action = await Genkit(plugins=[plugin])._registry.resolve_action_by_key(
+            '/check-operation/googleai/veo-3.1-generate-preview/check'
+        )
     assert action is not None
     assert action.kind == ActionKind.CHECK_OPERATION
-    assert action.name == googleai_name('veo-2.0-generate-001/check')
+    assert action.name == googleai_name('veo-3.1-generate-preview/check')
 
 
 @pytest.mark.asyncio
@@ -872,21 +896,19 @@ async def test_vertexai_listed_evaluator_metadata_matches_resolved(vertexai_plug
     _set_async_model_list(mock_client, [])
     plugin._runtime_client = lambda: mock_client
 
-    listed = {a.name: a for a in await plugin.list_actions() if a.action_type == ActionKind.EVALUATOR}
+    listed = {a.name: a for a in await plugin.list_actions() if a.kind == ActionKind.EVALUATOR}
 
-    assert len(listed) == 8
+    assert sorted(listed) == sorted(vertexai_name(m.lower()) for m in VertexAIEvaluationMetricType)
     for name, meta in listed.items():
         action = await plugin.resolve(action_type=ActionKind.EVALUATOR, name=name.removeprefix('vertexai/'))
         assert action is not None
         assert meta.metadata is not None
         assert meta.metadata['evaluator'] == action.metadata['evaluator']
-    assert listed[vertexai_name('fluency')].metadata == {
-        'evaluator': {
-            'evaluatorDefinition': 'Assesses the language mastery of an output',
-            'evaluatorDisplayName': 'Fluency',
-            'evaluatorIsBilled': True,
-            'label': vertexai_name('fluency'),
-        }
+    assert listed[vertexai_name('fluency')].metadata['evaluator'] == {
+        'evaluatorDefinition': 'Assesses the language mastery of an output',
+        'evaluatorDisplayName': 'Fluency',
+        'evaluatorIsBilled': True,
+        'label': vertexai_name('fluency'),
     }
 
 
@@ -936,6 +958,7 @@ async def test_lazy_client_credential_failure_is_unauthenticated_in_action_body(
         plugin = VertexAI()
         embedder_action = await plugin.resolve(ActionKind.EMBEDDER, vertexai_name('text-embedding-005'))
         assert embedder_action is not None
+        assert isinstance(embedder_action, Action)
 
         with pytest.raises(GenkitError) as raised:
             await embedder_action.run(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
@@ -953,3 +976,103 @@ async def test_lazy_client_unknown_failure_stays_raw() -> None:
             _plugin_client({'vertexai': False, 'api_key': 'k'})
 
     assert raised.value is boom
+
+
+def test_googleai_positional_api_key_raises_type_error() -> None:
+    """GoogleAI('my-key') raises TypeError; the key is passed as api_key=."""
+    with pytest.raises(TypeError):
+        GoogleAI('my-key')  # type: ignore[misc]
+
+
+def test_vertexai_positional_project_raises_type_error() -> None:
+    """VertexAI('my-project') raises TypeError instead of treating the project as credentials."""
+    with pytest.raises(TypeError):
+        VertexAI('my-project')  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_googleai_init_rejected_key_is_unauthenticated(googleai_plugin_instance: GoogleAI) -> None:
+    """A bad API key fails the model listing in init with UNAUTHENTICATED, not a raw SDK error."""
+    message = 'API key not valid. Please pass a valid API key.'
+    error_info = {
+        '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+        'reason': 'API_KEY_INVALID',
+        'domain': 'googleapis.com',
+        'metadata': {'service': 'generativelanguage.googleapis.com'},
+    }
+    localized = {'@type': 'type.googleapis.com/google.rpc.LocalizedMessage', 'locale': 'en-US', 'message': message}
+    details = [error_info, localized]
+    rejected = APIError(
+        400, {'error': {'code': 400, 'message': message, 'status': 'INVALID_ARGUMENT', 'details': details}}
+    )
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=rejected)
+    googleai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await googleai_plugin_instance.init()
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.cause is rejected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('failure', 'status'),
+    [
+        (APIError(503, {'error': {'code': 503, 'message': 'overloaded', 'status': 'UNAVAILABLE'}}), 'UNAVAILABLE'),
+        (RefreshError('invalid_grant: Token has been expired or revoked.'), 'UNAUTHENTICATED'),
+        (httpx.ConnectError('[Errno 61] Connection refused'), 'UNAVAILABLE'),
+    ],
+)
+async def test_vertexai_init_classifies_model_listing_failure(
+    vertexai_plugin_instance: VertexAI, failure: Exception, status: str
+) -> None:
+    """Model listing in init maps provider, credential, and connection failures like a generate call."""
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=failure)
+    vertexai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await vertexai_plugin_instance.init()
+
+    assert raised.value.status == status
+    assert raised.value.cause is failure
+    assert raised.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_vertexai_init_listing_unknown_failure_stays_raw(vertexai_plugin_instance: VertexAI) -> None:
+    """A listing failure that is not a provider, credential, or connection error keeps its own type."""
+    boom = RuntimeError('SDK bug')
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=boom)
+    vertexai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(RuntimeError) as raised:
+        await vertexai_plugin_instance.init()
+
+    assert raised.value is boom
+
+
+async def _pager_failing_after(first: Any, failure: BaseException) -> AsyncIterator[Any]:
+    yield first
+    raise failure
+
+
+@pytest.mark.asyncio
+async def test_googleai_init_classifies_failure_while_paging_models(googleai_plugin_instance: GoogleAI) -> None:
+    """An API error the pager raises after the first page is classified too."""
+    first = MagicMock()
+    first.name = 'models/gemini-2.5-flash'
+    first.supported_actions = ['generateContent']
+    denied = APIError(403, {'error': {'code': 403, 'message': 'denied', 'status': 'PERMISSION_DENIED'}})
+    mock_client = MagicMock()
+    mock_client.aio.models.list = AsyncMock(side_effect=lambda: _pager_failing_after(first, denied))
+    googleai_plugin_instance._runtime_client = lambda: mock_client
+
+    with pytest.raises(GenkitError) as raised:
+        await googleai_plugin_instance.init()
+
+    assert raised.value.status == 'PERMISSION_DENIED'
+    assert raised.value.cause is denied

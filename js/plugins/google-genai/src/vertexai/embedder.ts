@@ -22,11 +22,12 @@ import {
   type EmbedderReference,
 } from 'genkit/embedder';
 import { embedder as pluginEmbedder } from 'genkit/plugin';
-import { isKnownKey } from '../common/utils.js';
-import { embedContent } from './client.js';
+import { toGeminiMessage } from '../common/converters.js';
+import { isKnownKey, warnDroppedConfigField } from '../common/utils.js';
+import { embedContent, embedPredict } from './client.js';
 import {
   ClientOptions,
-  EmbedContentRequest,
+  EmbedPredictRequest,
   EmbeddingInstance,
   EmbeddingPrediction,
   EmbeddingResult,
@@ -108,8 +109,46 @@ export const KNOWN_MODELS = {
     dimensions: 3072,
     supports: { input: ['text'] },
   }),
+  // Uses the `:embedContent` method (see usesEmbedContent).
+  'gemini-embedding-2': commonRef('gemini-embedding-2', {
+    dimensions: 3072,
+    supports: { input: ['text', 'image', 'video'] },
+  }),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as embedders, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Remove a model once the server returns
+// 404 for it.
+const HIDDEN_MODELS = {
+  // Older model (retires Apr 1 2027). Listed so its routing is explicit: it
+  // uses `:predict`, while newer embedders may use `:embedContent` (like
+  // gemini-embedding-2). If the default for unlisted names ever changes,
+  // this one must stay on `:predict`.
+  'text-embedding-004': commonRef('text-embedding-004', {
+    dimensions: 768,
+    supports: { input: ['text'] },
+  }),
+} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
+
+/**
+ * Whether a model uses the `:embedContent` method (one content with
+ * interleaved text and media parts per request) instead of `:predict`.
+ * Newer Gemini embedders (gemini-embedding-2 and later, including unlisted
+ * ones) use it; gemini-embedding-001, text-embedding-* and
+ * multimodalembedding@001 use `:predict`.
+ */
+function usesEmbedContent(name: string): boolean {
+  return (
+    name.startsWith('gemini-embedding-') && name !== 'gemini-embedding-001'
+  );
+}
 
 export type EmbedderModelName = `${string}embedding${string}`;
 export function isEmbedderName(value: string): value is EmbedderModelName {
@@ -122,8 +161,8 @@ export function model(
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    const known = KNOWN_MODELS[name];
+  if (isKnownKey(name, ALL_MODELS)) {
+    const known = ALL_MODELS[name];
     return embedderRef({
       name: known.name,
       info: known.info,
@@ -158,8 +197,40 @@ export function listKnownModels(
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
 ) {
-  return Object.keys(KNOWN_MODELS).map((name) =>
+  return Object.keys(ALL_MODELS).map((name) =>
     defineEmbedder(name, clientOptions, pluginOptions)
+  );
+}
+
+/**
+ * Embeds each document with the `:embedContent` method: one request per
+ * document, with its text and media as parts.
+ */
+async function embedWithEmbedContent(
+  modelVersion: string,
+  docs: Document[],
+  options: EmbeddingConfig | undefined,
+  clientOptions: ClientOptions
+): Promise<EmbeddingResult[]> {
+  if (options?.taskType !== undefined) {
+    // The model has no task type field; the task goes in the text instead.
+    warnDroppedConfigField(modelVersion, 'taskType');
+  }
+  if (options?.title !== undefined) {
+    warnDroppedConfigField(modelVersion, 'title');
+  }
+  return Promise.all(
+    docs.map(async (doc) => {
+      const response = await embedContent(
+        modelVersion,
+        {
+          content: toGeminiMessage({ role: 'user', content: doc.content }),
+          outputDimensionality: options?.outputDimensionality,
+        },
+        clientOptions
+      );
+      return { embedding: response.embedding.values };
+    })
   );
 }
 
@@ -177,7 +248,19 @@ export function defineEmbedder(
       info: ref.info!,
     },
     async (request) => {
-      const embedContentRequest: EmbedContentRequest = {
+      const modelVersion = extractVersion(ref);
+      if (usesEmbedContent(modelVersion)) {
+        return {
+          embeddings: await embedWithEmbedContent(
+            modelVersion,
+            request.input,
+            request.options,
+            clientOptions
+          ),
+        };
+      }
+
+      const embedPredictRequest: EmbedPredictRequest = {
         instances: request.input.map((doc: Document) =>
           toEmbeddingInstance(ref, doc, request.options)
         ),
@@ -186,9 +269,9 @@ export function defineEmbedder(
         },
       };
 
-      const response = await embedContent(
-        extractVersion(ref),
-        embedContentRequest,
+      const response = await embedPredict(
+        modelVersion,
+        embedPredictRequest,
         clientOptions
       );
 
@@ -335,4 +418,4 @@ function isMultiModalEmbedder(
   return (input.includes('text') && input.includes('image')) || false;
 }
 
-export const TEST_ONLY = { KNOWN_MODELS };
+export const TEST_ONLY = { KNOWN_MODELS, HIDDEN_MODELS, ALL_MODELS };

@@ -16,6 +16,7 @@
 
 """Unit tests for Part factory methods and property getters."""
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -38,7 +39,6 @@ from genkit._core._model import (
     AgentResult,
     AgentStreamChunk,
     Artifact,
-    Candidate,
     EmbedRequest,
     GenerateActionOptions,
     ModelRequest,
@@ -48,7 +48,6 @@ from genkit._core._model import (
     SessionSnapshot,
     SessionState,
     as_artifact,
-    as_candidate,
     as_document,
     as_message,
     as_model_request,
@@ -63,7 +62,6 @@ from genkit._core._typing import (
     AgentResult as AgentResultData,
     AgentStreamChunk as AgentStreamChunkData,
     Artifact as ArtifactData,
-    Candidate as CandidateData,
     DocumentData,
     EmbedRequest as EmbedRequestData,
     FinishReason,
@@ -459,17 +457,6 @@ def test_agent_stream_chunk_keeps_model_chunk_index_and_output() -> None:
     assert wrap.model_chunk.output == 'parsed'
 
 
-def test_candidate_message_is_message() -> None:
-    cand = Candidate(
-        index=0,
-        message=Message(role='model', content=[Part.from_text('hi')]),
-        finish_reason=FinishReason.STOP,
-    )
-    assert type(cand.message) is Message
-    assert type(cand.message.content[0]) is Part
-    assert cand.message.text == 'hi'
-
-
 def test_part_from_text_round_trip() -> None:
     """Dumping and re-parsing a factory-built part keeps the payload."""
     p = Part.from_text('hello', metadata={'source': 'user'})
@@ -665,19 +652,29 @@ def test_model_response_chunk_ctor_keeps_index_zero() -> None:
     assert as_model_response_chunk({'content': [{'text': 'hi'}], 'index': 0}).index == 0
 
 
-def test_model_response_rejects_a_two_kind_part_already_on_candidate() -> None:
-    cand = Candidate(
-        index=0,
-        message=Message(role='model', content=[Part.from_text('hi')]),
-        finish_reason=FinishReason.STOP,
-    )
-    cand.message.content[0] = Part.model_construct(text='caption', media=Media(url='https://y'))
-    with pytest.raises(ValidationError, match='exactly one'):
-        ModelResponse(
-            message=Message(role='model', content=[Part.from_text('ok')]),
-            finish_reason=FinishReason.STOP,
-            candidates=[cand],
-        )
+def test_model_response_drops_legacy_candidates_on_load() -> None:
+    """A JS response, stored trace or snapshot that still has candidates loads; the list is dropped."""
+    wire = {
+        'message': {'role': 'model', 'content': [{'text': 'Smoked Salmon Tartine'}]},
+        'finishReason': 'stop',
+        'candidates': [
+            {
+                'index': 0,
+                'message': {'role': 'model', 'content': [{'text': 'Smoked Salmon Tartine'}]},
+                'finishReason': 'stop',
+            }
+        ],
+    }
+    resp = ModelResponse.model_validate(wire)
+    assert resp.text == 'Smoked Salmon Tartine'
+    assert 'candidates' not in resp.model_dump(by_alias=True)
+    assert ModelResponse.model_validate_json(json.dumps(wire)).text == 'Smoked Salmon Tartine'
+
+
+def test_model_response_still_rejects_other_unknown_keys() -> None:
+    """Only candidates is tolerated; other unknown keys still fail extra='forbid'."""
+    with pytest.raises(ValidationError):
+        ModelResponse.model_validate({'finishReason': 'stop', 'choices': []})
 
 
 def test_model_response_rejects_a_two_kind_part_already_on_request() -> None:
@@ -697,17 +694,6 @@ def test_require_model_response_rejects_a_two_kind_part_already_on_message() -> 
     resp.message.content[0] = Part.model_construct(text='caption', media=Media(url='https://y'))
     with pytest.raises(ValidationError, match='exactly one'):
         require_model_response(raw=resp, name='scriptedModel')
-
-
-def test_as_candidate_rebuilds_and_keeps_message_text() -> None:
-    cand = Candidate(
-        index=0,
-        message=Message(role='model', content=[Part.from_text('hi')]),
-        finish_reason=FinishReason.STOP,
-    )
-    walked = as_candidate(cand)
-    assert walked is not cand
-    assert walked.message.content[0].text == 'hi'
 
 
 def test_as_model_request_rebuilds_and_keeps_message_text() -> None:
@@ -870,7 +856,6 @@ def test_veneer_has_every_generated_field() -> None:
         (Message, MessageData),
         (Document, DocumentData),
         (Artifact, ArtifactData),
-        (Candidate, CandidateData),
         (ModelResponseChunk, ModelResponseChunkData),
         (Resume, ResumeData),
         (EmbedRequest, EmbedRequestData),

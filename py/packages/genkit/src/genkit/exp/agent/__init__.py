@@ -24,7 +24,7 @@ from genkit_google_genai import GoogleAI
 ai = Genkit(plugins=[GoogleAI()])
 agent = ai.define_agent(
     name='weatherAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Weather assistant.',
     store=InMemorySessionStore(),
 )
@@ -36,14 +36,13 @@ from genkit._ai._agents._client import (
     AgentChat,
     AgentChunk,
     AgentClient,
-    AgentError,
     AgentInterrupt,
     AgentResponse,
     AgentTransport,
     AgentTurn,
     DetachedTask,
 )
-from genkit._ai._agents._runtime import AgentFn, AgentInitError, SessionRunner
+from genkit._ai._agents._runtime import AgentContext, AgentFn, AgentInitError, SessionRunner
 from genkit._ai._agents._session import (
     Session,
     SessionStore,
@@ -95,7 +94,6 @@ __all__ = [
     'AgentChat',
     'AgentTurn',
     'AgentChunk',
-    'AgentError',
     'AgentInitError',
     'AgentInterrupt',
     'AgentResponse',
@@ -105,6 +103,7 @@ __all__ = [
     'remote_agent',
     # Agent function protocol
     'AgentFn',
+    'AgentContext',
     'SessionRunner',
     'TurnContext',
     'TurnResult',
