@@ -1638,7 +1638,7 @@ def test_pop_extra_drops_none_keeps_explicit_empty_and_list_items() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('key', ['tools', 'Tools'])
+@pytest.mark.parametrize('key', ['tools', 'Tools', 'TOOLS', 't_o_o_l_s'])
 async def test_generate_operation_deep_research_extra_tools_with_built_tools_raises(googleai: Genkit, key: str) -> None:
     """`code_execution=True` plus `extra={'tools': [...]}` raises instead of dropping code_execution; no job starts."""
     patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
@@ -1747,11 +1747,11 @@ async def test_interactions_config_forms_advertise_no_additional_properties(name
 
 
 @pytest.mark.parametrize('config_class', [AntigravityConfig, LyriaConfig, DeepResearchConfig])
-@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan')])
+@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan'), 1e306, True, False])
 def test_interactions_config_timeout_must_be_positive_finite_seconds(
     config_class: type[BaseModel], timeout: float
 ) -> None:
-    """`timeout=0`, negative, inf, and NaN fail validation on all three configs."""
+    """0, negative, inf, NaN, a value whose ms overflow, and bool fail validation on all three configs."""
     with pytest.raises(ValidationError, match='timeout must be a positive, finite number of seconds'):
         config_class.model_validate({'timeout': timeout})
 
@@ -1769,7 +1769,7 @@ async def test_generate_antigravity_zero_timeout_raises_and_sends_nothing(google
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('seconds', 'ms'), [(30, 30000.0), (1.5, 1500.0), (0.0001, 1.0)])
+@pytest.mark.parametrize(('seconds', 'ms'), [(30, 30000.0), (1.5, 1500.0), (2.007, 2007.0), (0.0001, 1.0)])
 async def test_generate_lyria_timeout_seconds_become_client_milliseconds(
     googleai: Genkit, seconds: float, ms: float
 ) -> None:
@@ -1785,15 +1785,72 @@ async def test_generate_lyria_timeout_seconds_become_client_milliseconds(
 
 
 @pytest.mark.asyncio
-async def test_check_operation_deep_research_zero_timeout_raises(googleai: Genkit) -> None:
-    """`check_operation(config={'timeout': 0})` raises like the model config does; nothing is polled."""
-    patcher, _, get_calls, _ = patch_interactions(
+@pytest.mark.parametrize('timeout', [0, -1, 'abc', [1], True, 1e306])
+@pytest.mark.parametrize('call', ['check', 'cancel'])
+async def test_deep_research_check_and_cancel_bad_timeout_raise(googleai: Genkit, call: str, timeout: object) -> None:
+    """A bad `config['timeout']` on check or cancel raises INVALID_ARGUMENT, like the model config; nothing is sent."""
+    patcher, _, get_calls, cancel_calls = patch_interactions(
         'genkit_google_genai._models._deep_research', get_result={'id': 'dr-old', 'status': 'in_progress'}
     )
     saved = Operation.model_validate({'id': 'dr-old', 'done': False, 'action': _DEEP_RESEARCH_KEY})
+    run = googleai.check_operation if call == 'check' else googleai.cancel_operation
     with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.check_operation(saved, config={'timeout': 0})
+        await run(saved, config={'timeout': timeout})
 
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert 'timeout must be a positive, finite number of seconds' in str(raised.value)
     assert get_calls == []
+    assert cancel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_check_operation_deep_research_numeric_string_timeout_is_seconds(googleai: Genkit) -> None:
+    """`check_operation(config={'timeout': '5'})` still reads the string as a number, now seconds."""
+    captured: dict[str, Any] = {}
+    patcher, _, get_calls, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research',
+        get_result={'id': 'dr-old', 'status': 'in_progress'},
+        captured=captured,
+    )
+    saved = Operation.model_validate({'id': 'dr-old', 'done': False, 'action': _DEEP_RESEARCH_KEY})
+    with patcher:
+        await googleai.check_operation(saved, config={'timeout': '5'})
+
+    assert get_calls == ['dr-old']
+    assert captured['client_options'].timeout == 5000.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('config', 'built'),
+    [
+        ({'mcp_servers': [{'name': 'docs', 'url': 'https://mcp.example'}]}, 'mcp_server'),
+        ({'file_search_store_names': ['stores/one']}, 'file_search'),
+        ({'google_search': True, 'url_context': True}, 'google_search, url_context'),
+    ],
+)
+async def test_generate_operation_deep_research_extra_tools_with_other_built_tools_raises(
+    googleai: Genkit, config: dict[str, Any], built: str
+) -> None:
+    """MCP, file search, and search tools collide with `extra['tools']` the same way code_execution does."""
+    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
+    with patcher, pytest.raises(GenkitError) as raised:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH, prompt='q', config={**config, 'extra': {'tools': [{'type': 'url_context'}]}}
+        )
+
+    assert f'would replace the tools built from config ({built})' in str(raised.value)
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_deep_research_extra_empty_tools_with_built_tools_raises(googleai: Genkit) -> None:
+    """`extra={'tools': []}` would also wipe the built list, so it raises rather than sending no tools."""
+    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
+    with patcher, pytest.raises(GenkitError) as raised:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH, prompt='q', config={'code_execution': True, 'extra': {'tools': []}}
+        )
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert create_calls == []

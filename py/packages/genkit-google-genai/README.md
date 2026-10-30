@@ -234,6 +234,10 @@ whole list, so it raises `INVALID_ARGUMENT` when a declared tool setting
 (`google_search`, `code_execution`, `mcp_servers`, ...) also builds tools. With
 no declared tool settings it is sent as written.
 
+`timeout` on these three configs (and in Deep Research's `check_operation` /
+`cancel_operation` `config`) is the HTTP timeout in seconds. It used to be
+milliseconds: `config={'timeout': 30000}` becomes `config={'timeout': 30}`.
+
 ```python
 op = await ai.generate_operation(
     model='googleai/deep-research-preview-04-2026',

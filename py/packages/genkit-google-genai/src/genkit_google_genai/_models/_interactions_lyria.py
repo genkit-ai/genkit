@@ -39,6 +39,7 @@ from genkit_google_genai._models._interactions_utils import (
     lowercase_choice_list,
     partition_keys,
     pop_extra,
+    reject_bool_timeout,
     remove_client_option_overrides,
     require_interaction_steps,
 )
@@ -59,8 +60,9 @@ class LyriaConfig(GenkitConfig):
     Unknown keys are rejected. An API field this class doesn't declare goes in
     ``extra``, which is deep-merged into the create body.
 
-    ``timeout`` is seconds, the same unit as ``GoogleAI(timeout=...)``. It was
-    milliseconds before, so ``timeout=30000`` becomes ``timeout=30``.
+    ``timeout`` is seconds, the Python convention (httpx, requests, the OpenAI
+    and Anthropic SDKs). It was milliseconds before, so ``timeout=30000``
+    becomes ``timeout=30``.
     """
 
     base_url: str | None = None
@@ -69,6 +71,12 @@ class LyriaConfig(GenkitConfig):
     custom_headers: dict[str, str] | None = None
     response_modalities: list[ResponseModality] | None = None
     extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
 
     @field_validator('timeout')
     @classmethod

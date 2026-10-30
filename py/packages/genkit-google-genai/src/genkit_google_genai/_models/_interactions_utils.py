@@ -86,29 +86,51 @@ def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key not in CLIENT_OPTION_KEYS}
 
 
-def check_timeout_seconds(value: float | None) -> float | None:
-    """Raise ``ValueError`` unless ``value`` is None or a positive, finite number of seconds.
+def check_timeout_seconds(value: object) -> float | None:
+    """Return ``value`` as float seconds, or raise ``ValueError`` unless it is None or positive and finite.
 
-    Same rule as ``GoogleAI(timeout=...)``: 0 would be an instant failure on
-    the Interactions client, and inf or NaN can't become milliseconds.
+    0 would be an instant failure on the Interactions client, and inf, NaN, or a
+    value whose milliseconds overflow can't become a timeout. ``True`` is not
+    a number of seconds, so bool raises too.
     """
-    if value is not None and (isinstance(value, bool) or not (math.isfinite(value) and value > 0)):
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not (math.isfinite(value) and value > 0 and math.isfinite(value * 1000))
+    ):
+        raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
+    return float(value)
+
+
+def reject_bool_timeout(value: object) -> object:
+    """Before-validator: pydantic turns ``True`` into ``1.0`` before an after-validator sees it."""
+    if isinstance(value, bool):
         raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
     return value
 
 
-def timeout_ms(seconds: float | None) -> float | None:
+def timeout_ms(seconds: object) -> float | None:
     """Config seconds to ``ClientOptions.timeout`` milliseconds, rounding up so 0.0001 sends 1 ms.
 
-    ``ClientOptions`` stays in milliseconds so the plugin-level options built
-    from ``GoogleAI(timeout=...)`` share it unchanged; this is the one place a
-    request config's seconds cross into it.
+    ``ClientOptions`` stays in milliseconds because the plugin-level options
+    (``HttpOptions.timeout`` today) share it; this is the one place a request
+    config's seconds cross into it. A numeric string such as ``'5'`` is read
+    as a number, as ``ClientOptions`` did before; anything else raises
+    ``INVALID_ARGUMENT``.
     """
+    if isinstance(seconds, str):
+        try:
+            seconds = float(seconds)
+        except ValueError:
+            pass
     try:
-        check_timeout_seconds(seconds)
+        checked = check_timeout_seconds(seconds)
     except ValueError as err:
         raise GenkitError(status='INVALID_ARGUMENT', message=str(err)) from err
-    return float(math.ceil(seconds * 1000)) if seconds is not None else None
+    # round() first so 2.007 s is 2007 ms, not 2008 from float noise.
+    return float(math.ceil(round(checked * 1000, 6))) if checked is not None else None
 
 
 def client_overrides_from_config(
