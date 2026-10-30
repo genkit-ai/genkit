@@ -16,6 +16,7 @@
 
 """Dump a family config and translate SDK ValidationErrors into Genkit errors."""
 
+import math
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -225,3 +226,34 @@ def sdk_config_error(*, action_name: str, error: ValidationError) -> GenkitError
         message=f'{action_name}: invalid config field {key}',
         cause=error,
     )
+
+
+def check_timeout_seconds(value: object) -> float | None:
+    """Return ``value`` as float seconds, or raise ``ValueError`` unless it is None or positive and finite.
+
+    0 would be an instant failure on the Interactions client, and inf, NaN, or a
+    value whose milliseconds overflow can't become a timeout. ``True`` is not
+    a number of seconds, so bool raises too.
+    """
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not (math.isfinite(value) and value > 0 and math.isfinite(value * 1000))
+    ):
+        raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
+    return float(value)
+
+
+def reject_bool_timeout(value: object) -> object:
+    """Before-validator: pydantic turns ``True`` into ``1.0`` before an after-validator sees it."""
+    if isinstance(value, bool):
+        raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
+    return value
+
+
+def timeout_seconds_to_ms(seconds: float) -> int:
+    """Validated seconds to google-genai's ``HttpOptions.timeout`` milliseconds, rounding up so 0.0001 is 1 ms."""
+    # round() first so 2.007 s is 2007 ms, not 2008 from float noise.
+    return math.ceil(round(seconds * 1000, 6))

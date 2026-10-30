@@ -30,6 +30,7 @@ from genkit_google_genai._interactions._converters import (
 )
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._routing import strip_ref_prefixes
+from genkit_google_genai._models._sdk_config import check_timeout_seconds
 from genkit_google_genai._models._secrets import context_api_key
 
 from genkit import GenkitError, Message
@@ -84,31 +85,6 @@ def extract_version(model_name: str) -> str:
 def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
     """Drop client-only config keys before passthrough to the wire payload."""
     return {key: value for key, value in config.items() if key not in CLIENT_OPTION_KEYS}
-
-
-def check_timeout_seconds(value: object) -> float | None:
-    """Return ``value`` as float seconds, or raise ``ValueError`` unless it is None or positive and finite.
-
-    0 would be an instant failure on the Interactions client, and inf, NaN, or a
-    value whose milliseconds overflow can't become a timeout. ``True`` is not
-    a number of seconds, so bool raises too.
-    """
-    if value is None:
-        return None
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int | float)
-        or not (math.isfinite(value) and value > 0 and math.isfinite(value * 1000))
-    ):
-        raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
-    return float(value)
-
-
-def reject_bool_timeout(value: object) -> object:
-    """Before-validator: pydantic turns ``True`` into ``1.0`` before an after-validator sees it."""
-    if isinstance(value, bool):
-        raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
-    return value
 
 
 def timeout_ms(seconds: object) -> float | None:

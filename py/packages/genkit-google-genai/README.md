@@ -173,6 +173,9 @@ Setting any `google_search_*` option turns Google Search on;
 `google_search=False` next to an option raises. A nested key such as
 `thinkingConfig` raises and names the flat fields that replace it.
 
+`timeout` sets the HTTP timeout for one request, in seconds, over the
+plugin's: `GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise.
+
 Function calling mode is controlled by `ai.generate(tool_choice=...)`, not config:
 `'auto'`, `'required'`, or `'none'`. In `'required'` mode, Gemini binds the request's
 function tools as `allowedFunctionNames`.
@@ -229,10 +232,9 @@ create body (snake_case names). A nested object merges key by key. Keys match
 ignoring case and underscores, the same way the Gemini merge aligns them. A
 `None` value means unset and is skipped. Unlike Gemini, no field is reserved: a
 key in `extra` overrides what Genkit builds, including `agent`, `input`, and
-`agent_config`. One exception on Deep Research: `extra['tools']` replaces the
-whole list, so it raises `INVALID_ARGUMENT` when a declared tool setting
-(`google_search`, `code_execution`, `mcp_servers`, ...) also builds tools. With
-no declared tool settings it is sent as written.
+`agent_config`. One exception on Deep Research: `extra['tools']` raises
+`INVALID_ARGUMENT`. Its tools are the declared settings (`google_search`,
+`url_context`, `code_execution`, `file_search_store_names`, `mcp_servers`).
 
 `timeout` on these three configs (and in Deep Research's `check_operation` /
 `cancel_operation` `config`) is the HTTP timeout in seconds. It used to be

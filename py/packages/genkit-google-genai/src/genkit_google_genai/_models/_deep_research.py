@@ -34,7 +34,6 @@ from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
     TIMEOUT_DESCRIPTION,
     api_key_for_context,
-    check_timeout_seconds,
     client_overrides_from_call_config,
     client_overrides_from_config,
     extract_version,
@@ -42,11 +41,10 @@ from genkit_google_genai._models._interactions_utils import (
     lowercase_choice_list,
     partition_keys,
     pop_extra,
-    reject_bool_timeout,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
-from genkit_google_genai._models._sdk_config import deep_merge
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, deep_merge, reject_bool_timeout
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 from pydantic import ConfigDict, Field, WithJsonSchema, field_validator, model_validator, with_config
 from pydantic.alias_generators import to_snake
@@ -110,11 +108,10 @@ class DeepResearchConfig(GenkitConfig):
     """Deep Research model configuration.
 
     Unknown keys are rejected. An API field this class doesn't declare goes in
-    ``extra``, which is deep-merged into the create body. ``extra['tools']``
-    is sent as written when no declared tool setting (``google_search``,
+    ``extra``, which is deep-merged into the create body. ``tools`` is not one
+    of them: Deep Research's tools are the declared settings (``google_search``,
     ``url_context``, ``code_execution``, ``file_search_store_names``,
-    ``mcp_servers``) builds a tool, and raises ``INVALID_ARGUMENT`` when one
-    does, since the list would replace the built tools.
+    ``mcp_servers``), and ``extra['tools']`` raises ``INVALID_ARGUMENT``.
 
     ``timeout`` is seconds, the Python convention (httpx, requests, the OpenAI
     and Anthropic SDKs), here and in ``check_operation``/``cancel_operation``
@@ -231,23 +228,22 @@ def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchC
     return tools
 
 
-def reject_extra_tools_over_built(action_name: str, extra: Mapping[str, Any], tools: list[dict[str, Any]]) -> None:
-    """Raise when ``extra`` sets ``tools`` and the declared settings built some too.
+def reject_extra_tools(action_name: str, extra: Mapping[str, Any]) -> None:
+    """Raise when ``extra`` sets ``tools``.
 
-    ``extra`` replaces a list instead of merging it, so the built tools would
-    be dropped without a word. With no declared tool settings, ``extra['tools']``
-    goes out as written; that is how a tool type this class doesn't declare
-    reaches the API. Keys match ignoring case and underscores, like the merge.
+    Deep Research's tools are the declared settings. ``extra`` would replace
+    the built list, and a raw tool list is no way to use a built-in tool.
+    A new tool type gets a declared setting instead. Keys match ignoring
+    case and underscores, like the merge.
     """
     key = next((key for key in extra if key.replace('_', '').lower() == 'tools'), None)
-    if key is None or not tools:
+    if key is None:
         return
-    built = ', '.join(dict.fromkeys(str(tool['type']) for tool in tools))
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=(
-            f'{action_name}: extra[{key!r}] would replace the tools built from config ({built}). '
-            f'List every tool in extra[{key!r}], or use the declared tool settings, not both.'
+            f'{action_name}: extra[{key!r}] is not supported. Use the declared tool settings: '
+            'google_search, url_context, code_execution, file_search_store_names, mcp_servers.'
         ),
     )
 
@@ -282,7 +278,7 @@ def create_deep_research_background_model(
         agent_config: dict[str, Any] = {'type': 'deep-research', **agent_fields}
 
         tools = build_tools(request, config)
-        reject_extra_tools_over_built(full_name, extra, tools)
+        reject_extra_tools(full_name, extra)
         create_kwargs: dict[str, Any] = {
             'agent': version,
             'input': steps_with_folded_system_instruction(request.messages),

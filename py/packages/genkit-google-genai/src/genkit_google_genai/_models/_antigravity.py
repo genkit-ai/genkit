@@ -28,17 +28,15 @@ from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
     TIMEOUT_DESCRIPTION,
     api_key_for_context,
-    check_timeout_seconds,
     client_overrides_from_config,
     extract_version,
     lowercase_choice_list,
     partition_keys,
     pop_extra,
-    reject_bool_timeout,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
-from genkit_google_genai._models._sdk_config import deep_merge
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, deep_merge, reject_bool_timeout
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 from pydantic import Field, field_validator
 

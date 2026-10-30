@@ -34,10 +34,13 @@ from genkit_google_genai._models._sdk_config import (
     GEMINI_UNSUPPORTED_GENERATION_FIELDS,
     attach_config_extra,
     attach_leftovers,
+    check_timeout_seconds,
     dump_family_config,
     keep_client_extra_body,
+    reject_bool_timeout,
     sdk_config_error,
     split_sdk_fields,
+    timeout_seconds_to_ms,
 )
 from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
 from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
@@ -499,6 +502,24 @@ class GeminiConfig(ModelConfig):
             "multi-regions ('us', 'eu'), or 'global'."
         ),
     )
+    timeout: float | None = Field(
+        default=None,
+        description=(
+            'HTTP timeout for this request, in seconds (positive, finite). Overrides the plugin timeout for this call.'
+        ),
+    )
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def _no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
+
+    @field_validator('timeout')
+    @classmethod
+    def _check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
 
     safety_settings: Annotated[
         list[SafetySetting] | None,
@@ -2370,6 +2391,7 @@ class GeminiModel:
 
         leftovers: dict[str, Any] = {}
         extra: dict[str, Any] | None = None
+        timeout: float | None = None
         if request.config:
             # 2. Normalize config into a dict
             dumped_config = self._normalize_config_to_dict(request.config)
@@ -2377,6 +2399,8 @@ class GeminiModel:
             if dumped_config is not None:
                 # config.extra is wire-shaped; it goes on the body as-is in step 5.
                 extra = dumped_config.pop('extra', None)
+                # timeout is transport, not body: it rides on this request's http_options.
+                timeout = dumped_config.pop('timeout', None)
 
                 # 3. Extract tool-related fields
                 self._check_backend_fields(dumped_config)
@@ -2406,7 +2430,7 @@ class GeminiModel:
 
         has_output = bool(request.output_format or request.output_schema or request.output_content_type)
 
-        if cfg is not None or tools or system_instruction or has_output or leftovers or extra:
+        if cfg is not None or tools or system_instruction or has_output or leftovers or extra or timeout is not None:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
@@ -2446,6 +2470,12 @@ class GeminiModel:
                 managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
                 unsupported_generation_fields=GEMINI_UNSUPPORTED_GENERATION_FIELDS,
             )
+            if timeout is not None:
+                # google-genai layers a request's http_options over the client's
+                # field by field, so only the timeout changes.
+                http_options = cfg.http_options.model_copy() if cfg.http_options else genai_types.HttpOptions()
+                http_options.timeout = timeout_seconds_to_ms(timeout)
+                cfg.http_options = http_options
             return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
         return None

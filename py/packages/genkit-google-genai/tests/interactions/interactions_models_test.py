@@ -1640,7 +1640,7 @@ def test_pop_extra_drops_none_keeps_explicit_empty_and_list_items() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize('key', ['tools', 'Tools', 'TOOLS', 't_o_o_l_s'])
 async def test_generate_operation_deep_research_extra_tools_with_built_tools_raises(googleai: Genkit, key: str) -> None:
-    """`code_execution=True` plus `extra={'tools': [...]}` raises instead of dropping code_execution; no job starts."""
+    """`extra={'tools': [...]}` raises in any spelling; no job starts."""
     patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
     with patcher, pytest.raises(GenkitError) as raised:
         await googleai.generate_operation(
@@ -1650,24 +1650,24 @@ async def test_generate_operation_deep_research_extra_tools_with_built_tools_rai
         )
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert f'extra[{key!r}] would replace the tools built from config (code_execution)' in str(raised.value)
+    assert f'extra[{key!r}] is not supported' in str(raised.value)
     assert create_calls == []
 
 
 @pytest.mark.asyncio
-async def test_generate_operation_deep_research_extra_tools_alone_sent_as_written(googleai: Genkit) -> None:
-    """With no declared tool settings, `extra['tools']` is how an undeclared tool type reaches the API."""
-    patcher, create_calls, _, _ = patch_interactions(
-        'genkit_google_genai._models._deep_research', create_result={'id': 'dr-x', 'status': 'in_progress'}
-    )
-    with patcher:
+async def test_generate_operation_deep_research_extra_tools_without_built_tools_raises(googleai: Genkit) -> None:
+    """With no declared tool settings, `extra['tools']` still raises: tools are declared settings only."""
+    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
+    with patcher, pytest.raises(GenkitError) as raised:
         await googleai.generate_operation(
             model=_DEEP_RESEARCH,
             prompt='q',
             config={'google_search': False, 'extra': {'tools': [{'type': 'new_tool', 'level': 2}]}},
         )
 
-    assert create_calls[0]['tools'] == [{'type': 'new_tool', 'level': 2}]
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'google_search, url_context, code_execution, file_search_store_names, mcp_servers' in str(raised.value)
+    assert create_calls == []
 
 
 @pytest.mark.asyncio
@@ -1822,15 +1822,15 @@ async def test_check_operation_deep_research_numeric_string_timeout_is_seconds(g
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('config', 'built'),
+    'config',
     [
-        ({'mcp_servers': [{'name': 'docs', 'url': 'https://mcp.example'}]}, 'mcp_server'),
-        ({'file_search_store_names': ['stores/one']}, 'file_search'),
-        ({'google_search': True, 'url_context': True}, 'google_search, url_context'),
+        {'mcp_servers': [{'name': 'docs', 'url': 'https://mcp.example'}]},
+        {'file_search_store_names': ['stores/one']},
+        {'google_search': True, 'url_context': True},
     ],
 )
 async def test_generate_operation_deep_research_extra_tools_with_other_built_tools_raises(
-    googleai: Genkit, config: dict[str, Any], built: str
+    googleai: Genkit, config: dict[str, Any]
 ) -> None:
     """MCP, file search, and search tools collide with `extra['tools']` the same way code_execution does."""
     patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
@@ -1839,7 +1839,7 @@ async def test_generate_operation_deep_research_extra_tools_with_other_built_too
             model=_DEEP_RESEARCH, prompt='q', config={**config, 'extra': {'tools': [{'type': 'url_context'}]}}
         )
 
-    assert f'would replace the tools built from config ({built})' in str(raised.value)
+    assert "extra['tools'] is not supported" in str(raised.value)
     assert create_calls == []
 
 
