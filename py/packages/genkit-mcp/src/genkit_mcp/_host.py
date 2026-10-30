@@ -20,18 +20,17 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 
-import structlog
 from pydantic import ValidationError
 
-from genkit import DynamicActionProvider, Genkit, Tool
-from genkit.plugin_api import Action
+from genkit import Genkit, Tool, get_logger
+from genkit.plugin_api import Action, DynamicActionProvider
 from genkit_mcp._client import McpClient
 from genkit_mcp._config import McpServerEntry, McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, validate_request_timeout
 from genkit_mcp._errors import _ClientError, _ConnectionClosedError, _ConnectionFailedError, _RequestTimeoutError
 from genkit_mcp._tools import validate_provider_name, validate_tool_prefix
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 _Listed = TypeVar('_Listed', Tool, Action[Any, Any])
 
