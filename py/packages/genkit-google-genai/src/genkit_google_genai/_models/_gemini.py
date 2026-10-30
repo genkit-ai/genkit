@@ -31,6 +31,7 @@ from genkit_google_genai._models._context_caching._utils import generate_cache_k
 from genkit_google_genai._models._sdk_config import (
     GEMINI_MANAGED_BODY_FIELDS,
     GEMINI_MANAGED_GENERATION_FIELDS,
+    GEMINI_UNSUPPORTED_GENERATION_FIELDS,
     attach_config_extra,
     attach_leftovers,
     copy_http_options,
@@ -59,7 +60,6 @@ from pydantic.alias_generators import to_camel, to_snake
 from typing_extensions import NotRequired, Self, TypedDict
 
 from genkit import (
-    ActionRunContext,
     FinishReason,
     GenkitError,
     Message,
@@ -70,15 +70,14 @@ from genkit import (
     RuntimeErrorReason,
 )
 from genkit.model import (
-    Candidate,
-    Constrained,
+    ConstrainedSupport,
+    GenerationUsage,
     ModelConfig,
+    ModelContext,
     ModelInfo,
     ModelRequest,
-    ModelUsage,
-    Supports,
+    ModelSupports,
     ToolDefinition,
-    get_basic_usage_stats,
 )
 
 
@@ -173,12 +172,12 @@ def _to_json_value(value: Any) -> Any:  # noqa: ANN401
     return value
 
 
-def _usage_from_metadata(usage_metadata: Any) -> ModelUsage:  # noqa: ANN401
-    """Build ModelUsage from a google-genai usage_metadata block."""
+def _usage_from_metadata(usage_metadata: Any) -> GenerationUsage:  # noqa: ANN401
+    """Build GenerationUsage from a google-genai usage_metadata block."""
     if usage_metadata is None:
-        return ModelUsage()
+        return GenerationUsage()
 
-    return ModelUsage(
+    return GenerationUsage(
         input_tokens=_to_float(usage_metadata, 'prompt_token_count'),
         output_tokens=_to_float(usage_metadata, 'candidates_token_count'),
         total_tokens=_to_float(usage_metadata, 'total_token_count'),
@@ -215,7 +214,6 @@ def _no_candidates_response(
         message=Message(role=Role.MODEL, content=[Part.from_text('')]),
         finish_reason=FinishReason.BLOCKED,
         finish_message=feedback.block_reason_message or f'prompt blocked: {reason.value}',
-        candidates=[],
         usage=_usage_from_metadata(usage_metadata),
         custom=_custom_from_feedback(feedback),
     )
@@ -657,7 +655,7 @@ class GeminiConfig(ModelConfig):
         ge=0.0,
         le=1.0,
     )
-    top_k: int | None = Field(  # pyrefly: ignore[bad-override]
+    top_k: int | None = Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
         default=None,
         description=('The maximum number of tokens to consider when sampling.'),
     )
@@ -684,8 +682,10 @@ class GeminiConfig(ModelConfig):
         ),
     )
 
-    max_output_tokens: int | None = Field(  # pyrefly: ignore[bad-override]
-        default=None, description='Maximum number of tokens to generate.'
+    max_output_tokens: int | None = (
+        Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
+            default=None, description='Maximum number of tokens to generate.'
+        )
     )
     stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
@@ -833,64 +833,64 @@ class GemmaConfig(GeminiConfig):
     temperature: float | None = None
 
 
-GEMINI_TEXT_SUPPORTS = Supports(
+GEMINI_TEXT_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,
     tool_choice=True,
     system_role=True,
-    constrained=Constrained.ALL,
+    constrained=ConstrainedSupport.ALL,
     output=['text', 'json'],
 )
 
 GEMINI_2_5_PRO_EXP_03_25 = ModelInfo(
     label='Google AI - Gemini 2.5 Pro Exp 03-25',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_2_5_PRO_PREVIEW_03_25 = ModelInfo(
     label='Google AI - Gemini 2.5 Pro Preview 03-25',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_2_5_PRO_PREVIEW_05_06 = ModelInfo(
     label='Google AI - Gemini 2.5 Pro Preview 05-06',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_2_5_FLASH_PREVIEW_04_17 = ModelInfo(
     label='Google AI - Gemini 2.5 Flash Preview 04-17',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
@@ -907,52 +907,52 @@ GEMINI_2_5_FLASH = ModelInfo(
 
 GEMINI_2_5_FLASH_LITE = ModelInfo(
     label='Google AI - Gemini 2.5 Flash Lite',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.NO_TOOLS,
+        constrained=ConstrainedSupport.NO_TOOLS,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_3_FLASH_PREVIEW = ModelInfo(
     label='Google AI - Gemini 3 Flash Preview',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_3_PRO_PREVIEW = ModelInfo(
     label='Google AI - Gemini 3 Pro Preview',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_3_5_FLASH = ModelInfo(
     label='Google AI - Gemini 3.5 Flash',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
@@ -969,13 +969,13 @@ GEMINI_3_7_FLASH = ModelInfo(
 
 GEMINI_3_1_PRO_PREVIEW = ModelInfo(
     label='Google AI - Gemini 3.1 Pro Preview',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
@@ -983,39 +983,39 @@ GEMINI_3_1_PRO_PREVIEW = ModelInfo(
 # customtools is registered identically to pro-preview (no distinct config in JS).
 GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS = ModelInfo(
     label='Google AI - Gemini 3.1 Pro Preview (Custom Tools)',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_3_1_FLASH_LITE_PREVIEW = ModelInfo(
     label='Google AI - Gemini 3.1 Flash Lite Preview',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
 
 GEMINI_3_1_FLASH_LITE = ModelInfo(
     label='Google AI - Gemini 3.1 Flash Lite',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
@@ -1025,13 +1025,13 @@ GEMINI_FLASH_LITE_LATEST = ModelInfo(
     supports=GEMINI_TEXT_SUPPORTS,
 )
 
-GEMINI_IMAGE_SUPPORTS = Supports(
+GEMINI_IMAGE_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,
     tool_choice=True,
     system_role=True,
-    constrained=Constrained.ALL,
+    constrained=ConstrainedSupport.ALL,
 )
 
 GEMINI_3_PRO_IMAGE = ModelInfo(
@@ -1064,13 +1064,13 @@ GEMINI_2_5_FLASH_IMAGE_PREVIEW = ModelInfo(
     supports=GEMINI_IMAGE_SUPPORTS,
 )
 
-GEMINI_TTS_SUPPORTS = Supports(
+GEMINI_TTS_SUPPORTS = ModelSupports(
     multiturn=False,
     media=False,
     tools=False,
     tool_choice=False,
     system_role=False,
-    constrained=Constrained.NONE,
+    constrained=ConstrainedSupport.NONE,
     output=['media'],
 )
 
@@ -1099,13 +1099,13 @@ GEMINI_3_8_FLASH_LITE_TTS = ModelInfo(
     supports=GEMINI_TTS_SUPPORTS,
 )
 
-GEMMA_SUPPORTS = Supports(
+GEMMA_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,
     tool_choice=True,
     system_role=True,
-    constrained=Constrained.ALL,
+    constrained=ConstrainedSupport.ALL,
     output=['text', 'json'],
 )
 
@@ -1121,13 +1121,13 @@ GEMMA_4_31B_IT = ModelInfo(
 
 GENERIC_GEMINI_MODEL = ModelInfo(
     label='Google AI - Gemini',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     ),
 )
@@ -1139,13 +1139,13 @@ GENERIC_TTS_MODEL = ModelInfo(
 
 GENERIC_IMAGE_MODEL = ModelInfo(
     label='Google AI - Gemini Image',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=False,
         media=True,
         tools=False,
         tool_choice=False,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['media'],
     ),
 )
@@ -1250,13 +1250,13 @@ _add_model(GEMMA_4_31B_IT, ['gemma-4-31b-it'])
 GEMINI_CATALOG_IDS = frozenset(SUPPORTED_MODELS)
 
 
-DEFAULT_SUPPORTS_MODEL = Supports(
+DEFAULT_SUPPORTS_MODEL = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,
     tool_choice=True,
     system_role=True,
-    constrained=Constrained.ALL,
+    constrained=ConstrainedSupport.ALL,
 )
 
 
@@ -1886,7 +1886,7 @@ class GeminiModel:
             raise transport_error(e) from e
         return cache
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Handle a generation request.
 
         Args:
@@ -2135,31 +2135,10 @@ class GeminiModel:
         if not content:
             content = [Part.from_text('')]
 
+        # The reply is candidate 0, the same one _contents_from_response reads.
         finish_reason = FinishReason.OTHER
-        candidates = []
-        for i, c in enumerate(response.candidates):
-            c_content = []
-            if c.content and c.content.parts:
-                for part in c.content.parts:
-                    converted = PartConverter.from_gemini(part=part, tools=tools)
-                    if converted:
-                        c_content.append(converted)
-
-            if not c_content:
-                c_content = [Part.from_text('')]
-
-            c_finish_reason = _to_finish_reason(c.finish_reason)
-
-            if i == 0:
-                finish_reason = c_finish_reason
-
-            candidates.append(
-                Candidate(
-                    index=float(i),
-                    message=Message(role=Role.MODEL, content=c_content),
-                    finish_reason=c_finish_reason,
-                )
-            )
+        if response.candidates:
+            finish_reason = _to_finish_reason(response.candidates[0].finish_reason)
 
         return ModelResponse(
             message=Message(
@@ -2167,7 +2146,6 @@ class GeminiModel:
                 role=Role.MODEL,
             ),
             finish_reason=finish_reason,
-            candidates=candidates,
             usage=_usage_from_metadata(response.usage_metadata),
             custom=_custom_from_feedback(response.prompt_feedback),
         )
@@ -2176,7 +2154,7 @@ class GeminiModel:
         self,
         request_contents: list[genai_types.Content],
         request_cfg: genai_types.GenerateContentConfig | None,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         model_name: str,
         client: genai.Client | None = None,
         tools: ToolTable | None = None,
@@ -2340,13 +2318,13 @@ class GeminiModel:
             list of generated contents.
         """
         content = []
-        if response.candidates:
-            for candidate in response.candidates:
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        converted = PartConverter.from_gemini(part=part, tools=tools)
-                        if converted:  # Only append if conversion succeeded
-                            content.append(converted)
+        # Genkit responses carry one reply: candidate 0.
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate and candidate.content and candidate.content.parts:
+            for part in candidate.content.parts:
+                converted = PartConverter.from_gemini(part=part, tools=tools)
+                if converted:  # Only append if conversion succeeded
+                    content.append(converted)
 
         # Ensure we always return a list, even if empty
         return content if content else []
@@ -2410,6 +2388,10 @@ class GeminiModel:
                         cfg = genai_types.GenerateContentConfig(**known)
                     except ValidationError as e:
                         raise sdk_config_error(action_name=self._version, error=e) from e
+                    # The SDK types top_k as float and coerces 40 to 40.0; the
+                    # API's topK is int32. Assignment isn't revalidated.
+                    if isinstance(known.get('top_k'), int):
+                        cfg.top_k = known['top_k']
 
         # Tools from top-level field and config-level fields
         function_tools = declared_tools if declared_tools is not None else self._get_tools(request)
@@ -2431,10 +2413,12 @@ class GeminiModel:
                 # Check if the model supports constrained generation with this configuration
                 model_info = google_model_info(model_name)
                 model_supports_constrained = (
-                    model_info.supports.constrained if model_info and model_info.supports else Constrained.NO_TOOLS
+                    model_info.supports.constrained
+                    if model_info and model_info.supports
+                    else ConstrainedSupport.NO_TOOLS
                 )
-                supports_constrained = model_supports_constrained == Constrained.ALL or (
-                    model_supports_constrained == Constrained.NO_TOOLS and not request.tools
+                supports_constrained = model_supports_constrained == ConstrainedSupport.ALL or (
+                    model_supports_constrained == ConstrainedSupport.NO_TOOLS and not request.tools
                 )
                 if supports_constrained:
                     self._apply_output_config(cfg, request)
@@ -2453,6 +2437,7 @@ class GeminiModel:
                 action_name=self._version,
                 managed_body_fields=GEMINI_MANAGED_BODY_FIELDS,
                 managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
+                unsupported_generation_fields=GEMINI_UNSUPPORTED_GENERATION_FIELDS,
             )
 
         return None
@@ -2657,7 +2642,7 @@ class GeminiModel:
             if key in config and key not in genai_types.GenerateContentConfig.model_fields:
                 del config[key]
 
-    def _create_usage_stats(self, request: ModelRequest, response: ModelResponse) -> ModelUsage:
+    def _create_usage_stats(self, request: ModelRequest, response: ModelResponse) -> GenerationUsage:
         """Create usage statistics.
 
         Args:
@@ -2668,13 +2653,13 @@ class GeminiModel:
             usage statistics
         """
         if not response.message:
-            usage = ModelUsage()
+            usage = GenerationUsage()
             usage.input_tokens = 0
             usage.output_tokens = 0
             usage.total_tokens = 0
             return usage
 
-        usage = get_basic_usage_stats(input_=request.messages, response=response.message)
+        usage = GenerationUsage.from_messages(request.messages, response.message)
         if response.usage:
             for field in ('input_tokens', 'output_tokens', 'total_tokens', 'thoughts_tokens', 'cached_content_tokens'):
                 val = getattr(response.usage, field, None)

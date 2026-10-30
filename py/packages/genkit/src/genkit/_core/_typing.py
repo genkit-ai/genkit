@@ -20,13 +20,18 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitConfig, GenkitModel
 from genkit._core._compat import StrEnum
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from genkit._core import _model
 
 
 class AgentFinishReason(StrEnum):
@@ -91,6 +96,16 @@ class FinishReason(StrEnum):
     INTERRUPTED = 'interrupted'
     OTHER = 'other'
     UNKNOWN = 'unknown'
+
+    def is_abnormal(self) -> bool:
+        """True when generation stopped abnormally (blocked, aborted, failed, interrupted, other)."""
+        return self in (
+            FinishReason.BLOCKED,
+            FinishReason.ABORTED,
+            FinishReason.FAILED,
+            FinishReason.INTERRUPTED,
+            FinishReason.OTHER,
+        )
 
 
 class Role(StrEnum):
@@ -434,31 +449,6 @@ class MiddlewareRef(GenkitModel):
     config: Any | None = Field(default=None)
 
 
-class CandidateError(GenkitModel):
-    """Model for candidateerror data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    index: float = Field(...)
-    code: Literal['blocked', 'other', 'unknown'] = Field(...)
-    message: str | None = None
-
-
-class Candidate(GenkitModel):
-    """Model for candidate data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    index: float = Field(...)
-    message: MessageData = Field(...)
-    usage: GenerationUsage | None = None
-    finish_reason: FinishReason = Field(...)
-    finish_message: str | None = None
-    custom: Any | None = Field(default=None)
-
-
 class CustomPart(GenkitModel):
     """Model for custompart data."""
 
@@ -574,6 +564,13 @@ class GenerationUsage(GenkitModel):
     cached_content_tokens: float | None = None
     cache_write_tokens: float | None = None
 
+    @classmethod
+    def from_messages(cls, messages: Sequence[_model.Message], response: _model.Message) -> GenerationUsage:
+        """Character and media counts for the request messages and the model reply."""
+        from genkit._core._model import count_message_usage  # noqa: PLC0415 - _model imports this module
+
+        return cls.model_validate(count_message_usage(messages, response))
+
 
 class MediaPart(GenkitModel):
     """Model for mediapart data."""
@@ -611,8 +608,8 @@ class ModelInfo(GenkitModel):
     )
     versions: list[str] | None = None
     label: str | None = None
-    supports: Supports | None = None
-    stage: Stage | None = None
+    supports: ModelSupports | None = None
+    stage: ModelStage | None = None
 
 
 class ModelReference(GenkitModel):
@@ -646,20 +643,6 @@ class MultipartToolResponse(GenkitModel):
     )
     output: Any | None = Field(default=None)
     content: list[PartData] | None = None
-    metadata: Metadata | None = None
-
-
-class Operation(GenkitModel):
-    """Model for operation data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    action: str | None = None
-    id: str = Field(...)
-    done: bool | None = None
-    output: Any | None = Field(default=None)
-    error: OperationError | None = None
     metadata: Metadata | None = None
 
 
@@ -1141,8 +1124,8 @@ class GenkitErrorDetails(GenkitModel):
     trace_id: str = Field(...)
 
 
-class Supports(GenkitModel):
-    """Model for supports data."""
+class ModelSupports(GenkitModel):
+    """Model for modelsupports data."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
@@ -1153,7 +1136,7 @@ class Supports(GenkitModel):
     system_role: bool | None = None
     output: list[str] | None = None
     content_type: list[str] | None = None
-    constrained: Constrained | None = None
+    constrained: ConstrainedSupport | None = None
     tool_choice: bool | None = None
     long_running: bool | None = None
 
@@ -1249,7 +1232,7 @@ class EvalResponse(RootModel[list[EvaluatorResponse]]):
     root: list[EvaluatorResponse]
 
 
-class Constrained(StrEnum):
+class ConstrainedSupport(StrEnum):
     """Constrained generation support (none, all, no-tools)."""
 
     NONE = 'none'
@@ -1257,7 +1240,7 @@ class Constrained(StrEnum):
     NO_TOOLS = 'no-tools'
 
 
-class Stage(StrEnum):
+class ModelStage(StrEnum):
     """Model stage (featured, stable, unstable, legacy, deprecated)."""
 
     FEATURED = 'featured'

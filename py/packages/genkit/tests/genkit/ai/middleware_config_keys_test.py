@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from genkit import Genkit, GenkitError
 from genkit._ai._generate import register_middleware, resolve_middleware_from_use
-from genkit._core._middleware import BaseMiddleware, GenerateMiddleware
+from genkit._core._middleware import Middleware, _MiddlewareMetadata
 from genkit._core._typing import MiddlewareRef
 from genkit.plugin_api import GenkitConfig
 
@@ -29,7 +29,7 @@ class AllergyGuardConfig(BaseModel):
     max_warnings: int = 3
 
 
-class AllergyGuard(BaseMiddleware[AllergyGuardConfig]):
+class AllergyGuard(Middleware[AllergyGuardConfig]):
     """Flags dishes containing a blocked allergen."""
 
 
@@ -41,7 +41,7 @@ class LenientConfig(BaseModel):
     region: str | None = None
 
 
-class Lenient(BaseMiddleware[LenientConfig]):
+class Lenient(Middleware[LenientConfig]):
     """Takes keys it doesn't declare."""
 
 
@@ -51,12 +51,12 @@ class BudgetConfig(GenkitConfig):
     max_spend_cents: int = 500
 
 
-class Budget(BaseMiddleware[BudgetConfig]):
+class Budget(Middleware[BudgetConfig]):
     """Caps spend per call."""
 
 
-def _definition(cls: type[BaseMiddleware], name: str) -> GenerateMiddleware:
-    return GenerateMiddleware(cls=cls, name=name)
+def _definition(cls: type[Middleware], name: str) -> _MiddlewareMetadata:
+    return _MiddlewareMetadata(cls=cls, name=name)
 
 
 def test_plain_basemodel_config_keys_are_field_names() -> None:
@@ -130,7 +130,7 @@ def test_inline_middleware_with_serialization_alias_and_computed_field_round_tri
         def doubled(self) -> int:
             return self.max_warnings * 2
 
-    class Mw(BaseMiddleware[Cfg]):
+    class Mw(Middleware[Cfg]):
         pass
 
     ai = Genkit()
@@ -138,6 +138,7 @@ def test_inline_middleware_with_serialization_alias_and_computed_field_round_tri
     [ref] = register_middleware(registry, [Mw(max_warnings=1)]) or []
     assert ref.config == {'max_warnings': 1}
     [rebuilt] = resolve_middleware_from_use(registry, [ref])
+    assert isinstance(rebuilt, Mw)
     assert rebuilt.config.max_warnings == 1
 
 
@@ -148,14 +149,16 @@ def test_alias_without_validate_by_name_rejects_field_name_in_ref() -> None:
     class Cfg(BaseModel):
         max_warnings: int = Field(3, alias='maxWarnings')
 
-    class Mw(BaseMiddleware[Cfg]):
+    class Mw(Middleware[Cfg]):
         pass
 
     with pytest.raises(GenkitError) as raised:
         _definition(Mw, 'mw').instantiate({'max_warnings': 1})
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert 'accepted keys: maxWarnings' in raised.value.original_message
-    assert _definition(Mw, 'mw').instantiate({'maxWarnings': 1}).config.max_warnings == 1
+    mw = _definition(Mw, 'mw').instantiate({'maxWarnings': 1})
+    assert isinstance(mw, Mw)
+    assert mw.config.max_warnings == 1
 
 
 def test_accepted_keys_show_the_serialization_alias_when_it_is_accepted() -> None:
@@ -170,7 +173,7 @@ def test_accepted_keys_show_the_serialization_alias_when_it_is_accepted() -> Non
         )
         surface_id: str | None = None
 
-    class Mw(BaseMiddleware[Cfg]):
+    class Mw(Middleware[Cfg]):
         pass
 
     with pytest.raises(GenkitError) as raised:
@@ -190,7 +193,7 @@ def test_bad_ref_value_is_invalid_argument_naming_middleware(config: dict[str, A
     class BoundedConfig(GenkitConfig):
         max_spend_cents: int = Field(500, ge=0)
 
-    class Bounded(BaseMiddleware[BoundedConfig]):
+    class Bounded(Middleware[BoundedConfig]):
         pass
 
     with pytest.raises(GenkitError) as raised:
@@ -207,7 +210,7 @@ def test_missing_required_ref_field_is_invalid_argument() -> None:
     class SandboxConfig(GenkitConfig):
         root_dir: str
 
-    class Sandbox(BaseMiddleware[SandboxConfig]):
+    class Sandbox(Middleware[SandboxConfig]):
         pass
 
     with pytest.raises(GenkitError) as raised:
@@ -231,7 +234,7 @@ def test_prompt_use_metadata_dumps_inline_config_with_accepted_keys() -> None:
         def doubled(self) -> int:
             return self.max_warnings * 2
 
-    class Guard(BaseMiddleware[GuardConfig]):
+    class Guard(Middleware[GuardConfig]):
         pass
 
     ai = Genkit()

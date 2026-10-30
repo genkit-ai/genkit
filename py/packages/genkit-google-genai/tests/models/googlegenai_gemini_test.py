@@ -51,9 +51,17 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from pytest_mock import MockerFixture
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit._core._compat import StrEnum
-from genkit.model import Constrained, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
+from genkit.model import (
+    ConstrainedSupport,
+    ModelContext,
+    ModelInfo,
+    ModelRequest,
+    ModelSupports,
+    OutputConfig,
+    ToolDefinition,
+)
 from genkit.plugin_api import to_json_schema
 
 ALL_VERSIONS = sorted({*GEMINI_CATALOG_IDS, *get_args(KnownGemma)})
@@ -99,7 +107,7 @@ async def test_generate_text_response(mocker: MockerFixture, version: str) -> No
 
     gemini = GeminiModel(version, googleai_client_mock)
 
-    ctx = ActionRunContext()
+    ctx = ModelContext()
     response = await gemini.generate(request, ctx)
 
     # Determine expected config based on model type
@@ -152,7 +160,7 @@ async def test_generate_stream_text_response(mocker: MockerFixture, version: str
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel(version, googleai_client_mock)
 
-    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+    ctx = ModelContext(streaming_callback=on_chunk_mock)
     response = await gemini.generate(request, ctx)
 
     # Determine expected config based on model type
@@ -212,7 +220,7 @@ async def test_generate_stream_captures_finish_reason_and_usage(mocker: MockerFi
 
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+    ctx = ModelContext(streaming_callback=on_chunk_mock)
 
     response = await gemini.generate(request, ctx)
     assert response.finish_reason == FinishReason.STOP
@@ -246,7 +254,7 @@ async def test_generate_stream_without_finish_reason(mocker: MockerFixture) -> N
 
     on_chunk_mock = mocker.MagicMock()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=on_chunk_mock)
+    ctx = ModelContext(streaming_callback=on_chunk_mock)
 
     response = await gemini.generate(request, ctx)
     assert response.finish_reason == FinishReason.UNKNOWN
@@ -287,7 +295,7 @@ async def test_generate_media_response(mocker: MockerFixture, version: str) -> N
 
     gemini = GeminiModel(version, googleai_client_mock)
 
-    ctx = ActionRunContext()
+    ctx = ModelContext()
     response = await gemini.generate(request, ctx)
 
     googleai_client_mock.assert_has_calls([
@@ -427,7 +435,7 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
     googleai_client_mock.aio.models.generate_content.return_value = resp
 
     gemini = GeminiModel(version, googleai_client_mock)
-    ctx = ActionRunContext()
+    ctx = ModelContext()
 
     response = await gemini.generate(request, ctx)
 
@@ -467,13 +475,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-3-pro-image',
             ModelInfo(
                 label='Google AI - Gemini 3 Pro Image',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=True,
                     media=True,
                     tools=True,
                     tool_choice=True,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                 ),
             ),
         ),
@@ -481,13 +489,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-3.1-flash-image',
             ModelInfo(
                 label='Google AI - Gemini 3.1 Flash Image',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=True,
                     media=True,
                     tools=True,
                     tool_choice=True,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                 ),
             ),
         ),
@@ -495,13 +503,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-3.1-flash-image-preview',
             ModelInfo(
                 label='Google AI - Gemini 3.1 Flash Image Preview',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=True,
                     media=True,
                     tools=True,
                     tool_choice=True,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                 ),
             ),
         ),
@@ -509,13 +517,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-3-pro-image-preview',
             ModelInfo(
                 label='Google AI - Gemini 3 Pro Image Preview',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=True,
                     media=True,
                     tools=True,
                     tool_choice=True,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                 ),
             ),
         ),
@@ -523,13 +531,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-2.5-flash-image',
             ModelInfo(
                 label='Google AI - Gemini 2.5 Flash Image',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=True,
                     media=True,
                     tools=True,
                     tool_choice=True,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                 ),
             ),
         ),
@@ -537,13 +545,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-2.5-flash-image-preview',
             ModelInfo(
                 label='Google AI - Gemini 2.5 Flash Image Preview',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=True,
                     media=True,
                     tools=True,
                     tool_choice=True,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                 ),
             ),
         ),
@@ -555,13 +563,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-2.0-flash-preview-image-generation',
             ModelInfo(
                 label='Google AI - Gemini Image',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=False,
                     media=True,
                     tools=False,
                     tool_choice=False,
                     system_role=True,
-                    constrained=Constrained.ALL,
+                    constrained=ConstrainedSupport.ALL,
                     output=['media'],
                 ),
             ),
@@ -570,13 +578,13 @@ async def test_generate_with_system_instructions(mocker: MockerFixture) -> None:
             'gemini-2.5-flash-preview-tts',
             ModelInfo(
                 label='Google AI - Gemini 2.5 Flash Preview TTS',
-                supports=Supports(
+                supports=ModelSupports(
                     multiturn=False,
                     media=False,
                     tools=False,
                     tool_choice=False,
                     system_role=False,
-                    constrained=Constrained.NONE,
+                    constrained=ConstrainedSupport.NONE,
                     output=['media'],
                 ),
             ),
@@ -612,7 +620,7 @@ def test_gemini_3_1_models_register_real_capabilities(model_name: str) -> None:
     assert model_info.supports is not None
     assert model_info.supports.tools is True
     assert model_info.supports.tool_choice is True
-    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.constrained == ConstrainedSupport.ALL
     assert model_info.supports.output == ['text', 'json']
 
 
@@ -639,7 +647,7 @@ def test_vertexai_gemini_3_x_text_models_register_real_capabilities(model_name: 
     assert model_info.supports is not None
     assert model_info.supports.tools is True
     assert model_info.supports.tool_choice is True
-    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.constrained == ConstrainedSupport.ALL
     assert model_info.supports.output == ['text', 'json']
 
 
@@ -664,7 +672,7 @@ def test_stable_gemini_text_models_register_real_capabilities(model_name: str, e
     assert model_info.supports.tools is True
     assert model_info.supports.tool_choice is True
     assert model_info.supports.system_role is True
-    assert model_info.supports.constrained == Constrained.ALL
+    assert model_info.supports.constrained == ConstrainedSupport.ALL
     assert model_info.supports.output == ['text', 'json']
 
 
@@ -683,13 +691,13 @@ def test_tts_models_register_per_name_capabilities(model_name: str, expected_lab
     model_info = google_model_info(model_name)
 
     assert model_info.label == expected_label
-    assert model_info.supports == Supports(
+    assert model_info.supports == ModelSupports(
         multiturn=False,
         media=False,
         tools=False,
         tool_choice=False,
         system_role=False,
-        constrained=Constrained.NONE,
+        constrained=ConstrainedSupport.NONE,
         output=['media'],
     )
     assert get_model_config_schema(model_name) is GeminiTtsConfig
@@ -726,13 +734,13 @@ def test_gemma_4_models_register_per_name_capabilities(model_name: str, expected
     model_info = google_model_info(model_name)
 
     assert model_info.label == expected_label
-    assert model_info.supports == Supports(
+    assert model_info.supports == ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         tool_choice=True,
         system_role=True,
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
         output=['text', 'json'],
     )
     assert get_model_config_schema(model_name) is GemmaConfig
@@ -1901,7 +1909,7 @@ def test_gemini_model__normalize_config_dumps_gemma_instance() -> None:
     """Gemma's relaxed temperature dumps through without re-validation."""
     gemma_model = GeminiModel(version='gemma-2-27b-it', client=MagicMock(spec=genai.Client))
 
-    dumped = gemma_model._normalize_config_to_dict(GemmaConfig(temperature=3.0))
+    dumped = gemma_model._normalize_config_to_dict(GemmaConfig.model_validate({'temperature': 3.0}))
 
     assert dumped == {'temperature': 3.0}
 
@@ -2150,7 +2158,7 @@ async def test_generate_json_output_pins_request_body(mocker: MockerFixture, leg
     )
     gemini = GeminiModel(version, googleai_client_mock, legacy_response_schema=legacy_response_schema)
 
-    response = await gemini.generate(request, ActionRunContext())
+    response = await gemini.generate(request, ModelContext())
 
     if legacy_response_schema:
         expected_config = genai.types.GenerateContentConfig(
@@ -2249,7 +2257,7 @@ async def test_streaming_generate_classifies_error_on_first_chunk(
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content_stream.return_value = failing_stream()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+    ctx = ModelContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(request, ctx)
@@ -2273,7 +2281,7 @@ async def test_streaming_generate_classifies_mid_stream_error(mocker: MockerFixt
     googleai_client_mock = mocker.AsyncMock()
     googleai_client_mock.aio.models.generate_content_stream.return_value = mid_stream_fail()
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+    ctx = ModelContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(request, ctx)
@@ -2291,7 +2299,7 @@ async def test_generate_classifies_503_as_unavailable(mocker: MockerFixture) -> 
     gemini = GeminiModel('gemini-2.5-flash', googleai_client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(request, ActionRunContext())
+        await gemini.generate(request, ModelContext())
     assert raised.value.status == 'UNAVAILABLE'
 
 
@@ -2389,7 +2397,7 @@ async def test_generate_keeps_caller_response_modalities_on_tts_model(mocker: Mo
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['AUDIO', 'TEXT']
@@ -2407,7 +2415,7 @@ async def test_generate_keeps_caller_response_modalities_on_image_model(mocker: 
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content.return_value = genai.types.GenerateContentResponse(candidates=[candidate])
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['IMAGE']
@@ -2437,7 +2445,7 @@ async def test_generate_defaults_the_tts_voice_where_one_is_needed(
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     client_mock = _tts_client_mock(mocker, vertexai=vertexai)
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -2457,7 +2465,7 @@ async def test_generate_sends_no_voice_to_gemini_api_tts_that_picks_its_own(
     request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])])
     client_mock = _tts_client_mock(mocker, vertexai=False)
 
-    await GeminiModel(version, client_mock).generate(request, ActionRunContext())
+    await GeminiModel(version, client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.response_modalities == ['AUDIO']
@@ -2473,7 +2481,7 @@ async def test_generate_defaults_the_tts_voice_next_to_a_language_code(mocker: M
     )
     client_mock = _tts_client_mock(mocker, vertexai=False)
 
-    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-3.1-flash-tts-preview', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -2492,7 +2500,7 @@ async def test_generate_keeps_the_caller_tts_voice(mocker: MockerFixture) -> Non
     )
     client_mock = _tts_client_mock(mocker, vertexai=True)
 
-    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -2510,7 +2518,7 @@ async def test_generate_adds_no_voice_to_a_multi_speaker_config(mocker: MockerFi
     )
     client_mock = _tts_client_mock(mocker, vertexai=True)
 
-    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert isinstance(sent_config.speech_config, genai_types.SpeechConfig)
@@ -2528,7 +2536,7 @@ async def test_generate_adds_no_default_voice_next_to_an_extra_voice(mocker: Moc
     )
     client_mock = _tts_client_mock(mocker, vertexai=True)
 
-    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ActionRunContext())
+    await GeminiModel('gemini-2.5-flash-preview-tts', client_mock).generate(request, ModelContext())
 
     sent_config = client_mock.aio.models.generate_content.call_args.kwargs['config']
     assert sent_config.speech_config is None or sent_config.speech_config.voice_config is None
@@ -2707,7 +2715,7 @@ async def test_generate_credential_failure_is_unauthenticated(mocker: MockerFixt
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAUTHENTICATED'
     assert raised.value.cause is auth_error
@@ -2720,7 +2728,7 @@ async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: 
     client_mock = mocker.AsyncMock()
     client_mock.aio.models.generate_content_stream.side_effect = revoked
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock())
+    ctx = ModelContext(streaming_callback=mocker.MagicMock())
 
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ctx)
@@ -2744,7 +2752,7 @@ async def test_generate_metadata_server_refresh_error_is_unavailable(mocker: Moc
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is blip
@@ -2759,7 +2767,7 @@ async def test_generate_retryable_refresh_error_is_unavailable(mocker: MockerFix
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is flaky
@@ -2774,7 +2782,7 @@ async def test_generate_bare_auth_transport_error_is_unavailable(mocker: MockerF
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.cause is blip
@@ -2785,7 +2793,7 @@ async def _generate_failure(mocker: MockerFixture, failure: BaseException, *, st
     client_mock.aio.models.generate_content.side_effect = failure
     client_mock.aio.models.generate_content_stream.side_effect = failure
     gemini = GeminiModel('gemini-2.5-flash', client_mock)
-    ctx = ActionRunContext(streaming_callback=mocker.MagicMock()) if streaming else ActionRunContext()
+    ctx = ModelContext(streaming_callback=mocker.MagicMock()) if streaming else ModelContext()
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ctx)
     return raised.value
@@ -3106,14 +3114,13 @@ async def test_generate_blocked_prompt(mocker: MockerFixture) -> None:
     )
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'unsafe prompt'
     assert response.message is not None
     assert response.message.role == Role.MODEL
     assert [p.text for p in response.message.content] == ['']
-    assert response.candidates == []
     assert response.custom == {'promptFeedback': {'blockReason': 'SAFETY', 'blockReasonMessage': 'unsafe prompt'}}
     assert response.usage is not None
     assert response.usage.input_tokens == 7
@@ -3129,7 +3136,7 @@ async def test_generate_blocked_prompt_default_message(mocker: MockerFixture) ->
     client.aio.models.generate_content.return_value = genai_types.GenerateContentResponse(prompt_feedback=feedback)
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'prompt blocked: PROHIBITED_CONTENT'
@@ -3154,7 +3161,7 @@ async def test_generate_no_candidates_without_block_is_internal(
     gemini = GeminiModel('gemini-2.5-flash', client)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext())
+        await gemini.generate(_hi_request(), ModelContext())
     assert raised.value.status == 'INTERNAL'
     assert raised.value.original_message == 'Model returned no candidates.'
     assert raised.value.cause is None
@@ -3169,7 +3176,7 @@ async def test_generate_candidate_without_content(mocker: MockerFixture) -> None
     )
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.LENGTH
     assert response.message is not None
@@ -3186,7 +3193,7 @@ async def test_generate_with_candidates_ignores_block_reason(mocker: MockerFixtu
     client.aio.models.generate_content.return_value = answer
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
@@ -3201,7 +3208,7 @@ async def test_generate_without_prompt_feedback_leaves_custom_empty(mocker: Mock
     client.aio.models.generate_content.return_value = _text_chunk('Hello', genai_types.FinishReason.STOP)
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext())
+    response = await gemini.generate(_hi_request(), ModelContext())
 
     assert response.custom == {}
 
@@ -3221,7 +3228,7 @@ async def test_streaming_generate_blocked_prompt(mocker: MockerFixture) -> None:
     gemini = GeminiModel('gemini-2.5-flash', client)
     on_chunk = mocker.MagicMock()
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
 
     assert response.finish_reason == FinishReason.BLOCKED
     assert response.finish_message == 'prompt blocked: SAFETY'
@@ -3256,7 +3263,7 @@ async def test_streaming_generate_no_candidates_without_block_is_internal(mocker
     on_chunk = mocker.MagicMock()
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+        await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
     assert raised.value.status == 'INTERNAL'
     assert raised.value.original_message == 'Model returned no candidates.'
     on_chunk.assert_not_called()
@@ -3275,7 +3282,7 @@ async def test_streaming_generate_empty_stream_is_unavailable(mocker: MockerFixt
     gemini = GeminiModel('gemini-2.5-flash', client)
 
     with pytest.raises(GenkitError) as raised:
-        await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=mocker.MagicMock()))
+        await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
     assert raised.value.status == 'UNAVAILABLE'
     assert raised.value.original_message == 'Model stream returned no responses.'
 
@@ -3294,7 +3301,7 @@ async def test_streaming_generate_candidate_without_content(mocker: MockerFixtur
     gemini = GeminiModel('gemini-2.5-flash', client)
     on_chunk = mocker.MagicMock()
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
 
     assert response.finish_reason == FinishReason.LENGTH
     on_chunk.assert_not_called()
@@ -3314,7 +3321,7 @@ async def test_streaming_generate_block_reason_after_candidates_is_not_blocked(m
     gemini = GeminiModel('gemini-2.5-flash', client)
     on_chunk = mocker.MagicMock()
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=on_chunk))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
 
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None
@@ -3344,7 +3351,7 @@ async def test_streaming_generate_exposes_prompt_feedback_without_block(mocker: 
     client.aio.models.generate_content_stream.return_value = single_chunk()
     gemini = GeminiModel('gemini-2.5-flash', client)
 
-    response = await gemini.generate(_hi_request(), ActionRunContext(streaming_callback=mocker.MagicMock()))
+    response = await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
 
     assert response.finish_reason == FinishReason.STOP
     assert response.message is not None

@@ -39,8 +39,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import Field, ValidationError, model_validator
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.model import ModelInfo, ModelRequest, OperationError, Supports
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports, OperationError
 from genkit.plugin_api import GenkitConfig
 
 # Quote autocomplete needs a Literal, so these aliases list the Veo ids each
@@ -57,10 +57,11 @@ KnownVertexAIVeo: TypeAlias = Literal[
     'veo-3.1-lite-generate-001',
 ]
 
-# Sent as genai_types.VideoCompressionQuality and genai_types.ImageResizeMode.
-# googlegenai_gemini_test.py pins both to the SDK enums.
 VideoCompressionQuality: TypeAlias = Literal['OPTIMIZED', 'LOSSLESS']
+"""Values of ``genai_types.VideoCompressionQuality``."""
+
 ImageResizeMode: TypeAlias = Literal['CROP', 'PAD']
+"""Values of ``genai_types.ImageResizeMode``."""
 
 
 def is_veo_model(name: str) -> bool:
@@ -123,7 +124,7 @@ class VeoConfig(GenkitConfig):
         return data
 
 
-DEFAULT_VEO_SUPPORT = Supports(
+DEFAULT_VEO_SUPPORT = ModelSupports(
     media=True,
     multiturn=False,
     tools=False,
@@ -280,7 +281,7 @@ class VeoModel:
 
     def _client_for_context(
         self,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         *,
         config: Mapping[str, Any] | None = None,
     ) -> genai.Client:
@@ -349,7 +350,7 @@ class VeoModel:
                 cause=e,
             ) from e
 
-    async def start(self, request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
+    async def start(self, request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
         """Start a video generation operation.
 
         Args:
@@ -385,7 +386,7 @@ class VeoModel:
 
         return _from_veo_operation(api_op=response)
 
-    async def check(self, operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(self, operation: Operation, ctx: ModelContext) -> Operation:
         """Check the status of a video generation operation.
 
         Args:

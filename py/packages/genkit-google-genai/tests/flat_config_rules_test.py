@@ -37,7 +37,7 @@ from google.genai import _api_client
 from pydantic import ValidationError
 
 from genkit import Genkit, GenkitError, ModelResponse
-from genkit.model import model_ref
+from genkit.model import ModelRef
 
 _GEMINI = 'googleai/gemini-2.5-flash'
 
@@ -107,7 +107,7 @@ def test_google_search_options_alone_validate() -> None:
 @pytest.mark.asyncio
 async def test_default_budget_plus_call_level_raises_at_generate(sent: _Sent) -> None:
     """A ModelRef budget and a call level each pass alone; the merged config fails before sending."""
-    ref = model_ref(_GEMINI, config_schema=GeminiConfig, config=GeminiConfig(thinking_budget=1024))
+    ref = ModelRef(name=_GEMINI, config_schema=GeminiConfig, config=GeminiConfig(thinking_budget=1024))
 
     with pytest.raises(GenkitError, match='thinking_level=None or thinking_budget=None'):
         await _googleai().generate(model=ref, prompt='hi', config={'thinking_level': 'HIGH'})
@@ -118,7 +118,7 @@ async def test_default_budget_plus_call_level_raises_at_generate(sent: _Sent) ->
 @pytest.mark.asyncio
 async def test_call_clears_default_budget_with_none(sent: _Sent) -> None:
     """`thinking_budget=None` on the call clears the default, so the level goes out alone."""
-    ref = model_ref(_GEMINI, config_schema=GeminiConfig, config=GeminiConfig(thinking_budget=1024))
+    ref = ModelRef(name=_GEMINI, config_schema=GeminiConfig, config=GeminiConfig(thinking_budget=1024))
 
     await _googleai().generate(model=ref, prompt='hi', config={'thinking_level': 'HIGH', 'thinking_budget': None})
 
@@ -128,8 +128,8 @@ async def test_call_clears_default_budget_with_none(sent: _Sent) -> None:
 @pytest.mark.asyncio
 async def test_call_turns_off_default_search_by_clearing_options(sent: _Sent) -> None:
     """google_search=False plus None for each default option sends no search tool."""
-    ref = model_ref(
-        'vertexai/gemini-2.5-flash',
+    ref = ModelRef(
+        name='vertexai/gemini-2.5-flash',
         config_schema=GeminiConfig,
         config=GeminiConfig(google_search_exclude_domains=['example-reviews.com']),
     )
@@ -305,8 +305,10 @@ async def test_gemini_api_only_file_search_raises_on_vertex_ai(sent: _Sent, conf
 @pytest.mark.asyncio
 async def test_default_voice_plus_call_speakers_raises_at_generate(sent: _Sent) -> None:
     """A ModelRef voice and call speakers fail on the merged config, naming the None escape."""
-    ref = model_ref(
-        'googleai/gemini-2.5-flash-preview-tts', config_schema=GeminiTtsConfig, config=GeminiTtsConfig(voice='Kore')
+    ref = ModelRef(
+        name='googleai/gemini-2.5-flash-preview-tts',
+        config_schema=GeminiTtsConfig,
+        config=GeminiTtsConfig(voice='Kore'),
     )
 
     with pytest.raises(GenkitError, match='voice=None or speakers=None'):

@@ -132,13 +132,17 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                     'type': 'integer',
                     'minimum': 1024,
                     'title': 'Thinking budget',
-                    'description': 'Thinking token budget. Required when thinking is enabled; ignored when adaptive.',
+                    'description': (
+                        'Thinking token budget. Required when thinking is enabled; ignored when adaptive or disabled.'
+                    ),
                 },
                 'thinkingDisplay': {
                     'type': 'string',
                     'enum': list(get_args(ThinkingDisplay)),
                     'title': 'Thinking display',
-                    'description': 'Whether the reply includes summarized thinking or omits it.',
+                    'description': (
+                        'Whether the reply includes summarized thinking or omits it. Ignored when thinking is disabled.'
+                    ),
                 },
                 'effort': {
                     'type': 'string',
@@ -189,6 +193,22 @@ class AnthropicConfig(ModelConfig):
     ``extra={'tool_choice': ...}`` is dropped on a request with no tools, the
     same as ``generate(tool_choice=)``, because the API rejects tool_choice
     without tools.
+
+    Layered config: Genkit merges config key by key, ModelRef default first,
+    then the prompt's config, then the call's; a layer overrides only the
+    keys it sets, and ``None`` clears an inherited value. Three rules follow:
+
+    1. Rules that span fields are judged once, on the merged config, right
+       before the request is built. A layer is never rejected for something
+       another layer could still supply. Single-field checks (type, bounds,
+       unknown keys) still run on each layer.
+    2. When one field is a switch and the others only apply in some modes,
+       the switch wins: a setting the mode doesn't use isn't sent, and
+       nothing fails. ``thinking='disabled'`` over an inherited
+       ``thinking_budget`` turns thinking off.
+    3. When two fields pick the same thing and neither is a switch, a
+       conflict in the merged config fails before the request is sent, and
+       the message names the ``None`` that clears the inherited one.
     """
 
     model_config = ConfigDict(json_schema_extra=_anthropic_config_schema_extra)
@@ -206,11 +226,11 @@ class AnthropicConfig(ModelConfig):
     thinking_budget: int | None = Field(
         default=None,
         ge=1024,
-        description='Thinking token budget. Required when thinking is enabled; ignored when adaptive.',
+        description='Thinking token budget. Required when thinking is enabled; ignored when adaptive or disabled.',
     )
     thinking_display: ThinkingDisplay | None = Field(
         default=None,
-        description='Whether the reply includes summarized thinking or omits it.',
+        description='Whether the reply includes summarized thinking or omits it. Ignored when thinking is disabled.',
     )
     effort: Effort | None = Field(default=None, description='How much effort the model spends on the reply.')
     task_budget: int | None = Field(
@@ -253,18 +273,27 @@ class AnthropicConfig(ModelConfig):
             raise GenkitError(status='INVALID_ARGUMENT', message=f'anthropic: {message}')
         return data
 
-    @model_validator(mode='after')
-    def _check_thinking(self) -> 'AnthropicConfig':
-        """Enforce the cross-field thinking rules."""
-        if self.thinking == 'enabled' and self.thinking_budget is None:
-            raise ValueError("thinking_budget is required when thinking is 'enabled'")
-        if self.thinking == 'disabled' and self.thinking_budget is not None:
-            raise ValueError("thinking_budget can't be set when thinking is 'disabled'")
-        if self.thinking == 'disabled' and self.thinking_display is not None:
-            raise ValueError("thinking_display can't be set when thinking is 'disabled'")
-        if self.thinking_display is not None and self.thinking is None and self.thinking_budget is None:
-            raise ValueError('thinking_display needs thinking= or thinking_budget=')
-        return self
+    # How the flattened groups behave when config layers merge. See "Layered
+    # config" in the class docstring for the three rules.
+    #
+    # - thinking / thinking_budget / thinking_display (rule 2): `thinking` is
+    #   the switch. 'disabled' ignores the budget and the display; 'adaptive'
+    #   ignores the budget. A call that sets thinking='disabled' over a default
+    #   of thinking='enabled', thinking_budget=4096 turns thinking off instead
+    #   of failing. The budget stays in the merged config, so a later
+    #   thinking='enabled' picks it back up. _to_anthropic_thinking leaves the
+    #   ignored fields out of the request. The one case this can't read: a
+    #   call that sets only thinking_budget over an inherited 'disabled'
+    #   merges to the same values as the case above, so it stays disabled;
+    #   turning thinking on takes thinking='enabled'.
+    # - effort / task_budget: independent; overriding one keeps the other.
+    # - user_id: one field.
+    # - disable_parallel_tool_use: ignored under generate(tool_choice='none'),
+    #   since Anthropic's none variant has no such field (rule 2).
+    # - api_version vs task_budget / betas (rule 3): neither side is a switch
+    #   for the other. Dropping the beta field would quietly lose a spend cap
+    #   or a feature; switching to beta would override an explicit 'stable'.
+    #   So the merged config fails and the message names both ways out.
 
     def thinking_mode(self) -> ThinkingMode | None:
         """The thinking mode the request sends; a budget alone means enabled."""
@@ -285,13 +314,26 @@ class AnthropicConfig(ModelConfig):
             present.add('task_budget')
         return present
 
-    @model_validator(mode='after')
-    def _check_api_surface(self) -> 'AnthropicConfig':
-        """Reject beta-only fields on the stable surface so an explicit apiVersion is never silently overridden."""
-        if self.api_version != 'stable':
-            return self
-        beta_only = self.beta_only_fields()
-        if beta_only:
-            names = ', '.join(sorted(beta_only))
-            raise ValueError(f"{names} require the beta API surface; remove them or set apiVersion to 'beta'")
-        return self
+    def check_merged(self) -> None:
+        """Raise ``ValueError`` if the merged config can't be sent (rule 1).
+
+        These rules span fields, so they aren't model validators: a validator
+        also runs on each layer by itself, and would reject
+        ``thinking='enabled'`` in a call whose default supplies the budget.
+        The plugin calls this once, on the config the request is built from.
+        """
+        # 'enabled' can't be sent without budget_tokens, and no layer set one.
+        if self.thinking == 'enabled' and self.thinking_budget is None:
+            raise ValueError("thinking_budget is required when thinking is 'enabled'")
+        # No mode and no budget means no thinking object to carry the display,
+        # so it would be dropped without a word.
+        if self.thinking_display is not None and self.thinking_mode() is None:
+            raise ValueError('thinking_display needs thinking= or thinking_budget=')
+        # Rule 3: an explicit 'stable' and a beta-only field conflict.
+        if self.api_version == 'stable':
+            beta_only = self.beta_only_fields()
+            if beta_only:
+                names = ', '.join(sorted(beta_only))
+                raise ValueError(
+                    f"{names} require the beta API surface; set apiVersion to 'beta' or clear them with None"
+                )

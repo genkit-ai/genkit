@@ -86,6 +86,7 @@ from genkit_google_genai._google import (
 )
 from genkit_google_genai._models._antigravity import AntigravityConfig
 from genkit_google_genai._models._deep_research import DeepResearchConfig, McpServerConfig
+from genkit_google_genai._models._embedder import EmbeddingConfig
 from genkit_google_genai._models._gemini import (
     GeminiConfig,
     GeminiImageConfig,
@@ -111,6 +112,7 @@ from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 __all__ = [
     'AntigravityConfig',
     'DeepResearchConfig',
+    'EmbeddingConfig',
     'GeminiConfig',
     'GeminiImageConfig',
     'GeminiTtsConfig',

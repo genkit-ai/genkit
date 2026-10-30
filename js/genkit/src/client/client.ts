@@ -170,6 +170,20 @@ async function __flowRunEnvelope({
 }
 
 /**
+ * The error {@link runFlow} throws for a response that is not a 200, carrying
+ * the HTTP status and the body so a caller can tell a missing route from an
+ * error the action itself reported.
+ */
+export class HttpStatusError extends Error {
+  constructor(
+    readonly httpStatus: number,
+    readonly body: string
+  ) {
+    super(`Server returned: ${httpStatus}: ${body}`);
+  }
+}
+
+/**
  * Invoke a deployed flow over HTTP(s).
  *
  * For example:
@@ -215,9 +229,7 @@ export async function runFlow<O = any, Init = any>({
     signal: abortSignal,
   });
   if (response.status !== 200) {
-    throw new Error(
-      `Server returned: ${response.status}: ${await response.text()}`
-    );
+    throw new HttpStatusError(response.status, await response.text());
   }
   const wrappedResult = (await response.json()) as
     | { result: O }

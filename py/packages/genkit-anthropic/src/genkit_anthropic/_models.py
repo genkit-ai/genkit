@@ -28,7 +28,6 @@ import json
 from typing import Any, Literal, Protocol, cast
 
 import httpx
-import structlog
 from anthropic import (
     APIConnectionError,
     APIError,
@@ -39,8 +38,8 @@ from anthropic import (
 )
 from anthropic.types import Message as AnthropicMessage
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
+from genkit.model import ConstrainedSupport, GenerationUsage, ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
@@ -54,7 +53,7 @@ from genkit_anthropic._utils import (
     to_anthropic_media,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 BETA_APIS: tuple[str, ...] = (
@@ -195,12 +194,17 @@ def _normalize_config(config: object | None) -> AnthropicConfig:
 def _to_anthropic_thinking(config: AnthropicConfig) -> dict[str, Any] | None:
     """Build Anthropic's thinking object from the flat fields; None sends nothing.
 
-    AnthropicConfig's validator already enforces the cross-field rules, so
-    'enabled' always has a budget here. 'adaptive' doesn't send one.
+    AnthropicConfig.check_merged already guarantees 'enabled' has a budget.
+    Fields the mode doesn't use are left out rather than rejected, because
+    they're usually inherited from another config layer (rule 2 in
+    AnthropicConfig's docstring): 'disabled' sends only the type, and
+    'adaptive' sends no budget.
     """
     mode = config.thinking_mode()
     if mode is None:
         return None
+    if mode == 'disabled':
+        return {'type': 'disabled'}
     result: dict[str, Any] = {}
     if config.thinking_display is not None:
         result['display'] = config.thinking_display
@@ -338,7 +342,7 @@ class AnthropicModel:
         self.client = client
         self._default_api_version = default_api_version
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
         """Generate response from Anthropic.
 
         Args:
@@ -355,6 +359,9 @@ class AnthropicModel:
         # ValidationError is a ValueError.
         try:
             config = _normalize_config(request.config)
+            # The merged config: every layer and middleware edit is in. Rules
+            # that span fields are judged here and only here.
+            config.check_merged()
             use_beta = self._uses_beta_api(config)
             params = self._build_params(request, config=config, use_beta=use_beta)
         except ValueError as e:
@@ -393,7 +400,7 @@ class AnthropicModel:
         content = maybe_strip_fences(request, content)
 
         response_message = Message(role=Role.MODEL, content=content)
-        basic_usage = get_basic_usage_stats(input_=request.messages, response=response_message)
+        basic_usage = GenerationUsage.from_messages(request.messages, response_message)
 
         finish_reason_map: dict[str, FinishReason] = {
             'compaction': FinishReason.OTHER,
@@ -417,7 +424,7 @@ class AnthropicModel:
             finish_reason=finish_reason,
         )
 
-    def _build_usage(self, response: AnthropicMessage, basic_usage: ModelUsage) -> ModelUsage:
+    def _build_usage(self, response: AnthropicMessage, basic_usage: GenerationUsage) -> GenerationUsage:
         """Build usage stats including cache read/write token counts.
 
         Delegates to :func:`utils.build_cache_usage` for the actual
@@ -428,7 +435,7 @@ class AnthropicModel:
             basic_usage: Basic character/image usage from message content.
 
         Returns:
-            ModelUsage with token and character counts.
+            GenerationUsage with token and character counts.
         """
         return build_cache_usage(
             input_tokens=response.usage.input_tokens,
@@ -500,6 +507,10 @@ class AnthropicModel:
         params['model'] = config.version or self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
+        # ModelConfig types top_k as float, so 40 dumps as 40.0; Claude's top_k is an int.
+        top_k = params.get('top_k')
+        if isinstance(top_k, float) and top_k.is_integer():
+            params['top_k'] = int(top_k)
 
         if use_beta:
             # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.
@@ -587,14 +598,14 @@ class AnthropicModel:
         """Return whether this model supports native constrained output."""
         supports = self._model_info.supports
         constrained = supports.constrained if supports else None
-        if constrained is None or constrained == Constrained.NONE:
+        if constrained is None or constrained == ConstrainedSupport.NONE:
             return False
-        return constrained != Constrained.NO_TOOLS or not has_tools
+        return constrained != ConstrainedSupport.NO_TOOLS or not has_tools
 
     async def _generate_streaming(
         self,
         params: dict[str, Any],
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         client: object | None = None,
         use_beta: bool = False,
     ) -> AnthropicMessage:

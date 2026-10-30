@@ -234,7 +234,12 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
+  "TID251", # banned-api (see flake8-tidy-imports.banned-api below)
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"structlog.get_logger".msg = "Use genkit.get_logger; structlog.get_logger lines never reach the Dev UI trace panel."
+"logging.getLogger".msg = "Use genkit.get_logger; stdlib logger lines never reach the Dev UI trace panel."
 
 [tool.ruff.lint.per-file-ignores]
 # Auto-generated file from schema
@@ -257,6 +262,14 @@ select = [
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Samples are demo code and can use blocking I/O, prints, top-level execution
 "samples/**/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
+# get_logger is enforced only in shipped package code
+"!packages/*/src/**/*.py" = ["TID251"]
+# Defines get_logger and sets levels on third-party stdlib loggers
+"packages/genkit/src/genkit/_core/_logger.py" = ["TID251"]
+# Served-failure logs go to the host web server's stdlib logging config
+"packages/genkit-django/src/genkit_django/_handler.py" = ["TID251"]
+"packages/genkit-fastapi/src/genkit_fastapi/_handler.py" = ["TID251"]
+"packages/genkit-flask/src/genkit_flask/_handler.py" = ["TID251"]
 
 
 [tool.ruff.lint.isort]

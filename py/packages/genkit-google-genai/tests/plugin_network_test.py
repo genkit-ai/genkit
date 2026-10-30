@@ -29,7 +29,7 @@ from genkit_google_genai import GeminiConfig, GoogleAI, VertexAI
 from google.oauth2.credentials import Credentials
 
 from genkit import FinishReason, Genkit
-from genkit.plugin_api import GENKIT_CLIENT_HEADER
+from genkit.plugin_api import GENKIT_USER_AGENT
 
 MODEL_LIST = {'models': [{'name': 'models/gemini-2.5-flash', 'supportedActions': ['generateContent']}]}
 VERTEX_MODEL_LIST = {'models': [{'name': 'publishers/google/models/gemini-2.5-flash'}]}
@@ -207,8 +207,8 @@ async def test_your_headers_are_sent_with_genkit_attribution_appended() -> None:
     sent = api.last_post().headers
     assert sent['x-team'] == 'search'
     assert len(sent.get_list('user-agent')) == 1
-    assert sent['user-agent'].endswith(f'acme {GENKIT_CLIENT_HEADER}')
-    assert GENKIT_CLIENT_HEADER in sent['x-goog-api-client']
+    assert sent['user-agent'].endswith(f'acme {GENKIT_USER_AGENT}')
+    assert GENKIT_USER_AGENT in sent['x-goog-api-client']
 
 
 @pytest.mark.asyncio
@@ -266,8 +266,8 @@ async def test_one_http_client_factory_shared_by_two_plugins() -> None:
 
     assert google_api.last_post().headers.get_list('x-team') == ['search']
     assert vertex_api.last_post().headers.get_list('x-team') == ['ads']
-    assert google_api.last_post().headers['user-agent'].count(GENKIT_CLIENT_HEADER) == 1
-    assert vertex_api.last_post().headers['user-agent'].count(GENKIT_CLIENT_HEADER) == 1
+    assert google_api.last_post().headers['user-agent'].count(GENKIT_USER_AGENT) == 1
+    assert vertex_api.last_post().headers['user-agent'].count(GENKIT_USER_AGENT) == 1
 
 
 @pytest.mark.asyncio
@@ -332,8 +332,8 @@ async def test_no_network_arguments_sends_attribution_headers_only(monkeypatch: 
     assert api.urls('POST') == [GENERATE_URL]
     sent = api.last_post().headers
     assert len(sent.get_list('user-agent')) == 1
-    assert sent['user-agent'].endswith(GENKIT_CLIENT_HEADER)
-    assert GENKIT_CLIENT_HEADER in sent['x-goog-api-client']
+    assert sent['user-agent'].endswith(GENKIT_USER_AGENT)
+    assert GENKIT_USER_AGENT in sent['x-goog-api-client']
     assert 'x-team' not in sent
 
 

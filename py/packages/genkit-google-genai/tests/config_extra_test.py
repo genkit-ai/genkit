@@ -132,3 +132,33 @@ async def test_generate_gemini_extra_snake_case_generation_config_keeps_other_ge
 
     assert _extra_body(cfg)['generationConfig'] == {'futureKnob': 1, 'newKnob': 2}
     assert 'generation_config' not in _extra_body(cfg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'extra',
+    [
+        {'generationConfig': {'candidateCount': 3}},
+        {'generation_config': {'candidate_count': 3}},
+    ],
+    ids=['camel', 'snake'],
+)
+async def test_generate_gemini_extra_candidate_count_raises(extra: dict) -> None:
+    """`extra` can't ask for N candidates: Gemini would bill N and Genkit reads only candidate 0."""
+    # 1. A request that asks for three candidates through the passthrough
+    config = GeminiConfig(extra=extra)
+
+    # 2. It fails before the request is built, naming the reason
+    with pytest.raises(GenkitError, match='Gemini models return one candidate') as err:
+        await _cfg(config)
+
+    # 3. Caller input, so retry skips it
+    assert err.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_extra_other_generation_keys_still_pass_through() -> None:
+    """Refusing candidateCount leaves the rest of generationConfig in extra alone."""
+    cfg = await _cfg(GeminiConfig(extra={'generationConfig': {'futureKnob': 1}}))
+
+    assert _extra_body(cfg)['generationConfig'] == {'futureKnob': 1}

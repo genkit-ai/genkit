@@ -78,11 +78,36 @@ res = await ai.generate(model='anthropic/claude-opus-4-6', prompt='Plan a tastin
 #   metadata={'user_id': 'diner-42'}
 ```
 
-- A `thinking_budget` alone means `thinking='enabled'`. `'enabled'` requires
-  a budget, `'disabled'` rejects one, and `'adaptive'` ignores it.
+- A `thinking_budget` alone means `thinking='enabled'`. `'enabled'` needs a
+  budget from some config layer; `'adaptive'` doesn't send one, and
+  `'disabled'` sends neither the budget nor the display.
 - `task_budget` is a beta field, so it sends the call to the beta API.
 - To send a shape the flat fields don't cover, put Anthropic's object in
   `extra`, e.g. `extra={'thinking': {...}}`. It replaces the built object.
+
+### Defaults and overrides
+
+Config merges key by key: the `Anthropic.claude(config=...)` default, then the
+prompt's config, then the call's. Rules that span fields are checked once, on
+the merged config. `thinking` is the switch, so a call can turn thinking off
+or back on without restating the budget:
+
+```python
+# 1. Model default with extended thinking on
+claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(thinking='enabled', thinking_budget=4096))
+
+# 2. Turn it off for one call; the inherited budget isn't sent
+await ai.generate(model=claude, prompt='Is shellfish safe for this guest?', config={'thinking': 'disabled'})
+# => thinking={'type': 'disabled'}
+
+# 3. Raise the budget for another; the mode is inherited
+await ai.generate(model=claude, prompt='Plan a nut-free tasting menu.', config={'thinking_budget': 8192})
+# => thinking={'type': 'enabled', 'budget_tokens': 8192}
+```
+
+A budget over an inherited `thinking='disabled'` stays disabled. Pass
+`thinking='enabled'` to turn it on, or `thinking=None` to clear the inherited
+mode. `None` clears any inherited value the same way.
 
 ## Tool choice
 

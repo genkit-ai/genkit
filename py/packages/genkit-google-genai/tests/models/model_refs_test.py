@@ -24,6 +24,7 @@ from typing import Literal, get_args, get_origin, get_type_hints
 import genkit_google_genai
 import pytest
 from genkit_google_genai import (
+    EmbeddingConfig,
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
@@ -297,6 +298,36 @@ class TestEmbeddingConstructor:
         assert isinstance(ref, EmbedderRef)
         assert not isinstance(ref, ModelRef)
         assert ref.name == 'googleai/gemini-embedding-001'
+
+    def test_embedding_stores_a_typed_config_as_a_dict(self) -> None:
+        """A typed EmbeddingConfig lands on the ref as the dict ai.embed() merges."""
+        config = EmbeddingConfig(task_type='RETRIEVAL_QUERY', output_dimensionality=256)
+        ref = GoogleAI.embedding('gemini-embedding-001', config=config)
+        assert ref.config == {'task_type': 'RETRIEVAL_QUERY', 'output_dimensionality': 256}
+
+    def test_embedding_normalizes_a_dict_config_to_snake_case(self) -> None:
+        """A camelCase dict config is stored by field name on both plugins."""
+        config: dict[str, object] = {'taskType': 'RETRIEVAL_DOCUMENT', 'mimeType': 'text/plain'}
+        expected = {'task_type': 'RETRIEVAL_DOCUMENT', 'mime_type': 'text/plain'}
+        assert GoogleAI.embedding('gemini-embedding-001', config=config).config == expected
+        assert VertexAI.embedding('text-embedding-005', config=config).config == expected
+
+    def test_embedding_keeps_the_camel_case_value_when_both_spellings_are_given(self) -> None:
+        """With both spellings in one dict the camelCase value is the field and the only one stored."""
+        config: dict[str, object] = {'taskType': 'CLUSTERING', 'task_type': 'RETRIEVAL_QUERY'}
+        assert GoogleAI.embedding('gemini-embedding-001', config=config).config == {'task_type': 'CLUSTERING'}
+
+    @pytest.mark.parametrize(
+        ('config', 'key'),
+        [({'outputDimensionality': 0}, 'outputDimensionality'), ({'someFutureFlag': True}, 'someFutureFlag')],
+        ids=['invalid_value', 'unknown_key'],
+    )
+    def test_embedding_rejects_an_invalid_dict_config(self, config: dict[str, object], key: str) -> None:
+        """A dict config that fails validation raises INVALID_ARGUMENT at construction, naming the key."""
+        with pytest.raises(GenkitError) as exc_info:
+            GoogleAI.embedding('gemini-embedding-001', config=config)
+        assert exc_info.value.status == 'INVALID_ARGUMENT'
+        assert exc_info.value.original_message == f'GoogleAI.embedding: invalid config field {key}'
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""

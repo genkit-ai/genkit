@@ -40,11 +40,10 @@ from genkit_google_genai._models._interactions_utils import (
 )
 from genkit_google_genai._models._secrets import reject_request_config_api_key
 from pydantic import field_validator
-from typing_extensions import Never
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind, GenkitConfig
+from genkit import ModelResponse
+from genkit.model import Model, ModelContext, ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 CREATE_OPTION_KEYS = ('response_modalities',)
 
@@ -71,12 +70,12 @@ def create_lyria_action(
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> Action[ModelRequest[LyriaConfig], ModelResponse, Never]:
+) -> Model:
     """Build a foreground model action for Interactions Lyria."""
     version = extract_version(name)
     info = lyria_model_info(version)
 
-    async def run(request: ModelRequest[LyriaConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[LyriaConfig], ctx: ModelContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
         config = request.config or LyriaConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
@@ -102,13 +101,9 @@ def create_lyria_action(
         created = await create_interaction(api_key, create_kwargs, merged_options)
         return from_interaction_sync(created)
 
-    return Action(
-        kind=ActionKind.MODEL,
-        name=name,
-        fn=run,
-        metadata=model_action_metadata(
-            name=name,
-            info=info.model_dump(by_alias=True),
-            config_schema=LyriaConfig,
-        ).metadata,
+    return Model(
+        name,
+        run,
+        info=info,
+        config_schema=LyriaConfig,
     )

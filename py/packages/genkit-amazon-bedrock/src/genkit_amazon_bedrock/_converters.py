@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelRequest, ModelUsage, ToolDefinition, ToolRequest
+from genkit.model import GenerationUsage, ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock._config import BedrockConfig
 
 # Bedrock returns signed and sometimes redacted reasoning that has to be sent
@@ -696,7 +696,7 @@ def map_finish_reason(stop_reason: str | None) -> FinishReason:
     return STOP_REASON_MAP.get(stop_reason or '', FinishReason.OTHER)
 
 
-def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # noqa: ANN401
+def usage_from_response(usage: dict[str, Any] | None) -> GenerationUsage | None:  # noqa: ANN401
     """Maps Converse token usage; totals are trusted verbatim from AWS.
 
     Only ``cacheReadInputTokens`` surfaces (as ``cached_content_tokens``);
@@ -704,7 +704,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
     """
     if usage is None:
         return None
-    return ModelUsage(
+    return GenerationUsage(
         input_tokens=usage.get('inputTokens'),
         output_tokens=usage.get('outputTokens'),
         total_tokens=usage.get('totalTokens'),
@@ -715,7 +715,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
 def usage_log_fields(usage: dict[str, Any] | None) -> dict[str, Any]:  # noqa: ANN401
     """Token counts as structlog keys; empty when the response reported none.
 
-    Cache writes are here but not on ``ModelUsage``, so the log is the only
+    Cache writes are here but not on ``GenerationUsage``, so the log is the only
     place they surface.
     """
     if not usage:

@@ -33,7 +33,15 @@ from genkit_anthropic._utils import maybe_strip_fences, strip_markdown_fences
 from pydantic import ValidationError
 
 from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponseChunk, Part, Role
-from genkit.model import Constrained, ModelConfig, ModelInfo, ModelRequest, OutputConfig, Supports, ToolDefinition
+from genkit.model import (
+    ConstrainedSupport,
+    ModelConfig,
+    ModelInfo,
+    ModelRequest,
+    ModelSupports,
+    OutputConfig,
+    ToolDefinition,
+)
 
 
 def _create_sample_request() -> ModelRequest:
@@ -767,7 +775,7 @@ def test_structured_output_falls_back_when_model_disallows_constraints() -> None
     """Test that an explicit constrained=none capability disables native output."""
     mock_client = MagicMock()
     model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
-    model._model_info = ModelInfo(label='Test model', supports=Supports(constrained=Constrained.NONE))
+    model._model_info = ModelInfo(label='Test model', supports=ModelSupports(constrained=ConstrainedSupport.NONE))
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
@@ -788,7 +796,7 @@ def test_structured_output_with_no_tools_capability() -> None:
     """Test that no-tools constrained output is disabled only when tools are present."""
     mock_client = MagicMock()
     model = AnthropicModel(model_name='claude-opus-4-6', client=mock_client)
-    model._model_info = ModelInfo(label='Test model', supports=Supports(constrained=Constrained.NO_TOOLS))
+    model._model_info = ModelInfo(label='Test model', supports=ModelSupports(constrained=ConstrainedSupport.NO_TOOLS))
 
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Generate a cat')])],
@@ -1194,6 +1202,11 @@ async def test_typed_config_thinking_translated_for_sdk() -> None:
         # Adaptive accepts a budget and doesn't send it.
         ({'thinking': 'adaptive', 'thinkingBudget': 2048}, {'type': 'adaptive'}),
         ({'thinking': 'disabled'}, {'type': 'disabled'}),
+        # Disabled sends only the type, whatever budget or display is set.
+        (
+            {'thinking': 'disabled', 'thinkingBudget': 2048, 'thinkingDisplay': 'summarized'},
+            {'type': 'disabled'},
+        ),
         # A budget alone means enabled.
         ({'thinkingBudget': 2048}, {'type': 'enabled', 'budget_tokens': 2048}),
         (
@@ -1268,11 +1281,24 @@ async def test_invalid_config_raises_from_generate() -> None:
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
     with pytest.raises(GenkitError) as exc_info:
-        await model.generate(_text_request({'thinking': 'enabled'}))
+        await model.generate(_text_request({'thinkingBudget': 512}))
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert isinstance(exc_info.value.cause, ValidationError)
     assert exc_info.value.__cause__ is exc_info.value.cause
+    mock_client.messages.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merged_config_rule_raises_from_generate() -> None:
+    """A merged config that breaks a cross-field rule is INVALID_ARGUMENT before anything is sent."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with pytest.raises(GenkitError, match="thinking_budget is required when thinking is 'enabled'") as exc_info:
+        await model.generate(_text_request({'thinking': 'enabled'}))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
     mock_client.messages.create.assert_not_called()
 
 

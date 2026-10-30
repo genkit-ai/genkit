@@ -47,7 +47,6 @@ from pydantic import ValidationError
 
 from genkit import Message, ModelResponse, ModelResponseChunk
 from genkit._core._error import RuntimeErrorReason
-from genkit._core._model import Candidate
 from genkit._core._typing import FinishReason, GenerationUsage, Role
 
 
@@ -441,58 +440,6 @@ async def test_generate_a2ui_instructions_none_does_not_inject_catalog() -> None
         use=[Surfaces(instructions='none')],
     )
     assert 'Rendering UI with A2UI' not in request_system_text(pm)
-
-
-@pytest.mark.asyncio
-async def test_generate_a2ui_rewrites_candidates_message_too() -> None:
-    """A finished turn rewrites candidates[0].message, not only the top-level message."""
-    ai, pm = setup()
-    fence = weather_fence()
-    message = Message(role=Role.MODEL, content=[text_part(fence)])
-    pm.responses = [
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=message,
-            candidates=[
-                Candidate(index=0, message=message, finish_reason=FinishReason.STOP),
-            ],
-        )
-    ]
-
-    response = await ai.generate(model='scriptedModel', prompt=WEATHER_PROMPT, use=[Surfaces()])
-    finished = assert_finished_message(response)
-    assert envelopes(finished.content)
-    assert_no_fence_in_text(finished.content)
-    assert response.candidates
-    candidate_message = response.candidates[0].message
-    assert envelopes(candidate_message.content)
-    assert_no_fence_in_text(candidate_message.content)
-
-
-@pytest.mark.asyncio
-async def test_generate_a2ui_rewrites_candidates_when_message_missing() -> None:
-    """A finished turn that only carries candidates[0] still becomes a data part."""
-    ai, pm = setup()
-    fence = weather_fence()
-    message = Message(role=Role.MODEL, content=[text_part(fence)])
-    pm.responses = [
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=None,
-            candidates=[
-                Candidate(index=0, message=message, finish_reason=FinishReason.STOP),
-            ],
-        )
-    ]
-
-    response = await ai.generate(model='scriptedModel', prompt=WEATHER_PROMPT, use=[Surfaces()])
-    finished = assert_finished_message(response)
-    assert envelopes(finished.content)
-    assert_no_fence_in_text(finished.content)
-    assert response.candidates
-    candidate_message = response.candidates[0].message
-    assert envelopes(candidate_message.content)
-    assert_no_fence_in_text(candidate_message.content)
 
 
 @pytest.mark.asyncio

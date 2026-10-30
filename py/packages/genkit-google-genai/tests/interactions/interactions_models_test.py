@@ -29,7 +29,7 @@ from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
-    create_deep_research_background_action,
+    create_deep_research_background_model,
     deep_research_model,
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig, create_lyria_action
@@ -38,7 +38,7 @@ from google.genai.interactions import Interaction
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
 from genkit.model import ModelRequest, ToolDefinition
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import ActionKind, BackgroundAction
 
 
 async def _empty_model_pager() -> AsyncIterator[Any]:
@@ -141,7 +141,7 @@ async def test_deep_research_start_sends_background_request() -> None:
         create_result={'id': 'dr-1', 'status': 'in_progress'},
         captured=captured,
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(
@@ -208,7 +208,7 @@ async def test_deep_research_check_reads_secrets_not_ticket() -> None:
         },
         captured=captured,
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(
@@ -260,7 +260,7 @@ async def test_deep_research_cancel_reads_secrets_not_ticket() -> None:
         cancel_result={'id': 'dr-1', 'status': 'cancelled'},
         captured=captured,
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -303,7 +303,7 @@ async def test_deep_research_check_falls_back_to_plugin_api_key() -> None:
         get_result={'id': 'dr-1', 'status': 'in_progress'},
         captured=captured,
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -324,7 +324,7 @@ async def test_deep_research_passes_previous_interaction_id() -> None:
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-2', 'status': 'in_progress'},
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -345,7 +345,7 @@ async def test_deep_research_rejects_config_api_key() -> None:
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-key', 'status': 'in_progress'},
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -370,7 +370,7 @@ async def test_deep_research_start_uses_context_secrets() -> None:
         create_result={'id': 'dr-secret', 'status': 'in_progress'},
         captured=captured,
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -434,7 +434,7 @@ async def test_deep_research_rejects_empty_messages() -> None:
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-empty', 'status': 'in_progress'},
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -462,7 +462,7 @@ async def test_deep_research_rejects_function_tools() -> None:
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-tools', 'status': 'in_progress'},
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -662,14 +662,14 @@ def test_package_root_lyria_config_is_interactions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deep_research_background_action_sets_action() -> None:
+async def test_deep_research_background_model_sets_action() -> None:
     """Start stamps Operation.action so check/cancel can find the companions."""
     patcher, _, _, _ = patch_interactions(
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-action-1', 'status': 'in_progress'},
     )
     ref = deep_research_model('deep-research-preview-04-2026')
-    bg = create_deep_research_background_action(
+    bg = create_deep_research_background_model(
         ref,
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -713,7 +713,9 @@ async def test_googleai_plugin_registers_interactions_models() -> None:
         plugin = GoogleAI(api_key='test-key')
         actions = await plugin.init()
 
-    kinds_by_name = {action.name: action.kind for action in actions}
+    # A background model comes back whole; flatten it the way the registry does.
+    members = [m for a in actions for m in (a.actions if isinstance(a, BackgroundAction) else [a])]
+    kinds_by_name = {action.name: action.kind for action in members}
     dr_name = googleai_name('deep-research-preview-04-2026')
     ag_name = googleai_name('antigravity-preview-05-2026')
     ly_name = googleai_name('lyria-3-clip-preview')
@@ -738,11 +740,16 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     assert bg is not None
     assert bg.kind == ActionKind.BACKGROUND_MODEL
 
-    check = await plugin.resolve(ActionKind.CHECK_OPERATION, f'{dr_name}/check')
+    # The plugin resolves only the start key; the registry files check and cancel.
+    registry = Genkit(plugins=[plugin])._registry
+    with patch('genkit_google_genai._google._list_genai_models', new=AsyncMock(return_value=GenaiModels())):
+        check = await registry.resolve_action_by_key(f'/check-operation/googleai/{dr_name}/check')
     assert check is not None
+    assert check.kind == ActionKind.CHECK_OPERATION
 
-    cancel = await plugin.resolve(ActionKind.CANCEL_OPERATION, f'{dr_name}/cancel')
+    cancel = await registry.resolve_action_by_key(f'/cancel-operation/googleai/{dr_name}/cancel')
     assert cancel is not None
+    assert cancel.kind == ActionKind.CANCEL_OPERATION
 
     ag = await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-05-2026')
     assert ag is not None
@@ -799,7 +806,7 @@ async def test_deep_research_file_search_and_mcp_dump_snake_case() -> None:
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-tools', 'status': 'in_progress'},
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
@@ -832,7 +839,7 @@ async def test_deep_research_file_search_empty_stores_and_orphan_options() -> No
         'genkit_google_genai._models._deep_research',
         create_result={'id': 'dr-tools', 'status': 'in_progress'},
     )
-    action = create_deep_research_background_action(
+    action = create_deep_research_background_model(
         'deep-research-preview-04-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
