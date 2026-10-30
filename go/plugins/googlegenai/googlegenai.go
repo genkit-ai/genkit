@@ -1,6 +1,26 @@
 // Copyright 2025 Google LLC
 // SPDX-License-Identifier: Apache-2.0
 
+// Package googlegenai provides Genkit plugins for Google's generative AI
+// models and embedders through the Gemini Developer API ([GoogleAI], provider
+// "googleai") and Google Cloud Vertex AI ([VertexAI], provider "vertexai").
+//
+// Both plugins implement [api.DynamicPlugin] and resolve any model or embedder
+// ID served by the backend on demand when referenced by its
+// "<provider>/<model-id>" name (for example, "googleai/gemini-flash-latest" or
+// "vertexai/gemini-2.5-flash"), including newly released models not listed in
+// internal capability tables.
+//
+// Example:
+//
+//	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+//
+//	helloFlow := genkit.DefineFlow(g, "hello", func(ctx context.Context, name string) (string, error) {
+//		return genkit.GenerateText(ctx, g,
+//			ai.WithModelName("googleai/gemini-flash-latest"),
+//			ai.WithPrompt("Say hello to %s", name),
+//		)
+//	})
 package googlegenai
 
 import (
@@ -244,9 +264,15 @@ func (v *VertexAI) customEndpointOnly() bool {
 		os.Getenv("GOOGLE_CLOUD_PROJECT") == "" && vertexLocationFromEnv() == ""
 }
 
-// Init initializes the Google AI plugin and all known models and embedders.
-// After calling Init, you may call [DefineModel] and [DefineEmbedder] to create
-// and register any additional generative models and embedders
+// Init initializes the Google AI plugin client.
+//
+// GoogleAI is a dynamic plugin ([api.DynamicPlugin]): Init registers no
+// actions up front, and [GoogleAI.ResolveAction] dynamically resolves any
+// model or embedder ID served by the Gemini Developer API on demand (for
+// example, via ai.WithModelName("googleai/gemini-flash-latest"), [ModelRef],
+// or [GoogleAIModel]), including newly released models not listed in internal
+// capability tables. Configure [GoogleAI.Models] or [GoogleAI.Embedders] only
+// when you need to override the capabilities advertised for a specific ID.
 func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 	ga.mu.Lock()
 	defer ga.mu.Unlock()
@@ -289,9 +315,15 @@ func (ga *GoogleAI) Init(ctx context.Context) []api.Action {
 	return []api.Action{}
 }
 
-// Init initializes the VertexAI plugin and all known models and embedders.
-// After calling Init, you may call [DefineModel] and [DefineEmbedder] to create
-// and register any additional generative models and embedders
+// Init initializes the Vertex AI plugin client.
+//
+// VertexAI is a dynamic plugin ([api.DynamicPlugin]): Init registers no
+// actions up front, and [VertexAI.ResolveAction] dynamically resolves any
+// model or embedder ID served by Vertex AI on demand (for example, via
+// ai.WithModelName("vertexai/gemini-flash-latest"), [ModelRef], or
+// [VertexAIModel]), including newly released models not listed in internal
+// capability tables. Configure [VertexAI.Models] or [VertexAI.Embedders] only
+// when you need to override the capabilities advertised for a specific ID.
 func (v *VertexAI) Init(ctx context.Context) []api.Action {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -565,34 +597,44 @@ func (v *VertexAI) IsDefinedEmbedder(g *genkit.Genkit, id string) bool {
 	return isDefined(g, api.ActionTypeEmbedder, vertexAIProvider, id)
 }
 
-// GoogleAIModel returns the [ai.Model] with the given ID.
-// It returns nil if the model was not defined.
+// GoogleAIModel resolves and returns the [ai.Model] with the given ID, or nil
+// if the [GoogleAI] plugin is not initialized.
 //
-// Deprecated: Use genkit.LookupModel instead.
+// Deprecated: Generation resolves a model from its name, so looking one up
+// first is rarely necessary: pass ai.WithModelName("googleai/<id>") or
+// [ModelRef]. Use [genkit.LookupModel] when the action itself is what you need.
 func GoogleAIModel(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(googleAIProvider, id))
 }
 
-// VertexAIModel returns the [ai.Model] with the given ID.
-// It returns nil if the model was not defined.
+// VertexAIModel resolves and returns the [ai.Model] with the given ID, or nil
+// if the [VertexAI] plugin is not initialized.
 //
-// Deprecated: Use genkit.LookupModel instead.
+// Deprecated: Generation resolves a model from its name, so looking one up
+// first is rarely necessary: pass ai.WithModelName("vertexai/<id>") or
+// [ModelRef]. Use [genkit.LookupModel] when the action itself is what you need.
 func VertexAIModel(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(vertexAIProvider, id))
 }
 
-// GoogleAIEmbedder returns the [ai.Embedder] with the given ID.
-// It returns nil if the embedder was not defined.
+// GoogleAIEmbedder resolves and returns the [ai.Embedder] with the given ID, or
+// nil if the [GoogleAI] plugin is not initialized.
 //
-// Deprecated: Use genkit.LookupEmbedder instead.
+// Deprecated: Embedding resolves an embedder from its name, so looking one up
+// first is rarely necessary: pass ai.WithEmbedderName("googleai/<id>") or
+// [EmbedderRef]. Use [genkit.LookupEmbedder] when the action itself is what you
+// need.
 func GoogleAIEmbedder(g *genkit.Genkit, id string) ai.Embedder {
 	return genkit.LookupEmbedder(g, api.NewName(googleAIProvider, id))
 }
 
-// VertexAIEmbedder returns the [ai.Embedder] with the given ID.
-// It returns nil if the embedder was not defined.
+// VertexAIEmbedder resolves and returns the [ai.Embedder] with the given ID, or
+// nil if the [VertexAI] plugin is not initialized.
 //
-// Deprecated: Use genkit.LookupEmbedder instead.
+// Deprecated: Embedding resolves an embedder from its name, so looking one up
+// first is rarely necessary: pass ai.WithEmbedderName("vertexai/<id>") or
+// [EmbedderRef]. Use [genkit.LookupEmbedder] when the action itself is what you
+// need.
 func VertexAIEmbedder(g *genkit.Genkit, id string) ai.Embedder {
 	return genkit.LookupEmbedder(g, api.NewName(vertexAIProvider, id))
 }
