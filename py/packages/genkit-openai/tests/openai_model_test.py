@@ -66,14 +66,52 @@ def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     assert model._get_response_format(request) == {'type': 'json_object'}
 
 
-def test_gpt_4_json_request_uses_text() -> None:
-    """gpt-4 does not list json output, so a schema-less JSON request sends text."""
+def test_gpt_4_json_request_uses_prompt_only() -> None:
+    """gpt-4 advertises JSON while omitting an unsupported response_format."""
     model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
-    assert model._get_response_format(request) == {'type': 'text'}
+    assert model._get_response_format(request) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'schema', [None, {'title': 'Answer', 'type': 'object', 'properties': {'value': {'type': 'string'}}}]
+)
+async def test_gpt_4_json_uses_prompt_only_fallback(schema: dict[str, Any] | None) -> None:
+    """Legacy GPT-4 receives JSON instructions without an unsupported wire format."""
+    model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Answer the question')])],
+        output=OutputConfig(format='json', json_schema=schema),
+    )
+    config = await model._get_openai_request_config(request)
+    assert 'response_format' not in config
+    assert 'JSON' in config['messages'][0]['content']
+    if schema is not None:
+        assert 'Answer' in config['messages'][0]['content']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'schema', [None, {'title': 'Answer', 'type': 'object', 'properties': {'value': {'type': 'string'}}}]
+)
+async def test_gpt_4_turbo_json_uses_json_object_and_prompt(schema: dict[str, Any] | None) -> None:
+    """GPT-4 Turbo gets JSON mode and a JSON instruction, never strict json_schema."""
+    model = OpenAIModel(
+        model='gpt-4-turbo', client=MagicMock(), supports=SUPPORTED_OPENAI_MODELS['gpt-4-turbo'].supports
+    )
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Answer the question')])],
+        output=OutputConfig(format='json', json_schema=schema),
+    )
+    config = await model._get_openai_request_config(request)
+    assert config['response_format'] == {'type': 'json_object'}
+    assert 'JSON' in config['messages'][0]['content']
+    if schema is not None:
+        assert 'Answer' in config['messages'][0]['content']
 
 
 def test_openai_model_text_only_supports_json_request_sends_text() -> None:

@@ -61,6 +61,19 @@ _MANAGED_BODY_FIELDS = (
     'stream',
 )
 
+# These older OpenAI snapshots predate strict Structured Outputs. Keep the
+# wire capability separate from Supports.output, which describes Genkit output.
+_PROMPT_ONLY_JSON_MODELS = frozenset({'gpt-4', 'gpt-4-0613'})
+_JSON_OBJECT_ONLY_MODELS = frozenset({
+    'gpt-4-turbo',
+    'gpt-4-turbo-2024-04-09',
+    'gpt-4-turbo-preview',
+    'gpt-4-0125-preview',
+    'gpt-4-1106-preview',
+    'gpt-4o-2024-05-13',
+})
+_LEGACY_JSON_MODELS = _PROMPT_ONLY_JSON_MODELS | _JSON_OBJECT_ONLY_MODELS
+
 
 def _uses_max_completion_tokens(model: str | None) -> bool:
     """Whether a model requires the reasoning-model token-limit parameter."""
@@ -251,10 +264,9 @@ class OpenAIModel:
         Args:
             model: The OpenAI model to use for generating responses.
             client: Async OpenAI client instance.
-            supports: This model's advertised capabilities. ``'json'`` in
-                ``supports.output`` means the endpoint accepts schema-less JSON
-                mode. ``None`` (or an entry that omits ``output``) still sends
-                ``json_object`` so a fine-tune keeps working.
+            supports: This model's advertised Genkit capabilities. For
+                unlisted compatible models, ``output`` retains the historical
+                schema-less JSON mode fallback.
         """
         self._model = model
         self._openai_client = client
@@ -320,10 +332,8 @@ class OpenAIModel:
     def _needs_schema_in_prompt(self, request: ModelRequest) -> bool:
         """Check whether the schema must be injected into the prompt.
 
-        Models that only support ``json_object`` mode (e.g. DeepSeek) never
-        receive the schema via ``response_format``.  When a schema is present
-        in the request we must include it in the system message so the model
-        knows what structure to produce.
+        Models without strict Structured Outputs never receive the schema via
+        ``response_format``. Include it in the system message instead.
 
         Args:
             request: The model request with output_format and output_schema.
@@ -333,8 +343,8 @@ class OpenAIModel:
         """
         if request.output_format != 'json' or not request.output_schema:
             return False
-        # DeepSeek models use json_object mode — schema never reaches the API.
-        return self._model.startswith('deepseek')
+        # These models cannot receive a strict json_schema response format.
+        return self._model.startswith('deepseek') or self._model in _LEGACY_JSON_MODELS
 
     def _get_response_format(self, request: ModelRequest) -> dict | None:
         """Determines the response format configuration based on the output settings.
@@ -345,15 +355,18 @@ class OpenAIModel:
         Returns:
             A dictionary representing the response format, which may include:
             - 'type': 'json_schema' and a validated JSON Schema if a schema is provided.
-            - 'type': 'json_object' if the model supports JSON mode, or the id
-              is not in the catalog (fine-tune, dated snapshot), and no schema
-              is provided.
-            - 'type': 'text' as the default fallback.
+            - 'type': 'json_object' for JSON-mode-only models, or for an
+              unlisted compatible model with no schema.
+            - None for prompt-only legacy models, or 'type': 'text' for a
+              compatible model explicitly declaring text-only output.
         """
         if request.output_format == 'json':
-            # DeepSeek models: always use 'json_object' (schema is injected
-            # into the prompt by _get_openai_request_config instead).
-            if self._model.startswith('deepseek'):
+            # The earliest GPT-4 snapshots need a prompt-only fallback.
+            if self._model in _PROMPT_ONLY_JSON_MODELS:
+                return None
+            # DeepSeek and older OpenAI models accept JSON mode but not a
+            # strict schema on the wire; the schema goes into the prompt.
+            if self._model.startswith('deepseek') or self._model in _JSON_OBJECT_ONLY_MODELS:
                 return {'type': 'json_object'}
             if request.output_schema:
                 return {
@@ -413,8 +426,7 @@ class OpenAIModel:
     def _build_schema_instruction(schema: dict[str, Any]) -> dict[str, str]:
         """Build a system message instructing the model to follow a JSON schema.
 
-        Used for models that only support ``json_object`` mode (e.g. DeepSeek)
-        where the API does not accept a ``json_schema`` response format.
+        Used when the API does not accept a ``json_schema`` response format.
 
         Args:
             schema: The JSON schema dictionary.
@@ -445,11 +457,12 @@ class OpenAIModel:
         """
         messages = self._get_messages(request.messages)
 
-        # For models that only support json_object mode, inject the schema
-        # into the messages so the model knows the expected output structure.
+        # Models without strict schema support need the schema in the prompt.
         if self._needs_schema_in_prompt(request) and request.output_schema:
             schema_msg = self._build_schema_instruction(request.output_schema)
             messages = [schema_msg, *messages]
+        elif request.output_format == 'json' and not request.output_schema and self._model in _LEGACY_JSON_MODELS:
+            messages = [{'role': 'system', 'content': 'Respond with a JSON object.'}, *messages]
 
         openai_config: dict[str, Any] = {
             'messages': messages,

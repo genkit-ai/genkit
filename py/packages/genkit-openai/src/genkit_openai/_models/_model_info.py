@@ -21,7 +21,8 @@ from typing import Literal, TypeAlias
 
 from genkit.model import ModelInfo, ModelSupports
 
-# 'json' in output means the endpoint accepts schema-less JSON mode.
+# Supports.output is the caller-facing Genkit output contract; wire modes
+# are selected separately by the OpenAI model adapter.
 MULTIMODAL_MODEL_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
@@ -30,13 +31,13 @@ MULTIMODAL_MODEL_SUPPORTS = ModelSupports(
     output=['json', 'text'],
 )
 
-# gpt-4's endpoint rejects schema-less JSON mode, so output lists only 'text'.
+# GPT-4 uses a prompt-only JSON fallback in the plugin.
 GPT_4_MODEL_SUPPORTS = ModelSupports(
     multiturn=True,
     media=False,
     tools=True,
     system_role=True,
-    output=['text'],
+    output=['json', 'text'],
 )
 
 GPT_35_MODEL_SUPPORTS = ModelSupports(
