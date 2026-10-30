@@ -261,7 +261,11 @@ async def _call_tool(
 
 
 class _Session(ClientSession):
-    """A session that sends ``notifications/cancelled`` for an operation's request that times out or is abandoned."""
+    """A session that sends ``notifications/cancelled`` for an operation's request that times out or is abandoned.
+
+    Only for the ``mcp<2`` pin: SDK 2 sends this notice itself and has no
+    ``_request_id`` counter, so this class goes when the pin is lifted.
+    """
 
     async def send_request(
         self,
@@ -292,14 +296,16 @@ class _Session(ClientSession):
                 await self._cancel(request_id, 'Request timed out')
             raise
         except asyncio.CancelledError:
-            connection = _serving.get()
-            # A connection that is ending would get the server's reply to the notice after its reader has gone.
-            if abandon.cancel_called and connection is not None and not connection.is_terminal:
+            if abandon.cancel_called:
                 await self._cancel(request_id, 'Request cancelled')
             raise
 
     async def _cancel(self, request_id: RequestId, reason: str) -> None:
         """Ask the server to stop one request, giving up quietly if the notice cannot be written."""
+        connection = _serving.get()
+        # When the connection is ending, the reply to the cancelled request could arrive after the reader has gone.
+        if connection is None or connection.is_terminal:
+            return
         notice = CancelledNotification(params=CancelledNotificationParams(requestId=request_id, reason=reason))
         with anyio.move_on_after(CANCEL_NOTICE_SECONDS, shield=True):
             try:
@@ -343,7 +349,9 @@ class McpConnection:
             config: How to launch the server.
             request_timeout_millis: How long one request may take before it
                 fails. Must be positive. ``None`` is the only way to disable
-                the timeout.
+                the timeout. A request that times out, or whose caller is
+                cancelled, is stopped and the server is sent
+                ``notifications/cancelled``.
 
         Raises:
             ValueError: If ``request_timeout_millis`` is zero or negative.

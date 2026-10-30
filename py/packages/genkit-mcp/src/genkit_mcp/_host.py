@@ -71,7 +71,9 @@ class McpHost:
                 prefixes each server's tools, in the order it lists them.
             request_timeout_millis: How long one MCP request may take before it
                 fails, for every server. Must be positive. ``None`` is the only
-                way to disable the timeout.
+                way to disable the timeout. A request that times out, or whose
+                caller is cancelled, is stopped and the server is sent
+                ``notifications/cancelled``.
 
         Raises:
             ValueError: If ``name`` cannot appear in a tool selector, if a
@@ -408,7 +410,9 @@ def define_mcp_host(
             cache, so every lookup lists the tools again.
         request_timeout_millis: How long one MCP request may take before it
             fails, for every server. Must be positive. ``None`` is the only way
-            to disable the timeout.
+            to disable the timeout. A request that times out, or whose caller
+            is cancelled, is stopped and the server is sent
+            ``notifications/cancelled``.
 
     Returns:
         A handle for listing tools, connecting, reconnecting and disconnecting.
