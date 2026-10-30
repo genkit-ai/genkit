@@ -64,6 +64,7 @@ _SHARED_GEMINI = {
     'gemini-3.5-flash',
     'gemini-3.6-flash',
     'gemini-3.7-flash',
+    'gemini-3.8-flash',
 }
 _GOOGLEAI_LATEST = {'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'}
 _SHARED_TTS = {

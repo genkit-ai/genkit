@@ -16,8 +16,6 @@
 
 """Configuration types for the Amazon Bedrock plugin."""
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict
 
 from genkit.model import ModelConfig
@@ -40,16 +38,13 @@ class BedrockConfig(ModelConfig):
 
     Unknown keys are rejected: only the declared fields reach the Converse
     API, so a tolerated typo (``maxTokens`` for ``maxOutputTokens``) would run
-    the call with the knob silently unset. Model-specific options travel
-    through ``additional_model_request_fields``; ``extra`` is merged into the
-    same field, after it, since Converse has no open top-level body.
+    the call with the knob silently unset. Model-specific options go in
+    ``extra``, which is sent as-is as Converse ``additionalModelRequestFields``
+    (e.g. Claude extended thinking).
     """
 
     tool_choice: str | None = None
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""
-
-    additional_model_request_fields: dict[str, Any] | None = None
-    """Forwarded verbatim to the Converse API (e.g. Claude extended thinking)."""
 
 
 class BedrockImageConfig(BaseModel):
