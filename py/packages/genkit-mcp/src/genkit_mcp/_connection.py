@@ -274,6 +274,8 @@ class McpConnection:
         name: str,
         config: McpStdioServerConfig,
         request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+        *,
+        host: str | None = None,
     ) -> None:
         """Prepare a connection. No process starts until the first call.
 
@@ -284,12 +286,15 @@ class McpConnection:
             request_timeout_millis: How long one request may take before it
                 fails. Must be positive. ``None`` is the only way to disable
                 the timeout.
+            host: Name of the host serving this server, if any, which errors
+                and logs report alongside ``name``.
 
         Raises:
             ValueError: If ``request_timeout_millis`` is zero or negative.
         """
         validate_request_timeout(request_timeout_millis)
         self._name = name
+        self._host = host
         self._config = config
         self._request_timeout = (
             timedelta(milliseconds=request_timeout_millis) if request_timeout_millis is not None else None
@@ -497,9 +502,10 @@ class McpConnection:
                 raise
             cause = _transport_cause(error)
             # A rendered traceback would print frame locals, and those hold the server's env.
+            named = {'client': self._name} if self._host is None else {'server': self._name, 'host': self._host}
             logger.warning(
                 'MCP connection ended',
-                client=self._name,
+                **named,
                 command=self._config.command,
                 error=type(error).__name__,
                 cause=repr(cause),
@@ -601,8 +607,10 @@ class McpConnection:
 
     @property
     def _target(self) -> str:
-        """Name the server in a message by its name and the command that runs it."""
-        return f'{self._name!r} ({self._config.command!r})'
+        """Name the server in a message by its name, its host if any, and the command that runs it."""
+        if self._host is None:
+            return f'{self._name!r} ({self._config.command!r})'
+        return f'{self._name!r} on host {self._host!r} ({self._config.command!r})'
 
     def _closed_error(self) -> _ConnectionClosedError:
         """Build the error reported once this connection is shut down."""

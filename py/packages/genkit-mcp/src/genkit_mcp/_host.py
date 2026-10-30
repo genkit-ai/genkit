@@ -341,7 +341,7 @@ class McpHost:
 
     def _build_client(self, server_name: str, config: McpStdioServerConfig) -> McpClient:
         """Build a client for one server, which serves no provider until it is installed."""
-        return McpClient(
+        client = McpClient(
             server_name,
             command=config.command,
             args=config.args,
@@ -349,6 +349,8 @@ class McpHost:
             cwd=config.cwd,
             request_timeout_millis=self._request_timeout_millis,
         )
+        client._host = self._name
+        return client
 
     def _stdio_config(self, server_name: str, entry: McpServerEntry) -> McpStdioServerConfig:
         """Validate one server's name and entry, naming the server when it is not a stdio entry."""

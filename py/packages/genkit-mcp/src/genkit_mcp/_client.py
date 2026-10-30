@@ -107,6 +107,7 @@ class McpClient:
         validate_request_timeout(request_timeout_millis)
         self._provider = None
         self._name = name
+        self._host: str | None = None
         self._server = McpStdioServerConfig(command=command, args=args, env=env, cwd=cwd)
         self._request_timeout_millis = request_timeout_millis
         self._closed = False
@@ -323,7 +324,9 @@ class McpClient:
             existing = self._connections.get(loop)
             if existing is not None and not existing.is_terminal:
                 return existing
-            connection = McpConnection(self._name, self._server, request_timeout_millis=self._request_timeout_millis)
+            connection = McpConnection(
+                self._name, self._server, request_timeout_millis=self._request_timeout_millis, host=self._host
+            )
             self._connections[loop] = connection
             return connection
 

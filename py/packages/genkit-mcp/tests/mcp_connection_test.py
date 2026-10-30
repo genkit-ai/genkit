@@ -53,6 +53,7 @@ from mcp.types import (
     Tool as McpTool,
 )
 from pydantic import ValidationError
+from structlog.testing import capture_logs
 
 ALL_TOOLS = [
     'echo',
@@ -1029,6 +1030,26 @@ async def test_request_rejects_a_state_change_after_start(
 
     connection._state = _ConnectionState.OPEN
     await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('host', 'named'),
+    [(None, {'client': 'catalog'}), ('hosted', {'server': 'catalog', 'host': 'hosted'})],
+)
+async def test_an_ended_connection_is_logged_under_its_client_or_its_host_and_server(
+    tmp_path: Path, host: str | None, named: dict[str, str]
+) -> None:
+    """The keys match the client's and the host's own logs."""
+    connection = McpConnection('catalog', McpStdioServerConfig(command=str(tmp_path / 'no-such-mcp-server')), host=host)
+    try:
+        with capture_logs() as logs, pytest.raises(_ConnectionFailedError):
+            await asyncio.wait_for(connection.list_tools(), timeout=LIMIT)
+    finally:
+        await asyncio.wait_for(connection.close(), timeout=LIMIT)
+
+    [ended] = [log for log in logs if log['event'] == 'MCP connection ended']
+    assert {key: ended[key] for key in ('client', 'server', 'host') if key in ended} == named
 
 
 @pytest.mark.asyncio

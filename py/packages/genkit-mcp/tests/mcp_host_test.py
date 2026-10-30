@@ -635,6 +635,19 @@ async def test_servers_sharing_a_command_are_told_apart_by_name(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_servers_sharing_a_name_and_command_are_told_apart_by_host(tmp_path: Path) -> None:
+    """Each host's error names that host, when two hosts run a server of the same name the same way."""
+    hosts = [McpHost(name, mcp_servers={'repo': missing_server(tmp_path)}) for name in ('alpha', 'beta')]
+    try:
+        for host in hosts:
+            with pytest.raises(GenkitError, match=f"MCP connection to 'repo' on host '{host.name}' .* failed"):
+                await host.reconnect('repo')
+    finally:
+        for host in hosts:
+            await host.close()
+
+
+@pytest.mark.asyncio
 async def test_close_is_final(tmp_path: Path) -> None:
     """A closed host stops every server and refuses every operation, as a client does."""
     ai = Genkit()
