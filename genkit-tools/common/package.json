@@ -16,7 +16,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "axios": "^1.21.0",
-    "chokidar": "^3.6.0",
+    "chokidar": "^4.0.3",
     "colorette": "^2.0.20",
     "configstore": "^5.0.1",
     "cors": "^2.8.6",
