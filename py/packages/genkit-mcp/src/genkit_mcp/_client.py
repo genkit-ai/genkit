@@ -27,11 +27,10 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
-import structlog
 from mcp.types import CallToolResult
 
-from genkit import DynamicActionProvider, Genkit, Tool
-from genkit.plugin_api import Action, ActionKind
+from genkit import Genkit, Tool, get_logger
+from genkit.plugin_api import Action, ActionKind, DynamicActionProvider
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection, validate_request_timeout
 from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
@@ -45,7 +44,7 @@ from genkit_mcp._tools import (
 
 _T = TypeVar('_T')
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # Well past a graceful server shutdown, which can take seconds.
 _CROSS_LOOP_CLOSE_TIMEOUT_SECONDS = 30.0

@@ -304,6 +304,6 @@ def mcp_tools_to_handles(
     """
     by_name = {mcp_tool_name(prefix, tool.name): tool for tool in tools}
     return [
-        Tool(action, original_output_schema=by_name[action.name].outputSchema)
+        Tool._from_action(action, original_output_schema=by_name[action.name].outputSchema)
         for action in mcp_tools_to_actions(tools, prefix, call)
     ]
