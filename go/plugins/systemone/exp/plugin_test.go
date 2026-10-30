@@ -18,13 +18,16 @@ package exp
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -747,6 +750,143 @@ func TestOpenRouterRequiresAKey(t *testing.T) {
 		}
 	}()
 	OpenRouter().Init(t.Context())
+}
+
+func TestNace(t *testing.T) {
+	fake := &systemonetest.Server{
+		Models: `{"models":[{"name":"drex-v1.5","alias_for":null},{"name":"drex-max","alias_for":null},{"name":"drex-latest","alias_for":"drex-v2.0"}]}`,
+	}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	p := Nace()
+	p.APIKey = "test-key"
+	p.BaseURL = srv.URL
+	g := genkit.Init(t.Context(), genkit.WithPlugins(p))
+	const png = "data:image/png;base64,iVBORw0KGgo="
+	photo := ai.WithMessages(ai.NewUserMessage(ai.NewTextPart("Is the parcel damaged?"), ai.NewMediaPart("image/png", png)))
+
+	// Drex Max reads images, which go to the native endpoint by its ID.
+	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("nace/drex-max"), photo); err != nil {
+		t.Fatal(err)
+	}
+	req, body := fake.Last(t)
+	if req.URL.Path != "/v1/systemone" || body["model"] != "drex-max" || !reflect.DeepEqual(body["images"], []any{png}) {
+		t.Errorf("request = %s model=%v images=%v, want /v1/systemone naming drex-max with the image", req.URL.Path, body["model"], body["images"])
+	}
+
+	// Drex 2.0 and its alias are text only, so images are refused before sending.
+	calls := fake.Calls()
+	for _, id := range []string{"drex-v2.0", "drex-latest"} {
+		if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("nace/"+id), photo); err == nil || !strings.Contains(err.Error(), "media") {
+			t.Errorf("%s: error = %v, want the image refused", id, err)
+		}
+	}
+	if fake.Calls() != calls {
+		t.Error("an image was sent to a text-only model")
+	}
+
+	// The listing is the server's models by name, with the known models
+	// beside them.
+	var listed []string
+	for _, desc := range p.ListActions(t.Context()) {
+		listed = append(listed, desc.Name)
+	}
+	if want := []string{"nace/drex-latest", "nace/drex-max", "nace/drex-max-v1.1", "nace/drex-v1.5", "nace/drex-v2.0"}; !reflect.DeepEqual(listed, want) {
+		t.Errorf("listed %v, want %v", listed, want)
+	}
+	if got := fake.Listings(); len(got) == 0 || got[len(got)-1] != "/v1/models" {
+		t.Errorf("listings = %v, want /v1/models", got)
+	}
+
+	down := httptest.NewServer(&systemonetest.Server{})
+	t.Cleanup(down.Close)
+	offline := Nace()
+	offline.APIKey = "test-key"
+	offline.BaseURL = down.URL
+	genkit.Init(t.Context(), genkit.WithPlugins(offline))
+	var offlineNames []string
+	for _, desc := range offline.ListActions(t.Context()) {
+		offlineNames = append(offlineNames, desc.Name)
+	}
+	if want := []string{"nace/drex-latest", "nace/drex-max", "nace/drex-max-v1.1", "nace/drex-v2.0"}; !reflect.DeepEqual(offlineNames, want) {
+		t.Errorf("listed %v while offline, want %v", offlineNames, want)
+	}
+}
+
+func TestNaceHTTPClient(t *testing.T) {
+	c := Nace().HTTPClient
+	if c == nil || c.Timeout < 60*time.Second {
+		t.Fatalf("Nace HTTPClient = %+v, want a client with a timeout of at least 60s", c)
+	}
+	if got := (&SystemOne{}).HTTPClient; got != nil {
+		t.Errorf("a plain SystemOne has HTTPClient %v, want nil", got)
+	}
+
+	// A redirect to another port is another origin, so it is not followed:
+	// the 3xx comes back as the response, an error that is not retried, and
+	// the key never reaches the other server.
+	var leaked atomic.Bool
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked.Store(true)
+	}))
+	t.Cleanup(other.Close)
+	var hits atomic.Int32
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/systemone" {
+			hits.Add(1)
+		}
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(origin.Close)
+	p := Nace()
+	p.APIKey = "test-key"
+	p.BaseURL = origin.URL
+	g := genkit.Init(t.Context(), genkit.WithPlugins(p))
+	_, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("nace/drex-max"), ai.WithPrompt("hi"))
+	if err == nil || !strings.Contains(err.Error(), "HTTP 307") {
+		t.Fatalf("error = %v, want the 307 returned as an error", err)
+	}
+	if strings.Contains(err.Error(), "UNAVAILABLE") {
+		t.Errorf("error = %v, want a non-transient error", err)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("the origin was called %d times, want 1 (no retries)", n)
+	}
+	if leaked.Load() {
+		t.Error("the request reached the other origin")
+	}
+
+	// A redirect within the origin is still followed.
+	same := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			if r.Header.Get("Authorization") == "" {
+				t.Error("the key was dropped on a same-origin redirect")
+			}
+			return
+		}
+		http.Redirect(w, r, "/moved", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(same.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, same.URL+"/v1/systemone", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer test-key")
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("a same-origin redirect failed: %v", err)
+	}
+	resp.Body.Close()
+}
+
+func TestNaceRequiresAKey(t *testing.T) {
+	t.Setenv("NACE_API_KEY", "")
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(r.(string), "NACE_API_KEY") {
+			t.Errorf("Init without a key: recovered %v, want a panic naming the variable", r)
+		}
+	}()
+	Nace().Init(t.Context())
 }
 
 func TestMedia(t *testing.T) {
