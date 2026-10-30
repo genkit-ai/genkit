@@ -163,7 +163,7 @@ async def test_deep_research_start_sends_background_request() -> None:
             'google_search': True,
             'base_url': 'https://start.example',
             'api_version': 'v1',
-            'timeout': 1500,
+            'timeout': 1.5,  # seconds
             'custom_headers': {'x-request-id': 'start'},
         },
     )
@@ -232,7 +232,7 @@ async def test_deep_research_check_reads_secrets_not_ticket() -> None:
                 'config': {
                     'base_url': 'https://poll.example',
                     'api_version': 'v1beta',
-                    'timeout': 2000,
+                    'timeout': 2.0,  # seconds
                     'custom_headers': {'x-request-id': 'check'},
                 },
             },
@@ -279,7 +279,7 @@ async def test_deep_research_cancel_reads_secrets_not_ticket() -> None:
                 'config': {
                     'base_url': 'https://cancel.example',
                     'api_version': 'v1alpha',
-                    'timeout': 2500,
+                    'timeout': 2.5,  # seconds
                     'custom_headers': {'x-request-id': 'cancel'},
                 },
             },
@@ -1090,7 +1090,7 @@ async def test_ai_generate_operation_deep_research_uses_context_secrets(
             config={
                 'base_url': 'https://start.example',
                 'api_version': 'v1',
-                'timeout': 1500,
+                'timeout': 1.5,  # seconds
                 'custom_headers': {'x-request-id': 'start'},
             },
             context=tenant,
@@ -1113,7 +1113,7 @@ async def test_ai_generate_operation_deep_research_uses_context_secrets(
             config={
                 'base_url': 'https://poll.example',
                 'api_version': 'v1beta',
-                'timeout': 2000,
+                'timeout': 2.0,  # seconds
                 'custom_headers': {'x-request-id': 'check'},
             },
         )
@@ -1130,7 +1130,7 @@ async def test_ai_generate_operation_deep_research_uses_context_secrets(
             config={
                 'base_url': 'https://cancel.example',
                 'api_version': 'v1alpha',
-                'timeout': 2500,
+                'timeout': 2.5,  # seconds
                 'custom_headers': {'x-request-id': 'cancel'},
             },
         )
@@ -1178,7 +1178,7 @@ async def test_ai_generate_antigravity_uses_context_secrets(
             config={
                 'base_url': 'https://antigravity.example',
                 'api_version': 'v1',
-                'timeout': 1500,
+                'timeout': 1.5,  # seconds
                 'custom_headers': {'x-request-id': 'antigravity'},
             },
             context={'secrets': {'api_key': 'tenant-key'}},
@@ -1217,7 +1217,7 @@ async def test_ai_generate_lyria_002_hits_interactions_with_tenant_key(
             config={
                 'base_url': 'https://lyria.example',
                 'api_version': 'v1beta',
-                'timeout': 2000,
+                'timeout': 2.0,  # seconds
                 'custom_headers': {'x-request-id': 'lyria'},
             },
             context={'secrets': {'api_key': 'tenant-key'}},
@@ -1722,7 +1722,7 @@ async def test_generate_antigravity_without_extra_sends_only_declared_settings(g
         await googleai.generate(
             model=_ANTIGRAVITY,
             prompt='hi',
-            config={'response_modalities': ['TEXT'], 'timeout': 1500},
+            config={'response_modalities': ['TEXT'], 'timeout': 1.5},
         )
 
     body = create_calls[0]
@@ -1744,3 +1744,56 @@ async def test_interactions_config_forms_advertise_no_additional_properties(name
     for nested in (form.get('$defs') or {}).values():
         if nested.get('type') == 'object':
             assert nested['additionalProperties'] is False
+
+
+@pytest.mark.parametrize('config_class', [AntigravityConfig, LyriaConfig, DeepResearchConfig])
+@pytest.mark.parametrize('timeout', [0, -1, float('inf'), float('nan')])
+def test_interactions_config_timeout_must_be_positive_finite_seconds(
+    config_class: type[BaseModel], timeout: float
+) -> None:
+    """`timeout=0`, negative, inf, and NaN fail validation on all three configs."""
+    with pytest.raises(ValidationError, match='timeout must be a positive, finite number of seconds'):
+        config_class.model_validate({'timeout': timeout})
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_zero_timeout_raises_and_sends_nothing(googleai: Genkit) -> None:
+    """`config={'timeout': 0}` raises INVALID_ARGUMENT before any request."""
+    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._antigravity')
+    with patcher, pytest.raises(GenkitError) as raised:
+        await googleai.generate(model=_ANTIGRAVITY, prompt='hi', config={'timeout': 0})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'timeout must be a positive, finite number of seconds' in str(raised.value)
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('seconds', 'ms'), [(30, 30000.0), (1.5, 1500.0), (0.0001, 1.0)])
+async def test_generate_lyria_timeout_seconds_become_client_milliseconds(
+    googleai: Genkit, seconds: float, ms: float
+) -> None:
+    """`timeout` is seconds on the config and reaches the HTTP client as whole milliseconds, rounded up."""
+    captured: dict[str, Any] = {}
+    patcher, _, _, _ = patch_interactions(
+        'genkit_google_genai._models._interactions_lyria', create_result=_TEXT_REPLY, captured=captured
+    )
+    with patcher:
+        await googleai.generate(model=_LYRIA, prompt='riff', config={'timeout': seconds})
+
+    assert captured['client_options'].timeout == ms
+
+
+@pytest.mark.asyncio
+async def test_check_operation_deep_research_zero_timeout_raises(googleai: Genkit) -> None:
+    """`check_operation(config={'timeout': 0})` raises like the model config does; nothing is polled."""
+    patcher, _, get_calls, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research', get_result={'id': 'dr-old', 'status': 'in_progress'}
+    )
+    saved = Operation.model_validate({'id': 'dr-old', 'done': False, 'action': _DEEP_RESEARCH_KEY})
+    with patcher, pytest.raises(GenkitError) as raised:
+        await googleai.check_operation(saved, config={'timeout': 0})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert 'timeout must be a positive, finite number of seconds' in str(raised.value)
+    assert get_calls == []

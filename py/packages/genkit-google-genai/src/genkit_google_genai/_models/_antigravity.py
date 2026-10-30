@@ -26,7 +26,9 @@ from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._interactions_registry import antigravity_model_info
 from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
+    TIMEOUT_DESCRIPTION,
     api_key_for_context,
+    check_timeout_seconds,
     client_overrides_from_config,
     extract_version,
     lowercase_choice_list,
@@ -58,18 +60,26 @@ class AntigravityConfig(GenkitConfig):
 
     Unknown keys are rejected. An API field this class doesn't declare goes in
     ``extra``, which is deep-merged into the create body.
+
+    ``timeout`` is seconds, the same unit as ``GoogleAI(timeout=...)``. It was
+    milliseconds before, so ``timeout=30000`` becomes ``timeout=30``.
     """
 
     base_url: str | None = None
     api_version: str | None = None
-    # Milliseconds — applied to the HTTP call, not the create body.
-    timeout: float | None = None
+    timeout: float | None = Field(default=None, description=TIMEOUT_DESCRIPTION)
     custom_headers: dict[str, str] | None = None
     previous_interaction_id: str | None = None
     store: bool | None = None
     environment: str | dict[str, Any] | None = None
     response_modalities: list[Literal['text', 'image']] | None = None
     extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
+
+    @field_validator('timeout')
+    @classmethod
+    def check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
 
     @field_validator('response_modalities', mode='before')
     @classmethod

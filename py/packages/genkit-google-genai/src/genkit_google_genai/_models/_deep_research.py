@@ -32,7 +32,10 @@ from genkit_google_genai._models._gemini import file_search_fields, flattened_ke
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
+    TIMEOUT_DESCRIPTION,
     api_key_for_context,
+    check_timeout_seconds,
+    client_overrides_from_call_config,
     client_overrides_from_config,
     extract_version,
     lowercase_choice,
@@ -111,12 +114,15 @@ class DeepResearchConfig(GenkitConfig):
     ``url_context``, ``code_execution``, ``file_search_store_names``,
     ``mcp_servers``) builds a tool, and raises ``INVALID_ARGUMENT`` when one
     does, since the list would replace the built tools.
+
+    ``timeout`` is seconds, the same unit as ``GoogleAI(timeout=...)``, here and
+    in ``check_operation``/``cancel_operation`` ``config``. It was milliseconds
+    before, so ``timeout=30000`` becomes ``timeout=30``.
     """
 
     base_url: str | None = None
     api_version: str | None = None
-    # Milliseconds — applied to the HTTP call, not the create body.
-    timeout: float | None = None
+    timeout: float | None = Field(default=None, description=TIMEOUT_DESCRIPTION)
     custom_headers: dict[str, str] | None = None
     thinking_summaries: Literal['auto', 'none'] | None = None
     previous_interaction_id: str | None = None
@@ -144,6 +150,12 @@ class DeepResearchConfig(GenkitConfig):
                     if error is not None:
                         raise error
         return data
+
+    @field_validator('timeout')
+    @classmethod
+    def check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
 
     @field_validator('mcp_servers', mode='before')
     @classmethod
@@ -277,8 +289,7 @@ def create_deep_research_background_model(
         return from_interaction(interaction)
 
     def _op_key_and_options(ctx: ModelContext) -> tuple[str, ClientOptions]:
-        call_config = ctx.context.get('config')
-        options = client_options.merge(call_config if isinstance(call_config, dict) else None)
+        options = client_options.merge(client_overrides_from_call_config(ctx.context.get('config')))
         return api_key_for_context(ctx.context, plugin_api_key), options
 
     async def check(operation: Operation, ctx: ModelContext) -> Operation:

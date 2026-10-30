@@ -18,7 +18,9 @@
 
 from __future__ import annotations
 
+import math
 import os
+from collections.abc import Mapping
 from typing import Any, cast
 
 from genkit_google_genai._interactions._converters import (
@@ -47,6 +49,11 @@ EXTRA_DESCRIPTION = (
     'named here wins. Keys match ignoring case and underscores, so `Agent` overrides `agent`. A `None` '
     'value means unset and is skipped, so it never sends null over a block Genkit built. '
     'Not validated, except that a top-level API key raises; do not put API keys here.'
+)
+
+TIMEOUT_DESCRIPTION = (
+    'HTTP timeout for this request, in seconds (positive, finite). It applies to the HTTP call, not the '
+    'create body. Was milliseconds before: divide by 1000, so 30000 becomes 30.'
 )
 
 
@@ -79,6 +86,31 @@ def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key not in CLIENT_OPTION_KEYS}
 
 
+def check_timeout_seconds(value: float | None) -> float | None:
+    """Raise ``ValueError`` unless ``value`` is None or a positive, finite number of seconds.
+
+    Same rule as ``GoogleAI(timeout=...)``: 0 would be an instant failure on
+    the Interactions client, and inf or NaN can't become milliseconds.
+    """
+    if value is not None and (isinstance(value, bool) or not (math.isfinite(value) and value > 0)):
+        raise ValueError(f'timeout must be a positive, finite number of seconds, got {value!r}')
+    return value
+
+
+def timeout_ms(seconds: float | None) -> float | None:
+    """Config seconds to ``ClientOptions.timeout`` milliseconds, rounding up so 0.0001 sends 1 ms.
+
+    ``ClientOptions`` stays in milliseconds so the plugin-level options built
+    from ``GoogleAI(timeout=...)`` share it unchanged; this is the one place a
+    request config's seconds cross into it.
+    """
+    try:
+        check_timeout_seconds(seconds)
+    except ValueError as err:
+        raise GenkitError(status='INVALID_ARGUMENT', message=str(err)) from err
+    return float(math.ceil(seconds * 1000)) if seconds is not None else None
+
+
 def client_overrides_from_config(
     config: object = None,
     *,
@@ -87,13 +119,34 @@ def client_overrides_from_config(
     timeout: float | None = None,
     custom_headers: dict[str, str] | None = None,
 ) -> ClientOptions:
-    """Lift per-request transport knobs out of a model config into ClientOptions."""
+    """Lift per-request transport knobs out of a model config into ClientOptions.
+
+    ``timeout`` (on ``config`` or as the keyword) is seconds; ClientOptions
+    gets milliseconds.
+    """
     return ClientOptions(
         base_url=getattr(config, 'base_url', base_url),
         api_version=getattr(config, 'api_version', api_version),
-        timeout=getattr(config, 'timeout', timeout),
+        timeout=timeout_ms(getattr(config, 'timeout', timeout)),
         custom_headers=getattr(config, 'custom_headers', custom_headers),
     )
+
+
+def client_overrides_from_call_config(call_config: object) -> ClientOptions | None:
+    """ClientOptions from ``check_operation``/``cancel_operation`` ``config``, with ``timeout`` in seconds.
+
+    Same keys and units as the model config's transport fields, so a timeout
+    that works on ``generate_operation`` means the same thing on check and
+    cancel. Other keys are ignored, as before.
+    """
+    if not isinstance(call_config, Mapping):
+        return None
+    values = {str(key): value for key, value in cast(Mapping[object, Any], call_config).items()}
+    seconds = values.pop('timeout', None)
+    overrides = ClientOptions.model_validate(values)
+    if seconds is None:
+        return overrides
+    return overrides.model_copy(update={'timeout': timeout_ms(seconds)})
 
 
 def _without_none(value: dict[str, Any]) -> dict[str, Any]:
