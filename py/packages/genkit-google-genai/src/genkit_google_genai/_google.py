@@ -665,7 +665,9 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             max_retries: How many times to retry a failed request after the
                 first attempt. Defaults to None: no retries, which is
                 google-genai's default. Same name and meaning as
-                ``max_retries`` on Genkit's OpenAI and Anthropic plugins.
+                ``max_retries`` in the OpenAI and Anthropic SDKs, which
+                Genkit's plugins for them take through ``client_options``
+                (those SDKs default to 2 retries).
                 Retries use google-genai's backoff (about 1, 2, 4 seconds,
                 doubling up to 60, with jitter) on HTTP 408, 429, 500, 502,
                 503 and 504 and on connection errors and timeouts, so each
@@ -1169,7 +1171,9 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             max_retries: How many times to retry a failed request after the
                 first attempt. Defaults to None: no retries, which is
                 google-genai's default. Same name and meaning as
-                ``max_retries`` on Genkit's OpenAI and Anthropic plugins.
+                ``max_retries`` in the OpenAI and Anthropic SDKs, which
+                Genkit's plugins for them take through ``client_options``
+                (those SDKs default to 2 retries).
                 Retries use google-genai's backoff (about 1, 2, 4 seconds,
                 doubling up to 60, with jitter) on HTTP 408, 429, 500, 502,
                 503 and 504 and on connection errors and timeouts, so each
