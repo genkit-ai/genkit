@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
 from genkit_amazon_bedrock import NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
-from genkit_amazon_bedrock._image import BedrockImageModel, image_config_class, is_image_model
+from genkit_amazon_bedrock._image import BedrockImageModel, build_amazon_image_body, image_config_class, is_image_model
 from pydantic import ConfigDict
 
 from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Part, Role
@@ -266,6 +266,18 @@ async def test_titan_typed_config_nests_under_image_generation_config() -> None:
             'imageGenerationConfig': {'numberOfImages': 2, 'height': 512, 'width': 512, 'cfgScale': 6.5, 'seed': 42},
         }
     ]
+
+
+def test_amazon_body_reads_fields_from_the_configs_own_class() -> None:
+    """A field only one family declares still reaches imageGenerationConfig: Titan and Nova share the builder."""
+
+    class TitanWithStyle(TitanImageConfig):
+        style: str | None = None
+
+    body = build_amazon_image_body(PROMPT, TitanWithStyle(style='photographic', seed=7))
+
+    assert body['imageGenerationConfig']['style'] == 'photographic'
+    assert body['imageGenerationConfig']['seed'] == 7
 
 
 @pytest.mark.asyncio
