@@ -31,7 +31,7 @@ from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import fixed_json_schema, to_json_schema
 from genkit._core._typing import ActionMetadata, ModelInfo
 
 
@@ -224,7 +224,7 @@ class BackgroundModel:
 
         model_meta['model'] = model_options
 
-        output_schema_meta = to_json_schema(ModelResponse)
+        output_schema_meta = fixed_json_schema(ModelResponse)
         model_meta['outputSchema'] = output_schema_meta
 
         start_action = _operation_action(
@@ -239,9 +239,9 @@ class BackgroundModel:
         if 'customOptions' not in model_options and start_action.config_schema is not None:
             model_options['customOptions'] = to_json_schema(start_action.config_schema)
         if not start_action.input_schema:
-            start_action.input_schema = to_json_schema(ModelRequest)
+            start_action.input_schema = fixed_json_schema(ModelRequest)
         if not start_action.output_schema:
-            start_action.output_schema = to_json_schema(Operation)
+            start_action.output_schema = fixed_json_schema(Operation)
 
         check_action = _operation_action(
             kind=ActionKind.CHECK_OPERATION,

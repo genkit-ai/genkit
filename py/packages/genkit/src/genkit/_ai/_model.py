@@ -58,7 +58,7 @@ from genkit._core._model import (
     text_from_message,
 )
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import fixed_json_schema, to_json_schema
 from genkit._core._typing import GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
@@ -438,6 +438,11 @@ def claims_long_running(*, model_options: dict[str, object]) -> bool:
     return False
 
 
+def _model_io_schemas() -> tuple[dict[str, object], dict[str, object]]:
+    """Every model publishes ModelRequest/ModelResponse; config shows in customOptions."""
+    return fixed_json_schema(ModelRequest), fixed_json_schema(ModelResponse)
+
+
 class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
     """A model action returned from a plugin's ``init`` / ``resolve`` / ``list_actions`` or ``define_model``.
 
@@ -472,9 +477,8 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
                 metadata=model_meta,
                 description=get_func_description(fn, description),
                 config_schema=config_schema,
+                _io_schemas=_model_io_schemas(),
             )
-            self.input_schema = to_json_schema(ModelRequest)
-            self.output_schema = to_json_schema(ModelResponse)
             # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
             if 'customOptions' not in model_options and self.config_schema is not None:
                 model_options['customOptions'] = to_json_schema(self.config_schema)
@@ -503,9 +507,8 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
             metadata=model_meta,
             description=get_func_description(fn, description),
             config_schema=config_schema,
+            _io_schemas=_model_io_schemas(),
         )
-        self.input_schema = to_json_schema(ModelRequest)
-        self.output_schema = to_json_schema(ModelResponse)
         if 'customOptions' not in model_options and self.config_schema is not None:
             model_options['customOptions'] = to_json_schema(self.config_schema)
 

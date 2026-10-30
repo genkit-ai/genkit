@@ -529,10 +529,13 @@ def json_schema_for(
     kind: ActionKind,
     name: str,
     label: str,
+    schema: dict[str, object] | None = None,
 ) -> tuple[TypeAdapter[Any], dict[str, object]]:
     """A validator and JSON schema for an action's input or output type.
 
     ``label`` says which one, e.g. ``"input 'query'"`` or ``'output'``.
+    A given ``schema`` is published as is instead of being generated from
+    the annotation; the validator is still built from the annotation.
     Pydantic's own errors here name neither the action nor the fix, so each
     one is re-raised as a TypeError that does.
     """
@@ -544,7 +547,7 @@ def json_schema_for(
     type_name = annotation.__name__ if isinstance(annotation, type) and not is_generic else repr(annotation)
     try:
         adapter: TypeAdapter[Any] = TypeAdapter(annotation)
-        return adapter, adapter.json_schema()
+        return adapter, schema if schema is not None else adapter.json_schema()
     except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
         # e.g. `-> Thermometer`, where Thermometer is a plain class
         raise TypeError(
@@ -912,6 +915,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         init_schema: type[BaseModel] | dict[str, object] | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
+        _io_schemas: tuple[dict[str, object], dict[str, object]] | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
@@ -939,7 +943,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._fn_is_wrapper: bool = metadata_fn is not None
-        self._initialize_io_schemas(hints)
+        # _io_schemas: the (input, output) JSON schemas to publish, from a
+        # subclass whose kind always publishes the same ones (Model publishes
+        # ModelRequest/ModelResponse whatever the fn's ModelRequest[Cfg]).
+        # Skips generating schemas from the annotations only to discard them.
+        self._initialize_io_schemas(hints, _io_schemas)
         self._config_schema = self._resolve_config_class(self._config_schema)
         self._initialize_init_schema(init_schema)
 
@@ -1195,28 +1203,41 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         channel, task = start_stream(run)
         return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
 
-    def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
+    def _initialize_io_schemas(
+        self,
+        annotations: dict[str, Any],
+        published: tuple[dict[str, object], dict[str, object]] | None = None,
+    ) -> None:
+        published_input, published_output = published if published is not None else (None, None)
         if self._params.input is not None:
             input_type = annotations.get(self._params.input.name, Any)
             type_adapter, self._input_schema = json_schema_for(
-                input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
+                input_type,
+                kind=self._kind,
+                name=self._name,
+                label=f"input '{self._params.input.name}'",
+                schema=published_input,
             )
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
             self._input_class: type | None = input_type if isinstance(input_type, type) else None
         else:
-            self._input_schema = TypeAdapter(object).json_schema()
+            self._input_schema = published_input or TypeAdapter(object).json_schema()
             self._input_type = None
             self._input_class = None
         self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
 
         if ActionMetadataKey.RETURN in annotations:
             output_adapter, self._output_schema = json_schema_for(
-                annotations[ActionMetadataKey.RETURN], kind=self._kind, name=self._name, label='output'
+                annotations[ActionMetadataKey.RETURN],
+                kind=self._kind,
+                name=self._name,
+                label='output',
+                schema=published_output,
             )
             self._output_type: TypeAdapter[OutputT] | None = cast(TypeAdapter[OutputT], output_adapter)
         else:
             self._output_type = None
-            self._output_schema = TypeAdapter(object).json_schema()
+            self._output_schema = published_output or TypeAdapter(object).json_schema()
         self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
     def _initialize_init_schema(

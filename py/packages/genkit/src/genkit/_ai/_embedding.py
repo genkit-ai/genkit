@@ -26,7 +26,7 @@ from typing_extensions import Never
 from genkit._core._action import Action, ActionKind, get_func_description, with_request_annotation
 from genkit._core._model import EmbedRequest
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import fixed_json_schema, to_json_schema
 from genkit._core._typing import EmbedResponse
 
 
@@ -123,9 +123,9 @@ class Embedder(Action[EmbedRequest, EmbedResponse, Never]):
             metadata=embedder_meta,
             description=get_func_description(fn, description),
             config_schema=config_schema,
+            # Every embedder publishes EmbedRequest/EmbedResponse.
+            _io_schemas=(fixed_json_schema(EmbedRequest), fixed_json_schema(EmbedResponse)),
         )
-        self.input_schema = to_json_schema(EmbedRequest)
-        self.output_schema = to_json_schema(EmbedResponse)
         # EmbedderInfo.config_schema is an explicit Dev UI override; else the class.
         if embedder_info.get('customOptions') is None and self.config_schema is not None:
             embedder_info['customOptions'] = to_json_schema(self.config_schema)
