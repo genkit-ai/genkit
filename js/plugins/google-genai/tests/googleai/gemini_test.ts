@@ -1233,6 +1233,34 @@ describe('Google AI Gemini', () => {
         });
       });
 
+      it('reports character counts next to token counts (Interactions API)', async () => {
+        // Telemetry reads usage.inputCharacters etc.; they're counted from the
+        // request and response, as on generateContent models.
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse({
+          status: 'completed',
+          steps: [
+            {
+              type: 'model_output',
+              content: [{ type: 'text', text: 'Hi there' }],
+            },
+          ],
+          usage: {
+            total_input_tokens: 2,
+            total_output_tokens: 3,
+            input_tokens_by_modality: [{ modality: 'text', tokens: 2 }],
+          },
+        });
+        const result = await model.run(minimalRequest);
+
+        const usage = result.result.usage;
+        assert.strictEqual(usage?.inputCharacters, 'Hello'.length);
+        assert.strictEqual(usage?.outputCharacters, 'Hi there'.length);
+        assert.strictEqual(usage?.inputTokens, 2);
+        assert.strictEqual(usage?.outputTokens, 3);
+        assert.deepStrictEqual(usage?.custom, { inputTextTokens: 2 });
+      });
+
       it('passes serviceTier to the API (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions); // Uses Interactions API
         mockFetchResponse(defaultApiResponse);

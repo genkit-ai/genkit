@@ -62,6 +62,7 @@ import {
   toInteractionSteps,
   toInteractionTool,
   toInteractionToolChoice,
+  withBasicUsageStats,
 } from '../common/interaction-converters.js';
 import {
   CreateInteractionRequest,
@@ -1328,8 +1329,11 @@ async function generateWithInteractions(params: {
   }
 
   if (!params.streamingRequested) {
-    return fromInteractionSync(
-      await createInteraction(req, params.requestClientOptions)
+    return withBasicUsageStats(
+      fromInteractionSync(
+        await createInteraction(req, params.requestClientOptions)
+      ),
+      request.messages
     );
   }
   const result = await createInteractionStream(
@@ -1343,7 +1347,10 @@ async function generateWithInteractions(params: {
       params.sendChunk({ index: 0, content });
     }
   }
-  return fromInteractionSync(await result.response);
+  return withBasicUsageStats(
+    fromInteractionSync(await result.response),
+    request.messages
+  );
 }
 
 /**

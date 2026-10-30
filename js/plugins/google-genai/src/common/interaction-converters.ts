@@ -23,7 +23,7 @@ import {
   Part,
   z,
 } from 'genkit';
-import { ToolDefinition } from 'genkit/model';
+import { ToolDefinition, getBasicUsageStats } from 'genkit/model';
 import {
   AudioContent,
   BuiltInToolStep,
@@ -1849,7 +1849,8 @@ function fromFunctionResultContent(content: FunctionResultContent): Part {
  *
  * The per-modality breakdowns are token counts, so they go in `custom` as
  * e.g. `inputTextTokens` / `outputImageTokens`: Genkit's `inputCharacters`,
- * `inputImages`, ... fields count characters and media parts.
+ * `inputImages`, ... fields count characters and media parts (added by
+ * withBasicUsageStats where the request is known).
  */
 function fromInteractionUsage(usage: Usage): GenerationUsage {
   const result: GenerationUsage = {
@@ -1957,6 +1958,35 @@ function interactionMessageMetadata(
         },
       }
     : {};
+}
+
+/**
+ * Adds the character and media-part counts (`inputCharacters`,
+ * `inputImages`, ...) to an Interactions response's usage, counted from the
+ * request messages and the response message the same way as on
+ * generateContent models (getBasicUsageStats). Telemetry (e.g. the Google
+ * Cloud plugin's generate/input/characters metric) reads these fields. The
+ * token counts from the API are kept and win over the basic counts.
+ *
+ * Call it on the final response (after streamed audio is merged), with the
+ * request's messages. Background models (Deep Research) don't have the
+ * request when checked, so they don't get these counts.
+ */
+export function withBasicUsageStats(
+  response: GenerateResponseData,
+  requestMessages: MessageData[]
+): GenerateResponseData {
+  const output: MessageData = response.message ?? {
+    role: 'model',
+    content: [],
+  };
+  return {
+    ...response,
+    usage: {
+      ...getBasicUsageStats(requestMessages, output),
+      ...response.usage,
+    },
+  };
 }
 
 export function fromInteractionSync(

@@ -57,6 +57,7 @@ import {
   toInteractionSteps,
   toInteractionTool,
   toInteractionToolChoice,
+  withBasicUsageStats,
 } from '../common/interaction-converters.js';
 import {
   InteractionTool,
@@ -1472,8 +1473,10 @@ export function defineModel(
             req,
             clientOpt
           );
-          const out = fromInteractionSync(response);
-          return out;
+          return withBasicUsageStats(
+            fromInteractionSync(response),
+            request.messages
+          );
         } else {
           const result = await createInteractionStream(
             requestApiKey,
@@ -1500,7 +1503,7 @@ export function defineModel(
               out.message.content.map(removeId3FromAudio)
             );
           }
-          return out;
+          return withBasicUsageStats(out, request.messages);
         }
       }
 

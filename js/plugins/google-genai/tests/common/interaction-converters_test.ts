@@ -40,6 +40,7 @@ import {
   toInteractionSteps,
   toInteractionTool,
   toInteractionVideoResponseFormat,
+  withBasicUsageStats,
 } from '../../src/common/interaction-converters.js';
 import {
   Content,
@@ -2919,6 +2920,75 @@ describe('Interaction Converters', () => {
         result.output?.message?.content.map((p) => p.text),
         ['partial']
       );
+    });
+  });
+
+  describe('withBasicUsageStats', () => {
+    const request: MessageData[] = [
+      {
+        role: 'user',
+        content: [
+          { text: 'Describe this' },
+          {
+            media: {
+              url: 'data:image/png;base64,AAAA',
+              contentType: 'image/png',
+            },
+          },
+        ],
+      },
+    ];
+
+    it('adds character and media counts next to the token counts', () => {
+      const response = fromInteractionSync({
+        status: 'completed',
+        steps: [
+          {
+            type: 'model_output',
+            content: [
+              { type: 'text', text: 'A cat.' },
+              { type: 'audio', mime_type: 'audio/wav', data: 'AAAA' },
+            ],
+          },
+        ],
+        usage: {
+          total_input_tokens: 270,
+          total_output_tokens: 30,
+          total_tokens: 300,
+          input_tokens_by_modality: [
+            { modality: 'text', tokens: 12 },
+            { modality: 'image', tokens: 258 },
+          ],
+        },
+      });
+      const result = withBasicUsageStats(response, request);
+      assert.deepStrictEqual(result.usage, {
+        inputCharacters: 'Describe this'.length,
+        inputImages: 1,
+        inputVideos: 0,
+        inputAudioFiles: 0,
+        outputCharacters: 'A cat.'.length,
+        outputImages: 0,
+        outputVideos: 0,
+        outputAudioFiles: 1,
+        inputTokens: 270,
+        outputTokens: 30,
+        totalTokens: 300,
+        cachedContentTokens: undefined,
+        thoughtsTokens: undefined,
+        custom: { inputTextTokens: 12, inputImageTokens: 258 },
+      });
+      // The rest of the response is unchanged.
+      assert.deepStrictEqual(result.message, response.message);
+    });
+
+    it('counts the request even when the API sent no usage', () => {
+      const response = fromInteractionSync({ status: 'completed', steps: [] });
+      const result = withBasicUsageStats(response, request);
+      assert.strictEqual(result.usage?.inputCharacters, 'Describe this'.length);
+      assert.strictEqual(result.usage?.inputImages, 1);
+      assert.strictEqual(result.usage?.outputCharacters, 0);
+      assert.strictEqual(result.usage?.inputTokens, undefined);
     });
   });
 
