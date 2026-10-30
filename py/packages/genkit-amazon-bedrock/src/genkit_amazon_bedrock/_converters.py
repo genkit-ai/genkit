@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.model import GenerationUsage, ModelRequest, ToolDefinition, ToolRequest
+from genkit.model._tool_input import unwrap_string_input, wrap_string_input, wrap_string_schema
 from genkit_amazon_bedrock._config import BedrockConfig
 
 # Bedrock returns signed and sometimes redacted reasoning that has to be sent
@@ -341,7 +342,7 @@ def _tool_use_id(ref: str | None, label: str) -> str:
     return ref
 
 
-def _part_to_blocks(part: Part) -> list[dict[str, Any]]:
+def _part_to_blocks(part: Part, tools: list[ToolDefinition] | None = None) -> list[dict[str, Any]]:
     """Converts one Genkit part to Converse content blocks.
 
     Unknown part kinds are silently dropped so a foreign part cannot fail a
@@ -356,7 +357,7 @@ def _part_to_blocks(part: Part) -> list[dict[str, Any]]:
                 'toolUse': {
                     'toolUseId': _tool_use_id(tool_request.ref, 'tool request'),
                     'name': tool_request.name,
-                    'input': tool_request.input,
+                    'input': wrap_string_input(tool_request.name, tool_request.input, tools),
                 }
             }
         ]
@@ -397,6 +398,7 @@ def _system_blocks(message: Message | Any) -> list[dict[str, Any]]:  # noqa: ANN
 
 def convert_messages(
     messages: list[Message] | None,
+    tools: list[ToolDefinition] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Splits Genkit messages into Converse messages and top-level system blocks.
 
@@ -422,7 +424,7 @@ def convert_messages(
         for part in message.content or []:
             if part is None:
                 continue
-            blocks.extend(_part_to_blocks(part))
+            blocks.extend(_part_to_blocks(part, tools))
         if not blocks:
             continue
         converse_messages.append({'role': role, 'content': blocks})
@@ -447,6 +449,7 @@ def _normalize_tool_schema(schema: Any) -> dict[str, Any]:  # noqa: ANN401
         normalized = parsed if isinstance(parsed, dict) else {'type': 'object', 'properties': {}}
     else:
         return {'type': 'object', 'properties': {}}
+    normalized = wrap_string_schema(normalized) or normalized
     normalized.setdefault('type', 'object')
     if normalized.get('type') == 'object':
         normalized.setdefault('properties', {})
@@ -500,9 +503,8 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
     if request is None:
         raise GenkitError(message='bedrock: model request is missing', status='INVALID_ARGUMENT')
     config = normalize_config(request.config)
-    messages, system = convert_messages(request.messages)
-
     tools = request.tools or []
+    messages, system = convert_messages(request.messages, tools)
     tool_choice = _requested_tool_choice(request, config) if tools else ''
     # "none" means omit toolConfig entirely — Bedrock has no none mode.
     send_tool_config = bool(tools) and tool_choice != 'none'
@@ -603,6 +605,7 @@ def _coerce_map(value: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]
 
 def coerce_tool_input(name: str, value: Any, tools: list[ToolDefinition] | None) -> Any:  # noqa: ANN401
     """Coerces a decoded tool input toward the named tool's declared schema."""
+    value = unwrap_string_input(name, value, tools)
     if not isinstance(value, dict):
         return value
     for tool in tools or []:

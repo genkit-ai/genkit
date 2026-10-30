@@ -39,7 +39,8 @@ from anthropic import (
 from anthropic.types import Message as AnthropicMessage
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
-from genkit.model import ConstrainedSupport, GenerationUsage, ModelContext, ModelRequest, ToolRequest
+from genkit.model import ConstrainedSupport, GenerationUsage, ModelContext, ModelRequest, ToolDefinition, ToolRequest
+from genkit.model._tool_input import unwrap_string_input, wrap_string_input, wrap_string_schema
 from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
@@ -373,7 +374,9 @@ class AnthropicModel:
         try:
             if streaming:
                 assert ctx is not None  # streaming requires ctx
-                response = await self._generate_streaming(params, ctx, client=client, use_beta=use_beta)
+                response = await self._generate_streaming(
+                    params, ctx, client=client, use_beta=use_beta, tools=request.tools
+                )
             else:
                 active_client = cast(Any, client)
                 messages_client = active_client.beta.messages if use_beta else active_client.messages
@@ -396,7 +399,7 @@ class AnthropicModel:
             output_tokens=response.usage.output_tokens,
         )
 
-        content = self._to_genkit_content(response.content)
+        content = self._to_genkit_content(response.content, request.tools)
         content = maybe_strip_fences(request, content)
 
         response_message = Message(role=Role.MODEL, content=content)
@@ -505,7 +508,7 @@ class AnthropicModel:
         disable_parallel_tool_use = bool(config.disable_parallel_tool_use)
 
         params['model'] = config.version or self.model_name
-        params['messages'] = self._to_anthropic_messages(request.messages)
+        params['messages'] = self._to_anthropic_messages(request.messages, request.tools)
         params['max_tokens'] = int(max_tokens)
         # ModelConfig types top_k as float, so 40 dumps as 40.0; Claude's top_k is an int.
         top_k = params.get('top_k')
@@ -583,7 +586,7 @@ class AnthropicModel:
                 {
                     'name': t.name,
                     'description': t.description,
-                    'input_schema': _to_tool_input_schema(t.input_schema),
+                    'input_schema': _to_tool_input_schema(wrap_string_schema(t.input_schema)),
                 }
                 for t in request.tools
             ]
@@ -608,6 +611,7 @@ class AnthropicModel:
         ctx: ModelContext,
         client: object | None = None,
         use_beta: bool = False,
+        tools: list[ToolDefinition] | None = None,
     ) -> AnthropicMessage:
         """Handle streaming generation.
 
@@ -695,7 +699,7 @@ class AnthropicModel:
                                         tool_request=ToolRequest(
                                             ref=tool_info['id'],
                                             name=tool_info['name'],
-                                            input=tool_input,
+                                            input=unwrap_string_input(tool_info['name'], tool_input, tools),
                                         )
                                     )
                                 ],
@@ -715,7 +719,9 @@ class AnthropicModel:
                 return ''.join(texts) if texts else None
         return None
 
-    def _to_anthropic_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
+    def _to_anthropic_messages(
+        self, messages: list[Message], tools: list[ToolDefinition] | None = None
+    ) -> list[dict[str, Any]]:
         """Convert Genkit messages to Anthropic format.
 
         Handles text, media (images), tool use/result, and document
@@ -729,7 +735,7 @@ class AnthropicModel:
             role = 'assistant' if msg.role == Role.MODEL else 'user'
             content: list[dict[str, Any]] = []
             for part in msg.content:
-                block = self._to_anthropic_block(part)
+                block = self._to_anthropic_block(part, tools)
                 if block is not None:
                     # Apply cache_control from part metadata if present; the API
                     # rejects it on thinking blocks.
@@ -740,7 +746,7 @@ class AnthropicModel:
             result.append({'role': role, 'content': content})
         return result
 
-    def _to_anthropic_block(self, part: Part) -> dict[str, Any] | None:
+    def _to_anthropic_block(self, part: Part, tools: list[ToolDefinition] | None = None) -> dict[str, Any] | None:
         """Convert a single Genkit content part to an Anthropic content block.
 
         Handles reasoning, redacted thinking, text, media (images + PDFs),
@@ -748,6 +754,7 @@ class AnthropicModel:
 
         Args:
             part: A message content part.
+            tools: Tool definitions used to shape string inputs.
 
         Returns:
             An Anthropic content block dict, or None if unrecognized.
@@ -775,7 +782,7 @@ class AnthropicModel:
                 'type': 'tool_use',
                 'id': part.tool_request.ref,
                 'name': part.tool_request.name,
-                'input': part.tool_request.input,
+                'input': wrap_string_input(part.tool_request.name, part.tool_request.input, tools),
             }
         if part.tool_response is not None:
             return {
@@ -785,7 +792,7 @@ class AnthropicModel:
             }
         return None
 
-    def _to_genkit_content(self, content_blocks: list[Any]) -> list[Part]:
+    def _to_genkit_content(self, content_blocks: list[Any], tools: list[ToolDefinition] | None = None) -> list[Part]:
         """Convert Anthropic response to Genkit format."""
         parts = []
         for block in content_blocks:
@@ -797,7 +804,7 @@ class AnthropicModel:
                         tool_request=ToolRequest(
                             ref=block.id,
                             name=block.name,
-                            input=block.input,
+                            input=unwrap_string_input(block.name, block.input, tools),
                         )
                     )
                 )

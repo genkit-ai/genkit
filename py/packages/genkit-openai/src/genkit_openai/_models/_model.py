@@ -38,6 +38,7 @@ from openai.types.completion_usage import CompletionTokensDetails, PromptTokensD
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import GenerationUsage, ModelConfig, ModelContext, ModelRequest, ModelSupports, ToolDefinition
+from genkit.model._tool_input import is_string_tool, unwrap_string_input, wrap_string_input, wrap_string_schema
 
 logger = get_logger(__name__)
 
@@ -265,11 +266,12 @@ class OpenAIModel:
         """The name of the OpenAI model."""
         return self._model
 
-    def _get_messages(self, messages: list[Message]) -> list[dict]:
+    def _get_messages(self, messages: list[Message], tools: list[ToolDefinition] | None = None) -> list[dict]:
         """Converts the request messages into the format required by OpenAI's API.
 
         Args:
             messages: A list of the user messages.
+            tools: Tool definitions used to shape string inputs.
 
         Returns:
             A list of dictionaries, where each dictionary represents a message
@@ -281,6 +283,11 @@ class OpenAIModel:
         openai_messages = []
         for message in messages:
             openai_messages.extend(MessageConverter.to_openai(message=message))
+        for message in openai_messages:
+            for tool_call in message.get('tool_calls', []):
+                function = tool_call['function']
+                value = json.loads(function['arguments'])
+                function['arguments'] = json.dumps(wrap_string_input(function['name'], value, tools))
         return openai_messages
 
     async def _get_tools_definition(self, tools: list[ToolDefinition]) -> list[dict]:
@@ -301,7 +308,7 @@ class OpenAIModel:
         """
         result = []
         for tool_definition in tools:
-            parameters = tool_definition.input_schema or {}
+            parameters = wrap_string_schema(tool_definition.input_schema) or {}
             if parameters:
                 parameters = _ensure_strict_json_schema(parameters, path=(), root=parameters)
 
@@ -443,7 +450,7 @@ class OpenAIModel:
         Returns:
             A dictionary representing the OpenAI request configuration.
         """
-        messages = self._get_messages(request.messages)
+        messages = self._get_messages(request.messages, request.tools)
 
         # For models that only support json_object mode, inject the schema
         # into the messages so the model knows the expected output structure.
@@ -512,6 +519,11 @@ class OpenAIModel:
         )
 
         genkit_message = MessageConverter.to_genkit(message)
+        for part in genkit_message.content:
+            if part.tool_request is not None:
+                part.tool_request.input = unwrap_string_input(
+                    part.tool_request.name, part.tool_request.input, request.tools
+                )
         # An empty message is the answer when the model was blocked or cut off; at a clean stop it is unreadable.
         if not genkit_message.content and finish_reason is FinishReason.STOP:
             raise ValueError('Unable to determine content part')
@@ -602,11 +614,21 @@ class OpenAIModel:
                         tool_calls[tool_call.index] = tool_call
                     else:
                         existing = tool_calls[tool_call.index]
-                        if hasattr(existing, 'function') and existing.function and tool_call.function:
-                            existing.function.arguments = (existing.function.arguments or '') + fragment
-                    parts.append(
-                        MessageConverter.tool_call_to_genkit(tool_calls[tool_call.index], args_segment=fragment)
-                    )
+                        if tool_call.function:
+                            if not existing.function:
+                                existing.function = tool_call.function
+                            else:
+                                if tool_call.function.name and not existing.function.name:
+                                    existing.function.name = tool_call.function.name
+                                existing.function.arguments = (existing.function.arguments or '') + fragment
+                    complete_call = tool_calls[tool_call.index]
+                    # The id may arrive before the function name; wait to emit a usable part.
+                    if (
+                        complete_call.function
+                        and complete_call.function.name
+                        and not is_string_tool(complete_call.function.name, request.tools)
+                    ):
+                        parts.append(MessageConverter.tool_call_to_genkit(complete_call, args_segment=fragment))
 
             if parts:
                 callback(ModelResponseChunk(role=Role.MODEL, content=parts))
@@ -623,6 +645,13 @@ class OpenAIModel:
             message = MessageConverter.to_genkit(
                 DictMessageAdapter({'tool_calls': tool_calls.values(), 'role': Role.MODEL})
             )
+            for part in message.content:
+                if part.tool_request is not None:
+                    part.tool_request.input = unwrap_string_input(
+                        part.tool_request.name, part.tool_request.input, request.tools
+                    )
+                    if is_string_tool(part.tool_request.name, request.tools):
+                        callback(ModelResponseChunk(role=Role.MODEL, content=[part]))
             accumulated_content.extend(message.content)
 
         finish_reason, finish_message = _finish_state(

@@ -41,6 +41,7 @@ from genkit.model import (
     ModelSupports,
     OutputConfig,
     ToolDefinition,
+    ToolRequest,
 )
 
 
@@ -124,6 +125,53 @@ async def test_generate_with_tools() -> None:
     assert part.tool_request.name == 'get_weather'
     assert part.tool_request.ref == 'tool_123'
     assert part.tool_request.input == {'location': 'Paris'}
+
+
+@pytest.mark.asyncio
+async def test_generate_unwraps_string_tool_input() -> None:
+    """A string tool uses an object on the wire and returns a bare string."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Weather in Paris?')])],
+        tools=[ToolDefinition(name='weather', description='Get weather', input_schema={'type': 'string'})],
+    )
+    mock_client = MagicMock()
+    block = MagicMock()
+    block.type = 'tool_use'
+    block.id = 'tool_1'
+    block.name = 'weather'
+    block.input = {'input': 'Paris'}
+    response = MagicMock(content=[block], usage=MagicMock(input_tokens=5, output_tokens=5), stop_reason='tool_use')
+    mock_client.messages.create = AsyncMock(return_value=response)
+
+    result = await AnthropicModel(model_name='claude-sonnet-4', client=mock_client).generate(request)
+
+    schema = mock_client.messages.create.call_args.kwargs['tools'][0]['input_schema']
+    assert schema == {'type': 'object', 'properties': {'input': {'type': 'string'}}, 'required': ['input']}
+    assert result.message.content[0].tool_request.input == 'Paris'
+
+
+def test_string_tool_history_is_wrapped_without_changing_object_tool() -> None:
+    """Prior calls use the matching schema's wire shape for each tool."""
+    tools = [
+        ToolDefinition(name='weather', description='Get weather', input_schema={'type': 'string'}),
+        ToolDefinition(
+            name='search',
+            description='Search',
+            input_schema={'type': 'object', 'properties': {'input': {'type': 'string'}}},
+        ),
+    ]
+    message = Message(
+        role=Role.MODEL,
+        content=[
+            Part(tool_request=ToolRequest(name='weather', ref='1', input='Paris')),
+            Part(tool_request=ToolRequest(name='search', ref='2', input={'input': 'Paris'})),
+        ],
+    )
+    model = AnthropicModel(model_name='claude-sonnet-4', client=MagicMock())
+    blocks = model._to_anthropic_messages([message], tools)[0]['content']
+    assert blocks[0]['input'] == {'input': 'Paris'}
+    assert blocks[1]['input'] == {'input': 'Paris'}
+    assert message.content[0].tool_request.input == 'Paris'
 
 
 @pytest.mark.asyncio
