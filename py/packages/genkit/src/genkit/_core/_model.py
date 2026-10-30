@@ -33,18 +33,22 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    GetJsonSchemaHandler,
     PrivateAttr,
     RootModel,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 from pydantic.alias_generators import to_camel
 from pydantic.config import JsonDict
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 from typing_extensions import Self, TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
-from genkit._core._base import GenkitModel, dump_keeping_unknown
+from genkit._core._base import GenkitConfig, GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
@@ -57,7 +61,6 @@ from genkit._core._typing import (
     DocumentData,
     FinishReason,
     GenerateActionOutputConfig,
-    GenerationCommonConfig,
     GenerationUsage,
     JsonPatch,
     Media,
@@ -80,9 +83,16 @@ from genkit._core._typing import (
 # ModelConfigDict is the hand-copied autocomplete list for this class — keep
 # the keys matching so a new knob shows up in the IDE the same day it becomes legal.
 #
-# GenerationCommonConfig is generated as a GenkitConfig, so model_dump()
-# returns field names for provider SDKs and by_alias=True gives the wire shape.
-class ModelConfig(GenerationCommonConfig):
+# The common fields are declared here rather than inherited from the generated
+# GenerationCommonConfig, which types token counts as float (JSON Schema has
+# one number type). The names match it field for field; a test pins that.
+# As a GenkitConfig, model_dump() returns field names for provider SDKs and
+# by_alias=True gives the wire shape.
+#
+# A plugin config extends this class and never re-declares or aliases these
+# fields: tighter provider bounds go in a validator, and a provider's own name
+# for one of these settings is the plugin's to map, not a second field.
+class ModelConfig(GenkitConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
     Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
@@ -90,6 +100,67 @@ class ModelConfig(GenerationCommonConfig):
     per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
     here.
     """
+
+    version: str | None = Field(default=None, description='Model version to call, for providers that pin one.')
+    """Model version to call, for providers that pin one per request."""
+
+    temperature: float | None = Field(default=None, description='Sampling temperature. Higher is more random.')
+    """Sampling temperature. Higher is more random."""
+
+    max_output_tokens: int | None = Field(default=None, description='Maximum number of tokens to generate.')
+    """Upper bound on tokens in the reply."""
+
+    top_k: int | None = Field(default=None, description='The maximum number of tokens to consider when sampling.')
+    """Sample only from the k most likely tokens."""
+
+    top_p: float | None = Field(
+        default=None, description='The maximum cumulative probability of tokens to consider when sampling.'
+    )
+    """Sample from the smallest token set whose probability reaches p."""
+
+    stop_sequences: list[str] | None = Field(default=None, description='Strings that end the reply when generated.')
+    """Strings that end the reply when the model emits one."""
+
+    common_field_bounds: ClassVar[Mapping[str, tuple[float, float]]] = {}
+    """Inclusive ``(min, max)`` a provider allows for a numeric common field.
+
+    A plugin narrows a common field here instead of re-declaring it. Values
+    outside the range fail validation, and the Dev UI schema advertises the
+    range as ``minimum``/``maximum``.
+
+    Example:
+        ```python
+        class OpenAIConfig(ModelConfig):
+            common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
+
+
+        OpenAIConfig(temperature=3.0)
+        # => ValidationError: temperature must be between 0.0 and 2.0, got 3.0
+        ```
+    """
+
+    @field_validator('temperature', 'max_output_tokens', 'top_k', 'top_p')
+    @classmethod
+    def _check_common_field_bounds(cls, value: float | None, info: ValidationInfo) -> float | None:
+        bounds = cls.common_field_bounds.get(info.field_name or '')
+        if value is not None and bounds is not None and not bounds[0] <= value <= bounds[1]:
+            raise ValueError(f'{info.field_name} must be between {bounds[0]} and {bounds[1]}, got {value}')
+        return value
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        """Advertise ``common_field_bounds`` on the matching schema properties."""
+        json_schema = handler(core_schema)
+        resolved = handler.resolve_ref_schema(json_schema)
+        properties = resolved.get('properties')
+        if isinstance(properties, dict):
+            for name, (low, high) in cls.common_field_bounds.items():
+                alias = cls.model_fields[name].alias
+                prop = properties.get(alias) if alias in properties else properties.get(name)
+                if isinstance(prop, dict):
+                    prop['minimum'] = low
+                    prop['maximum'] = high
+        return json_schema
 
     extra: dict[str, Any] | None = None
     """Provider settings the model's config class doesn't declare, sent as-is.
@@ -145,8 +216,8 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
 
     version: str | None
     temperature: float | None
-    max_output_tokens: float | None
-    top_k: float | None
+    max_output_tokens: int | None
+    top_k: int | None
     top_p: float | None
     stop_sequences: Sequence[str] | None
     extra: dict[str, Any] | None

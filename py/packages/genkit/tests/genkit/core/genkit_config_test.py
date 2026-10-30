@@ -20,6 +20,7 @@ import pytest
 from pydantic import ValidationError
 
 from genkit._core._base import GenkitModel
+from genkit._core._model import ModelConfigDict
 from genkit._core._typing import GenerationCommonConfig
 from genkit.model import ModelConfig, ModelRequest
 from genkit.plugin_api import GenkitConfig
@@ -78,9 +79,31 @@ def test_plugin_config_forbids_extra_kwargs() -> None:
 
 def test_model_config_is_plugin_config_not_genkit_model() -> None:
     """Model configs follow the upstream dump contract, not GenkitModel's camelCase default."""
-    assert issubclass(ModelConfig, GenerationCommonConfig)
+    assert issubclass(ModelConfig, GenkitConfig)
     assert issubclass(GenerationCommonConfig, GenkitConfig)
     assert not issubclass(ModelConfig, GenkitModel)
+
+
+def test_model_config_common_fields_match_shared_schema() -> None:
+    """ModelConfig declares exactly the shared schema's common fields, same names and wire aliases."""
+    ours = {name: field.alias for name, field in ModelConfig.model_fields.items() if name != 'extra'}
+    shared = {name: field.alias for name, field in GenerationCommonConfig.model_fields.items()}
+    assert ours == shared
+
+
+def test_model_config_token_counts_are_ints() -> None:
+    """`max_output_tokens` and `top_k` validate as int; a whole float from JSON is accepted, a fraction is not."""
+    config = ModelConfig.model_validate({'maxOutputTokens': 256.0, 'topK': 40})
+    assert config.max_output_tokens == 256
+    assert type(config.max_output_tokens) is int
+    assert type(config.top_k) is int
+    with pytest.raises(ValidationError):
+        ModelConfig(max_output_tokens=2.5)  # pyright: ignore[reportArgumentType]
+
+
+def test_model_config_dict_keys_match_model_config() -> None:
+    """The autocomplete TypedDict lists the same keys as ModelConfig."""
+    assert set(ModelConfigDict.__annotations__) == set(ModelConfig.model_fields)
 
 
 def test_generated_common_config_rejects_unknown_keys() -> None:
@@ -108,3 +131,25 @@ def test_genkit_config_rejects_both_spellings_of_one_setting() -> None:
         SampleConfig.model_validate({'sampleRate': 0.5, 'sample_rate': 0.5})
     with pytest.raises(ValidationError):
         SampleConfig(sample_rate=0.5, sampleRate=0.6)  # type: ignore[call-arg]
+
+
+class _BoundedConfig(ModelConfig):
+    """A plugin config that narrows temperature without re-declaring it."""
+
+    common_field_bounds = {'temperature': (0.0, 2.0)}
+
+
+def test_common_field_bounds_reject_out_of_range_value() -> None:
+    """`temperature=3.0` on a config bounded to [0, 2] fails naming the field and range."""
+    assert _BoundedConfig(temperature=2.0).temperature == 2.0
+    with pytest.raises(ValidationError, match=r'temperature must be between 0.0 and 2.0, got 3.0'):
+        _BoundedConfig(temperature=3.0)
+
+
+def test_common_field_bounds_show_in_json_schema() -> None:
+    """The Dev UI schema carries the range on the inherited property; unbounded fields stay open."""
+    props = _BoundedConfig.model_json_schema(by_alias=True)['properties']
+    assert props['temperature']['minimum'] == 0.0
+    assert props['temperature']['maximum'] == 2.0
+    assert 'minimum' not in props['topP']
+    assert 'minimum' not in ModelConfig.model_json_schema(by_alias=True)['properties']['temperature']

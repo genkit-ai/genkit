@@ -161,7 +161,7 @@ def test_model_config_dict_accepts_common_knobs() -> None:
     """ModelConfigDict is the typed shape for config={...} literals."""
     config: ModelConfigDict = {
         'temperature': 0.5,
-        'max_output_tokens': 256.0,
+        'max_output_tokens': 256,
         'top_k': 40,
         'top_p': 0.9,
         'stop_sequences': ['END'],
@@ -169,7 +169,7 @@ def test_model_config_dict_accepts_common_knobs() -> None:
     }
 
     assert config['temperature'] == 0.5
-    assert config['max_output_tokens'] == 256.0
+    assert config['max_output_tokens'] == 256
 
 
 def test_model_config_dict_accepts_none_clear() -> None:

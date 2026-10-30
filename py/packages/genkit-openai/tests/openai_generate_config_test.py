@@ -29,6 +29,7 @@ from genkit import FinishReason, Genkit, GenkitError, Part
 from genkit.plugin_api import ActionKind
 
 PLUGIN_KEY = 'sk-plugin'
+_AUDIO = 'data:audio/mpeg;base64,' + base64.b64encode(b'mp3-bytes').decode()
 
 
 def _completion(text: str = 'hi back') -> dict[str, Any]:
@@ -176,6 +177,181 @@ async def test_generate_openai_max_output_tokens_caps_reply(
         k: body[k] for k in ('max_tokens', 'max_completion_tokens', 'max_output_tokens', 'maxOutputTokens') if k in body
     }
     assert caps_sent == {cap: 50}
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_stop_sequences_go_out_as_stop(ai: Genkit, server: _OpenAIServer) -> None:
+    """`config={'stop_sequences': ['###']}` arrives as OpenAI's `stop`."""
+    await ai.generate(model='openai/gpt-4o', prompt='hi', config={'stop_sequences': ['###']})
+
+    [body] = server.bodies()
+    assert body['stop'] == ['###']
+    assert 'stop_sequences' not in body
+    assert 'stopSequences' not in body
+
+
+@pytest.mark.parametrize(
+    'config,message',
+    [
+        pytest.param({'max_tokens': 50}, 'max_tokens is not a config field; use max_output_tokens', id='max_tokens'),
+        pytest.param(
+            {'max_completion_tokens': 50},
+            'max_completion_tokens is not a config field; use max_output_tokens',
+            id='max_completion_tokens',
+        ),
+        pytest.param({'stop': ['###']}, 'stop is not a config field; use stop_sequences', id='stop'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_openai_native_name_for_common_field_raises(
+    ai: Genkit, server: _OpenAIServer, config: dict[str, Any], message: str
+) -> None:
+    """OpenAI's own name for the reply cap or stop strings raises INVALID_ARGUMENT; nothing is sent."""
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model='openai/gpt-4o', prompt='hi', config=config)
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert message in str(raised.value)
+    assert server.requests == []
+
+
+@pytest.mark.parametrize(
+    'key,common',
+    [('max_tokens', 'max_output_tokens'), ('max_completion_tokens', 'max_output_tokens'), ('stop', 'stop_sequences')],
+)
+@pytest.mark.asyncio
+async def test_generate_openai_native_name_in_extra_fails(
+    ai: Genkit, server: _OpenAIServer, key: str, common: str
+) -> None:
+    """`extra={'stop': [...]}` collides with the field Genkit builds from `stop_sequences`; nothing is sent."""
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi', config={'extra': {key: 1}})
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert f"extra field '{key}' is built by Genkit" in response.error.message
+    assert f'use {common}' in response.error.message
+    assert server.requests == []
+
+
+# Image and audio models take only their own settings
+
+_MEDIA_MODELS = [
+    pytest.param('openai/dall-e-3', 'a cat', id='dall-e'),
+    pytest.param('openai/gpt-image-1', 'a cat', id='gpt-image'),
+    pytest.param('openai/tts-1', 'say hi', id='tts'),
+    pytest.param('openai/whisper-1', [Part.from_media(_AUDIO, content_type='audio/mpeg')], id='stt'),
+]
+
+
+@pytest.mark.parametrize('model,prompt', _MEDIA_MODELS)
+@pytest.mark.parametrize(
+    'config',
+    [
+        {'max_output_tokens': 50},
+        {'top_k': 4},
+        {'top_p': 0.9},
+        {'stop_sequences': ['###']},
+    ],
+    ids=lambda c: next(iter(c)),
+)
+@pytest.mark.asyncio
+async def test_generate_openai_media_model_rejects_generic_knob(
+    ai: Genkit, server: _OpenAIServer, model: str, prompt: Any, config: dict[str, Any]
+) -> None:
+    """A text-generation knob on an image or audio model raises INVALID_ARGUMENT instead of being dropped."""
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model=model, prompt=prompt, config=config)
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert next(iter(config)) in str(raised.value)
+    assert server.requests == []
+
+
+@pytest.mark.parametrize('model,prompt', _MEDIA_MODELS)
+@pytest.mark.asyncio
+async def test_generate_openai_media_model_rejects_version(
+    ai: Genkit, server: _OpenAIServer, model: str, prompt: Any
+) -> None:
+    """`config={'version': ...}` on an image or audio model fails INVALID_ARGUMENT instead of pinning or being sent."""
+    response = await ai.generate(model=model, prompt=prompt, config={'version': 'pinned'})
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert 'version is not a setting for this model' in response.error.message
+    assert server.requests == []
+
+
+@pytest.mark.parametrize('model,prompt', [p for p in _MEDIA_MODELS if p.id != 'stt'])
+@pytest.mark.asyncio
+async def test_generate_openai_image_and_tts_reject_temperature(
+    ai: Genkit, server: _OpenAIServer, model: str, prompt: Any
+) -> None:
+    """Images and speech take no temperature, so it raises."""
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(model=model, prompt=prompt, config={'temperature': 0.2})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_stt_sends_temperature(ai: Genkit, server: _OpenAIServer) -> None:
+    """Transcription takes a temperature, including 0."""
+    await ai.generate(
+        model='openai/whisper-1',
+        prompt=[Part.from_media(_AUDIO, content_type='audio/mpeg')],
+        config={'temperature': 0},
+    )
+
+    [request] = server.requests
+    assert b'name="temperature"\r\n\r\n0' in request.content
+
+
+@pytest.mark.parametrize(
+    'model,props',
+    [
+        pytest.param('openai/dall-e-3', {'size', 'quality', 'style', 'n', 'user', 'responseFormat', 'extra'}),
+        pytest.param(
+            'openai/gpt-image-1',
+            {
+                'size',
+                'style',
+                'user',
+                'n',
+                'quality',
+                'background',
+                'moderation',
+                'outputCompression',
+                'outputFormat',
+                'extra',
+            },
+        ),
+        pytest.param('openai/tts-1', {'voice', 'speed', 'responseFormat', 'instructions', 'extra'}),
+        pytest.param(
+            'openai/whisper-1',
+            {
+                'temperature',
+                'language',
+                'timestampGranularities',
+                'responseFormat',
+                'prompt',
+                'translate',
+                'extra',
+            },
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_openai_media_model_advertises_only_its_own_settings(plugin: OpenAI, model: str, props: set[str]) -> None:
+    """The Dev UI form for an image or audio model lists its endpoint's settings, no text-generation knobs."""
+    action = await plugin.resolve(ActionKind.MODEL, model)
+
+    assert action is not None
+    options = cast(dict[str, Any], action.metadata['model'])['customOptions']
+    assert set(options['properties']) == props
+    assert options['additionalProperties'] is False
 
 
 # Whose key a call runs on
@@ -331,9 +507,6 @@ async def test_generate_openai_config_api_key_raises_naming_context_secrets(
     assert "context={'secrets': {'api_key': ...}}" in str(raised.value)
     assert 'sk-tenant-secret' not in str(raised.value)
     assert server.requests == []
-
-
-_AUDIO = 'data:audio/mpeg;base64,' + base64.b64encode(b'mp3-bytes').decode()
 
 
 @pytest.mark.parametrize(

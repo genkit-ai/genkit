@@ -134,10 +134,14 @@ def _sample_value(annotation: object) -> object:
     return ['###']
 
 
+# Ollama options that are set through a common ModelConfig field instead.
+_COMMON_FIELD_OPTIONS = {'num_predict': 'max_output_tokens', 'stop': 'stop_sequences'}
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize('option', sorted(ollama_api.Options.model_fields))
+@pytest.mark.parametrize('option', sorted(set(ollama_api.Options.model_fields) - set(_COMMON_FIELD_OPTIONS)))
 async def test_generate_ollama_every_client_sampler_option_reaches_options(server: Server, option: str) -> None:
-    """Each sampler option the installed `ollama` client knows is accepted and lands in `options`."""
+    """Each sampler option the installed `ollama` client knows, minus `num_predict`/`stop`, lands in `options`."""
     value = _sample_value(ollama_api.Options.model_fields[option].annotation)
     ai = make_ai()
 
@@ -401,23 +405,60 @@ async def test_generate_ollama_unusable_secrets_key_raises_invalid_argument(serv
 
 
 @pytest.mark.asyncio
-async def test_generate_ollama_stop_wins_over_stop_sequences(server: Server) -> None:
-    """`stop=['A']` with `stop_sequences=['B']` sends `['A']`, like `num_predict` over `max_output_tokens`."""
+@pytest.mark.parametrize(
+    'config',
+    [
+        {'stop_sequences': ['###'], 'max_output_tokens': 256},
+        {'stopSequences': ['###'], 'maxOutputTokens': 256},
+    ],
+)
+async def test_generate_ollama_common_fields_go_out_as_stop_and_num_predict(
+    server: Server, config: dict[str, Any]
+) -> None:
+    """`stop_sequences` and `max_output_tokens` arrive as Ollama's `stop` and `num_predict`."""
     ai = make_ai()
 
-    await ai.generate(model=MODEL, prompt='hi', config={'stop': ['A'], 'stop_sequences': ['B']})
+    await ai.generate(model=MODEL, prompt='hi', config=config)
 
-    assert server.last_options == {'stop': ['A']}
+    assert server.last_options == {'stop': ['###'], 'num_predict': 256}
 
 
 @pytest.mark.asyncio
-async def test_generate_ollama_stop_sequences_maps_to_stop(server: Server) -> None:
-    """`stop_sequences=['B']` alone sends `stop: ['B']`."""
+@pytest.mark.parametrize(
+    ('key', 'value', 'common'),
+    [
+        ('stop', ['###'], 'stop_sequences'),
+        ('num_predict', 256, 'max_output_tokens'),
+        ('numPredict', 256, 'max_output_tokens'),
+    ],
+)
+async def test_generate_ollama_native_name_raises_naming_common_field(
+    server: Server, key: str, value: object, common: str
+) -> None:
+    """`config={'stop': [...]}` raises INVALID_ARGUMENT naming `stop_sequences`; nothing is sent."""
     ai = make_ai()
 
-    await ai.generate(model=MODEL, prompt='hi', config={'stop_sequences': ['B']})
+    with pytest.raises(GenkitError, match=f'ollama: {key} is not a config field; use {common}') as excinfo:
+        await ai.generate(model=MODEL, prompt='hi', config={key: value})
 
-    assert server.last_options == {'stop': ['B']}
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('key', 'common'), sorted(_COMMON_FIELD_OPTIONS.items()))
+async def test_generate_ollama_native_name_in_extra_raises(server: Server, key: str, common: str) -> None:
+    """`extra={'stop': [...]}` collides with the option Genkit builds from `stop_sequences`; nothing is sent."""
+    ai = make_ai()
+
+    response = await ai.generate(model=MODEL, prompt='hi', config={'extra': {key: 1}})
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert f'extra field {key!r}' in response.error.message
+    assert f'use {common}' in response.error.message
+    assert server.requests == []
 
 
 @pytest.mark.asyncio

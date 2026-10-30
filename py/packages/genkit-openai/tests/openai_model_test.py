@@ -175,58 +175,32 @@ async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models
     model = OpenAIModel(model=model_name, client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, reasoning_effort=reasoning_effort),
+        config=OpenAIConfig(max_output_tokens=32, reasoning_effort=reasoning_effort),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_completion_tokens'] == 32
     assert 'max_tokens' not in body
+    assert 'max_output_tokens' not in body
 
 
 @pytest.mark.asyncio
 async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
-    """Legacy OpenAI-compatible models continue to receive max_tokens."""
+    """Legacy OpenAI-compatible models receive max_output_tokens as max_tokens."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32),
+        config=OpenAIConfig(max_output_tokens=32, stop_sequences=['###']),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_tokens'] == 32
+    assert body['stop'] == ['###']
     assert 'max_completion_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
-    """An explicit modern token limit wins when both fields are configured."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_completion_tokens=64),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_completion_tokens'] == 64
-    assert 'max_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_max_tokens_wins_over_max_output_tokens() -> None:
-    """`max_tokens=32` with `max_output_tokens=128` sends a cap of 32."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_output_tokens=128),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_tokens'] == 32
     assert 'max_output_tokens' not in body
+    assert 'stop_sequences' not in body
 
 
 @pytest.mark.asyncio
