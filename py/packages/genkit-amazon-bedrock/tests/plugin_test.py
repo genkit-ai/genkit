@@ -22,7 +22,7 @@ from typing import Any, cast
 
 import boto3.session
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -109,10 +109,11 @@ async def test_resolve_returns_an_image_action_for_a_listed_image_model() -> Non
     assert action is not None
     assert action.metadata is not None
     model_metadata = cast(dict[str, Any], action.metadata['model'])
-    # The open image schema: a strict one would reject every family-specific
-    # override at Genkit's request validation.
-    assert model_metadata['customOptions']['properties'] == {}
-    assert model_metadata['customOptions'].get('additionalProperties') is not False
+    # Titan's own schema: its wire fields as camelCase properties, unknown keys rejected.
+    properties = model_metadata['customOptions']['properties']
+    assert {'numberOfImages', 'height', 'width', 'cfgScale', 'seed', 'quality', 'extra'} <= set(properties)
+    assert 'toolChoice' not in properties
+    assert model_metadata['customOptions'].get('additionalProperties') is False
 
 
 @pytest.mark.asyncio
@@ -126,7 +127,7 @@ async def test_resolve_classifies_an_undeclared_image_model_id() -> None:
     assert action.metadata is not None
     model_metadata = cast(dict[str, Any], action.metadata['model'])
     assert model_metadata['supports']['output'] == ['media']
-    assert model_metadata['customOptions']['properties'] == {}
+    assert model_metadata['customOptions']['properties']['quality']['anyOf'][0]['enum'] == ['standard', 'premium']
 
 
 @pytest.mark.asyncio
@@ -145,7 +146,30 @@ async def test_list_actions_lists_configured_chat_and_image_models() -> None:
     assert actions[1].metadata is not None
     image_metadata = cast(dict[str, Any], actions[1].metadata['model'])
     assert image_metadata['supports']['output'] == ['media']
-    assert image_metadata['customOptions']['properties'] == {}
+    assert 'numberOfImages' in image_metadata['customOptions']['properties']
+
+
+@pytest.mark.parametrize(
+    ('model_id', 'config_class'),
+    [
+        ('amazon.titan-image-generator-v1', TitanImageConfig),
+        ('amazon.titan-image-generator-v2:0', TitanImageConfig),
+        ('us.amazon.nova-canvas-v1:0', NovaCanvasConfig),
+        ('stability.sd3-5-large-v1:0', StabilityImageConfig),
+        ('stability.stable-image-core-v1:1', StabilityImageConfig),
+        ('us.stability.stable-image-ultra-v1:1', StabilityImageConfig),
+        ('amazon.nova-lite-v1:0', BedrockConfig),
+    ],
+)
+@pytest.mark.asyncio
+async def test_each_model_registers_its_family_config_class(model_id: str, config_class: type) -> None:
+    # The registered class drives both the Dev UI form and generate()'s
+    # isinstance check, so a NovaCanvasConfig sent to Titan is caught.
+    plugin = Bedrock(region='us-east-1')
+    action = await plugin.resolve(ActionKind.MODEL, model_id)
+
+    assert action is not None
+    assert action.config_schema is config_class
 
 
 @pytest.mark.asyncio

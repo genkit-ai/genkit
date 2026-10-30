@@ -20,7 +20,7 @@ import json
 from typing import Any, cast
 
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -194,26 +194,135 @@ async def test_generate_bedrock_image_extra_prompt_field_fails_invalid_argument(
 
 @pytest.mark.asyncio
 async def test_generate_bedrock_image_extra_not_a_mapping_fails_invalid_argument() -> None:
-    """`config={'extra': 'oops'}` fails with INVALID_ARGUMENT instead of an AttributeError, and sends nothing."""
+    """`config={'extra': 'oops'}` fails with INVALID_ARGUMENT before the call, and sends nothing."""
     ai, transport = bedrock_app()
 
-    response = await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'extra': 'oops'})
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'extra': 'oops'})
 
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert "config['extra'] must be a mapping" in response.error.message
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "'extra'" in str(exc_info.value)
     assert transport.invoke_calls == []
 
 
 @pytest.mark.asyncio
-async def test_generate_bedrock_image_undeclared_key_is_accepted() -> None:
-    """`config={'aspect_ratio': '16:9'}` on a Stability model is sent; image config does not reject unknown keys."""
+@pytest.mark.parametrize(
+    ('model', 'config', 'expected'),
+    [
+        (
+            NOVA_CANVAS,
+            NovaCanvasConfig(seed=7, width=512, height=512, quality='premium', number_of_images=2, cfg_scale=6.5),
+            {
+                'taskType': 'TEXT_IMAGE',
+                'textToImageParams': {'text': 'a reef'},
+                'imageGenerationConfig': {
+                    'numberOfImages': 2,
+                    'height': 512,
+                    'width': 512,
+                    'cfgScale': 6.5,
+                    'seed': 7,
+                    'quality': 'premium',
+                },
+            },
+        ),
+        (
+            TITAN_IMAGE,
+            {'seed': 7, 'width': 512, 'height': 512},
+            {
+                'taskType': 'TEXT_IMAGE',
+                'textToImageParams': {'text': 'a reef'},
+                'imageGenerationConfig': {'numberOfImages': 1, 'height': 512, 'width': 512, 'cfgScale': 8.0, 'seed': 7},
+            },
+        ),
+        (
+            IMAGE_MODEL,
+            StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg'),
+            {
+                'prompt': 'a reef',
+                'output_format': 'jpeg',
+                'aspect_ratio': '16:9',
+                'seed': 42,
+                'negative_prompt': 'blurry',
+            },
+        ),
+        (
+            IMAGE_MODEL,
+            {'aspect_ratio': '16:9', 'temperature': 0.4},
+            {'prompt': 'a reef', 'output_format': 'png', 'aspect_ratio': '16:9'},
+        ),
+    ],
+    ids=['nova_typed', 'titan_dict', 'stability_typed', 'stability_dict_generic_knob_ignored'],
+)
+async def test_generate_bedrock_image_config_reaches_the_wire(
+    model: str, config: Any, expected: dict[str, Any]
+) -> None:  # noqa: ANN401
+    """Typed and dict configs map to each family's wire body; Genkit's generic knobs are dropped."""
     ai, transport = bedrock_app()
 
-    await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'aspect_ratio': '16:9'})
+    response = await ai.generate(model=model, prompt='a reef', config=config)
 
-    body = json.loads(transport.invoke_calls[0]['body'])
-    assert body['aspect_ratio'] == '16:9'
+    assert response.error is None
+    assert json.loads(transport.invoke_calls[0]['body']) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model', 'config', 'needle'),
+    [
+        (IMAGE_MODEL, {'aspect_ratio': '16:9', 'style_preset': 'photographic'}, "'style_preset'"),
+        (NOVA_CANVAS, {'imageGenerationConfg': {'seed': 7}}, "'imageGenerationConfg'"),
+        (TITAN_IMAGE, {'number_of_image': 2}, "'number_of_image'"),
+    ],
+    ids=['stability_unlisted_field', 'nova_typo', 'titan_typo'],
+)
+async def test_generate_bedrock_image_unknown_key_fails_and_points_to_extra(
+    model: str, config: dict[str, Any], needle: str
+) -> None:
+    """An undeclared image config key raises INVALID_ARGUMENT naming it and `extra`, and sends nothing."""
+    ai, transport = bedrock_app()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=model, prompt='a reef', config=config)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert needle in str(exc_info.value)
+    assert "config['extra']" in str(exc_info.value)
+    assert transport.invoke_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('old_name', ['imageGenerationConfig', 'image_generation_config'])
+@pytest.mark.parametrize('model', [NOVA_CANVAS, TITAN_IMAGE])
+async def test_generate_bedrock_image_old_nested_config_raises_and_names_flat_fields(model: str, old_name: str) -> None:
+    """The old nested `imageGenerationConfig`, in either spelling, raises INVALID_ARGUMENT naming the flat fields."""
+    ai, transport = bedrock_app()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=model, prompt='a reef', config={old_name: {'seed': 7}})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert f'{old_name} was flattened' in str(exc_info.value)
+    assert 'number_of_images=' in str(exc_info.value)
+    assert transport.invoke_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_bedrock_image_config_class_of_another_family_fails() -> None:
+    """`NovaCanvasConfig` on a Titan model is rejected; each family registers its own class."""
+    ai, transport = bedrock_app()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=TITAN_IMAGE, prompt='a reef', config=NovaCanvasConfig(seed=7))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'TitanImageConfig' in str(exc_info.value)
+    assert transport.invoke_calls == []
+
+
+def test_titan_image_config_rejects_the_old_nested_key_at_construction() -> None:
+    """`TitanImageConfig(imageGenerationConfig=...)` raises the same INVALID_ARGUMENT as the dict form."""
+    with pytest.raises(GenkitError, match='imageGenerationConfig was flattened'):
+        TitanImageConfig.model_validate({'imageGenerationConfig': {'seed': 7}})
 
 
 @pytest.mark.asyncio
