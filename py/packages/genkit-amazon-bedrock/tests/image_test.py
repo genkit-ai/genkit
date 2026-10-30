@@ -21,8 +21,8 @@ from typing import Any
 
 import pytest
 from botocore.exceptions import ClientError, NoCredentialsError
-from genkit_amazon_bedrock._config import BedrockConfig, BedrockImageConfig
-from genkit_amazon_bedrock._image import BedrockImageModel, build_amazon_image_body, is_image_model
+from genkit_amazon_bedrock import NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
+from genkit_amazon_bedrock._image import BedrockImageModel, image_config_class, is_image_model
 from pydantic import ConfigDict
 
 from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Part, Role
@@ -47,7 +47,7 @@ TITAN_DEFAULTS: dict[str, Any] = {
     'cfgScale': 8.0,
     'seed': 0,
 }
-# Nova Canvas takes a quality knob; Titan Image rejects one.
+# Nova Canvas defaults quality; Titan Image sends it only when set.
 NOVA_CANVAS_DEFAULTS: dict[str, Any] = {**TITAN_DEFAULTS, 'quality': 'standard'}
 
 
@@ -253,61 +253,108 @@ async def test_titan_sends_the_documented_defaults() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_nested_override_leaves_the_other_defaults_alone() -> None:
+async def test_titan_typed_config_nests_under_image_generation_config() -> None:
     transport = FakeInvokeTransport(amazon_response('titan-image'))
-    await generate(TITAN_IMAGE, transport, image_request(config={'imageGenerationConfig': {'height': 512, 'seed': 42}}))
+    config = TitanImageConfig(number_of_images=2, height=512, width=512, cfg_scale=6.5, seed=42)
+    await generate(TITAN_IMAGE, transport, image_request(config=config))
+
+    # Exact equality: no quality unless set, and nothing at the top level.
+    assert transport.bodies() == [
+        {
+            'taskType': 'TEXT_IMAGE',
+            'textToImageParams': {'text': PROMPT},
+            'imageGenerationConfig': {'numberOfImages': 2, 'height': 512, 'width': 512, 'cfgScale': 6.5, 'seed': 42},
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_titan_sends_quality_only_when_set() -> None:
+    transport = FakeInvokeTransport(amazon_response('titan-image'))
+    await generate(TITAN_IMAGE, transport, image_request(config=TitanImageConfig(quality='premium')))
+
+    assert transport.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'quality': 'premium'}
+
+
+@pytest.mark.parametrize(
+    'config',
+    [
+        {'height': 512, 'seed': 42},
+        {'height': 512, 'seed': 42, 'temperature': 0.9},
+        {'height': 512, 'seed': 42, 'topP': 0.5, 'version': 'v2'},
+    ],
+    ids=['plain', 'generic_knob', 'camel_generic_knobs'],
+)
+@pytest.mark.asyncio
+async def test_a_dict_config_overrides_only_what_it_names(config: dict[str, Any]) -> None:
+    # Genkit's generic knobs validate (they're on ModelConfig) and are dropped.
+    transport = FakeInvokeTransport(amazon_response('titan-image'))
+    await generate(TITAN_IMAGE, transport, image_request(config=config))
 
     assert transport.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'height': 512, 'seed': 42}
 
 
 @pytest.mark.asyncio
-async def test_amazon_drops_top_level_config_keys() -> None:
-    transport = FakeInvokeTransport(amazon_response('titan-image'))
-    config = {'height': 512, 'aspect_ratio': '16:9', 'imageGenerationConfig': {'seed': 42}}
-    await generate(TITAN_IMAGE, transport, image_request(config=config))
+async def test_amazon_accepts_the_camel_case_wire_names() -> None:
+    transport = FakeInvokeTransport(amazon_response('nova-image'))
+    await generate(NOVA_CANVAS, transport, image_request(config={'numberOfImages': 3, 'cfgScale': 4.0}))
 
-    body = transport.bodies()[0]
-    # Only the nested map is honoured; a flat merge would leak both of these.
-    assert body['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'seed': 42}
-    assert 'aspect_ratio' not in body
+    assert transport.bodies()[0]['imageGenerationConfig'] == {
+        **NOVA_CANVAS_DEFAULTS,
+        'numberOfImages': 3,
+        'cfgScale': 4.0,
+    }
 
 
+@pytest.mark.parametrize('key', ['imageGenerationConfig', 'image_generation_config'])
+@pytest.mark.parametrize('model_id', [TITAN_IMAGE, NOVA_CANVAS])
 @pytest.mark.asyncio
-async def test_amazon_accepts_the_snake_case_nested_key() -> None:
-    transport = FakeInvokeTransport(amazon_response('titan-image'))
-    await generate(TITAN_IMAGE, transport, image_request(config={'image_generation_config': {'seed': 3}}))
+async def test_the_old_nested_key_names_the_flat_fields(model_id: str, key: str) -> None:
+    with pytest.raises(GenkitError) as excinfo:
+        await generate(model_id, ForbiddenTransport(), image_request(config={key: {'seed': 7}}))
 
-    # BedrockConfig takes either casing, so this spelling must not be dropped.
-    assert transport.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'seed': 3}
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
+    assert f'{key} was flattened' in str(excinfo.value)
+    assert 'number_of_images=' in str(excinfo.value)
+    assert "config['extra']" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    ('model_id', 'config'),
+    [
+        (TITAN_IMAGE, {'imageGenerationConfg': {'seed': 7}}),
+        (TITAN_IMAGE, {'aspect_ratio': '16:9'}),
+        (NOVA_CANVAS, {'numberOfImage': 2}),
+        (SD3, {'aspectRatio': '16:9', 'style_preset': 'photographic'}),
+        (SD3, {'width': 512}),
+    ],
+    ids=['titan_typo', 'titan_stability_key', 'nova_typo', 'stability_unlisted', 'stability_amazon_key'],
+)
 @pytest.mark.asyncio
-async def test_the_camel_case_nested_key_wins_over_the_snake_case_one() -> None:
-    transport = FakeInvokeTransport(amazon_response('titan-image'))
-    config = {'imageGenerationConfig': {'seed': 1}, 'image_generation_config': {'seed': 2}}
-    await generate(TITAN_IMAGE, transport, image_request(config=config))
-
-    # camelCase is the AWS wire name.
-    assert transport.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'seed': 1}
+async def test_an_unknown_key_is_rejected_before_any_call(model_id: str, config: dict[str, Any]) -> None:
+    with pytest.raises(GenkitError, match='invalid config') as excinfo:
+        await generate(model_id, ForbiddenTransport(), image_request(config=config))
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
 
 
-def test_the_amazon_body_does_not_alias_the_callers_nested_dict() -> None:
-    overrides: dict[str, Any] = {'height': 512}
-    config: dict[str, Any] = {'imageGenerationConfig': overrides}
-    body = build_amazon_image_body('a mountain', config, include_quality=False)
-
-    body['imageGenerationConfig']['width'] = 256
-    assert overrides == {'height': 512}
-    assert config == {'imageGenerationConfig': {'height': 512}}
-
-
-@pytest.mark.parametrize('overrides', ['not a dict', 42, ['seed', 7], None])
+@pytest.mark.parametrize(
+    ('model_id', 'config'),
+    [
+        (NOVA_CANVAS, {'width': 500}),
+        (NOVA_CANVAS, {'height': 8192}),
+        (NOVA_CANVAS, {'number_of_images': 6}),
+        (TITAN_IMAGE, {'cfg_scale': 11}),
+        (TITAN_IMAGE, {'quality': 'ultra'}),
+        (SD3, {'aspect_ratio': '4:3'}),
+        (SD3, {'output_format': 'gif'}),
+        (SD3, {'seed': -1}),
+    ],
+)
 @pytest.mark.asyncio
-async def test_amazon_ignores_a_non_mapping_image_generation_config(overrides: Any) -> None:  # noqa: ANN401
-    transport = FakeInvokeTransport(amazon_response('titan-image'))
-    await generate(TITAN_IMAGE, transport, image_request(config={'imageGenerationConfig': overrides}))
-
-    assert transport.bodies()[0]['imageGenerationConfig'] == TITAN_DEFAULTS
+async def test_an_out_of_range_value_is_rejected_before_any_call(model_id: str, config: dict[str, Any]) -> None:
+    with pytest.raises(GenkitError, match='invalid config') as excinfo:
+        await generate(model_id, ForbiddenTransport(), image_request(config=config))
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
@@ -325,9 +372,9 @@ async def test_nova_canvas_defaults_include_quality() -> None:
 
 
 @pytest.mark.asyncio
-async def test_nova_canvas_keeps_a_nested_override() -> None:
+async def test_nova_canvas_typed_config_overrides_the_defaults() -> None:
     transport = FakeInvokeTransport(amazon_response('nova-image'))
-    config = {'imageGenerationConfig': {'quality': 'premium', 'width': 512}}
+    config = NovaCanvasConfig(quality='premium', width=512)
     await generate(NOVA_CANVAS, transport, image_request(config=config))
 
     assert transport.bodies()[0]['imageGenerationConfig'] == {
@@ -349,13 +396,24 @@ async def test_stability_sends_the_documented_defaults() -> None:
     assert transport.bodies() == [{'prompt': 'a reef', 'output_format': 'png'}]
 
 
+@pytest.mark.parametrize(
+    'config',
+    [
+        StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg'),
+        {'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry', 'output_format': 'jpeg'},
+        {'aspectRatio': '16:9', 'seed': 42, 'negativePrompt': 'blurry', 'outputFormat': 'jpeg'},
+    ],
+    ids=['typed', 'snake_dict', 'camel_dict'],
+)
 @pytest.mark.asyncio
-async def test_stability_merges_a_flat_config_over_the_defaults() -> None:
+async def test_stability_sends_declared_fields_at_the_top_level(config: Any) -> None:  # noqa: ANN401
     transport = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
-    config = {'aspect_ratio': '16:9', 'seed': 42, 'output_format': 'jpeg'}
     await generate(STABLE_CORE, transport, image_request('a reef', config=config))
 
-    assert transport.bodies() == [{'prompt': 'a reef', 'output_format': 'jpeg', 'aspect_ratio': '16:9', 'seed': 42}]
+    # Stability's wire names are snake_case, whatever spelling the caller used.
+    assert transport.bodies() == [
+        {'prompt': 'a reef', 'output_format': 'jpeg', 'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
+    ]
 
 
 @pytest.mark.asyncio
@@ -380,8 +438,9 @@ async def test_stability_mime_follows_the_requested_output_format() -> None:
 
 @pytest.mark.asyncio
 async def test_stability_mime_lowercases_while_the_wire_keeps_the_casing() -> None:
+    # The declared field takes lowercase only; extra is sent as-is.
     transport = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
-    response = await generate(SD3, transport, image_request(config={'output_format': 'JPEG'}))
+    response = await generate(SD3, transport, image_request(config={'extra': {'output_format': 'JPEG'}}))
 
     assert transport.bodies()[0]['output_format'] == 'JPEG'
     assert [item.content_type for item in media(response)] == ['image/jpeg']
@@ -502,15 +561,26 @@ async def test_an_all_blank_image_array_is_internal(model_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_a_pydantic_config_and_the_equivalent_dict_agree() -> None:
-    overrides: dict[str, Any] = {'imageGenerationConfig': {'seed': 7}}
-    typed = FakeInvokeTransport(amazon_response('titan-image'))
-    plain = FakeInvokeTransport(amazon_response('titan-image'))
+    overrides: dict[str, Any] = {'seed': 7, 'extra': {'textToImageParams': {'negativeText': 'blurry'}}}
+    typed = FakeInvokeTransport(amazon_response('nova-image'))
+    plain = FakeInvokeTransport(amazon_response('nova-image'))
 
-    await generate(TITAN_IMAGE, typed, image_request(config=BedrockImageConfig.model_validate(overrides)))
-    await generate(TITAN_IMAGE, plain, image_request(config=overrides))
+    await generate(NOVA_CANVAS, typed, image_request(config=NovaCanvasConfig.model_validate(overrides)))
+    await generate(NOVA_CANVAS, plain, image_request(config=overrides))
 
     assert typed.bodies() == plain.bodies()
-    assert typed.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'seed': 7}
+    assert typed.bodies()[0]['imageGenerationConfig'] == {**NOVA_CANVAS_DEFAULTS, 'seed': 7}
+    assert typed.bodies()[0]['textToImageParams'] == {'text': PROMPT, 'negativeText': 'blurry'}
+
+
+@pytest.mark.asyncio
+async def test_extra_deep_merges_over_the_typed_fields() -> None:
+    # A colliding leaf in extra wins, as in #6644; siblings keep the typed values.
+    transport = FakeInvokeTransport(amazon_response('nova-image'))
+    config = NovaCanvasConfig(seed=7, width=512, extra={'imageGenerationConfig': {'seed': 9}})
+    await generate(NOVA_CANVAS, transport, image_request(config=config))
+
+    assert transport.bodies()[0]['imageGenerationConfig'] == {**NOVA_CANVAS_DEFAULTS, 'seed': 9, 'width': 512}
 
 
 @pytest.mark.asyncio
@@ -559,14 +629,33 @@ async def test_botocore_errors_map_to_genkit_statuses() -> None:
 # ---- Config schema ----------------------------------------------------------
 
 
-def test_the_image_config_schema_stays_open() -> None:
-    # Genkit validates request config against this schema before the handler
-    # runs, so anything strict would reject every family-specific override.
-    image_schema = to_json_schema(BedrockImageConfig)
-    chat_schema = to_json_schema(BedrockConfig)
+@pytest.mark.parametrize(
+    ('model_id', 'config_class'),
+    [
+        (TITAN_IMAGE, TitanImageConfig),
+        (NOVA_CANVAS, NovaCanvasConfig),
+        (f'us.{NOVA_CANVAS}', NovaCanvasConfig),
+        (SD3, StabilityImageConfig),
+        (STABLE_CORE, StabilityImageConfig),
+        ('amazon.nova-lite-v1:0', None),
+    ],
+)
+def test_image_config_class_follows_the_family(model_id: str, config_class: type | None) -> None:
+    assert image_config_class(model_id) is config_class
 
-    assert image_schema.get('additionalProperties') is not False
-    assert image_schema.get('properties') == {}
-    # Positive control: the chat schema really does declare properties, so the
-    # empty map above is a fact about BedrockImageConfig, not about the helper.
-    assert 'toolChoice' in chat_schema['properties']
+
+@pytest.mark.parametrize(
+    ('config_class', 'expected'),
+    [
+        (TitanImageConfig, {'numberOfImages', 'height', 'width', 'cfgScale', 'seed', 'quality'}),
+        (NovaCanvasConfig, {'numberOfImages', 'height', 'width', 'cfgScale', 'seed', 'quality'}),
+        (StabilityImageConfig, {'aspectRatio', 'seed', 'negativePrompt', 'outputFormat'}),
+    ],
+)
+def test_each_image_schema_is_strict_and_declares_its_wire_fields(config_class: type, expected: set[str]) -> None:
+    # Strict, so a typo raises instead of being dropped; the Dev UI renders these as a form.
+    schema = to_json_schema(config_class)
+
+    assert schema.get('additionalProperties') is False
+    assert expected <= set(schema['properties'])
+    assert 'extra' in schema['properties']

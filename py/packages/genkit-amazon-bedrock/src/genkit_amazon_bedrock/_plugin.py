@@ -35,7 +35,7 @@ from genkit.plugin_api import (
 from genkit_amazon_bedrock._config import (
     DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
-    BedrockImageConfig,
+    ImageConfig,
 )
 from genkit_amazon_bedrock._embedders import (
     BedrockEmbedder,
@@ -43,7 +43,7 @@ from genkit_amazon_bedrock._embedders import (
     is_embedding_model,
     looks_like_embedding_model,
 )
-from genkit_amazon_bedrock._image import BedrockImageModel, is_image_model
+from genkit_amazon_bedrock._image import BedrockImageModel, image_config_class, is_image_model
 from genkit_amazon_bedrock._model_info import get_model_info, is_rerank_model
 from genkit_amazon_bedrock._models import BedrockModel
 from genkit_amazon_bedrock._transport import BedrockTransport
@@ -70,9 +70,13 @@ def _model_type(model_id: str) -> Literal['chat', 'image']:
     return 'image' if is_image_model(model_id) else 'chat'
 
 
-def _config_schema(model_type: Literal['chat', 'image']) -> type[BedrockConfig] | type[BedrockImageConfig]:
-    """The config schema for a route; resolve and list both read it so the Dev UI matches the action."""
-    return BedrockImageConfig if model_type == 'image' else BedrockConfig
+def _config_schema(model_id: str) -> type[BedrockConfig] | type[ImageConfig]:
+    """The config class for a model; resolve and list both read it so the Dev UI matches the action.
+
+    Image models get their family's class (Titan Image, Nova Canvas,
+    Stability), everything else ``BedrockConfig``.
+    """
+    return image_config_class(model_id) or BedrockConfig
 
 
 def _require_id_list(arg: str, value: list[str] | None) -> list[str]:
@@ -203,7 +207,7 @@ class Bedrock(Plugin):
 
     def _create_model_action(self, model_id: str, model_type: Literal['chat', 'image'] = 'chat') -> Action:
         model_info = get_model_info(model_id, model_type)
-        config_schema = _config_schema(model_type)
+        config_schema = _config_schema(model_id)
 
         async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             if model_type == 'image':
