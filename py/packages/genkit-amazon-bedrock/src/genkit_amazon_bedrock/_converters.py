@@ -326,7 +326,10 @@ def _reasoning_part_to_blocks(part: Part) -> list[dict[str, Any]]:
         blocks.append({'reasoningContent': {'redactedContent': redacted}})
     signature = _metadata_str(metadata, REASONING_SIGNATURE_METADATA_KEY)
     text = part.reasoning or ''
-    if text and signature:
+    # Signed reasoning replays even with empty text: Claude can sign an empty
+    # thinking block, and a tool-use turn must start with it. A redacted-only
+    # part has no text of its own to sign.
+    if signature and (text or not redacted):
         blocks.append({'reasoningContent': {'reasoningText': {'text': text, 'signature': signature}}})
     return blocks
 

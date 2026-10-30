@@ -594,6 +594,37 @@ def test_bedrock_reasoning_part_round_trips() -> None:
     ]
 
 
+def test_empty_signed_reasoning_part_round_trips() -> None:
+    # Claude can sign a thinking block with empty text; a tool-use turn has to
+    # start with it when thinking is enabled, so it must replay.
+    part = Part.from_reasoning('', metadata={REASONING_SIGNATURE_METADATA_KEY: 'sig-abc123=='})
+    request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part])])
+    kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
+    assert kwargs['messages'][0]['content'] == [
+        {'reasoningContent': {'reasoningText': {'text': '', 'signature': 'sig-abc123=='}}}
+    ]
+
+
+def test_empty_signed_reasoning_survives_response_to_request_round_trip() -> None:
+    response_blocks = [
+        {'reasoningContent': {'reasoningText': {'text': '', 'signature': 'sig-abc123=='}}},
+        {'toolUse': {'toolUseId': 'tool-1', 'name': 'getWeather', 'input': {'city': 'Paris'}}},
+    ]
+    parts = content_blocks_to_parts(response_blocks)
+    request = ModelRequest(messages=[Message(role=Role.MODEL, content=parts)])
+    kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
+    replayed = kwargs['messages'][0]['content']
+    assert replayed[0] == {'reasoningContent': {'reasoningText': {'text': '', 'signature': 'sig-abc123=='}}}
+    assert 'toolUse' in replayed[1]
+
+
+def test_empty_unsigned_reasoning_part_is_dropped() -> None:
+    part = Part.from_reasoning('')
+    request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part, Part.from_text('391')])])
+    kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
+    assert kwargs['messages'][0]['content'] == [{'text': '391'}]
+
+
 def test_bytes_signature_form_is_tolerated() -> None:
     part = Part.from_reasoning('step by step', metadata={REASONING_SIGNATURE_METADATA_KEY: b'sig-abc123=='})
     request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part])])

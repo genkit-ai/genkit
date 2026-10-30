@@ -309,6 +309,30 @@ async def test_reasoning_text_streams_and_signature_accumulates() -> None:
     assert text_part.text == 'answer'
 
 
+async def test_signed_reasoning_without_text_is_kept() -> None:
+    # Claude can sign a thinking block with empty text; the non-streaming path
+    # keeps it, and the signature is needed to replay the turn.
+    ctx, chunks = streaming_ctx()
+
+    response = await consume_converse_stream(
+        events(
+            reasoning_delta(0, {'signature': 'sig-abc'}),
+            text_delta(1, 'answer'),
+            message_stop('end_turn'),
+        ),
+        text_request(),
+        ctx,
+    )
+
+    assert len(chunks) == 1
+    assert response.message is not None
+    reasoning_part, text_part = response.message.content
+    assert reasoning_part.reasoning == ''
+    assert reasoning_part.metadata is not None
+    assert reasoning_part.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig-abc'
+    assert text_part.text == 'answer'
+
+
 async def test_redacted_reasoning_accumulates_as_base64_without_chunks() -> None:
     ctx, chunks = streaming_ctx()
 
