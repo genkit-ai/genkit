@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+#
+# Copyright 2026 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+"""A model typed as ModelRequest[Cfg] checks call config against Cfg up front.
+
+Without a class passed as ``config_schema=``, a value the annotation's class
+can't take used to come back as an empty response with
+``finish_reason='failed'``. It now raises INVALID_ARGUMENT before the model
+runs, the same as when ``config_schema=`` is a class.
+"""
+
+from collections.abc import Awaitable, Callable
+from typing import Literal
+
+import pytest
+from pydantic import BaseModel, ConfigDict
+from pydantic.alias_generators import to_camel
+
+from genkit import Genkit, Part
+from genkit._core._error import GenkitError
+from genkit._core._model import Message, ModelRequest, ModelResponse
+from genkit._core._typing import Role
+from genkit.model import GenerateActionOptions, ModelContext
+from genkit.plugin_api import ActionKind
+
+QUALITY_SCHEMA: dict[str, object] = {
+    'type': 'object',
+    'properties': {'quality': {'type': 'string', 'enum': ['low', 'high']}},
+}
+
+
+class SketchConfig(BaseModel):
+    """Config the sketch model's function is typed with."""
+
+    quality: Literal['low', 'high'] = 'low'
+
+
+class OtherConfig(BaseModel):
+    """A config class that belongs to some other model."""
+
+    quality: str = 'low'
+
+
+def sketch_model() -> tuple[
+    Callable[[ModelRequest[SketchConfig], ModelContext], Awaitable[ModelResponse]], list[object]
+]:
+    """A typed model function, plus the configs it was called with."""
+    configs: list[object] = []
+
+    async def sketch(request: ModelRequest[SketchConfig], ctx: ModelContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('sketch')]))
+
+    return sketch, configs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'define_kwargs',
+    [
+        pytest.param({}, id='no-config-schema'),
+        pytest.param({'config_schema': QUALITY_SCHEMA}, id='dict-config-schema'),
+    ],
+)
+async def test_generate_with_bad_config_raises_invalid_argument(define_kwargs: dict[str, object]) -> None:
+    """A value the annotation's class rejects raises before the model runs."""
+    ai = Genkit()
+    sketch, configs = sketch_model()
+    ai.define_model('acme/sketch', sketch, **define_kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model='acme/sketch', prompt='a lighthouse', config={'quality': 'ultra'})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "config 'quality'" in str(exc_info.value)
+    assert configs == []
+
+
+@pytest.mark.asyncio
+async def test_generate_with_good_config_reaches_model_as_annotation_class() -> None:
+    """Valid config is still coerced into the annotation's class."""
+    ai = Genkit()
+    sketch, configs = sketch_model()
+    ai.define_model('acme/sketch', sketch, config_schema=QUALITY_SCHEMA)
+
+    response = await ai.generate(model='acme/sketch', prompt='a lighthouse', config={'quality': 'high'})
+
+    assert response.text == 'sketch'
+    assert configs == [SketchConfig(quality='high')]
+
+
+@pytest.mark.asyncio
+async def test_generate_with_other_models_config_object_raises() -> None:
+    """Another class's config object is a caller mistake and raises before the model runs."""
+    ai = Genkit()
+    sketch, configs = sketch_model()
+    ai.define_model('acme/sketch', sketch)
+
+    with pytest.raises(GenkitError, match=r'config must be .*SketchConfig or a mapping, got .*OtherConfig'):
+        await ai.generate(model='acme/sketch', prompt='a lighthouse', config=OtherConfig(quality='high'))
+
+    assert configs == []
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_bad_config_raises_invalid_argument() -> None:
+    """generate_stream fails the same way as generate."""
+    ai = Genkit()
+    sketch, configs = sketch_model()
+    ai.define_model('acme/sketch', sketch)
+
+    stream = ai.generate_stream(model='acme/sketch', prompt='a lighthouse', config={'quality': 'ultra'})
+    with pytest.raises(GenkitError) as exc_info:
+        await stream.response
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert configs == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_bad_call_config_raises_invalid_argument() -> None:
+    """A prompt call's config override is checked against the annotation's class too."""
+    ai = Genkit()
+    sketch, configs = sketch_model()
+    ai.define_model('acme/sketch', sketch)
+    lighthouse = ai.define_prompt(model='acme/sketch', prompt='a lighthouse')
+
+    with pytest.raises(GenkitError) as exc_info:
+        await lighthouse(config={'quality': 'ultra'})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert configs == []
+
+
+def test_config_schema_class_must_match_annotation() -> None:
+    """With both, the class passed as config_schema= must be the annotated class."""
+
+    class StrictSketchConfig(BaseModel):
+        quality: Literal['high'] = 'high'
+
+    ai = Genkit()
+    sketch, _ = sketch_model()
+    with pytest.raises(
+        GenkitError,
+        match=(
+            r"model 'acme/sketch': config_schema is .*StrictSketchConfig, "
+            r'but the function takes config as .*SketchConfig'
+        ),
+    ):
+        ai.define_model('acme/sketch', sketch, config_schema=StrictSketchConfig)
+
+
+@pytest.mark.asyncio
+async def test_util_generate_with_bad_config_raises_invalid_argument() -> None:
+    """/util/generate (Dev UI, reflection) skips the veneer and still raises before the model runs."""
+    ai = Genkit()
+    sketch, configs = sketch_model()
+    ai.define_model('acme/sketch', sketch)
+    util = await ai._registry.resolve_action(ActionKind.UTIL, 'generate')  # pyright: ignore[reportPrivateUsage]
+    assert util is not None
+
+    with pytest.raises(GenkitError) as exc_info:
+        await util.run(
+            GenerateActionOptions(
+                model='acme/sketch',
+                messages=[Message(role=Role.USER, content=[Part.from_text('a lighthouse')])],
+                config={'quality': 'ultra'},
+            )
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "config 'quality'" in str(exc_info.value)
+    assert configs == []
+
+
+class TokenBudgetConfig(BaseModel):
+    """Camel-case aliases and no extra keys, like most provider configs."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, extra='forbid')
+
+    max_output_tokens: int | None = None
+
+
+@pytest.mark.asyncio
+async def test_prompt_folds_aliases_with_annotation_class() -> None:
+    """The prompt's maxOutputTokens and the call's max_output_tokens are one setting; the call wins."""
+    ai = Genkit()
+    configs: list[object] = []
+
+    async def summarize(request: ModelRequest[TokenBudgetConfig], ctx: ModelContext) -> ModelResponse:
+        configs.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('summary')]))
+
+    ai.define_model('acme/summarize', summarize)
+    digest = ai.define_prompt(model='acme/summarize', prompt='Summarize the menu.', config={'maxOutputTokens': 10})
+
+    await digest(config={'max_output_tokens': 20})
+
+    assert configs == [TokenBudgetConfig(max_output_tokens=20)]

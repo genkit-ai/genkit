@@ -28,18 +28,18 @@ from typing import Any
 from pydantic import ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelRequest, ModelUsage, ToolDefinition, ToolRequest
+from genkit.model import GenerationUsage, ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock._config import BedrockConfig
 
-# Metadata keys used to round-trip Bedrock reasoning ("thinking") content back
-# into a follow-up request. Bedrock returns signed and sometimes redacted
-# reasoning that must be replayed verbatim on the next turn or the model
-# rejects it, so both are stashed on the part metadata: the signature verbatim
-# (it is a string on the wire), the redacted blob as a base64 string so the
-# part stays JSON-serializable. These keys are Bedrock-specific: a generic
-# reasoning part (without these) is intentionally NOT round-tripped, so
-# foreign reasoning can't corrupt a Bedrock conversation.
-REASONING_SIGNATURE_METADATA_KEY = 'bedrockReasoningSignature'
+# Bedrock returns signed and sometimes redacted reasoning that has to be sent
+# back verbatim next turn or the model rejects it, so both ride on the part
+# metadata. The signature uses the same `thoughtSignature` key every provider
+# uses; the redacted blob is stored base64 so a saved chat stays JSON. Reasoning
+# with neither is never sent back. Claude signatures work across the Claude API,
+# Vertex, and Bedrock, so a part from `anthropic/` or `modelgarden/anthropic/`
+# replays here. The source isn't checked, so a Gemini `thoughtSignature` is sent
+# too, and Bedrock rejects it.
+REASONING_SIGNATURE_METADATA_KEY = 'thoughtSignature'
 REDACTED_CONTENT_METADATA_KEY = 'bedrockRedactedContent'
 
 # Custom-part key marking a prompt cache point.
@@ -316,9 +316,8 @@ def _tool_response_text(output: Any) -> str:  # noqa: ANN401
 def _reasoning_part_to_blocks(part: Part) -> list[dict[str, Any]]:
     """Converts a reasoning part back to Converse reasoningContent blocks.
 
-    Only Bedrock-originated reasoning (carrying the signature and/or redacted
-    metadata) is emitted; a generic reasoning part produces no blocks so it
-    cannot corrupt the follow-up request.
+    Only signed or redacted reasoning is emitted; unsigned reasoning produces
+    no blocks, since Bedrock would reject it.
     """
     metadata = part.metadata
     blocks: list[dict[str, Any]] = []
@@ -646,8 +645,6 @@ def bedrock_reasoning_part(text: str, signature: str | None, redacted: bytes | N
     """
     metadata: dict[str, Any] = {}
     if signature:
-        # Also stored under the generic key so framework-level consumers see it.
-        metadata['signature'] = signature
         metadata[REASONING_SIGNATURE_METADATA_KEY] = signature
     if redacted:
         # Base64 string, not raw bytes: part metadata must stay JSON-serializable.
@@ -699,7 +696,7 @@ def map_finish_reason(stop_reason: str | None) -> FinishReason:
     return STOP_REASON_MAP.get(stop_reason or '', FinishReason.OTHER)
 
 
-def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # noqa: ANN401
+def usage_from_response(usage: dict[str, Any] | None) -> GenerationUsage | None:  # noqa: ANN401
     """Maps Converse token usage; totals are trusted verbatim from AWS.
 
     Only ``cacheReadInputTokens`` surfaces (as ``cached_content_tokens``);
@@ -707,7 +704,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
     """
     if usage is None:
         return None
-    return ModelUsage(
+    return GenerationUsage(
         input_tokens=usage.get('inputTokens'),
         output_tokens=usage.get('outputTokens'),
         total_tokens=usage.get('totalTokens'),
@@ -718,7 +715,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
 def usage_log_fields(usage: dict[str, Any] | None) -> dict[str, Any]:  # noqa: ANN401
     """Token counts as structlog keys; empty when the response reported none.
 
-    Cache writes are here but not on ``ModelUsage``, so the log is the only
+    Cache writes are here but not on ``GenerationUsage``, so the log is the only
     place they surface.
     """
     if not usage:

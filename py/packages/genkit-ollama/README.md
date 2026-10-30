@@ -135,8 +135,12 @@ response = await ai.generate(
 
 ### Remote server, headers, and timeouts
 
+`Ollama()` reads `OLLAMA_HOST`, then falls back to `http://127.0.0.1:11434`.
+`base_url` is the server root, with no `/v1` or `/api` suffix; the plugin calls
+`{base_url}/api/chat`.
+
 ```python
-Ollama(server_address='http://ollama.example.com:11434')
+Ollama(base_url='http://ollama.example.com:11434')
 
 # Static headers
 Ollama(request_headers={'Authorization': 'Bearer <token>'})
@@ -158,7 +162,7 @@ async def cloud_run_auth() -> dict[str, str]:
     return {'Authorization': f'Bearer {creds.token}'}
 
 
-Ollama(server_address=OLLAMA_URL, request_headers=cloud_run_auth, timeout=60.0)
+Ollama(base_url=OLLAMA_URL, request_headers=cloud_run_auth, timeout=60.0)
 ```
 
 A dict is sent as-is. A callable takes no arguments, may be sync or async, and
@@ -179,7 +183,7 @@ embedders.
 
 If the plugin can't reach the server it raises a `GenkitError` with status
 `UNAVAILABLE` and the URL it tried (`DEADLINE_EXCEEDED` if the request timed
-out). Start the daemon (`ollama serve`) or set `server_address` to a reachable
+out). Start the daemon (`ollama serve`) or set `base_url` to a reachable
 host.
 
 ## Sample

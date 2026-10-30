@@ -18,20 +18,29 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_type_hints
 
-from pydantic import AliasChoices, BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError
 
+from genkit._ai._background_model import BackgroundModel
 from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    ModelContext,
     get_func_description,
 )
-from genkit._core._background import BackgroundAction
+from genkit._core._config_check import (
+    check_config_json_schema,
+    check_config_values,
+    check_request_config,
+    config_field_names,
+    config_values,
+)
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -39,23 +48,22 @@ from genkit._core._model import (
     ModelConfig as ModelConfig,
     ModelConfigDict,
     ModelRef,
-    ModelRefConfigT,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
     config_type_path,
-    get_basic_usage_stats,
+    declared_config_type,
     reject_config_api_key,
     text_from_content,
     text_from_message,
 )
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, GenerationCommonConfig, ModelInfo
+from genkit._core._schema import fixed_json_schema, to_json_schema
+from genkit._core._typing import GenerationCommonConfig, ModelInfo
 
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
-ModelFn = Callable[[ModelRequest, ActionRunContext], Awaitable[ModelResponse[Any]]]
+ModelFn = Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse[Any]]]
 
 logger = get_logger(__name__)
 
@@ -80,26 +88,15 @@ def python_config_schema(schema: object) -> type[BaseModel] | None:
     return schema if isinstance(schema, type) and issubclass(schema, BaseModel) else None
 
 
+def annotated_config_class(action: object | None) -> type[BaseModel] | None:
+    """The class on the model function's ``ModelRequest[...]`` annotation, if any."""
+    input_class = getattr(action, 'input_class', None) if action is not None else None
+    return declared_config_type(input_class) if isinstance(input_class, type) else None
+
+
 def ref_defers_to_registered_class(schema: type[BaseModel] | None) -> bool:
     """True when the ref named plain ModelConfig, so the model's class is used."""
     return schema is ModelConfig or schema is GenerationCommonConfig
-
-
-def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
-    """Map each field name and alias to the Python field name."""
-    names: dict[str, str] = {}
-    for name, field in schema.model_fields.items():
-        names[name] = name
-        if field.alias:
-            names[field.alias] = name
-        accepted = field.validation_alias
-        if isinstance(accepted, str):
-            names[accepted] = name
-        elif isinstance(accepted, AliasChoices):
-            for choice in accepted.choices:
-                if isinstance(choice, str):
-                    names[choice] = name
-    return names
 
 
 def fold_config_aliases(*, config: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
@@ -174,7 +171,7 @@ def _registered_action_name(*, action: Action, kind: ActionKind, registry: Regis
 
 def _model_action_name(*, model: object, registry: Registry) -> str | None:
     """Name of a define_model action registered here; None if not an action."""
-    if isinstance(model, BackgroundAction):
+    if isinstance(model, BackgroundModel):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f"model is background model '{model.name}'. Pass it to generate_operation.",
@@ -191,7 +188,7 @@ def _model_action_name(*, model: object, registry: Registry) -> str | None:
     return _registered_action_name(action=model, kind=ActionKind.MODEL, registry=registry)
 
 
-def background_model_name(*, model: BackgroundAction, registry: Registry) -> str:
+def background_model_name(*, model: BackgroundModel, registry: Registry) -> str:
     """Name of a define_background_model result registered on this registry."""
     return _registered_action_name(action=model.start_action, kind=ActionKind.BACKGROUND_MODEL, registry=registry)
 
@@ -303,6 +300,35 @@ async def resolve_for_generate(
     return replace(resolved, config_schema=python_config_schema(raw))
 
 
+async def config_class_for_generate(*, model: object | None, registry: Registry) -> type[BaseModel] | None:
+    """The config class a generate call to ``model`` folds and checks against.
+
+    The ``config_schema=`` class (or a ref's plugin class) when there is
+    one, else the class on the model function's ``ModelRequest[...]``.
+    """
+    resolved = await resolve_for_generate(model=model, registry=registry)
+    if resolved.config_schema is not None:
+        return resolved.config_schema
+    return annotated_config_class(await registry.resolve_model(resolved.name))
+
+
+async def check_config_before_turn(*, model: ModelArg, config: object, registry: Registry) -> None:
+    """Raise before the turn when a value in ``config`` can't reach the model.
+
+    Covers the two schemas the call-time check doesn't see: the class on the
+    model function's ``ModelRequest[...]`` annotation, and a JSON-schema dict
+    passed as ``config_schema=``. A missing top-level field passes:
+    ``wrap_model`` middleware can still fill it, and the model action reports
+    it if nothing does.
+    """
+    model_name = model.name if isinstance(model, ModelRef) else model
+    action = await registry.resolve_model(model_name)
+    check_config_values(config=config, schema=annotated_config_class(action), model=model_name)
+    declared = getattr(action, '_config_schema', None) if action is not None else None
+    if isinstance(declared, dict):
+        check_config_values(config=config, schema=cast(dict[str, Any], declared), model=model_name)
+
+
 def config_schema_at_define(*, model: object | None, registry: Registry) -> tuple[str | None, type[BaseModel] | None]:
     """Name and class a define-time typed config is checked against.
 
@@ -341,41 +367,30 @@ def resolve_model_ref(*, model: ModelRef[Any], config: dict[str, Any]) -> Resolv
     )
 
 
-def model_action_metadata(
-    name: str,
-    info: dict[str, object] | None = None,
-    config_schema: type | dict[str, Any] | None = None,
-) -> ActionMetadata:
-    """Create ActionMetadata for a model action."""
-    info = info if info is not None else {}
-    return ActionMetadata(
-        action_type=ActionKind.MODEL,
-        name=name,
-        input_json_schema=to_json_schema(ModelRequest),
-        output_json_schema=to_json_schema(ModelResponse),
-        metadata={'model': {**info, 'customOptions': to_json_schema(config_schema) if config_schema else None}},
-    )
-
-
-def model_ref(
-    name: str,
+def _model_options(
     *,
-    config_schema: type[ModelRefConfigT],
-    namespace: str | None = None,
-    info: ModelInfo | None = None,
-    version: str | None = None,
-    config: ModelRefConfigT | None = None,
-) -> ModelRef[ModelRefConfigT]:
-    """Create a ModelRef, optionally prefixing name with namespace."""
-    final_name = f'{namespace}/{name}' if namespace and not name.startswith(f'{namespace}/') else name
-
-    return ModelRef(
-        name=final_name,
-        config_schema=config_schema,
-        info=info,
-        version=version,
-        config=config,
-    )
+    name: str,
+    info: ModelInfo | None,
+    config_schema: type | dict[str, Any] | None,
+    metadata: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Build ``metadata['model']`` for ``Model``."""
+    options: dict[str, object] = info.model_dump(by_alias=True, exclude_none=True) if info else {}
+    existing = metadata.get('model') if metadata else None
+    if isinstance(existing, dict):
+        for key, value in cast(dict[str, object], existing).items():
+            if isinstance(key, str) and key not in options:
+                options[key] = value
+    if not options.get('label'):
+        options['label'] = name
+    if claims_long_running(model_options=options):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"model '{name}' cannot set longRunning. Use define_background_model.",
+        )
+    if config_schema:
+        options['customOptions'] = to_json_schema(config_schema)
+    return options
 
 
 def _check_request_annotation(name: str, fn: ModelFn) -> None:
@@ -423,57 +438,79 @@ def claims_long_running(*, model_options: dict[str, object]) -> bool:
     return False
 
 
-def model(
-    name: str,
-    fn: ModelFn,
-    *,
-    config_schema: type[BaseModel] | dict[str, object] | None = None,
-    metadata: dict[str, object] | None = None,
-    info: ModelInfo | None = None,
-    description: str | None = None,
-) -> Action:
-    """Build a model action without registering it.
+def _model_io_schemas() -> tuple[dict[str, object], dict[str, object]]:
+    """Every model publishes ModelRequest/ModelResponse; config shows in customOptions."""
+    return fixed_json_schema(ModelRequest), fixed_json_schema(ModelResponse)
 
-    Plugin ``init`` / ``resolve`` return this. ``define_model`` registers it.
-    The config class stays on the action so ``generate(model='name', config=)``
-    can isinstance-check a Pydantic instance against a string model name.
+
+class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
+    """A model action returned from a plugin's ``init`` / ``resolve`` / ``list_actions`` or ``define_model``.
+
+    Plugin ``init`` / ``resolve`` / ``list_actions`` return this without registering it;
+    ``define_model`` registers it.
+    The config class stays on the action so ``generate(model='name', config=...)``
+    can ``isinstance``-check a Pydantic instance against a string model name.
+    It comes from ``config_schema`` or the fn's ``ModelRequest[Cfg]``
+    annotation; given both, they must be the same class.
     """
-    model_options: dict[str, object] = {}
 
-    if info:
-        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
+    def __init__(
+        self,
+        name: str,
+        fn: ModelFn,
+        *,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        info: ModelInfo | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Build a model action."""
+        model_options = _model_options(name=name, info=info, config_schema=config_schema, metadata=metadata)
+        model_meta: dict[str, object] = metadata.copy() if metadata else {}
+        model_meta['model'] = model_options
 
-    if metadata and 'model' in metadata:
-        existing = metadata['model']
-        if isinstance(existing, dict):
-            existing_dict = cast(dict[str, object], existing)
-            for key, value in existing_dict.items():
-                if isinstance(key, str) and key not in model_options:
-                    model_options[key] = value
+        if not config_schema:
+            super().__init__(
+                kind=ActionKind.MODEL,
+                name=name,
+                fn=fn,
+                metadata=model_meta,
+                description=get_func_description(fn, description),
+                config_schema=config_schema,
+                _io_schemas=_model_io_schemas(),
+            )
+            # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
+            if 'customOptions' not in model_options and self.config_schema is not None:
+                model_options['customOptions'] = to_json_schema(self.config_schema)
+            return
 
-    if 'label' not in model_options or not model_options['label']:
-        model_options['label'] = name
+        schema = config_schema
+        # Action rejects a sync fn, but it only sees the async wrapper below.
+        if not inspect.iscoroutinefunction(fn):
+            raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
+        if isinstance(schema, dict):
+            check_config_json_schema(schema, model=name)
 
-    if claims_long_running(model_options=model_options):
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f"define_model '{name}' cannot set longRunning. Use define_background_model.",
+        @functools.wraps(fn)
+        async def run_with_config_check(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse[Any]:
+            # Runs inside the model action, after every middleware, so a required
+            # field no layer filled is reported here. generate returns it as the
+            # turn's error. Go checks config at the same point.
+            check_request_config(request, schema=schema, model=name)
+            return await self.params.call(fn, request, ctx)
+
+        super().__init__(
+            kind=ActionKind.MODEL,
+            name=name,
+            fn=run_with_config_check,
+            metadata_fn=fn,
+            metadata=model_meta,
+            description=get_func_description(fn, description),
+            config_schema=config_schema,
+            _io_schemas=_model_io_schemas(),
         )
-
-    if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
-
-    model_meta: dict[str, object] = metadata.copy() if metadata else {}
-    model_meta['model'] = model_options
-
-    return Action(
-        kind=ActionKind.MODEL,
-        name=name,
-        fn=fn,
-        metadata=model_meta,
-        description=get_func_description(fn, description),
-        config_schema=config_schema,
-    )
+        if 'customOptions' not in model_options and self.config_schema is not None:
+            model_options['customOptions'] = to_json_schema(self.config_schema)
 
 
 def define_model(
@@ -484,10 +521,10 @@ def define_model(
     metadata: dict[str, object] | None = None,
     info: ModelInfo | None = None,
     description: str | None = None,
-) -> Action:
+) -> Model:
     """Register a custom model action."""
     _check_request_annotation(name, fn)
-    action = model(
+    action = Model(
         name,
         fn,
         config_schema=config_schema,
@@ -522,85 +559,10 @@ def assert_correct_config_class(
     )
 
 
-def check_config_dict(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
-    """A dict config has to fit the model's class before anything is sent.
-
-    Layers merge by top-level key, so a missing top-level field is fine
-    here — another layer may supply it. A nested object is sent whole, so
-    a missing field inside one raises. ``None`` means "clear the default"
-    and isn't checked.
-    """
-    if schema is None or not isinstance(config, Mapping):
-        return
-    layer = {key: value for key, value in cast(Mapping[str, Any], config).items() if value is not None}
-    try:
-        schema.model_validate(layer)
-    except ValidationError as e:
-        problems = [err for err in e.errors() if not (err['type'] == 'missing' and len(err['loc']) == 1)]
-        if not problems:
-            return
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'{model}: {_describe_config_problems(problems, layer=layer, schema=schema)}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
-            cause=e,
-        ) from e
-
-
-def _describe_config_problems(
-    problems: Sequence[Mapping[str, Any]], *, layer: Mapping[str, Any], schema: type[BaseModel]
-) -> str:
-    # pydantic binds one spelling of a setting and calls the other unknown;
-    # the caller didn't misspell anything, they wrote the setting twice.
-    names = config_field_names(schema)
-    repeated: dict[str, list[str]] = {}
-    unknown: list[str] = []
-    for err in problems:
-        if err['type'] != 'extra_forbidden':
-            continue
-        key = _config_path(err['loc'])
-        field = names.get(key) if len(err['loc']) == 1 else None
-        spellings = [k for k in layer if field and names.get(k) == field]
-        if field and len(spellings) > 1:
-            repeated[field] = sorted(spellings, key=lambda k: k != field)
-        else:
-            unknown.append(key)
-    parts = [f'{_join_words(spellings)} are the same setting; pass one' for spellings in repeated.values()]
-    if unknown:
-        keys = ', '.join(repr(key) for key in unknown)
-        noun = 'key' if len(unknown) == 1 else 'keys'
-        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
-    parts.extend(
-        f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
-    )
-    return '; '.join(parts)
-
-
-def _join_words(words: list[str]) -> str:
-    """`a and b`, or `a, b, and c` for three or more."""
-    if len(words) <= 2:
-        return ' and '.join(words)
-    return f'{", ".join(words[:-1])}, and {words[-1]}'
-
-
-def _config_path(loc: tuple[int | str, ...]) -> str:
-    return '.'.join(str(part) for part in loc)
-
-
 def check_call_config(*, config: object, schema: type[BaseModel] | None, model: str) -> None:
     """Call-time config check: a typed object's class and a dict's keys and values."""
     assert_correct_config_class(config=config, schema=schema, model=model)
-    check_config_dict(config=config, schema=schema, model=model)
-
-
-def _config_values(config: BaseModel) -> dict[str, Any]:
-    """``config`` as plain data, nested models included, in the shape validation takes.
-
-    ``BaseModel.model_dump`` skips GenkitModel's ``exclude_none`` default (an
-    explicit ``None`` is a value too) and its fallback serializer, so a value
-    of the wrong type comes back as itself and fails validation.
-    """
-    return BaseModel.model_dump(config, by_alias=True, round_trip=True, exclude_none=False, warnings=False)
+    check_config_values(config=config, schema=schema, model=model)
 
 
 class MiddlewareConfigCheck:
@@ -632,7 +594,7 @@ class MiddlewareConfigCheck:
         """Start from ``config`` as generate built it; ``schema`` is the model's config class."""
         self._schema = schema
         self._model = model
-        self._checked = _config_values(config)
+        self._checked = config_values(config)
         self._rejected: list[tuple[object, GenkitError]] = []
 
     def check(self, config: object, middleware: str) -> None:
@@ -640,7 +602,7 @@ class MiddlewareConfigCheck:
 
         On success, changed fields on ``config`` hold their parsed values.
         """
-        dumped = _config_values(config) if isinstance(config, self._schema) else None
+        dumped = config_values(config) if isinstance(config, self._schema) else None
         typed = dumped is not None
         # Middleware edits a config of the right class in place, so it's
         # matched by its keys and values. Anything else is matched by identity.
@@ -710,4 +672,4 @@ class MiddlewareConfigCheck:
         # middleware left it, so ``exclude_unset`` dumps don't change.
         for name in changed:
             values[name] = parsed.__dict__[name]
-        self._checked = _config_values(config) if changed else dumped
+        self._checked = config_values(config) if changed else dumped

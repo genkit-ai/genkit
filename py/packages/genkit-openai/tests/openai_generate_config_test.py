@@ -88,7 +88,7 @@ def server() -> _OpenAIServer:
 @pytest.fixture
 def plugin(server: _OpenAIServer) -> OpenAI:
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
-    return OpenAI(api_key=PLUGIN_KEY, http_client=http_client, max_retries=0)
+    return OpenAI(api_key=PLUGIN_KEY, client_options={'http_client': http_client, 'max_retries': 0})
 
 
 @pytest.fixture
@@ -185,7 +185,7 @@ async def test_generate_openai_max_output_tokens_caps_reply(
 def keyless_ai(server: _OpenAIServer, monkeypatch: pytest.MonkeyPatch) -> Genkit:
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
-    return Genkit(plugins=[OpenAI(http_client=http_client, max_retries=0)])
+    return Genkit(plugins=[OpenAI(client_options={'http_client': http_client, 'max_retries': 0})])
 
 
 @pytest.mark.asyncio
@@ -217,7 +217,7 @@ async def test_plugin_without_key_and_no_tenant_key_raises_naming_both(
 
 
 @pytest.mark.asyncio
-async def test_tenant_key_wins_over_plugin_key(ai: Genkit, server: _OpenAIServer) -> None:
+async def test_openai_per_request_key_still_overrides_plugin_key(ai: Genkit, server: _OpenAIServer) -> None:
     """`context={'secrets': {'api_key': 'sk-tenant'}}` on a plugin with its own key sends `Bearer sk-tenant`."""
     response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}})
 
@@ -371,10 +371,12 @@ async def test_generate_openai_tenant_call_drops_plugin_org_and_project(
         plugins=[
             OpenAI(
                 api_key=PLUGIN_KEY,
-                organization='org-plugin',
-                default_headers={'OpenAI-Project': 'proj-pinned', 'X-Gateway-Route': 'eu'},
-                http_client=http_client,
-                max_retries=0,
+                client_options={
+                    'organization': 'org-plugin',
+                    'default_headers': {'OpenAI-Project': 'proj-pinned', 'X-Gateway-Route': 'eu'},
+                    'http_client': http_client,
+                    'max_retries': 0,
+                },
             )
         ]
     )
@@ -400,7 +402,7 @@ async def test_plugin_without_key_tenant_call_drops_env_org_and_project(
     monkeypatch.setenv('OPENAI_ORG_ID', 'org-env')
     monkeypatch.setenv('OPENAI_PROJECT_ID', 'proj-env')
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
-    ai = Genkit(plugins=[OpenAI(http_client=http_client, max_retries=0)])
+    ai = Genkit(plugins=[OpenAI(client_options={'http_client': http_client, 'max_retries': 0})])
 
     await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}})
 
@@ -411,16 +413,18 @@ async def test_plugin_without_key_tenant_call_drops_env_org_and_project(
 
 
 @pytest.mark.asyncio
-async def test_generate_openai_pinned_authorization_header_refuses_tenant_key(server: _OpenAIServer) -> None:
-    """`default_headers={'Authorization': ...}` would replace a tenant key, so the call fails FAILED_PRECONDITION."""
+async def test_openai_client_options_authorization_header_still_refuses_tenant_key(server: _OpenAIServer) -> None:
+    """`client_options={'default_headers': {'Authorization': ...}}` plus a secrets key fails FAILED_PRECONDITION."""
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
     ai = Genkit(
         plugins=[
             OpenAI(
                 api_key=PLUGIN_KEY,
-                default_headers={'Authorization': 'Bearer corp-gateway'},
-                http_client=http_client,
-                max_retries=0,
+                client_options={
+                    'default_headers': {'Authorization': 'Bearer corp-gateway'},
+                    'http_client': http_client,
+                    'max_retries': 0,
+                },
             )
         ]
     )
@@ -430,6 +434,7 @@ async def test_generate_openai_pinned_authorization_header_refuses_tenant_key(se
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
     assert 'Authorization' in str(response.finish_message)
+    assert 'client_options' in str(response.finish_message)
     assert server.requests == []
 
 
@@ -456,3 +461,87 @@ async def test_plugin_without_key_lists_built_in_catalog_without_calling_openai(
 
     assert '/model/openai/gpt-4o' in catalog
     assert server.requests == []
+
+
+# Constructor
+
+
+def test_openai_positional_argument_raises_type_error() -> None:
+    """OpenAI('sk-...') raises TypeError; the key is passed as api_key=."""
+    with pytest.raises(TypeError):
+        OpenAI('sk-key')  # type: ignore[misc]
+
+
+def test_openai_misspelled_api_key_raises_type_error() -> None:
+    """OpenAI(apikey=...) raises TypeError naming apikey instead of silently running without a key."""
+    with pytest.raises(TypeError, match='apikey'):
+        OpenAI(apikey='sk-key')  # type: ignore[call-arg]
+
+
+def test_openai_api_key_in_both_places_raises() -> None:
+    """OpenAI(api_key=a, client_options={'api_key': b}) raises TypeError instead of picking one."""
+    with pytest.raises(TypeError, match='api_key'):
+        OpenAI(api_key='a', client_options={'api_key': 'b'})
+
+
+def test_openai_base_url_in_both_places_raises() -> None:
+    """OpenAI(base_url=a, client_options={'base_url': b}) raises TypeError instead of picking one."""
+    with pytest.raises(TypeError, match='base_url'):
+        OpenAI(base_url='https://a.example/v1', client_options={'base_url': 'https://b.example/v1'})
+
+
+def test_openai_unknown_client_options_key_raises_type_error() -> None:
+    """OpenAI(client_options={'api_kye': ...}) raises TypeError naming api_kye at construction."""
+    with pytest.raises(TypeError, match='api_kye'):
+        OpenAI(client_options={'api_kye': 'sk-key'})
+
+
+@pytest.mark.asyncio
+async def test_openai_without_api_key_uses_openai_api_key_env(
+    server: _OpenAIServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OpenAI() with OPENAI_API_KEY=sk-env sends Bearer sk-env."""
+    monkeypatch.setenv('OPENAI_API_KEY', 'sk-env')
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    ai = Genkit(plugins=[OpenAI(client_options={'http_client': http_client, 'max_retries': 0})])
+
+    await ai.generate(model='openai/gpt-4o', prompt='hi')
+
+    assert server.keys() == ['Bearer sk-env']
+
+
+@pytest.mark.asyncio
+async def test_openai_base_url_sends_requests_to_that_server(server: _OpenAIServer) -> None:
+    """OpenAI(base_url='https://gateway.example.com/v1') sends ai.generate to that host."""
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    ai = Genkit(
+        plugins=[
+            OpenAI(
+                api_key=PLUGIN_KEY,
+                base_url='https://gateway.example.com/v1',
+                client_options={'http_client': http_client, 'max_retries': 0},
+            )
+        ]
+    )
+
+    await ai.generate(model='openai/gpt-4o', prompt='hi')
+
+    assert str(server.requests[-1].url) == 'https://gateway.example.com/v1/chat/completions'
+
+
+@pytest.mark.asyncio
+async def test_openai_client_options_reach_the_client(server: _OpenAIServer) -> None:
+    """OpenAI(client_options={'default_headers': {'X-Team': 'search'}}) sends that header on ai.generate."""
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(server.handler))
+    ai = Genkit(
+        plugins=[
+            OpenAI(
+                api_key=PLUGIN_KEY,
+                client_options={'default_headers': {'X-Team': 'search'}, 'http_client': http_client, 'max_retries': 0},
+            )
+        ]
+    )
+
+    await ai.generate(model='openai/gpt-4o', prompt='hi')
+
+    assert server.requests[-1].headers['x-team'] == 'search'

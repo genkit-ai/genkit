@@ -23,7 +23,6 @@ import pytest
 from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason, runtime_error_reason
 from genkit._core._model import AgentInit, AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
@@ -31,10 +30,10 @@ from genkit._core._typing import (
     SnapshotStatus,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore, TurnContext, TurnResult
+from genkit.exp.agent import AgentContext, InMemorySessionStore, TurnContext, TurnResult
 
 
-async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def echo_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = ''
         if inp.message and inp.message.content:

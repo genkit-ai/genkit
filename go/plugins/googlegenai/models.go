@@ -42,7 +42,7 @@ var (
 		Tools:      false,
 		SystemRole: false,
 		Media:      true,
-		Output:     []string{"media"},
+		Output:     []string{ai.OutputFormatMedia},
 	}
 
 	// VeoSupports describes model capabilities for video generation models (Veo).
@@ -51,7 +51,7 @@ var (
 		Multiturn:   false,
 		Tools:       false,
 		SystemRole:  false,
-		Output:      []string{"media"},
+		Output:      []string{ai.OutputFormatMedia},
 		LongRunning: true,
 	}
 
@@ -66,7 +66,7 @@ var (
 		Tools:      false,
 		ToolChoice: false,
 		SystemRole: false,
-		Output:     []string{"media"},
+		Output:     []string{ai.OutputFormatMedia},
 	}
 )
 

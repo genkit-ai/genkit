@@ -24,6 +24,7 @@ from typing import Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
+from typing_extensions import Never
 
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._logger import get_logger
@@ -32,11 +33,10 @@ from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span
 from genkit._core._typing import (
-    ActionMetadata,
     BaseDataPoint,
-    EvalFnResponse,
-    EvalRequest,
     EvalResponse,
+    EvaluatorRequest,
+    EvaluatorResponse,
     Score,
     ScoreStatus,
 )
@@ -51,11 +51,10 @@ T = TypeVar('T')
 
 # User-provided evaluator function that evaluates a single datapoint.
 # Must be async (coroutine function).
-EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvalFnResponse]]
+EvaluatorFn = Callable[[BaseDataPoint, T], Coroutine[Any, Any, EvaluatorResponse]]
 
-# User-provided batch evaluator: one EvalRequest. Returns the rows as a list
-# or as an EvalResponse.
-BatchEvaluatorFn = Callable[[EvalRequest], Coroutine[Any, Any, list[EvalFnResponse] | EvalResponse]]
+# User-provided batch evaluator: one EvaluatorRequest. Returns list[EvaluatorResponse].
+BatchEvaluatorFn = Callable[[EvaluatorRequest], Coroutine[Any, Any, list[EvaluatorResponse]]]
 
 
 class EvaluatorRef(BaseModel):
@@ -91,28 +90,6 @@ def _evaluator_metadata(
     return evaluator_meta
 
 
-def evaluator_action_metadata(
-    name: str,
-    *,
-    display_name: str,
-    definition: str,
-    is_billed: bool = False,
-    config_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> ActionMetadata:
-    """Describe an evaluator in a plugin's list_actions.
-
-    The metadata matches what define_evaluator registers, so the Dev UI shows
-    the same display name and definition before and after the action resolves.
-    """
-    return ActionMetadata(
-        action_type=ActionKind.EVALUATOR,
-        name=name,
-        input_json_schema=to_json_schema(EvalRequest),
-        output_json_schema=to_json_schema(list[EvalFnResponse]),
-        metadata=_evaluator_metadata(name, display_name, definition, is_billed, config_schema),
-    )
-
-
 def _get_func_description(func: Callable[..., Any], description: str | None = None) -> str:
     """Return description if provided, otherwise use the function's docstring."""
     if description is not None:
@@ -120,6 +97,86 @@ def _get_func_description(func: Callable[..., Any], description: str | None = No
     if func.__doc__ is not None:
         return func.__doc__
     return ''
+
+
+class Evaluator(Action[EvaluatorRequest, EvalResponse, Never]):
+    """Evaluator action that runs ``fn`` on each dataset sample, without registering it.
+
+    Plugin ``init`` / ``resolve`` / ``list_actions`` return this.
+    ``define_evaluator`` registers it.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        fn: EvaluatorFn[Any],
+        *,
+        display_name: str,
+        definition: str,
+        is_billed: bool = False,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        description: str | None = None,
+    ) -> None:
+        if not inspect.iscoroutinefunction(fn):
+            raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
+
+        evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
+        evaluator_description = _get_func_description(fn, description)
+
+        async def eval_stepper_fn(req: EvaluatorRequest) -> EvalResponse:
+            eval_responses: list[EvaluatorResponse] = []
+            for index in range(len(req.dataset)):
+                datapoint = req.dataset[index]
+                case_id = datapoint.test_case_id or str(uuid.uuid4())
+                datapoint.test_case_id = case_id
+                try:
+
+                    async def body(
+                        span: SpanContext, point: BaseDataPoint = datapoint, test_case_id: str = case_id
+                    ) -> EvaluatorResponse:
+                        try:
+                            test_case_output = await fn(point, req.options)
+                            test_case_output.span_id = span.span_id
+                            test_case_output.trace_id = span.trace_id
+                            return test_case_output
+                        except Exception as e:
+                            logger.debug(f'eval_stepper_fn error: {e!s}')
+                            logger.debug(traceback.format_exc())
+                            evaluation = Score(
+                                error=f'Evaluation of test case {test_case_id} failed: \n{e!s}',
+                                status=ScoreStatus.FAIL,
+                            )
+                            eval_responses.append(
+                                EvaluatorResponse(
+                                    span_id=span.span_id,
+                                    trace_id=span.trace_id,
+                                    test_case_id=test_case_id,
+                                    evaluation=[evaluation],
+                                )
+                            )
+                            raise e
+
+                    eval_responses.append(
+                        await run_in_new_span(
+                            f'Test Case {datapoint.test_case_id}',
+                            body,
+                            action_type='evaluator',
+                            input=datapoint,
+                            attributes={metadata_key('evaluator:evalRunId'): str(req.eval_run_id)},
+                        )
+                    )
+                except Exception:  # noqa: S112 - intentionally continue processing other datapoints
+                    continue
+            return EvalResponse(eval_responses)
+
+        super().__init__(
+            kind=ActionKind.EVALUATOR,
+            name=name,
+            fn=eval_stepper_fn,
+            metadata=evaluator_meta,
+            description=evaluator_description,
+        )
 
 
 def define_evaluator(
@@ -132,65 +189,63 @@ def define_evaluator(
     config_schema: type[BaseModel] | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
     description: str | None = None,
-) -> Action:
+) -> Evaluator:
     """Register an evaluator that runs the callback on each dataset sample."""
-    evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
-
-    evaluator_description = _get_func_description(fn, description)
-
-    async def eval_stepper_fn(req: EvalRequest) -> EvalResponse:
-        eval_responses: list[EvalFnResponse] = []
-        for index in range(len(req.dataset)):
-            datapoint = req.dataset[index]
-            case_id = datapoint.test_case_id or str(uuid.uuid4())
-            datapoint.test_case_id = case_id
-            try:
-
-                async def body(
-                    span: SpanContext, point: BaseDataPoint = datapoint, test_case_id: str = case_id
-                ) -> EvalFnResponse:
-                    try:
-                        test_case_output = await fn(point, req.options)
-                        test_case_output.span_id = span.span_id
-                        test_case_output.trace_id = span.trace_id
-                        return test_case_output
-                    except Exception as e:
-                        logger.debug(f'eval_stepper_fn error: {e!s}')
-                        logger.debug(traceback.format_exc())
-                        evaluation = Score(
-                            error=f'Evaluation of test case {test_case_id} failed: \n{e!s}',
-                            status=ScoreStatus.FAIL,
-                        )
-                        eval_responses.append(
-                            EvalFnResponse(
-                                span_id=span.span_id,
-                                trace_id=span.trace_id,
-                                test_case_id=test_case_id,
-                                evaluation=[evaluation],
-                            )
-                        )
-                        raise e
-
-                eval_responses.append(
-                    await run_in_new_span(
-                        f'Test Case {datapoint.test_case_id}',
-                        body,
-                        action_type='evaluator',
-                        input=datapoint,
-                        attributes={metadata_key('evaluator:evalRunId'): str(req.eval_run_id)},
-                    )
-                )
-            except Exception:  # noqa: S112 - intentionally continue processing other datapoints
-                continue
-        return EvalResponse(eval_responses)
-
-    return registry.register_action(
-        name=name,
-        kind=ActionKind.EVALUATOR,
-        fn=eval_stepper_fn,
-        metadata=evaluator_meta,
-        description=evaluator_description,
+    action = Evaluator(
+        name,
+        fn,
+        display_name=display_name,
+        definition=definition,
+        is_billed=is_billed,
+        config_schema=config_schema,
+        metadata=metadata,
+        description=description,
     )
+    registry.register_action_from_instance(action)
+    return action
+
+
+class BatchEvaluator(Action[EvaluatorRequest, EvalResponse, Never]):
+    """Batch evaluator action that runs ``fn`` once on the whole ``EvaluatorRequest``, without registering it.
+
+    ``fn`` returns ``list[EvaluatorResponse]``. The action wraps the list so
+    ``action.run(...).response`` is an ``EvalResponse``.
+    Plugin ``init`` / ``resolve`` / ``list_actions`` return this.
+    ``define_batch_evaluator`` registers it.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        fn: BatchEvaluatorFn,
+        *,
+        display_name: str,
+        definition: str,
+        is_billed: bool = False,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        description: str | None = None,
+    ) -> None:
+        if not inspect.iscoroutinefunction(fn):
+            raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
+
+        evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
+        evaluator_description = _get_func_description(fn, description)
+
+        # the action hands back the rows as one model so the Dev UI and
+        # `genkit eval:run` get a JSON array, the same as a per-row evaluator.
+        # fn stays the metadata_fn, so its signature is still checked when built.
+        async def batch_fn(req: EvaluatorRequest, ctx: ActionRunContext) -> EvalResponse:
+            return EvalResponse(await self.params.call(fn, req, ctx))
+
+        super().__init__(
+            kind=ActionKind.EVALUATOR,
+            name=name,
+            fn=batch_fn,
+            metadata_fn=fn,
+            metadata=evaluator_meta,
+            description=evaluator_description,
+        )
 
 
 def define_batch_evaluator(
@@ -203,32 +258,17 @@ def define_batch_evaluator(
     config_schema: type[BaseModel] | dict[str, object] | None = None,
     metadata: dict[str, object] | None = None,
     description: str | None = None,
-) -> Action:
-    """Register a batch evaluator that runs ``fn`` once on the whole ``EvalRequest``.
-
-    ``fn`` returns the rows as a list or an ``EvalResponse``. The action wraps
-    them so ``action.run(...).response`` is always an ``EvalResponse``.
-    """
-    evaluator_meta = _evaluator_metadata(name, display_name, definition, is_billed, config_schema, metadata)
-
-    evaluator_description = _get_func_description(fn, description)
-
-    if not inspect.iscoroutinefunction(fn):
-        raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}'.")
-
-    # the action hands back the rows as one model so the Dev UI and
-    # `genkit eval:run` get a JSON array, the same as a per-row evaluator.
-    # fn stays the metadata_fn, so its signature is still checked when defined.
-    # model_validate takes a list or an EvalResponse; the constructor rejects the latter.
-    async def batch_fn(req: EvalRequest, ctx: ActionRunContext) -> EvalResponse:
-        return EvalResponse.model_validate(await action.params.call(fn, req, ctx))
-
-    action = registry.register_action(
-        name=name,
-        kind=ActionKind.EVALUATOR,
-        fn=batch_fn,
-        metadata_fn=fn,
-        metadata=evaluator_meta,
-        description=evaluator_description,
+) -> BatchEvaluator:
+    """Register a batch evaluator that runs ``fn`` once on the whole ``EvaluatorRequest``."""
+    action = BatchEvaluator(
+        name,
+        fn,
+        display_name=display_name,
+        definition=definition,
+        is_billed=is_billed,
+        config_schema=config_schema,
+        metadata=metadata,
+        description=description,
     )
+    registry.register_action_from_instance(action)
     return action

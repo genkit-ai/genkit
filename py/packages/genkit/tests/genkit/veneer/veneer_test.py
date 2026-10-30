@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from genkit import (
     Document,
+    FlowContext,
     Genkit,
     GenkitError,
     Interrupt,
@@ -23,18 +24,18 @@ from genkit import (
     Part,
 )
 from genkit._ai._model import text_from_message
-from genkit._core._action import ActionKind, ActionRunContext
+from genkit._core._action import ActionKind
 from genkit._core._model import ModelRequest, OutputConfig
+from genkit._core._operation import Operation
 from genkit._core._typing import (
-    EvalFnResponse,
-    EvalRequest,
-    EvalResponse,
+    EvaluatorRequest,
+    EvaluatorResponse,
     FinishReason,
+    MiddlewareRef,
     ModelInfo,
-    Operation,
+    ModelSupports,
     Role,
     Score,
-    Supports,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
@@ -44,10 +45,10 @@ from genkit.evaluator import (
     EvaluatorRef,
     ScoreDetails,
     ScoreStatus,
-    evaluator_action_metadata,
 )
 from genkit.formats import FormatHandler, Formatter, FormatterConfig
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import ModelContext
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -1028,12 +1029,12 @@ async def test_generate_with_middleware() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='pre_mw')
-    class PreMiddleware(BaseMiddleware):
+    class PreMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1048,12 +1049,12 @@ async def test_generate_with_middleware() -> None:
             )
 
     @ai.middleware(name='post_mw')
-    class PostMiddleware(BaseMiddleware):
+    class PostMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             resp: ModelResponse = await next_fn(params, ctx)
             assert resp.message is not None
@@ -1068,7 +1069,7 @@ async def test_generate_with_middleware() -> None:
     response = await ai.generate(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
+        use=cast(Any, [MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')]),
     )
 
     assert response.text == want
@@ -1076,7 +1077,7 @@ async def test_generate_with_middleware() -> None:
     stream_result = ai.generate_stream(
         model='echoModel',
         prompt='hi',
-        use=[MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')],
+        use=cast(Any, [MiddlewareRef(name='pre_mw'), MiddlewareRef(name='post_mw')]),
     )
 
     assert (await stream_result.response).text == want
@@ -1090,12 +1091,12 @@ async def test_generate_passes_through_current_action_context() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1104,7 +1105,7 @@ async def test_generate_passes_through_current_action_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1116,7 +1117,7 @@ async def test_generate_passes_through_current_action_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[MiddlewareRef(name='inject_ctx')],
+            use=cast(Any, [MiddlewareRef(name='inject_ctx')]),
         )
 
     action = ai._registry.register_action(name='test_action', kind=ActionKind.CUSTOM, fn=action_fn)
@@ -1133,12 +1134,12 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
     define_echo_model(ai)
 
     @ai.middleware(name='inject_ctx')
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1147,7 +1148,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1159,7 +1160,7 @@ async def test_generate_uses_explicitly_passed_in_context() -> None:
         return await ai.generate(
             model='echoModel',
             prompt='hi',
-            use=[MiddlewareRef(name='inject_ctx')],
+            use=cast(Any, [MiddlewareRef(name='inject_ctx')]),
             context={'bar': 'baz'},
         )
 
@@ -1176,12 +1177,12 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
     define_scripted_model(ai)
     define_echo_model(ai)
 
-    class InjectContextMiddleware(BaseMiddleware):
+    class InjectContextMiddleware(Middleware):
         async def wrap_model(
             self,
             params: ModelHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             txt = ''.join(text_from_message(m) for m in params.request.messages)
             return await next_fn(
@@ -1190,7 +1191,7 @@ async def test_generate_uses_inline_middleware_instance_with_context() -> None:
                         messages=[
                             Message(
                                 role=Role.USER,
-                                content=[Part.from_text(f'{txt} {ctx.custom_context}')],
+                                content=[Part.from_text(f'{txt} {ctx.context}')],
                             ),
                         ],
                     ),
@@ -1523,7 +1524,7 @@ def test_define_model_default_metadata(setup_test: SetupFixture) -> None:
     """Test that the define model function works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1544,7 +1545,7 @@ def test_define_model_with_schema(setup_test: SetupFixture) -> None:
         field_a: str = Field(description='a field')
         field_b: str = Field(description='b field')
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1581,7 +1582,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     """Test that the define model function with info works."""
     ai, _, _, *_ = setup_test
 
-    async def foo_model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def foo_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('banana!')]))
 
     action = ai.define_model(
@@ -1589,7 +1590,7 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
         fn=foo_model_fn,
         info=ModelInfo(
             label='Foo Bar',
-            supports=Supports(multiturn=True, tools=True, system_role=True),
+            supports=ModelSupports(multiturn=True, tools=True, system_role=True),
         ),
     )
     assert action.metadata['model'] == {
@@ -1602,12 +1603,13 @@ def test_define_model_with_info(setup_test: SetupFixture) -> None:
     }
 
 
-def test_define_evaluator_simple(setup_test: SetupFixture) -> None:
-    """Test that the define evaluator function works."""
+@pytest.mark.asyncio
+async def test_define_evaluator_simple(setup_test: SetupFixture) -> None:
+    """ai.define_evaluator(...) registers the evaluator, so ai.evaluate(evaluator='my_eval') scores each row."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
-        return EvalFnResponse(
+    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvaluatorResponse:
+        return EvaluatorResponse(
             test_case_id=datapoint.test_case_id or '',
             evaluation=[Score(score=True, details=ScoreDetails(reasoning='I think it is true'))],
         )
@@ -1625,6 +1627,10 @@ def test_define_evaluator_simple(setup_test: SetupFixture) -> None:
         'evaluatorDisplayName': 'Test evaluator',
         'evaluatorIsBilled': False,
     }
+    results = await ai.evaluate(evaluator='my_eval', dataset=_two_rows())
+    assert [row.test_case_id for row in results] == ['case1', 'case2']
+    assert [score.score for score in results[0].evaluation] == [True]
+    assert [score.score for score in results[1].evaluation] == [True]
 
 
 def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
@@ -1634,8 +1640,8 @@ def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
     class CustomOption(BaseModel):
         foo_bar: str = Field('baz', description='foo_bar field')
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvalFnResponse:
-        return EvalFnResponse(
+    async def my_eval_fn(datapoint: BaseDataPoint, options: dict[str, Any] | None = None) -> EvaluatorResponse:
+        return EvaluatorResponse(
             test_case_id=datapoint.test_case_id or '',
             evaluation=[
                 Score(score=True, details=ScoreDetails(reasoning=options.get('foo_bar', 'baz') if options else 'baz'))
@@ -1669,12 +1675,7 @@ def test_define_evaluator_custom_config(setup_test: SetupFixture) -> None:
         },
     }
 
-    listed = evaluator_action_metadata(
-        'my_eval',
-        display_name='Test evaluator',
-        definition='Test evaluator that always returns True',
-        config_schema=CustomOption,
-    )
+    listed = action._action_metadata()
     assert listed.action_type == ActionKind.EVALUATOR
     assert listed.metadata == {'evaluator': action.metadata['evaluator']}
 
@@ -1683,12 +1684,12 @@ def test_define_batch_evaluator(setup_test: SetupFixture) -> None:
     """Test that the define batch evaluator function works."""
     ai, _, _, *_ = setup_test
 
-    async def my_eval_fn(req: EvalRequest) -> list[EvalFnResponse]:
-        eval_responses: list[EvalFnResponse] = []
+    async def my_eval_fn(req: EvaluatorRequest) -> list[EvaluatorResponse]:
+        eval_responses: list[EvaluatorResponse] = []
         for index in range(len(req.dataset)):
             datapoint = req.dataset[index]
             eval_responses.append(
-                EvalFnResponse(
+                EvaluatorResponse(
                     test_case_id=f'testCase{index}',
                     evaluation=[
                         Score(
@@ -1722,10 +1723,10 @@ async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: Se
     ai, *_ = setup_test
     seen: list[object] = []
 
-    async def my_eval(req: EvalRequest) -> list[EvalFnResponse]:
+    async def my_eval(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         seen.append(req.options)
         return [
-            EvalFnResponse(
+            EvaluatorResponse(
                 test_case_id=req.dataset[0].test_case_id or '',
                 evaluation=[Score(score=True)],
             )
@@ -1738,7 +1739,7 @@ async def test_batch_evaluator_run_reads_options_from_the_request(setup_test: Se
         fn=my_eval,
     )
     result = await action.run(
-        EvalRequest(
+        EvaluatorRequest(
             dataset=[BaseDataPoint(input='hi', output='hi', test_case_id='case1')],
             eval_run_id='run-1',
             options={'threshold': 0.8},
@@ -1753,7 +1754,7 @@ def test_batch_evaluator_with_second_parameter_raises_type_error(setup_test: Set
     """`(req, options)` raises at definition: options live on the request."""
     ai, *_ = setup_test
 
-    async def my_eval(req: EvalRequest, options: object | None) -> list[EvalFnResponse]:
+    async def my_eval(req: EvaluatorRequest, options: object | None) -> list[EvaluatorResponse]:
         return []
 
     with pytest.raises(TypeError, match="evaluator 'my_eval' takes one input, but 'options' is a second parameter"):
@@ -1769,7 +1770,7 @@ def test_sync_batch_evaluator_raises_type_error_at_definition(setup_test: SetupF
     """A sync batch fn raises at definition, not when the first run awaits its list."""
     ai, *_ = setup_test
 
-    def my_eval(req: EvalRequest) -> list[EvalFnResponse]:
+    def my_eval(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         return []
 
     with pytest.raises(TypeError, match="Got sync function for 'my_eval'"):
@@ -1782,30 +1783,12 @@ def test_sync_batch_evaluator_raises_type_error_at_definition(setup_test: SetupF
 
 
 @pytest.mark.asyncio
-async def test_evaluate_batch_evaluator_returning_eval_response_returns_its_rows(setup_test: SetupFixture) -> None:
-    """A batch fn that returns an EvalResponse gives ai.evaluate the same rows as one returning a list."""
-    ai, *_ = setup_test
-
-    async def my_eval(req: EvalRequest) -> EvalResponse:
-        return EvalResponse([
-            EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)]) for row in req.dataset
-        ])
-
-    ai.define_batch_evaluator(name='resp_eval', display_name='resp_eval', definition='returns model', fn=my_eval)
-
-    results = await ai.evaluate(evaluator='resp_eval', dataset=_two_rows())
-
-    assert [row.test_case_id for row in results] == ['case1', 'case2']
-    assert [score.score for score in results[0].evaluation] == [True]
-
-
-@pytest.mark.asyncio
 async def test_define_sync_flow(setup_test: SetupFixture) -> None:
     """Test defining an async flow (renamed from sync test - sync flows no longer supported)."""
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -1830,7 +1813,7 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
     ai, _, _, *_ = setup_test
 
     @ai.flow()
-    async def my_flow(input: str, ctx: ActionRunContext) -> str:
+    async def my_flow(input: str, ctx: FlowContext[int]) -> str:
         # Use ctx.send_chunk() for streaming
         ctx.send_chunk(1)
         ctx.send_chunk(2)
@@ -1852,8 +1835,8 @@ async def test_define_async_flow(setup_test: SetupFixture) -> None:
 def _define_scoring_evaluator(ai: Genkit, name: str, scores: list[Score]) -> None:
     """Register a per-row evaluator that gives every row the same scores."""
 
-    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
-        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=list(scores))
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=list(scores))
 
     ai.define_evaluator(name=name, display_name=name, definition='fixed scores', fn=eval_fn)
 
@@ -1906,10 +1889,10 @@ async def test_evaluator_that_raises_reports_score_status_fail_with_error(setup_
     """A row whose evaluator raises comes back as one ScoreStatus.FAIL score with the error, and the next row runs."""
     ai, *_ = setup_test
 
-    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+    async def my_eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
         if datapoint.test_case_id == 'case1':
             raise RuntimeError('row boom')
-        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     ai.define_evaluator(name='my_eval', display_name='my_eval', definition='first row raises', fn=my_eval_fn)
 
@@ -1982,9 +1965,9 @@ async def test_evaluate_with_base_data_point_dataset_keeps_test_case_id(setup_te
     ai, *_ = setup_test
     seen: list[str | None] = []
 
-    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
         seen.append(datapoint.test_case_id)
-        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     ai.define_evaluator(name='id_eval', display_name='id_eval', definition='echo ids', fn=eval_fn)
 
@@ -2016,7 +1999,9 @@ async def test_evaluate_batch_evaluator_returns_a_list_of_rows(setup_test: Setup
 
 def test_eval_response_single_score_object_on_load_becomes_list() -> None:
     """A saved row whose evaluation is one score object loads as a one-item list."""
-    row = EvalFnResponse.model_validate_json('{"testCaseId": "case1", "evaluation": {"id": "accuracy", "score": 0.9}}')
+    row = EvaluatorResponse.model_validate_json(
+        '{"testCaseId": "case1", "evaluation": {"id": "accuracy", "score": 0.9}}'
+    )
 
     assert row.test_case_id == 'case1'
     assert [score.id for score in row.evaluation] == ['accuracy']
@@ -2026,7 +2011,7 @@ def test_eval_response_single_score_object_on_load_becomes_list() -> None:
 
 def test_eval_response_score_list_on_load_stays_list() -> None:
     """A saved row whose evaluation is already a list loads unchanged."""
-    row = EvalFnResponse.model_validate({
+    row = EvaluatorResponse.model_validate({
         'testCaseId': 'case1',
         'evaluation': [{'id': 'accuracy', 'score': 0.9}, {'id': 'fluency', 'score': 0.8}],
     })
@@ -2042,7 +2027,7 @@ def test_eval_response_score_list_on_load_stays_list() -> None:
 
 def test_eval_response_empty_score_list_on_load_stays_empty() -> None:
     """A saved row whose evaluation is an empty list loads as an empty list."""
-    row = EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': []})
+    row = EvaluatorResponse.model_validate({'testCaseId': 'case1', 'evaluation': []})
 
     assert row.test_case_id == 'case1'
     assert row.evaluation == []
@@ -2052,22 +2037,22 @@ def test_eval_response_empty_score_list_on_load_stays_empty() -> None:
 def test_eval_response_string_evaluation_raises() -> None:
     """A saved row whose evaluation is a string raises ValidationError."""
     with pytest.raises(ValidationError):
-        EvalFnResponse.model_validate({'testCaseId': 'case1', 'evaluation': 'nope'})
+        EvaluatorResponse.model_validate({'testCaseId': 'case1', 'evaluation': 'nope'})
 
 
 def test_eval_response_bare_score_in_code_raises_validation_error() -> None:
-    """Building EvalFnResponse(evaluation=Score(...)) in code raises; wrap it in a list."""
+    """Building EvaluatorResponse(evaluation=Score(...)) in code raises; wrap it in a list."""
     with pytest.raises(ValidationError):
-        EvalFnResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))  # type: ignore[arg-type]
+        EvaluatorResponse(test_case_id='case1', evaluation=Score(id='accuracy', score=0.9))  # type: ignore[arg-type]
 
 
 def _define_recording_evaluator(ai: Genkit, name: str) -> list[object]:
     """Register a per-row evaluator that records the settings it was handed."""
     seen: list[object] = []
 
-    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvalFnResponse:
+    async def eval_fn(datapoint: BaseDataPoint, options: object | None) -> EvaluatorResponse:
         seen.append(options)
-        return EvalFnResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
+        return EvaluatorResponse(test_case_id=datapoint.test_case_id or '', evaluation=[Score(score=True)])
 
     ai.define_evaluator(name=name, display_name=name, definition='records settings', fn=eval_fn)
     return seen
@@ -2077,10 +2062,11 @@ def _define_recording_batch_evaluator(ai: Genkit, name: str) -> list[object]:
     """Register a batch evaluator that records the settings it was handed."""
     seen: list[object] = []
 
-    async def eval_fn(req: EvalRequest) -> list[EvalFnResponse]:
+    async def eval_fn(req: EvaluatorRequest) -> list[EvaluatorResponse]:
         seen.append(req.options)
         return [
-            EvalFnResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)]) for row in req.dataset
+            EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)])
+            for row in req.dataset
         ]
 
     ai.define_batch_evaluator(name=name, display_name=name, definition='records settings', fn=eval_fn)
@@ -2181,10 +2167,10 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
     """Test that define_background_model correctly serializes info by alias and excludes None."""
     ai, _, _, *_ = setup_test
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     action = ai.define_background_model(
@@ -2193,7 +2179,7 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
         check=check_fn,
         info=ModelInfo(
             label='Background Model',
-            supports=Supports(multiturn=True, system_role=True),
+            supports=ModelSupports(multiturn=True, system_role=True),
         ),
     )
     assert action.start_action.metadata['model'] == {
@@ -2207,21 +2193,22 @@ def test_define_background_model_with_info(setup_test: SetupFixture) -> None:
 
 
 def test_background_model_factory_stashes_class_without_registering(setup_test: SetupFixture) -> None:
-    """background_model() keeps the config class on the start action."""
-    from genkit.model import background_model
+    """BackgroundModel() keeps the config class on the start action."""
+    from genkit.model import BackgroundModel
 
     ai, _, _, *_ = setup_test
 
     class BgConfig(BaseModel):
         duration: int | None = None
 
-    async def start_fn(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start_fn(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check_fn(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check_fn(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
-    action = background_model('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
+    action = BackgroundModel('veo-style', start=start_fn, check=check_fn, config_schema=BgConfig)
+    assert isinstance(action, BackgroundModel)
     assert action.start_action._config_schema is BgConfig
     registered = ai._registry._entries.get(ActionKind.BACKGROUND_MODEL, {})
     assert 'veo-style' not in registered
@@ -2234,10 +2221,10 @@ async def test_generate_operation_with_model_info_long_running(
     """Verify generate_operation succeeds for a define_background_model."""
     ai, _, _, *_ = setup_test
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='op123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai.define_background_model(name='lr_model', start=start, check=check)
@@ -2323,12 +2310,12 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
     _define_echo_request_tool(ai)
 
     @ai.middleware(name='raising_mw')
-    class RaisingMiddleware(BaseMiddleware):
+    class RaisingMiddleware(Middleware):
         async def wrap_generate(
             self,
             params: Any,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[Any, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[Any, MiddlewareContext], Awaitable[ModelResponse]],
         ) -> ModelResponse:
             raise ValueError('hook exploded')
 
@@ -2336,7 +2323,7 @@ async def test_generate_echoes_full_request_when_hook_raises(setup_test: SetupFi
         model='scriptedModel',
         prompt='hi',
         tools=['test_tool'],
-        use=[MiddlewareRef(name='raising_mw')],
+        use=cast(Any, [MiddlewareRef(name='raising_mw')]),
         **_echo_request_kwargs(),
     )
 

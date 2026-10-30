@@ -25,10 +25,10 @@ from typing import Any, Union, cast, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, resolve_type_hints
+from genkit._core._action import Action, ActionKind, ActionRunContext, ChunkT, resolve_type_hints
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._middleware import MiddlewareContext
 from genkit._core._model import MultipartToolResponse, Part, as_part, as_resumed
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -247,16 +247,23 @@ _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_res
 _tool_original_input: ContextVar[Any | None] = ContextVar('tool_original_input', default=None)  # noqa: ANN401
 
 
-class ToolRunContext(ActionRunContext):
-    """Tool execution context with interrupt support."""
+class ToolContext(ActionRunContext[ChunkT]):
+    """What a tool sees while it runs: request context, streaming, and resume state.
+
+    Annotate a tool parameter with it to receive it:
+
+        @ai.tool()
+        async def check_allergens(dish: str, ctx: ToolContext) -> str:
+            return 'resumed' if ctx.is_resumed() else ctx.context.get('user', 'guest')
+    """
 
     def __init__(
         self,
-        ctx: ActionRunContext,
+        ctx: ActionRunContext[ChunkT],
         resumed_metadata: dict[str, Any] | None = None,
         original_input: Any = None,  # noqa: ANN401 - prior tool_request.input when replacing on restart
     ) -> None:
-        """Initialize from parent ActionRunContext.
+        """Initialize from the tool action's run context.
 
         Args:
             ctx: Parent action context
@@ -288,13 +295,13 @@ async def run_tool_request(
     *,
     tool: Action,
     tool_request_part: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
-    Pipes ``GenerateMiddlewareContext.custom_context`` and ``telemetry_labels``
+    Pipes ``MiddlewareContext.context`` and ``telemetry_labels``
     into ``tool.run``, and sets resume ContextVars from ``tool_request_part``
-    metadata so ``ToolRunContext`` reflects ``resumed`` / ``replacedInput``.
+    metadata so ``ToolContext`` reflects ``resumed`` / ``replacedInput``.
     """
     tool_req = tool_request_part.tool_request
     if tool_req is None:
@@ -302,11 +309,11 @@ async def run_tool_request(
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
-    run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
+    run_context = dict(ctx.context) if ctx and ctx.context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
         return (
-            await tool.run(
+            await tool._run(
                 tool_req.input,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
@@ -350,11 +357,11 @@ async def run_tool_after_restart(
     *,
     tool: Action,
     restart_trp: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Part:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
-    Sets the same context variables as the tool wrapper so ToolRunContext reflects
+    Sets the same context variables as the tool wrapper so ToolContext reflects
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
     tool_req = restart_trp.tool_request
@@ -470,8 +477,8 @@ def _define_tool(
         if resumed_meta:
             set_custom_metadata_attributes({'resumed': resumed_meta})
 
-        # A ctx annotated ActionRunContext gets the ToolRunContext too.
-        tool_ctx = ToolRunContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
+        # A ctx annotated FlowContext gets the ToolContext too.
+        tool_ctx = ToolContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
         raw = await action.params.call(func, input, tool_ctx)
         return as_multipart_tool_response(raw, tool_name=tool_name)
 
@@ -491,7 +498,7 @@ def _define_tool(
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return _Tool(action, original_output_schema=original_output_schema)
+    return _Tool._from_action(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -513,7 +520,7 @@ def define_tool(
         func: The async function to register as a tool. Must be a coroutine function.
             It takes at most one input, annotated with a type that has a JSON
             schema (``Any`` accepts anything), plus an optional parameter
-            annotated ``ToolRunContext`` in any position.
+            annotated ``ToolContext`` in any position.
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
@@ -521,45 +528,9 @@ def define_tool(
     Raises:
         TypeError: If func is not an async function, has more than one input,
             has an input with no annotation or no JSON schema, or has more than
-            one ``ToolRunContext`` parameter.
+            one ``ToolContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
-
-
-def tool(
-    func: Callable[..., Any],
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
-    """Define an ephemeral tool for a single ``generate`` call.
-
-    Unlike ``@ai.tool()``, this does not register the tool on the app, so it
-    cannot be referenced by name later. Use for dynamic tools that exist only
-    for one call.
-
-    Args:
-        func: Async tool implementation (same one-input rule as :func:`define_tool`).
-        name: Tool name for the model. Defaults to ``func.__name__``.
-        description: Sent to the model. Defaults to the function docstring.
-        input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
-
-    Raises:
-        TypeError: If ``func`` is not a coroutine function, takes more than one input,
-            or its input has no annotation or no JSON schema.
-        ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
-
-    Example:
-        from genkit import tool
-
-        async def lookup_price(sku: str) -> str:
-            return '12.00'
-
-        ephemeral = tool(lookup_price, name='lookup_price')
-        res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
-    """
-    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
 
 def define_interrupt(
@@ -575,7 +546,7 @@ def define_interrupt(
     An interrupt tool is a special tool that always raises ``Interrupt`` with
     optional metadata. This is useful for explicit human-in-the-loop checkpoints.
     For tools that sometimes run logic and sometimes interrupt, use ``define_tool``
-    and raise ``Interrupt`` from the handler (or use ``ToolRunContext``).
+    and raise ``Interrupt`` from the handler (or use ``ToolContext``).
 
     Args:
         registry: The registry to register the interrupt tool in

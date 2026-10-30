@@ -34,7 +34,6 @@ from genkit._ai._agents._client import (
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
 from genkit._ai._agents._types import StateManagement, TurnResult
 from genkit._ai._json_patch import apply_json_patch
-from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._model import (
@@ -64,7 +63,7 @@ from genkit._core._typing import (
     TurnEnd,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore
+from genkit.exp.agent import AgentContext, InMemorySessionStore
 from genkit.testing import define_scripted_model
 
 # ---------------------------------------------------------------------------
@@ -1593,7 +1592,7 @@ def _define_turns(
     store: InMemorySessionStore | None,
     state_schema: type[BaseModel] | None = None,
 ) -> Agent:
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def turn(inp: AgentInput, __: Any) -> TurnResult | None:  # noqa: ANN401
             return await handle(session_runner, inp)
 

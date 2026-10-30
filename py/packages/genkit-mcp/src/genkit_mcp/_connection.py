@@ -1,0 +1,623 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Lifecycle of a stdio connection to one MCP server."""
+
+import asyncio
+import contextvars
+import os
+import sys
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import timedelta
+from enum import Enum
+from importlib import metadata
+from typing import Any, Generic, TypeVar, cast
+
+import anyio
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from mcp.shared.exceptions import McpError
+from mcp.types import (
+    CONNECTION_CLOSED,
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    INVALID_REQUEST,
+    METHOD_NOT_FOUND,
+    PARSE_ERROR,
+    CallToolResult,
+    Implementation,
+    PaginatedRequestParams,
+    Tool as McpTool,
+)
+
+from genkit import get_logger
+from genkit.plugin_api import StatusName
+from genkit_mcp._config import McpStdioServerConfig
+from genkit_mcp._errors import (
+    _ClientError,
+    _ConnectionClosedError,
+    _ConnectionFailedError,
+    _ProtocolError,
+    _RequestTimeoutError,
+    _ServerError,
+    _ToolResultError,
+)
+
+if sys.version_info < (3, 11):
+    from exceptiongroup import BaseExceptionGroup  # type: ignore[import-not-found]
+
+_T = TypeVar('_T')
+
+logger = get_logger(__name__)
+
+_TRANSPORT_ERRORS = (anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream)
+
+_OUTPUT_SCHEMA_VIOLATIONS = (
+    'has an output schema but did not return structured content',
+    'Invalid structured content returned by tool',
+    'Invalid schema for tool',
+)
+"""How the SDK words the bare ``RuntimeError`` it raises for a tool result that breaks its output schema."""
+
+_PACKAGE = 'genkit-mcp'
+
+MAX_TOOL_PAGES = 1000
+"""Ceiling on ``tools/list`` pages followed before a server is called broken."""
+
+DEFAULT_REQUEST_TIMEOUT_MILLIS = 60_000
+"""How long one MCP request may take before the SDK fails it."""
+
+_REQUEST_TIMEOUT = 408
+"""The code on the ``McpError`` the SDK raises when a request outlives its read timeout."""
+
+_SERVER_ERROR_STATUS: dict[int, StatusName] = {
+    INVALID_PARAMS: 'INVALID_ARGUMENT',
+    METHOD_NOT_FOUND: 'UNIMPLEMENTED',
+    INVALID_REQUEST: 'INTERNAL',
+    PARSE_ERROR: 'INTERNAL',
+    INTERNAL_ERROR: 'INTERNAL',
+}
+"""Status for each JSON-RPC error code a server may answer with. Any other code is ``UNKNOWN``."""
+
+LIVENESS_PROBE_SECONDS = 5.0
+"""Bound on the ping that tells a dead transport from a server error reply.
+
+A ping which does not return inside this window is read as a slow server, not a
+dead one: the opposite reading tears down a healthy connection over one slow
+reply.
+"""
+
+CLOSE_GRACE_SECONDS = 6.0
+"""How long ``close`` lets the SDK's stdio shutdown run before it kills the server outright.
+
+The SDK waits two seconds for the server to exit on stdin EOF, then two more
+after SIGTERM to the process group before it sends SIGKILL.
+"""
+
+
+def _client_info() -> Implementation:
+    """Name this package and its version for the server's session log."""
+    try:
+        return Implementation(name=_PACKAGE, version=metadata.version(_PACKAGE))
+    except metadata.PackageNotFoundError:
+        return Implementation(name=_PACKAGE, version='0.0.0')
+
+
+CLIENT_INFO = _client_info()
+"""What servers see in the ``clientInfo`` of every initialize request."""
+
+_serving: contextvars.ContextVar['McpConnection | None'] = contextvars.ContextVar('genkit_mcp_serving', default=None)
+"""The connection whose operation the current task, or a task it spawned, is running."""
+
+
+class _ConnectionState(Enum):
+    NEW = 'new'
+    CONNECTING = 'connecting'
+    OPEN = 'open'
+    FAILED = 'failed'
+    CLOSED = 'closed'
+
+
+@dataclass
+class _Request(Generic[_T]):
+    """An operation waiting for the owner to start it, and the future its caller awaits."""
+
+    operation: Callable[[ClientSession], Awaitable[_T]]
+    result: asyncio.Future[_T]
+
+
+async def _transport_is_dead(session: ClientSession, error: Exception) -> bool:
+    """Report whether an operation failed because the server is unreachable.
+
+    The SDK synthesises ``CONNECTION_CLOSED`` locally when the read stream ends,
+    but that is also the JSON-RPC range a healthy server may answer with, so the
+    code alone proves nothing and the server is asked directly. Any answer at
+    all is read as liveness, not correctness.
+
+    Args:
+        session: Session to probe when the error is ambiguous.
+        error: What the operation raised.
+
+    Returns:
+        True when the server can no longer be reached.
+    """
+    if isinstance(error, _TRANSPORT_ERRORS):
+        return True
+    if not isinstance(error, McpError) or error.error.code != CONNECTION_CLOSED:
+        return False
+    try:
+        await asyncio.wait_for(session.send_ping(), timeout=LIVENESS_PROBE_SECONDS)
+    except McpError as probe:
+        return probe.error.code == CONNECTION_CLOSED
+    except asyncio.TimeoutError:
+        return False
+    except Exception:
+        return True
+    return False
+
+
+def _timed_out(error: Exception) -> bool:
+    """Report whether the SDK gave up waiting for the server to answer a request."""
+    return isinstance(error, McpError) and error.error.code == _REQUEST_TIMEOUT
+
+
+def _transport_cause(error: Exception) -> Exception:
+    """Find the transport error inside the task groups the SDK wraps it in.
+
+    Args:
+        error: What ended the owner task.
+
+    Returns:
+        The first transport or MCP error leaf, or ``error`` itself when there is none.
+    """
+    if isinstance(error, BaseExceptionGroup):
+        for leaf in cast('BaseExceptionGroup[BaseException]', error).exceptions:
+            if not isinstance(leaf, Exception):
+                continue
+            found = _transport_cause(leaf)
+            if isinstance(found, (*_TRANSPORT_ERRORS, McpError)):
+                return found
+    return error
+
+
+def _drop_tracebacks(error: BaseException) -> None:
+    """Detach every traceback reachable from ``error`` through its causes, contexts and task groups.
+
+    The frames under ``_run`` hold the server's env in their locals, and a
+    rendered traceback prints those locals.
+
+    Args:
+        error: What ended the session.
+    """
+    pending = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        current.__traceback__ = None
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(cast('BaseExceptionGroup[BaseException]', current).exceptions)
+        pending.extend(linked for linked in (current.__cause__, current.__context__) if linked is not None)
+
+
+async def _call_tool(
+    session: ClientSession,
+    name: str,
+    arguments: dict[str, Any],
+    meta: dict[str, Any] | None,
+) -> CallToolResult:
+    """Invoke one tool, reporting an output schema violation as this package's own error.
+
+    Args:
+        session: Session to send the request on.
+        name: Tool name as the server lists it.
+        arguments: Tool input, unvalidated.
+        meta: Optional MCP ``_meta`` forwarded with the request.
+
+    Returns:
+        The raw result, for the caller to map.
+
+    Raises:
+        _ToolResultError: If the result violates the tool's declared output schema.
+    """
+    try:
+        return await session.call_tool(name, arguments, meta=meta)
+    except RuntimeError as error:
+        message = str(error)
+        if any(marker in message for marker in _OUTPUT_SCHEMA_VIOLATIONS):
+            raise _ToolResultError(message) from error
+        raise
+
+
+def validate_request_timeout(request_timeout_millis: int | None) -> None:
+    """Reject a request timeout that is not positive.
+
+    Args:
+        request_timeout_millis: Timeout to check. ``None`` disables the timeout.
+
+    Raises:
+        ValueError: If ``request_timeout_millis`` is zero or negative.
+    """
+    if request_timeout_millis is not None and request_timeout_millis <= 0:
+        raise ValueError(
+            f'request_timeout_millis must be positive, got {request_timeout_millis}; pass None to disable the timeout'
+        )
+
+
+class McpConnection:
+    """Owns the child process and session for one MCP server.
+
+    The MCP SDK opens the transport and the session inside a task group, so both
+    must be entered and exited by the same task. One connection is therefore held
+    per event loop: the Dev UI reflection server runs its own loop on a separate
+    thread and would otherwise await a future belonging to the main loop.
+    """
+
+    def __init__(
+        self,
+        config: McpStdioServerConfig,
+        request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+    ) -> None:
+        """Prepare a connection. No process starts until the first call.
+
+        Args:
+            config: How to launch the server.
+            request_timeout_millis: How long one request may take before it
+                fails. Must be positive. ``None`` is the only way to disable
+                the timeout.
+
+        Raises:
+            ValueError: If ``request_timeout_millis`` is zero or negative.
+        """
+        validate_request_timeout(request_timeout_millis)
+        self._config = config
+        self._request_timeout = (
+            timedelta(milliseconds=request_timeout_millis) if request_timeout_millis is not None else None
+        )
+        self._state = _ConnectionState.NEW
+        self._failure: Exception | None = None
+        self._queue: asyncio.Queue[_Request[Any]] = asyncio.Queue()
+        self._ready = asyncio.Event()
+        self._closed = asyncio.Event()
+        self._state_lock = asyncio.Lock()
+        self._owner_task: asyncio.Task[None] | None = None
+        self._shutdown: anyio.CancelScope | None = None
+        self._stop: anyio.CancelScope | None = None
+        self._deadline: asyncio.TimerHandle | None = None
+        self._unwinding: list[_Request[Any]] = []
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether this connection is closed or failed and serves nothing more."""
+        return self._state in (_ConnectionState.FAILED, _ConnectionState.CLOSED)
+
+    async def list_tools(self) -> list[McpTool]:
+        """List every tool the server offers, following pagination cursors.
+
+        A server that does not advertise the tools capability is not asked.
+
+        Returns:
+            All tools, in server order. Empty for a server without the tools
+            capability.
+
+        Raises:
+            _ProtocolError: If the server's cursors never terminate.
+            _RequestTimeoutError: If the server does not answer a page in time.
+            _ServerError: If the server answers a page with a JSON-RPC error.
+        """
+
+        async def list_all(session: ClientSession) -> list[McpTool]:
+            capabilities = session.get_server_capabilities()
+            if capabilities is None or capabilities.tools is None:
+                return []
+            tools: list[McpTool] = []
+            cursor: str | None = None
+            seen: set[str] = set()
+            for _ in range(MAX_TOOL_PAGES):
+                result = await session.list_tools(
+                    params=PaginatedRequestParams(cursor=cursor) if cursor is not None else None
+                )
+                tools.extend(result.tools)
+                cursor = result.nextCursor
+                if not cursor:
+                    return tools
+                if cursor in seen:
+                    raise _ProtocolError(f'{self._config.command!r} repeated the tools/list cursor {cursor!r}')
+                seen.add(cursor)
+            raise _ProtocolError(f'{self._config.command!r} served over {MAX_TOOL_PAGES} tools/list pages')
+
+        return await self._request(list_all)
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        meta: dict[str, Any] | None = None,
+    ) -> CallToolResult:
+        """Invoke one tool on the server.
+
+        Args:
+            name: Tool name as the server lists it, without the Genkit prefix.
+            arguments: Tool input, unvalidated.
+            meta: Optional MCP ``_meta`` forwarded with the request.
+
+        Returns:
+            The raw result, for the caller to map.
+
+        Raises:
+            _ToolResultError: If the result violates the tool's declared output schema.
+            _RequestTimeoutError: If the server does not answer in time.
+            _ServerError: If the server answers with a JSON-RPC error.
+        """
+
+        async def call(session: ClientSession) -> CallToolResult:
+            return await _call_tool(session, name, arguments, meta)
+
+        return await self._request(call)
+
+    async def close(self) -> None:
+        """Shut the session down and reap the child process.
+
+        Safe to call when never connected, and safe to call twice. A closed
+        connection serves nothing more. In-flight and queued callers are
+        released at once; the return waits until the server has exited, which
+        takes up to ``CLOSE_GRACE_SECONDS`` for a server that ignores stdin EOF.
+
+        Raises:
+            GenkitError: ``FAILED_PRECONDITION`` if called from inside one of
+                this connection's own operations, which teardown would wait on
+                forever.
+        """
+        async with self._state_lock:
+            if _serving.get() is self:
+                raise _ClientError(
+                    'MCP connection cannot be closed from inside one of its own requests', status='FAILED_PRECONDITION'
+                )
+            if self._state is not _ConnectionState.CLOSED:
+                self._begin_close()
+        await self._closed.wait()
+
+    def _begin_close(self) -> None:
+        """Release every caller and start the owner's teardown, without awaiting it.
+
+        Nothing here suspends, so cancelling a ``close`` caller cannot cut the
+        teardown short, and every caller waits on ``_closed`` alike.
+        """
+        self._state = _ConnectionState.CLOSED
+        # A connection closed before it started has no owner to open this gate.
+        self._ready.set()
+        self._fail_queued(self._closed_error)
+        task = self._owner_task
+        if task is None:
+            self._closed.set()
+            return
+        if self._stop is not None:
+            self._stop.cancel()
+        if self._shutdown is not None:
+            # Not ``task.cancel()``: that ignores anyio shields, so it can abort the SDK reaping the child.
+            self._deadline = asyncio.get_running_loop().call_later(CLOSE_GRACE_SECONDS, self._shutdown.cancel)
+        task.add_done_callback(self._owner_done)
+
+    def _owner_done(self, _task: asyncio.Task[None]) -> None:
+        """Open the ``close`` gate once the owner has reaped the server."""
+        if self._deadline is not None:
+            self._deadline.cancel()
+        self._closed.set()
+
+    async def _request(self, operation: Callable[[ClientSession], Awaitable[_T]]) -> _T:
+        """Hand an operation to the owner and wait for its outcome."""
+        await self._start()
+        loop = asyncio.get_running_loop()
+        result: asyncio.Future[_T] = loop.create_future()
+        async with self._state_lock:
+            if self._state is _ConnectionState.CLOSED:
+                raise self._closed_error()
+            if self._state is _ConnectionState.FAILED:
+                if self._failure is not None or self._owner_task is None or self._owner_task.done():
+                    raise self._failed_error()
+                # The owner is still unwinding toward the cause, so wait for it like a cut-off caller.
+                self._unwinding.append(_Request(operation, result))
+            else:
+                # Enqueueing must not await: ``_settle`` runs between awaits and
+                # would otherwise drain the queue before this request joined it.
+                self._queue.put_nowait(_Request(operation, result))
+        return await result
+
+    async def _start(self) -> None:
+        """Start lazily, then wait until initialization finishes, however it ends."""
+        async with self._state_lock:
+            if self._state is _ConnectionState.NEW:
+                self._state = _ConnectionState.CONNECTING
+                self._shutdown = shutdown = anyio.CancelScope()
+                self._stop = stop = anyio.CancelScope()
+                self._owner_task = asyncio.create_task(self._run(shutdown, stop), name='genkit-mcp-connection')
+        await self._ready.wait()
+
+    async def _run(self, shutdown: anyio.CancelScope, stop: anyio.CancelScope) -> None:
+        """Own the SDK context managers until the transport dies or ``close`` cancels ``stop``.
+
+        Args:
+            shutdown: Cancelled only when the SDK's stdio shutdown overruns
+                ``CLOSE_GRACE_SECONDS``.
+            stop: Cancelled by ``close`` to end the session's work.
+        """
+        try:
+            parameters = StdioServerParameters(
+                command=self._config.command,
+                args=self._config.args or [],
+                env=self._config.env,
+                cwd=os.fspath(self._config.cwd) if self._config.cwd is not None else None,
+                # A server which emits one invalid byte kills a strict decoder,
+                # and with it every later request on this connection.
+                encoding_error_handler='replace',
+            )
+            with shutdown:
+                async with stdio_client(parameters) as (read_stream, write_stream):
+                    async with ClientSession(
+                        read_stream,
+                        write_stream,
+                        read_timeout_seconds=self._request_timeout,
+                        client_info=CLIENT_INFO,
+                    ) as session:
+                        # The SDK's stdio shutdown is not shielded, so no scope around it may be cancelled.
+                        with stop:
+                            await session.initialize()
+                            async with self._state_lock:
+                                if self._state is _ConnectionState.CONNECTING:
+                                    self._state = _ConnectionState.OPEN
+                            self._ready.set()
+                            await self._serve(session)
+        except BaseException as error:
+            if not isinstance(error, Exception):
+                self._settle(None)
+                raise
+            cause = _transport_cause(error)
+            # A rendered traceback would print frame locals, and those hold the server's env.
+            logger.warning(
+                'MCP connection ended', command=self._config.command, error=type(error).__name__, cause=repr(cause)
+            )
+            self._settle(cause)
+        finally:
+            # anyio cancel scopes inside the SDK can absorb whatever ended the
+            # serve loop, so this is the only settlement guaranteed to run.
+            self._settle(None)
+            self._ready.set()
+
+    async def _serve(self, session: ClientSession) -> None:
+        """Start each queued operation as a child task until the transport dies."""
+        async with anyio.create_task_group() as operations:
+            while True:
+                request = await self._queue.get()
+                if request.result.cancelled():
+                    continue
+                if self._state is _ConnectionState.CLOSED:
+                    # Dequeued in the same step that close ran, before its cancellation reached this task.
+                    request.result.set_exception(self._closed_error())
+                    continue
+                operations.start_soon(self._execute, session, request, operations.cancel_scope)
+
+    async def _execute(self, session: ClientSession, request: _Request[Any], serving: anyio.CancelScope) -> None:
+        """Run one operation and release its caller, however the body is left."""
+        _serving.set(self)
+        deferred = False
+        try:
+            try:
+                value = await request.operation(session)
+            except Exception as error:
+                if await _transport_is_dead(session, error):
+                    # Settle now rather than leaving callers waiting the seconds the SDK spends terminating the child.
+                    self._settle(error)
+                    serving.cancel()
+                elif not request.result.done():
+                    request.result.set_exception(self._answered_error(error))
+            else:
+                if not request.result.done():
+                    request.result.set_result(value)
+        except BaseException:
+            # Only an ending connection cancels a child, and the state must say so before any caller is released.
+            if self._state is _ConnectionState.CLOSED or self._failure is not None:
+                self._settle(None)
+            else:
+                # The SDK cancels this child before its task group hands the owner the transport error.
+                self._state = _ConnectionState.FAILED
+                self._unwinding.append(request)
+                deferred = True
+            raise
+        finally:
+            # A caller must never see the child's own CancelledError.
+            if not deferred and not request.result.done():
+                request.result.set_exception(self._terminal_error())
+
+    def _terminal_error(self) -> _ConnectionClosedError | _ConnectionFailedError:
+        """Build the error for a caller the connection can no longer serve."""
+        if self._state is _ConnectionState.CLOSED:
+            return self._closed_error()
+        return self._failed_error()
+
+    def _settle(self, error: Exception | None) -> None:
+        """Move to a terminal state and release every caller. Idempotent.
+
+        Stays synchronous so that ``_run`` can call it from ``finally`` during
+        cancellation unwinding, where awaiting ``_state_lock`` could deadlock
+        against the ``close`` that is doing the cancelling.
+
+        Args:
+            error: What ended the session, when the caller knows.
+        """
+        if self._state is _ConnectionState.CLOSED:
+            self._fail_queued(self._closed_error)
+            return
+        self._state = _ConnectionState.FAILED
+        if self._failure is None and error is not None:
+            _drop_tracebacks(error)
+            self._failure = error
+        self._fail_queued(self._failed_error)
+
+    def _fail_queued(self, build_error: Callable[[], BaseException]) -> None:
+        """Release callers whose work was not yet started, or who wait for a failure's cause.
+
+        Args:
+            build_error: Makes one error per caller, so tracebacks stay separate.
+        """
+        unwinding, self._unwinding = self._unwinding, []
+        for request in unwinding:
+            if not request.result.done():
+                request.result.set_exception(build_error())
+        while True:
+            try:
+                request = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if not request.result.done():
+                request.result.set_exception(build_error())
+
+    def _closed_error(self) -> _ConnectionClosedError:
+        """Build the error reported once this connection is shut down."""
+        return _ConnectionClosedError(f'MCP connection to {self._config.command!r} is closed')
+
+    def _answered_error(self, error: Exception) -> Exception:
+        """Build the error reported for one operation that failed while the server stayed reachable."""
+        if _timed_out(error):
+            return self._timed_out_error(error)
+        if isinstance(error, McpError):
+            return self._server_error(error)
+        return error
+
+    def _server_error(self, reply: McpError) -> _ServerError:
+        """Build the error reported when the server answered one request with a JSON-RPC error."""
+        code = reply.error.code
+        error = _ServerError(
+            f'MCP request to {self._config.command!r} failed with error {code}: {reply.error.message}',
+            status=_SERVER_ERROR_STATUS.get(code, 'UNKNOWN'),
+            cause=reply,
+        )
+        error.__cause__ = reply
+        return error
+
+    def _timed_out_error(self, timeout: Exception) -> _RequestTimeoutError:
+        """Build the error reported when the server did not answer one request in time."""
+        error = _RequestTimeoutError(f'MCP request to {self._config.command!r} timed out')
+        error.__cause__ = timeout
+        return error
+
+    def _failed_error(self) -> _ConnectionFailedError:
+        """Build the error reported when startup or the session died."""
+        error = _ConnectionFailedError(f'MCP connection to {self._config.command!r} failed')
+        error.__cause__ = self._failure
+        return error

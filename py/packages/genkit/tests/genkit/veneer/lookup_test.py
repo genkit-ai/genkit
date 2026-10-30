@@ -10,12 +10,13 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ModelHookParams
-from genkit.model import GenerateActionOptions, ModelRequest, model
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+from genkit import FinishReason, Genkit, Message, ModelResponse, Operation, Part, Role, Tool
+from genkit._core._typing import MiddlewareRef
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import GenerateActionOptions, Model, ModelContext, ModelRequest
+from genkit.plugin_api import Action, ActionKind, Plugin
 
-NextModel = Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]]
+NextModel = Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]]
 
 
 def _answer(text: str) -> ModelResponse:
@@ -26,7 +27,7 @@ def _answer(text: str) -> ModelResponse:
 
 
 def _define_answering_model(ai: Genkit, name: str, text: str) -> None:
-    async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return _answer(text)
 
     ai.define_model(name=name, fn=fn)
@@ -44,12 +45,12 @@ class LazyPlugin(Plugin):
         if action_type != ActionKind.MODEL or name != 'fast':
             return None
 
-        async def fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             return _answer('from lazy fast')
 
-        return model(name, fn)
+        return Model(name, fn)
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 
@@ -61,7 +62,7 @@ async def test_lookup_model_returns_registered_model_action() -> None:
 
     action = await ai.lookup_model('test/echo')
 
-    assert action is not None
+    assert isinstance(action, Model)
     assert action.name == 'test/echo'
     result = await action.run(ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('hi')])]))
     assert isinstance(result.response, ModelResponse)
@@ -94,10 +95,10 @@ async def test_lookup_model_does_not_return_background_models() -> None:
     """A background model runs through `generate_operation`, so `lookup_model` returns None for it."""
     ai = Genkit()
 
-    async def start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
+    async def start(request: ModelRequest, ctx: ModelContext) -> Operation:
         return Operation(id='op-1')
 
-    async def check(operation: Operation, ctx: ActionRunContext) -> Operation:
+    async def check(operation: Operation, ctx: ModelContext) -> Operation:
         return operation
 
     ai.define_background_model('veo', start=start, check=check)
@@ -223,9 +224,9 @@ async def test_middleware_ctx_ai_is_the_app_on_every_generate_path() -> None:
     _define_answering_model(ai, 'test/echo', 'from echo')
     seen: list[object] = []
 
-    class PeekAi(BaseMiddleware):
+    class PeekAi(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             seen.append(ctx.ai)
             return await next_fn(params, ctx)
@@ -261,9 +262,9 @@ async def test_middleware_ctx_ai_lookup_model_finds_app_model() -> None:
     _define_answering_model(ai, 'test/echo', 'from echo')
     _define_answering_model(ai, 'test/other', 'from other')
 
-    class SwapModel(BaseMiddleware):
+    class SwapModel(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             other = await ctx.ai.lookup_model('test/other')
             assert other is not None
@@ -283,9 +284,9 @@ async def test_middleware_ctx_ai_lookup_value_sees_app_value() -> None:
     ai.define_value(kind='greeting', name='default', value='hello')
     seen: list[object | None] = []
 
-    class ReadValue(BaseMiddleware):
+    class ReadValue(Middleware):
         async def wrap_model(
-            self, params: ModelHookParams, ctx: GenerateMiddlewareContext, next_fn: NextModel
+            self, params: ModelHookParams, ctx: MiddlewareContext, next_fn: NextModel
         ) -> ModelResponse:
             seen.append(ctx.ai.lookup_value(kind='greeting', name='default'))
             seen.append(ctx.ai.lookup_value(kind='greeting', name='missing'))

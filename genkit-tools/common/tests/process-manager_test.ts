@@ -15,7 +15,11 @@
  */
 
 import { describe, expect, it } from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { ProcessManager } from '../src/manager/process-manager';
+import { logger } from '../src/utils';
 
 describe('ProcessManager', () => {
   it('should start and stop a process successfully', async () => {
@@ -70,6 +74,43 @@ describe('ProcessManager', () => {
     // Restart
     await manager.restart({ nonInteractive: true });
     expect(manager.status()).toEqual({ status: 'running' });
+    await manager.waitForProcess();
+  });
+
+  it('should preserve nonInteractive and cwd options when restart() is called without arguments', async () => {
+    const tmpDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-pm-test-'))
+    );
+    const capturedDebug: string[] = [];
+    const origDebug = logger.debug.bind(logger);
+    logger.debug = ((...args: unknown[]) => {
+      capturedDebug.push(args.map(String).join(' '));
+    }) as typeof logger.debug;
+
+    try {
+      const manager = new ProcessManager('node', [
+        '-e',
+        'console.log("> simulated npm banner from " + process.cwd()); process.exit(0);',
+      ]);
+
+      await manager.start({ nonInteractive: true, cwd: tmpDir });
+      capturedDebug.length = 0;
+
+      // Restart with no options (mirrors MCP restart_runtime and Dev UI restartAppProcess)
+      await manager.restart();
+      await manager.waitForProcess();
+
+      expect(
+        capturedDebug.some(
+          (line) =>
+            line.includes('[ProcessManager Stdout]') &&
+            line.includes(`> simulated npm banner from ${tmpDir}`)
+        )
+      ).toBe(true);
+    } finally {
+      logger.debug = origDebug;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it('kill should be idempotent', async () => {

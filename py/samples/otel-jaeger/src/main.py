@@ -59,7 +59,7 @@ if __name__ == '__main__':
         GenAiInstrumentation(content_capturing_mode='SPAN_ONLY'),
     )
 
-    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
     async def main() -> None:
         try:

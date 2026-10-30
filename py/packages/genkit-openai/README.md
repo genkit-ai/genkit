@@ -28,13 +28,24 @@ from genkit_openai import OpenAI
 ai = Genkit(plugins=[OpenAI()])
 
 res = await ai.generate(
-    model=OpenAI.gpt_model('gpt-5.2'),
+    model=OpenAI.gpt('gpt-5.2'),
     prompt='Suggest 2 catchy names for an AI newsletter.',
 )
 print(res.text)
 ```
 
 Set `OPENAI_API_KEY` in the environment, or pass `api_key=` to `OpenAI()`.
+`base_url=` points the plugin at another OpenAI-compatible server. Pass the URL
+up to and including `/v1`; the SDK appends `/chat/completions`. Any other
+`AsyncOpenAI` setting goes in `client_options`:
+
+```python
+OpenAI(
+    api_key=key,
+    base_url='https://openrouter.ai/api/v1',
+    client_options={'organization': 'org-123', 'timeout': 30, 'max_retries': 5},
+)
+```
 
 ## Config
 

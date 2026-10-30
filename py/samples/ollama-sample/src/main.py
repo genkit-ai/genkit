@@ -27,7 +27,7 @@ chat_model = os.getenv('OLLAMA_CHAT_MODEL', 'llama3.2')
 embedder_model = os.getenv('OLLAMA_EMBEDDER_MODEL', 'nomic-embed-text')
 
 ai = Genkit(
-    plugins=[Ollama(server_address=os.getenv('OLLAMA_HOST'))],
+    plugins=[Ollama()],
     model=f'ollama/{chat_model}',
 )
 
