@@ -272,7 +272,6 @@ async def test_model_action_stream_returns_stream_response() -> None:
 
 
 @pytest.mark.asyncio
-<<<<<<< HEAD
 async def test_flow_stream_to_sse_frames_chunks_and_result() -> None:
     """`flow.stream(...).to_sse()` yields `data: {"message": ...}` frames followed by `data: {"result": ...}`."""
     ai = Genkit()
