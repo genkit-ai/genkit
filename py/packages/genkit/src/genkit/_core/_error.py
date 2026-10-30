@@ -16,18 +16,17 @@
 
 """Error classes and utilities for the Genkit framework."""
 
-import json
-import logging
 import math
 import reprlib
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
-from typing import Any, ClassVar, Literal, TypedDict, cast
+from typing import Any, ClassVar, Literal, TypedDict, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
+from pydantic_core.core_schema import ErrorType
 
 from genkit._core._compat import StrEnum
 from genkit._core._typing import GenkitRuntimeError as GenkitRuntimeErrorData
@@ -369,7 +368,23 @@ _value_preview.maxlist = _value_preview.maxtuple = _value_preview.maxdict = _val
 _value_preview.maxlevel = 2
 
 
-def format_validation_error(error: ValidationError, *, max_errors: int = 3) -> str:
+_MAX_PROBLEMS = 3
+
+
+def _loc_path(loc: Sequence[object]) -> str:
+    """``('items', 1, 'qty')`` -> ``items[1].qty``."""
+    return ''.join(f'[{p}]' if isinstance(p, int) else f'.{p}' for p in loc).lstrip('.')
+
+
+def _join_problems(problems: list[str], *, total: int, max_errors: int) -> str:
+    """Join the first ``max_errors`` clauses and say how many more were cut."""
+    clauses = problems[:max_errors]
+    if total > max_errors:
+        clauses.append(f'and {total - max_errors} more')
+    return '; '.join(clauses)
+
+
+def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PROBLEMS) -> str:
     """One short clause per Pydantic error: where, what was expected, what came in.
 
     Pydantic already words each error for every type it validates (str, int,
@@ -388,12 +403,9 @@ def format_validation_error(error: ValidationError, *, max_errors: int = 3) -> s
         # For a missing field the input is the whole parent object, which says nothing new.
         if err['type'] != 'missing' and not hide_input:
             text = f'{text}, got {_value_preview.repr(err["input"])}'
-        path = ''.join(f'[{p}]' if isinstance(p, int) else f'.{p}' for p in err['loc']).lstrip('.')
+        path = _loc_path(err['loc'])
         problems.append(f'{path}: {text}' if path else text)
-    hidden = error.error_count() - max_errors
-    if hidden > 0:
-        problems.append(f'and {hidden} more')
-    return '; '.join(problems)
+    return _join_problems(problems, total=error.error_count(), max_errors=max_errors)
 
 
 class GenkitError(Exception):
@@ -483,12 +495,12 @@ class GenkitError(Exception):
         return runtime_error_reason(self.details)
 
     def to_callable_serializable(self) -> HttpErrorWireFormat:
-        """Served-flow wire body; same redaction as ``get_callable_json``.
+        """Served-flow wire body; same redaction as ``error_body``.
 
         Only a PublicError keeps its message and details. In-process code
         that needs the real error reads ``original_message`` and ``details``.
         """
-        body = get_callable_json(self)
+        body = error_body(self)
         return HttpErrorWireFormat(
             details=body.get('details'),
             status=body['status'],
@@ -512,7 +524,10 @@ def mark_request_error(*, error: GenkitError) -> GenkitError:
     """Mark an error from the served action's own input or init check.
 
     The HTTP caller sent a body the action cannot accept, so they get a 4xx
-    with a generic sentence. The validation dump stays off the wire.
+    with the message and the failing fields: each field's path and
+    Pydantic's fixed wording, never the values or a custom validator's text.
+    Only the outermost action marks its errors; a nested action called wrong
+    is a server bug and stays a 500.
     """
     error._request_sourced = True
     return error
@@ -616,7 +631,7 @@ def _client_facing_error(error: object) -> GenkitError | None:
 
     A PublicError is the app saying this status and sentence are for the
     caller. The served action's own input/init check is the caller's
-    request, so it keeps a 4xx and a generic sentence. A missing model or
+    request, so it keeps a 4xx and its message. A missing model or
     a plugin "bad role" is the server failing to run the flow.
     """
     if isinstance(error, PublicError):
@@ -626,11 +641,62 @@ def _client_facing_error(error: object) -> GenkitError | None:
     return None
 
 
-def _generic_client_message(status: StatusName) -> str:
-    """'INVALID_ARGUMENT' -> 'Invalid argument'; INTERNAL uses 'Internal Error'."""
-    if status == 'INTERNAL':
-        return 'Internal Error'
-    return status.replace('_', ' ').capitalize()
+# Pydantic's built-in messages read from the schema (expected type, length,
+# Literal choices). These also put the input or the server's own text in the
+# message: a validator's ValueError/assertion, a discriminator tag the caller
+# sent, an attribute name, or a parser error that quotes the bad character.
+_VALUE_BEARING_ERROR_TYPES = frozenset({
+    'assertion_error',
+    'bytes_invalid_encoding',
+    'datetime_object_invalid',
+    'get_attribute_error',
+    'no_such_attribute',
+    'union_tag_invalid',
+    'uuid_parsing',
+    'value_error',
+})
+_SERVED_ERROR_TYPES = frozenset(get_args(ErrorType)) - _VALUE_BEARING_ERROR_TYPES
+# The last loc segment of these is a key the caller made up.
+_CALLER_KEY_ERROR_TYPES = frozenset({'extra_forbidden', 'unexpected_keyword_argument'})
+_MAX_SERVED_SEGMENT = 64
+
+
+def _served_problem(entry: dict[str, object]) -> str:
+    """One ``path: message`` clause safe to send to the HTTP caller.
+
+    A custom validator's message can carry anything the server knows (the
+    value, a tenant, a DB name), so only Pydantic's built-in wording goes out
+    and the rest says ``Invalid value``. A path segment that isn't a plain
+    field name is a dict key or extra field the caller sent and shows as ``*``.
+    To show the caller a validator's own sentence, raise PublicError from it.
+    """
+    error_type = entry.get('type')
+    loc = entry.get('loc')
+    parts = list(cast(list[object], loc)) if isinstance(loc, list) else []
+    if error_type in _CALLER_KEY_ERROR_TYPES and parts:
+        parts.pop()
+    safe_parts = [
+        p if isinstance(p, int) or (isinstance(p, str) and p.isidentifier() and len(p) <= _MAX_SERVED_SEGMENT) else '*'
+        for p in parts
+    ]
+    path = _loc_path(safe_parts)
+    text = str(entry.get('message', '')) if error_type in _SERVED_ERROR_TYPES else 'Invalid value'
+    return f'{path}: {text}' if path else text
+
+
+def _request_client_message(error: GenkitError) -> str:
+    """The input/init message plus each failing field, without the values the caller sent.
+
+    ``Invalid input for flow 'place': order_id: Field required; qty: Input should be a valid integer``
+    """
+    details = error.details if isinstance(error.details, dict) else {}
+    errors = details.get('errors')
+    if not isinstance(errors, list) or not errors:
+        return error.original_message
+    entries = [cast(dict[str, object], e) for e in cast(list[object], errors) if isinstance(e, dict)]
+    problems = [_served_problem(e) for e in entries[:_MAX_PROBLEMS]]
+    joined = _join_problems(problems, total=len(entries), max_errors=_MAX_PROBLEMS)
+    return f'{error.original_message}: {joined}' if joined else error.original_message
 
 
 _ANY_ADAPTER: TypeAdapter[Any] = TypeAdapter(Any)
@@ -647,12 +713,12 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
-def get_http_status(error: object) -> int:
-    """HTTP status for a served-flow error.
+def error_status(error: object) -> int:
+    """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
-    A PublicError keeps its own status (NOT_FOUND is a 404). Any other
-    GenkitError, a provider-sourced error, a plain exception, or anything
-    else is a 500.
+    A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
+    request to the flow itself keeps its 4xx. Any other GenkitError, a
+    provider error, a plain exception, or anything else is a 500.
     """
     facing = _client_facing_error(error)
     if facing is not None:
@@ -689,18 +755,30 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def get_callable_json(error: object) -> dict[str, Any]:
-    """JSON body for a served-flow HTTP or SSE error.
+def error_body(error: object) -> dict[str, Any]:
+    """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's
-    the one error whose author said the text is safe for callers. Any other
-    GenkitError, a provider-sourced error, and anything else become
-    ``{"message": "Internal Error", "status": "INTERNAL"}``.
+    the one error whose author said the text is safe for callers. A bad
+    request to the flow itself keeps its 4xx status and names the failing
+    fields without their values, such as ``"Invalid input for flow 'save':
+    qty: Input should be a valid integer"``. Any other GenkitError, a provider
+    error, and anything else become ``{"message": "Internal Error", "status": "INTERNAL"}``.
+
+    Example:
+        ```python
+        from genkit.web import error_body, error_status
+
+        try:
+            response = await my_flow.run(input=data)
+        except Exception as e:
+            return JSONResponse(error_body(e), status_code=error_status(e))
+        ```
     """
     facing = _client_facing_error(error)
     if facing is None:
         return dict(_INTERNAL_CLIENT_BODY)
-    message = facing.original_message if isinstance(facing, PublicError) else _generic_client_message(facing.status)
+    message = facing.original_message if isinstance(facing, PublicError) else _request_client_message(facing)
     body: dict[str, Any] = {
         'message': message,
         'status': facing.status,
@@ -710,27 +788,6 @@ def get_callable_json(error: object) -> dict[str, Any]:
         if details is not None:
             body['details'] = details
     return body
-
-
-_JSON_SEPARATORS = (',', ':')
-
-
-def served_error_json(*, error: object) -> tuple[int, str]:
-    """HTTP status and compact JSON body for a served-flow failure."""
-    return get_http_status(error), json.dumps(get_callable_json(error), separators=_JSON_SEPARATORS)
-
-
-def served_stream_error_event(*, error: object) -> str:
-    """SSE ``data: {"error": ...}`` event for a served-flow failure."""
-    return f'data: {json.dumps({"error": get_callable_json(error)}, separators=_JSON_SEPARATORS)}\n\n'
-
-
-def log_served_failure(*, adapter_logger: logging.Logger, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
-    if get_http_status(error) >= 500:
-        adapter_logger.exception('served flow %s failed', where)
-    else:
-        adapter_logger.warning('served flow %s failed: %s', where, error)
 
 
 def get_error_stack(error: object) -> str | None:

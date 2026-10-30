@@ -31,6 +31,10 @@
 
 ::: genkit.middleware
 
+## genkit.web
+
+::: genkit.web
+
 ## genkit.exp
 
 ::: genkit.exp

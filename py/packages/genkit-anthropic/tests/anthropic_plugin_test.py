@@ -360,10 +360,13 @@ _ANTHROPIC_CONFIG_KEYS = {
     'apiVersion',
     'betas',
     'maxOutputTokens',
-    'tool_choice',
-    'metadata',
+    'disableParallelToolUse',
     'thinking',
-    'output_config',
+    'thinkingBudget',
+    'thinkingDisplay',
+    'effort',
+    'taskBudget',
+    'userId',
 }
 
 
