@@ -17,7 +17,7 @@
 """Connection configuration for MCP servers."""
 
 import os
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -52,3 +52,22 @@ class McpStdioServerConfig(BaseModel):
     args: list[str] | None = Field(default=None, repr=False)
     env: dict[str, str] | None = Field(default=None, repr=False)
     cwd: str | os.PathLike[str] | None = None
+
+
+class _McpServerCommand(TypedDict):
+    command: str
+
+
+class McpServerEntry(_McpServerCommand, total=False):
+    """One stdio entry of an ``mcpServers`` block, as Claude Desktop and Cursor write it.
+
+    The shape :func:`define_mcp_host` takes for each server and
+    :meth:`McpHost.connect` takes for one. Only ``command`` is required. A host
+    validates each entry into :class:`McpStdioServerConfig`, so an unknown key
+    fails there.
+    """
+
+    args: list[str]
+    env: dict[str, str]
+    cwd: str
+    type: Literal['stdio']

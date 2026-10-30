@@ -31,14 +31,15 @@ class _ClientError(GenkitError):
 
     _status: ClassVar[StatusName] = 'INTERNAL'
 
-    def __init__(self, message: str, *, status: StatusName | None = None) -> None:
+    def __init__(self, message: str, *, status: StatusName | None = None, cause: BaseException | None = None) -> None:
         """Build the error with this class's status unless ``status`` overrides it.
 
         Args:
             message: What went wrong.
             status: Status to report instead of the class default.
+            cause: The provider error this one reports, if any.
         """
-        super().__init__(message=message, status=status or self._status)
+        super().__init__(message=message, status=status or self._status, cause=cause)
 
 
 class _ConnectionClosedError(_ClientError):
@@ -59,6 +60,26 @@ class _ConnectionFailedError(_ClientError):
     """
 
     _status: ClassVar[StatusName] = 'UNAVAILABLE'
+
+
+class _RequestTimeoutError(_ClientError):
+    """The server did not answer one request in time. Status ``DEADLINE_EXCEEDED``.
+
+    The session stays open, since a slow server is not a dead one.
+    ``__cause__`` carries the timeout the MCP SDK raised.
+    """
+
+    _status: ClassVar[StatusName] = 'DEADLINE_EXCEEDED'
+
+
+class _ServerError(_ClientError):
+    """The server answered one request with a JSON-RPC error. Status ``UNKNOWN`` unless its code names one.
+
+    The session stays open, since the server is still answering.
+    ``__cause__`` carries the ``McpError`` the MCP SDK raised.
+    """
+
+    _status: ClassVar[StatusName] = 'UNKNOWN'
 
 
 class _ProtocolError(_ClientError):

@@ -161,8 +161,11 @@ class McpClient:
             share a Genkit tool name.
 
         Raises:
-            GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
-                ``UNAVAILABLE`` if the server cannot be started.
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed,
+                ``UNAVAILABLE`` if the server cannot be started,
+                ``DEADLINE_EXCEEDED`` if it does not answer in time,
+                ``INTERNAL`` if it breaks the protocol, or the status for the
+                JSON-RPC error code it answers the listing with.
         """
         tools = await self._on_connection(McpConnection.list_tools)
         return mcp_tools_to_handles(tools, self._name, self._call_tool)
@@ -183,8 +186,11 @@ class McpClient:
         ``UNAVAILABLE``, and can be retried once this returns.
 
         Raises:
-            GenkitError: ``FAILED_PRECONDITION`` if this client is closed, or
-                ``UNAVAILABLE`` if the server cannot be started.
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed,
+                ``UNAVAILABLE`` if the server cannot be started,
+                ``DEADLINE_EXCEEDED`` if it does not answer in time,
+                ``INTERNAL`` if it breaks the protocol, or the status for the
+                JSON-RPC error code it answers the listing with.
         """
         with self._connections_lock:
             self._refuse_when_closed()

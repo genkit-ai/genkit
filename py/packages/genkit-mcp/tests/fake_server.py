@@ -23,6 +23,7 @@ from mcp.types import (
     ErrorData,
     ListToolsRequest,
     ListToolsResult,
+    Resource,
     ServerResult,
     TextContent,
     Tool,
@@ -54,6 +55,10 @@ COLLIDING_TOOLS = [
 
 PAGE_SIZE = int(os.environ.get('MCP_FAKE_PAGE_SIZE', '2'))
 
+TOOL_NAME_PREFIX = os.environ.get('MCP_FAKE_TOOL_NAME_PREFIX', '')
+if TOOL_NAME_PREFIX:
+    TOOLS = [tool.model_copy(update={'name': TOOL_NAME_PREFIX + tool.name}) for tool in TOOLS]
+
 list_requests = 0
 
 rendezvous_arrivals = 0
@@ -77,7 +82,13 @@ async def list_tools(req: ListToolsRequest) -> ListToolsResult:
     if os.environ.get('MCP_FAKE_APP_ERROR') and list_requests == 1:
         # -32000 is the JSON-RPC implementation-defined server error range, which
         # a healthy server may use and the SDK also synthesises on transport death.
-        raise McpError(ErrorData(code=CONNECTION_CLOSED, message='application-level failure'))
+        code = int(os.environ.get('MCP_FAKE_APP_ERROR_CODE', CONNECTION_CLOSED))
+        raise McpError(ErrorData(code=code, message='application-level failure'))
+
+    stall_list_marker = os.environ.get('MCP_FAKE_STALL_LIST')
+    if stall_list_marker:
+        await anyio.Path(stall_list_marker).write_text('stalled', encoding='utf-8')
+        await asyncio.Event().wait()
 
     if os.environ.get('MCP_FAKE_STUCK_CURSOR'):
         return ListToolsResult(tools=TOOLS[:1], nextCursor='stuck')
@@ -136,6 +147,15 @@ if os.environ.get('MCP_FAKE_APP_ERROR_CALL'):
         raise McpError(ErrorData(code=CONNECTION_CLOSED, message='application-level failure'))
 
     app.request_handlers[CallToolRequest] = failing_call
+
+if os.environ.get('MCP_FAKE_NO_TOOLS'):
+    # Without these handlers the server neither advertises tools nor answers tools/list.
+    del app.request_handlers[ListToolsRequest]
+    del app.request_handlers[CallToolRequest]
+
+    @app.list_resources()
+    async def list_resources() -> list[Resource]:
+        return []
 
 
 def close_stdin_after_handshake(marker: str) -> None:
