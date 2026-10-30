@@ -31,6 +31,7 @@ from genkit_google_genai._models._context_caching._utils import generate_cache_k
 from genkit_google_genai._models._sdk_config import (
     GEMINI_MANAGED_BODY_FIELDS,
     GEMINI_MANAGED_GENERATION_FIELDS,
+    GEMINI_UNSUPPORTED_GENERATION_FIELDS,
     attach_config_extra,
     attach_leftovers,
     dump_family_config,
@@ -2436,6 +2437,7 @@ class GeminiModel:
                 action_name=self._version,
                 managed_body_fields=GEMINI_MANAGED_BODY_FIELDS,
                 managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
+                unsupported_generation_fields=GEMINI_UNSUPPORTED_GENERATION_FIELDS,
             )
             return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
