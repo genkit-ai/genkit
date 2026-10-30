@@ -18,6 +18,7 @@
 
 # Base class and framework primitives
 from genkit._core._action import Action, ActionKind
+from genkit._core._background import BackgroundAction
 from genkit._core._base import GenkitConfig
 from genkit._core._compat import StrEnum
 from genkit._core._constants import GENKIT_USER_AGENT
@@ -34,6 +35,7 @@ __all__ = [
     'Plugin',
     'GenkitConfig',
     'Action',
+    'BackgroundAction',
     'ActionMetadata',
     'ActionKind',
     'DynamicActionProvider',

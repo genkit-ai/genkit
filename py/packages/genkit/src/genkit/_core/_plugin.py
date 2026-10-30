@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sequence
+from typing import Any
 
 from genkit._core._action import Action, ActionKind, set_action_name
+from genkit._core._background import BackgroundAction, background_base_id
 from genkit._core._middleware import Middleware
 from genkit._core._typing import ActionMetadata
 
@@ -42,8 +44,12 @@ class Plugin(abc.ABC):
     name: str  # plugin namespace
 
     @abc.abstractmethod
-    async def init(self) -> list[Action]:
+    async def init(self) -> Sequence[Action | BackgroundAction[Any, Any]]:
         """Lazy warm-up called once per plugin; return actions to pre-register.
+
+        A ``BackgroundAction`` (e.g. a ``BackgroundModel``) registers its start,
+        check and cancel actions together. ``Sequence`` so an override that
+        returns ``list[Action]`` still type-checks.
 
         Return names with or without the ``{plugin.name}/`` prefix. A name that
         doesn't start with it is registered under ``{plugin.name}/{name}`` with
@@ -53,8 +59,15 @@ class Plugin(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
         """Resolve a single action by kind and its id inside this plugin.
+
+        Return a ``BackgroundAction`` (e.g. a ``BackgroundModel``) for a
+        background job. Genkit registers its start, check and cancel actions
+        together, so a later ``/check-operation/{name}/check`` lookup finds the
+        check action without the plugin routing it. If ``resolve`` returns
+        ``None`` for a check or cancel key, Genkit asks again with
+        ``ActionKind.BACKGROUND_MODEL`` and the start id.
 
         Naming rule. When an app asks for ``{plugin.name}/{rest}``:
 
@@ -92,8 +105,10 @@ class Plugin(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def list_actions(self) -> Sequence[Action | ActionMetadata]:
+    async def list_actions(self) -> Sequence[Action | BackgroundAction[Any, Any] | ActionMetadata]:
         """Return advertised actions for dev UI/reflection listing.
+
+        A ``BackgroundAction`` is listed once, under its start action.
 
         ``ActionMetadata.action_type`` must be set (typically ``ActionKind.*``) and
         ``ActionMetadata.name`` must match resolution keys (typically
@@ -113,7 +128,9 @@ class Plugin(abc.ABC):
             ```python
             from genkit import Genkit
             from genkit.middleware import Middleware
-            from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+            from typing import Any
+
+            from genkit.plugin_api import Action, ActionKind, ActionMetadata, BackgroundAction, Plugin
 
 
             # 1. Define a middleware class with a registry name
@@ -125,10 +142,10 @@ class Plugin(abc.ABC):
             class AllergyGuard(Plugin):
                 name = 'allergy-guard'
 
-                async def init(self) -> list[Action]:
+                async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
                     return []
 
-                async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+                async def resolve(self, kind: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
                     return None
 
                 async def list_actions(self) -> list[ActionMetadata]:
@@ -166,7 +183,11 @@ class Plugin(abc.ABC):
 
     async def _named_resolve(self, kind: ActionKind, name: str) -> Action | None:
         requested_id = name.removeprefix(f'{self.name}/')
-        action = await self.resolve(kind, requested_id)
-        if action is not None:
-            set_action_name(action, resolved_action_name(plugin=self.name, requested_id=requested_id))
-        return action
+        resolved = await self.resolve(kind, requested_id)
+        if isinstance(resolved, BackgroundAction):
+            base = background_base_id(kind, requested_id)
+            resolved._rename(resolved_action_name(plugin=self.name, requested_id=base))
+            return resolved._action_for(kind)
+        if resolved is not None:
+            set_action_name(resolved, resolved_action_name(plugin=self.name, requested_id=requested_id))
+        return resolved

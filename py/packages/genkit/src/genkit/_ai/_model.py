@@ -26,6 +26,7 @@ from typing import Annotated, Any, TypeAlias, cast, get_args, get_origin, get_ty
 
 from pydantic import BaseModel, ValidationError
 
+from genkit._ai._background_model import BackgroundModel
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -33,7 +34,6 @@ from genkit._core._action import (
     ModelContext,
     get_func_description,
 )
-from genkit._core._background import BackgroundModel
 from genkit._core._config_check import (
     check_config_json_schema,
     check_config_values,

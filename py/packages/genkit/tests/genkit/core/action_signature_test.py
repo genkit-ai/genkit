@@ -12,8 +12,8 @@ import pytest
 from pydantic import TypeAdapter
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Operation, Part
+from genkit._ai._background_model import CheckModelOpFn, StartModelOpFn
 from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._background import CheckModelOpFn, StartModelOpFn
 from genkit._core._typing import ActionMetadata, Role
 from genkit.model import ModelRequest
 from genkit.plugin_api import Plugin
