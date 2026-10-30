@@ -121,11 +121,8 @@ async def to_sse(turn: StreamHandle) -> AsyncIterator[str]:
     """
     # Lazy: keeps the agent runtime off the `import genkit_fastapi` path.
     from genkit._ai._agents._client import agent_sse_value
-    from genkit._ai._prompt import ModelStreamResponse, _model_sse_value
 
-    # Same frames as the handle's own .to_sse(): a model stream drops the echoed request.
-    to_value = _model_sse_value if isinstance(turn, ModelStreamResponse) else agent_sse_value
-    async for line in _stream_to_sse(turn.stream, lambda: turn.response, to_value=to_value, logger=logger):
+    async for line in _stream_to_sse(turn.stream, lambda: turn.response, to_value=agent_sse_value, logger=logger):
         yield line
 
 
