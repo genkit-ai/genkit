@@ -24,7 +24,7 @@ from genkit_mcp import define_mcp_client
 
 from genkit import Genkit
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 # No process starts here. The server is launched the first time its tools are listed.
 # Any command works: `npx`, `uvx`, a binary on PATH. This one is the sample's own
