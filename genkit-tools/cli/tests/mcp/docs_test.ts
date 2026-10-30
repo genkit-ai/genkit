@@ -261,14 +261,6 @@ describe('MCP language auto-detection, docs, and usage guide tools', () => {
         marker: 'go.mod',
         expectedHeading: '# Genkit Go API Rules',
       },
-      {
-        marker: 'pyproject.toml',
-        expectedHeading: '# Genkit Python API Rules',
-      },
-      {
-        marker: 'pubspec.yaml',
-        expectedHeading: '# Genkit Dart API Rules',
-      },
     ])(
       'auto-detects project language for get_usage_guide when language is omitted ($marker)',
       async ({ marker, expectedHeading }) => {
@@ -285,8 +277,6 @@ describe('MCP language auto-detection, docs, and usage guide tools', () => {
     it.each([
       { language: 'js', expectedHeading: '# Genkit Node.js API Rules' },
       { language: 'go', expectedHeading: '# Genkit Go API Rules' },
-      { language: 'python', expectedHeading: '# Genkit Python API Rules' },
-      { language: 'dart', expectedHeading: '# Genkit Dart API Rules' },
     ])(
       'returns the $language usage guide when explicitly requested',
       async ({ language, expectedHeading }) => {

@@ -30,8 +30,6 @@ const TARGET_DIR = path.resolve(
 
 const jsContextPath = path.resolve(CONTEXT_DIR, 'GENKIT.js.md');
 const goContextPath = path.resolve(CONTEXT_DIR, 'GENKIT.go.md');
-const pythonContextPath = path.resolve(CONTEXT_DIR, 'GENKIT.python.md');
-const dartContextPath = path.resolve(CONTEXT_DIR, 'GENKIT.dart.md');
 
 const AUTO_GEN_HEADER = '// Auto-generated, do not edit';
 
@@ -41,18 +39,13 @@ if (!fs.existsSync(CONTEXT_DIR)) {
 }
 
 // Ensure context files exists
-if (
-  !fs.existsSync(jsContextPath) ||
-  !fs.existsSync(goContextPath) ||
-  !fs.existsSync(pythonContextPath) ||
-  !fs.existsSync(dartContextPath)
-) {
-  throw new Error('Context markdown files missing.');
+if (!fs.existsSync(jsContextPath) || !fs.existsSync(goContextPath)) {
+  throw new Error('JS/Go context files missing.');
 }
 
-function mdToTs(filePath, target) {
+async function mdToTs(filePath, target) {
   try {
-    const data = fs.readFileSync(filePath, 'utf8');
+    const data = await fs.promises.readFile(filePath, 'utf8');
     const cleaned = JSON.stringify(data.replace(/\r\n/g, '\n').trim());
     const final = `${AUTO_GEN_HEADER}\nexport const GENKIT_CONTEXT = ${cleaned}`;
     fs.writeFileSync(target, final);
@@ -64,5 +57,3 @@ function mdToTs(filePath, target) {
 fs.mkdirSync(TARGET_DIR, { recursive: true });
 mdToTs(jsContextPath, path.join(TARGET_DIR, 'nodejs.ts'));
 mdToTs(goContextPath, path.join(TARGET_DIR, 'go.ts'));
-mdToTs(pythonContextPath, path.join(TARGET_DIR, 'python.ts'));
-mdToTs(dartContextPath, path.join(TARGET_DIR, 'dart.ts'));
