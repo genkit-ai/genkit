@@ -15,7 +15,7 @@
  */
 
 import axios, { type AxiosError } from 'axios';
-import chokidar from 'chokidar';
+import chokidar, { type FSWatcher } from 'chokidar';
 import EventEmitter from 'events';
 import * as fsSync from 'fs';
 import fs from 'fs/promises';
@@ -351,7 +351,7 @@ export class RuntimeManager extends BaseRuntimeManager {
   private filenameToDevUiMap: Record<string, DevToolsInfo> = {};
   private idToFileMap: Record<string, string> = {};
   private eventEmitter = new EventEmitter();
-  private watchers: chokidar.FSWatcher[] = [];
+  private watchers: FSWatcher[] = [];
   private healthCheckInterval?: NodeJS.Timeout;
   // Secrets advertised in discovery files, by runtime ID. Kept out of
   // RuntimeInfo because RuntimeInfo is served to the Dev UI browser.
