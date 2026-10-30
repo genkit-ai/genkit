@@ -175,7 +175,8 @@ func WithPlugins(plugins ...api.Plugin) GenkitOption {
 // WithDefaultModel sets the default model name to use for generation tasks
 // when no specific model is provided in the request options, formatted as
 // "<provider>/<model-id>" (for example,
-// genkit.WithDefaultModel("googleai/gemini-flash-latest")).
+// genkit.WithDefaultModel("googleai/gemini-flash-latest")). The "<provider>/"
+// prefix is required; bare model IDs without a provider prefix do not resolve.
 //
 // The name may refer to a model registered via [DefineModelAction] or one
 // served by a plugin; dynamic plugins resolve arbitrary model IDs on demand at
@@ -507,8 +508,13 @@ func ListValues(g *Genkit) map[string]any {
 	return g.reg.ListValues()
 }
 
-// DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
-// and returns a [core.Flow] runner.
+// DefineFlow defines a non-streaming flow, registers it by name as a
+// [core.Action] of type Flow on g (making it discoverable by the Genkit CLI,
+// Developer UI, and Reflection API), and returns a [core.Flow] runner for
+// invoking the flow directly from Go via [core.Flow.Run]. When a flow is only
+// invoked externally via the Genkit CLI or HTTP server, the returned value can
+// be ignored.
+//
 // The provided function `fn` takes an input of type `In` and returns an output of type `Out`.
 // Flows are the primary mechanism for orchestrating multi-step AI tasks in Genkit.
 // Each run of a flow is traced, and steps within the flow can be traced using [Run].
@@ -535,8 +541,11 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 	return f
 }
 
-// DefineStreamingFlow defines a streaming flow, registers it as a [core.Action] of type Flow,
-// and returns a [core.Flow] runner capable of streaming.
+// DefineStreamingFlow defines a streaming flow, registers it by name as a
+// [core.Action] of type Flow on g (making it discoverable by the Genkit CLI,
+// Developer UI, and Reflection API), and returns a [core.Flow] runner capable
+// of streaming. When a flow is only invoked externally via the Genkit CLI or
+// HTTP server, the returned value can be ignored.
 //
 // The provided function `fn` takes an input of type `In`. It can optionally stream
 // intermediate results of type `Stream` by invoking the provided callback function.
@@ -789,11 +798,12 @@ func DefineBackgroundModel(g *Genkit, name string, opts *ai.BackgroundModelOptio
 	return m
 }
 
-// LookupModel retrieves a registered [ai.Model] by its provider and name.
-// It returns the model instance if found, or `nil` if no model with the
-// given identifier is registered (e.g., via [DefineModel] or a plugin).
-// It will try to resolve the model dynamically by matching the provider name;
-// this does not necessarily mean the model is valid.
+// LookupModel retrieves a registered [ai.Model] by its "<provider>/<model-id>"
+// name (for example, "googleai/gemini-flash-latest"). It returns the model
+// instance if found, or `nil` if no model with the given identifier is
+// registered (e.g., via [DefineModelAction] or a plugin). It will try to
+// resolve the model dynamically by matching the provider prefix; this does not
+// necessarily mean the model ID is valid.
 func LookupModel(g *Genkit, name string) ai.Model {
 	return ai.LookupModel(g.reg, name)
 }

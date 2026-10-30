@@ -306,7 +306,8 @@ func WithModel(model ModelArg) CommonGenOption {
 // WithModelName sets the model name to call for generation, formatted as
 // "<provider>/<model-id>" (for example,
 // ai.WithModelName("googleai/gemini-flash-latest") or
-// ai.WithModelName("vertexai/gemini-3.8-flash")).
+// ai.WithModelName("vertexai/gemini-3.8-flash")). The "<provider>/" prefix is
+// required; bare model IDs without a provider prefix do not resolve.
 //
 // The model name is resolved to a [Model] at request time and may error if the
 // reference is invalid. Dynamic plugins (such as googlegenai, openai, and
@@ -989,7 +990,9 @@ func WithEmbedder(embedder EmbedderArg) EmbedderOption {
 // WithEmbedderName sets the embedder name to call for document embedding,
 // formatted as "<provider>/<embedder-id>" (for example,
 // ai.WithEmbedderName("googleai/gemini-embedding-001") or
-// ai.WithEmbedderName("vertexai/gemini-embedding-001")).
+// ai.WithEmbedderName("vertexai/gemini-embedding-001")). The "<provider>/"
+// prefix is required; bare embedder IDs without a provider prefix do not
+// resolve.
 //
 // The embedder name is resolved to an [Embedder] at request time and may error
 // if the reference is invalid. Dynamic plugins (such as googlegenai and openai)
