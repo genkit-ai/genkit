@@ -8,7 +8,7 @@
 // Both plugins implement [api.DynamicPlugin] and resolve any model or embedder
 // ID served by the backend on demand when referenced by its
 // "<provider>/<model-id>" name (for example, "googleai/gemini-flash-latest" or
-// "vertexai/gemini-2.5-flash"), including newly released models not listed in
+// "vertexai/gemini-3.8-flash"), including newly released models not listed in
 // internal capability tables.
 //
 // Example:

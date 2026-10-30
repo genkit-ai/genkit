@@ -306,7 +306,7 @@ func WithModel(model ModelArg) CommonGenOption {
 // WithModelName sets the model name to call for generation, formatted as
 // "<provider>/<model-id>" (for example,
 // ai.WithModelName("googleai/gemini-flash-latest") or
-// ai.WithModelName("vertexai/gemini-2.5-flash")).
+// ai.WithModelName("vertexai/gemini-3.8-flash")).
 //
 // The model name is resolved to a [Model] at request time and may error if the
 // reference is invalid. Dynamic plugins (such as googlegenai, openai, and
