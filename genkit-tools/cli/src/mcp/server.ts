@@ -49,8 +49,8 @@ export async function startMcpServer(params: {
     }
   );
 
-  await defineDocsTool(server);
-  await defineUsageGuideTool(server);
+  await defineDocsTool(server, projectRoot);
+  await defineUsageGuideTool(server, projectRoot);
   defineInitPrompt(server);
 
   const manager = new McpRuntimeManager(auth);

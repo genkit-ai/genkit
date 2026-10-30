@@ -18,8 +18,27 @@ import {
   BaseRuntimeManager,
   GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
+import { detectRuntimeSync } from '@genkit-ai/tools-common/utils';
 import { z } from 'zod';
 import { startDevProcessManager, startManager } from '../utils/manager-utils';
+
+export const SUPPORTED_DOC_LANGUAGES = ['js', 'go', 'python', 'dart'] as const;
+export type SupportedDocLanguage = (typeof SUPPORTED_DOC_LANGUAGES)[number];
+
+/**
+ * Auto-detects the default Genkit documentation/usage language from project
+ * marker files in `projectRoot` (defaulting to `process.cwd()`). Falls back to
+ * `'js'` when no recognized language marker is found.
+ */
+export function detectProjectLanguage(
+  projectRoot: string = process.cwd()
+): SupportedDocLanguage {
+  const runtime = detectRuntimeSync(projectRoot || process.cwd());
+  if (runtime === 'go' || runtime === 'python' || runtime === 'dart') {
+    return runtime;
+  }
+  return 'js';
+}
 
 export function formatMcpError(err: unknown): string {
   if (err instanceof GenkitToolsError) {
