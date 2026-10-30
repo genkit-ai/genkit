@@ -92,6 +92,7 @@ describe('MCP language auto-detection, docs, and usage guide tools', () => {
   describe('detectProjectLanguage', () => {
     it.each([
       { file: 'go.mod', expected: 'go' },
+      { file: 'main.go', expected: 'go' },
       { file: 'pyproject.toml', expected: 'python' },
       { file: 'requirements.txt', expected: 'python' },
       { file: 'pubspec.yaml', expected: 'dart' },
@@ -120,6 +121,12 @@ describe('MCP language auto-detection, docs, and usage guide tools', () => {
       fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
       fs.writeFileSync(path.join(goDir, 'package.json'), '{}');
       expect(detectProjectLanguage(goDir)).toBe('go');
+
+      const standaloneGoDir = path.join(tmpDir, 'standalone-go-with-pkg');
+      fs.mkdirSync(standaloneGoDir, { recursive: true });
+      fs.writeFileSync(path.join(standaloneGoDir, 'main.go'), 'package main');
+      fs.writeFileSync(path.join(standaloneGoDir, 'package.json'), '{}');
+      expect(detectProjectLanguage(standaloneGoDir)).toBe('go');
 
       const pyDir = path.join(tmpDir, 'py-with-pkg');
       fs.mkdirSync(pyDir, { recursive: true });
@@ -271,6 +278,27 @@ describe('MCP language auto-detection, docs, and usage guide tools', () => {
         const { registeredTools } = await setupUsageServer(projDir);
         const res = await registeredTools['get_usage_guide']({});
         expect(res.content[0].text).toContain(expectedHeading);
+      }
+    );
+
+    it.each([
+      { marker: 'pyproject.toml', expectedLang: 'python' },
+      { marker: 'pubspec.yaml', expectedLang: 'dart' },
+    ])(
+      'directs caller to docs tools when language is omitted in a $expectedLang workspace ($marker)',
+      async ({ marker, expectedLang }) => {
+        const projDir = path.join(tmpDir, `usage-${marker}`);
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(path.join(projDir, marker), '');
+
+        const { registeredTools } = await setupUsageServer(projDir);
+        const res = await registeredTools['get_usage_guide']({});
+        expect(res.content[0].text).toContain(
+          `No standalone usage guide is bundled for '${expectedLang}' projects.`
+        );
+        expect(res.content[0].text).toContain('list_genkit_docs');
+        expect(res.content[0].text).toContain('search_genkit_docs');
+        expect(res.content[0].text).not.toContain('# Genkit Node.js API Rules');
       }
     );
 

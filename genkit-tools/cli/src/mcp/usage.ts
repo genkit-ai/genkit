@@ -46,16 +46,18 @@ export async function defineUsageGuideTool(
       await record(new McpRunToolEvent('get_usage_guide'));
 
       const content = [] as ContentBlock[];
-      if (!language) {
-        language = detectProjectLanguage(projectRoot) === 'go' ? 'go' : 'js';
+      const targetLanguage = language ?? detectProjectLanguage(projectRoot);
+      if (targetLanguage !== 'js' && targetLanguage !== 'go') {
+        content.push({
+          type: 'text',
+          text: `No standalone usage guide is bundled for '${targetLanguage}' projects. Use 'list_genkit_docs' and 'search_genkit_docs' (which default to '${targetLanguage}' in this workspace) followed by 'read_genkit_docs' to look up Genkit ${targetLanguage} documentation and setup instructions.`,
+        });
+        return { content };
       }
-      let text = JsContext;
-      if (language === 'go') {
-        text = GoContext;
-      }
+
       content.push({
         type: 'text',
-        text,
+        text: targetLanguage === 'go' ? GoContext : JsContext,
       });
 
       return { content };
