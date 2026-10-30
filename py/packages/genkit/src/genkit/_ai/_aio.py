@@ -34,6 +34,16 @@ import anyio
 import uvicorn
 from pydantic import BaseModel
 
+from genkit._ai._background_model import (
+    BackgroundModel,
+    CancelModelOpFn,
+    CheckModelOpFn,
+    StartModelOpFn,
+    as_model_operation,
+    cancel_operation,
+    check_operation,
+    define_background_model,
+)
 from genkit._ai._embedding import Embedder, EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluator,
@@ -80,17 +90,7 @@ from genkit._ai._prompt import (
 )
 from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
-from genkit._core._background import (
-    BackgroundModel,
-    CancelModelOpFn,
-    CheckModelOpFn,
-    StartModelOpFn,
-    as_model_operation,
-    cancel_operation,
-    check_operation,
-    define_background_model,
-    missing_operation_error,
-)
+from genkit._core._background import missing_operation_error
 from genkit._core._channel import run_loop, start_stream
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
@@ -2080,20 +2080,39 @@ class Genkit:
         attributes = {metadata_key(k): str(v) for k, v in (metadata or {}).items()}
         return await run_in_new_span(name, body, action_type='flowStep', attributes=attributes)
 
+    @overload
     async def check_operation(
         self,
-        operation: Operation | Mapping[str, Any],
+        operation: Operation[T],
         *,
         context: dict[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> Operation[ModelResponse]:
+    ) -> Operation[T]: ...
+
+    @overload
+    async def check_operation(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]: ...
+
+    async def check_operation(
+        self,
+        operation: Operation[Any] | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]:
         """Poll a background job.
 
-        Background models are the only operations, so the handle comes back
-        as ``Operation[ModelResponse]``. Pass the ``Operation`` you have or
-        the dict a stored one dumped to. Either is validated as an
-        ``Operation[ModelResponse]`` first: an unknown key, a missing ``id``,
-        or an ``output`` that isn't a ModelResponse is INVALID_ARGUMENT.
+        Generic like JS ``checkOperation<T>``: an ``Operation[T]`` comes back
+        as ``Operation[T]``, a stored dict as ``Operation[Any]``. The handle's
+        ``action`` key finds the job. For a background model the handle is
+        validated as ``Operation[ModelResponse]`` before anything runs: an
+        unknown key, a missing ``id``, or an ``output`` that isn't a
+        ModelResponse is INVALID_ARGUMENT.
 
         Pass ``context={'secrets': {'api_key': ...}}`` again when start used a
         per-request key. ``config`` is client knobs (``base_url``,
@@ -2108,8 +2127,8 @@ class Genkit:
             )
             saved = op.model_dump_json()
 
-            # 2. Later, poll with the dict you saved
-            op = await ai.check_operation(json.loads(saved))
+            # 2. Later, reload it typed and poll
+            op = await ai.check_operation(Operation[ModelResponse].model_validate_json(saved))
             print(op.done)
             # => False
 
@@ -2122,17 +2141,35 @@ class Genkit:
         """
         return await check_operation(self._registry, operation, context=context, config=config)
 
+    @overload
     async def cancel_operation(
         self,
-        operation: Operation | Mapping[str, Any],
+        operation: Operation[T],
         *,
         context: dict[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> Operation[ModelResponse]:
+    ) -> Operation[T]: ...
+
+    @overload
+    async def cancel_operation(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]: ...
+
+    async def cancel_operation(
+        self,
+        operation: Operation[Any] | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]:
         """Cancel a background job.
 
-        Same input and return types as ``check_operation``: an
-        ``Operation`` or a stored dict in, ``Operation[ModelResponse]`` out.
+        Same input and return types as ``check_operation``: ``Operation[T]``
+        in, ``Operation[T]`` out; a stored dict in, ``Operation[Any]`` out.
         Same ``context`` / ``config`` pockets.
 
         Example:
