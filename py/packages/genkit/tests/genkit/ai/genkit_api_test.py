@@ -235,7 +235,7 @@ async def test_genkit_check_operation() -> None:
 
     # Patch lookup_background_model to return our mock
     with mock.patch(
-        'genkit._core._background.lookup_background_model',
+        'genkit._ai._background_model.lookup_background_model',
         new=AsyncMock(return_value=mock_background_model),
     ) as mock_lookup:
         updated_op = await ai.check_operation(op)

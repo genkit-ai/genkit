@@ -16,13 +16,13 @@
 
 """Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
+from genkit._ai._background_model import BackgroundModel, background_model
 from genkit._ai._generate import StreamingCallbackError
 from genkit._ai._model import (
     model,
     model_action_metadata,
 )
 from genkit._core._action import ModelContext
-from genkit._core._background import BackgroundModel, background_model
 from genkit._core._model import (
     GenerateActionOptions,
     GenerationUsage,
