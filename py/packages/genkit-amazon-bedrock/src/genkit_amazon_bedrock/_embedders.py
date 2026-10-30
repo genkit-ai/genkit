@@ -37,7 +37,7 @@ rejected with ``Invalid parameter combination``. Image embedding needs
 import asyncio
 import json
 from collections.abc import Coroutine
-from typing import Any, Literal, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, TypeAlias, TypeVar, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -118,6 +118,18 @@ EMBEDDER_INFO: dict[str, EmbedderInfo] = {
         supports=EmbedderSupports(input=list(TEXT_ONLY)),
     ),
 }
+
+
+# Autocomplete for Bedrock.embedding(). Same set as EMBEDDER_INFO (a test pins
+# that); any other embedding ID is still accepted.
+KnownBedrockEmbedder: TypeAlias = Literal[
+    'amazon.titan-embed-text-v1',
+    'amazon.titan-embed-text-v2:0',
+    'amazon.titan-embed-image-v1',
+    'cohere.embed-english-v3',
+    'cohere.embed-multilingual-v3',
+    'amazon.nova-2-multimodal-embeddings-v1:0',
+]
 
 
 class InvokeModelTransport(Protocol):

@@ -34,7 +34,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role, get_logger
-from genkit.model import ModelConfig, ModelContext, ModelRequest
+from genkit.model import ModelContext, ModelRequest
 from genkit_amazon_bedrock._config import ImageConfig, NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
 from genkit_amazon_bedrock._embedders import InvokeModelTransport
 from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
@@ -67,15 +67,12 @@ _FAMILY_CONFIG: dict[ImageFamily, type[ImageConfig]] = {
     'stability': StabilityImageConfig,
 }
 
-# Only the fields a family class adds reach the body. Genkit's own knobs
-# (temperature, top_p, ...) are inherited from ModelConfig and dropped: the
-# image APIs take none of them. extra is merged separately.
-_GENKIT_CONFIG_FIELDS = frozenset(ModelConfig.model_fields)
-_AMAZON_IMAGE_FIELDS: set[str] = set(NovaCanvasConfig.model_fields) - _GENKIT_CONFIG_FIELDS
-_STABILITY_IMAGE_FIELDS: set[str] = set(StabilityImageConfig.model_fields) - _GENKIT_CONFIG_FIELDS
+# Every declared field but extra reaches the body; extra is merged separately.
+_AMAZON_IMAGE_FIELDS: set[str] = set(NovaCanvasConfig.model_fields) - {'extra'}
+_STABILITY_IMAGE_FIELDS: set[str] = set(StabilityImageConfig.model_fields) - {'extra'}
 
 
-def _image_family(model_id: str) -> ImageFamily | None:
+def image_family(model_id: str) -> ImageFamily | None:
     """Routes a model ID to its image family, or None if it is not one."""
     base_id = strip_inference_profile_prefix(model_id)
     for pattern, family in _IMAGE_FAMILY_PATTERNS:
@@ -157,7 +154,7 @@ def is_image_model(model_id: str) -> bool:
     Returns:
         True when the ID routes to a known image family.
     """
-    return _image_family(model_id) is not None
+    return image_family(model_id) is not None
 
 
 def image_prompt(request: ModelRequest[Any]) -> str:
@@ -244,7 +241,7 @@ def image_config_class(model_id: str) -> type[ImageConfig] | None:
     Returns:
         The per-family config class.
     """
-    family = _image_family(model_id)
+    family = image_family(model_id)
     return _FAMILY_CONFIG[family] if family is not None else None
 
 
@@ -332,7 +329,7 @@ class BedrockImageModel:
                 usable image, and the mapped AWS status for a failed call.
         """
         # ctx is never used: there is nothing to stream, only a final response.
-        family = _image_family(self._model_id)
+        family = image_family(self._model_id)
         if family is None:
             raise GenkitError(
                 message=f'bedrock image: unsupported image generation model {self._model_id!r}',

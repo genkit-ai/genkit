@@ -104,6 +104,35 @@ ai = Genkit(
 )
 ```
 
+To pick a model per call, use a typed ref. Each constructor binds the config
+class that model's action validates, so the IDE completes the fields and a
+config for the wrong family is caught:
+
+```python
+from genkit_amazon_bedrock import Bedrock, BedrockConfig
+
+# 1. Text model (Converse) with a default config
+claude = Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0', config=BedrockConfig(max_output_tokens=512))
+
+# 2. Generate
+response = await ai.generate(model=claude, prompt='Pair a wine with mushroom risotto.')
+print(response.text)
+# => A dry white such as a Pinot Grigio ...
+```
+
+The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,
+served over Converse, including models that take image or document input),
+`Bedrock.nova_canvas`, `Bedrock.titan_image` and `Bedrock.stability` (IMAGE,
+one per request shape), and `Bedrock.embedding` (EMBEDDING, an `EmbedderRef`
+for `ai.embed()`). Each takes a bare ID or a `bedrock/`-prefixed one, and
+returns `bedrock/<id>`. They route the ID the same way the plugin does at runtime,
+inference-profile prefixes (`us.`, `eu.`, ...) and model ARNs included, and an
+ID from another family raises `INVALID_ARGUMENT` naming the right constructor
+(`Bedrock.text('amazon.nova-canvas-v1:0')` points at `Bedrock.nova_canvas()`).
+An application inference profile ARN carries no model ID, so it routes to
+Converse and only `Bedrock.text` takes it. Plain `'bedrock/<id>'` strings still
+work everywhere.
+
 Credentials resolve through the standard AWS SDK chain (environment,
 `~/.aws/credentials`, instance metadata). Pass a pre-configured
 `boto3.session.Session` via `session=` for custom wiring. The region comes
@@ -293,7 +322,7 @@ ai = Genkit(
 )
 
 response = await ai.generate(
-    model='bedrock/stability.sd3-5-large-v1:0',
+    model=Bedrock.stability('stability.sd3-5-large-v1:0'),
     prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
 )
 image = response.media[0].url  # data:image/png;base64,...
@@ -324,11 +353,11 @@ which the plugin nests under `imageGenerationConfig` by their Bedrock wire
 names:
 
 ```python
-from genkit_amazon_bedrock import NovaCanvasConfig
+from genkit_amazon_bedrock import Bedrock, NovaCanvasConfig
 
-# 1. Typed, flat fields
+# 1. Typed ref and flat, typed fields
 response = await ai.generate(
-    model='bedrock/amazon.nova-canvas-v1:0',
+    model=Bedrock.nova_canvas('amazon.nova-canvas-v1:0'),
     prompt='A dim sum spread on a marble table.',
     config=NovaCanvasConfig(seed=7, width=512, height=512, quality='premium', number_of_images=2, cfg_scale=6.5),
 )
@@ -350,8 +379,9 @@ takes `StabilityImageConfig`. Its field names are Stability's wire names and go
 at the top of the body, over `{'prompt': ..., 'output_format': 'png'}`:
 
 ```python
-from genkit_amazon_bedrock import StabilityImageConfig
+from genkit_amazon_bedrock import Bedrock, StabilityImageConfig
 
+model=Bedrock.stability('stability.sd3-5-large-v1:0')
 config=StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg')
 # => {'prompt': ..., 'output_format': 'jpeg', 'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
 ```
@@ -363,9 +393,11 @@ raises `INVALID_ARGUMENT`. So does the old nested
 `config={'imageGenerationConfig': {...}}`, with a message naming the flat
 fields that replace it.
 
-Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
-and the rest of the common config) are accepted and ignored, as on the OpenAI
-image configs: Bedrock's image APIs take none of them.
+The image classes extend `GenkitConfig`, like the Veo config, not
+`ModelConfig`: Bedrock's image APIs take none of Genkit's generic generation
+options, so `temperature`, `topP`, `maxOutputTokens` and the rest raise
+`INVALID_ARGUMENT` as unknown keys, and the Dev UI form shows only real image
+fields.
 
 ### `extra` on image models
 
@@ -376,7 +408,7 @@ Nested objects merge key by key, and a colliding leaf takes your value:
 ```python
 # 1. Nova Canvas: add negativeText next to the prompt
 response = await ai.generate(
-    model='bedrock/amazon.nova-canvas-v1:0',
+    model=Bedrock.nova_canvas('amazon.nova-canvas-v1:0'),
     prompt='a coral reef',
     config=NovaCanvasConfig(seed=7, extra={'textToImageParams': {'negativeText': 'blurry'}}),
 )

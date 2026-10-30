@@ -276,20 +276,10 @@ async def test_titan_sends_quality_only_when_set() -> None:
     assert transport.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'quality': 'premium'}
 
 
-@pytest.mark.parametrize(
-    'config',
-    [
-        {'height': 512, 'seed': 42},
-        {'height': 512, 'seed': 42, 'temperature': 0.9},
-        {'height': 512, 'seed': 42, 'topP': 0.5, 'version': 'v2'},
-    ],
-    ids=['plain', 'generic_knob', 'camel_generic_knobs'],
-)
 @pytest.mark.asyncio
-async def test_a_dict_config_overrides_only_what_it_names(config: dict[str, Any]) -> None:
-    # Genkit's generic knobs validate (they're on ModelConfig) and are dropped.
+async def test_a_dict_config_overrides_only_what_it_names() -> None:
     transport = FakeInvokeTransport(amazon_response('titan-image'))
-    await generate(TITAN_IMAGE, transport, image_request(config=config))
+    await generate(TITAN_IMAGE, transport, image_request(config={'height': 512, 'seed': 42}))
 
     assert transport.bodies()[0]['imageGenerationConfig'] == {**TITAN_DEFAULTS, 'height': 512, 'seed': 42}
 
@@ -327,8 +317,23 @@ async def test_the_old_nested_key_names_the_flat_fields(model_id: str, key: str)
         (NOVA_CANVAS, {'numberOfImage': 2}),
         (SD3, {'aspectRatio': '16:9', 'style_preset': 'photographic'}),
         (SD3, {'width': 512}),
+        # Genkit's generic knobs: the image configs extend GenkitConfig, not ModelConfig.
+        (TITAN_IMAGE, {'temperature': 0.9}),
+        (NOVA_CANVAS, {'topP': 0.5}),
+        (SD3, {'max_output_tokens': 100}),
+        (SD3, {'stop_sequences': ['x']}),
     ],
-    ids=['titan_typo', 'titan_stability_key', 'nova_typo', 'stability_unlisted', 'stability_amazon_key'],
+    ids=[
+        'titan_typo',
+        'titan_stability_key',
+        'nova_typo',
+        'stability_unlisted',
+        'stability_amazon_key',
+        'titan_temperature',
+        'nova_top_p',
+        'stability_max_output_tokens',
+        'stability_stop_sequences',
+    ],
 )
 @pytest.mark.asyncio
 async def test_an_unknown_key_is_rejected_before_any_call(model_id: str, config: dict[str, Any]) -> None:
@@ -414,17 +419,6 @@ async def test_stability_sends_declared_fields_at_the_top_level(config: Any) -> 
     assert transport.bodies() == [
         {'prompt': 'a reef', 'output_format': 'jpeg', 'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
     ]
-
-
-@pytest.mark.asyncio
-async def test_stability_drops_genkit_generic_config_keys() -> None:
-    transport = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
-    config = {'aspect_ratio': '16:9', 'temperature': 0.9}
-    await generate(SD3, transport, image_request('a reef', config=config))
-
-    # Exact equality: temperature is one of Genkit's own knobs and InvokeModel
-    # has no such field, so a flat merge of the whole config would send it.
-    assert transport.bodies() == [{'prompt': 'a reef', 'output_format': 'png', 'aspect_ratio': '16:9'}]
 
 
 @pytest.mark.asyncio
@@ -585,20 +579,27 @@ async def test_extra_deep_merges_over_the_typed_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_a_generic_config_model_and_the_equivalent_dict_agree() -> None:
-    # a generic config object and a raw mapping are both legal inputs, so the
-    # two paths must drop the same keys.
+    # A generic config object and a raw mapping are both legal inputs, so the
+    # two paths must build the same body.
     class LooseConfig(ModelConfig):
         model_config = ConfigDict(extra='allow')
 
     typed = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
     plain = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
-    overrides: dict[str, Any] = {'temperature': 0.9, 'max_output_tokens': 100, 'seed': 42}
+    overrides: dict[str, Any] = {'seed': 42}
 
     await generate(SD3, typed, image_request(config=LooseConfig.model_validate(overrides)))
     await generate(SD3, plain, image_request(config=overrides))
 
     assert typed.bodies() == plain.bodies()
     assert typed.bodies() == [{'prompt': PROMPT, 'output_format': 'png', 'seed': 42}]
+
+
+@pytest.mark.asyncio
+async def test_a_generic_config_model_carrying_a_genkit_knob_is_rejected() -> None:
+    with pytest.raises(GenkitError, match='invalid config') as excinfo:
+        await generate(SD3, ForbiddenTransport(), image_request(config=ModelConfig(temperature=0.9)))
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
@@ -657,5 +658,6 @@ def test_each_image_schema_is_strict_and_declares_its_wire_fields(config_class: 
     schema = to_json_schema(config_class)
 
     assert schema.get('additionalProperties') is False
-    assert expected <= set(schema['properties'])
-    assert 'extra' in schema['properties']
+    assert set(schema['properties']) == expected | {'extra'}
+    # GenkitConfig base: no temperature/topP/... fields in the Dev UI form.
+    assert 'temperature' not in schema['properties']
