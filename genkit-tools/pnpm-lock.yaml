@@ -106,8 +106,8 @@ importers:
         specifier: ^7.10.1
         version: 7.10.1(@types/node@20.19.43)
       '@trpc/server':
-        specifier: ^10.45.4
-        version: 10.45.4
+        specifier: ^11.22.1
+        version: 11.22.1(typescript@5.9.3)
       adm-zip:
         specifier: ^0.6.1
         version: 0.6.1
@@ -856,8 +856,11 @@ packages:
   '@so-ric/colorspace@1.1.6':
     resolution: {integrity: sha512-/KiKkpHNOBgkFJwu9sh48LkHSMYGyuTcSFK/qMBdnOAlrRJzRSXAOFB5qwzaVQuDl8wAvHVMkaASQDReTahxuw==}
 
-  '@trpc/server@10.45.4':
-    resolution: {integrity: sha512-5MuyK5sDuFVGHOT9EMVHgRjP5I5j3RqGymcb5D47UOp8tzn6LH0g1lEgYrAsOZ12vmk1gpxMw/v/y4xHHK/Qdg==}
+  '@trpc/server@11.22.1':
+    resolution: {integrity: sha512-9SjWTS5iwENHOVPqpTjm0I1Os/CtuT6p8kDlovyEm00pXhpHX55tQM2vszJTEpcQhm/JfUz4ut/7Y9JZZQZo6A==}
+    hasBin: true
+    peerDependencies:
+      typescript: '>=5.7.2'
 
   '@tsconfig/node10@1.0.13':
     resolution: {integrity: sha512-gcLdvR9HO1ZJBypsOGqaP6TFEzb6vIta0KSTLt9NAQ6pXQO3cRgSVyCN6pzYqI9DlJgY71XKO0dpDhCf08b3pg==}
@@ -3329,7 +3332,9 @@ snapshots:
       color: 5.0.3
       text-hex: 1.0.0
 
-  '@trpc/server@10.45.4': {}
+  '@trpc/server@11.22.1(typescript@5.9.3)':
+    dependencies:
+      typescript: 5.9.3
 
   '@tsconfig/node10@1.0.13': {}
 
