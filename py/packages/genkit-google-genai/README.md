@@ -226,9 +226,13 @@ config = GeminiConfig.model_validate({
 Antigravity, Interactions Lyria, and Deep Research also reject unknown keys
 and take undeclared fields in `extra`, which is merged into the Interactions
 create body (snake_case names). A nested object merges key by key. Keys match
-ignoring case and underscores, the same way the Gemini merge aligns them. Unlike
-Gemini, no field is reserved: a key in `extra` overrides what Genkit builds,
-including `agent`, `input`, `agent_config`, and `tools`.
+ignoring case and underscores, the same way the Gemini merge aligns them. A
+`None` value means unset and is skipped. Unlike Gemini, no field is reserved: a
+key in `extra` overrides what Genkit builds, including `agent`, `input`, and
+`agent_config`. One exception on Deep Research: `extra['tools']` replaces the
+whole list, so it raises `INVALID_ARGUMENT` when a declared tool setting
+(`google_search`, `code_execution`, `mcp_servers`, ...) also builds tools. With
+no declared tool settings it is sent as written.
 
 ```python
 op = await ai.generate_operation(

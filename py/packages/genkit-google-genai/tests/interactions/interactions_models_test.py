@@ -1638,6 +1638,53 @@ def test_pop_extra_drops_none_keeps_explicit_empty_and_list_items() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('key', ['tools', 'Tools'])
+async def test_generate_operation_deep_research_extra_tools_with_built_tools_raises(googleai: Genkit, key: str) -> None:
+    """`code_execution=True` plus `extra={'tools': [...]}` raises instead of dropping code_execution; no job starts."""
+    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
+    with patcher, pytest.raises(GenkitError) as raised:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH,
+            prompt='q',
+            config={'code_execution': True, 'extra': {key: [{'type': 'url_context'}]}},
+        )
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert f'extra[{key!r}] would replace the tools built from config (code_execution)' in str(raised.value)
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_deep_research_extra_tools_alone_sent_as_written(googleai: Genkit) -> None:
+    """With no declared tool settings, `extra['tools']` is how an undeclared tool type reaches the API."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research', create_result={'id': 'dr-x', 'status': 'in_progress'}
+    )
+    with patcher:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH,
+            prompt='q',
+            config={'google_search': False, 'extra': {'tools': [{'type': 'new_tool', 'level': 2}]}},
+        )
+
+    assert create_calls[0]['tools'] == [{'type': 'new_tool', 'level': 2}]
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_deep_research_extra_tools_none_keeps_built_tools(googleai: Genkit) -> None:
+    """`extra={'tools': None}` is unset, so the built tools go out and nothing raises."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research', create_result={'id': 'dr-x', 'status': 'in_progress'}
+    )
+    with patcher:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH, prompt='q', config={'code_execution': True, 'extra': {'tools': None}}
+        )
+
+    assert create_calls[0]['tools'] == [{'type': 'code_execution'}]
+
+
+@pytest.mark.asyncio
 async def test_generate_antigravity_extra_environment_overrides_default(googleai: Genkit) -> None:
     """`extra={'environment': {'type': 'custom', ...}}` wins over the default remote environment."""
     patcher, create_calls, _, _ = patch_interactions(
