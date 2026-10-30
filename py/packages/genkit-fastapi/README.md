@@ -105,34 +105,18 @@ app.include_router(
 )
 ```
 
-### Streaming from Custom Routes (`stream.to_sse()`)
+### Streaming from Custom Routes (`genkit.web.to_sse`)
 
-Call `.to_sse()` on any `StreamResponse` (`flow.stream()`, `ai.generate_stream()`) or `AgentTurn` (`chat.send_stream()`) to frame chunks, the final result, and errors as Genkit SSE events (`data: {"message": ...}`, `data: {"result": ...}`, or `data: {"error": ...}`) inside your own FastAPI route:
+`to_sse(handle)` frames any streaming handle as Genkit SSE events: a `data: {"message": ...}` per chunk, then `data: {"result": ...}`, or `data: {"error": ...}` if the run fails. It takes `flow.stream()`, `ai.generate_stream()`, `prompt.stream()` and `chat.send_stream()`, so your route keeps its own typed params and `Depends(...)` and still sends the frames `serve_flow` sends:
 
 ```python
 from fastapi import Depends, FastAPI
 from fastapi.responses import StreamingResponse
 from genkit import FlowContext, Genkit
+from genkit.web import to_sse
 
 ai = Genkit(...)
 app = FastAPI()
-
-
-@ai.flow
-async def deploy_service(service: str, ctx: FlowContext[str]) -> str:
-    user_id = ctx.context['user_id']
-    ctx.send_chunk(f'[{user_id}] building {service}')
-    ctx.send_chunk(f'[{user_id}] rolling out {service}')
-    return f'https://{service}.run.app'
-
-
-@app.post('/deploy/stream')
-async def deploy_stream(service: str, user: User = Depends(current_user)):
-    stream = deploy_service.stream(service, context={'user_id': user.id})
-    return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
-    # => data: {"message":"[u_42] building payments"}
-    # => data: {"message":"[u_42] rolling out payments"}
-    # => data: {"result":"https://payments.run.app"}
 
 
 @ai.flow()
@@ -145,17 +129,20 @@ async def ask_chef(prompt: str, ctx: FlowContext[str]) -> str:
 
 @app.post('/chat/stream')
 async def chat_stream(prompt: str, user: User = Depends(current_user)):
+    # 1. FastAPI owns the route: typed params, Depends, OpenAPI
     stream = ask_chef.stream(prompt, context={'user_id': user.id})
-    return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
+
+    # 2. Genkit owns the wire
+    return StreamingResponse(to_sse(stream), media_type='text/event-stream')
     # => data: {"message":"Pad thai"}
-    # => data: {"message":", no peanuts."}
-    # => data: {"result":"Pad thai, no peanuts."}
+    #    data: {"message":", no peanuts."}
+    #    data: {"result":"Pad thai, no peanuts."}
 ```
 
 > [!WARNING]
-> A flow's `result` frame is whatever the flow returns, over SSE and JSON alike. Return `response.text` or `response.output`, not the `ModelResponse`: its `request` field carries the system prompt, tool definitions, retrieved documents, and history, and `flow.stream().to_sse()`, `handle_genkit_request`, and `serve_flow` all send it as-is. `ai.generate_stream(...).to_sse()` leaves `request` out of its `result` frame.
+> The `result` frame is whatever the run returns, over SSE and JSON alike. Return `response.text` or `response.output` from a served flow, not the `ModelResponse`: its `request` field carries the system prompt, tool definitions, retrieved documents and history. The same goes for `to_sse(ai.generate_stream(...))`, whose result is the whole `ModelResponse`.
 
-`chat.send_stream(...).to_sse()` frames agent turns the same way `serve_agent` does (`AgentStreamChunk` messages, then the `AgentOutput` result). For a handle without a `.to_sse()` method, `genkit_fastapi.exp.to_sse(handle)` runs the same framer and logs failures on the `genkit_fastapi` logger.
+`to_sse(chat.send_stream(...))` frames agent turns the same way `serve_agent` does (`AgentStreamChunk` messages, then the `AgentOutput` result). Failures log on the `genkit.web._sse` logger; pass `logger=` to use your own.
 
 ### Handling Full Genkit Requests (`handle_genkit_request`)
 
