@@ -426,18 +426,16 @@ class Ollama(Plugin):
         )
         return definition
 
-    def _create_model_action(self, model_ref: _ResolvedModel | str) -> Action:
+    def _create_model_action(self, model_ref: _ResolvedModel) -> Action:
         """Create an Action object for an Ollama model.
 
         Args:
-            model_ref: The resolved model or model name; its name is used as received (no
+            model_ref: The resolved model; its name is used as received (no
                 plugin-prefix stripping).
 
         Returns:
             Action object for the model.
         """
-        if isinstance(model_ref, str):
-            model_ref = _ResolvedModel(name=model_ref.removeprefix(f'{OLLAMA_PLUGIN_NAME}/'))
         name = model_ref.name
         model = OllamaModel(
             client=self.client,

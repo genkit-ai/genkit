@@ -30,7 +30,7 @@ import httpx
 import ollama as ollama_api
 import pytest
 from genkit_ollama import Ollama, OllamaConfig
-from genkit_ollama._plugin import ollama_name
+from genkit_ollama._plugin import _ResolvedModel
 from pydantic import ValidationError
 
 from genkit import FinishReason, Genkit, GenkitError
@@ -184,10 +184,33 @@ async def test_generate_ollama_think_and_keep_alive_stay_top_level(server: Serve
 
 def test_ollama_model_advertises_config_without_additional_properties() -> None:
     """The Dev UI config schema says `additionalProperties: false`."""
-    action = Ollama()._create_model_action(ollama_name('llama3.2'))
+    action = Ollama()._create_model_action(_ResolvedModel(name='llama3.2'))
 
     model_meta = cast(dict[str, Any], cast(dict[str, Any], action.metadata)['model'])
     assert model_meta['customOptions']['additionalProperties'] is False
+
+
+@pytest.mark.asyncio
+async def test_generate_ollama_secrets_api_key_closes_its_client(
+    server: Server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The client opened for a `context.secrets` key is closed when the call ends, so its pool doesn't leak."""
+    created: list[ollama_api.AsyncClient] = []
+    real_client = ollama_api.AsyncClient
+
+    def recording_client(*args: Any, **kwargs: Any) -> ollama_api.AsyncClient:
+        client = real_client(*args, **kwargs)
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(ollama_api, 'AsyncClient', recording_client)
+    ai = make_ai()
+
+    await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
+
+    keyed = [c for c in created if c._client.headers.get('authorization') == 'Bearer tenant']  # noqa: SLF001
+    assert len(keyed) == 1
+    assert keyed[0]._client.is_closed  # noqa: SLF001
 
 
 @pytest.mark.asyncio
