@@ -194,11 +194,11 @@ def _normalize_config(config: object | None) -> AnthropicConfig:
 def _to_anthropic_thinking(config: AnthropicConfig) -> dict[str, Any] | None:
     """Build Anthropic's thinking object from the flat fields; None sends nothing.
 
-    AnthropicConfig's validator already guarantees 'enabled' has a budget.
+    AnthropicConfig.check_merged already guarantees 'enabled' has a budget.
     Fields the mode doesn't use are left out rather than rejected, because
-    they're usually inherited from another config layer (see the comment
-    above AnthropicConfig._check_thinking): 'disabled' sends only the type,
-    and 'adaptive' sends no budget.
+    they're usually inherited from another config layer (rule 2 in
+    AnthropicConfig's docstring): 'disabled' sends only the type, and
+    'adaptive' sends no budget.
     """
     mode = config.thinking_mode()
     if mode is None:
@@ -359,6 +359,9 @@ class AnthropicModel:
         # ValidationError is a ValueError.
         try:
             config = _normalize_config(request.config)
+            # The merged config: every layer and middleware edit is in. Rules
+            # that span fields are judged here and only here.
+            config.check_merged()
             use_beta = self._uses_beta_api(config)
             params = self._build_params(request, config=config, use_beta=use_beta)
         except ValueError as e:

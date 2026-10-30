@@ -497,34 +497,126 @@ async def test_generate_claude_config_tool_choice_points_to_generate_option() ->
     assert api.requests == []
 
 
+ENABLED_4096: dict[str, Any] = {'thinking': 'enabled', 'thinking_budget': 4096}
+
+
 @pytest.mark.parametrize(
-    ('call_config', 'sent'),
+    ('default', 'call_config', 'sent'),
     [
-        ({'thinking': 'disabled'}, {'type': 'disabled'}),
-        ({'thinking': 'adaptive'}, {'type': 'adaptive', 'display': 'summarized'}),
-        ({'thinkingBudget': 8192}, {'type': 'enabled', 'budget_tokens': 8192, 'display': 'summarized'}),
+        # Rule 1: a call's partial config picks up the rest from the default.
+        (ENABLED_4096, None, {'type': 'enabled', 'budget_tokens': 4096}),
+        (ENABLED_4096, {'thinking': 'enabled'}, {'type': 'enabled', 'budget_tokens': 4096}),
+        (ENABLED_4096, {'thinkingBudget': 8192}, {'type': 'enabled', 'budget_tokens': 8192}),
+        ({'thinking': 'enabled'}, {'thinkingBudget': 4096}, {'type': 'enabled', 'budget_tokens': 4096}),
+        (None, {'thinkingBudget': 8192}, {'type': 'enabled', 'budget_tokens': 8192}),
+        (
+            ENABLED_4096,
+            {'thinkingDisplay': 'omitted'},
+            {'type': 'enabled', 'budget_tokens': 4096, 'display': 'omitted'},
+        ),
+        # Rule 2: the mode is the switch; settings it doesn't use aren't sent.
+        (
+            {**ENABLED_4096, 'thinking_display': 'summarized'},
+            {'thinking': 'disabled'},
+            {'type': 'disabled'},
+        ),
+        (
+            {**ENABLED_4096, 'thinking_display': 'summarized'},
+            {'thinking': 'adaptive'},
+            {'type': 'adaptive', 'display': 'summarized'},
+        ),
+        # Settings carry across mode changes.
+        (
+            {'thinking': 'adaptive', 'thinking_budget': 4096},
+            {'thinking': 'enabled'},
+            {'type': 'enabled', 'budget_tokens': 4096},
+        ),
+        (
+            {'thinking': 'disabled', 'thinking_budget': 4096},
+            {'thinking': 'enabled'},
+            {'type': 'enabled', 'budget_tokens': 4096},
+        ),
+        # The one ambiguous merge: a budget over an inherited 'disabled' stays disabled.
+        ({'thinking': 'disabled'}, {'thinkingBudget': 8192}, {'type': 'disabled'}),
+        # None clears the inherited mode, so a budget alone means enabled again.
+        (
+            {'thinking': 'disabled'},
+            {'thinking': None, 'thinkingBudget': 8192},
+            {'type': 'enabled', 'budget_tokens': 8192},
+        ),
     ],
-    ids=['disabled-over-enabled', 'adaptive-over-enabled', 'budget-over-enabled'],
+    ids=[
+        'inherit-all',
+        'enabled-inherits-budget',
+        'budget-over-enabled',
+        'budget-fills-enabled-default',
+        'budget-alone',
+        'display-over-enabled',
+        'disabled-over-enabled',
+        'adaptive-over-enabled',
+        'enabled-over-adaptive-keeps-budget',
+        'enabled-over-disabled-keeps-budget',
+        'budget-over-disabled-stays-disabled',
+        'none-clears-disabled',
+    ],
 )
 @pytest.mark.asyncio
-async def test_generate_call_thinking_overrides_model_default(
-    call_config: dict[str, Any], sent: dict[str, Any]
+async def test_generate_layered_thinking_config(
+    default: dict[str, Any] | None, call_config: dict[str, Any] | None, sent: dict[str, Any]
 ) -> None:
-    """A call's thinking mode wins over the ModelRef default's budget and display instead of failing."""
-    # 1. A model default with extended thinking on
+    """The call's config merges over the ModelRef default key by key; rules judge the merged result."""
+    # 1. A model default from Anthropic.claude(config=...)
     api = FakeClaudeApi()
     ai = _genkit(api)
-    claude = Anthropic.claude(
-        'claude-sonnet-4-6',
-        config=AnthropicConfig(thinking='enabled', thinking_budget=4096, thinking_display='summarized'),
-    )
+    claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(**default) if default else None)
 
-    # 2. One call overrides part of it; config merges key by key
+    # 2. One call overrides part of it
     response = await ai.generate(model=claude, prompt='Is shellfish safe for this guest?', config=call_config)
 
     # 3. The request carries only the fields the merged mode uses
     assert response.text == 'ok'
     assert api.body()['thinking'] == sent
+
+
+@pytest.mark.parametrize(
+    ('default', 'call_config'),
+    [
+        ({'thinking': 'adaptive'}, {'thinking': 'enabled'}),
+        (None, {'thinking': 'enabled'}),
+    ],
+    ids=['enabled-over-adaptive-no-budget', 'enabled-no-budget-anywhere'],
+)
+@pytest.mark.asyncio
+async def test_generate_layered_thinking_without_any_budget_fails_before_send(
+    default: dict[str, Any] | None, call_config: dict[str, Any]
+) -> None:
+    """'enabled' with no budget in any layer is INVALID_ARGUMENT, and nothing is sent."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+    claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(**default) if default else None)
+
+    response = await ai.generate(model=claude, prompt='hi', config=call_config)
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert "thinking_budget is required when thinking is 'enabled'" in response.error.message
+    assert api.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_prompt_thinking_default_filled_by_call() -> None:
+    """A prompt's config is a layer too: thinking='enabled' there takes the call's budget."""
+    # 1. A prompt that turns thinking on and leaves the budget to the caller
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+    triage = ai.define_prompt(name='allergy_triage', model=MODEL, config={'thinking': 'enabled'}, prompt='hi')
+
+    # 2. The call supplies the budget
+    response = await triage(config={'thinkingBudget': 4096})
+
+    # 3. The merged config is sent
+    assert response.text == 'ok'
+    assert api.body()['thinking'] == {'type': 'enabled', 'budget_tokens': 4096}
 
 
 # --- middleware edits ---------------------------------------------------------
@@ -550,18 +642,8 @@ def _edit_task_budget(config: Any) -> None:  # noqa: ANN401
             _edit_thinking_budget,
             "set config 'thinking_budget': Input should be greater than or equal to 1024",
         ),
-        (
-            {'thinking': 'adaptive'},
-            _edit_thinking_mode,
-            "set config 'thinking': Value error, thinking_budget is required when thinking is 'enabled'",
-        ),
-        (
-            {'apiVersion': 'stable'},
-            _edit_task_budget,
-            "set config 'task_budget': Value error, task_budget require the beta API surface",
-        ),
     ],
-    ids=['thinking-budget-bound', 'thinking-check', 'api-surface-check'],
+    ids=['thinking-budget-bound'],
 )
 @pytest.mark.asyncio
 async def test_middleware_edit_of_claude_setting_is_validated(
@@ -581,6 +663,36 @@ async def test_middleware_edit_of_claude_setting_is_validated(
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert response.finish_message.startswith(f"{MODEL}: middleware 'Tune' {message}")
+    assert api.requests == []
+
+
+@pytest.mark.parametrize(
+    ('config', 'edit', 'message'),
+    [
+        ({'thinking': 'adaptive'}, _edit_thinking_mode, "thinking_budget is required when thinking is 'enabled'"),
+        ({'apiVersion': 'stable'}, _edit_task_budget, 'task_budget require the beta API surface'),
+    ],
+    ids=['thinking-check', 'api-surface-check'],
+)
+@pytest.mark.asyncio
+async def test_middleware_edit_that_breaks_a_merged_rule_fails_before_send(
+    config: dict[str, Any], edit: Callable[[Any], None], message: str
+) -> None:
+    """Cross-field rules run on the config the request is built from, after every middleware edit."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    class Tune(Middleware):
+        async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+            edit(params.request.config)
+            return await next_fn(params, ctx)
+
+    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert message in response.error.message
     assert api.requests == []
 
 

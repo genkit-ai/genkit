@@ -1273,11 +1273,24 @@ async def test_invalid_config_raises_from_generate() -> None:
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
     with pytest.raises(GenkitError) as exc_info:
-        await model.generate(_text_request({'thinking': 'enabled'}))
+        await model.generate(_text_request({'thinkingBudget': 512}))
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert isinstance(exc_info.value.cause, ValidationError)
     assert exc_info.value.__cause__ is exc_info.value.cause
+    mock_client.messages.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_merged_config_rule_raises_from_generate() -> None:
+    """A merged config that breaks a cross-field rule is INVALID_ARGUMENT before anything is sent."""
+    mock_client = _mock_client_for_generate()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    with pytest.raises(GenkitError, match="thinking_budget is required when thinking is 'enabled'") as exc_info:
+        await model.generate(_text_request({'thinking': 'enabled'}))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
     mock_client.messages.create.assert_not_called()
 
 

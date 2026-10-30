@@ -26,9 +26,14 @@ from genkit.plugin_api import to_json_schema
 # --- thinking ---------------------------------------------------------------
 
 
-def test_thinking_enabled_requires_budget() -> None:
-    with pytest.raises(ValidationError, match="thinking_budget is required when thinking is 'enabled'"):
-        AnthropicConfig.model_validate({'thinking': 'enabled'})
+def test_thinking_enabled_without_budget_is_a_valid_layer() -> None:
+    """A layer may set thinking='enabled' and leave the budget to another layer (rule 1)."""
+    assert AnthropicConfig.model_validate({'thinking': 'enabled'}).thinking == 'enabled'
+
+
+def test_thinking_enabled_requires_budget_once_merged() -> None:
+    with pytest.raises(ValueError, match="thinking_budget is required when thinking is 'enabled'"):
+        AnthropicConfig.model_validate({'thinking': 'enabled'}).check_merged()
 
 
 def test_thinking_disabled_accepts_inherited_budget_and_display() -> None:
@@ -46,8 +51,8 @@ def test_thinking_disabled_accepts_inherited_budget_and_display() -> None:
 
 def test_thinking_display_alone_raises() -> None:
     """A display with no mode would send nothing, so it fails instead of being dropped."""
-    with pytest.raises(ValidationError, match='thinking_display needs thinking= or thinking_budget='):
-        AnthropicConfig(thinking_display='summarized')
+    with pytest.raises(ValueError, match='thinking_display needs thinking= or thinking_budget='):
+        AnthropicConfig(thinking_display='summarized').check_merged()
 
 
 def test_thinking_budget_below_minimum_raises() -> None:
@@ -161,9 +166,9 @@ def test_api_version_literal_and_alias() -> None:
         AnthropicConfig.model_validate({'apiVersion': 'nightly'})
 
 
-def test_stable_api_version_with_betas_raises() -> None:
-    with pytest.raises(ValidationError):
-        AnthropicConfig.model_validate({'apiVersion': 'stable', 'betas': ['token-efficient-tools-2025']})
+def test_stable_api_version_with_betas_raises_once_merged() -> None:
+    with pytest.raises(ValueError, match='require the beta API surface'):
+        AnthropicConfig.model_validate({'apiVersion': 'stable', 'betas': ['token-efficient-tools-2025']}).check_merged()
 
 
 def test_beta_api_version_with_betas_valid() -> None:
@@ -261,9 +266,9 @@ def test_beta_only_fields_detection(raw: dict, expected: set[str]) -> None:
     ],
 )
 def test_beta_only_fields_rejected_on_stable_surface(raw: dict) -> None:
-    """An explicit stable apiVersion is never silently overridden."""
-    with pytest.raises(ValidationError, match='require the beta API surface'):
-        AnthropicConfig.model_validate(raw)
+    """An explicit stable apiVersion is never silently overridden (rule 3)."""
+    with pytest.raises(ValueError, match='require the beta API surface'):
+        AnthropicConfig.model_validate(raw).check_merged()
 
 
 @pytest.mark.parametrize(
