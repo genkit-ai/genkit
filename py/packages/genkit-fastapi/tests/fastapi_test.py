@@ -1042,3 +1042,23 @@ def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
         'data: {"message":", no peanuts."}\n\n'
         'data: {"result":"Pad thai, no peanuts."}\n\n'
     )
+
+
+def test_to_sse_on_a_model_stream_drops_request_like_the_method() -> None:
+    """exp.to_sse(ai.generate_stream(...)) leaves request out, same as the stream's own .to_sse()."""
+    ai = Genkit()
+    reply = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_text('Pad thai, no peanuts.')]),
+    )
+    define_scripted_model(ai, responses=[reply])
+
+    async def collect() -> list[str]:
+        stream = ai.generate_stream(model='scriptedModel', system='Comp VIPs up to $50.', prompt='Dinner?')
+        return [line async for line in to_sse(stream)]
+
+    lines = asyncio.run(collect())
+
+    result = json.loads(lines[-1].removeprefix('data: '))['result']
+    assert 'request' not in result
+    assert result['message'] == {'role': 'model', 'content': [{'text': 'Pad thai, no peanuts.'}]}
