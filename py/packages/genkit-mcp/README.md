@@ -19,7 +19,7 @@ from genkit import Genkit
 from genkit_google_genai import GoogleAI
 from genkit_mcp import define_mcp_client
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 client = define_mcp_client(
     ai,
