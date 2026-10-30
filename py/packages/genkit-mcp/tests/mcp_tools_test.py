@@ -216,13 +216,7 @@ async def test_mcp_tool_to_action_preserves_schema_metadata_and_context_meta() -
     assert action.name == 'catalog_lookup'
     assert action.input_schema == awkward_schema
     assert action.metadata['name'] == 'catalog_lookup'
-    assert action.metadata['mcp'] == {
-        'prefix': 'catalog',
-        'tool': 'lookup',
-        'title': None,
-        'annotations': None,
-        '_meta': {'audience': 'internal'},
-    }
+    assert action.metadata['mcp'] == {'prefix': 'catalog', 'tool': 'lookup', '_meta': {'audience': 'internal'}}
     assert calls == [('lookup', {'q': 'coffee'}, {'progressToken': 7})]
     assert response.output == 'ok'
 
@@ -392,6 +386,38 @@ def test_mcp_tool_to_action_keeps_the_server_title_and_annotations() -> None:
         'openWorldHint': False,
         'costHint': 'high',
     }
+
+
+@pytest.mark.parametrize('annotations', [None, ToolAnnotations()])
+def test_mcp_tool_to_action_leaves_out_a_title_and_hints_the_server_did_not_send(
+    annotations: ToolAnnotations | None,
+) -> None:
+    """No title and no hints means no ``title`` or ``annotations`` key, rather than a None."""
+    tool = Tool(name='lookup', inputSchema={'type': 'object'}, annotations=annotations)
+
+    mcp = mcp_tool_to_action(tool, 'catalog', no_content).metadata['mcp']
+
+    assert isinstance(mcp, dict)
+    assert 'title' not in mcp
+    assert 'annotations' not in mcp
+
+
+@pytest.mark.parametrize(
+    ('title', 'annotations', 'kept'),
+    [('Look up', None, {'title'}), (None, ToolAnnotations(readOnlyHint=True), {'annotations'})],
+)
+def test_mcp_tool_to_action_keeps_a_title_or_hints_on_their_own(
+    title: str | None,
+    annotations: ToolAnnotations | None,
+    kept: set[str],
+) -> None:
+    """A title without hints, or hints without a title, is kept on its own."""
+    tool = Tool(name='lookup', title=title, inputSchema={'type': 'object'}, annotations=annotations)
+
+    mcp = mcp_tool_to_action(tool, 'catalog', no_content).metadata['mcp']
+
+    assert isinstance(mcp, dict)
+    assert {'title', 'annotations'} & mcp.keys() == kept
 
 
 @pytest.mark.parametrize('output_schema', [{'type': 'object', 'properties': {'hits': {'type': 'integer'}}}, None])

@@ -205,7 +205,8 @@ def mcp_tool_to_action(
     the server's own tool name under ``metadata['mcp']['tool']``, its display
     title and behaviour hints under ``metadata['mcp']['title']`` and
     ``metadata['mcp']['annotations']``, and the server's output schema, if
-    any, as the one the model is sent. A hint the server left out stays out.
+    any, as the one the model is sent. A title or hint the server left out is
+    left out of the metadata too.
 
     Args:
         tool: Tool as listed by the server.
@@ -250,13 +251,13 @@ def mcp_tool_to_action(
     ).action()
     action.metadata['name'] = action.name
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = tool.outputSchema
-    action.metadata['mcp'] = {
-        'prefix': prefix,
-        'tool': tool.name,
-        'title': tool.title,
-        'annotations': tool.annotations.model_dump(exclude_none=True) if tool.annotations is not None else None,
-        '_meta': mcp_meta,
-    }
+    mcp: dict[str, object] = {'prefix': prefix, 'tool': tool.name, '_meta': mcp_meta}
+    if tool.title is not None:
+        mcp['title'] = tool.title
+    annotations = tool.annotations.model_dump(exclude_none=True) if tool.annotations is not None else {}
+    if annotations:
+        mcp['annotations'] = annotations
+    action.metadata['mcp'] = mcp
     return action
 
 
