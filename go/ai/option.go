@@ -986,8 +986,15 @@ func WithEmbedder(embedder EmbedderArg) EmbedderOption {
 	return &embedderOptions{Embedder: embedder}
 }
 
-// WithEmbedderName sets the embedder name to call for document embedding.
-// The embedder name will be resolved to a [Embedder] and may error if the reference is invalid.
+// WithEmbedderName sets the embedder name to call for document embedding,
+// formatted as "<provider>/<embedder-id>" (for example,
+// ai.WithEmbedderName("googleai/gemini-embedding-001") or
+// ai.WithEmbedderName("vertexai/gemini-embedding-001")).
+//
+// The embedder name is resolved to an [Embedder] at request time and may error
+// if the reference is invalid. Dynamic plugins (such as googlegenai and openai)
+// resolve arbitrary embedder IDs served by the provider on demand without
+// requiring the embedder to be pre-registered.
 func WithEmbedderName(name string) EmbedderOption {
 	return WithEmbedder(NewEmbedderRef(name, nil))
 }
