@@ -31,6 +31,7 @@ from genkit_google_genai._models._interactions_utils import (
     extract_version,
     lowercase_choice_list,
     partition_keys,
+    pop_extra,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
@@ -94,8 +95,7 @@ def create_antigravity_action(
         merged_options = client_options.merge(client_overrides_from_config(config))
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        raw_extra = dumped.pop('extra', None)
-        extra: dict[str, Any] = raw_extra if isinstance(raw_extra, dict) else {}
+        extra = pop_extra(dumped)
         # GenkitConfig rejects undeclared keys, so nothing is left over.
         create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         create_kwargs: dict[str, Any] = {

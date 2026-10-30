@@ -34,6 +34,7 @@ from genkit_google_genai._models._deep_research import (
 )
 from genkit_google_genai._models._interactions_lyria import LyriaConfig, create_lyria_action
 from genkit_google_genai._models._interactions_registry import deep_research_model_info, lyria_model_info
+from genkit_google_genai._models._interactions_utils import pop_extra
 from google.genai.interactions import Interaction
 from pydantic import BaseModel, ValidationError
 
@@ -1575,6 +1576,65 @@ async def test_generate_operation_deep_research_extra_nested_key_wins_and_keeps_
         'thinking_summaries': 'auto',
         'visualization': 'auto',
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'extra',
+    [
+        {'agent_config': None},
+        {'agentConfig': None},
+        {'agent_config': {'thinking_summaries': None}},
+    ],
+)
+async def test_generate_operation_deep_research_extra_none_keeps_built_agent_config(
+    googleai: Genkit, extra: dict[str, Any]
+) -> None:
+    """`extra={'agent_config': None}` is unset, so the built agent_config goes out instead of null."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research', create_result={'id': 'dr-x', 'status': 'in_progress'}
+    )
+    with patcher:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH, prompt='q', config={'thinking_summaries': 'auto', 'extra': extra}
+        )
+
+    assert create_calls[0]['agent_config'] == {'type': 'deep-research', 'thinking_summaries': 'auto'}
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_extra_none_environment_keeps_default(googleai: Genkit) -> None:
+    """`extra={'environment': None}` leaves the default remote environment in place."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity', create_result=_TEXT_REPLY
+    )
+    with patcher:
+        await googleai.generate(model=_ANTIGRAVITY, prompt='hi', config={'extra': {'environment': None}})
+
+    assert create_calls[0]['environment'] == {'type': 'remote'}
+
+
+def test_pop_extra_drops_none_keeps_explicit_empty_and_list_items() -> None:
+    """None is unset at every dict level; an explicit `{}` and list items go out as written."""
+    dumped: dict[str, Any] = {
+        'store': False,
+        'extra': {
+            'agent_config': None,
+            'generation_config': {'seed': None},
+            'webhook_config': {},
+            'tools': [None, {'type': 'url_context', 'top_k': None}],
+            'labels': {'team': 'search', 'owner': None},
+        },
+    }
+
+    extra = pop_extra(dumped)
+
+    assert extra == {
+        'webhook_config': {},
+        'tools': [None, {'type': 'url_context', 'top_k': None}],
+        'labels': {'team': 'search'},
+    }
+    assert dumped == {'store': False}
 
 
 @pytest.mark.asyncio

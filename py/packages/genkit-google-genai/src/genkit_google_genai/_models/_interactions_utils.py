@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from genkit_google_genai._interactions._converters import (
     ensure_tool_ids,
@@ -44,7 +44,8 @@ CLIENT_OPTION_KEYS = frozenset({
 EXTRA_DESCRIPTION = (
     "Interactions API fields this class doesn't declare, in the API's snake_case wire names. Merged into "
     'the top level of the create body after everything else, and nested objects merge key by key, so a key '
-    'named here wins. Keys match ignoring case and underscores, so `Agent` overrides `agent`. '
+    'named here wins. Keys match ignoring case and underscores, so `Agent` overrides `agent`. A `None` '
+    'value means unset and is skipped, so it never sends null over a block Genkit built. '
     'Not validated, except that a top-level API key raises; do not put API keys here.'
 )
 
@@ -93,6 +94,31 @@ def client_overrides_from_config(
         timeout=getattr(config, 'timeout', timeout),
         custom_headers=getattr(config, 'custom_headers', custom_headers),
     )
+
+
+def _without_none(value: dict[str, Any]) -> dict[str, Any]:
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        if isinstance(item, dict) and item:
+            item = _without_none(cast(dict[str, Any], item))
+            if not item:
+                # Every key in it was None: unset, not an empty object.
+                continue
+        if item is not None:
+            cleaned[key] = item
+    return cleaned
+
+
+def pop_extra(dumped: dict[str, Any]) -> dict[str, Any]:
+    """Pop ``extra`` off a dumped config, dropping ``None`` values at every dict level.
+
+    ``None`` means unset, the same as for declared fields (``exclude_none``),
+    so ``extra={'agent_config': None}`` leaves the built ``agent_config``
+    alone instead of sending ``null`` over it. A dict left empty that way is
+    dropped too; an explicit ``{}`` and list items are kept as written.
+    """
+    raw = dumped.pop('extra', None)
+    return _without_none(cast(dict[str, Any], raw)) if isinstance(raw, dict) else {}
 
 
 def partition_keys(
