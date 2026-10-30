@@ -87,9 +87,11 @@ closed client cannot be restarted. To use that server again, define a new client
 `generate` with one of its tools, and `get_active_tools()`, fail with a `GenkitError` whose status
 is `FAILED_PRECONDITION`. A server that cannot start, or whose process dies, fails with status
 `UNAVAILABLE`, and a request the server does not answer within `request_timeout_millis` fails with
-`DEADLINE_EXCEEDED`. A connection that died on its own is replaced on next use, so one bad server start is
-not permanent. Resolving a tool by its action key, as the Dev UI does to run one, reports neither
-status: core finds no action for a closed client or a server that cannot start.
+`DEADLINE_EXCEEDED`. A request that times out, or whose caller is cancelled, is stopped and the
+server is sent `notifications/cancelled`. A connection that died on its own is replaced on next use,
+so one bad server start is not permanent. Resolving a tool by its action key, as the Dev UI does to
+run one, reports neither status: core finds no action for a closed client or a server that cannot
+start.
 
 Nothing needs closing at exit. Call `close()` when you are done with a server before your process
 is, not as cleanup on the way out: a process running under `genkit start` outlives your `main()`,

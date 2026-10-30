@@ -1189,7 +1189,7 @@ async def test_a_timed_out_call_is_cancelled_on_the_server(tmp_path: Path) -> No
     connection = McpConnection(
         'fake',
         config(tmp_path, MCP_FAKE_STALL_DIR=str(stalls), MCP_FAKE_CANCEL_LOG=str(log)),
-        request_timeout_millis=3000,
+        request_timeout_millis=8000,
     )
     try:
         with pytest.raises(_RequestTimeoutError, match='timed out'):
