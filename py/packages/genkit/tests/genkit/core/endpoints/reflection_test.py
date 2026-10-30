@@ -48,7 +48,7 @@ from pydantic import BaseModel, Field
 
 from genkit import FlowContext, Genkit, PublicError
 from genkit._core._action import ActionKind
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import ModelConfig
 from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._registry import Registry
@@ -334,7 +334,7 @@ async def test_run_action_streaming_primitive_types(
 
 # Real-registry tests for the /api/values?type=middleware endpoint. The other
 # endpoint tests above use a MagicMock registry, but here we want to exercise
-# the actual GenerateMiddleware serialization path the Dev UI consumes — mocking
+# the actual MiddlewareMetadata serialization path the Dev UI consumes — mocking
 # would defeat the point.
 
 
@@ -349,7 +349,7 @@ async def _registry_asgi_client(registry: Registry) -> AsyncClient:
 async def test_values_middleware_includes_derived_config_schema() -> None:
     """The Dev UI's /api/values?type=middleware response carries each middleware's configSchema.
 
-    The schema is derived from the middleware class's pydantic fields by ``GenerateMiddleware(cls=...)``.
+    The schema is derived from the middleware class's pydantic fields by ``MiddlewareMetadata(cls=...)``.
     """
 
     ai = Genkit()
@@ -360,7 +360,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
         isolate_config: bool = False
 
     @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
-    class _Fallback(BaseMiddleware[_FallbackConfig]):
+    class _Fallback(Middleware[_FallbackConfig]):
         pass
 
     client = await _registry_asgi_client(ai._registry)
@@ -374,7 +374,7 @@ async def test_values_middleware_includes_derived_config_schema() -> None:
         config_schema = entry['configSchema']
         assert config_schema['type'] == 'object'
         # Author-defined fields show up; framework-injected ones (registry,
-        # custom_context / on_chunk) must not leak into the form.
+        # context / on_chunk) must not leak into the form.
         assert set(config_schema['properties'].keys()) == {'models', 'statuses', 'isolate_config'}
     finally:
         await client.aclose()
@@ -391,7 +391,7 @@ async def test_values_middleware_uses_class_docstring_as_description_fallback() 
     ai = Genkit()
 
     @ai.middleware(name='docstring_mw')
-    class _DocMw(BaseMiddleware):
+    class _DocMw(Middleware):
         """Logs every model call with a configurable prefix.
 
         Extra paragraphs end up in the description verbatim.
@@ -419,7 +419,7 @@ async def test_values_middleware_empty_config_schema_for_no_op() -> None:
     ai = Genkit()
 
     @ai.middleware(name='no_op')
-    class _NoOp(BaseMiddleware):
+    class _NoOp(Middleware):
         pass
 
     client = await _registry_asgi_client(ai._registry)

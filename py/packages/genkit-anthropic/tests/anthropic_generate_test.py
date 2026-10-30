@@ -29,7 +29,7 @@ import pytest
 from genkit_anthropic import Anthropic
 
 from genkit import FinishReason, Genkit, GenkitError
-from genkit.middleware import BaseMiddleware
+from genkit.middleware import Middleware
 from genkit.plugin_api import ActionKind
 
 MODEL = 'anthropic/claude-sonnet-4-6'
@@ -436,7 +436,7 @@ async def test_middleware_edit_inside_nested_claude_setting_is_validated(
     api = FakeClaudeApi()
     ai = _genkit(api)
 
-    class Tune(BaseMiddleware):
+    class Tune(Middleware):
         async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
             edit(params.request.config)
             return await next_fn(params, ctx)

@@ -17,7 +17,7 @@
 """Shared machinery for the typed family ref constructors.
 
 Each plugin class exposes one constructor per config family
-(``gemini_model``, ``gemini_image_model``, ...). The return type is the contract:
+(``gemini``, ``gemini_image``, ...). The return type is the contract:
 ``ModelRef[GeminiConfig]`` tells generate-time code exactly which
 config is legal, so a constructor must refuse ids whose runtime action
 would validate a different schema — otherwise the ref lies and the wrong
@@ -39,20 +39,20 @@ ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
 # Map known families onto their GoogleAI/VertexAI method name.
 FAMILY_METHOD: dict[str, str] = {
-    'gemini': 'gemini_model',
-    'tts': 'gemini_tts_model',
-    'image': 'gemini_image_model',
-    'gemma': 'gemma_model',
-    'veo': 'veo_model',
+    'gemini': 'gemini',
+    'tts': 'gemini_tts',
+    'image': 'gemini_image',
+    'gemma': 'gemma',
+    'veo': 'veo',
     'embedder': 'embedding',
 }
 
 # Families one plugin class serves: display name, constructor, and that class.
 PLUGIN_FAMILY_METHODS: dict[str, tuple[str, str, str]] = {
-    'deep-research': ('Deep Research', 'deep_research_model', 'GoogleAI'),
-    'antigravity': ('Antigravity', 'antigravity_model', 'GoogleAI'),
-    'lyria': ('Lyria', 'lyria_model', 'GoogleAI'),
-    'virtual-try-on': ('Virtual Try-On', 'virtual_try_on_model', 'VertexAI'),
+    'deep-research': ('Deep Research', 'deep_research', 'GoogleAI'),
+    'antigravity': ('Antigravity', 'antigravity', 'GoogleAI'),
+    'lyria': ('Lyria', 'lyria', 'GoogleAI'),
+    'virtual-try-on': ('Virtual Try-On', 'virtual_try_on', 'VertexAI'),
 }
 
 
@@ -68,8 +68,8 @@ def wrong_family_error(*, plugin_class: str, method: str, family: str, local: st
             else f"'{local}' has no ref constructor in this plugin."
         )
     elif actual == 'unsupported':
-        if is_imagen_model_name(local) and method != 'gemini_image_model':
-            hint = f"'{local}' is not a supported model; for image generation use {plugin_class}.gemini_image_model()."
+        if is_imagen_model_name(local) and method != 'gemini_image':
+            hint = f"'{local}' is not a supported model; for image generation use {plugin_class}.gemini_image()."
         else:
             hint = f"'{local}' is not a supported model."
     elif actual in FAMILY_METHOD:
@@ -91,7 +91,7 @@ def family_model_ref(
     info: ModelInfo | None = None,
 ) -> ModelRef[ConfigT]:
     """Strip, gate against the closed family set, then stamp this plugin's namespace."""
-    # str(None) is 'None', and gemini_model allows unknown ids, so a
+    # str(None) is 'None', and gemini allows unknown ids, so a
     # non-string would mint a real-looking ref instead of failing here.
     if not isinstance(name, str):
         raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.{method}: model name must be a string.')
@@ -99,7 +99,7 @@ def family_model_ref(
     if not local:
         raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.{method}: model name is required.')
     actual = classify_family(local)
-    # Unknown ids stay usable through gemini_model so a brand-new Gemini
+    # Unknown ids stay usable through gemini so a brand-new Gemini
     # release works before this plugin learns its name. Every other family
     # method takes only its own ids.
     allowed = actual == family or (family == 'gemini' and actual == 'unknown')

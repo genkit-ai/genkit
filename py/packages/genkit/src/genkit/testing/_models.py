@@ -135,7 +135,7 @@ class EchoModel:
 
         if request.config:
             if isinstance(request.config, BaseModel):
-                config_json = request.config.model_dump_json()
+                config_json = request.config.model_dump_json(by_alias=True, exclude_none=True)
             else:
                 config_json = json.dumps(request.config, separators=(',', ':'))
         else:

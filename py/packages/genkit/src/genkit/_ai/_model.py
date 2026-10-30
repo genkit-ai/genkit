@@ -445,6 +445,8 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
     ``define_model`` registers it.
     The config class stays on the action so ``generate(model='name', config=...)``
     can ``isinstance``-check a Pydantic instance against a string model name.
+    It comes from ``config_schema`` or the fn's ``ModelRequest[Cfg]``
+    annotation; given both, they must be the same class.
     """
 
     def __init__(
@@ -469,9 +471,13 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
                 fn=fn,
                 metadata=model_meta,
                 description=get_func_description(fn, description),
+                config_schema=config_schema,
             )
             self.input_schema = to_json_schema(ModelRequest)
             self.output_schema = to_json_schema(ModelResponse)
+            # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
+            if 'customOptions' not in model_options and self.config_schema is not None:
+                model_options['customOptions'] = to_json_schema(self.config_schema)
             return
 
         schema = config_schema
@@ -482,7 +488,7 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
             check_config_json_schema(schema, model=name)
 
         @functools.wraps(fn)
-        async def run_with_config_check(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def run_with_config_check(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse[Any]:
             # Runs inside the model action, after every middleware, so a required
             # field no layer filled is reported here. generate returns it as the
             # turn's error. Go checks config at the same point.
@@ -500,6 +506,8 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
         )
         self.input_schema = to_json_schema(ModelRequest)
         self.output_schema = to_json_schema(ModelResponse)
+        if 'customOptions' not in model_options and self.config_schema is not None:
+            model_options['customOptions'] = to_json_schema(self.config_schema)
 
 
 def define_model(

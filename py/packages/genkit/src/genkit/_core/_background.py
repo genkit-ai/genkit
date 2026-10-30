@@ -235,6 +235,9 @@ class BackgroundModel:
             description=description or f'Background model: {resolved_label}',
             config_schema=config_schema,
         )
+        # Annotation only: the Dev UI form comes from ModelRequest[Cfg].
+        if 'customOptions' not in model_options and start_action.config_schema is not None:
+            model_options['customOptions'] = to_json_schema(start_action.config_schema)
         if not start_action.input_schema:
             start_action.input_schema = to_json_schema(ModelRequest)
         if not start_action.output_schema:
