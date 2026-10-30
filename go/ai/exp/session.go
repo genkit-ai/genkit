@@ -234,6 +234,28 @@ type SnapshotSubscriber interface {
 	OnSnapshotStatusChange(ctx context.Context, snapshotID string) <-chan SnapshotStatus
 }
 
+// SessionDeleter is the optional capability layered on [SessionStore] that
+// lets [Agent.DeleteSession] permanently remove a session.
+//
+// DeleteSession removes every snapshot of the session (and any data stored
+// alongside them, such as checkpoint shards or a per-session pointer) and
+// reports whether anything was removed. It is idempotent: a session with no
+// persisted data is not an error and reports false. Single-snapshot deletion
+// is deliberately not offered, since later snapshots may depend on earlier
+// ones.
+//
+// Once a session is deleted, SaveSnapshot must reject (with
+// [ErrSessionDeleted]) any write that continues its chain: a row whose
+// ParentID is set, or a rewrite of a row of the deleted session. A write with
+// no parent and no existing row is a fresh session under the same ID and is
+// accepted. A store should also report the removal to
+// [SnapshotSubscriber.OnSnapshotStatusChange] subscribers of each deleted
+// snapshot as [SnapshotStatusAborted] before closing their channels, so a
+// detached run watching its row stops.
+type SessionDeleter interface {
+	DeleteSession(ctx context.Context, sessionID string) (bool, error)
+}
+
 // SessionStore is the minimum store interface required by
 // [WithSessionStore]. Status-change observation is layered as the optional
 // [SnapshotSubscriber] capability and checked at runtime: a store wired
