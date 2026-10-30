@@ -31,14 +31,17 @@ def test_thinking_enabled_requires_budget() -> None:
         AnthropicConfig.model_validate({'thinking': 'enabled'})
 
 
-def test_thinking_disabled_rejects_budget() -> None:
-    with pytest.raises(ValidationError, match="thinking_budget can't be set when thinking is 'disabled'"):
-        AnthropicConfig(thinking='disabled', thinking_budget=2048)
+def test_thinking_disabled_accepts_inherited_budget_and_display() -> None:
+    """'disabled' over an inherited budget and display validates; the mode wins."""
+    # 1. What key-by-key merging produces when a call sets thinking='disabled'
+    #    over a default of enabled + 4096 + summarized
+    merged = {'thinking': 'enabled', 'thinkingBudget': 4096, 'thinkingDisplay': 'summarized'} | {'thinking': 'disabled'}
 
+    # 2. Validates instead of raising
+    config = AnthropicConfig.model_validate(merged)
 
-def test_thinking_disabled_rejects_display() -> None:
-    with pytest.raises(ValidationError, match="thinking_display can't be set when thinking is 'disabled'"):
-        AnthropicConfig(thinking='disabled', thinking_display='omitted')
+    # 3. The mode is what's sent
+    assert config.thinking_mode() == 'disabled'
 
 
 def test_thinking_display_alone_raises() -> None:
@@ -72,6 +75,8 @@ def test_thinking_mode_typo_raises() -> None:
         # Adaptive accepts and ignores a budget, as before.
         ({'thinking': 'adaptive', 'thinkingBudget': 2048}, 'adaptive'),
         ({'thinking': 'disabled'}, 'disabled'),
+        # Disabled ignores a budget, the same as adaptive.
+        ({'thinking': 'disabled', 'thinkingBudget': 2048}, 'disabled'),
         ({}, None),
     ],
 )

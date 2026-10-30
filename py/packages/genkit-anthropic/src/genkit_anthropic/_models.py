@@ -194,12 +194,17 @@ def _normalize_config(config: object | None) -> AnthropicConfig:
 def _to_anthropic_thinking(config: AnthropicConfig) -> dict[str, Any] | None:
     """Build Anthropic's thinking object from the flat fields; None sends nothing.
 
-    AnthropicConfig's validator already enforces the cross-field rules, so
-    'enabled' always has a budget here. 'adaptive' doesn't send one.
+    AnthropicConfig's validator already guarantees 'enabled' has a budget.
+    Fields the mode doesn't use are left out rather than rejected, because
+    they're usually inherited from another config layer (see the comment
+    above AnthropicConfig._check_thinking): 'disabled' sends only the type,
+    and 'adaptive' sends no budget.
     """
     mode = config.thinking_mode()
     if mode is None:
         return None
+    if mode == 'disabled':
+        return {'type': 'disabled'}
     result: dict[str, Any] = {}
     if config.thinking_display is not None:
         result['display'] = config.thinking_display

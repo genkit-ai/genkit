@@ -497,6 +497,36 @@ async def test_generate_claude_config_tool_choice_points_to_generate_option() ->
     assert api.requests == []
 
 
+@pytest.mark.parametrize(
+    ('call_config', 'sent'),
+    [
+        ({'thinking': 'disabled'}, {'type': 'disabled'}),
+        ({'thinking': 'adaptive'}, {'type': 'adaptive', 'display': 'summarized'}),
+        ({'thinkingBudget': 8192}, {'type': 'enabled', 'budget_tokens': 8192, 'display': 'summarized'}),
+    ],
+    ids=['disabled-over-enabled', 'adaptive-over-enabled', 'budget-over-enabled'],
+)
+@pytest.mark.asyncio
+async def test_generate_call_thinking_overrides_model_default(
+    call_config: dict[str, Any], sent: dict[str, Any]
+) -> None:
+    """A call's thinking mode wins over the ModelRef default's budget and display instead of failing."""
+    # 1. A model default with extended thinking on
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+    claude = Anthropic.claude(
+        'claude-sonnet-4-6',
+        config=AnthropicConfig(thinking='enabled', thinking_budget=4096, thinking_display='summarized'),
+    )
+
+    # 2. One call overrides part of it; config merges key by key
+    response = await ai.generate(model=claude, prompt='Is shellfish safe for this guest?', config=call_config)
+
+    # 3. The request carries only the fields the merged mode uses
+    assert response.text == 'ok'
+    assert api.body()['thinking'] == sent
+
+
 # --- middleware edits ---------------------------------------------------------
 
 
@@ -505,7 +535,7 @@ def _edit_thinking_budget(config: Any) -> None:  # noqa: ANN401
 
 
 def _edit_thinking_mode(config: Any) -> None:  # noqa: ANN401
-    config.thinking = 'disabled'
+    config.thinking = 'enabled'
 
 
 def _edit_task_budget(config: Any) -> None:  # noqa: ANN401
@@ -521,9 +551,9 @@ def _edit_task_budget(config: Any) -> None:  # noqa: ANN401
             "set config 'thinking_budget': Input should be greater than or equal to 1024",
         ),
         (
-            {'thinking': 'enabled', 'thinkingBudget': 2048},
+            {'thinking': 'adaptive'},
             _edit_thinking_mode,
-            "set config 'thinking': Value error, thinking_budget can't be set when thinking is 'disabled'",
+            "set config 'thinking': Value error, thinking_budget is required when thinking is 'enabled'",
         ),
         (
             {'apiVersion': 'stable'},

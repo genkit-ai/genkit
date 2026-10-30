@@ -132,13 +132,17 @@ def _anthropic_config_schema_extra(schema: JsonDict) -> None:
                     'type': 'integer',
                     'minimum': 1024,
                     'title': 'Thinking budget',
-                    'description': 'Thinking token budget. Required when thinking is enabled; ignored when adaptive.',
+                    'description': (
+                        'Thinking token budget. Required when thinking is enabled; ignored when adaptive or disabled.'
+                    ),
                 },
                 'thinkingDisplay': {
                     'type': 'string',
                     'enum': list(get_args(ThinkingDisplay)),
                     'title': 'Thinking display',
-                    'description': 'Whether the reply includes summarized thinking or omits it.',
+                    'description': (
+                        'Whether the reply includes summarized thinking or omits it. Ignored when thinking is disabled.'
+                    ),
                 },
                 'effort': {
                     'type': 'string',
@@ -206,11 +210,11 @@ class AnthropicConfig(ModelConfig):
     thinking_budget: int | None = Field(
         default=None,
         ge=1024,
-        description='Thinking token budget. Required when thinking is enabled; ignored when adaptive.',
+        description='Thinking token budget. Required when thinking is enabled; ignored when adaptive or disabled.',
     )
     thinking_display: ThinkingDisplay | None = Field(
         default=None,
-        description='Whether the reply includes summarized thinking or omits it.',
+        description='Whether the reply includes summarized thinking or omits it. Ignored when thinking is disabled.',
     )
     effort: Effort | None = Field(default=None, description='How much effort the model spends on the reply.')
     task_budget: int | None = Field(
@@ -253,15 +257,39 @@ class AnthropicConfig(ModelConfig):
             raise GenkitError(status='INVALID_ARGUMENT', message=f'anthropic: {message}')
         return data
 
+    # Genkit merges config key by key across layers (the ModelRef default from
+    # Anthropic.claude(config=...), the prompt's config, the call's config), so
+    # a layer overrides only the keys it sets and inherits the rest. Before this
+    # change each group below was one nested object, and a layer replaced the
+    # whole object. Each flattened group is handled on its own here:
+    #
+    # - thinking / thinking_budget / thinking_display: `thinking` picks the
+    #   mode, and the mode decides which of the other two fields apply.
+    #   Fields the mode doesn't use are ignored, not rejected, because they are
+    #   usually inherited: a call that sets thinking='disabled' over a default
+    #   of thinking='enabled', thinking_budget=4096 must turn thinking off, not
+    #   fail. 'disabled' ignores the budget and the display; 'adaptive' ignores
+    #   the budget. The flip side: a call that sets only thinking_budget over
+    #   an inherited thinking='disabled' stays disabled, so turning thinking
+    #   back on takes an explicit thinking='enabled'. _to_anthropic_thinking
+    #   leaves the ignored fields out of the request.
+    # - effort / task_budget: independent fields with no cross-field rule, so
+    #   overriding one keeps the other. task_budget is beta-only; see
+    #   _check_api_surface for why it still raises against apiVersion='stable'.
+    # - user_id: a single field; nothing to reconcile.
+    # - disable_parallel_tool_use: ignored when generate(tool_choice='none'),
+    #   because Anthropic's none variant has no such field. Not rejected, for
+    #   the same inherited-value reason as the thinking fields.
+
     @model_validator(mode='after')
     def _check_thinking(self) -> 'AnthropicConfig':
-        """Enforce the cross-field thinking rules."""
+        """Enforce the thinking rules that hold no matter which layer set each field."""
+        # 'enabled' can't be sent without budget_tokens, and no layer supplied
+        # one. Raising here names the missing field; the API would reject it.
         if self.thinking == 'enabled' and self.thinking_budget is None:
             raise ValueError("thinking_budget is required when thinking is 'enabled'")
-        if self.thinking == 'disabled' and self.thinking_budget is not None:
-            raise ValueError("thinking_budget can't be set when thinking is 'disabled'")
-        if self.thinking == 'disabled' and self.thinking_display is not None:
-            raise ValueError("thinking_display can't be set when thinking is 'disabled'")
+        # With no mode and no budget there's no thinking object to put the
+        # display in, so it would be dropped without a word.
         if self.thinking_display is not None and self.thinking is None and self.thinking_budget is None:
             raise ValueError('thinking_display needs thinking= or thinking_budget=')
         return self
@@ -288,6 +316,12 @@ class AnthropicConfig(ModelConfig):
     @model_validator(mode='after')
     def _check_api_surface(self) -> 'AnthropicConfig':
         """Reject beta-only fields on the stable surface so an explicit apiVersion is never silently overridden."""
+        # Unlike the thinking fields, an inherited task_budget or betas still
+        # raises against apiVersion='stable'. Ignoring it would quietly drop a
+        # spend cap or a feature the default asked for; switching to beta would
+        # override the explicit 'stable'. Neither is safe to guess, so the
+        # caller picks: remove the field from the layer that sets it, or
+        # don't pin 'stable'.
         if self.api_version != 'stable':
             return self
         beta_only = self.beta_only_fields()

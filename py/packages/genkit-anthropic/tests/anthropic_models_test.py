@@ -1194,6 +1194,11 @@ async def test_typed_config_thinking_translated_for_sdk() -> None:
         # Adaptive accepts a budget and doesn't send it.
         ({'thinking': 'adaptive', 'thinkingBudget': 2048}, {'type': 'adaptive'}),
         ({'thinking': 'disabled'}, {'type': 'disabled'}),
+        # Disabled sends only the type, whatever budget or display is set.
+        (
+            {'thinking': 'disabled', 'thinkingBudget': 2048, 'thinkingDisplay': 'summarized'},
+            {'type': 'disabled'},
+        ),
         # A budget alone means enabled.
         ({'thinkingBudget': 2048}, {'type': 'enabled', 'budget_tokens': 2048}),
         (
