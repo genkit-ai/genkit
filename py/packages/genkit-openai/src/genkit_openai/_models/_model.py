@@ -20,7 +20,6 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
-import structlog
 from genkit_openai._models._utils import (
     OPENAI_CALL_ERRORS,
     DictMessageAdapter,
@@ -37,10 +36,10 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import ModelConfig, ModelContext, ModelRequest, ModelUsage, Supports, ToolDefinition
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # Genkit common fields that are not chat.completions.create() kwargs.
 # version becomes the wire model id; stop_sequences becomes stop; extra

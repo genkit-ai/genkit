@@ -21,7 +21,6 @@ records to the Developer UI. ``configure_instrumentation`` is the hook
 for a recording backend; ``reset_instrumentation`` starts over between tests.
 """
 
-from genkit._core._telemetry._http import DirectHttpInstrumentation
 from genkit._core._telemetry._instrumentation import (
     DisposableInstrumentation,
     FlushableInstrumentation,
@@ -46,7 +45,6 @@ __all__ = [
     'configure_instrumentation',
     'run_in_new_span',
     # Testing & test-inspection helpers
-    'DirectHttpInstrumentation',
     'is_instrumented_by',
     'reset_instrumentation',
 ]

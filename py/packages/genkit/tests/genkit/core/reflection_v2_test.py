@@ -46,7 +46,7 @@ from websockets.asyncio.server import serve
 
 from genkit import Genkit
 from genkit._core._action import Action, ActionKind, ActionRunContext, BidiAction
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import AgentInit, AgentInput, ModelConfig
 from genkit._core._reflection import ActionRunner
 from genkit._core._reflection_v2 import (
@@ -369,13 +369,13 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
     Without explicit serialization the response would fall through to
     ``json.dumps(default=str)`` and the dev-ui would receive the string
     ``"name='concise_reply_mw' description=None ..."`` instead of the
-    ``GenerateMiddleware`` wire shape.
+    ``MiddlewareMetadata`` wire shape.
     """
 
     ai = Genkit()
 
     @ai.middleware(name='concise_reply_mw')
-    class _NoOpMiddleware(BaseMiddleware):
+    class _NoOpMiddleware(Middleware):
         pass
 
     client, task = await _run_client_lifecycle(ai._registry, fake_manager)
@@ -408,7 +408,7 @@ async def test_reflection_server_v2_list_values_serializes_middleware_as_object(
 async def test_reflection_server_v2_list_values_includes_derived_config_schema(
     fake_manager: FakeReflectionManager,
 ) -> None:
-    """Middleware registered via ``GenerateMiddleware(cls=...)`` exposes a derived configSchema.
+    """Middleware registered via ``MiddlewareMetadata(cls=...)`` exposes a derived configSchema.
 
     The Dev UI uses this schema to render a config form for each registered
     middleware.
@@ -422,7 +422,7 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
         isolate_config: bool = False
 
     @ai.middleware(name='fallback', description='Falls back to alternative models on failure')
-    class _Fallback(BaseMiddleware[_FallbackConfig]):
+    class _Fallback(Middleware[_FallbackConfig]):
         pass
 
     client, task = await _run_client_lifecycle(ai._registry, fake_manager)
@@ -442,7 +442,7 @@ async def test_reflection_server_v2_list_values_includes_derived_config_schema(
         config_schema = entry['configSchema']
         assert config_schema['type'] == 'object'
         # Author-defined fields show up; framework-injected ones (registry,
-        # custom_context / on_chunk) must not leak into the form.
+        # context / on_chunk) must not leak into the form.
         props = config_schema['properties']
         assert set(props.keys()) == {'models', 'statuses', 'isolate_config'}
         assert props['models']['type'] == 'array'
@@ -464,7 +464,7 @@ async def test_reflection_server_v2_list_values_empty_config_schema_for_no_op(
     ai = Genkit()
 
     @ai.middleware(name='no_op')
-    class _NoOp(BaseMiddleware):
+    class _NoOp(Middleware):
         pass
 
     client, task = await _run_client_lifecycle(ai._registry, fake_manager)

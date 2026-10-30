@@ -44,7 +44,7 @@ from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import get_reflection_json
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddleware
+from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import AgentInit, AgentInput, ModelRef
 from genkit._core._reflection_config import REFLECTION_SECRET_HEADER, secrets_equal
 from genkit._core._registry import Registry
@@ -285,8 +285,8 @@ def create_reflection_asgi_app(
             if type_param == 'middleware':
                 serialized: dict[str, Any] = {}
                 for key, val in raw_values.items():
-                    assert isinstance(val, GenerateMiddleware), (
-                        f'registry middleware/{key!r} must be GenerateMiddleware, got {type(val).__name__}'
+                    assert isinstance(val, _MiddlewareMetadata), (
+                        f'registry middleware/{key!r} must be _MiddlewareMetadata, got {type(val).__name__}'
                     )
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized

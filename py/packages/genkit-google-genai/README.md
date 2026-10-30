@@ -42,23 +42,163 @@ gcloud auth application-default login
 from genkit import Genkit
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+# 1. Initialize Genkit with plugin and default model reference
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
+# 2. Define a typed flow
 @ai.flow()
 async def greet(name: str) -> str:
     res = await ai.generate(prompt=f'Say hello to {name}.')
     return res.text
+
+
+# 3. Execute and inspect output
+print(await greet('Grace'))
+# => Hello Grace! How can I help you today?
 ```
 
 ## Features
 
-### Dynamic Models & Specifying Model References
+### Dynamic Models
 
-Any model ID served by the Gemini API (including newly released models) is resolved lazily on demand when `ai.generate()` is called, without needing pre-registration or SDK updates. You can pass models to `Genkit(model=...)` or `ai.generate(model=...)` in two ways:
+The plugin automatically discovers available models from the API upon initialization. You can use any model name supported by the API via model reference constructors (e.g., `GoogleAI.gemini('gemini-flash-latest')`, `VertexAI.gemini('gemini-3.1-pro-preview')`).
 
-- **Typed `ModelRef` (recommended)**: `GoogleAI.gemini_model('gemini-flash-latest')` or `VertexAI.gemini_model('gemini-4-argon')` — pass the bare model ID; returns a `ModelRef[GeminiConfig]` with the `'googleai/'` or `'vertexai/'` namespace stamped automatically and static config type-checking.
-- **Prefixed string shorthand**: `'googleai/gemini-flash-latest'` or `'vertexai/gemini-4-argon'` — when passing a plain `str`, the `'googleai/'` or `'vertexai/'` prefix is required; passing an unprefixed string raises `NOT_FOUND`.
+### Typed config
+
+Config classes take flat snake_case keyword arguments, so pyright, pyrefly
+and ty check every key. The plugin builds Gemini's nested request objects
+(`thinkingConfig`, `speechConfig`, `tools`) when it sends the request. The Dev
+UI and `.prompt` files use the same flat fields in camelCase
+(`thinkingLevel`); both spellings validate at runtime.
+
+#### Text generation with GeminiConfig and tool_choice
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GeminiConfig, GoogleAI
+
+# 1. Initialize plugin and client
+ai = Genkit(plugins=[GoogleAI()])
+
+
+# 2. Define a function tool
+@ai.tool()
+async def check_inventory(ingredient: str) -> dict[str, int]:
+    return {'pesto': 12, 'pine_nuts': 4}
+
+
+# 3. Generate with flat thinking, safety, search grounding, and a tool
+res = await ai.generate(
+    model=GoogleAI.gemini('gemini-flash-latest'),
+    prompt='Check pesto inventory and cite current safety storage guidelines.',
+    tools=[check_inventory],
+    config=GeminiConfig(
+        thinking_level='HIGH',
+        include_thoughts=True,
+        safety_settings=[
+            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_ONLY_HIGH'},
+        ],
+        google_search=True,
+    ),
+)
+
+print(res.text)
+# => Inventory verified: 12 jars of pesto in stock. Storage guidelines require refrigeration at 40°F (4°C) or below after opening.
+```
+
+#### Audio generation with GeminiTtsConfig
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GeminiTtsConfig, GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+# Generate multi-speaker audio dialog
+res = await ai.generate(
+    model=GoogleAI.gemini_tts('gemini-2.5-flash-preview-tts'),
+    prompt='Host: Welcome to Morning Roaster. Chef: Today we review Ethiopian beans.',
+    config=GeminiTtsConfig(
+        speakers={'Host': 'Kore', 'Chef': 'Puck'},
+        language_code='en-US',
+    ),
+)
+
+print(res.media.url)
+# => data:audio/wav;base64,UklGRiQAAABXQVZFZ...
+```
+
+#### Image generation with GeminiImageConfig
+
+```python
+from genkit import Genkit
+from genkit_google_genai import GeminiImageConfig, GoogleAI
+
+ai = Genkit(plugins=[GoogleAI()])
+
+# Generate high-resolution image with specified aspect ratio and size
+res = await ai.generate(
+    model=GoogleAI.gemini_image('gemini-2.5-flash-preview-image-generation'),
+    prompt='A modern minimalist espresso bar with warm cedar accents.',
+    config=GeminiImageConfig(
+        aspect_ratio='16:9',
+        image_size='2K',
+    ),
+)
+
+print(res.media.url)
+# => data:image/png;base64,iVBORw0KGgoAAAANSU...
+```
+
+#### Default config on model references
+
+Pass a config instance directly to `GoogleAI.gemini(...)` or `VertexAI.gemini(...)` to configure defaults that every call inherits:
+
+```python
+model = GoogleAI.gemini(
+    'gemini-flash-latest',
+    config=GeminiConfig(temperature=0.7, thinking_level='MEDIUM'),
+)
+```
+
+### Config rules and validation
+
+Choice fields take plain strings. The Literal aliases (`ThinkingLevel`,
+`HarmCategory`, `ImageAspectRatio`, ...) export from the package root for
+annotating your own code. `safety_settings` entries are `SafetySetting`
+TypedDicts: pass a dict literal or `SafetySetting(category=..., threshold=...)`.
+
+Setting any `google_search_*` option turns Google Search on;
+`google_search=False` next to an option raises. A nested key such as
+`thinkingConfig` raises and names the flat fields that replace it.
+
+Function calling mode is controlled by `ai.generate(tool_choice=...)`, not config:
+`'auto'`, `'required'`, or `'none'`. In `'required'` mode, Gemini binds the request's
+function tools as `allowedFunctionNames`.
+
+Settings that can't be combined raise before anything is sent:
+
+- `thinking_level` with `thinking_budget`, and `voice` with `speakers`. When
+  one comes from a model reference default, pass `None` for it on the call.
+- `google_search_start_time` without `google_search_end_time`, and
+  `file_search_top_k` or `file_search_metadata_filter` without
+  `file_search_store_names`.
+- Vertex AI only settings on the Gemini API: `google_search_exclude_domains`,
+  `google_search_blocking_confidence`, safety `method`, `output_mime_type`,
+  `output_compression_quality`, `person_generation`, `prominent_people`.
+
+A cloned (replicated) voice has no flat field; send it through `extra`:
+
+```python
+config = GeminiTtsConfig(
+    extra={'generationConfig': {'speechConfig': {'voiceConfig': {'replicatedVoiceConfig': {
+        'mimeType': 'audio/wav',
+        'voiceSampleAudio': sample_b64,
+        'consentAudio': consent_b64,
+    }}}}},
+)
+```
 
 ### Provider fields the plugin doesn't declare
 
@@ -131,15 +271,20 @@ download URL, Vertex often sends the mp4 inline.
 from genkit import Genkit
 from genkit_google_genai import GoogleAI
 
+# 1. Initialize Genkit with GoogleAI
 ai = Genkit(plugins=[GoogleAI()])
 
+# 2. Launch background video generation
 operation = await ai.generate_operation(
-    model=GoogleAI.veo_model('veo-3.1-fast-generate-preview'),
+    model=GoogleAI.veo('veo-3.1-fast-generate-preview'),
     prompt='A paper airplane gliding through a bright classroom',
 )
 while not operation.done:
     operation = await ai.check_operation(operation)
-print(operation.output)
+
+# 3. Access output media artifact
+print(operation.output.message.content[0].media.url)
+# => https://generativelanguage.googleapis.com/v1beta/files/preview.mp4
 ```
 
 **With `VertexAI`:**
@@ -148,15 +293,20 @@ print(operation.output)
 from genkit import Genkit
 from genkit_google_genai import VertexAI
 
+# 1. Initialize Genkit with VertexAI
 ai = Genkit(plugins=[VertexAI()])
 
+# 2. Launch background video generation
 operation = await ai.generate_operation(
-    model=VertexAI.veo_model('veo-3.1-generate-001'),
+    model=VertexAI.veo('veo-3.1-generate-001'),
     prompt='A paper airplane gliding through a bright classroom',
 )
 while not operation.done:
     operation = await ai.check_operation(operation)
-print(operation.output)
+
+# 3. Access output media artifact
+print(operation.output.message.content[0].media.url)
+# => gs://my-bucket/videos/output.mp4
 ```
 
 Runnable version: [google-genai-media](https://github.com/genkit-ai/genkit/tree/main/py/samples/google-genai-media).
@@ -176,7 +326,7 @@ from genkit_google_genai import VertexAI
 ai = Genkit(plugins=[VertexAI()])
 
 response = await ai.generate(
-    model=VertexAI.virtual_try_on_model('virtual-try-on-001'),
+    model=VertexAI.virtual_try_on('virtual-try-on-001'),
     messages=[
         Message(
             role=Role.USER,

@@ -27,12 +27,10 @@ See:
 import re
 from typing import Any
 
-import structlog
-
-from genkit import Part
+from genkit import Part, get_logger
 from genkit.model import ModelRequest, ModelUsage
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # PDF MIME type for document handling.
 PDF_MIME_TYPE = 'application/pdf'

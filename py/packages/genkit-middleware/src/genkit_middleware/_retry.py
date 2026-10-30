@@ -27,7 +27,7 @@ from collections.abc import Awaitable, Callable
 from pydantic import Field
 
 from genkit import GenkitError, ModelResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.plugin_api import GenkitConfig
 from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
@@ -51,14 +51,17 @@ class RetryConfig(GenkitConfig):
     no_jitter: bool = False
 
 
-class Retry(BaseMiddleware[RetryConfig]):
+class Retry(Middleware[RetryConfig]):
     """Retry middleware with exponential backoff for transient failures."""
+
+    name = 'retry'
+    description = 'Retries model calls on transient failures with exponential backoff'
 
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Retry the model call up to max_retries times on transient failures."""
         current_delay_ms = float(self.config.initial_delay_ms)

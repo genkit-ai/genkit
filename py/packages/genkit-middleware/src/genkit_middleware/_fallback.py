@@ -24,7 +24,7 @@ from typing import Any, cast
 from pydantic import Field, field_validator
 
 from genkit import GenkitError, ModelResponse, ModelResponseChunk
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelRef, ModelRequest
 from genkit.plugin_api import Action, GenkitConfig
 from genkit_middleware._errors import caused_by_caller_callback
@@ -86,12 +86,15 @@ def fallback_request_config(entry: str | FallbackModelEntry) -> dict[str, Any] |
     return entry.config
 
 
-class Fallback(BaseMiddleware[FallbackConfig]):
+class Fallback(Middleware[FallbackConfig]):
     """Fallback middleware to try alternative models on failure."""
+
+    name = 'fallback'
+    description = 'Falls back to alternative models on failure'
 
     async def _resolve_fallback_model(
         self,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
         model_name: str,
     ) -> Action[ModelRequest, ModelResponse, ModelResponseChunk]:
         """Look up a fallback model among the app's models."""
@@ -106,8 +109,8 @@ class Fallback(BaseMiddleware[FallbackConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
@@ -135,7 +138,7 @@ class Fallback(BaseMiddleware[FallbackConfig]):
             try:
                 result = await fallback_action._run(
                     input=fallback_request,
-                    context=ctx.custom_context,
+                    context=ctx.context,
                     on_chunk=on_chunk,
                     abort_signal=ctx.abort_signal,
                 )

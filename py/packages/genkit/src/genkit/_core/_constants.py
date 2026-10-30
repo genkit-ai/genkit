@@ -31,5 +31,6 @@ def package_version() -> str:
 # Sent over HTTP in the client header and on the OTLP log scope.
 GENKIT_VERSION: Final[str] = package_version()
 
-GENKIT_CLIENT_HEADER: Final[str] = f'genkit-python/{GENKIT_VERSION}'
-"""Client identifier plugins send to providers, e.g. `genkit-python/1.0.0`."""
+# Header value plugins send in ``x-goog-api-client`` and ``user-agent``.
+GENKIT_USER_AGENT: Final[str] = f'genkit-python/{GENKIT_VERSION}'
+"""Header value plugins send in x-goog-api-client and user-agent."""
