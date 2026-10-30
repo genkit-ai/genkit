@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import weakref
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
@@ -65,8 +65,6 @@ from genkit._core._action import (
     ActionKind,
     StreamingCallback,
     StreamResponse,
-    _stream_to_sse,
-    _to_sse_value,
     create_action_key,
     get_current_context,
 )
@@ -180,32 +178,6 @@ class ModelStreamResponse(StreamResponse[ModelResponseChunk[OutputT], ModelRespo
         # => stop
         ```
     """
-
-    def to_sse(self) -> AsyncIterator[str]:
-        r"""Frame this stream as Genkit SSE lines, without the echoed request.
-
-        Same frames as ``StreamResponse.to_sse()``, except the ``result`` frame
-        leaves out ``ModelResponse.request``. That field echoes the system
-        prompt, tool definitions, retrieved docs, and history back to whoever
-        reads the stream. ``await stream.response`` still has it server-side.
-
-        Example:
-            ```python
-            stream = ai.generate_stream(system='Comp VIPs up to $50.', prompt='Dinner?')
-            return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
-            # => data: {"message":{"role":"model","content":[{"text":"Pad thai"}]}}
-            # => data: {"result":{"message":{...},"finishReason":"stop",...}}
-            #    (no "request" key)
-            ```
-        """
-        return _stream_to_sse(self._stream, lambda: self._response, to_value=_model_sse_value)
-
-
-def _model_sse_value(obj: object) -> object:
-    """SSE frame value for a model stream: a ``ModelResponse`` goes out without ``request``."""
-    if isinstance(obj, ModelResponse) and obj.request is not None:
-        obj = obj.model_copy(update={'request': None})
-    return _to_sse_value(obj)
 
 
 @dataclass
