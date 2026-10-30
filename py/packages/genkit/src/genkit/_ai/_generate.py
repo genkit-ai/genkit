@@ -99,6 +99,7 @@ from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._tool import Tool
 from genkit._core._typing import (
+    ConstrainedSupport,
     FinishReason,
     GenerateActionOutputConfig,
     MiddlewareRef,
@@ -1330,7 +1331,11 @@ async def resolve_door(
             ),
             reason=RuntimeErrorReason.INVALID_RESUME,
         )
-    options, formatter = apply_format(options=options, format_def=format_def)
+    options, formatter = apply_format(
+        options=options,
+        format_def=format_def,
+        model_supports_constrained=supports_constrained(turn_model, has_tools=bool(turn_tools)),
+    )
     assert_valid_tool_names(turn_tools)
     return options, ResolvedTurn(model=turn_model, tools=turn_tools, formatter=formatter)
 
@@ -1874,6 +1879,7 @@ def apply_format(
     *,
     options: GenerateActionOptions,
     format_def: Formatter | None,
+    model_supports_constrained: bool,
 ) -> tuple[GenerateActionOptions, FormatHandler[Any, Any] | None]:
     """Apply format definition to request, injecting instructions and output config."""
     if not format_def:
@@ -1889,25 +1895,32 @@ def apply_format(
     str_instructions = raw_instructions if isinstance(raw_instructions, str) else None
     instructions = resolve_instructions(formatter=formatter, instructions=str_instructions)
 
-    should_inject = False
-    if options.output and options.output.instructions is not None:
-        should_inject = bool(options.output.instructions)
-    elif format_def.config.default_instructions is not None:
-        should_inject = format_def.config.default_instructions
-    elif instructions:
-        should_inject = True
+    # The request's final output shape: the format sets it, the caller can override constrained.
+    output_format = format_def.config.format or (options.output.format if options.output else None)
+    json_schema = options.output.json_schema if options.output else None
+    requested = (
+        options.output.constrained
+        if options.output and options.output.constrained is not None
+        else format_def.config.constrained
+    )
+    # Native mode only when asked for, there is a schema, and the model can do it.
+    constrained = bool(requested) and json_schema is not None and model_supports_constrained
 
-    if should_inject and instructions is not None:
+    if raw_instructions is not None:
+        should_inject = bool(raw_instructions)
+    else:
+        # Natively constrained JSON already follows the schema; everything else needs the
+        # text. Same rule as Go's generate.
+        should_inject = not (constrained and output_format == 'json')
+
+    if should_inject and instructions:
         out_request.messages = inject_instructions(out_request.messages, instructions)  # type: ignore[arg-type]
 
     # Ensure output is set before modifying its properties
     if out_request.output is None:
         return (out_request, formatter)
 
-    if format_def.config.constrained is not None:
-        out_request.output.constrained = format_def.config.constrained
-    if options.output and options.output.constrained is not None:
-        out_request.output.constrained = options.output.constrained
+    out_request.output.constrained = constrained
 
     if format_def.config.content_type is not None:
         out_request.output.content_type = format_def.config.content_type
@@ -1915,6 +1928,14 @@ def apply_format(
         out_request.output.format = format_def.config.format
 
     return (out_request, formatter)
+
+
+def supports_constrained(model: Action | None, *, has_tools: bool) -> bool:
+    """Whether the model declares native constrained output for this request."""
+    model_options = model.metadata.get('model') if model else None
+    supports = cast(dict[str, object], model_options).get('supports') if isinstance(model_options, dict) else None
+    value = cast(dict[str, object], supports).get('constrained') if isinstance(supports, dict) else None
+    return value == ConstrainedSupport.ALL or (value == ConstrainedSupport.NO_TOOLS and not has_tools)
 
 
 def resolve_instructions(*, formatter: FormatHandler[Any, Any], instructions: str | None) -> str | None:

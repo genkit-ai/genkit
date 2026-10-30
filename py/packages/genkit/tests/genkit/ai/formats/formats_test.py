@@ -50,7 +50,6 @@ class TestJsonFormatConfig:
         assert json_format.config.content_type == 'application/json'
         assert json_format.config.constrained is True
         assert json_format.config.format == 'json'
-        assert json_format.config.default_instructions is False
 
 
 class TestArrayFormatConfig:

@@ -28,7 +28,7 @@ import pytest
 from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
 from genkit_openai._models._handler import OpenAIModelHandler
 from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
-from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai._openai_plugin import OpenAI
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 from openai.types import Model
@@ -36,7 +36,7 @@ from openai.types.chat import ChatCompletion
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest, EmbedResponse
-from genkit.model import ModelSupports
+from genkit.model import ConstrainedSupport, ModelSupports
 from genkit.plugin_api import Action, ActionKind, loop_local_client
 
 
@@ -93,6 +93,7 @@ GPT_6_ASTRA_SUPPORTS = {
     'tools': False,
     'systemRole': True,
     'output': ['json', 'text'],
+    'constrained': 'all',
 }
 
 
@@ -107,7 +108,30 @@ def test_gpt_6_astra_catalog_entry() -> None:
         tools=False,
         system_role=True,
         output=['json', 'text'],
+        constrained=ConstrainedSupport.ALL,
     )
+
+
+@pytest.mark.parametrize(
+    ('model', 'constrained'),
+    [
+        ('gpt-4o', ConstrainedSupport.ALL),
+        ('gpt-4.1', ConstrainedSupport.ALL),
+        ('o3-mini', ConstrainedSupport.ALL),
+        ('gpt-5', ConstrainedSupport.ALL),
+        ('gpt-4-turbo', None),
+        ('gpt-4', None),
+        ('gpt-3.5-turbo', None),
+        ('gpt-5-chat-latest', None),
+    ],
+)
+def test_catalog_declares_native_json_only_where_json_schema_works(
+    model: KnownGpt, constrained: ConstrainedSupport | None
+) -> None:
+    """Models with response_format json_schema skip the prompt's schema text; json_object-only models keep it."""
+    supports = SUPPORTED_OPENAI_MODELS[model].supports
+    assert supports is not None
+    assert supports.constrained == constrained
 
 
 @pytest.mark.parametrize(

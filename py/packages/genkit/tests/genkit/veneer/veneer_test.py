@@ -28,6 +28,7 @@ from genkit._core._action import ActionKind
 from genkit._core._model import ModelRequest, OutputConfig
 from genkit._core._operation import Operation
 from genkit._core._typing import (
+    ConstrainedSupport,
     EvaluatorRequest,
     EvaluatorResponse,
     FinishReason,
@@ -68,12 +69,40 @@ def _ok_schema_response() -> ModelResponse:
     )
 
 
+# What the json format adds to the prompt for the foo/bar TestSchema.
+_FOO_BAR_JSON_INSTRUCTIONS = (
+    'Output should be in JSON format and conform to the '
+    'following schema:\n\n```\n{\n  "properties": {\n    '
+    '"foo": {\n      "anyOf": [\n        {\n          '
+    '"type": "integer"\n        },\n        {\n          '
+    '"type": "null"\n        }\n      ],\n      '
+    '"default": null,\n      "description": "foo field",\n      '
+    '"title": "Foo"\n    },\n    "bar": {\n      '
+    '"anyOf": [\n        {\n          "type": "string"\n        },\n        '
+    '{\n          "type": "null"\n        }\n      ],\n      '
+    '"default": null,\n      "description": "bar field",\n      '
+    '"title": "Bar"\n    }\n  },\n  "title": "TestSchema",\n  '
+    '"type": "object"\n}\n```\n'
+)
+
+
 @pytest.fixture
 def setup_test() -> SetupFixture:
     """Setup a test fixture for the veneer tests."""
     ai = Genkit(model='echoModel')
 
-    pm, _ = define_scripted_model(ai)
+    # The scripted model declares native JSON mode, like Gemini, Claude, and gpt-4o.
+    # The echo model declares nothing, so JSON requests to it carry the schema text.
+    pm = ScriptedModel()
+
+    async def scripted_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        return await pm.model_fn(request, ctx)
+
+    ai.define_model(
+        name='scriptedModel',
+        fn=scripted_fn,
+        info=ModelInfo(supports=ModelSupports(constrained=ConstrainedSupport.ALL)),
+    )
     echo, _ = define_echo_model(ai)
 
     return (ai, echo, pm)
@@ -963,7 +992,7 @@ async def test_generate_defaults_to_json_format(
 async def test_generate_json_format_unconstrained(
     setup_test: SetupFixture,
 ) -> None:
-    """When Output is provided, format will default to json."""
+    """Unconstrained json puts the schema in the prompt, since nothing else enforces it."""
     ai, _, pm, *_ = setup_test
     pm.responses = [_ok_schema_response(), _ok_schema_response()]
 
@@ -973,7 +1002,13 @@ async def test_generate_json_format_unconstrained(
 
     want = ModelRequest(
         messages=[
-            Message(role=Role.USER, content=[Part.from_text('hi')]),
+            Message(
+                role=Role.USER,
+                content=[
+                    Part.from_text('hi'),
+                    Part.from_text(_FOO_BAR_JSON_INSTRUCTIONS, metadata={'purpose': 'output'}),
+                ],
+            ),
         ],
         config={},  # type: ignore[arg-type]
         tools=[],
@@ -1226,20 +1261,7 @@ async def test_generate_json_format_unconstrained_with_instructions(
         bar: str | None = Field(None, description='bar field')
 
     # Explicit instructions text to inject (matches formatter output for this schema)
-    instructions_text = (
-        'Output should be in JSON format and conform to the '
-        'following schema:\n\n```\n{\n  "properties": {\n    '
-        '"foo": {\n      "anyOf": [\n        {\n          '
-        '"type": "integer"\n        },\n        {\n          '
-        '"type": "null"\n        }\n      ],\n      '
-        '"default": null,\n      "description": "foo field",\n      '
-        '"title": "Foo"\n    },\n    "bar": {\n      '
-        '"anyOf": [\n        {\n          "type": "string"\n        },\n        '
-        '{\n          "type": "null"\n        }\n      ],\n      '
-        '"default": null,\n      "description": "bar field",\n      '
-        '"title": "Bar"\n    }\n  },\n  "title": "TestSchema",\n  '
-        '"type": "object"\n}\n```\n'
-    )
+    instructions_text = _FOO_BAR_JSON_INSTRUCTIONS
 
     want = ModelRequest(
         messages=[
@@ -1305,9 +1327,8 @@ async def test_generate_output_instructions_true_injects_standard(
 ) -> None:
     """``output_instructions=True`` injects the format's standard instructions.
 
-    ``json`` defaults to not injecting (it leans on native constrained output), so
-    passing ``True`` is how a caller opts back into the schema instructions -- e.g.
-    when running unconstrained against a model without native structured output.
+    Natively constrained ``json`` leaves them out by default, so ``True`` is how a
+    caller puts the schema text back in alongside native mode.
     """
     ai, _, pm, *_ = setup_test
     pm.responses = [_ok_schema_response(), _ok_schema_response()]
@@ -1319,25 +1340,25 @@ async def test_generate_output_instructions_true_injects_standard(
         msg = resp.request.messages[0]
         return [p for p in msg.content if (p.metadata or {}).get('purpose') == 'output']
 
-    # True -> the standard schema preamble is injected.
+    # 1. True -> the standard schema preamble is injected, even under native mode.
     on = await ai.generate(
         model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
-        output_constrained=False,
         output_instructions=True,
     )
+    assert on.request is not None and on.request.output is not None
+    assert on.request.output.constrained is True
     injected = output_parts(on)
     assert len(injected) == 1
     injected_text = injected[0].text or ''
     assert 'Output should be in JSON format and conform to the following schema' in injected_text
 
-    # Unset -> json's default (False) means nothing is injected.
+    # 2. Unset -> native mode enforces the schema, so nothing is injected.
     off = await ai.generate(
         model='scriptedModel',
         prompt='hi',
         output_schema=TestSchema,
-        output_constrained=False,
     )
     assert output_parts(off) == []
 
@@ -1473,25 +1494,10 @@ async def test_define_format(setup_test: SetupFixture) -> None:
     assert response.output == TestSchema(foo=1, bar='banana model says')
     assert chunks == ['banana chunk 1', 'banana chunk 2', 'banana chunk 3']
 
+    # banana sends format='json' with constrained=True, and the scripted model has native
+    # JSON mode, so the format's instructions stay out of the prompt, same as built-in json.
     assert response.request == ModelRequest(
-        messages=[
-            Message(
-                role=Role.USER,
-                content=[
-                    Part.from_text('hi'),
-                    Part.from_text(
-                        (
-                            'schema: {"properties": {"foo": {"anyOf": [{"type": "integer"}, '
-                            '{"type": "null"}], "default": null, "description": "foo field", '
-                            '"title": "Foo"}, "bar": {"anyOf": [{"type": "string"}, '
-                            '{"type": "null"}], "default": null, "description": "bar field", '
-                            '"title": "Bar"}}, "title": "TestSchema", "type": "object"}'
-                        ),
-                        metadata={'purpose': 'output'},
-                    ),
-                ],
-            ),
-        ],
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         config={},  # type: ignore[arg-type]
         tools=[],
         output=OutputConfig(

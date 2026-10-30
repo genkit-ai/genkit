@@ -26,6 +26,7 @@ from genkit_anthropic import AnthropicConfig
 # Private import across packages, on purpose. genkit-anthropic and
 # genkit-vertexai release in lockstep, so Model Garden reuses the Claude
 # model class instead of copying it.
+from genkit_anthropic._model_info import get_model_info as get_anthropic_model_info
 from genkit_anthropic._models import AnthropicModel
 
 from genkit import ModelResponse
@@ -85,6 +86,8 @@ class AnthropicModelGarden:
         Returns:
             ModelInfo with the model's capabilities.
         """
+        # Same catalog AnthropicModel reads, so Genkit and the model agree on native JSON mode.
+        catalog = get_anthropic_model_info(self._model_name).supports
         return ModelInfo(
             label=f'ModelGarden - {self.name}',
             supports=ModelSupports(
@@ -93,6 +96,7 @@ class AnthropicModelGarden:
                 tools=True,
                 system_role=True,
                 output=['text', 'json'],
+                constrained=catalog.constrained if catalog else None,
             ),
         )
 

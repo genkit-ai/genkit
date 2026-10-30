@@ -3193,7 +3193,8 @@ async def test_generate_schema_failure_preserves_history() -> None:
     assert response.message is not None
     assert response.message.text == 'not json'
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
-    assert response.messages[0].text == 'give me a recipe'
+    # The scripted model has no native JSON mode, so the schema instructions follow the prompt.
+    assert response.messages[0].content[0].text == 'give me a recipe'
     assert response.messages[1] == response.message
 
 

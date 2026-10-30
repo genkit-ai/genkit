@@ -48,8 +48,10 @@ class JsonFormat(Formatter):
     def __init__(self) -> None:
         """Initializes a JsonFormat instance.
 
-        Sets up the format definition with configurations suitable for JSON,
-        including content type, constraints, and default instructions.
+        Sets up the format definition with configurations suitable for JSON:
+        content type and native constrained output. While the request is
+        constrained, its schema instructions go into the prompt only when the
+        caller passes ``output_instructions``.
         """
         super().__init__(
             'json',
@@ -57,7 +59,6 @@ class JsonFormat(Formatter):
                 format='json',
                 content_type='application/json',
                 constrained=True,
-                default_instructions=False,
             ),
         )
 

@@ -32,14 +32,14 @@ from genkit._core._base import GenkitModel
 class FormatterConfig(GenkitModel):
     """Request settings a Formatter applies to every generate call that uses it.
 
-    `format` and `content_type` replace the request's values; `constrained` is a default
-    the request can override. `default_instructions=False` skips the handler's instructions.
+    `format` and `content_type` replace the request's values. `constrained` asks for the
+    model's native JSON mode, and the request can override it. It only takes effect when
+    there is a schema and the model declares `supports.constrained`.
     """
 
     format: str | None = None
     content_type: str | None = None
     constrained: bool | None = None
-    default_instructions: bool | str | None = None
 
 
 OutputT = TypeVar('OutputT', default=Any)
@@ -50,6 +50,12 @@ class FormatHandler(Generic[OutputT, ChunkT]):
     """Per-request parsers and prompt instructions returned by `Formatter.handle()`.
 
     `message_parser` builds `response.output`; `chunk_parser` builds `chunk.output`.
+    `instructions`, when set, is added to the prompt, except on a natively constrained
+    JSON request, where the model already follows the schema. A request is natively
+    constrained when `format='json'`, `constrained` is on, there is a schema, and the
+    model declares `supports.constrained` (`all`, or `no-tools` with no tools). A caller
+    overrides it per request with `output_instructions`: `True` adds it, `False` adds
+    nothing, a string replaces it.
     """
 
     def __init__(
