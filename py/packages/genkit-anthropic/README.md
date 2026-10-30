@@ -48,23 +48,96 @@ Anthropic(
 
 ## Typed config
 
-`AnthropicConfig` and its nested settings take snake_case keyword arguments,
-so pyright, pyrefly and ty check every key. The request goes out with
-Anthropic's own snake_case names (`budget_tokens`, `task_budget`):
+`AnthropicConfig` is flat. Choices are exported Literals (`ThinkingMode`,
+`ThinkingDisplay`, `Effort`), so pyright, pyrefly and ty check every key and
+value. The plugin builds Anthropic's nested request objects from the flat
+fields:
+
+- `thinking`, `thinking_budget`, `thinking_display` → `thinking`
+- `effort`, `task_budget` → `output_config`
+- `user_id` → `metadata`
 
 ```python
-from genkit_anthropic import AnthropicConfig, OutputConfig, TaskBudget, ThinkingConfig
+from genkit_anthropic import AnthropicConfig
 
-# 1. Build the config from typed nested settings
+# 1. Build the config from flat fields
 config = AnthropicConfig(
     max_output_tokens=4096,
-    thinking=ThinkingConfig(type='enabled', budget_tokens=2048),
-    output_config=OutputConfig(task_budget=TaskBudget(total=20000)),
+    thinking='adaptive',
+    thinking_display='summarized',
+    effort='high',
+    task_budget=20000,
+    user_id='diner-42',
 )
 
 # 2. Generate with it
-res = await ai.generate(model='anthropic/claude-sonnet-4-6', prompt='Plan a tasting menu.', config=config)
+res = await ai.generate(model='anthropic/claude-opus-4-6', prompt='Plan a tasting menu.', config=config)
+# Sent as:
+#   thinking={'display': 'summarized', 'type': 'adaptive'}
+#   output_config={'effort': 'high', 'task_budget': {'type': 'tokens', 'total': 20000}}
+#   metadata={'user_id': 'diner-42'}
 ```
+
+- A `thinking_budget` alone means `thinking='enabled'`. `'enabled'` needs a
+  budget from some config layer; `'adaptive'` doesn't send one, and
+  `'disabled'` sends neither the budget nor the display.
+- `task_budget` is a beta field, so it sends the call to the beta API.
+- To send a shape the flat fields don't cover, put Anthropic's object in
+  `extra`, e.g. `extra={'thinking': {...}}`. It replaces the built object.
+
+### Defaults and overrides
+
+Config merges key by key: the `Anthropic.claude(config=...)` default, then the
+prompt's config, then the call's. Rules that span fields are checked once, on
+the merged config. `thinking` is the switch, so a call can turn thinking off
+or back on without restating the budget:
+
+```python
+# 1. Model default with extended thinking on
+claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(thinking='enabled', thinking_budget=4096))
+
+# 2. Turn it off for one call; the inherited budget isn't sent
+await ai.generate(model=claude, prompt='Is shellfish safe for this guest?', config={'thinking': 'disabled'})
+# => thinking={'type': 'disabled'}
+
+# 3. Raise the budget for another; the mode is inherited
+await ai.generate(model=claude, prompt='Plan a nut-free tasting menu.', config={'thinking_budget': 8192})
+# => thinking={'type': 'enabled', 'budget_tokens': 8192}
+```
+
+A budget over an inherited `thinking='disabled'` stays disabled. Pass
+`thinking='enabled'` to turn it on, or `thinking=None` to clear the inherited
+mode. `None` clears any inherited value the same way.
+
+## Tool choice
+
+Tool choice is Genkit's `tool_choice` option, not a config field. The plugin
+sends it as Anthropic's `tool_choice` object: `'auto'` → `{'type': 'auto'}`,
+`'required'` → `{'type': 'any'}`, `'none'` → `{'type': 'none'}`. Anthropic
+carries `disable_parallel_tool_use` inside that object, so the config takes it
+as a flat flag:
+
+```python
+# 1. Require one tool call, and only one
+res = await ai.generate(
+    model='anthropic/claude-sonnet-4-6',
+    prompt='Is the pho in stock?',
+    tools=['lookup_menu'],
+    tool_choice='required',
+    config=AnthropicConfig(disable_parallel_tool_use=True),
+    return_tool_requests=True,
+)
+# Sent as: tool_choice={'type': 'any', 'disable_parallel_tool_use': True}
+```
+
+To pin one named tool, send Anthropic's object as
+`extra={'tool_choice': {'type': 'tool', 'name': 'lookup_menu'}}`; it replaces
+the translated value.
+
+With `thinking='enabled'` or `'adaptive'`, Anthropic accepts only `'auto'` and
+`'none'`, so `tool_choice='required'` raises `INVALID_ARGUMENT` before the
+request goes out. On a request with no tools, `tool_choice` (option or
+`extra`) is dropped, since the API rejects it there.
 
 ## Per-request API key
 

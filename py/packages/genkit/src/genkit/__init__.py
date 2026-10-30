@@ -45,7 +45,6 @@ from genkit._ai._tools import (
     ToolContext,
 )
 from genkit._core._action import FlowContext, StreamResponse
-from genkit._core._context import ContextProvider, RequestData
 from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
 from genkit._core._flow import Flow
 from genkit._core._logger import get_logger
@@ -92,9 +91,6 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
-    # HTTP request context for flow handlers
-    'ContextProvider',
-    'RequestData',
     # Custom output formats
     'FormatDef',
     'FormatterConfig',

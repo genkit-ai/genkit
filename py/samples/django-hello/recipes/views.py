@@ -20,7 +20,8 @@ from genkit_django import genkit_django_handler
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import FlowContext, Genkit, ModelResponse, RequestData
+from genkit import FlowContext, Genkit, ModelResponse
+from genkit.web import RequestData
 
 ai = Genkit(
     plugins=[GoogleAI()],
