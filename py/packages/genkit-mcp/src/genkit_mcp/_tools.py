@@ -21,7 +21,6 @@ import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
-import structlog
 from mcp.types import (
     AudioContent,
     BlobResourceContents,
@@ -35,14 +34,14 @@ from mcp.types import (
 )
 
 import genkit
-from genkit import MultipartToolResponse, Part, ToolContext
+from genkit import MultipartToolResponse, Part, ToolContext, get_logger
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 from genkit_mcp._errors import _ToolResultError
 
 McpToolCall = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[CallToolResult]]
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 MAX_TOOL_NAME_LENGTH = 64
 """Longest function declaration name both Gemini and OpenAI accept."""
@@ -217,7 +216,7 @@ def mcp_tool_to_action(
             )
         return call_result_to_multipart(result)
 
-    action = genkit.tool(
+    action = genkit.Tool(
         handler,
         name=tool_name,
         description=tool.description or '',
