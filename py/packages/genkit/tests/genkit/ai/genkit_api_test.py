@@ -5,6 +5,7 @@
 
 """Tests for the Genkit extra API methods."""
 
+import json
 import os
 import signal
 import socket
@@ -17,13 +18,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from genkit import Genkit, get_logger
-from genkit._core._action import ActionRunContext, _action_context
+import genkit.plugin_api
+from genkit import Genkit, Message, Part, Role, get_logger
+from genkit._core._action import ActionKind, _action_context
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
+from genkit._core._operation import Operation
 from genkit._core._telemetry._log_exporter import build_log_record
-from genkit._core._typing import Operation
 from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
+from genkit.model import ModelContext
 from genkit.telemetry import (
     SpanMetadata,
     SpanNext,
@@ -187,6 +190,13 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
         reset_instrumentation()
 
 
+def test_get_logger_lives_only_in_genkit() -> None:
+    """`get_logger` is app-facing: exported from `genkit`, not from `genkit.plugin_api`."""
+    assert 'get_logger' in genkit.__all__
+    assert 'get_logger' not in genkit.plugin_api.__all__
+    assert not hasattr(genkit.plugin_api, 'get_logger')
+
+
 @pytest.mark.asyncio
 async def test_get_logger_in_flow_attaches_trace_id(hex_ids: None) -> None:
     """get_logger() lines inside a flow attach the flow's trace ID to the log record."""
@@ -218,19 +228,21 @@ async def test_genkit_check_operation() -> None:
 
     op = Operation(id='123', done=False, action='/background-model/test_action')
 
-    # Create mock background action with check method
-    mock_background_action = MagicMock()
-    mock_background_action.check = AsyncMock(return_value=Operation(id='123', done=True, output='result'))
+    # Create mock background model with check method
+    mock_background_model = MagicMock()
+    finished = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('result')]))
+    mock_background_model.check = AsyncMock(return_value=Operation(id='123', done=True, output=finished))
 
-    # Patch lookup_background_action to return our mock
+    # Patch lookup_background_model to return our mock
     with mock.patch(
-        'genkit._core._background.lookup_background_action',
-        new=AsyncMock(return_value=mock_background_action),
+        'genkit._ai._background_model.lookup_background_model',
+        new=AsyncMock(return_value=mock_background_model),
     ) as mock_lookup:
         updated_op = await ai.check_operation(op)
 
         assert updated_op.done is True
-        assert updated_op.output == 'result'
+        assert updated_op.output is not None
+        assert updated_op.output.text == 'result'
         mock_lookup.assert_called_once()
 
 
@@ -254,7 +266,7 @@ async def test_genkit_check_operation_malformed_key_is_invalid_argument() -> Non
     op = Operation(id='123', done=False, action='missing')
 
     with pytest.raises(
-        GenkitError, match='Failed to resolve background action from original request: missing'
+        GenkitError, match='Failed to resolve background model from original request: missing'
     ) as exc_info:
         await ai.check_operation(op)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
@@ -267,7 +279,7 @@ async def test_genkit_check_operation_not_found() -> None:
     op = Operation(id='123', done=False, action='/background-model/nope')
 
     with pytest.raises(
-        GenkitError, match='Failed to resolve background action from original request: /background-model/nope'
+        GenkitError, match='Failed to resolve background model from original request: /background-model/nope'
     ) as exc_info:
         await ai.check_operation(op)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
@@ -275,13 +287,13 @@ async def test_genkit_check_operation_not_found() -> None:
 
 @pytest.mark.asyncio
 async def test_check_operation_round_trips_persisted_dump() -> None:
-    """model_dump(by_alias=True) -> model_validate is the supported save/reload path."""
+    """model_dump(by_alias=True) -> model_validate still works next to passing the dict."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-rt', start=start, check=check)
@@ -293,21 +305,115 @@ async def test_check_operation_round_trips_persisted_dump() -> None:
     assert updated.done is True
 
 
-@pytest.mark.asyncio
-async def test_check_operation_dump_is_invalid_argument() -> None:
-    """A saved dict is not an Operation until model_validate."""
-    ai = Genkit()
-    dumped = {
-        'id': '123',
-        'done': False,
-        'action': '/background-model/test_action',
-    }
+def _text_response(text: str) -> ModelResponse:
+    return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
-    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as exc_info:
-        await ai.check_operation(dumped)  # type: ignore[arg-type]
+
+@pytest.mark.asyncio
+async def test_check_operation_accepts_stored_dict() -> None:
+    """generate_operation -> JSON -> json.loads -> check_operation, no model_validate step."""
+    ai = Genkit()
+
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return Operation(id=op.id, done=True, output=_text_response('rendered'))
+
+    ai.define_background_model(name='bg-dict', start=start, check=check)
+    started = await ai.generate_operation(model='bg-dict', prompt='a cat video')
+    saved = started.model_dump_json()
+
+    updated = await ai.check_operation(json.loads(saved))
+
+    assert type(updated) is Operation[ModelResponse]
+    assert updated.done is True
+    assert updated.action == '/background-model/bg-dict'
+    assert isinstance(updated.output, ModelResponse)
+    assert updated.output.text == 'rendered'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_stored_dict_output_reaches_check_as_model_response() -> None:
+    """A finished handle's dict output is validated before the check fn sees it."""
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        seen.append(op.output)
+        return op
+
+    ai.define_background_model(name='bg-done', start=start, check=check)
+    finished = Operation[ModelResponse](
+        id='job-1', done=True, action='/background-model/bg-done', output=_text_response('done')
+    )
+
+    updated = await ai.check_operation(json.loads(finished.model_dump_json()))
+
+    assert isinstance(seen[0], ModelResponse)
+    assert isinstance(updated.output, ModelResponse)
+    assert updated.output.text == 'done'
+
+
+@pytest.mark.asyncio
+async def test_check_operation_typod_key_is_invalid_argument() -> None:
+    """A typo'd key fails INVALID_ARGUMENT with the field named instead of loading as done=None."""
+    ai = Genkit()
+
+    with pytest.raises(GenkitError, match='invalid Operation: Done: Extra inputs are not permitted') as exc_info:
+        await ai.check_operation({'id': 'x', 'action': '/background-model/test_action', 'Done': True})
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.original_message
+
+
+@pytest.mark.asyncio
+async def test_check_operation_dict_without_id_is_invalid_argument() -> None:
+    ai = Genkit()
+
+    with pytest.raises(GenkitError, match='invalid Operation: id: Field required') as exc_info:
+        await ai.check_operation({'action': '/background-model/test_action', 'done': False})
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_check_operation_model_response_dump_is_invalid_argument() -> None:
+    """A stored generate() response is not the handle; point at response.operation."""
+    ai = Genkit()
+    boxed = ModelResponse(operation=Operation(id='123', action='/background-model/test_action'))
+
+    with pytest.raises(GenkitError, match='got a ModelResponse dump; pass response.operation') as exc_info:
+        await ai.check_operation(json.loads(boxed.model_dump_json()))
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_check_action_input_schema_stays_closed() -> None:
+    """Dicts are validated before the action runs, so the published input schema is still a closed Operation."""
+    ai = Genkit()
+
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='bg-schema', start=start, check=check, cancel=check)
+
+    for kind, name in (
+        (ActionKind.CHECK_OPERATION, 'bg-schema/check'),
+        (ActionKind.CANCEL_OPERATION, 'bg-schema/cancel'),
+    ):
+        action = await ai._registry.resolve_action(kind, name)
+        assert action is not None
+        schema = action.input_schema
+        assert schema['additionalProperties'] is False
+        assert schema['required'] == ['id']
 
 
 @pytest.mark.asyncio
@@ -339,13 +445,13 @@ async def test_cancel_operation_round_trips_persisted_dump() -> None:
     """Cancel accepts the same save/reload path as check."""
     ai = Genkit()
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='job-1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
-    async def cancel(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def cancel(op: Operation, _ctx: ModelContext) -> Operation:
         return Operation(id=op.id, done=True)
 
     ai.define_background_model(name='bg-cancel-rt', start=start, check=check, cancel=cancel)
@@ -358,29 +464,38 @@ async def test_cancel_operation_round_trips_persisted_dump() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_operation_dump_is_invalid_argument() -> None:
+async def test_cancel_operation_accepts_stored_dict() -> None:
+    """The dict a started handle dumped to cancels without a model_validate step."""
     ai = Genkit()
-    dumped = {
-        'id': '123',
-        'done': False,
-        'action': '/background-model/test_action',
-    }
 
-    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as exc_info:
-        await ai.cancel_operation(dumped)  # type: ignore[arg-type]
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='job-1', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    async def cancel(op: Operation, _ctx: ModelContext) -> Operation:
+        return Operation(id=op.id, done=True, output=_text_response('cancelled'))
+
+    ai.define_background_model(name='bg-cancel-dict', start=start, check=check, cancel=cancel)
+    started = await ai.generate_operation(model='bg-cancel-dict', prompt='a cat video')
+
+    updated = await ai.cancel_operation(json.loads(started.model_dump_json()))
+
+    assert type(updated) is Operation[ModelResponse]
+    assert updated.done is True
+    assert isinstance(updated.output, ModelResponse)
+    assert updated.output.text == 'cancelled'
 
 
 @pytest.mark.asyncio
 async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
     """The wrapper's UNIMPLEMENTED propagates through the veneer unchanged."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='123', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -395,13 +510,13 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
-    """A real no-cancel BackgroundAction raises UNIMPLEMENTED from .cancel."""
+async def test_background_model_cancel_without_fn_is_unimplemented() -> None:
+    """A real no-cancel BackgroundModel raises UNIMPLEMENTED from .cancel."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
@@ -416,23 +531,27 @@ async def test_background_action_cancel_without_fn_is_unimplemented() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_action_check_rejects_non_operation() -> None:
-    """BackgroundAction.check uses the same require_operation gate as the veneer."""
+async def test_background_model_check_gate() -> None:
+    """BackgroundModel.check uses the same require_operation gate as the veneer: dict in, boxes and strings out."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
-        return op
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return Operation(id=op.id, done=True)
 
     ai = Genkit()
     action = ai.define_background_model(name='bg-check', start=start, check=check)
-    dumped = {'id': '1', 'action': '/background-model/bg-check'}
+    stored = {'id': '1', 'action': '/background-model/bg-check'}
     boxed = ModelResponse(operation=Operation(id='1', action='/background-model/bg-check'))
 
-    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as dump_exc:
-        await action.check(dumped)  # type: ignore[arg-type]
-    assert dump_exc.value.status == 'INVALID_ARGUMENT'
+    updated = await action.check(stored)
+    assert isinstance(updated, Operation)
+    assert updated.done is True
+
+    with pytest.raises(GenkitError, match='invalid Operation: Done') as typo_exc:
+        await action.check({'id': '1', 'action': '/background-model/bg-check', 'Done': True})
+    assert typo_exc.value.status == 'INVALID_ARGUMENT'
 
     with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as box_exc:
         await action.check(boxed)  # type: ignore[arg-type]
@@ -444,21 +563,25 @@ async def test_background_action_check_rejects_non_operation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_background_action_cancel_rejects_non_operation() -> None:
-    """A dump must not AttributeError on .action before UNIMPLEMENTED."""
+async def test_background_model_cancel_validates_dict_before_unimplemented() -> None:
+    """A stored dict is validated first, so a bad one is INVALID_ARGUMENT and a good one reaches UNIMPLEMENTED."""
 
-    async def start(_request: ModelRequest, _ctx: ActionRunContext) -> Operation:
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
         return Operation(id='1', done=False)
 
-    async def check(op: Operation, _ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
         return op
 
     ai = Genkit()
     action = ai.define_background_model(name='no-cancel', start=start, check=check)
 
-    with pytest.raises(GenkitError, match='got a dump; pass Operation.model_validate') as exc_info:
-        await action.cancel({'id': '1', 'action': '/background-model/no-cancel'})  # type: ignore[arg-type]
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    with pytest.raises(GenkitError, match='invalid Operation: id') as bad_exc:
+        await action.cancel({'action': '/background-model/no-cancel'})
+    assert bad_exc.value.status == 'INVALID_ARGUMENT'
+
+    with pytest.raises(GenkitError, match='does not support cancellation') as exc_info:
+        await action.cancel({'id': '1', 'action': '/background-model/no-cancel'})
+    assert exc_info.value.status == 'UNIMPLEMENTED'
 
 
 @pytest.mark.asyncio
@@ -469,7 +592,7 @@ async def test_current_context() -> None:
 
     context: dict[str, object] = {'auth': {'uid': '123'}}
 
-    # Simulate being inside an action run using ActionRunContext internal mechanism
+    # Simulate being inside an action run using ModelContext internal mechanism
     token = _action_context.set(context)
     try:
         assert Genkit.current_context() == context
@@ -514,6 +637,16 @@ def test_genkit_two_positional_args_says_got_2() -> None:
         match=r'Genkit\(\) takes no positional arguments, got 2\.',
     ):
         Genkit('googleai/gemini-flash-latest', [])  # type: ignore[reportCallIssue,too-many-positional-arguments]
+
+
+def test_genkit_init_has_docstring() -> None:
+    """Genkit.__init__.__doc__ documents keyword arguments and lazy model resolution."""
+    doc = Genkit.__init__.__doc__
+    assert doc is not None
+    assert 'plugins:' in doc
+    assert 'model:' in doc
+    assert 'prompt_dir:' in doc
+    assert 'GoogleAI.gemini_model' in doc
 
 
 def test_define_evaluator_takes_name_and_fn_positionally() -> None:

@@ -42,8 +42,8 @@ from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelInfo, ModelRequest, Supports
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, ModelSupports
 
 
 class OpenAITtsConfig(ModelConfig):
@@ -89,7 +89,7 @@ _CONTENT_TYPE_TO_EXTENSION: dict[str, str] = {
 SUPPORTED_TTS_MODELS: dict[str, ModelInfo] = {
     'tts-1': ModelInfo(
         label='OpenAI - TTS 1',
-        supports=Supports(
+        supports=ModelSupports(
             media=False,
             output=['media'],
             multiturn=False,
@@ -99,7 +99,7 @@ SUPPORTED_TTS_MODELS: dict[str, ModelInfo] = {
     ),
     'tts-1-hd': ModelInfo(
         label='OpenAI - TTS 1 HD',
-        supports=Supports(
+        supports=ModelSupports(
             media=False,
             output=['media'],
             multiturn=False,
@@ -109,7 +109,7 @@ SUPPORTED_TTS_MODELS: dict[str, ModelInfo] = {
     ),
     'gpt-4o-mini-tts': ModelInfo(
         label='OpenAI - GPT-4o Mini TTS',
-        supports=Supports(
+        supports=ModelSupports(
             media=False,
             output=['media'],
             multiturn=False,
@@ -123,7 +123,7 @@ SUPPORTED_TTS_MODELS: dict[str, ModelInfo] = {
 SUPPORTED_STT_MODELS: dict[str, ModelInfo] = {
     'gpt-4o-transcribe': ModelInfo(
         label='OpenAI - GPT-4o Transcribe',
-        supports=Supports(
+        supports=ModelSupports(
             media=True,
             output=['text', 'json'],
             multiturn=False,
@@ -133,7 +133,7 @@ SUPPORTED_STT_MODELS: dict[str, ModelInfo] = {
     ),
     'gpt-4o-mini-transcribe': ModelInfo(
         label='OpenAI - GPT-4o Mini Transcribe',
-        supports=Supports(
+        supports=ModelSupports(
             media=True,
             output=['text', 'json'],
             multiturn=False,
@@ -143,7 +143,7 @@ SUPPORTED_STT_MODELS: dict[str, ModelInfo] = {
     ),
     'whisper-1': ModelInfo(
         label='OpenAI - Whisper 1',
-        supports=Supports(
+        supports=ModelSupports(
             media=True,
             output=['text', 'json'],
             multiturn=False,
@@ -330,7 +330,7 @@ class OpenAITTSModel:
         """The name of the TTS model."""
         return self._model_name
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Generate speech audio from the request.
 
         Args:
@@ -372,7 +372,7 @@ class OpenAISTTModel:
         """The name of the STT model."""
         return self._model_name
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Transcribe audio from the request.
 
         Args:

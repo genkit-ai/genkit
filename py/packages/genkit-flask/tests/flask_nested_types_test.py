@@ -33,7 +33,7 @@ def test_flask_flow_returning_model_with_nested_message_sends_wire_json() -> Non
     ai = Genkit()
     app = Flask(__name__)
 
-    @app.post('/turn')
+    @app.post('/turn')  # type: ignore[arg-type]  # Flask's T_route bound rejects async views; same as flask_test.py.
     @genkit_flask_handler(ai)
     @ai.flow()
     async def turn(_: str) -> Turn:

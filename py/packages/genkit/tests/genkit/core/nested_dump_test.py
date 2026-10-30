@@ -42,7 +42,7 @@ from genkit._core._model import (
 )
 from genkit._core._typing import FinishReason, Media, ToolRequest
 from genkit.exp.agent import FileSessionStore
-from genkit.model import model_ref
+from genkit.model import ModelRef
 from genkit.testing import EchoModel, define_echo_model
 
 
@@ -150,7 +150,7 @@ async def test_model_config_temperature_none_still_clears_ref_default() -> None:
     ai = Genkit()
     echo: EchoModel
     echo, _ = define_echo_model(ai, name='testEcho')
-    ref = model_ref('testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.2, top_k=3))
+    ref = ModelRef(name='testEcho', config_schema=ModelConfig, config=ModelConfig(temperature=0.2, top_k=3))
 
     await ai.generate(model=ref, prompt='hi', config=ModelConfig(temperature=None))
 

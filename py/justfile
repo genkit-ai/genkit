@@ -20,7 +20,6 @@
 # Examples:
 #   just py lint           # Lint and type-check all Python code
 #   just py test           # Run all Python tests
-#   just py sample         # Interactive sample runner
 #   just py fmt            # Format Python code
 
 set dotenv-load := true
@@ -76,20 +75,6 @@ check:
 check-lock:
     uv lock --check --directory "{{ py_dir }}"
 
-# Clean build artifacts and caches.
-clean:
-    "{{ py_dir }}/bin/cleanup"
-
-# --- Samples -----------------------------------------------------------
-
-# Run a sample (interactive picker or by name).
-sample NAME="":
-    "{{ py_dir }}/bin/run_sample" {{ NAME }}
-
-# Test flows in a sample.
-test-sample NAME="":
-    "{{ py_dir }}/bin/test_sample_flows" {{ NAME }}
-
 # --- Code Generation ---------------------------------------------------
 
 # Regenerate typing.py from JSON schema.
@@ -110,14 +95,6 @@ build:
 create-release VERSION PR *FLAGS:
     "{{ py_dir }}/bin/create_release" {{ VERSION }} {{ PR }} {{ FLAGS }}
 
-# Publish to PyPI.
-publish:
-    "{{ py_dir }}/bin/publish_pypi.sh"
-
 # Check version consistency across packages.
 check-versions:
     "{{ py_dir }}/bin/check_versions"
-
-# Validate release documentation.
-validate-docs:
-    "{{ py_dir }}/bin/validate_release_docs"

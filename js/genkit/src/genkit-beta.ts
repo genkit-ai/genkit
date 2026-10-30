@@ -15,6 +15,7 @@
  */
 
 import {
+  CommittedTurnError,
   GenerateOptions,
   GenerateResponseData,
   GenerationCommonConfigSchema,
@@ -37,6 +38,7 @@ import {
   type ResourceFn,
   type ResourceOptions,
   type ToolAction,
+  type TurnResult,
 } from '@genkit-ai/ai';
 
 import { defineFormat } from '@genkit-ai/ai/formats';
@@ -61,6 +63,7 @@ import { Genkit, type GenkitOptions } from './genkit.js';
 
 export type { JsonPatch, JsonPatchOperation } from '@genkit-ai/ai/json-patch';
 export {
+  CommittedTurnError,
   FileSessionStore,
   InMemorySessionStore,
   SessionRunner,
@@ -81,6 +84,7 @@ export type {
   SessionStore,
   SessionStoreOptions,
   SnapshotMutator,
+  TurnResult,
 };
 
 /**
@@ -119,6 +123,12 @@ export class GenkitBeta extends Genkit {
       description?: string;
       stateSchema?: z.ZodType<State>;
       store?: SessionStore<State>;
+      /**
+       * How long (ms) one request to the `waitForSnapshot` companion action
+       * holds before it answers with the snapshot as it stands. Defaults to
+       * 25 seconds.
+       */
+      maxSnapshotWaitMs?: number;
     },
     fn: AgentFn<State>
   ) {
@@ -142,6 +152,12 @@ export class GenkitBeta extends Genkit {
     promptInput?: z.infer<I>;
     stateSchema?: z.ZodType<State>;
     store?: SessionStore<State>;
+    /**
+     * How long (ms) one request to the `waitForSnapshot` companion action
+     * holds before it answers with the snapshot as it stands. Defaults to
+     * 25 seconds.
+     */
+    maxSnapshotWaitMs?: number;
   }) {
     return definePromptAgent<State, I>(this.registry, config);
   }
@@ -237,7 +253,7 @@ export class GenkitBeta extends Genkit {
    *
    * ```ts
    * const operation = await ai.generateOperation({
-   *   model: googleAI.model('veo-3.1-generate-preview'),
+   *   model: vertexAI.model('veo-3.1-generate-001'),
    *   prompt: 'A banana riding a bicycle.',
    * });
    * ```

@@ -34,7 +34,7 @@ import (
 const provider = "genkit-middleware-exp"
 
 // Middleware provides the experimental middleware ([Agents], [Artifacts],
-// [ContextCompression]) as a Genkit plugin. Register it with
+// [Budget], [ContextCompression]) as a Genkit plugin. Register it with
 // [genkit.WithPlugins] during [genkit.Init] to make them resolvable by name
 // (e.g. for the Dev UI). Using them directly via [ai.WithUse] does not require
 // the plugin.
@@ -48,6 +48,7 @@ func (p *Middleware) Middlewares(ctx context.Context) ([]*ai.MiddlewareDesc, err
 	return []*ai.MiddlewareDesc{
 		ai.NewMiddleware("Delegate tasks to registered sub-agents via per-agent tools", Agents{}),
 		ai.NewMiddleware("Provide read/write tools for session artifacts", Artifacts{}),
+		ai.NewMiddleware("Cap the usage a generate run or agent session may spend", Budget{}),
 		ai.NewMiddleware("Compress the conversation when it grows too large, by deduplicating and truncating tool responses, summarizing, and dropping older messages", ContextCompression{}),
 	}, nil
 }

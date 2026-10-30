@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import abc
 from collections.abc import Sequence
-from typing import ClassVar
+from typing import Any
 
 from genkit._core._action import Action, ActionKind, set_action_name
-from genkit._core._middleware import GenerateMiddleware
-from genkit._core._typing import ActionMetadata
+from genkit._core._background import BackgroundAction, background_base_id
+from genkit._core._middleware import Middleware
 
 
 def resolved_action_name(*, plugin: str, requested_id: str) -> str:
@@ -43,8 +43,12 @@ class Plugin(abc.ABC):
     name: str  # plugin namespace
 
     @abc.abstractmethod
-    async def init(self) -> list[Action]:
+    async def init(self) -> Sequence[Action | BackgroundAction[Any, Any]]:
         """Lazy warm-up called once per plugin; return actions to pre-register.
+
+        A ``BackgroundAction`` (e.g. a ``BackgroundModel``) registers its start,
+        check and cancel actions together. ``Sequence`` so an override that
+        returns ``list[Action]`` still type-checks.
 
         Return names with or without the ``{plugin.name}/`` prefix. A name that
         doesn't start with it is registered under ``{plugin.name}/{name}`` with
@@ -54,8 +58,15 @@ class Plugin(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
         """Resolve a single action by kind and its id inside this plugin.
+
+        Return a ``BackgroundAction`` (e.g. a ``BackgroundModel``) for a
+        background job. Genkit registers its start, check and cancel actions
+        together, so a later ``/check-operation/{name}/check`` lookup finds the
+        check action without the plugin routing it. If ``resolve`` returns
+        ``None`` for a check or cancel key, Genkit asks again with
+        ``ActionKind.BACKGROUND_MODEL`` and the start id.
 
         Naming rule. When an app asks for ``{plugin.name}/{rest}``:
 
@@ -93,26 +104,59 @@ class Plugin(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def list_actions(self) -> Sequence[Action | ActionMetadata]:
+    async def list_actions(self) -> Sequence[Action | BackgroundAction[Any, Any]]:
         """Return advertised actions for dev UI/reflection listing.
 
-        ``ActionMetadata.action_type`` must be set (typically ``ActionKind.*``) and
-        ``ActionMetadata.name`` must match resolution keys (typically
+        A ``BackgroundAction`` is listed once, under its start action. Each
+        returned action's ``name`` must match resolution keys (typically
         ``{plugin.name}/localName`` for plugin-backed actions).
         """
         ...
 
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        """Return middleware descriptors for this plugin to register on the app.
+    def list_middleware(self) -> Sequence[type[Middleware]]:
+        """Return middleware classes this plugin registers on the app. Defaults to none.
 
-        This runs while :class:`Genkit` is being constructed, after
-        built-in middleware is registered. Use unique flat names without
-        slash characters so they do not collide with built-ins or other
-        plugins.
+        Runs once while :class:`Genkit` is constructed, after built-in
+        middleware. Each returned :class:`~genkit.middleware.Middleware`
+        subclass is registered under its ``cls.name`` via
+        :meth:`Genkit.define_middleware() <genkit.Genkit.define_middleware>`.
 
-        Returns:
-            Descriptors to list in the Dev UI and to resolve by name from
-            ``generate(use=...)``.
+        Example:
+            ```python
+            from genkit import Genkit
+            from genkit.middleware import Middleware
+            from typing import Any
+
+            from genkit.plugin_api import Action, ActionKind, BackgroundAction, Plugin
+
+
+            # 1. Define a middleware class with a registry name
+            class AllergyCheck(Middleware):
+                name = 'allergy_check'
+
+
+            # 2. A plugin that contributes the middleware class
+            class AllergyGuard(Plugin):
+                name = 'allergy-guard'
+
+                async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
+                    return []
+
+                async def resolve(self, kind: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
+                    return None
+
+                async def list_actions(self) -> list[Action]:
+                    return []
+
+                def list_middleware(self) -> list[type[Middleware]]:
+                    return [AllergyCheck]
+
+
+            # 3. Register the plugin and pass the middleware in use=[...]
+            ai = Genkit(plugins=[AllergyGuard()])
+            res = await ai.generate(prompt='Suggest a dish.', use=[AllergyCheck()])
+            # => AllergyCheck runs around the model call
+            ```
         """
         return []
 
@@ -136,58 +180,11 @@ class Plugin(abc.ABC):
 
     async def _named_resolve(self, kind: ActionKind, name: str) -> Action | None:
         requested_id = name.removeprefix(f'{self.name}/')
-        action = await self.resolve(kind, requested_id)
-        if action is not None:
-            set_action_name(action, resolved_action_name(plugin=self.name, requested_id=requested_id))
-        return action
-
-
-class MiddlewarePlugin(Plugin):
-    """Plugin that contributes middleware descriptors only.
-
-    Example:
-        from genkit import Genkit
-        from genkit.middleware import BaseMiddleware
-        from genkit.middleware import GenerateMiddleware
-        from genkit.plugin_api import MiddlewarePlugin
-
-        class PrefixPromptMiddleware(BaseMiddleware):
-            ...
-
-        class MyMiddlewarePlugin(MiddlewarePlugin):
-            name = 'my-middleware'
-            middleware = [
-                GenerateMiddleware(
-                    cls=PrefixPromptMiddleware,
-                    name='prefix_prompt',
-                    description='Prepends a fixed prompt',
-                ),
-            ]
-
-        ai = Genkit(plugins=[MyMiddlewarePlugin()])
-    """
-
-    name: str = ''
-    middleware: ClassVar[list[GenerateMiddleware]] = []
-
-    def __init__(self) -> None:
-        if not type(self).name:
-            raise ValueError(f'{type(self).__name__} must set `name` to the plugin namespace string.')
-        if not self.list_middleware():
-            raise ValueError(
-                f'{type(self).__name__} must provide middleware via the `middleware` class '
-                'attribute or a `list_middleware` override. Each entry should come from '
-                'GenerateMiddleware(cls=YourMiddleware, name=..., description=...).'
-            )
-
-    async def init(self) -> list[Action]:
-        return []
-
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-        return None
-
-    async def list_actions(self) -> Sequence[Action | ActionMetadata]:
-        return []
-
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        return list(type(self).middleware)
+        resolved = await self.resolve(kind, requested_id)
+        if isinstance(resolved, BackgroundAction):
+            base = background_base_id(kind, requested_id)
+            resolved._rename(resolved_action_name(plugin=self.name, requested_id=base))
+            return resolved._action_for(kind)
+        if resolved is not None:
+            set_action_name(resolved, resolved_action_name(plugin=self.name, requested_id=requested_id))
+        return resolved

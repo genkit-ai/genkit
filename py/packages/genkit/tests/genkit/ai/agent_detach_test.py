@@ -26,8 +26,7 @@ from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionSt
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
 from genkit._ai._agents._types import TurnContext
 from genkit._ai._generate import CallScope, generate_action
-from genkit._ai._tools import ToolRunContext
-from genkit._core._action import ActionRunContext
+from genkit._ai._tools import ToolContext
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import GenkitError
 from genkit._core._model import (
@@ -48,6 +47,7 @@ from genkit._core._typing import (
     ToolRequest,
 )
 from genkit.exp import Genkit
+from genkit.exp.agent import AgentContext
 from genkit.testing import define_scripted_model
 
 
@@ -101,7 +101,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
     seen_inputs: list[AgentInput] = []
 
-    async def agent_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             seen_inputs.append(inp)
             return None
@@ -152,7 +152,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     release = asyncio.Event()
     chunks: list[AgentStreamChunk] = []
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             ctx.send_chunk(
                 AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('working')]))
@@ -213,7 +213,7 @@ async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest
 
     release = asyncio.Event()
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             await release.wait()
 
@@ -262,7 +262,7 @@ async def test_detach_without_store_raises() -> None:
     rt, _ = _runtime(session, None)
     await rt.session_runner.seed_last_good_state()
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             await ctx.abort_signal.wait()
 
@@ -287,7 +287,7 @@ async def test_abort_snapshot_stops_detached_work() -> None:
 
     aborted = asyncio.Event()
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             for _i in range(100):
                 if ctx.abort_signal.is_set():
@@ -327,7 +327,7 @@ async def test_generate_tool_respects_abort_signal() -> None:
     tool_saw_abort = asyncio.Event()
 
     @ai.tool(name='slowWork')
-    async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+    async def slow_work(_: dict, ctx: ToolContext) -> dict:
         try:
             for _i in range(200):
                 if ctx.abort_signal.is_set():
@@ -383,7 +383,7 @@ async def test_detach_swallowed_turn_error_finalizes_failed() -> None:
     rt, _out_queue = _runtime(session, store)
     await rt.session_runner.seed_last_good_state()
 
-    async def agent_fn(session_runner: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
             raise RuntimeError('intentional failure')
 

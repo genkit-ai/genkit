@@ -1100,6 +1100,36 @@ describe('prompt', () => {
     });
   });
 
+  it('takes the variant from the file name, not the folder', async () => {
+    // See tests/prompts/v1.0/greet.fun.prompt.
+    const { messages } = await ai
+      .prompt('v1.0/greet', { variant: 'fun' })
+      .render({});
+
+    assert.strictEqual(messages[0].content[0].text, 'Hello from v1.0', 'text');
+
+    const action: PromptAction = await ai.registry.lookupAction(
+      '/prompt/v1.0/greet.fun'
+    );
+    assert.strictEqual(
+      action.__action.metadata?.prompt?.name,
+      'v1.0/greet',
+      'metadata name'
+    );
+  });
+
+  it('loads partials from sub folders', async () => {
+    // See tests/prompts. Full names always resolve; short names go to the root
+    // partial first, then to the first sub folder partial in walk order.
+    const { messages } = await ai.prompt('partials').render({});
+
+    assert.strictEqual(
+      messages[0].content[0].text,
+      'sub system|other system|other system|root greeting|sub greeting',
+      'rendered partials'
+    );
+  });
+
   it('loads from from the folder with all the options', async () => {
     const testPrompt = ai.prompt('kitchensink'); // see tests/prompts folder
 

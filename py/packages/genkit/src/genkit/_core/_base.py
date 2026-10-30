@@ -47,21 +47,18 @@ class GenkitModel(BaseModel):
     All Genkit types inherit from this so they serialize to the wire shape
     wherever they sit, including inside a user's own pydantic model:
     - camelCase keys (an explicit ``by_alias=False`` still gets field names)
-    - no ``None`` fields, unless the class sets ``_keep_none_fields``
+    - no ``None`` fields (config models are ``GenkitConfig`` and keep them)
     - ``bytes`` as base64 when a Genkit type is dumped to JSON
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
         serialize_by_alias=True,
         ser_json_bytes='base64',
     )
-
-    # Config objects turn this on: an explicit None there clears a model
-    # ref's default, so it has to survive the dump.
-    _keep_none_fields: ClassVar[bool] = False
 
     # No return annotation on purpose: pydantic would publish it as the
     # serialization schema, and Any there blanks out the schema FastAPI
@@ -69,7 +66,7 @@ class GenkitModel(BaseModel):
     @model_serializer(mode='wrap')
     def _serialize_wire(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
         dumped = handler(self)
-        if self._keep_none_fields or not isinstance(dumped, dict):
+        if not isinstance(dumped, dict):
             return dumped
         return self._drop_none_fields(dumped)
 
@@ -89,3 +86,38 @@ class GenkitModel(BaseModel):
         kwargs.setdefault('exclude_none', True)
         kwargs.setdefault('fallback', _default_serializer)
         return super().model_dump_json(**kwargs)
+
+
+class GenkitConfig(BaseModel):
+    """Base for settings passed to a Genkit action: model and middleware config.
+
+    Python callers construct it with field names (snake_case), and plugins
+    hand model_dump() output to provider SDKs. Genkit's tooling sees
+    camelCase JSON: the Developer UI renders the JSON schema as a form,
+    pre-fills it from traces and .prompt files by exact key, and exports
+    .prompt files from it. Those formats are shared with the JS and Go SDKs,
+    so the schema keys, trace keys and .prompt keys must use one spelling.
+
+    - alias_generator=to_camel: camelCase wire names and schema properties.
+    - validate_by_name / validate_by_alias: accept either spelling; all three
+      type checkers take the snake_case kwarg.
+    - extra='forbid': an unknown key raises instead of being dropped, and so
+      does a second spelling of a key already given (maxOutputTokens and
+      max_output_tokens in one input).
+
+    model_dump() is not overridden: the default returns field names. Pass
+    by_alias=True for Genkit JSON. Nested in a GenkitModel such as
+    ModelRequest, the parent's settings apply, so traces stay camelCase.
+
+    Use plain BaseModel for flow and tool input/output; that data is the
+    app's, and Genkit does not rename it. An app's own middleware config may
+    also be a plain BaseModel: its keys are its field names everywhere, and
+    unknown keys still raise.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+    )
