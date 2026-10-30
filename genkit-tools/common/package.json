@@ -11,7 +11,7 @@
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
     "@inquirer/prompts": "^7.10.1",
-    "@trpc/server": "^10.45.4",
+    "@trpc/server": "^11.22.1",
     "adm-zip": "^0.6.1",
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
