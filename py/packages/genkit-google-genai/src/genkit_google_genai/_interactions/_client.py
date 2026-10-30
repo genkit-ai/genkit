@@ -152,7 +152,8 @@ async def request(
     # Auth/key headers are per-request; the client is just the transport.
     # The timeout always goes on the request so a caller's own client gets the
     # same budget as the default one instead of httpx's 5 second default.
-    client = (client_options.http_client if client_options else None) or _http_client()
+    http_client = client_options.http_client if client_options else None
+    client = http_client() if http_client is not None else _http_client()
     request_headers = headers(api_key=api_key, client_options=client_options)
     timeout = timeout_seconds(client_options)
 

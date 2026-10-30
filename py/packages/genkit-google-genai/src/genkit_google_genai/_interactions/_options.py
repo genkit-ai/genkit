@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 import httpx
@@ -46,7 +47,8 @@ class ClientOptions(BaseModel):
     # Milliseconds — applied to the HTTP call, not the create body.
     timeout: float | None = None
     # Only the plugin sets this; a request config can't swap the connection.
-    http_client: httpx.AsyncClient | None = Field(default=None, exclude=True)
+    # A getter, called per request, so each event loop gets its own client.
+    http_client: Callable[[], httpx.AsyncClient] | None = Field(default=None, exclude=True)
 
     def merge(self, overrides: ClientOptions | dict[str, Any] | None) -> Self:
         """Return a copy with non-null override fields applied."""

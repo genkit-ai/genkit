@@ -28,8 +28,8 @@ def copy_http_options(opts: genai_types.HttpOptions) -> genai_types.HttpOptions:
     """Copy ``opts`` so per-request edits never reach the plugin's options.
 
     ``headers`` is the only container the plugin sets, so it gets a fresh dict.
-    The caller's ``http_client`` stays shared: it holds locks and sockets that
-    can't be copied, and every request is supposed to go through it.
+    The loop's ``httpx_async_client`` stays shared: it holds locks and sockets
+    that can't be copied, and every request on that loop goes through it.
     """
     if opts.headers is None:
         return opts.model_copy()

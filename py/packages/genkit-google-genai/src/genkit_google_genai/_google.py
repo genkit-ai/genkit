@@ -283,7 +283,7 @@ def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
     return GeminiModel(
         clean_name,
         plugin._runtime_client(),
-        client_kwargs=plugin._client_kwargs,
+        client_kwargs=plugin._loop_client_kwargs(),
         base_url_pinned=plugin._base_url_pinned,
         legacy_response_schema=plugin._legacy_response_schema,
     )
@@ -365,7 +365,7 @@ def _create_veo_background_action(
     name: str,
     client_getter: Callable[[], genai.Client],
     plugin_name: str,
-    client_kwargs: dict[str, Any] | None = None,
+    client_kwargs: Callable[[], dict[str, Any]] | None = None,
 ) -> BackgroundAction:
     """Create the start/check action pair for a Veo video generation model.
 
@@ -378,8 +378,8 @@ def _create_veo_background_action(
         name: The model id without the plugin prefix.
         client_getter: Function returning the loop-local Google GenAI client.
         plugin_name: The name of the plugin (googleai or vertexai).
-        client_kwargs: Plugin-level client kwargs, cloned when a call
-            overrides the key or endpoint.
+        client_kwargs: Returns the plugin-level client kwargs for the running
+            loop, cloned when a call overrides the key or endpoint.
 
     Returns:
         BackgroundAction pairing the start and check actions.
@@ -387,11 +387,11 @@ def _create_veo_background_action(
     full_name = f'{plugin_name}/{name}'
 
     async def _start(request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
-        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
+        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs() if client_kwargs else None)
         return await veo.start(request, ctx)
 
     async def _check(op: Operation, ctx: ActionRunContext) -> Operation:
-        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
+        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs() if client_kwargs else None)
         return await veo.check(op, ctx)
 
     return background_model(
@@ -630,8 +630,8 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         api_version: str | None = None,
         base_url: str | None = None,
         headers: Mapping[str, str] | None = None,
-        timeout_seconds: float | None = None,
-        http_client: httpx.AsyncClient | None = None,
+        timeout: float | None = None,
+        http_client: Callable[[], httpx.AsyncClient] | None = None,
         legacy_response_schema: bool = False,
     ) -> None:
         """Initializes the GoogleAI plugin.
@@ -649,19 +649,31 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 its client attribution to ``x-goog-api-client`` and ``user-agent``.
                 Interactions models (Deep Research, Antigravity, Lyria) drop a
                 caller's ``x-goog-api-client`` and send only Genkit's.
-            timeout_seconds: Per-request timeout in seconds; must be positive.
-                Defaults to no timeout. The timeout set on ``http_client``
-                itself is not used.
-            http_client: An ``httpx.AsyncClient`` that model calls go through,
-                for proxies, mTLS, or a custom transport. Genkit never closes
-                it. OAuth token refresh for ``credentials`` and downloads of
-                media URLs in prompts don't use it.
+            timeout: Per-request timeout in **seconds**, as a float. Must be
+                positive and finite. Defaults to no timeout. A timeout set on
+                the client from ``http_client`` is not used.
 
-                The client is bound to the event loop that first uses it, so
-                only pass one when every Genkit call runs on a single loop. A
-                call from another loop (a second ``asyncio.run``, or the Dev UI
-                reflection server's thread under ``genkit start``) fails or
-                hangs, and may do so after the request reached the server.
+                Seconds is the Python convention for an argument named
+                ``timeout``: the standard library (``asyncio.wait_for``,
+                ``socket.settimeout``, ``subprocess.run``), ``requests``,
+                ``httpx``, ``aiohttp`` and the OpenAI and Anthropic SDKs all
+                use it. google-genai's ``HttpOptions.timeout`` is in
+                **milliseconds**, so divide by 1000 when migrating:
+                ``HttpOptions(timeout=30000)`` becomes ``timeout=30``. Passing
+                ``timeout=30000`` waits over 8 hours.
+            http_client: A function with no arguments that returns an
+                ``httpx.AsyncClient``, for proxies, mTLS, or a custom
+                transport. Genkit calls it once per event loop and reuses that
+                client for every model call on the loop. An ``AsyncClient``
+                only works on the loop that first used it, and Genkit runs on
+                more than one: ``genkit start`` serves the Dev UI from its own
+                thread and loop. Genkit never closes these clients.
+                OAuth token refresh for ``credentials`` and downloads of media
+                URLs in prompts don't use them.
+
+                ```python
+                GoogleAI(http_client=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
+                ```
             legacy_response_schema: Send JSON output schemas as Gemini's
                 ``responseSchema`` field instead of ``responseJsonSchema``,
                 converted to its format; a schema that cannot be converted
@@ -691,15 +703,19 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 base_url=base_url,
                 api_version=api_version,
                 headers=headers,
-                timeout_seconds=timeout_seconds,
-                http_client=http_client,
+                timeout=timeout,
             ),
         }
+        self._http_client = _loop_local_http_client(http_client)
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         self._legacy_response_schema = legacy_response_schema
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._loop_client_kwargs()))
         self._list_actions_cache: list[ActionMetadata] | None = None
+
+    def _loop_client_kwargs(self) -> dict[str, Any]:
+        """Client kwargs carrying this loop's ``http_client``, if one was given."""
+        return _with_loop_http_client(self._client_kwargs, self._http_client)
 
     def _interactions_client_options(self) -> ClientOptions:
         """Plugin-level transport knobs for Interactions models.
@@ -715,7 +731,9 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             base_url=http_options.base_url,
             custom_headers=dict(http_options.headers) if http_options.headers else None,
             timeout=float(http_options.timeout) if http_options.timeout is not None else None,
-            http_client=http_options.httpx_async_client,
+            # The getter, not a client: Interactions calls it per request so
+            # each event loop gets its own client.
+            http_client=self._http_client,
         )
 
     def _plugin_api_key(self) -> str | None:
@@ -819,7 +837,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         Returns:
             BackgroundAction for the Veo model.
         """
-        return _create_veo_background_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._client_kwargs)
+        return _create_veo_background_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._loop_client_kwargs)
 
     def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Google AI model.
@@ -1091,8 +1109,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         api_version: str | None = None,
         base_url: str | None = None,
         headers: Mapping[str, str] | None = None,
-        timeout_seconds: float | None = None,
-        http_client: httpx.AsyncClient | None = None,
+        timeout: float | None = None,
+        http_client: Callable[[], httpx.AsyncClient] | None = None,
         legacy_response_schema: bool = False,
     ) -> None:
         """Initializes the VertexAI plugin.
@@ -1113,19 +1131,31 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             base_url: The base URL for the API. Defaults to None.
             headers: Extra HTTP headers sent on every request. Genkit appends
                 its client attribution to ``x-goog-api-client`` and ``user-agent``.
-            timeout_seconds: Per-request timeout in seconds; must be positive.
-                Defaults to no timeout. The timeout set on ``http_client``
-                itself is not used.
-            http_client: An ``httpx.AsyncClient`` that model calls go through,
-                for proxies, mTLS, or a custom transport. Genkit never closes
-                it. OAuth token refresh, Vertex evaluators and downloads of
-                media URLs in prompts don't use it.
+            timeout: Per-request timeout in **seconds**, as a float. Must be
+                positive and finite. Defaults to no timeout. A timeout set on
+                the client from ``http_client`` is not used.
 
-                The client is bound to the event loop that first uses it, so
-                only pass one when every Genkit call runs on a single loop. A
-                call from another loop (a second ``asyncio.run``, or the Dev UI
-                reflection server's thread under ``genkit start``) fails or
-                hangs, and may do so after the request reached the server.
+                Seconds is the Python convention for an argument named
+                ``timeout``: the standard library (``asyncio.wait_for``,
+                ``socket.settimeout``, ``subprocess.run``), ``requests``,
+                ``httpx``, ``aiohttp`` and the OpenAI and Anthropic SDKs all
+                use it. google-genai's ``HttpOptions.timeout`` is in
+                **milliseconds**, so divide by 1000 when migrating:
+                ``HttpOptions(timeout=30000)`` becomes ``timeout=30``. Passing
+                ``timeout=30000`` waits over 8 hours.
+            http_client: A function with no arguments that returns an
+                ``httpx.AsyncClient``, for proxies, mTLS, or a custom
+                transport. Genkit calls it once per event loop and reuses that
+                client for every model call on the loop. An ``AsyncClient``
+                only works on the loop that first used it, and Genkit runs on
+                more than one: ``genkit start`` serves the Dev UI from its own
+                thread and loop. Genkit never closes these clients.
+                OAuth token refresh, Vertex evaluators and downloads of media
+                URLs in prompts don't use them.
+
+                ```python
+                VertexAI(http_client=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
+                ```
             legacy_response_schema: Send JSON output schemas as Gemini's
                 ``responseSchema`` field instead of ``responseJsonSchema``,
                 converted to its format; a schema that cannot be converted
@@ -1145,9 +1175,9 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             base_url=base_url,
             api_version=api_version,
             headers=headers,
-            timeout_seconds=timeout_seconds,
-            http_client=http_client,
+            timeout=timeout,
         )
+        self._http_client = _loop_local_http_client(http_client)
         self._base_url_pinned = bool(opts.base_url)
         self._legacy_response_schema = legacy_response_schema
         multi_region = const.is_multi_regional_location(self._location)
@@ -1185,8 +1215,12 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'http_options': opts,
         }
         # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
+        self._runtime_client = loop_local_client(lambda: _plugin_client(self._loop_client_kwargs()))
         self._list_actions_cache: list[Action | ActionMetadata] | None = None
+
+    def _loop_client_kwargs(self) -> dict[str, Any]:
+        """Client kwargs carrying this loop's ``http_client``, if one was given."""
+        return _with_loop_http_client(self._client_kwargs, self._http_client)
 
     async def init(self) -> list[Action]:
         """Initialize the plugin.
@@ -1279,7 +1313,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         Returns:
             BackgroundAction for the Veo model.
         """
-        return _create_veo_background_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._client_kwargs)
+        return _create_veo_background_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._loop_client_kwargs)
 
     def _resolve_evaluator(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI evaluator.
@@ -1336,7 +1370,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 model = VirtualTryOnModel(
                     name,
                     self._runtime_client(),
-                    client_kwargs=self._client_kwargs,
+                    client_kwargs=self._loop_client_kwargs(),
                     base_url_pinned=self._base_url_pinned,
                 )
                 return await model.generate(request, ctx)
@@ -1454,24 +1488,76 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         return actions_list
 
 
+def _loop_local_http_client(
+    http_client: Callable[[], httpx.AsyncClient] | None,
+) -> Callable[[], httpx.AsyncClient] | None:
+    """Wrap the caller's ``http_client`` factory so each event loop gets its own client.
+
+    An ``httpx.AsyncClient`` binds its connection pool to the loop that first
+    uses it. Genkit runs actions on more than one loop (the Dev UI reflection
+    server has its own thread and loop), so one shared client fails or hangs
+    there, sometimes after the request already reached the server.
+    """
+    if http_client is None:
+        return None
+    if isinstance(http_client, (httpx.AsyncClient, httpx.Client)) or not callable(http_client):
+        raise TypeError(
+            'http_client takes a function that returns an httpx.AsyncClient, '
+            f'got {type(http_client).__name__}. Pass http_client=lambda: httpx.AsyncClient(...). '
+            'Genkit builds one client per event loop because an AsyncClient only works '
+            'on the loop that first used it.'
+        )
+    factory = http_client
+
+    def _build() -> httpx.AsyncClient:
+        client: object = factory()
+        if not isinstance(client, httpx.AsyncClient):
+            raise TypeError(
+                f'http_client must return an httpx.AsyncClient, got {type(client).__name__}. '
+                'Genkit calls models asynchronously.'
+            )
+        return client
+
+    return loop_local_client(_build)
+
+
+def _with_loop_http_client(
+    client_kwargs: dict[str, Any],
+    http_client: Callable[[], httpx.AsyncClient] | None,
+) -> dict[str, Any]:
+    """Return ``client_kwargs`` with the running loop's ``http_client`` attached.
+
+    The plugin's own kwargs never hold a client. Every SDK client, including
+    the temporary ones built for per-call overrides, gets this loop's httpx
+    client here at call time.
+    """
+    if http_client is None:
+        return client_kwargs
+    opts: HttpOptions = client_kwargs['http_options']
+    return {**client_kwargs, 'http_options': opts.model_copy(update={'httpx_async_client': http_client()})}
+
+
 def _plugin_http_options(
     *,
     base_url: str | None = None,
     api_version: str | None = None,
     headers: Mapping[str, str] | None = None,
-    timeout_seconds: float | None = None,
-    http_client: httpx.AsyncClient | None = None,
+    timeout: float | None = None,
 ) -> HttpOptions:
-    """Build the SDK's HttpOptions from the plugin's network arguments."""
-    if http_client is not None and not isinstance(http_client, httpx.AsyncClient):
-        raise TypeError(
-            f'http_client must be an httpx.AsyncClient, got {type(http_client).__name__}. '
-            'Genkit calls models asynchronously.'
-        )
+    """Build the SDK's HttpOptions from the plugin's network arguments.
+
+    ``timeout`` is in seconds because that is what Python callers expect from
+    an argument named ``timeout``. The standard library (``asyncio.wait_for``,
+    ``asyncio.timeout``, ``socket.settimeout``, ``subprocess.run``,
+    ``urllib.request.urlopen``), ``requests``, ``httpx``, ``aiohttp``, the
+    OpenAI and Anthropic SDKs, grpc-python and Genkit's Ollama plugin all take
+    float seconds. google-genai's ``HttpOptions.timeout`` (milliseconds) is the
+    outlier, so the conversion happens here, once.
+    """
     # 0 would mean no timeout to google-genai but an instant failure to the
     # Interactions client, so only a positive, finite budget is accepted.
-    if timeout_seconds is not None and not (math.isfinite(timeout_seconds) and timeout_seconds > 0):
-        raise ValueError(f'timeout_seconds must be a positive, finite number, got {timeout_seconds!r}')
+    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
+        raise ValueError(f'timeout must be a positive, finite number of seconds, got {timeout!r}')
 
     merged = dict(headers or {})
     for name in ('x-goog-api-client', 'user-agent'):
@@ -1484,6 +1570,5 @@ def _plugin_http_options(
         base_url=base_url or None,
         api_version=api_version or None,
         headers=merged,
-        timeout=math.ceil(timeout_seconds * 1000) if timeout_seconds is not None else None,
-        httpx_async_client=http_client,
+        timeout=math.ceil(timeout * 1000) if timeout is not None else None,
     )
