@@ -41,6 +41,8 @@ from genkit.model import (
     ModelSupports,
     OutputConfig,
     ToolDefinition,
+    ToolRequest,
+    ToolResponse,
 )
 
 
@@ -1814,8 +1816,8 @@ async def test_generate_claude_drops_thinking_part_without_thought_signature(
     assert sent[1] == {'role': 'assistant', 'content': [{'type': 'text', 'text': '391'}]}
 
 
-def test_empty_reasoning_part_is_skipped() -> None:
-    """Test that empty reasoning parts produce no Anthropic block."""
+def test_empty_signed_reasoning_part_encodes_as_thinking_block() -> None:
+    """Claude can sign a thinking block with empty text; it must be sent back, not dropped."""
     mock_client = MagicMock()
     model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
 
@@ -1827,7 +1829,50 @@ def test_empty_reasoning_part_is_skipped() -> None:
     ]
 
     anthropic_messages = model._to_anthropic_messages(messages)
+    assert anthropic_messages[0]['content'] == [{'type': 'thinking', 'thinking': '', 'signature': 'sig-abc'}]
+
+
+def test_empty_unsigned_reasoning_part_is_skipped() -> None:
+    """Test that empty reasoning without a signature produces no Anthropic block."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [Message(role=Role.MODEL, content=[Part.from_reasoning('')])]
+
+    anthropic_messages = model._to_anthropic_messages(messages)
     assert anthropic_messages[0]['content'] == []
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_sends_back_empty_signed_thinking_before_tool_use() -> None:
+    """An empty signed thinking block from a tool-call turn stays at the start of that turn."""
+    mock_client = _mock_client_for_generate()
+    # The plugin checks the client for a credential before each call.
+    mock_client.api_key = 'test-key'
+    plugin = Anthropic(api_key='test-key')
+    plugin._runtime_client = lambda: mock_client
+    ai = Genkit(plugins=[plugin])
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('what is the weather in Paris?')]),
+        Message(
+            role=Role.MODEL,
+            content=[
+                Part.from_reasoning('', metadata={'thoughtSignature': 'sig-abc'}),
+                Part(tool_request=ToolRequest(ref='toolu_1', name='getWeather', input={'city': 'Paris'})),
+            ],
+        ),
+        Message(
+            role=Role.TOOL,
+            content=[Part(tool_response=ToolResponse(ref='toolu_1', name='getWeather', output='sunny'))],
+        ),
+    ]
+
+    await ai.generate(model='anthropic/claude-sonnet-4', messages=history)
+
+    create = mock_client.messages.create if mock_client.messages.create.called else mock_client.beta.messages.create
+    sent = create.call_args.kwargs['messages']
+    assert sent[1]['content'][0] == {'type': 'thinking', 'thinking': '', 'signature': 'sig-abc'}
+    assert sent[1]['content'][1]['type'] == 'tool_use'
 
 
 def test_redacted_thinking_part_round_trips() -> None:
