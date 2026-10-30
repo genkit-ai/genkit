@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import { readFile, rm, writeFile } from 'fs/promises';
 import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
 import type { CreateDatasetRequest, UpdateDatasetRequest } from '../types/apis';
 import {
   DatasetSchema,
@@ -241,7 +241,7 @@ export class LocalFileDatasetStore implements DatasetStore {
       return this.testUniqueness(datasetId, keys);
     }
 
-    const id = uuidv4();
+    const id = randomUUID();
     return this.testUniqueness(id, keys);
   }
 
