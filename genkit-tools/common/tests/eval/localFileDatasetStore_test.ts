@@ -22,8 +22,8 @@ import {
   it,
   jest,
 } from '@jest/globals';
+import crypto from 'crypto';
 import fs from 'fs';
-import * as uuid from 'uuid';
 import { LocalFileDatasetStore } from '../../src/eval/localFileDatasetStore';
 import {
   CreateDatasetRequestSchema,
@@ -137,8 +137,6 @@ jest.mock('process', () => {
   };
 });
 
-jest.mock('uuid');
-const uuidSpy = jest.spyOn(uuid, 'v4');
 const TEST_CASE_ID = 'test-case-1234-1234-1234';
 jest.mock('../../src/utils', () => ({
   generateTestCaseId: jest.fn(() => TEST_CASE_ID),
@@ -153,7 +151,7 @@ describe('localFileDatasetStore', () => {
   beforeEach(() => {
     // For storeRoot setup
     fs.existsSync = jest.fn(() => true);
-    uuidSpy.mockReturnValueOnce('12345678');
+    jest.spyOn(crypto, 'randomUUID').mockReturnValueOnce('12345678' as any);
     LocalFileDatasetStore.reset();
     DatasetStore = LocalFileDatasetStore.getDatasetStore() as DatasetStore;
   });
