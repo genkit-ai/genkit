@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import genkit_mcp._client
+import genkit_mcp._connection
 import psutil
 import pytest
 from genkit_mcp import McpClient, define_mcp_client
@@ -80,6 +81,24 @@ def start_count(starts: Path) -> int:
         return len(starts.read_text(encoding='utf-8'))
     except FileNotFoundError:
         return 0
+
+
+class FakeClock:
+    """A stand-in for ``time`` whose ``monotonic`` moves only when a test moves it."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def fake_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    """Make the client and its connections read the time from a :class:`FakeClock`."""
+    clock = FakeClock()
+    monkeypatch.setattr(genkit_mcp._client, 'time', clock)
+    monkeypatch.setattr(genkit_mcp._connection, 'time', clock)
+    return clock
 
 
 def server_processes(tmp_path: Path) -> list[psutil.Process]:
@@ -738,27 +757,77 @@ async def test_a_server_that_dies_after_the_handshake_but_before_answering_waits
 
 
 @pytest.mark.asyncio
+async def test_a_server_that_timed_out_and_then_died_waits_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request that timed out got no answer, so it does not spare the server the wait."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 600.0)
+    client = McpClient(
+        'fake',
+        **server(tmp_path, MCP_FAKE_STALL_LIST=str(tmp_path / 'listing.stalled')),
+        request_timeout_millis=3_000,
+    )
+    try:
+        with pytest.raises(GenkitError) as timed_out:
+            await client.get_active_tools()
+        assert timed_out.value.status == 'DEADLINE_EXCEEDED'
+        stalled = server_processes(tmp_path)
+        assert len(stalled) == 1
+        stalled[0].kill()
+        stalled[0].wait(timeout=30)
+
+        for _ in range(2):
+            with pytest.raises(GenkitError) as raised:
+                await client.get_active_tools()
+            assert raised.value.status == 'UNAVAILABLE'
+        assert server_processes(tmp_path) == []
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_request_during_the_wait_says_how_long_is_left(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The error names the server and the time left, and keeps the failure that started the wait."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 18.0)
+    clock = fake_clock(monkeypatch)
+    client = McpClient('booking', **exiting_server(tmp_path / 'starts'))
+    try:
+        with pytest.raises(GenkitError) as failed:
+            await client.get_active_tools()
+        clock.now += 4.0
+        with pytest.raises(
+            GenkitError,
+            match="MCP server 'booking' failed 4s ago and is not started again for another 14s; restart it to try now",
+        ) as waiting:
+            await client.get_active_tools()
+    finally:
+        await client.close()
+
+    assert waiting.value.status == 'UNAVAILABLE'
+    assert failed.value.__cause__ is not None
+    assert waiting.value.__cause__ is failed.value.__cause__
+
+
+@pytest.mark.asyncio
 async def test_a_broken_server_waits_twice_as_long_after_each_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Each failure in a row doubles the wait before the next start."""
     monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 1.0)
+    clock = fake_clock(monkeypatch)
     starts = tmp_path / 'starts'
     client = McpClient('fake', **exiting_server(starts))
 
-    async def list_once() -> int:
+    async def list_after(seconds: float) -> int:
+        clock.now += seconds
         with pytest.raises(GenkitError):
             await client.get_active_tools()
         return start_count(starts)
 
     try:
-        assert await list_once() == 1
-        await asyncio.sleep(1.2)
-        assert await list_once() == 2
-        await asyncio.sleep(1.0)
-        assert await list_once() == 2
-        await asyncio.sleep(1.2)
-        assert await list_once() == 3
+        assert await list_after(0) == 1
+        assert await list_after(0.5) == 1
+        assert await list_after(0.5) == 2
+        assert await list_after(1.5) == 2
+        assert await list_after(0.5) == 3
     finally:
         await client.close()
 
@@ -768,8 +837,9 @@ async def test_the_wait_before_starting_a_broken_server_again_stops_growing_at_i
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Once the wait reaches its maximum, every later failure waits the same."""
-    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 0.4)
-    monkeypatch.setattr(genkit_mcp._client, '_MAX_RESPAWN_DELAY_SECONDS', 0.4)
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 1.0)
+    monkeypatch.setattr(genkit_mcp._client, '_MAX_RESPAWN_DELAY_SECONDS', 1.0)
+    clock = fake_clock(monkeypatch)
     starts = tmp_path / 'starts'
     client = McpClient('fake', **exiting_server(starts))
     try:
@@ -777,7 +847,7 @@ async def test_the_wait_before_starting_a_broken_server_again_stops_growing_at_i
             with pytest.raises(GenkitError):
                 await client.get_active_tools()
             assert start_count(starts) == expected
-            await asyncio.sleep(0.5)
+            clock.now += 1.0
     finally:
         await client.close()
 

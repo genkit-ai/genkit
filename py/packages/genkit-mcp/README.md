@@ -88,9 +88,10 @@ closed client cannot be restarted. To use that server again, define a new client
 is `FAILED_PRECONDITION`. A server that cannot start, or whose process dies, fails with status
 `UNAVAILABLE`, and a request the server does not answer within `request_timeout_millis` fails with
 `DEADLINE_EXCEEDED`. A connection that died on its own is replaced on next use, so one bad server start is
-not permanent. A server that fails before it completes a request after its handshake waits one second
-before it is started again, and each such failure in a row doubles the wait, up to 30 seconds. Meanwhile its tools fail at
-once with `UNAVAILABLE`, and `restart()` skips the wait. Resolving a tool by its action key, as the
+not permanent. A server that fails before it completes a request, including one that never finishes
+its handshake, waits one second before it is started again, and each such failure in a row doubles
+the wait, up to 30 seconds. Meanwhile its tools fail at once with `UNAVAILABLE` and an error that
+says how long is left, and `restart()` skips the wait. Resolving a tool by its action key, as the
 Dev UI does to run one, reports neither status: core finds no action for a closed client or a server
 that cannot start.
 

@@ -317,8 +317,13 @@ class McpConnection:
 
     @property
     def answered(self) -> bool:
-        """Whether a request after the handshake completed on this connection while the server stayed reachable."""
+        """Whether an operation after the handshake finished without timing out while the server stayed reachable."""
         return self._answered
+
+    @property
+    def failure(self) -> Exception | None:
+        """What ended this connection, once known."""
+        return self._failure
 
     async def list_tools(self) -> list[McpTool]:
         """List every tool the server offers, following pagination cursors.
@@ -538,7 +543,8 @@ class McpConnection:
                     self._settle(error)
                     serving.cancel()
                 else:
-                    self._answered = True
+                    if not _timed_out(error):
+                        self._answered = True
                     if not request.result.done():
                         request.result.set_exception(self._answered_error(error))
             else:

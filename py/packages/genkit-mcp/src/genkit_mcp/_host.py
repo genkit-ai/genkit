@@ -48,9 +48,10 @@ class McpHost:
     other failure to list a server, such as a protocol violation, an error the
     server returns, or two of its tools sharing a name, fails the listing.
 
-    A server that failed before completing a request after its handshake is
-    started again only once the delay :class:`McpClient` describes is up, not
-    on every listing of the other servers.
+    A server that failed before completing a request, including one that never
+    finished its handshake, is started again only once the delay
+    :class:`McpClient` describes is up, not on every listing of the other
+    servers.
 
     A host holds no Genkit instance. Registering the provider is
     :func:`define_mcp_host`.
