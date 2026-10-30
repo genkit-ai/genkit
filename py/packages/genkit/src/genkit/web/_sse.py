@@ -29,9 +29,9 @@ from genkit._core._error import error_body, error_status
 # Compact JSON, the same bytes the FastAPI, Flask and Django adapters send.
 _JSON_SEPARATORS = (',', ':')
 
-# Served-failure logs go to the host web server's stdlib logging config, same as
-# the fastapi/flask/django handlers (exempt from TID251 in pyproject for this reason).
-_logger = logging.getLogger(__name__)  # noqa: TID251
+# Stdlib logging, like the fastapi/flask/django handlers: served failures go to the
+# host web server's logging config (TID251 exemption in pyproject.toml).
+_logger = logging.getLogger(__name__)
 
 
 class StreamHandle(Protocol):
@@ -66,12 +66,13 @@ def _frame(key: str, value: object) -> str:
     return f'data: {json.dumps({key: value}, separators=_JSON_SEPARATORS)}\n\n'
 
 
-async def to_sse(handle: StreamHandle, *, logger: logging.Logger | None = None) -> AsyncIterator[str]:
+async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
     r"""Frame a streaming handle as Genkit SSE lines.
 
     Yields ``data: {"message": ...}`` for each chunk, then ``data: {"result": ...}``.
     If the run fails, it yields one ``data: {"error": ...}`` instead of the rest
-    and logs the failure: 5xx with a traceback, 4xx as a warning. Only a
+    and logs the failure on the ``genkit.web._sse`` stdlib logger: 5xx with a
+    traceback, 4xx as a warning. Only a
     ``PublicError``'s text reaches the client; anything else goes out as
     ``Internal Error``. These are the frames ``serve_flow``,
     ``handle_genkit_request`` and ``serve_agent`` send.
@@ -103,12 +104,10 @@ async def to_sse(handle: StreamHandle, *, logger: logging.Logger | None = None) 
 
     Args:
         handle: The streaming handle to frame.
-        logger: Where served failures are logged. Defaults to ``genkit.web._sse``.
 
     Yields:
         One SSE ``data:`` line per frame, each ending in a blank line.
     """
-    log = logger or _logger
     try:
         async for chunk in handle.stream:
             yield _frame('message', _frame_value(chunk))
@@ -116,7 +115,7 @@ async def to_sse(handle: StreamHandle, *, logger: logging.Logger | None = None) 
         yield _frame('result', _frame_value(result))
     except Exception as e:
         if error_status(e) >= 500:
-            log.exception('served flow stream failed')
+            _logger.exception('served flow stream failed')
         else:
-            log.warning('served flow stream failed: %s', e)
+            _logger.warning('served flow stream failed: %s', e)
         yield _frame('error', error_body(e))

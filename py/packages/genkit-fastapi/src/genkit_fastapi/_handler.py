@@ -171,7 +171,7 @@ async def _handle_action_request(
                 _log_failure(error=e, where='stream')
                 yield format_stream_error(e)
                 return
-            async for line in to_sse(stream_handle, logger=logger):
+            async for line in to_sse(stream_handle):
                 yield line
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')

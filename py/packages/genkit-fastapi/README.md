@@ -142,7 +142,7 @@ async def chat_stream(prompt: str, user: User = Depends(current_user)):
 > [!WARNING]
 > The `result` frame is whatever the run returns, over SSE and JSON alike. Return `response.text` or `response.output` from a served flow, not the `ModelResponse`: its `request` field carries the system prompt, tool definitions, retrieved documents and history. The same goes for `to_sse(ai.generate_stream(...))`, whose result is the whole `ModelResponse`.
 
-`to_sse(chat.send_stream(...))` frames agent turns the same way `serve_agent` does (`AgentStreamChunk` messages, then the `AgentOutput` result). Failures log on the `genkit.web._sse` logger; pass `logger=` to use your own.
+`to_sse(chat.send_stream(...))` frames agent turns the same way `serve_agent` does (`AgentStreamChunk` messages, then the `AgentOutput` result). Failures log on the `genkit.web._sse` stdlib logger, so they show up wherever your app's logging config sends them.
 
 ### Handling Full Genkit Requests (`handle_genkit_request`)
 

@@ -882,9 +882,9 @@ class _Turn:
         return self._result
 
 
-def _sse_lines(turn: _Turn, logger: logging.Logger | None = None) -> list[str]:
+def _sse_lines(turn: _Turn) -> list[str]:
     async def collect() -> list[str]:
-        return [line async for line in to_sse(turn, logger=logger)]
+        return [line async for line in to_sse(turn)]
 
     return asyncio.run(collect())
 
@@ -994,7 +994,7 @@ def test_to_sse_keeps_user_model_raw_field() -> None:
 
 
 def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> None:
-    """The error frame is logged on genkit.web's logger by default, 5xx with the traceback."""
+    """The error frame is logged on the genkit.web._sse stdlib logger, 5xx with the traceback."""
     with caplog.at_level(logging.ERROR, logger='genkit.web._sse'):
         _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
 
@@ -1002,18 +1002,6 @@ def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> Non
         ('genkit.web._sse', 'served flow stream failed'),
     ]
     assert caplog.records[0].exc_info is not None
-
-
-def test_to_sse_logs_on_the_logger_it_is_given(caplog: pytest.LogCaptureFixture) -> None:
-    """An adapter passes its own logger, so served failures land in its logging config."""
-    with caplog.at_level(logging.WARNING, logger='genkit_fastapi._handler'):
-        _sse_lines(
-            _Turn(chunks=[], error=PublicError('INVALID_ARGUMENT', 'bad dish')),
-            logger=logging.getLogger('genkit_fastapi._handler'),
-        )
-
-    assert [(r.name, r.levelname) for r in caplog.records] == [('genkit_fastapi._handler', 'WARNING')]
-    assert 'bad dish' in caplog.records[0].getMessage()
 
 
 def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
