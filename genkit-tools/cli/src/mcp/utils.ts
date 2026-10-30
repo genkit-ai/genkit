@@ -18,8 +18,50 @@ import {
   BaseRuntimeManager,
   GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
+import { detectRuntimeSync } from '@genkit-ai/tools-common/utils';
+import * as fs from 'fs';
+import * as path from 'path';
 import { z } from 'zod';
 import { startDevProcessManager, startManager } from '../utils/manager-utils';
+
+export const SUPPORTED_DOC_LANGUAGES = ['js', 'go', 'python', 'dart'] as const;
+export type SupportedDocLanguage = (typeof SUPPORTED_DOC_LANGUAGES)[number];
+
+const PROJECT_LANGUAGE_MARKERS: ReadonlyArray<{
+  file: string;
+  language: SupportedDocLanguage;
+}> = [
+  { file: 'go.mod', language: 'go' },
+  { file: 'pyproject.toml', language: 'python' },
+  { file: 'requirements.txt', language: 'python' },
+  { file: 'pubspec.yaml', language: 'dart' },
+  { file: 'package.json', language: 'js' },
+];
+
+/**
+ * Auto-detects the default Genkit documentation/usage language from project
+ * marker files in `projectRoot` (defaulting to `process.cwd()`). Falls back to
+ * `'js'` when no recognized language marker is found.
+ */
+export function detectProjectLanguage(
+  projectRoot: string = process.cwd()
+): SupportedDocLanguage {
+  const dir = projectRoot || process.cwd();
+  for (const { file, language } of PROJECT_LANGUAGE_MARKERS) {
+    try {
+      if (fs.statSync(path.join(dir, file)).isFile()) {
+        return language;
+      }
+    } catch {
+      // Ignore missing or inaccessible marker files
+    }
+  }
+  const runtime = detectRuntimeSync(dir);
+  if (runtime === 'go' || runtime === 'python' || runtime === 'dart') {
+    return runtime;
+  }
+  return 'js';
+}
 
 export function formatMcpError(err: unknown): string {
   if (err instanceof GenkitToolsError) {

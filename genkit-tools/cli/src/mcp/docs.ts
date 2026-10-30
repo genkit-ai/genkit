@@ -20,8 +20,9 @@ import { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import z from 'zod';
 import { loadDocs, searchDocs } from '../utils/docs';
 import { McpRunToolEvent } from './analytics';
+import { SUPPORTED_DOC_LANGUAGES, detectProjectLanguage } from './utils';
 
-export async function defineDocsTool(server: McpServer) {
+export async function defineDocsTool(server: McpServer, projectRoot?: string) {
   const documents = await loadDocs();
 
   server.registerTool(
@@ -32,16 +33,16 @@ export async function defineDocsTool(server: McpServer) {
         'Use this to see a list of available Genkit documentation files. Returns `filePaths` that can be passed to `read_genkit_docs`.',
       inputSchema: {
         language: z
-          .enum(['js', 'go', 'python', 'dart'])
+          .enum(SUPPORTED_DOC_LANGUAGES)
           .describe(
-            'Which language to list docs for (default js); type: string.'
+            'Which language to list docs for (js, go, python, dart; defaults to auto-detected project language); type: string.'
           )
-          .default('js'),
+          .optional(),
       },
     },
     async ({ language }) => {
       await record(new McpRunToolEvent('list_genkit_docs'));
-      const lang = language || 'js';
+      const lang = language || detectProjectLanguage(projectRoot);
 
       const fileList = Object.keys(documents)
         .filter((file) => file.startsWith(lang))
@@ -78,16 +79,16 @@ export async function defineDocsTool(server: McpServer) {
           .string()
           .describe('Keywords to search for in documentation; type: string.'),
         language: z
-          .enum(['js', 'go', 'python', 'dart'])
+          .enum(SUPPORTED_DOC_LANGUAGES)
           .describe(
-            'Which language to search docs for (default js); type: string.'
+            'Which language to search docs for (js, go, python, dart; defaults to auto-detected project language); type: string.'
           )
-          .default('js'),
+          .optional(),
       },
     },
     async ({ query, language }) => {
       await record(new McpRunToolEvent('search_genkit_docs'));
-      const lang = language || 'js';
+      const lang = language || detectProjectLanguage(projectRoot);
 
       const results = searchDocs(documents, query, lang).slice(0, 10); // Top 10
 
