@@ -94,8 +94,6 @@ def _chat_completion(text: str) -> ChatCompletion:
             {
                 'name': 'ModelGarden - Meta - llama-3.1',
                 'supports': {
-                    'constrained': None,
-                    'content_type': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
@@ -105,7 +103,6 @@ def _chat_completion(text: str) -> ChatCompletion:
                         'json',
                         'text',
                     ],
-                    'tool_choice': None,
                 },
             },
         ),
@@ -114,9 +111,6 @@ def _chat_completion(text: str) -> ChatCompletion:
             {
                 'name': 'ModelGarden - meta/lazaro-model-pro-max',
                 'supports': {
-                    'constrained': None,
-                    'content_type': None,
-                    'long_running': None,
                     'multiturn': True,
                     'media': True,
                     'tools': True,
@@ -125,7 +119,6 @@ def _chat_completion(text: str) -> ChatCompletion:
                         'json',
                         'text',
                     ],
-                    'tool_choice': None,
                 },
             },
         ),
