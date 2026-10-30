@@ -1,0 +1,107 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Genkit client for a single MCP server."""
+
+import os
+
+from genkit import Genkit
+from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, validate_request_timeout
+
+
+class McpClient:
+    """One MCP server, registered with Genkit as a dynamic action provider.
+
+    Obtain instances via :func:`define_mcp_client` rather than constructing directly.
+    """
+
+    @property
+    def name(self) -> str:
+        """Provider name used in tool selectors.
+
+        For example, ``everything`` in the selector ``everything:tool/*``.
+        """
+        raise NotImplementedError
+
+    async def restart(self) -> None:
+        """Reconnect to the server, replacing any connection it already has.
+
+        Raises:
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed.
+        """
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        """Disconnect from the server and stop its process.
+
+        Closing is final: a closed client cannot be restarted. Build a new one
+        with :func:`define_mcp_client`.
+        """
+        raise NotImplementedError
+
+
+def define_mcp_client(
+    ai: Genkit,
+    name: str,
+    *,
+    command: str,
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    cwd: str | os.PathLike[str] | None = None,
+    cache_ttl_millis: int | None = None,
+    request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+) -> McpClient:
+    """Register an MCP server's tools with Genkit.
+
+    The server's tools become ``tool.v2`` actions behind a dynamic action provider
+    named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
+    them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
+    process starts on the first tool listing.
+
+    The client holds one connection, and so one server process, per event loop.
+    While the Dev UI runs, its reflection server has its own loop, so a second
+    process starts for the same server. The two processes do not share state,
+    and servers that bind a port, take a lock file or own a browser profile can
+    clash.
+
+    Args:
+        ai: The Genkit instance to register with.
+        name: Provider name, used in tool selectors and as the namespace of
+            this server's tool names.
+        command: Executable that runs the server, for example ``npx`` or ``uv``.
+        args: Arguments passed to ``command``.
+        env: Extra environment for the server process, over the minimal set
+            that ``mcp.client.stdio.get_default_environment()`` returns. The
+            parent environment is not inherited, so list every variable the
+            server needs, API keys included.
+        cwd: Working directory for the server process.
+        cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
+            ``0`` uses the default of 3 seconds. A negative value disables the
+            cache, so every lookup lists the tools again.
+        request_timeout_millis: How long one MCP request may take before it
+            fails. Must be positive. ``None`` is the only way to disable the
+            timeout.
+
+    Returns:
+        A handle for disconnecting.
+
+    Raises:
+        ValueError: If ``name`` cannot appear in a tool selector or a
+            model-facing tool name, or if ``request_timeout_millis`` is zero
+            or negative.
+    """
+    validate_request_timeout(request_timeout_millis)
+    raise NotImplementedError
