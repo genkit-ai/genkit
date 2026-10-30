@@ -18,11 +18,28 @@ import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import z from 'zod';
+import { GENKIT_CONTEXT as DartContext } from '../commands/init-ai-tools/context/dart';
 import { GENKIT_CONTEXT as GoContext } from '../commands/init-ai-tools/context/go';
 import { GENKIT_CONTEXT as JsContext } from '../commands/init-ai-tools/context/nodejs';
+import { GENKIT_CONTEXT as PythonContext } from '../commands/init-ai-tools/context/python';
 import { McpRunToolEvent } from './analytics';
+import {
+  SUPPORTED_DOC_LANGUAGES,
+  SupportedDocLanguage,
+  detectProjectLanguage,
+} from './utils';
 
-export async function defineUsageGuideTool(server: McpServer) {
+const USAGE_GUIDES: Record<SupportedDocLanguage, string> = {
+  js: JsContext,
+  go: GoContext,
+  python: PythonContext,
+  dart: DartContext,
+};
+
+export async function defineUsageGuideTool(
+  server: McpServer,
+  projectRoot?: string
+) {
   server.registerTool(
     'get_usage_guide',
     {
@@ -31,27 +48,23 @@ export async function defineUsageGuideTool(server: McpServer) {
         'Use this tool to look up the official Genkit usage guide, including project setup instructions and API best practices. ALWAYS call this before implementing Genkit features.',
       inputSchema: {
         language: z
-          .enum(['js', 'go'])
-          .describe('which language this usage guide is for; type: string')
-          .default('js')
+          .enum(SUPPORTED_DOC_LANGUAGES)
+          .describe(
+            'which language this usage guide is for (js, go, python, dart; defaults to auto-detected project language); type: string'
+          )
           .optional(),
       },
     },
     async ({ language }) => {
       await record(new McpRunToolEvent('get_usage_guide'));
 
-      const content = [] as ContentBlock[];
-      if (!language) {
-        language = 'js';
-      }
-      let text = JsContext;
-      if (language === 'go') {
-        text = GoContext;
-      }
-      content.push({
-        type: 'text',
-        text,
-      });
+      const lang = language || detectProjectLanguage(projectRoot);
+      const content = [
+        {
+          type: 'text',
+          text: USAGE_GUIDES[lang] ?? JsContext,
+        },
+      ] as ContentBlock[];
 
       return { content };
     }
