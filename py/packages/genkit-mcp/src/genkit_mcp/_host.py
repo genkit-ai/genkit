@@ -69,7 +69,7 @@ class McpHost:
                 provider name used in tool selectors.
             mcp_servers: The servers this host manages, keyed by the name that
                 prefixes each server's tools, in the order it lists them. An
-                entry with ``disabled`` set is validated but left out.
+                entry whose ``disabled`` is true is validated but left out.
             request_timeout_millis: How long one MCP request may take before it
                 fails, for every server. Must be positive. ``None`` is the only
                 way to disable the timeout.
@@ -146,8 +146,8 @@ class McpHost:
         on the next generate. A server that fails is stopped and leaves this
         host as it was, a server it would have replaced included. Once the new
         server is listed, a replaced server is disconnected and its process
-        stopped. An entry with ``disabled`` set starts nothing and removes any
-        server of that name.
+        stopped. An entry whose ``disabled`` is true starts nothing and removes
+        any server of that name.
 
         This method keeps ``entry`` out of its own frames, but a traceback that
         renders frame locals still prints a ``config`` the caller holds, ``env``
@@ -413,7 +413,7 @@ def define_mcp_host(
             prefixes each server's tools, in the order it lists them. Each
             entry holds ``command`` and optionally ``args``, ``env``, ``cwd``,
             ``type``, which can only be ``stdio``, and ``disabled``, which
-            leaves the server out.
+            leaves the server out when true.
         cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
             ``0`` uses the default of 3 seconds. A negative value disables the
             cache, so every lookup lists the tools again.

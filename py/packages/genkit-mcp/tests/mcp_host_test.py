@@ -852,7 +852,7 @@ async def test_an_mcp_servers_block_of_stdio_servers_is_accepted_as_it_is(tmp_pa
 async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_path: Path) -> None:
     """A misspelt env must not launch the server without its secret, nor print the secret."""
     secret = 'sk-distinctive-secret-7f3a'
-    loaded: dict[str, Any] = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
+    loaded = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
     with pytest.raises(ValueError, match="MCP host 'hosted': server 'alpha' is not a stdio entry") as raised:
         McpHost('hosted', mcp_servers={'alpha': loaded})
     assert 'enviroment' in str(raised.value)
