@@ -15,10 +15,10 @@
   },
   "devDependencies": {
     "json-schema": "^0.4.0",
-    "only-allow": "^1.2.1",
-    "tsx": "^4.20.3",
-    "zod": "^3.25.67",
-    "zod-to-json-schema": "^3.24.5"
+    "only-allow": "^1.2.2",
+    "tsx": "^4.23.15",
+    "zod": "3.25.67",
+    "zod-to-json-schema": "~3.24.5"
   },
   "pnpm": {
     "overrides": {
