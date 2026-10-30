@@ -38,7 +38,7 @@ from google.genai.interactions import Interaction
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
 from genkit.model import ModelRequest, ToolDefinition
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import ActionKind, BackgroundAction
 
 
 async def _empty_model_pager() -> AsyncIterator[Any]:
@@ -713,7 +713,9 @@ async def test_googleai_plugin_registers_interactions_models() -> None:
         plugin = GoogleAI(api_key='test-key')
         actions = await plugin.init()
 
-    kinds_by_name = {action.name: action.kind for action in actions}
+    # A background model comes back whole; flatten it the way the registry does.
+    members = [m for a in actions for m in (a.actions if isinstance(a, BackgroundAction) else [a])]
+    kinds_by_name = {action.name: action.kind for action in members}
     dr_name = googleai_name('deep-research-preview-04-2026')
     ag_name = googleai_name('antigravity-preview-05-2026')
     ly_name = googleai_name('lyria-3-clip-preview')
@@ -738,11 +740,16 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     assert bg is not None
     assert bg.kind == ActionKind.BACKGROUND_MODEL
 
-    check = await plugin.resolve(ActionKind.CHECK_OPERATION, f'{dr_name}/check')
+    # The plugin resolves only the start key; the registry files check and cancel.
+    registry = Genkit(plugins=[plugin])._registry
+    with patch('genkit_google_genai._google._list_genai_models', new=AsyncMock(return_value=GenaiModels())):
+        check = await registry.resolve_action_by_key(f'/check-operation/googleai/{dr_name}/check')
     assert check is not None
+    assert check.kind == ActionKind.CHECK_OPERATION
 
-    cancel = await plugin.resolve(ActionKind.CANCEL_OPERATION, f'{dr_name}/cancel')
+    cancel = await registry.resolve_action_by_key(f'/cancel-operation/googleai/{dr_name}/cancel')
     assert cancel is not None
+    assert cancel.kind == ActionKind.CANCEL_OPERATION
 
     ag = await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-05-2026')
     assert ag is not None

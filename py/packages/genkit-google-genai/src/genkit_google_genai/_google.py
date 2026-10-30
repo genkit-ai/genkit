@@ -76,6 +76,7 @@ from genkit.plugin_api import (
     GENKIT_USER_AGENT,
     Action,
     ActionKind,
+    BackgroundAction,
     Plugin,
     loop_local_client,
 )
@@ -354,7 +355,7 @@ def _create_veo_background_model(
 
     Veo runs as a background operation: callers start a generation and poll
     it, they never block a generate call on a multi-minute video render. Both
-    plugins therefore expose Veo only as BACKGROUND_MODEL + CHECK_OPERATION,
+    plugins therefore expose Veo only as a BackgroundModel (start + check),
     never as a blocking MODEL.
 
     Args:
@@ -643,7 +644,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         }
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         self._legacy_response_schema = legacy_response_schema
-        self._list_actions_cache: list[Action | BackgroundModel] | None = None
+        self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
 
     @loop_local_client
     def _runtime_client(self) -> genai.Client:
@@ -670,15 +671,15 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         raw = self._client_kwargs.get('api_key')
         return raw if isinstance(raw, str) else None
 
-    async def init(self) -> list[Action]:
+    async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
 
         Returns:
-            List of Action objects for known/supported models.
+            Actions and background models for known/supported models.
         """
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
 
-        actions: list[Action] = []
+        actions: list[Action | BackgroundAction[Any, Any]] = []
         # Gemini Models
         for name in genai_models.gemini:
             if action := self._resolve_model(name):
@@ -686,17 +687,17 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(self._resolve_veo_model(name).actions)
+            actions.append(self._resolve_veo_model(name))
 
         client_options = self._interactions_client_options()
         plugin_api_key = self._plugin_api_key()
         for name in list_known_deep_research_models():
-            actions.extend(
+            actions.append(
                 create_deep_research_background_model(
                     name,
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
-                ).actions
+                )
             )
         for name in list_known_antigravity_models():
             actions.append(
@@ -721,7 +722,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         return actions
 
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
         """Resolve an action by creating and returning an Action object.
 
         Args:
@@ -729,19 +730,13 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             name: The id without the ``googleai/`` prefix.
 
         Returns:
-            Action object if found, None otherwise.
+            Action or BackgroundModel if found, None otherwise. Genkit
+            registers a BackgroundModel's check and cancel actions with it.
         """
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         if action_type == ActionKind.BACKGROUND_MODEL:
-            bg = self._resolve_background_model(name)
-            return bg.start_action if bg else None
-        if action_type == ActionKind.CHECK_OPERATION and name.endswith('/check'):
-            bg = self._resolve_background_model(name.removesuffix('/check'))
-            return bg.check_action if bg else None
-        if action_type == ActionKind.CANCEL_OPERATION and name.endswith('/cancel'):
-            bg = self._resolve_background_model(name.removesuffix('/cancel'))
-            return bg.cancel_action if bg else None
+            return self._resolve_background_model(name)
         if action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
         return None
@@ -843,16 +838,16 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         """
         return _create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME)
 
-    async def list_actions(self) -> list[Action | BackgroundModel]:
+    async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Generate a list of available actions or models.
 
         Returns:
-            list[Action | BackgroundModel]: A list of Action and BackgroundModel objects.
+            list[Action | BackgroundAction[Any, Any]]: Actions and background models.
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
-        actions_list: list[Action | BackgroundModel] = []
+        actions_list: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
             if (model_action := self._resolve_model(name)) is not None:
@@ -1086,21 +1081,21 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'debug_config': debug_config,
             'http_options': opts,
         }
-        self._list_actions_cache: list[Action | BackgroundModel] | None = None
+        self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
 
     @loop_local_client
     def _runtime_client(self) -> genai.Client:
         # One client per event loop, used everywhere in plugin runtime paths.
         return _plugin_client(self._client_kwargs)
 
-    async def init(self) -> list[Action]:
+    async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
 
         Returns:
-            List of Action objects for known/supported models.
+            Actions and background models for known/supported models.
         """
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
-        actions: list[Action] = []
+        actions: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
             if action := self._resolve_model(name):
@@ -1108,7 +1103,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(self._resolve_veo_model(name).actions)
+            actions.append(self._resolve_veo_model(name))
 
         for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
             if action := self._resolve_model(name):
@@ -1145,7 +1140,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             actions.append(self._resolve_embedder(name))
         return actions
 
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
         """Resolve an action by creating and returning an Action object.
 
         Args:
@@ -1153,21 +1148,14 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             name: The id without the ``vertexai/`` prefix.
 
         Returns:
-            Action object if found, None otherwise.
+            Action or BackgroundModel if found, None otherwise. Genkit
+            registers a BackgroundModel's check action with it.
         """
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         elif action_type == ActionKind.BACKGROUND_MODEL:
             if is_veo_model(name):
-                bg_action = self._resolve_veo_model(name)
-                return bg_action.start_action
-            return None
-        elif action_type == ActionKind.CHECK_OPERATION:
-            if name.endswith('/check'):
-                model_name = name.removesuffix('/check')
-                if is_veo_model(model_name):
-                    bg_action = self._resolve_veo_model(model_name)
-                    return bg_action.check_action
+                return self._resolve_veo_model(name)
             return None
         elif action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
@@ -1310,16 +1298,16 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """
         return _create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME)
 
-    async def list_actions(self) -> list[Action | BackgroundModel]:
+    async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Generate a list of available actions or models.
 
         Returns:
-            list[Action | BackgroundModel]: A list of Action and BackgroundModel objects.
+            list[Action | BackgroundAction[Any, Any]]: Actions and background models.
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
-        actions_list: list[Action | BackgroundModel] = []
+        actions_list: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
             if (model_action := self._resolve_model(name)) is not None:

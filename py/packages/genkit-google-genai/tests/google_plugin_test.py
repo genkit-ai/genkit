@@ -29,7 +29,13 @@ import httpx
 import pytest
 from genkit_google_genai import GoogleAI, VertexAI
 from genkit_google_genai._evaluators._evaluation import VertexAIEvaluationMetricType
-from genkit_google_genai._google import _inject_attribution_headers, _plugin_client, googleai_name, vertexai_name
+from genkit_google_genai._google import (
+    GenaiModels,
+    _inject_attribution_headers,
+    _plugin_client,
+    googleai_name,
+    vertexai_name,
+)
 from genkit_google_genai._models._embedder import VERTEX_KNOWN_EMBEDDERS
 from genkit_google_genai._models._gemini import (
     DEFAULT_SUPPORTS_MODEL,
@@ -46,8 +52,8 @@ from pydantic import ValidationError
 
 from genkit import Document, Genkit, GenkitError, Message, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.model import ModelInfo, ModelRequest
-from genkit.plugin_api import GENKIT_USER_AGENT, ActionKind
+from genkit.model import BackgroundModel, ModelInfo, ModelRequest
+from genkit.plugin_api import GENKIT_USER_AGENT, Action, ActionKind
 
 
 async def _get_runtime_client(plugin: GoogleAI | VertexAI) -> object:
@@ -831,8 +837,9 @@ async def test_googleai_resolve_background_model(googleai_plugin_instance: Googl
     """Test resolve action for background model."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.BACKGROUND_MODEL, name='veo-3.1-generate-preview')
-    assert action is not None
+    action_model = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'veo-3.1-generate-preview')
+    assert isinstance(action_model, BackgroundModel)
+    action = action_model.start_action
     assert action.kind == ActionKind.BACKGROUND_MODEL
     assert action.name == googleai_name('veo-3.1-generate-preview')
 
@@ -842,7 +849,11 @@ async def test_googleai_resolve_check_operation(googleai_plugin_instance: Google
     """Test resolve action for check operation."""
     plugin = googleai_plugin_instance
 
-    action = await plugin.resolve(action_type=ActionKind.CHECK_OPERATION, name='veo-3.1-generate-preview/check')
+    # The plugin resolves only the start key; the registry files check with it.
+    with patch('genkit_google_genai._google._list_genai_models', new=AsyncMock(return_value=GenaiModels())):
+        action = await Genkit(plugins=[plugin])._registry.resolve_action_by_key(
+            '/check-operation/googleai/veo-3.1-generate-preview/check'
+        )
     assert action is not None
     assert action.kind == ActionKind.CHECK_OPERATION
     assert action.name == googleai_name('veo-3.1-generate-preview/check')
@@ -947,6 +958,7 @@ async def test_lazy_client_credential_failure_is_unauthenticated_in_action_body(
         plugin = VertexAI()
         embedder_action = await plugin.resolve(ActionKind.EMBEDDER, vertexai_name('text-embedding-005'))
         assert embedder_action is not None
+        assert isinstance(embedder_action, Action)
 
         with pytest.raises(GenkitError) as raised:
             await embedder_action.run(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
