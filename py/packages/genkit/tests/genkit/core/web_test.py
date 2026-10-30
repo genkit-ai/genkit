@@ -42,9 +42,11 @@ def test_request_context_types_live_on_genkit_web_only() -> None:
     assert sorted(genkit.web.__all__) == [
         'ContextProvider',
         'RequestData',
+        'StreamHandle',
         'error_body',
         'error_status',
         'read_body',
+        'to_sse',
         'wants_stream',
     ]
     assert not {'ContextProvider', 'RequestData'} & set(genkit.__all__)

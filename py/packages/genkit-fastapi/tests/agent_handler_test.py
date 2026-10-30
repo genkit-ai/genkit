@@ -22,7 +22,7 @@ InMemorySessionStore = _genkit_agent.InMemorySessionStore
 AgentInit = _genkit_agent.AgentInit
 
 from genkit_fastapi import handle_genkit_request  # noqa: E402
-from genkit_fastapi.exp import serve_agent, to_sse  # noqa: E402
+from genkit_fastapi.exp import serve_agent  # noqa: E402
 
 from genkit._ai._agents._client import error_from_http  # noqa: E402
 from genkit._core._error import RuntimeErrorReason  # noqa: E402
@@ -35,6 +35,7 @@ from genkit._core._model import (  # noqa: E402
 from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
 from genkit.testing import define_scripted_model  # noqa: E402
+from genkit.web import to_sse  # noqa: E402
 
 
 def build_agent(name: str, *, server_managed: bool = True) -> Any:
@@ -294,25 +295,20 @@ def frames(text: str) -> list[str]:
 
 
 def test_hand_rolled_routes_send_the_same_frames_as_serve_agent() -> None:
-    """handle_genkit_request, turn.to_sse(), and exp.to_sse(turn) send serve_agent's frames, payloads included."""
+    """handle_genkit_request and genkit.web.to_sse(turn) send serve_agent's frames, payloads included."""
     served = client(build_agent('servedFrames')).post('/api/chat?stream=true', json={'message': 'Hi'})
 
     via_request = build_agent('requestFrames')
-    via_method = build_agent('methodFrames')
-    via_function = build_agent('functionFrames')
+    via_to_sse = build_agent('toSseFrames')
     app = FastAPI()
 
     @app.post('/request', response_model=None)
     async def request_route(request: Request) -> object:
         return await handle_genkit_request(request, action=via_request)
 
-    @app.post('/method')
-    async def method_route() -> StreamingResponse:
-        return StreamingResponse(via_method.chat().send_stream('Hi').to_sse(), media_type='text/event-stream')
-
-    @app.post('/function')
-    async def function_route() -> StreamingResponse:
-        return StreamingResponse(to_sse(via_function.chat().send_stream('Hi')), media_type='text/event-stream')
+    @app.post('/to_sse')
+    async def to_sse_route() -> StreamingResponse:
+        return StreamingResponse(to_sse(via_to_sse.chat().send_stream('Hi')), media_type='text/event-stream')
 
     hand = TestClient(app)
     wire_body = {'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}}
@@ -325,5 +321,4 @@ def test_hand_rolled_routes_send_the_same_frames_as_serve_agent() -> None:
     ]
     assert frames(served.text) == expected
     assert frames(hand.post('/request?stream=true', json=wire_body).text) == expected
-    assert frames(hand.post('/method').text) == expected
-    assert frames(hand.post('/function').text) == expected
+    assert frames(hand.post('/to_sse').text) == expected

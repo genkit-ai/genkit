@@ -20,22 +20,18 @@ Handlers here serve APIs that are still experimental in Genkit and may change
 between minor releases. Importing ``genkit_fastapi`` does not load this module.
 
 ```python
-from genkit_fastapi.exp import serve_agent, to_sse
+from genkit.web import to_sse
+from genkit_fastapi.exp import serve_agent
 
 app.include_router(serve_agent(weather_agent), prefix='/api')
 
-# A hand-rolled route frames any handle with `.stream` / `.response`.
+# A hand-written route frames an agent turn with genkit.web.to_sse.
 return StreamingResponse(to_sse(chat.send_stream('Weather in Paris?')), media_type='text/event-stream')
 ```
-
-``to_sse(handle)`` is the framer behind ``StreamResponse.to_sse()`` and
-``AgentTurn.to_sse()``; calling the method directly sends the same frames.
 """
 
-from .._handler import to_sse
 from ._agent import serve_agent
 
 __all__ = [
     'serve_agent',
-    'to_sse',
 ]

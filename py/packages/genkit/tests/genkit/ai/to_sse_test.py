@@ -1,7 +1,7 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""`StreamResponse.to_sse()` and `AgentTurn.to_sse()` share one framer; these pin its frames."""
+"""`genkit.web.to_sse` frames flow streams, model streams and agent turns; these pin its frames."""
 
 import asyncio
 import datetime
@@ -18,6 +18,7 @@ from genkit import FlowContext, Genkit, Message, Part, PublicError
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk
 from genkit._core._typing import AgentFinishReason, Role, TurnEnd
+from genkit.web import to_sse
 
 
 class Meta(BaseModel):
@@ -54,7 +55,7 @@ async def test_flow_to_sse_keeps_user_model_raw_field() -> None:
         ctx.send_chunk(Doc(title='draft', raw=Meta(source='crm')))
         return Doc(title=doc_id, raw=Meta(source='crm'))
 
-    assert await _lines(fetch_doc.stream('T').to_sse()) == [
+    assert await _lines(to_sse(fetch_doc.stream('T'))) == [
         'data: {"message":{"title":"draft","raw":{"source":"crm"}}}\n\n',
         'data: {"result":{"title":"T","raw":{"source":"crm"}}}\n\n',
     ]
@@ -69,7 +70,7 @@ async def test_flow_to_sse_encodes_lists_of_models_and_datetimes() -> None:
     async def bookings(guest: str) -> list[Visit]:
         return [Visit(guest=guest, at=datetime.datetime(2026, 3, 1, 19, 30))]
 
-    assert await _lines(bookings.stream('Ada').to_sse()) == [
+    assert await _lines(to_sse(bookings.stream('Ada'))) == [
         'data: {"result":[{"guest":"Ada","at":"2026-03-01T19:30:00"}]}\n\n',
     ]
 
@@ -83,8 +84,8 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
     async def track_order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'order {order_id} missing')
 
-    with caplog.at_level(logging.WARNING, logger='genkit._core._action'):
-        lines = await _lines(track_order.stream('A-1042').to_sse())
+    with caplog.at_level(logging.WARNING, logger='genkit.web._sse'):
+        lines = await _lines(to_sse(track_order.stream('A-1042')))
 
     assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
     assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
@@ -109,7 +110,7 @@ def _turn(
 
 @pytest.mark.asyncio
 async def test_agent_turn_to_sse_frames_wire_shapes() -> None:
-    """`AgentTurn.to_sse()` frames `raw` (AgentStreamChunk / AgentOutput), the shapes serve_agent sends."""
+    """`to_sse(AgentTurn)` frames `raw` (AgentStreamChunk / AgentOutput), the shapes serve_agent sends."""
     wire_chunk = AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Hi')]))
     turn_end = AgentStreamChunk(turn_end=TurnEnd(snapshot_id='snap-1', finish_reason=AgentFinishReason.STOP))
     wire_output = AgentOutput(
@@ -122,7 +123,7 @@ async def test_agent_turn_to_sse_frames_wire_shapes() -> None:
 
     turn = _turn([AgentChunk(text='Hi', raw=wire_chunk), AgentChunk(raw=turn_end)], output)
 
-    assert await _lines(turn.to_sse()) == [
+    assert await _lines(to_sse(turn)) == [
         'data: {"message":{"modelChunk":{"role":"model","content":[{"text":"Hi"}]}}}\n\n',
         'data: {"message":{"turnEnd":{"snapshotId":"snap-1","finishReason":"stop"}}}\n\n',
         'data: {"result":{"snapshotId":"snap-1","message":{"role":"model","content":[{"text":"Hi"}]},'
@@ -144,10 +145,10 @@ async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains() -
 
         failed_output: asyncio.Future[AgentResponse[Any]] = loop.create_future()
         failed = _turn([], failed_output, fail=True)
-        lines = await _lines(failed.to_sse())
+        lines = await _lines(to_sse(failed))
 
         unread = _turn([], loop.create_future())
-        _ = unread.to_sse()
+        _ = to_sse(unread)
 
         del failed, unread, _
         gc.collect()

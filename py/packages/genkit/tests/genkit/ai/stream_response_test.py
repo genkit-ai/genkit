@@ -28,6 +28,7 @@ from genkit import (
 from genkit._core._typing import FinishReason, Role, ToolRequest
 from genkit.model import ModelContext, ModelRequest
 from genkit.testing import define_scripted_model
+from genkit.web import to_sse
 
 
 async def _texts(result: StreamResponse[ModelResponseChunk[Any], ModelResponse[Any]]) -> list[str]:
@@ -273,7 +274,7 @@ async def test_model_action_stream_returns_stream_response() -> None:
 
 @pytest.mark.asyncio
 async def test_flow_stream_to_sse_frames_chunks_and_result() -> None:
-    """`flow.stream(...).to_sse()` yields `data: {"message": ...}` frames followed by `data: {"result": ...}`."""
+    """`to_sse(flow.stream(...))` yields `data: {"message": ...}` frames followed by `data: {"result": ...}`."""
     ai = Genkit()
 
     @ai.flow()
@@ -282,7 +283,7 @@ async def test_flow_stream_to_sse_frames_chunks_and_result() -> None:
         ctx.send_chunk('Out for delivery')
         return f'Order {order_id} delivered'
 
-    lines = [line async for line in track_order.stream('A-1042').to_sse()]
+    lines = [line async for line in to_sse(track_order.stream('A-1042'))]
     assert lines == [
         'data: {"message":"Packed"}\n\n',
         'data: {"message":"Out for delivery"}\n\n',
@@ -292,7 +293,7 @@ async def test_flow_stream_to_sse_frames_chunks_and_result() -> None:
 
 @pytest.mark.asyncio
 async def test_flow_stream_to_sse_on_failure_emits_error_frame_without_result() -> None:
-    """`flow.stream(...).to_sse()` frames mid-stream errors as `data: {"error": ...}` with no trailing result."""
+    """`to_sse(flow.stream(...))` frames mid-stream errors as `data: {"error": ...}` with no trailing result."""
     ai = Genkit()
 
     @ai.flow()
@@ -300,7 +301,7 @@ async def test_flow_stream_to_sse_on_failure_emits_error_frame_without_result() 
         ctx.send_chunk('Packed')
         raise PublicError('NOT_FOUND', f'order {order_id} missing')
 
-    lines = [line async for line in track_order.stream('A-1042').to_sse()]
+    lines = [line async for line in to_sse(track_order.stream('A-1042'))]
     assert len(lines) == 2
     assert lines[0] == 'data: {"message":"Packed"}\n\n'
     payload = json.loads(lines[1].removeprefix('data: ').strip())
@@ -309,7 +310,7 @@ async def test_flow_stream_to_sse_on_failure_emits_error_frame_without_result() 
 
 @pytest.mark.asyncio
 async def test_generate_stream_to_sse_frames_model_chunks_and_response() -> None:
-    """`ai.generate_stream(...).to_sse()` serializes Pydantic chunks and final response with camelCase aliases."""
+    """`to_sse(ai.generate_stream(...))` serializes Pydantic chunks and final response with camelCase aliases."""
     ai = Genkit()
     define_scripted_model(
         ai,
@@ -327,7 +328,7 @@ async def test_generate_stream_to_sse_frames_model_chunks_and_response() -> None
         ],
     )
 
-    lines = [line async for line in ai.generate_stream(model='scriptedModel', prompt='Soup?').to_sse()]
+    lines = [line async for line in to_sse(ai.generate_stream(model='scriptedModel', prompt='Soup?'))]
     events = [json.loads(line.removeprefix('data: ').strip()) for line in lines]
     assert [list(e.keys()) for e in events] == [['message'], ['message'], ['result']]
     assert events[0]['message']['content'] == [{'text': 'Miso'}]

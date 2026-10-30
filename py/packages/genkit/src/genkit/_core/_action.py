@@ -19,7 +19,6 @@
 import asyncio
 import inspect
 import json
-import logging
 import re
 import sys
 import time
@@ -43,19 +42,11 @@ from typing import (
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
-from pydantic_core import to_jsonable_python
 from typing_extensions import Self, TypeVar
 
 from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
-from genkit._core._error import (
-    GenkitError,
-    Interrupt,
-    RuntimeErrorReason,
-    error_body,
-    error_status,
-    mark_request_error,
-)
+from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
 from genkit._core._model import (
     EmbedRequest,
     ModelRequest,
@@ -209,47 +200,6 @@ class ActionResponse(BaseModel, Generic[ResponseT]):
 ChunkT_co = TypeVar('ChunkT_co', covariant=True)
 OutputT_co = TypeVar('OutputT_co', covariant=True)
 
-_SSE_JSON_SEPARATORS = (',', ':')
-
-# Served-failure logs go to the host web server's stdlib logging config, same as
-# the fastapi/flask/django handlers (exempt from TID251 in pyproject for this reason).
-_sse_logger = logging.getLogger(__name__)  # noqa: TID251
-
-
-def _to_sse_value(obj: object) -> object:
-    """JSON-ready frame value: camelCase aliases, no null model fields, nested models/lists/datetimes encoded."""
-    return to_jsonable_python(obj, by_alias=True, exclude_none=True)
-
-
-def _sse_frame(key: str, value: object) -> str:
-    return f'data: {json.dumps({key: value}, separators=_SSE_JSON_SEPARATORS)}\n\n'
-
-
-async def _stream_to_sse(
-    stream: AsyncIterator[Any],
-    response: Callable[[], Awaitable[Any]],
-    *,
-    to_value: Callable[[Any], object] = _to_sse_value,
-    logger: logging.Logger = _sse_logger,
-) -> AsyncIterator[str]:
-    """The one Genkit SSE framer: ``message`` per chunk, then ``result``, or ``error`` instead of the rest.
-
-    ``response`` is called only after the stream drains, so a failed or never-iterated
-    stream doesn't leave an un-awaited result coroutine behind.
-    """
-    try:
-        async for chunk in stream:
-            yield _sse_frame('message', to_value(chunk))
-        result = await response()
-        yield _sse_frame('result', to_value(result))
-    except Exception as e:
-        # Same split as the adapters: 5xx logs the traceback, 4xx a one-line warning.
-        if error_status(e) >= 500:
-            logger.exception('served flow stream failed')
-        else:
-            logger.warning('served flow stream failed: %s', e)
-        yield _sse_frame('error', error_body(e))
-
 
 class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     """Chunks from a running action, then its result.
@@ -304,10 +254,6 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     def __aiter__(self) -> AsyncIterator[ChunkT_co]:
         # `async for chunk in result` reads `.stream`, so callers can skip the hop.
         return self._stream.__aiter__()
-
-    def to_sse(self) -> AsyncIterator[str]:
-        r"""Frame this stream as Genkit SSE lines (``data: {"message"|"result"|"error": ...}\n\n``)."""
-        return _stream_to_sse(self._stream, lambda: self._response)
 
     async def aclose(self) -> None:
         """Close the stream and release any underlying resources."""

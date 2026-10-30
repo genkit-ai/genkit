@@ -32,7 +32,6 @@ from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
 from genkit._ai._agents._snapshot import lookup_label
 from genkit._ai._agents._types import StateManagement
 from genkit._ai._json_patch import apply_json_patch
-from genkit._core._action import _stream_to_sse, _to_sse_value
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
@@ -423,17 +422,6 @@ def agent_interrupts_from_message(message: Message | None) -> list[AgentInterrup
     return interrupts
 
 
-def agent_sse_value(obj: object) -> object:
-    """SSE frame value for a turn chunk or result: the wire ``raw`` for the client wrappers, else as-is.
-
-    Gated on the wrapper types, so a user model that happens to have a ``raw``
-    field serializes whole.
-    """
-    if isinstance(obj, (AgentChunk, AgentResponse)) and obj.raw is not None:
-        obj = obj.raw
-    return _to_sse_value(obj)
-
-
 class AgentTurn(Generic[StateT]):
     """A single in-flight turn — read ``.stream`` for chunks, ``.response`` for the result.
 
@@ -494,14 +482,6 @@ class AgentTurn(Generic[StateT]):
 
     def __await__(self) -> Generator[Any, None, AgentResponse[StateT]]:
         return self.response.__await__()
-
-    def to_sse(self) -> AsyncIterator[str]:
-        r"""Frame this turn as Genkit SSE lines (``data: {"message"|"result"|"error": ...}\n\n``).
-
-        Frames carry the wire shapes (``AgentStreamChunk`` / ``AgentOutput``), the
-        same ones ``serve_agent`` sends, not the client-side wrappers.
-        """
-        return _stream_to_sse(self.stream, lambda: self.response, to_value=agent_sse_value)
 
     async def abort(self) -> None:
         """Detaches the client from this turn: stops streaming and settles the result now.

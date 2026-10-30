@@ -22,7 +22,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from typing import Any, Protocol, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
@@ -30,9 +30,8 @@ from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import Genkit, GenkitError, PublicError
-from genkit._core._action import _stream_to_sse
 from genkit.plugin_api import Action
-from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
+from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, to_sse, wants_stream
 
 logger = logging.getLogger(__name__)
 
@@ -92,38 +91,6 @@ def format_stream_error(error: Exception) -> str:
     """Format a stream failure as a canonical SSE data event."""
     err_json = json.dumps({'error': error_body(error)}, separators=JSON_SEPARATORS)
     return f'data: {err_json}\n\n'
-
-
-class StreamHandle(Protocol):
-    """A generate_stream / chat.send_stream handle: chunks on ``.stream``, result on ``.response``."""
-
-    @property
-    def stream(self) -> AsyncIterator[object]:
-        """Chunks as they arrive from the model."""
-        ...
-
-    @property
-    def response(self) -> Awaitable[object]:
-        """The settled turn once the stream finishes."""
-        ...
-
-
-async def to_sse(turn: StreamHandle) -> AsyncIterator[str]:
-    """Frame a streaming turn as Genkit SSE lines.
-
-    A chunk is not HTTP. This is the line that turns ``turn.stream`` /
-    ``turn.response`` into the same ``data: {message|result|error}`` frames
-    ``serve_agent`` and ``handle_genkit_request`` send, so a hand-rolled
-    FastAPI route can ``yield`` them without inventing a second wire.
-
-    Experimental: import it from ``genkit_fastapi.exp``. It may change
-    between minor releases.
-    """
-    # Lazy: keeps the agent runtime off the `import genkit_fastapi` path.
-    from genkit._ai._agents._client import agent_sse_value
-
-    async for line in _stream_to_sse(turn.stream, lambda: turn.response, to_value=agent_sse_value, logger=logger):
-        yield line
 
 
 async def handle_genkit_request(
@@ -204,7 +171,7 @@ async def _handle_action_request(
                 _log_failure(error=e, where='stream')
                 yield format_stream_error(e)
                 return
-            async for line in to_sse(stream_handle):
+            async for line in to_sse(stream_handle, logger=logger):
                 yield line
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')

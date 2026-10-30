@@ -27,7 +27,6 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
-from genkit_fastapi.exp import to_sse
 from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -35,7 +34,7 @@ from genkit import FlowContext, Genkit, GenkitError, Message, ModelResponse, Mod
 from genkit._core._typing import FinishReason, Role
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
-from genkit.web import RequestData
+from genkit.web import RequestData, to_sse
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -883,9 +882,9 @@ class _Turn:
         return self._result
 
 
-def _sse_lines(turn: _Turn) -> list[str]:
+def _sse_lines(turn: _Turn, logger: logging.Logger | None = None) -> list[str]:
     async def collect() -> list[str]:
-        return [line async for line in to_sse(turn)]
+        return [line async for line in to_sse(turn, logger=logger)]
 
     return asyncio.run(collect())
 
@@ -936,14 +935,16 @@ def test_to_sse_error_before_chunks_is_only_the_error_frame() -> None:
     assert 'message' not in payload
 
 
-def test_to_sse_is_experimental_only() -> None:
-    """to_sse comes from genkit_fastapi.exp, not the stable import."""
+def test_to_sse_lives_on_genkit_web_only() -> None:
+    """to_sse is genkit.web's; genkit_fastapi and genkit_fastapi.exp don't re-export it."""
     import genkit_fastapi
     import genkit_fastapi.exp
 
+    import genkit.web
+
+    assert 'to_sse' in genkit.web.__all__
     assert 'to_sse' not in genkit_fastapi.__all__
-    assert not hasattr(genkit_fastapi, 'to_sse')
-    assert 'to_sse' in genkit_fastapi.exp.__all__
+    assert 'to_sse' not in genkit_fastapi.exp.__all__
 
 
 class SourceMeta(BaseModel):
@@ -983,7 +984,7 @@ def test_serve_flow_keeps_user_model_raw_field_over_json_and_sse() -> None:
 
 
 def test_to_sse_keeps_user_model_raw_field() -> None:
-    """exp.to_sse on a handle of user models doesn't flatten a `raw` field."""
+    """to_sse on a handle of user models doesn't flatten a `raw` field."""
     doc = CrmDoc(title='T', raw=SourceMeta(source='crm'))
 
     assert _sse_lines(_Turn(chunks=[doc], result=doc)) == [
@@ -993,14 +994,26 @@ def test_to_sse_keeps_user_model_raw_field() -> None:
 
 
 def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> None:
-    """The error frame is logged on the adapter logger, 5xx with the traceback."""
-    with caplog.at_level(logging.ERROR, logger='genkit_fastapi._handler'):
+    """The error frame is logged on genkit.web's logger by default, 5xx with the traceback."""
+    with caplog.at_level(logging.ERROR, logger='genkit.web._sse'):
         _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
 
     assert [(r.name, r.getMessage()) for r in caplog.records] == [
-        ('genkit_fastapi._handler', 'served flow stream failed'),
+        ('genkit.web._sse', 'served flow stream failed'),
     ]
     assert caplog.records[0].exc_info is not None
+
+
+def test_to_sse_logs_on_the_logger_it_is_given(caplog: pytest.LogCaptureFixture) -> None:
+    """An adapter passes its own logger, so served failures land in its logging config."""
+    with caplog.at_level(logging.WARNING, logger='genkit_fastapi._handler'):
+        _sse_lines(
+            _Turn(chunks=[], error=PublicError('INVALID_ARGUMENT', 'bad dish')),
+            logger=logging.getLogger('genkit_fastapi._handler'),
+        )
+
+    assert [(r.name, r.levelname) for r in caplog.records] == [('genkit_fastapi._handler', 'WARNING')]
+    assert 'bad dish' in caplog.records[0].getMessage()
 
 
 def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
@@ -1033,7 +1046,7 @@ def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
     @app.post('/chat/stream')
     async def chat_stream(prompt: str) -> StreamingResponse:
         stream = ask_chef.stream(prompt, context={'user_id': 'u_42'})
-        return StreamingResponse(stream.to_sse(), media_type='text/event-stream')
+        return StreamingResponse(to_sse(stream), media_type='text/event-stream')
 
     response = TestClient(app).post('/chat/stream', params={'prompt': 'Dinner?'})
 
