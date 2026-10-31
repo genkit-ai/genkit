@@ -200,7 +200,8 @@ def _blocks_to_parts(blocks: dict[int, _StreamBlock], tools: list[ToolDefinition
             continue
         # One block can carry both reasoning and text; reasoning comes first.
         reasoning = ''.join(block.reasoning)
-        if reasoning or block.redacted:
+        # A signature alone is kept: Claude can sign reasoning with empty text.
+        if reasoning or block.signature or block.redacted:
             parts.append(bedrock_reasoning_part(reasoning, block.signature, bytes(block.redacted) or None))
         text = ''.join(block.text)
         if text:
