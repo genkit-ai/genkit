@@ -6795,3 +6795,259 @@ describe('detach finalize', () => {
     );
   });
 });
+
+describe('agent.deleteSession', () => {
+  const turn = (text = 'hi') => ({
+    message: { role: 'user' as const, content: [{ text }] },
+  });
+
+  async function runTurn(
+    flow: ReturnType<typeof defineCustomAgent<any>>,
+    init: Record<string, unknown> = {}
+  ) {
+    const session = flow.streamBidi(init);
+    session.send(turn());
+    session.close();
+    for await (const _ of session.stream) {
+    }
+    return session.output;
+  }
+
+  it('deletes a completed session and is idempotent', async () => {
+    const store = new InMemorySessionStore();
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteCompleted', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const output = await runTurn(flow);
+    const snapshot = await store.getSnapshot({
+      snapshotId: output.snapshotId!,
+    });
+    const sessionId = snapshot!.sessionId!;
+
+    assert.strictEqual(await flow.deleteSession(sessionId), true);
+    assert.strictEqual(await store.getSnapshot({ sessionId }), undefined);
+    assert.strictEqual(
+      await store.getSnapshot({ snapshotId: output.snapshotId! }),
+      undefined
+    );
+    assert.strictEqual(await flow.deleteSession(sessionId), false);
+  });
+
+  it('starts a fresh session when resuming a deleted session by sessionId', async () => {
+    const store = new InMemorySessionStore();
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteThenResume', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const first = await runTurn(flow);
+    const sessionId = (await store.getSnapshot({
+      snapshotId: first.snapshotId!,
+    }))!.sessionId!;
+    await flow.deleteSession(sessionId);
+
+    const second = await runTurn(flow, { sessionId });
+    const fresh = await store.getSnapshot({ snapshotId: second.snapshotId! });
+    assert.strictEqual(fresh?.sessionId, sessionId);
+    assert.strictEqual(fresh?.parentId, undefined);
+  });
+
+  it('aborts a pending detached run and does not resurrect the session when it finishes', async () => {
+    const store = new InMemorySessionStore();
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let aborted = false;
+
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteDetached', store },
+      async (sess, { abortSignal }) => {
+        if (abortSignal) abortSignal.onabort = () => (aborted = true);
+        await sess.run(async () => {
+          await released;
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({ ...turn(), detach: true });
+    const output = await session.output;
+    const pending = await store.getSnapshot({ snapshotId: output.snapshotId! });
+    assert.strictEqual(pending?.status, 'pending');
+    const sessionId = pending!.sessionId!;
+
+    assert.strictEqual(await flow.deleteSession(sessionId), true);
+    assert.strictEqual(aborted, true, 'the worker should have been aborted');
+
+    // The worker finishing late must not write the session back.
+    release();
+    session.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.strictEqual(await store.getSnapshot({ sessionId }), undefined);
+    assert.strictEqual(
+      await store.getSnapshot({ snapshotId: output.snapshotId! }),
+      undefined
+    );
+  });
+
+  it('does not resurrect the session when an attached turn finishes after the delete', async () => {
+    const store = new InMemorySessionStore();
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let started: () => void = () => {};
+    const turnStarted = new Promise<void>((resolve) => (started = resolve));
+    let invocations = 0;
+
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteAttached', store },
+      async (sess) => {
+        const block = ++invocations > 1;
+        await sess.run(async () => {
+          if (!block) return;
+          started();
+          await released;
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    // A first, completed turn gives the session history to delete.
+    const first = await runTurn(flow);
+    const sessionId = (await store.getSnapshot({
+      snapshotId: first.snapshotId!,
+    }))!.sessionId!;
+
+    const session = flow.streamBidi({ sessionId });
+    session.send(turn('again'));
+    session.close();
+    const drained = (async () => {
+      for await (const _ of session.stream) {
+      }
+    })();
+    await turnStarted;
+
+    await flow.deleteSession(sessionId);
+    release();
+    await drained;
+    await session.output;
+
+    assert.strictEqual(await store.getSnapshot({ sessionId }), undefined);
+  });
+
+  it('does not resurrect a deleted pending run even on a store without tombstones', async () => {
+    // A minimal custom store: delete just drops the rows, nothing remembers it.
+    const rows = new Map<string, SessionSnapshot>();
+    const store = {
+      async getSnapshot(opts: GetSnapshotOptions) {
+        if (opts.snapshotId) return rows.get(opts.snapshotId);
+        return [...rows.values()].find((r) => r.sessionId === opts.sessionId);
+      },
+      async saveSnapshot(
+        snapshotId: string | undefined,
+        mutator: SnapshotMutator
+      ) {
+        const next = mutator(snapshotId ? rows.get(snapshotId) : undefined);
+        if (next === null) return null;
+        const id = snapshotId ?? next.snapshotId ?? reserveSnapshotId();
+        rows.set(id, { ...next, snapshotId: id });
+        return id;
+      },
+      async deleteSession(sessionId: string) {
+        let removed = false;
+        for (const [id, row] of rows) {
+          if (row.sessionId === sessionId) removed = rows.delete(id) || removed;
+        }
+        return removed;
+      },
+    };
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteNoTombstone', store },
+      async (sess) => {
+        await sess.run(async () => {
+          await released;
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({ ...turn(), detach: true });
+    const output = await session.output;
+    const sessionId = (await store.getSnapshot({
+      snapshotId: output.snapshotId!,
+    }))!.sessionId!;
+
+    await flow.deleteSession(sessionId);
+    release();
+    session.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.strictEqual(rows.size, 0);
+  });
+
+  it('throws FAILED_PRECONDITION without a store', async () => {
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteNoStore' },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+    await assert.rejects(
+      () => flow.deleteSession('some-session'),
+      (e: any) => e.status === 'FAILED_PRECONDITION'
+    );
+  });
+
+  it('throws FAILED_PRECONDITION when the store cannot delete', async () => {
+    const inner = new InMemorySessionStore();
+    const store = {
+      getSnapshot: inner.getSnapshot.bind(inner),
+      saveSnapshot: inner.saveSnapshot.bind(inner),
+    };
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteUnsupported', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+    await assert.rejects(
+      () => flow.deleteSession('some-session'),
+      (e: any) =>
+        e.status === 'FAILED_PRECONDITION' && /deleteSession/.test(e.message)
+    );
+  });
+
+  it('rejects an empty sessionId', async () => {
+    const flow = defineCustomAgent(
+      new Registry(),
+      { name: 'deleteEmptyId', store: new InMemorySessionStore() },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+    await assert.rejects(
+      () => flow.deleteSession(' '),
+      (e: any) => e.status === 'INVALID_ARGUMENT'
+    );
+  });
+});
