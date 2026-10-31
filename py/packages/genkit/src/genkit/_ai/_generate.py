@@ -2413,7 +2413,12 @@ async def execute_tool_request(
     watcher_task = asyncio.create_task(watch_abort())
     closing = False
     try:
-        tool_response = await asyncio.shield(tool_task)
+        # Wait via asyncio.wait rather than awaiting or shielding tool_task directly:
+        # awaiting tool_task forwards an outer cancel before we can suppress teardown
+        # exceptions, and asyncio.shield logs 'exception in shielded future' to the
+        # loop exception handler on Python 3.14 even when tool_task is awaited below.
+        await asyncio.wait((tool_task,))
+        tool_response = tool_task.result()
     except GeneratorExit:
         closing = True
         tool_task.cancel()
@@ -2428,10 +2433,10 @@ async def execute_tool_request(
             and tool_task.exception() is None
         ):
             # tool_task already committed its return value before the outer cancel
-            # reached the shield wrapper; preserve the completed output.
+            # reached the wait wrapper; preserve the completed output.
             tool_response = tool_task.result()
         else:
-            # An outer cancel (deadline / gather teardown) cancels the shield waiter,
+            # An outer cancel (deadline / gather teardown) cancels the wait future,
             # not tool_task itself — cancel and await tool_task so its finally blocks
             # and async context managers finish cleanly and any teardown exception is
             # retrieved.
