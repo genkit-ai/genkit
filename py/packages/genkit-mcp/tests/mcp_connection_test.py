@@ -1182,5 +1182,5 @@ async def test_each_output_schema_wording_is_translated(message: str) -> None:
     session = cast(ClientSession, _RaisingSession(RuntimeError(message)))
     with pytest.raises(_ToolResultError) as raised:
         await _call_tool(session, 'echo', {}, None)
-    assert raised.value.original_message == message
+    assert raised.value.message == message
     assert isinstance(raised.value.__cause__, RuntimeError)

@@ -139,7 +139,7 @@ async def test_non_model_job_cancel_unsupported_names_a_background_action() -> N
         await job.cancel(Operation(id='render-q1', action='/custom/render-report'))
 
     assert exc.value.status == 'UNIMPLEMENTED'
-    assert exc.value.original_message == 'Background action /custom/render-report does not support cancellation.'
+    assert exc.value.message == 'Background action /custom/render-report does not support cancellation.'
     assert exc.value.reason is None
 
 
@@ -281,7 +281,7 @@ async def test_bad_model_output_fails_before_any_action_runs(monkeypatch: pytest
         })
 
     assert exc.value.status == 'INVALID_ARGUMENT'
-    assert exc.value.original_message.startswith('invalid Operation: output')
+    assert exc.value.message.startswith('invalid Operation: output')
     assert runs == []
 
 
@@ -303,5 +303,5 @@ async def test_model_cancel_unsupported_keeps_model_wording() -> None:
 
     assert exc.value.status == 'UNIMPLEMENTED'
     expected = 'Background model /background-model/bistro-video does not support cancellation.'
-    assert exc.value.original_message == expected
+    assert exc.value.message == expected
     assert exc.value.reason == 'UNSUPPORTED_BY_MODEL'
