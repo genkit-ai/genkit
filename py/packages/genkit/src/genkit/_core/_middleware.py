@@ -21,13 +21,16 @@ from __future__ import annotations
 import asyncio
 import inspect
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Generic, NamedTuple, Protocol, TypeVar, cast, get_args, get_origin
+from typing import Any, ClassVar, Generic, NamedTuple, Protocol, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, PrivateAttr, ValidationError, field_validator
+from typing_extensions import TypeVar
 
 from genkit._core._action import Action
+from genkit._core._config_check import config_field_names
+from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     GenerateActionOptions,
@@ -93,7 +96,104 @@ class _EmptyMiddlewareConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
 
-TConfig = TypeVar('TConfig', bound=BaseModel)
+# Covariant (config is read-only) with a BaseModel default, so bare
+# ``Middleware`` means ``Middleware[BaseModel]`` and ``Sequence[Middleware]``
+# accepts every subclass.
+TConfig = TypeVar('TConfig', bound=BaseModel, covariant=True, default=BaseModel)
+
+
+def _config_key_spellings(config_cls: type[BaseModel]) -> dict[str, str] | None:
+    """Map every key ``config_cls`` accepts to the spelling to suggest for it.
+
+    Returns None when the class takes keys it doesn't declare (``extra``
+    set explicitly to ``'allow'`` or ``'ignore'``) or uses an alias path this
+    check can't enumerate.
+    """
+    if config_cls.model_config.get('extra') in ('allow', 'ignore'):
+        return None
+    fields = config_cls.model_fields
+    for info in fields.values():
+        validation_alias = info.validation_alias
+        if validation_alias is None or isinstance(validation_alias, str):
+            continue
+        if not isinstance(validation_alias, AliasChoices) or not all(
+            isinstance(choice, str) for choice in validation_alias.choices
+        ):
+            return None
+    accepts_field_name = bool(
+        config_cls.model_config.get('validate_by_name') or config_cls.model_config.get('populate_by_name')
+    )
+    # config_field_names is the same walk model config folding uses; pydantic
+    # only rejects the bare field name when it has an alias and the class
+    # doesn't validate by name.
+    names = config_field_names(config_cls)
+    alias_keys = set(names) - set(fields)
+    for name, info in fields.items():
+        if name == info.alias or name == info.validation_alias:
+            alias_keys.add(name)
+        elif isinstance(info.validation_alias, AliasChoices) and name in info.validation_alias.choices:
+            alias_keys.add(name)
+    accepted = {
+        key: name
+        for key, name in names.items()
+        if key in alias_keys
+        or accepts_field_name
+        or (fields[name].alias is None and fields[name].validation_alias is None)
+    }
+    spellings: dict[str, str] = {}
+    for key, name in accepted.items():
+        info = fields[name]
+        # The wire, Dev UI schema and the JS/Go SDKs use the serialization alias.
+        wire = info.serialization_alias
+        spellings[key] = wire if wire is not None and wire in accepted else (info.alias or name)
+    return spellings
+
+
+def _dump_middleware_ref_config(config: BaseModel) -> dict[str, Any] | None:
+    """Dump a middleware config for ``MiddlewareRef`` using keys the class validates.
+
+    Excludes ``@computed_field``s and falls back to the validation alias or
+    field name when ``serialization_alias`` is output-only.
+    """
+    cfg_cls = type(config)
+    computed = set(cfg_cls.model_computed_fields)
+    dumped = config.model_dump(exclude_none=True, by_alias=True, mode='json', exclude=computed)
+    spellings = _config_key_spellings(cfg_cls)
+    if spellings is None or all(k in spellings for k in dumped):
+        return dumped or None
+    raw = config.model_dump(exclude_none=True, by_alias=False, mode='json', exclude=computed)
+    out: dict[str, Any] = {}
+    for name, val in raw.items():
+        info = cfg_cls.model_fields.get(name)
+        if info is None:
+            out[name] = val
+            continue
+        candidates: list[str] = []
+        if info.serialization_alias:
+            candidates.append(info.serialization_alias)
+        if info.alias:
+            candidates.append(info.alias)
+        if isinstance(info.validation_alias, str):
+            candidates.append(info.validation_alias)
+        elif isinstance(info.validation_alias, AliasChoices):
+            candidates.extend(c for c in info.validation_alias.choices if isinstance(c, str))
+        candidates.append(name)
+        key = next((c for c in candidates if c in spellings), name)
+        out[key] = val
+    return out or None
+
+
+def _unknown_config_keys(config_cls: type[BaseModel], keys: Iterable[str]) -> tuple[list[str], list[str]]:
+    """Keys ``config_cls`` would drop, and the keys it accepts, for an error message.
+
+    A plain BaseModel ignores unknown keys, so ``maxRetries`` against a
+    ``max_retries`` field would run with the default and no error.
+    """
+    spellings = _config_key_spellings(config_cls)
+    if spellings is None:
+        return [], []
+    unknown = sorted(k for k in keys if k not in spellings)
+    return unknown, sorted(set(spellings.values()))
 
 
 class GenerateHookParams(BaseModel):
@@ -138,20 +238,21 @@ class ToolHookParams(BaseModel):
 
 
 @dataclass
-class GenerateMiddlewareContext:
+class MiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
     ``ai`` is the app's ``Genkit`` instance, so ``await ctx.ai.lookup_model(name)``,
     ``await ctx.ai.lookup_tool(name)`` and ``ctx.ai.lookup_value(kind=..., name=...)``
     find what the app defined. Inside an agent, read the session with
-    ``genkit.exp.current_session()``. Also carries caller-provided metadata
-    (``custom_context``), streaming hooks, and the abort signal for the whole
+    ``genkit.exp.current_session()``. Also carries a copy of the call's
+    ``context=`` (auth, secrets; the same dict flows and tools read as
+    ``ctx.context``), streaming hooks, and the abort signal for the whole
     generate invocation.
     """
 
     ai: GenkitLike
     abort_signal: asyncio.Event = field(default_factory=asyncio.Event)
-    custom_context: dict[str, object] = field(default_factory=dict)
+    context: dict[str, object] = field(default_factory=dict)
     on_chunk: Callable[[ModelResponseChunk], None] | None = None
     telemetry_labels: dict[str, str] | None = None
 
@@ -175,7 +276,7 @@ class GenerateMiddlewareContext:
         return previous
 
 
-class BaseMiddleware(Generic[TConfig]):
+class Middleware(Generic[TConfig]):
     """Base class for generate middleware.
 
     A middleware is defined by its custom configuration (backed by Pydantic),
@@ -191,22 +292,31 @@ class BaseMiddleware(Generic[TConfig]):
         class RetryConfig(BaseModel):
             max_retries: int = 3
 
-    2. Extend BaseMiddleware with your config model, e.g. Retry:
+       Any pydantic BaseModel works. Its keys (field names, or aliases if it
+       declares them) are the config keys in .prompt files, the Dev UI form
+       and traces. A key the class doesn't declare raises instead of being
+       dropped (a ValidationError, as for a GenkitConfig), unless the class sets
+       ``extra='allow'`` or ``'ignore'``.
+
+    2. Extend Middleware with your config model and give it a registry name:
         ai = Genkit()
 
-        @ai.middleware(
-            name="retry",
-            description="Configures smart retry logic with exponential backoff and a jitter."
-        )
-        class Retry(BaseMiddleware[RetryConfig]):
-            async def wrap_model(self, params, next_fn, ctx):
+        @ai.middleware
+        class Retry(Middleware[RetryConfig]):
+            name = 'retry'
+            description = 'Retries model calls with exponential backoff and jitter.'
+
+            async def wrap_model(self, params, ctx, next_fn):
                 for attempt in range(self.config.max_retries + 1):
                     ...
 
-    Wrap your subclass with the ``@ai.middleware`` decorator to make it available
-    in your local Dev UI.
+    ``@ai.middleware`` (or ``ai.define_middleware(Retry)``) registers the class
+    so the Dev UI lists it and a ``.prompt`` file can name it.
+    ``@ai.middleware(name=..., description=...)`` overrides the class attributes.
+    ``name`` and ``description`` are not inherited: a subclass of ``Retry``
+    sets its own ``name`` before it can be registered.
 
-    3.Use the Retry middleware in your `generate` call:
+    3. Use the Retry middleware in your `generate` call:
         ai.generate(
             ...,
             use=[Retry(max_retries=5)]
@@ -218,40 +328,47 @@ class BaseMiddleware(Generic[TConfig]):
             use=[Retry(config=RetryConfig(max_retries=5))]
         )
 
-    Keep in mind that config are not meant to be mutated from within hooks.
+    ``self.config`` is set once at construction. The attribute is read-only;
+    treat the config object as read-only too (Pydantic models are not frozen).
     """
 
+    name: ClassVar[str] = ''
+    description: ClassVar[str | None] = None
     Config: ClassVar[type[BaseModel]] = _EmptyMiddlewareConfig
-    config: TConfig
+    _config: TConfig
 
     def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init_subclass__(**kwargs)
-        # Python keeps RetryConfig in BaseMiddleware[RetryConfig] for type checkers only.
+        # The registry name and Dev UI description belong to the class that
+        # declares them; a subclass inheriting them would collide with its parent.
+        if 'name' not in cls.__dict__:
+            cls.name = ''
+        if 'description' not in cls.__dict__:
+            cls.description = None
+        # Python keeps RetryConfig in Middleware[RetryConfig] for type checkers only.
         # We copy it onto cls.Config so Retry(max_retries=5) and the Dev UI form work.
         if 'Config' in cls.__dict__:
-            raise TypeError(
-                f'{cls.__name__} must not define Config; declare config as BaseMiddleware[YourConfig] instead.'
-            )
+            raise TypeError(f'{cls.__name__} must not define Config; declare config as Middleware[YourConfig] instead.')
         config_cls: type[BaseModel] | None = None
         # Pull config type out of the brackets of the class declaration.
-        # i.e. CustomMiddlewareConfig from CustomMiddleware(BaseMiddleware[CustomMiddlewareConfig]).
+        # i.e. CustomMiddlewareConfig from CustomMiddleware(Middleware[CustomMiddlewareConfig]).
         for base in getattr(cls, '__orig_bases__', ()):
-            if get_origin(base) is BaseMiddleware:
+            if get_origin(base) is Middleware:
                 args = get_args(base)
                 if len(args) == 1:
                     arg = args[0]
                     if isinstance(arg, type) and issubclass(arg, BaseModel):
                         config_cls = arg
                 break
-        # Look for a config in parent classes, e.g. if a parent is BaseMiddleware[SomeConfig]
+        # Look for a config in parent classes, e.g. if a parent is Middleware[SomeConfig]
         if config_cls is None:
             for base in cls.__mro__[1:]:
-                if base is BaseMiddleware:
+                if base is Middleware:
                     break
-                if issubclass(base, BaseMiddleware) and base.Config is not _EmptyMiddlewareConfig:
+                if issubclass(base, Middleware) and base.Config is not _EmptyMiddlewareConfig:
                     config_cls = base.Config
                     break
-        # Handle the case where no config type is specified, e.g. class Logging(BaseMiddleware):
+        # Handle the case where no config type is specified, e.g. class Logging(Middleware):
         # This means there is no user-facing configuration for the middleware.
         cls.Config = config_cls or _EmptyMiddlewareConfig
 
@@ -261,19 +378,41 @@ class BaseMiddleware(Generic[TConfig]):
                 raise TypeError('pass either config= or keyword config fields, not both')
             if not isinstance(config, self.Config):
                 raise TypeError(f'expected config type {self.Config.__name__}, got {type(config).__name__}')
-            self.config = config
+            self._config = config
         else:
-            self.config = cast(Any, self.Config(**kwargs))
+            unknown, _ = _unknown_config_keys(self.Config, kwargs)
+            if unknown:
+                # The same error a GenkitConfig raises, so the base class doesn't change what callers catch.
+                raise ValidationError.from_exception_data(
+                    self.Config.__name__,
+                    [{'type': 'extra_forbidden', 'loc': (key,), 'input': kwargs[key]} for key in unknown],
+                )
+            self._config = cast(Any, self.Config(**kwargs))
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+    @property
+    def config(self) -> TConfig:
+        """The validated config this instance was constructed with (read-only)."""
+        return self._config
+
+    @classmethod
+    def _middleware_metadata(
+        cls,
+        name: str | None = None,
+        *,
+        description: str | None = None,
+    ) -> _MiddlewareMetadata:
+        """Build the internal Dev UI catalog descriptor for this middleware class."""
+        return _MiddlewareMetadata(cls=cls, name=name, description=description)
+
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
         return []
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
         return await next_fn(params, ctx)
@@ -281,8 +420,8 @@ class BaseMiddleware(Generic[TConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each model API call."""
         return await next_fn(params, ctx)
@@ -290,8 +429,8 @@ class BaseMiddleware(Generic[TConfig]):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Wrap each tool execution.
 
@@ -302,27 +441,27 @@ class BaseMiddleware(Generic[TConfig]):
         return await next_fn(params, ctx)
 
 
-def _copy_middleware_instance(impl: BaseMiddleware[Any]) -> BaseMiddleware[Any]:
+def _copy_middleware_instance(impl: Middleware) -> Middleware:
     """Return a fresh instance with the same config; internal hook state is not copied."""
-    return type(impl)(config=impl.config.model_copy(deep=True))
+    return type(impl)(config=impl._config.model_copy(deep=True))
 
 
 class MiddlewareDef(Protocol):
     """Hook contract the generate pipeline chains.
 
-    Authors implement this by subclassing ``BaseMiddleware``. The pipeline types
+    Authors implement this by subclassing ``Middleware``. The pipeline types
     against this protocol so it only calls hooks, not constructors or config.
     """
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Tool]:
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         """Return additional tools to expose to the model for this generate call."""
         ...
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each iteration of the tool loop (model call + optional tool resolution)."""
         ...
@@ -330,8 +469,8 @@ class MiddlewareDef(Protocol):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Wrap each model API call."""
         ...
@@ -339,50 +478,81 @@ class MiddlewareDef(Protocol):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Wrap each tool execution."""
         ...
 
 
-class GenerateMiddleware(MiddlewareDesc):
-    """Registered middleware factory: wire metadata + class used to instantiate hooks."""
+class _MiddlewareMetadata(MiddlewareDesc):
+    """Internal Dev UI catalog descriptor and factory for a registered middleware class."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    _cls: type[BaseMiddleware] = PrivateAttr()
+    _cls: type[Middleware] = PrivateAttr()
 
     def __init__(
         self,
         *,
-        cls: type[BaseMiddleware],
-        name: str,
+        cls: type[Middleware],
+        name: str | None = None,
         description: str | None = None,
-        metadata: dict[str, Any] | None = None,
     ) -> None:
-        res = _validate_middleware_key_segment(name)
+        effective_name = name if name is not None else cls.name
+        if not effective_name:
+            raise ValueError(
+                f"{cls.__name__} has no middleware name. Set `name = '...'` on the class "
+                f'or pass a name: ai.define_middleware({cls.__name__}, name=...).'
+            )
+        res = _validate_middleware_key_segment(effective_name)
         if res.errored:
-            raise ValueError(f'GenerateMiddleware name {res.error_message}')
-        if description is None and cls.__doc__:
-            description = inspect.cleandoc(cls.__doc__)
+            raise ValueError(f'middleware name {res.error_message}')
+        effective_desc = description if description is not None else cls.description
+        if effective_desc is None and cls.__doc__:
+            effective_desc = inspect.cleandoc(cls.__doc__)
         super().__init__(
-            name=name,
-            description=description,
+            name=effective_name,
+            description=effective_desc,
             config_schema=_derive_config_schema(cls),
-            metadata=metadata,
         )
         self._cls = cls
 
-    def instantiate(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
-        """Build a configured middleware instance for one resolve step."""
-        return self._cls(**(config or {}))
+    def instantiate(self, config: dict[str, Any] | None = None) -> Middleware:
+        """Build a configured middleware instance for one resolve step.
 
-    def __call__(self, config: dict[str, Any] | None = None) -> BaseMiddleware:
+        ``config`` comes from a .prompt file, the Dev UI or a trace, so an
+        unknown key is INVALID_ARGUMENT naming the middleware and its keys.
+        """
+        config = config or {}
+        unknown, accepted = _unknown_config_keys(self._cls.Config, config)
+        if unknown:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'Middleware "{self.name}" got unknown config key(s) {", ".join(unknown)}; '
+                    f'accepted keys: {", ".join(accepted) or "none"}'
+                ),
+                source='genkit.generate',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        try:
+            return self._cls(**config)
+        except ValidationError as e:
+            # Wrong type, a bound, or a missing required field.
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'Middleware "{self.name}" got invalid config',
+                source='genkit.generate',
+                reason=RuntimeErrorReason.INVALID_INPUT,
+                cause=e,
+            ) from e
+
+    def __call__(self, config: dict[str, Any] | None = None) -> Middleware:
         return self.instantiate(config)
 
 
-def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
+def _derive_config_schema(cls: type[Middleware]) -> dict[str, Any]:
     """Build a JSON Schema describing a middleware's user-facing config fields."""
     config_cls = cls.Config
     if config_cls is _EmptyMiddlewareConfig or not config_cls.model_fields:
@@ -406,10 +576,10 @@ def _derive_config_schema(cls: type[BaseMiddleware]) -> dict[str, Any]:
         }
 
 
-def middleware_class_index(registry: RegistryLike) -> dict[type[BaseMiddleware], str]:
+def middleware_class_index(registry: RegistryLike) -> dict[type[Middleware], str]:
     """Reverse index from a registered class to the name it was registered under."""
-    out: dict[type[BaseMiddleware], str] = {}
+    out: dict[type[Middleware], str] = {}
     for reg_name, value in registry.list_values('middleware').items():
-        if isinstance(value, GenerateMiddleware):
+        if isinstance(value, _MiddlewareMetadata):
             out[value._cls] = reg_name
     return out

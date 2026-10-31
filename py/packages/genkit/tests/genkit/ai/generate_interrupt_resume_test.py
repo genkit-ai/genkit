@@ -25,9 +25,10 @@ from genkit._core._model import GenerateActionOptions, Resume
 from genkit._core._typing import (
     FinishReason,
     Media,
+    MiddlewareRef,
     Role,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
 from genkit.testing import define_scripted_model
 
 
@@ -261,12 +262,12 @@ async def test_wrap_tool_catch_all_does_not_swallow_interrupt() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='degrade_tool_errors')
-    class DegradeToolErrors(BaseMiddleware):
+    class DegradeToolErrors(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             try:
                 return await next_fn(params, ctx)
@@ -343,12 +344,12 @@ async def test_restart_through_wrap_tool_catch_all_still_interrupts_again() -> N
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='degrade_tool_errors')
-    class DegradeToolErrors(BaseMiddleware):
+    class DegradeToolErrors(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             try:
                 return await next_fn(params, ctx)
@@ -1109,12 +1110,12 @@ async def test_pending_multipart_response_survives_wire_round_trip() -> None:
         return 'described'
 
     @ai.middleware(name='multipart_media')
-    class MultipartMedia(BaseMiddleware):
+    class MultipartMedia(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             response = await next_fn(params, ctx)
             requested = params.tool_request_part.tool_request
@@ -1655,12 +1656,12 @@ async def _restart_screenshot(*, with_passthrough: bool = False) -> tuple[Any, A
     if with_passthrough:
 
         @ai.middleware(name='passthrough_mw')
-        class PassthroughMW(BaseMiddleware):
+        class PassthroughMW(Middleware):
             async def wrap_tool(
                 self,
                 params: ToolHookParams,
-                ctx: GenerateMiddlewareContext,
-                next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+                ctx: MiddlewareContext,
+                next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
             ) -> MultipartToolResponse:
                 return await next_fn(params, ctx)
 

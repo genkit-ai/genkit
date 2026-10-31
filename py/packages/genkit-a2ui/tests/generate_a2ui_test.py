@@ -47,7 +47,6 @@ from pydantic import ValidationError
 
 from genkit import Message, ModelResponse, ModelResponseChunk
 from genkit._core._error import RuntimeErrorReason
-from genkit._core._model import Candidate
 from genkit._core._typing import FinishReason, GenerationUsage, Role
 
 
@@ -219,7 +218,7 @@ async def test_generate_a2ui_strict_fails_the_turn_on_bad_block() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
 
@@ -235,7 +234,7 @@ async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
     stream = ai.generate_stream(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     streamed_envs: list[dict[str, Any]] = []
     async for chunk in stream.stream:
@@ -268,7 +267,7 @@ async def test_strict_refusal_keeps_the_tokens_the_turn_cost() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
 
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='NotAThing')
@@ -314,7 +313,7 @@ async def test_generate_a2ui_skips_rewrite_when_blocked_or_aborted() -> None:
         response = await ai.generate(
             model='scriptedModel',
             prompt=WEATHER_PROMPT,
-            use=[Surfaces(validate='strict')],
+            use=[Surfaces(validation='strict')],
         )
         message = assert_finished_message(response, finish_reason=reason)
         assert response.finish_message == 'safety'
@@ -338,7 +337,7 @@ async def test_generate_a2ui_other_keeps_raw_fence() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     message = assert_finished_message(response, finish_reason=FinishReason.OTHER)
     assert response.finish_message == 'provider other'
@@ -363,7 +362,7 @@ async def test_generate_stream_blocked_paints_card_but_response_keeps_fence() ->
     stream = ai.generate_stream(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     streamed_envs: list[dict[str, Any]] = []
     async for chunk in stream.stream:
@@ -393,7 +392,7 @@ async def test_generate_stream_other_paints_card_but_response_keeps_fence() -> N
     stream = ai.generate_stream(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     streamed_envs: list[dict[str, Any]] = []
     async for chunk in stream.stream:
@@ -444,67 +443,15 @@ async def test_generate_a2ui_instructions_none_does_not_inject_catalog() -> None
 
 
 @pytest.mark.asyncio
-async def test_generate_a2ui_rewrites_candidates_message_too() -> None:
-    """A finished turn rewrites candidates[0].message, not only the top-level message."""
-    ai, pm = setup()
-    fence = weather_fence()
-    message = Message(role=Role.MODEL, content=[text_part(fence)])
-    pm.responses = [
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=message,
-            candidates=[
-                Candidate(index=0, message=message, finish_reason=FinishReason.STOP),
-            ],
-        )
-    ]
-
-    response = await ai.generate(model='scriptedModel', prompt=WEATHER_PROMPT, use=[Surfaces()])
-    finished = assert_finished_message(response)
-    assert envelopes(finished.content)
-    assert_no_fence_in_text(finished.content)
-    assert response.candidates
-    candidate_message = response.candidates[0].message
-    assert envelopes(candidate_message.content)
-    assert_no_fence_in_text(candidate_message.content)
-
-
-@pytest.mark.asyncio
-async def test_generate_a2ui_rewrites_candidates_when_message_missing() -> None:
-    """A finished turn that only carries candidates[0] still becomes a data part."""
-    ai, pm = setup()
-    fence = weather_fence()
-    message = Message(role=Role.MODEL, content=[text_part(fence)])
-    pm.responses = [
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=None,
-            candidates=[
-                Candidate(index=0, message=message, finish_reason=FinishReason.STOP),
-            ],
-        )
-    ]
-
-    response = await ai.generate(model='scriptedModel', prompt=WEATHER_PROMPT, use=[Surfaces()])
-    finished = assert_finished_message(response)
-    assert envelopes(finished.content)
-    assert_no_fence_in_text(finished.content)
-    assert response.candidates
-    candidate_message = response.candidates[0].message
-    assert envelopes(candidate_message.content)
-    assert_no_fence_in_text(candidate_message.content)
-
-
-@pytest.mark.asyncio
 async def test_generate_a2ui_off_keeps_surface_without_root() -> None:
-    """validate='off' still returns the surface when the component list has no root."""
+    """validation='off' still returns the surface when the component list has no root."""
     ai, pm = setup()
     pm.responses = [model_ok(no_root_fence())]
 
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='off')],
+        use=[Surfaces(validation='off')],
     )
     message = assert_finished_message(response)
     assert envelopes(message.content)
@@ -590,7 +537,7 @@ async def test_generate_a2ui_strict_fails_on_malformed_json_fence() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='failed to parse envelope block as JSON')
 
@@ -604,7 +551,7 @@ async def test_generate_a2ui_warn_keeps_malformed_json_fence_as_prose() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='warn')],
+        use=[Surfaces(validation='warn')],
     )
     message = assert_finished_message(response)
     assert_no_a2ui_parts(message.content)
@@ -619,7 +566,7 @@ async def test_generate_a2ui_strict_fails_on_missing_root() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     assert_dead_turn(response, reason=RuntimeErrorReason.INVALID_OUTPUT, match='id "root"')
 
@@ -632,7 +579,7 @@ async def test_generate_a2ui_strict_empty_fence_does_not_fail_turn() -> None:
     response = await ai.generate(
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
-        use=[Surfaces(validate='strict')],
+        use=[Surfaces(validation='strict')],
     )
     message = assert_finished_message(response)
     assert_no_a2ui_parts(message.content)

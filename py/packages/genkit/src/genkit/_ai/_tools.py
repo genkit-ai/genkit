@@ -28,7 +28,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from genkit._core._action import Action, ActionKind, ActionRunContext, ChunkT, resolve_type_hints
 from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._middleware import MiddlewareContext
 from genkit._core._model import MultipartToolResponse, Part, as_part, as_resumed
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -295,11 +295,11 @@ async def run_tool_request(
     *,
     tool: Action,
     tool_request_part: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
-    Pipes ``GenerateMiddlewareContext.custom_context`` and ``telemetry_labels``
+    Pipes ``MiddlewareContext.context`` and ``telemetry_labels``
     into ``tool.run``, and sets resume ContextVars from ``tool_request_part``
     metadata so ``ToolContext`` reflects ``resumed`` / ``replacedInput``.
     """
@@ -309,7 +309,7 @@ async def run_tool_request(
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
-    run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
+    run_context = dict(ctx.context) if ctx and ctx.context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
         return (
@@ -357,7 +357,7 @@ async def run_tool_after_restart(
     *,
     tool: Action,
     restart_trp: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Part:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
@@ -378,7 +378,7 @@ async def run_restarted_tool(
     *,
     tool: Action,
     restart_trp: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Part:
     """Like ``run_tool_after_restart``, but a second Interrupt propagates as is.
 
@@ -512,7 +512,7 @@ def _define_tool(
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return _Tool(action, original_output_schema=original_output_schema)
+    return _Tool._from_action(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -545,42 +545,6 @@ def define_tool(
             one ``ToolContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
-
-
-def tool(
-    func: Callable[..., Any],
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
-    """Define an ephemeral tool for a single ``generate`` call.
-
-    Unlike ``@ai.tool()``, this does not register the tool on the app, so it
-    cannot be referenced by name later. Use for dynamic tools that exist only
-    for one call.
-
-    Args:
-        func: Async tool implementation (same one-input rule as :func:`define_tool`).
-        name: Tool name for the model. Defaults to ``func.__name__``.
-        description: Sent to the model. Defaults to the function docstring.
-        input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
-
-    Raises:
-        TypeError: If ``func`` is not a coroutine function, takes more than one input,
-            or its input has no annotation or no JSON schema.
-        ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
-
-    Example:
-        from genkit import tool
-
-        async def lookup_price(sku: str) -> str:
-            return '12.00'
-
-        ephemeral = tool(lookup_price, name='lookup_price')
-        res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
-    """
-    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
 
 def define_interrupt(

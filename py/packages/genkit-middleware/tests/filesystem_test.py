@@ -23,7 +23,7 @@ import pytest
 from genkit_middleware import Filesystem
 
 from genkit import Interrupt, MultipartToolResponse, Part
-from genkit.middleware import GenerateMiddlewareContext, ToolHookParams
+from genkit.middleware import MiddlewareContext, ToolHookParams
 from genkit.model import ToolRequest
 
 # ---------------------------------------------------------------------------
@@ -207,7 +207,7 @@ async def test_wrap_tool_lets_interrupt_through_without_queueing_an_error(ctx) -
             tool=write_file.action(),
         )
 
-        async def needs_approval(_params: ToolHookParams, _ctx: GenerateMiddlewareContext) -> MultipartToolResponse:
+        async def needs_approval(_params: ToolHookParams, _ctx: MiddlewareContext) -> MultipartToolResponse:
             raise Interrupt({'reason': 'confirm overwrite', 'path': 'menu.md'})
 
         with pytest.raises(Interrupt) as raised:

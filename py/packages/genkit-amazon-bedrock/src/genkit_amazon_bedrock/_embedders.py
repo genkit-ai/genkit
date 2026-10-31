@@ -39,10 +39,9 @@ import json
 from collections.abc import Coroutine
 from typing import Any, Literal, Protocol, TypeVar, cast
 
-import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import Document, Embedding, GenkitError
+from genkit import Document, Embedding, GenkitError, get_logger
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -53,7 +52,7 @@ from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # One call's result: a single vector per document, or a chunk of them for Cohere.
 _T = TypeVar('_T')

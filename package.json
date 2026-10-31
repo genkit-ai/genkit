@@ -20,9 +20,10 @@
     "dist:zip": "cd dist && zip genkit-dist.zip *.tgz",
     "test:all": "npm-run-all test:js test:genkit-tools",
     "test:js": "cd js && pnpm i && pnpm test:all",
-    "test:genkit-tools": "pnpm test:genkit-tools-cli && pnpm test:genkit-tools-common",
+    "test:genkit-tools": "pnpm test:genkit-tools-cli && pnpm test:genkit-tools-common && pnpm test:genkit-tools-telemetry-server",
     "test:genkit-tools-cli": "cd genkit-tools/cli && pnpm i && pnpm test",
     "test:genkit-tools-common": "cd genkit-tools/common && pnpm i && pnpm test",
+    "test:genkit-tools-telemetry-server": "cd genkit-tools/telemetry-server && pnpm i && pnpm test",
     "test:e2e-local": "pnpm build && pnpm pack:all && cd tests && pnpm install && pnpm test",
     "test:e2e": "cd tests && pnpm install && pnpm test",
     "postinstall": "simple-git-hooks"
