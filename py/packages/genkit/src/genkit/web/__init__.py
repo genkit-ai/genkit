@@ -25,9 +25,14 @@ a generic ``Internal Error`` so server details stay in your logs. A
 ``ContextProvider`` reads the ``RequestData`` for one request and returns what
 goes into the flow's context.
 
-Chunks and results are often Pydantic models, so serialize with
-``pydantic_core.to_json``. It writes compact JSON by alias, the same frames
-the FastAPI, Flask and Django adapters send.
+``to_sse`` frames a streaming handle (``flow.stream()``,
+``ai.generate_stream()``, ``chat.send_stream()``) as the SSE lines every
+adapter sends: a ``message`` frame per chunk, then ``result``, or an
+``error`` frame instead. It's also how a hand-written route, say a FastAPI one
+with typed params and ``Depends(...)``, streams without writing frames itself.
+Non-streaming results are often Pydantic models, so serialize them with
+``pydantic_core.to_json``: compact JSON by alias, the same bytes the adapters
+send.
 
 Example:
     ```python
@@ -35,7 +40,7 @@ Example:
     from starlette.requests import Request
     from starlette.responses import Response, StreamingResponse
 
-    from genkit.web import RequestData, error_body, error_status, read_body, wants_stream
+    from genkit.web import RequestData, error_body, error_status, read_body, to_sse, wants_stream
 
 
     def to_wire(payload: object) -> bytes:
@@ -47,18 +52,7 @@ Example:
         return {'token': request_data.headers.get('authorization')}
 
 
-    # 2. Stream: one frame per chunk, then the result, or an error frame
-    async def events(flow_input: object, ctx: dict[str, object]):
-        try:
-            stream = order_flow.stream(input=flow_input, context=ctx)
-            async for chunk in stream.stream:
-                yield b'data: ' + to_wire({'message': chunk}) + b'\n\n'
-            yield b'data: ' + to_wire({'result': await stream.response}) + b'\n\n'
-        except Exception as e:
-            yield b'data: ' + to_wire({'error': error_body(e)}) + b'\n\n'
-
-
-    # 3. One route: parse, build context, then stream or run once
+    # 2. One route: parse, build context, then stream or run once
     async def serve(request: Request) -> Response:
         try:
             body = await request.json()
@@ -71,7 +65,8 @@ Example:
             )
             ctx = await auth(request_data)
             if wants_stream(accept=request.headers.get('accept'), stream=request.query_params.get('stream')):
-                return StreamingResponse(events(flow_input, ctx), media_type='text/event-stream')
+                stream = order_flow.stream(input=flow_input, context=ctx)
+                return StreamingResponse(to_sse(stream), media_type='text/event-stream')
             response = await order_flow.run(input=flow_input, context=ctx)
             return Response(to_wire({'result': response.response}), media_type='application/json')
         except Exception as e:
@@ -80,6 +75,9 @@ Example:
 
     # POST /order {"data": {"dish": "pad thai"}}
     # => {"result":{"text":"1x pad thai"}}
+    # POST /order?stream=true {"data": {"dish": "pad thai"}}
+    # => data: {"message":"Plating pad thai"}
+    #    data: {"result":{"text":"1x pad thai"}}
     # POST /order {"input": "pad thai"}
     # => 400 {"message":"Flow request must be wrapped in {\"data\": ...}","status":"INVALID_ARGUMENT"}
     ```
@@ -88,5 +86,15 @@ Example:
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._error import error_body, error_status
 from genkit._core._web import read_body, wants_stream
+from genkit.web._sse import StreamHandle, to_sse
 
-__all__ = ['ContextProvider', 'RequestData', 'error_body', 'error_status', 'read_body', 'wants_stream']
+__all__ = [
+    'ContextProvider',
+    'RequestData',
+    'StreamHandle',
+    'error_body',
+    'error_status',
+    'read_body',
+    'to_sse',
+    'wants_stream',
+]

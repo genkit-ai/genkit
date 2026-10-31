@@ -6,6 +6,7 @@
 import asyncio
 import contextlib
 import gc
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -21,11 +22,13 @@ from genkit import (
     ModelResponseChunk,
     ModelStreamResponse,
     Part,
+    PublicError,
     StreamResponse,
 )
 from genkit._core._typing import FinishReason, Role, ToolRequest
 from genkit.model import ModelContext, ModelRequest
 from genkit.testing import define_scripted_model
+from genkit.web import to_sse
 
 
 async def _texts(result: StreamResponse[ModelResponseChunk[Any], ModelResponse[Any]]) -> list[str]:
@@ -267,6 +270,70 @@ async def test_model_action_stream_returns_stream_response() -> None:
     assert isinstance(result, StreamResponse)
     assert [chunk.text async for chunk in result] == ['Tartine']
     assert (await result.response).text == 'Tartine'
+
+
+@pytest.mark.asyncio
+async def test_flow_stream_to_sse_frames_chunks_and_result() -> None:
+    """`to_sse(flow.stream(...))` yields `data: {"message": ...}` frames followed by `data: {"result": ...}`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk('Packed')
+        ctx.send_chunk('Out for delivery')
+        return f'Order {order_id} delivered'
+
+    lines = [line async for line in to_sse(track_order.stream('A-1042'))]
+    assert lines == [
+        'data: {"message":"Packed"}\n\n',
+        'data: {"message":"Out for delivery"}\n\n',
+        'data: {"result":"Order A-1042 delivered"}\n\n',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_flow_stream_to_sse_on_failure_emits_error_frame_without_result() -> None:
+    """`to_sse(flow.stream(...))` frames mid-stream errors as `data: {"error": ...}` with no trailing result."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def track_order(order_id: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk('Packed')
+        raise PublicError('NOT_FOUND', f'order {order_id} missing')
+
+    lines = [line async for line in to_sse(track_order.stream('A-1042'))]
+    assert len(lines) == 2
+    assert lines[0] == 'data: {"message":"Packed"}\n\n'
+    payload = json.loads(lines[1].removeprefix('data: ').strip())
+    assert payload == {'error': {'message': 'order A-1042 missing', 'status': 'NOT_FOUND'}}
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_frames_model_chunks_and_response() -> None:
+    """`to_sse(ai.generate_stream(...))` serializes Pydantic chunks and final response with camelCase aliases."""
+    ai = Genkit()
+    define_scripted_model(
+        ai,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Miso soup')]),
+            )
+        ],
+        chunks=[
+            [
+                ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Miso')]),
+                ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(' soup')]),
+            ]
+        ],
+    )
+
+    lines = [line async for line in to_sse(ai.generate_stream(model='scriptedModel', prompt='Soup?'))]
+    events = [json.loads(line.removeprefix('data: ').strip()) for line in lines]
+    assert [list(e.keys()) for e in events] == [['message'], ['message'], ['result']]
+    assert events[0]['message']['content'] == [{'text': 'Miso'}]
+    assert events[1]['message']['content'] == [{'text': ' soup'}]
+    assert events[2]['result']['finishReason'] == 'stop'
 
 
 @pytest.mark.asyncio

@@ -16,8 +16,9 @@
 
 """Django, Flask and FastAPI serve a failing flow with the same bytes and logs.
 
-Each adapter keeps its own copy of the failure logging and the JSON/SSE error
-framing, so they can be read and changed with the framework's idioms. This test
+Flask and Django keep their own copy of the failure logging and the JSON/SSE
+error framing, so they can be read and changed with the framework's idioms;
+FastAPI streams through ``genkit.web.to_sse``. This test
 is what keeps those copies in step: every case runs the same flow through all
 three adapters and checks the status, the exact response bytes and the log
 records against one expected result. A fix to the error frame or a log level
@@ -79,7 +80,8 @@ def _adapter_logs(caplog: pytest.LogCaptureFixture) -> tuple[tuple[str, str, boo
     return tuple(
         (r.levelname, r.getMessage(), r.exc_info is not None)
         for r in caplog.records
-        if r.name.startswith(('genkit_django', 'genkit_flask', 'genkit_fastapi'))
+        # genkit.web: FastAPI streams through genkit.web.to_sse, which logs there.
+        if r.name.startswith(('genkit.web', 'genkit_django', 'genkit_flask', 'genkit_fastapi'))
     )
 
 

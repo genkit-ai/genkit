@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
 # serve_agent needs the agent subsystem; skip the whole module where it isn't built.
@@ -33,6 +35,7 @@ from genkit._core._model import (  # noqa: E402
 from genkit._core._typing import FinishReason, Role  # noqa: E402
 from genkit.exp import Genkit  # noqa: E402
 from genkit.testing import define_scripted_model  # noqa: E402
+from genkit.web import to_sse  # noqa: E402
 
 
 def build_agent(name: str, *, server_managed: bool = True) -> Any:
@@ -281,3 +284,41 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
     err = error_from_http(status_code=response.status_code, body=response.text)
     assert err.status == 'FAILED_PRECONDITION'
     assert err.reason is reason
+
+
+_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+
+
+def frames(text: str) -> list[str]:
+    """SSE data lines with session / snapshot uuids masked, so frames from separate runs compare whole."""
+    return [_UUID.sub('<id>', line) for line in text.splitlines() if line.startswith('data: ')]
+
+
+def test_hand_rolled_routes_send_the_same_frames_as_serve_agent() -> None:
+    """handle_genkit_request and genkit.web.to_sse(turn) send serve_agent's frames, payloads included."""
+    served = client(build_agent('servedFrames')).post('/api/chat?stream=true', json={'message': 'Hi'})
+
+    via_request = build_agent('requestFrames')
+    via_to_sse = build_agent('toSseFrames')
+    app = FastAPI()
+
+    @app.post('/request', response_model=None)
+    async def request_route(request: Request) -> object:
+        return await handle_genkit_request(request, action=via_request)
+
+    @app.post('/to_sse')
+    async def to_sse_route() -> StreamingResponse:
+        return StreamingResponse(to_sse(via_to_sse.chat().send_stream('Hi')), media_type='text/event-stream')
+
+    hand = TestClient(app)
+    wire_body = {'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}}
+
+    expected = [
+        'data: {"message":{"modelChunk":{"role":"model","index":0.0,"content":[{"text":"Hi there!"}]}}}',
+        'data: {"message":{"turnEnd":{"snapshotId":"<id>","finishReason":"stop"}}}',
+        'data: {"result":{"sessionId":"<id>","snapshotId":"<id>",'
+        '"message":{"role":"model","content":[{"text":"Hi there!"}]},"artifacts":[],"finishReason":"stop"}}',
+    ]
+    assert frames(served.text) == expected
+    assert frames(hand.post('/request?stream=true', json=wire_body).text) == expected
+    assert frames(hand.post('/to_sse').text) == expected
