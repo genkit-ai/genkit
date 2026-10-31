@@ -23,7 +23,7 @@ import {
   Part,
   z,
 } from 'genkit';
-import { ToolDefinition } from 'genkit/model';
+import { ToolDefinition, getBasicUsageStats } from 'genkit/model';
 import {
   AudioContent,
   BuiltInToolStep,
@@ -46,6 +46,7 @@ import {
   InteractionSseEvent,
   InteractionTool,
   InteractionToolChoiceConfig,
+  ModalityTokens,
   ModelGenerationConfig,
   SpeechAnnotation,
   SpeechConfig,
@@ -1843,7 +1844,14 @@ function fromFunctionResultContent(content: FunctionResultContent): Part {
   };
 }
 
-/** Converts Interactions API token usage to Genkit usage. */
+/**
+ * Converts Interactions API token usage to Genkit usage.
+ *
+ * The per-modality breakdowns are token counts, so they go in `custom` as
+ * e.g. `inputTextTokens` / `outputImageTokens`: Genkit's `inputCharacters`,
+ * `inputImages`, ... fields count characters and media parts (added by
+ * withBasicUsageStats where the request is known).
+ */
 function fromInteractionUsage(usage: Usage): GenerationUsage {
   const result: GenerationUsage = {
     inputTokens: usage.total_input_tokens,
@@ -1852,40 +1860,22 @@ function fromInteractionUsage(usage: Usage): GenerationUsage {
     cachedContentTokens: usage.total_cached_tokens,
     thoughtsTokens: usage.total_thought_tokens,
   };
-  for (const modalityToken of usage.input_tokens_by_modality ?? []) {
-    switch (modalityToken.modality) {
-      case 'text':
-        result.inputCharacters = modalityToken.tokens;
-        break;
-      case 'image':
-        result.inputImages = modalityToken.tokens;
-        break;
-      case 'audio':
-        result.inputAudioFiles = modalityToken.tokens;
-        break;
-      case 'video':
-        result.inputVideos = modalityToken.tokens;
-        break;
-    }
-  }
-  for (const modalityToken of usage.output_tokens_by_modality ?? []) {
-    switch (modalityToken.modality) {
-      case 'text':
-        result.outputCharacters = modalityToken.tokens;
-        break;
-      case 'image':
-        result.outputImages = modalityToken.tokens;
-        break;
-      case 'audio':
-        result.outputAudioFiles = modalityToken.tokens;
-        break;
-      case 'video':
-        result.outputVideos = modalityToken.tokens;
-        break;
-    }
-  }
   // Genkit has no standard fields for these.
   const custom: Record<string, number> = {};
+  const addModalityTokens = (
+    direction: 'input' | 'output',
+    breakdown: ModalityTokens[] | undefined
+  ) => {
+    for (const { modality, tokens } of breakdown ?? []) {
+      if (modality && typeof tokens === 'number') {
+        const name = modality.charAt(0).toUpperCase() + modality.slice(1);
+        const key = `${direction}${name}Tokens`;
+        custom[key] = (custom[key] ?? 0) + tokens;
+      }
+    }
+  };
+  addModalityTokens('input', usage.input_tokens_by_modality);
+  addModalityTokens('output', usage.output_tokens_by_modality);
   // Tokens loaded by tools, e.g. video frames read during agentic video
   // understanding.
   if (usage.total_tool_use_tokens) {
@@ -1968,6 +1958,35 @@ function interactionMessageMetadata(
         },
       }
     : {};
+}
+
+/**
+ * Adds the character and media-part counts (`inputCharacters`,
+ * `inputImages`, ...) to an Interactions response's usage, counted from the
+ * request messages and the response message the same way as on
+ * generateContent models (getBasicUsageStats). Telemetry (e.g. the Google
+ * Cloud plugin's generate/input/characters metric) reads these fields. The
+ * token counts from the API are kept and win over the basic counts.
+ *
+ * Call it on the final response (after streamed audio is merged), with the
+ * request's messages. Background models (Deep Research) don't have the
+ * request when checked, so they don't get these counts.
+ */
+export function withBasicUsageStats(
+  response: GenerateResponseData,
+  requestMessages: MessageData[]
+): GenerateResponseData {
+  const output: MessageData = response.message ?? {
+    role: 'model',
+    content: [],
+  };
+  return {
+    ...response,
+    usage: {
+      ...getBasicUsageStats(requestMessages, output),
+      ...response.usage,
+    },
+  };
 }
 
 export function fromInteractionSync(

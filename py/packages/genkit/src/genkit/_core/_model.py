@@ -99,7 +99,8 @@ class ModelConfig(GenerationCommonConfig):
     builds from the request (messages, tools) are rejected rather than
     overwritten. Where the map lands depends on the provider: the request
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
-    ``additionalModelRequestFields`` for Bedrock.
+    ``additionalModelRequestFields`` for Bedrock chat models (the InvokeModel
+    body for Bedrock image models).
 
     Keys aren't validated, except that an API key here raises like one at the
     top level: config travels with the request into traces. Don't put other
@@ -1468,7 +1469,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         try:
             parsed = self._raw_parsed_output()
         except Exception as exc:
-            if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
+            if isinstance(exc, GenkitError) and (exc.message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
             if cut_off:
@@ -1496,9 +1497,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             try:
                 parse_schema(data=parsed, json_schema=schema)
             except GenkitError as error:
-                if error.original_message.startswith('Invalid output_schema'):
+                if error.message.startswith('Invalid output_schema'):
                     raise
-                self._mark_invalid_output(error.original_message)
+                self._mark_invalid_output(error.message)
                 return
 
         # A custom format's parser can return a scalar (e.g. enum string).

@@ -35,7 +35,6 @@ Example:
 """
 
 from genkit._ai._aio import Genkit
-from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
     ModelStreamResponse,
     Prompt,
@@ -91,9 +90,6 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'RuntimeErrorReason',
-    # Custom output formats
-    'FormatDef',
-    'FormatterConfig',
     # Log lines that reach the Dev UI trace panel
     'get_logger',
 ]

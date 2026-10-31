@@ -29,6 +29,7 @@ import {
   fromInteractionSync,
   toInteractionResponseFormat,
   toInteractionSteps,
+  withBasicUsageStats,
 } from '../common/interaction-converters.js';
 import { CreateInteractionRequest } from '../common/interaction-types.js';
 import { isKnownKey } from '../common/utils.js';
@@ -280,7 +281,10 @@ export function defineModel(
           toInteractionsClientOptions(clientOpt)
         );
 
-        return fromInteractionSync(response);
+        return withBasicUsageStats(
+          fromInteractionSync(response),
+          request.messages
+        );
       } else {
         throw new Error(`Unsupported model config schema for ${name}`);
       }
