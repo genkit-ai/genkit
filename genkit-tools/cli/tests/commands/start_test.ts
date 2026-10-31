@@ -61,12 +61,12 @@ describe('start command', () => {
     startDevProcessManagerSpy = jest
       .spyOn(managerUtils, 'startDevProcessManager')
       .mockResolvedValue({
-        manager: {} as any,
+        manager: { stopOnce: jest.fn(async () => {}) } as any,
         processPromise: Promise.resolve(),
       });
     startManagerSpy = jest
       .spyOn(managerUtils, 'startManager')
-      .mockResolvedValue({} as any);
+      .mockResolvedValue({ stopOnce: jest.fn(async () => {}) } as any);
     startServerSpy = startServer as unknown as jest.Mock;
 
     // Reset args and options; commander keeps them across parseAsync calls.

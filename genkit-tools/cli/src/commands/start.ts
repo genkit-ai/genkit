@@ -32,6 +32,7 @@ import {
   startManager,
 } from '../utils/manager-utils';
 import { parsePort } from '../utils/option-parsers';
+import { waitForRuntimeShutdown } from '../utils/runtime-shutdown';
 
 interface RunOptions {
   /** --experimental-auth. */
@@ -217,5 +218,5 @@ export const start = new Command('start')
         open(`http://${formattedHost}:${port}`);
       }
     }
-    await processPromise;
+    await waitForRuntimeShutdown(manager, processPromise);
   });

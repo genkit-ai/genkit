@@ -26,6 +26,7 @@ import {
   startDevProcessManager,
 } from '../utils/manager-utils';
 import { parsePort } from '../utils/option-parsers';
+import { waitForRuntimeShutdown } from '../utils/runtime-shutdown';
 
 interface FlutterRunOptions {
   /** --experimental-auth. */
@@ -99,5 +100,5 @@ export const startFlutter = new Command('start:flutter')
       }
     }
 
-    await processPromise;
+    await waitForRuntimeShutdown(manager, processPromise);
   });
