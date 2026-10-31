@@ -32,6 +32,8 @@ from genkit_google_genai._models._gemini import file_search_fields, flattened_ke
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
+    INPUT_HINT,
+    MODEL_ID_HINT,
     TIMEOUT_DESCRIPTION,
     api_key_for_context,
     client_overrides_from_call_config,
@@ -41,6 +43,7 @@ from genkit_google_genai._models._interactions_utils import (
     lowercase_choice_list,
     partition_keys,
     pop_extra,
+    reject_managed_extra,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
@@ -108,10 +111,11 @@ class DeepResearchConfig(GenkitConfig):
     """Deep Research model configuration.
 
     Unknown keys are rejected. An API field this class doesn't declare goes in
-    ``extra``, which is deep-merged into the create body. ``tools`` is not one
-    of them: Deep Research's tools are the declared settings (``google_search``,
+    ``extra``, which is deep-merged into the create body. Fields Genkit builds
+    from the request (``agent``, ``input``, ``tools``) raise there: Deep
+    Research's tools are the declared settings (``google_search``,
     ``url_context``, ``code_execution``, ``file_search_store_names``,
-    ``mcp_servers``), and ``extra['tools']`` raises ``INVALID_ARGUMENT``.
+    ``mcp_servers``).
 
     ``timeout`` is seconds, the Python convention (httpx, requests, the OpenAI
     and Anthropic SDKs), here and in ``check_operation``/``cancel_operation``
@@ -228,24 +232,15 @@ def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchC
     return tools
 
 
-def reject_extra_tools(action_name: str, extra: Mapping[str, Any]) -> None:
-    """Raise when ``extra`` sets ``tools``.
-
-    Deep Research's tools are the declared settings. ``extra`` would replace
-    the built list, and a raw tool list is no way to use a built-in tool.
-    A new tool type gets a declared setting instead. Keys match ignoring
-    case and underscores, like the merge.
-    """
-    key = next((key for key in extra if key.replace('_', '').lower() == 'tools'), None)
-    if key is None:
-        return
-    raise GenkitError(
-        status='INVALID_ARGUMENT',
-        message=(
-            f'{action_name}: extra[{key!r}] is not supported. Use the declared tool settings: '
-            'google_search, url_context, code_execution, file_search_store_names, mcp_servers.'
-        ),
-    )
+# Fields Genkit builds from the request; extra can't replace them.
+DEEP_RESEARCH_MANAGED_EXTRA = {
+    'agent': MODEL_ID_HINT,
+    'input': INPUT_HINT,
+    'tools': (
+        'Use the declared tool settings: google_search, url_context, code_execution, '
+        'file_search_store_names, mcp_servers.'
+    ),
+}
 
 
 def create_deep_research_background_model(
@@ -278,7 +273,7 @@ def create_deep_research_background_model(
         agent_config: dict[str, Any] = {'type': 'deep-research', **agent_fields}
 
         tools = build_tools(request, config)
-        reject_extra_tools(full_name, extra)
+        reject_managed_extra(full_name, extra, DEEP_RESEARCH_MANAGED_EXTRA)
         create_kwargs: dict[str, Any] = {
             'agent': version,
             'input': steps_with_folded_system_instruction(request.messages),

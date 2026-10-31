@@ -26,6 +26,8 @@ from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._interactions_registry import antigravity_model_info
 from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
+    INPUT_HINT,
+    MODEL_ID_HINT,
     TIMEOUT_DESCRIPTION,
     api_key_for_context,
     client_overrides_from_config,
@@ -33,6 +35,8 @@ from genkit_google_genai._models._interactions_utils import (
     lowercase_choice_list,
     partition_keys,
     pop_extra,
+    reject_function_tools,
+    reject_managed_extra,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
@@ -94,6 +98,14 @@ class AntigravityConfig(GenkitConfig):
         return lowercase_choice_list(value)
 
 
+# Fields Genkit builds from the request; extra can't replace them.
+ANTIGRAVITY_MANAGED_EXTRA = {
+    'agent': MODEL_ID_HINT,
+    'input': INPUT_HINT,
+    'tools': 'Antigravity takes no tools.',
+}
+
+
 def create_antigravity_action(
     name: str,
     *,
@@ -112,6 +124,8 @@ def create_antigravity_action(
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         extra = pop_extra(dumped)
+        reject_function_tools(name, request)
+        reject_managed_extra(name, extra, ANTIGRAVITY_MANAGED_EXTRA)
         # GenkitConfig rejects undeclared keys, so nothing is left over.
         create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         create_kwargs: dict[str, Any] = {

@@ -31,6 +31,9 @@ from genkit_google_genai._interactions._options import ClientOptions, ResponseMo
 from genkit_google_genai._models._interactions_registry import lyria_model_info
 from genkit_google_genai._models._interactions_utils import (
     EXTRA_DESCRIPTION,
+    INPUT_HINT,
+    MODEL_ID_HINT,
+    SYSTEM_INSTRUCTION_HINT,
     TIMEOUT_DESCRIPTION,
     api_key_for_context,
     client_overrides_from_config,
@@ -38,6 +41,8 @@ from genkit_google_genai._models._interactions_utils import (
     lowercase_choice_list,
     partition_keys,
     pop_extra,
+    reject_function_tools,
+    reject_managed_extra,
     remove_client_option_overrides,
     require_interaction_steps,
 )
@@ -89,6 +94,15 @@ class LyriaConfig(GenkitConfig):
         return lowercase_choice_list(value)
 
 
+# Fields Genkit builds from the request; extra can't replace them.
+LYRIA_MANAGED_EXTRA = {
+    'model': MODEL_ID_HINT,
+    'input': INPUT_HINT,
+    'systeminstruction': SYSTEM_INSTRUCTION_HINT,
+    'tools': 'Lyria takes no tools.',
+}
+
+
 def create_lyria_action(
     name: str,
     *,
@@ -106,6 +120,8 @@ def create_lyria_action(
         merged_options = client_options.merge(client_overrides_from_config(config))
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         extra = pop_extra(dumped)
+        reject_function_tools(name, request)
+        reject_managed_extra(name, extra, LYRIA_MANAGED_EXTRA)
         # GenkitConfig rejects undeclared keys, so nothing is left over.
         create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         modalities = create_options.get('response_modalities') or ['audio', 'text']

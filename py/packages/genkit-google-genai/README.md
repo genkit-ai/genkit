@@ -230,11 +230,13 @@ Antigravity, Interactions Lyria, and Deep Research also reject unknown keys
 and take undeclared fields in `extra`, which is merged into the Interactions
 create body (snake_case names). A nested object merges key by key. Keys match
 ignoring case and underscores, the same way the Gemini merge aligns them. A
-`None` value means unset and is skipped. Unlike Gemini, no field is reserved: a
-key in `extra` overrides what Genkit builds, including `agent`, `input`, and
-`agent_config`. One exception on Deep Research: `extra['tools']` raises
-`INVALID_ARGUMENT`. Its tools are the declared settings (`google_search`,
-`url_context`, `code_execution`, `file_search_store_names`, `mcp_servers`).
+`None` value means unset and is skipped. Like Gemini, fields Genkit builds from
+the request raise in `extra`: the model id (`agent`, or `model` on Lyria),
+`input`, `tools`, and Lyria's `system_instruction`. Deep Research's tools are
+its declared settings (`google_search`, `url_context`, `code_execution`,
+`file_search_store_names`, `mcp_servers`); Antigravity and Lyria take none, and
+`generate(tools=...)` raises on them. Blocks with defaults, such as
+`agent_config` and `environment`, merge key by key.
 
 `timeout` on these three configs (and in Deep Research's `check_operation` /
 `cancel_operation` `config`) is the HTTP timeout in seconds. It used to be

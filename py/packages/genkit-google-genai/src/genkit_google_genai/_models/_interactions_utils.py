@@ -34,6 +34,7 @@ from genkit_google_genai._models._sdk_config import check_timeout_seconds
 from genkit_google_genai._models._secrets import context_api_key
 
 from genkit import GenkitError, Message
+from genkit.model import ModelRequest
 
 # Snake_case: callers dump config with by_alias=False before we strip these.
 CLIENT_OPTION_KEYS = frozenset({
@@ -47,7 +48,8 @@ CLIENT_OPTION_KEYS = frozenset({
 EXTRA_DESCRIPTION = (
     "Interactions API fields this class doesn't declare, in the API's snake_case wire names. Merged into "
     'the top level of the create body after everything else, and nested objects merge key by key, so a key '
-    'named here wins. Keys match ignoring case and underscores, so `Agent` overrides `agent`. A `None` '
+    'named here wins. Keys match ignoring case and underscores. Fields Genkit builds from the request '
+    "(the model id, `input`, `tools`, and Lyria's `system_instruction`) raise. A `None` "
     'value means unset and is skipped, so it never sends null over a block Genkit built. '
     'Not validated, except that a top-level API key raises; do not put API keys here.'
 )
@@ -158,6 +160,36 @@ def _without_none(value: dict[str, Any]) -> dict[str, Any]:
         if item is not None:
             cleaned[key] = item
     return cleaned
+
+
+MODEL_ID_HINT = 'Pick the model with generate(model=...).'
+INPUT_HINT = 'Pass the prompt and messages to generate().'
+SYSTEM_INSTRUCTION_HINT = 'Pass a system message to generate().'
+
+
+def reject_managed_extra(action_name: str, extra: Mapping[str, Any], managed: Mapping[str, str]) -> None:
+    """Raise when ``extra`` sets a field Genkit builds from the request.
+
+    ``managed`` maps a folded key (lowercase, no underscores) to the hint that
+    names where the setting goes instead. Keys fold the same way as the merge,
+    so ``Input`` and ``in_put`` are caught along with ``input``.
+    """
+    for key in extra:
+        hint = managed.get(key.replace('_', '').lower())
+        if hint is not None:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f"{action_name}: extra[{key!r}] can't be set in extra. {hint}",
+            )
+
+
+def reject_function_tools(action_name: str, request: ModelRequest[Any]) -> None:
+    """Raise when ``generate(tools=...)`` targets a model that takes none, instead of dropping them."""
+    if request.tools:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{action_name} does not support function tools.',
+        )
 
 
 def pop_extra(dumped: dict[str, Any]) -> dict[str, Any]:

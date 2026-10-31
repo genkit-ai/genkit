@@ -1650,7 +1650,7 @@ async def test_generate_operation_deep_research_extra_tools_with_built_tools_rai
         )
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert f'extra[{key!r}] is not supported' in str(raised.value)
+    assert f"extra[{key!r}] can't be set in extra" in str(raised.value)
     assert create_calls == []
 
 
@@ -1839,7 +1839,7 @@ async def test_generate_operation_deep_research_extra_tools_with_other_built_too
             model=_DEEP_RESEARCH, prompt='q', config={**config, 'extra': {'tools': [{'type': 'url_context'}]}}
         )
 
-    assert "extra['tools'] is not supported" in str(raised.value)
+    assert "extra['tools'] can't be set in extra" in str(raised.value)
     assert create_calls == []
 
 
@@ -1853,4 +1853,64 @@ async def test_generate_operation_deep_research_extra_empty_tools_with_built_too
         )
 
     assert raised.value.status == 'INVALID_ARGUMENT'
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('mod', 'model', 'key'),
+    [
+        ('_antigravity', _ANTIGRAVITY, 'agent'),
+        ('_antigravity', _ANTIGRAVITY, 'Input'),
+        ('_antigravity', _ANTIGRAVITY, 'tools'),
+        ('_interactions_lyria', _LYRIA, 'model'),
+        ('_interactions_lyria', _LYRIA, 'input'),
+        ('_interactions_lyria', _LYRIA, 'systemInstruction'),
+        ('_interactions_lyria', _LYRIA, 'tools'),
+    ],
+)
+async def test_generate_extra_cannot_set_fields_built_from_the_request(
+    googleai: Genkit, mod: str, model: str, key: str
+) -> None:
+    """The model id, input, tools, and Lyria's system_instruction come from generate(); extra can't replace them."""
+    patcher, create_calls, _, _ = patch_interactions(f'genkit_google_genai._models.{mod}', create_result=_TEXT_REPLY)
+    with patcher:
+        response = await googleai.generate(model=model, prompt='hi', config={'extra': {key: 'x'}})
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert f"extra[{key!r}] can't be set in extra" in response.error.message
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key', ['agent', 'input'])
+async def test_generate_operation_deep_research_extra_cannot_set_agent_or_input(googleai: Genkit, key: str) -> None:
+    """Deep Research reserves the agent id and input along with tools; no job starts."""
+    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
+    with patcher, pytest.raises(GenkitError) as raised:
+        await googleai.generate_operation(model=_DEEP_RESEARCH, prompt='q', config={'extra': {key: 'x'}})
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert f"extra[{key!r}] can't be set in extra" in str(raised.value)
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('mod', 'model'), [('_antigravity', _ANTIGRAVITY), ('_interactions_lyria', _LYRIA)])
+async def test_generate_function_tools_raise_instead_of_being_dropped(googleai: Genkit, mod: str, model: str) -> None:
+    """generate(tools=[...]) on a model that takes none fails instead of silently sending nothing."""
+
+    @googleai.tool(name='todays_specials')
+    async def todays_specials() -> str:
+        """List today's specials."""
+        return 'ramen'
+
+    patcher, create_calls, _, _ = patch_interactions(f'genkit_google_genai._models.{mod}', create_result=_TEXT_REPLY)
+    with patcher:
+        response = await googleai.generate(model=model, prompt='hi', tools=['todays_specials'])
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert 'does not support function tools' in response.error.message
     assert create_calls == []
