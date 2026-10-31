@@ -233,7 +233,7 @@ def mcp_tool_to_action(
             result = await call(tool.name, input, meta)
         except _ToolResultError as error:
             result = CallToolResult(
-                content=[TextContent(type='text', text=error.original_message)],
+                content=[TextContent(type='text', text=error.message)],
                 isError=True,
             )
         return call_result_to_multipart(result)

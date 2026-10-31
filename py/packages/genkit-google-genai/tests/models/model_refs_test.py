@@ -328,7 +328,7 @@ class TestEmbeddingConstructor:
         with pytest.raises(GenkitError) as exc_info:
             GoogleAI.embedding('gemini-embedding-001', config=config)
         assert exc_info.value.status == 'INVALID_ARGUMENT'
-        assert exc_info.value.original_message == f'GoogleAI.embedding: invalid config field {key}'
+        assert exc_info.value.message == f'GoogleAI.embedding: invalid config field {key}'
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""

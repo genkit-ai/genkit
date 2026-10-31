@@ -1099,7 +1099,7 @@ def test_gemini_model__convert_schema_property_raises_exception(
         gemini_model_instance._convert_schema_property(input_schema, defs)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'cannot be resolved' in exc_info.value.original_message
+    assert 'cannot be resolved' in exc_info.value.message
 
 
 class _LinkedList(BaseModel):
@@ -1187,7 +1187,7 @@ def test_gemini_model__convert_schema_property_strict_rejects_required_recursive
         gemini_model_instance._convert_schema_property(to_json_schema(_RequiredTree), strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'children' in exc_info.value.original_message
+    assert 'children' in exc_info.value.message
 
 
 def test_gemini_model__convert_schema_property_strict_leaves_out_recursive_property(
@@ -1207,7 +1207,7 @@ def test_gemini_model__convert_schema_property_strict_rejects_required_recursive
         gemini_model_instance._convert_schema_property(to_json_schema(_RequiredLinkedList), strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'next' in exc_info.value.original_message
+    assert 'next' in exc_info.value.message
 
 
 @pytest.mark.parametrize(
@@ -1230,7 +1230,7 @@ def test_gemini_model__convert_schema_property_strict_rejects_union_losing_a_bra
         gemini_model_instance._convert_schema_property(input_schema, strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert needle in exc_info.value.original_message
+    assert needle in exc_info.value.message
 
 
 @pytest.mark.parametrize(
@@ -1385,7 +1385,7 @@ def test_gemini_model__convert_schema_property_rejects_bad_keyword_value(
         gemini_model_instance._convert_schema_property(input_schema, strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert keyword in exc_info.value.original_message
+    assert keyword in exc_info.value.message
 
 
 @pytest.mark.parametrize(
@@ -1426,7 +1426,7 @@ def test_gemini_model__convert_schema_property_non_object_property(gemini_model_
     )
     with pytest.raises(GenkitError) as exc_info:
         gemini_model_instance._convert_schema_property(schema, strict=True)
-    assert 'required property x' in exc_info.value.original_message
+    assert 'required property x' in exc_info.value.message
 
 
 @pytest.mark.parametrize('raw_type', ['bogus', None, 123])
@@ -1439,7 +1439,7 @@ def test_gemini_model__convert_schema_property_rejects_unsupported_type(
         gemini_model_instance._convert_schema_property({'type': raw_type})
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'is not supported' in exc_info.value.original_message
+    assert 'is not supported' in exc_info.value.message
 
 
 def test_gemini_model__convert_schema_property_discriminated_union(gemini_model_instance: GeminiModel) -> None:
@@ -1542,7 +1542,7 @@ def test_gemini_model__convert_schema_property_rejects_required_untyped_property
         gemini_model_instance._convert_schema_property(to_json_schema(Payload), strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'data' in exc_info.value.original_message
+    assert 'data' in exc_info.value.message
 
 
 class _RequiredAny(BaseModel):
@@ -1705,7 +1705,7 @@ def test_gemini_model__convert_schema_property_rejects_untyped_constraint(
         gemini_model_instance._convert_schema_property(input_schema, strict=True)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'no type' in exc_info.value.original_message
+    assert 'no type' in exc_info.value.message
 
 
 @pytest.mark.parametrize(
@@ -1767,7 +1767,7 @@ def test_gemini_model__convert_schema_property_strict_map(
     )
     with pytest.raises(GenkitError) as exc_info:
         gemini_model_instance._convert_schema_property({**schema, 'required': ['scores']}, strict=True)
-    assert 'required property scores' in exc_info.value.original_message
+    assert 'required property scores' in exc_info.value.message
 
 
 @pytest.mark.parametrize(
@@ -2081,7 +2081,7 @@ async def test_gemini_model__legacy_unconvertible_output_schema_raises(
         await model._genkit_to_googleai_cfg(request)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert needle in exc_info.value.original_message
+    assert needle in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -2846,7 +2846,7 @@ async def test_unmapped_4xx_is_unknown_genkit_error(mocker: MockerFixture, code:
 
     assert error.status == 'UNKNOWN'
     assert error.cause is api_error
-    assert error.original_message == 'Request payload too large'
+    assert error.message == 'Request payload too large'
 
 
 @pytest.mark.asyncio
@@ -2922,7 +2922,7 @@ async def test_rejected_api_key_is_unauthenticated(mocker: MockerFixture) -> Non
     error = await _generate_failure(mocker, rejected)
 
     assert error.status == 'UNAUTHENTICATED'
-    assert error.original_message == message
+    assert error.message == message
     assert error.cause is rejected
 
 
@@ -3083,7 +3083,7 @@ def test_cache_metadata_bad_ttl_is_invalid_argument(ttl: object) -> None:
         _gemini._cache_ttl_seconds({'ttlSeconds': ttl})
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert 'ttlSeconds' in raised.value.original_message
+    assert 'ttlSeconds' in raised.value.message
 
 
 # ---------------------------------------------------------------------------
@@ -3164,7 +3164,7 @@ async def test_generate_no_candidates_without_block_is_internal(
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ModelContext())
     assert raised.value.status == 'INTERNAL'
-    assert raised.value.original_message == 'Model returned no candidates.'
+    assert raised.value.message == 'Model returned no candidates.'
     assert raised.value.cause is None
 
 
@@ -3266,7 +3266,7 @@ async def test_streaming_generate_no_candidates_without_block_is_internal(mocker
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ModelContext(streaming_callback=on_chunk))
     assert raised.value.status == 'INTERNAL'
-    assert raised.value.original_message == 'Model returned no candidates.'
+    assert raised.value.message == 'Model returned no candidates.'
     on_chunk.assert_not_called()
 
 
@@ -3285,7 +3285,7 @@ async def test_streaming_generate_empty_stream_is_unavailable(mocker: MockerFixt
     with pytest.raises(GenkitError) as raised:
         await gemini.generate(_hi_request(), ModelContext(streaming_callback=mocker.MagicMock()))
     assert raised.value.status == 'UNAVAILABLE'
-    assert raised.value.original_message == 'Model stream returned no responses.'
+    assert raised.value.message == 'Model stream returned no responses.'
 
 
 @pytest.mark.asyncio
