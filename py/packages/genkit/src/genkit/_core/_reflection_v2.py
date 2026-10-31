@@ -45,9 +45,16 @@ from websockets.exceptions import ConnectionClosed
 from genkit._core._action import Action, BidiAction, input_from_json
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
-from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
+from genkit._core._error import (
+    Interrupt,
+    ReflectionError,
+    ReflectionErrorDetails,
+    StatusCodes,
+    get_reflection_json,
+    interrupt_escape_error,
+)
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddleware
+from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init, resolve_runnable_key
 from genkit._core._reflection_config import REFLECTION_AUTH_ERROR_CODE
@@ -584,9 +591,11 @@ class ReflectionServerV2:
                 output.response,
                 output.trace_id or trace_holder[0],
             )
-        except (asyncio.CancelledError, Exception) as e:
+        except (asyncio.CancelledError, Exception, Interrupt) as e:
+            # A tool run on its own has no generate loop to pause, so its
+            # Interrupt is reported like any other failure.
             await drain_chunks()
-            await self.send_run_action_error(sid, e, trace_holder)
+            await self.send_run_action_error(sid, interrupt_escape_error(e) or e, trace_holder)
             # Report the cancellation to the Dev UI, then let it propagate so the
             # task actually winds down (swallowing it fakes a clean completion and
             # breaks cooperative cancellation on shutdown).
@@ -726,8 +735,8 @@ class ReflectionServerV2:
         for name in self.registry.list_values(p.type):
             value = self.registry.lookup_value(p.type, name)
             if p.type == 'middleware':
-                assert isinstance(value, GenerateMiddleware), (
-                    f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
+                assert isinstance(value, _MiddlewareMetadata), (
+                    f'registry middleware/{name!r} must be _MiddlewareMetadata, got {type(value).__name__}'
                 )
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             elif p.type == 'defaultModel':

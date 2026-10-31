@@ -36,7 +36,7 @@ from openai.types.images_response import ImagesResponse
 from pydantic import Field
 
 from genkit import FinishReason, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, Supports
+from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, ModelSupports
 
 
 class OpenAIDalleConfig(ModelConfig):
@@ -71,7 +71,7 @@ class OpenAIGptImageConfig(ModelConfig):
 SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     'dall-e-3': ModelInfo(
         label='OpenAI - DALL-E 3',
-        supports=Supports(
+        supports=ModelSupports(
             media=False,
             output=['media'],
             multiturn=False,
@@ -81,7 +81,7 @@ SUPPORTED_IMAGE_MODELS: dict[str, ModelInfo] = {
     ),
     'gpt-image-1': ModelInfo(
         label='OpenAI - GPT Image 1',
-        supports=Supports(
+        supports=ModelSupports(
             media=False,
             output=['media'],
             multiturn=False,

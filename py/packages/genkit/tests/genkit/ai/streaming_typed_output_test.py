@@ -20,10 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._core._action import ActionRunContext
 from genkit._core._model import chunk_for_stream
 from genkit._core._typing import Role
+from genkit.formats import FormatHandler, Formatter, FormatterConfig
 from genkit.testing import define_scripted_model
 
 OutputT = TypeVar('OutputT', bound=BaseModel)
@@ -669,15 +669,15 @@ async def test_stream_chunk_output_schema_post_init_error_is_none() -> None:
 async def test_stream_chunk_output_custom_chunk_parser_error_is_none() -> None:
     """A custom format whose chunk parser raises gives `chunk.output is None` instead of ending the stream."""
 
-    class BoomChunks(FormatDef):
+    class BoomChunks(Formatter):
         def __init__(self) -> None:
             super().__init__('boom-chunks', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
             def chunk_parser(_chunk: ModelResponseChunk) -> object:
                 raise TypeError('chunk parser exploded')
 
-            return Formatter(message_parser=lambda msg: msg.text, chunk_parser=chunk_parser, instructions=None)
+            return FormatHandler(message_parser=lambda msg: msg.text, chunk_parser=chunk_parser, instructions=None)
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)

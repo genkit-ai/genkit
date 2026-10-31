@@ -32,9 +32,10 @@ from genkit._core._schema import to_json_schema
 from genkit._core._tool import Tool
 from genkit._core._typing import (
     FinishReason,
+    MiddlewareRef,
     MultipartToolResponse as MultipartToolResponseData,
 )
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MiddlewareRef, ToolHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
 from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
@@ -75,7 +76,7 @@ def test_returning_hollow_parts_is_invalid_part_naming_the_tool() -> None:
         as_multipart_tool_response(hollow, tool_name='shot')
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert ei.value.original_message == "Tool 'shot' content includes a part with no live payload."
+    assert ei.value.message == "Tool 'shot' content includes a part with no live payload."
 
 
 def test_response_builds_the_envelope() -> None:
@@ -104,8 +105,8 @@ def test_response_rejects_bare_part() -> None:
         MultipartToolResponse(output={'ok': True}, content=_png())  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert ei.value.original_message == 'MultipartToolResponse content must be a list of Parts, got Part.'
-    assert 'INVALID_PART' not in ei.value.original_message
+    assert ei.value.message == 'MultipartToolResponse content must be a list of Parts, got Part.'
+    assert 'INVALID_PART' not in ei.value.message
 
 
 def test_response_rejects_non_part_parts() -> None:
@@ -113,8 +114,8 @@ def test_response_rejects_non_part_parts() -> None:
         MultipartToolResponse(output={'ok': True}, content='not-a-part')  # type: ignore[arg-type]
     assert ei.value.status == 'INVALID_ARGUMENT'
     assert ei.value.reason is RuntimeErrorReason.INVALID_PART
-    assert ei.value.original_message == 'MultipartToolResponse content must be a list of Parts, got str.'
-    assert 'INVALID_PART' not in ei.value.original_message
+    assert ei.value.message == 'MultipartToolResponse content must be a list of Parts, got str.'
+    assert 'INVALID_PART' not in ei.value.message
 
 
 class CamelOut(BaseModel):
@@ -132,8 +133,8 @@ def test_returning_unserializable_part_data_is_invalid_argument_naming_the_tool(
     with pytest.raises(GenkitError) as ei:
         as_multipart_tool_response(bad, tool_name='shot')
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert ei.value.original_message == "Tool 'shot' content is not JSON-serializable."
-    assert 'content' in ei.value.original_message
+    assert ei.value.message == "Tool 'shot' content is not JSON-serializable."
+    assert 'content' in ei.value.message
 
 
 def test_define_tool_stamps_envelope_and_declared_schema() -> None:
@@ -249,8 +250,8 @@ async def test_unserializable_metadata_is_invalid_argument() -> None:
     with pytest.raises(GenkitError) as ei:
         await shot()
     assert ei.value.status == 'INVALID_ARGUMENT'
-    assert 'shot' in ei.value.original_message
-    assert 'metadata' in ei.value.original_message
+    assert 'shot' in ei.value.message
+    assert 'metadata' in ei.value.message
 
 
 async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict | None = None) -> list:
@@ -376,12 +377,12 @@ async def test_wrap_tool_can_substitute_a_response() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='deny_mw')
-    class DenyMW(BaseMiddleware):
+    class DenyMW(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             return MultipartToolResponse(output='denied')
 
@@ -428,12 +429,12 @@ async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
     pm, _ = define_scripted_model(ai)
 
     @ai.middleware(name='capture_mw')
-    class CaptureMW(BaseMiddleware):
+    class CaptureMW(Middleware):
         async def wrap_tool(
             self,
             params: ToolHookParams,
-            ctx: GenerateMiddlewareContext,
-            next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
         ) -> MultipartToolResponse:
             seen.append(params.tool_request_part)
             return await next_fn(params, ctx)

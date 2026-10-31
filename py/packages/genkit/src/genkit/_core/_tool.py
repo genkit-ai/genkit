@@ -158,6 +158,15 @@ class Tool(Action[InputT, OutputT, ChunkT]):
             TypeError: If ``func`` is not a coroutine function, takes more than one input,
                 or its input has no annotation or no JSON schema.
             ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
+
+        Example:
+            from genkit import Tool
+
+            async def lookup_price(sku: str) -> str:
+                return '12.00'
+
+            ephemeral = Tool(lookup_price, name='lookup_price')
+            res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
         """
         # _ai/_tools imports _core; the run-context and envelope helpers live there.
         from genkit._ai._tools import (  # noqa: PLC0415

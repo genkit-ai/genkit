@@ -91,32 +91,98 @@ def _vertexai() -> Genkit:
 # -- unknown keys -------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ('config', 'key'),
-    [
-        ({'thinking_config': {'thinkng_budget': 0}}, 'thinking_config.thinkng_budget'),
-        (
-            {
-                'safety_settings': [
-                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH', 'methd': 'SEVERITY'}
-                ]
-            },
-            'safety_settings.0.methd',
-        ),
-        ({'google_search': {'exclude_domainz': ['x']}}, 'google_search.exclude_domainz'),
-        ({'url_context': {'max_urls': 3}}, 'url_context.max_urls'),
-        ({'code_execution': {'timeout': 3}}, 'code_execution.timeout'),
-    ],
-    ids=['thinking_config', 'safety_settings', 'google_search', 'url_context', 'code_execution'],
-)
 @pytest.mark.asyncio
-async def test_generate_gemini_unknown_nested_config_key_raises(sent: _Sent, config: dict[str, Any], key: str) -> None:
-    """A typo one level down raises INVALID_ARGUMENT naming the nested path, and no request is sent."""
+async def test_generate_gemini_unknown_safety_setting_key_raises(sent: _Sent) -> None:
+    """A typo inside a safety setting raises INVALID_ARGUMENT naming the path, and no request is sent."""
+    config = {
+        'safety_settings': [
+            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_ONLY_HIGH', 'methd': 'SEVERITY'}
+        ]
+    }
     with pytest.raises(GenkitError) as raised:
         await _googleai().generate(model=_GEMINI, prompt='hi', config=config)
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert repr(key) in str(raised.value)
+    assert "'safety_settings.0.methd'" in str(raised.value)
+    assert sent.bodies == []
+
+
+@pytest.mark.parametrize(
+    ('model', 'config', 'message'),
+    [
+        (
+            _GEMINI,
+            {'thinking_config': {'thinking_budget': 0}},
+            'thinking_config was flattened; use include_thoughts / thinking_budget / thinking_level',
+        ),
+        (
+            _GEMINI,
+            {'thinkingConfig': {'thinkingLevel': 'MEDIUM'}},
+            'thinkingConfig was flattened; use includeThoughts / thinkingBudget / thinkingLevel',
+        ),
+        (
+            'googleai/gemini-2.5-flash-preview-tts',
+            {'speechConfig': {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': 'Kore'}}}},
+            'speechConfig was flattened; use voice / speakers / languageCode',
+        ),
+        (
+            'googleai/gemini-2.5-flash-image',
+            {'image_config': {'aspect_ratio': '16:9'}},
+            'image_config was flattened; use aspect_ratio / image_size',
+        ),
+        (
+            _GEMINI,
+            {'file_search': {'file_search_store_names': ['fileSearchStores/menu']}},
+            'file_search was flattened; use file_search_store_names / file_search_metadata_filter / file_search_top_k',
+        ),
+        (
+            _GEMINI,
+            {'google_search': {'exclude_domains': ['example.com']}},
+            'google_search takes True or False; set options with google_search_types / ',
+        ),
+        (_GEMINI, {'url_context': {}}, 'url_context takes True or False'),
+        (_GEMINI, {'code_execution': {}}, 'code_execution takes True or False'),
+        (_GEMINI, {'function_calling_config': {'mode': 'ANY'}}, 'function_calling_config is not a config field'),
+        (_GEMINI, {'google_search_retrieval': True}, 'google_search_retrieval was flattened; use google_search'),
+        (_GEMINI, {'googleSearchRetrieval': {}}, 'googleSearchRetrieval was flattened; use googleSearch'),
+        (
+            _GEMINI,
+            {'speechConfig': {'voiceConfig': {}}},
+            'speechConfig was flattened into voice / speakers / languageCode, which only GeminiTtsConfig has; '
+            'build the model ref with gemini_tts()',
+        ),
+        (
+            _GEMINI,
+            {'image_config': {'aspect_ratio': '16:9'}},
+            'which only GeminiImageConfig has; build the model ref with gemini_image()',
+        ),
+    ],
+    ids=[
+        'thinking_config',
+        'thinkingConfig',
+        'speechConfig',
+        'image_config',
+        'file_search',
+        'google_search-dict',
+        'url_context-dict',
+        'code_execution-dict',
+        'function_calling_config',
+        'google_search_retrieval',
+        'googleSearchRetrieval',
+        'speechConfig-on-gemini',
+        'image_config-on-gemini',
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_gemini_nested_key_names_flat_fields(
+    sent: _Sent, model: str, config: dict[str, Any], message: str
+) -> None:
+    """A nested key the flat fields replaced raises INVALID_ARGUMENT naming them, in the caller's casing."""
+    with pytest.raises(GenkitError) as raised:
+        await _googleai().generate(model=model, prompt='hi', config=config)
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert message in str(raised.value)
     assert sent.bodies == []
 
 
@@ -135,20 +201,20 @@ async def test_generate_gemini_unknown_nested_config_key_raises(sent: _Sent, con
         ),
         (
             'vertexai/gemini-2.5-flash-image',
-            {'image_config': {'output_mime_type': 'image/jpeg'}},
+            {'output_mime_type': 'image/jpeg'},
             ('generationConfig', 'imageConfig', 'imageOutputOptions', 'mimeType'),
             'image/jpeg',
         ),
     ],
-    ids=['safety_settings.method', 'image_config.output_mime_type'],
+    ids=['safety_settings.method', 'output_mime_type'],
 )
 @pytest.mark.asyncio
 async def test_generate_gemini_sdk_field_in_nested_setting_reaches_request(
     sent: _Sent, model: str, config: dict[str, Any], wire_path: tuple[str | int, ...], wire_value: str
 ) -> None:
-    """A field the google-genai type declares passes the unknown-key check and lands on the wire.
+    """A Vertex-only setting lands on the wire on Vertex AI.
 
-    Both fields are Vertex-only; google-genai refuses them on the Gemini API.
+    The Gemini API rejects both; see test_generate_gemini_vertex_only_setting_raises_on_gemini_api.
     """
     await _vertexai().generate(model=model, prompt='hi', config=config)
 
@@ -286,12 +352,13 @@ async def test_generate_gemini_google_search_true_attaches_search_tool(
 
 
 @pytest.mark.asyncio
-async def test_generate_gemini_google_search_dict_passes_options_to_tool(sent: _Sent) -> None:
-    """`{'google_search': {'exclude_domains': [...]}}` passes the options into the tool."""
+async def test_generate_gemini_google_search_option_attaches_tool_with_options(sent: _Sent) -> None:
+    """`google_search_exclude_domains` alone turns search on and passes the option into the tool."""
     await _vertexai().generate(
-        model='vertexai/gemini-2.5-flash', prompt='hi', config={'google_search': {'exclude_domains': ['example.com']}}
+        model='vertexai/gemini-2.5-flash', prompt='hi', config={'google_search_exclude_domains': ['example.com']}
     )
 
+    # google-genai dumps nested tool options snake_case; Proto JSON accepts either.
     [tool] = sent.body['tools']
     assert list(tool['googleSearch'].values()) == [['example.com']]
 
@@ -321,18 +388,6 @@ async def test_generate_gemini_google_search_with_function_tools_sends_both(sent
     assert any(t.get('functionDeclarations', [{}])[0].get('name') == 'lookup' for t in tools)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize('old_key', ['google_search_retrieval', 'googleSearchRetrieval'])
-async def test_generate_gemini_google_search_retrieval_raises_naming_google_search(sent: _Sent, old_key: str) -> None:
-    """The pre-1.0 name (and the JS spelling) fails before sending and names `google_search` as the fix."""
-    with pytest.raises(GenkitError) as raised:
-        await _googleai().generate(model=_GEMINI, prompt='hi', config={old_key: True})
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert f'{old_key} was renamed to google_search' in str(raised.value)
-    assert sent.bodies == []
-
-
 # -- Dev UI -------------------------------------------------------------------
 
 
@@ -342,12 +397,20 @@ def test_config_form_advertises_no_additional_properties(config_class: type[Base
     assert config_class.model_json_schema(by_alias=True)['additionalProperties'] is False
 
 
-def test_gemini_config_form_nested_settings_advertise_no_additional_properties() -> None:
-    """Nested settings like `thinkingConfig` are closed in the form too."""
+def test_gemini_config_form_safety_settings_items_are_closed() -> None:
+    """Each safety setting in the form takes category, threshold and method only."""
     properties = GeminiConfig.model_json_schema(by_alias=True)['properties']
 
-    assert properties['thinkingConfig']['additionalProperties'] is False
-    assert properties['functionCallingConfig']['additionalProperties'] is False
+    assert properties['safetySettings']['type'] == 'array'
+    assert properties['safetySettings']['items']['additionalProperties'] is False
+
+
+def test_gemini_config_form_literal_lists_are_top_level_arrays() -> None:
+    """List-of-Literal fields publish `{type: array, items: {enum}}`, which the Dev UI renders as a multi-select."""
+    properties = GeminiConfig.model_json_schema(by_alias=True)['properties']
+
+    assert properties['googleSearchTypes']['items']['enum'] == ['web', 'image']
+    assert properties['responseModalities']['items']['enum'] == ['TEXT', 'IMAGE', 'AUDIO']
 
 
 def test_gemini_config_form_shows_google_search_not_google_search_retrieval() -> None:
