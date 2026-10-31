@@ -47,7 +47,7 @@ from google import genai
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai.errors import APIError
-from google.genai.types import HttpOptions
+from google.genai.types import HttpOptions, HttpOptionsDict
 from pydantic import ValidationError
 
 from genkit import Document, Genkit, GenkitError, Message, Part, Role
@@ -498,6 +498,32 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
                 'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
             },
         ),
+        (
+            {'headers': {'x-goog-api-client': GENKIT_USER_AGENT, 'user-agent': GENKIT_USER_AGENT}},
+            {
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
+            },
+        ),
+        (
+            HttpOptions(
+                headers={
+                    'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
+                    'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
+                }
+            ),
+            {
+                'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
+                'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
+            },
+        ),
+        (
+            {'headers': {'x-goog-api-client': '', 'user-agent': ''}},
+            {
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
+            },
+        ),
     ],
 )
 def test_inject_attribution_headers(
@@ -507,6 +533,56 @@ def test_inject_attribution_headers(
     result = _inject_attribution_headers(input_options)  # type: ignore
     assert isinstance(result, HttpOptions)
     assert result.headers == expected_headers
+
+
+def test_inject_attribution_headers_is_idempotent() -> None:
+    """Repeated calls or chained outputs never duplicate GENKIT_USER_AGENT."""
+    expected = {
+        'X-Goog-Api-Client': f'order-service/1.0 {GENKIT_USER_AGENT}',
+        'User-Agent': f'order-service/1.0 {GENKIT_USER_AGENT}',
+    }
+
+    opts = HttpOptions(headers={'X-Goog-Api-Client': 'order-service/1.0', 'User-Agent': 'order-service/1.0'})
+    first = _inject_attribution_headers(opts)
+    second = _inject_attribution_headers(opts)
+    chained = _inject_attribution_headers(first)
+    assert first.headers == expected
+    assert second.headers == expected
+    assert chained.headers == expected
+
+    opts_dict: HttpOptionsDict = {
+        'headers': {'X-Goog-Api-Client': 'order-service/1.0', 'User-Agent': 'order-service/1.0'}
+    }
+    dict_first = _inject_attribution_headers(opts_dict)
+    dict_second = _inject_attribution_headers(opts_dict)
+    dict_chained = _inject_attribution_headers(dict_first)
+    assert dict_first.headers == expected
+    assert dict_second.headers == expected
+    assert dict_chained.headers == expected
+
+
+def test_inject_attribution_headers_does_not_mutate_caller_headers() -> None:
+    """Caller-owned header dicts are copied rather than mutated in place."""
+    raw_dict_headers = {'x-goog-api-client': 'crm-worker/2.0', 'x-trace-id': 'abc'}
+    opts_dict: HttpOptionsDict = {'headers': raw_dict_headers}
+    dict_result = _inject_attribution_headers(opts_dict)
+    assert raw_dict_headers == {'x-goog-api-client': 'crm-worker/2.0', 'x-trace-id': 'abc'}
+    assert opts_dict == {'headers': {'x-goog-api-client': 'crm-worker/2.0', 'x-trace-id': 'abc'}}
+    assert dict_result.headers is not raw_dict_headers
+
+    model_headers = {'x-goog-api-client': 'crm-worker/2.0'}
+    opts_model = HttpOptions(headers=model_headers)
+    model_result = _inject_attribution_headers(opts_model)
+    assert model_headers == {'x-goog-api-client': 'crm-worker/2.0'}
+    assert opts_model.headers == {'x-goog-api-client': 'crm-worker/2.0'}
+    assert model_result.headers is not opts_model.headers
+
+    constructed_headers = {'x-goog-api-client': 'crm-worker/2.0'}
+    opts_constructed = HttpOptions.model_construct(headers=constructed_headers)
+    constructed_result = _inject_attribution_headers(opts_constructed)
+    assert constructed_headers == {'x-goog-api-client': 'crm-worker/2.0'}
+    assert opts_constructed.headers == {'x-goog-api-client': 'crm-worker/2.0'}
+    assert constructed_result.headers is not constructed_headers
 
 
 class TestVertexAIInit(unittest.TestCase):
