@@ -236,6 +236,7 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
+  "TD",    # flake8-todos (TODO comment formatting and issue links)
   "TID251", # banned-api (see flake8-tidy-imports.banned-api below)
 ]
 
