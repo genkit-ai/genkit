@@ -1114,7 +1114,11 @@ async def generate_prompt_agent_turn(
     await persist_turn_messages(
         session_runner=session_runner,
         history=history,
-        response_message=response.message,
+        response_message=(
+            None
+            if response.error is not None and response.finish_reason in (FinishReason.FAILED, FinishReason.ABORTED)
+            else response.message
+        ),
         response=response,
     )
 
