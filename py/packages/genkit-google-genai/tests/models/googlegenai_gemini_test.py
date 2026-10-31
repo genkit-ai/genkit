@@ -50,6 +50,7 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, Field, HttpUrl, ValidationError
 from pytest_mock import MockerFixture
+from structlog.testing import capture_logs
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit._core._compat import StrEnum
@@ -865,7 +866,7 @@ def test_gemini_model__create_tool(
 
 
 @pytest.mark.parametrize(
-    'input_schema, defs, expected_schema',
+    'input_schema, root, expected_schema',
     [
         # Test Case 1: None input_schema
         (
@@ -942,13 +943,13 @@ def test_gemini_model__create_tool(
                 },
             ),
         ),
-        # Test Case 9: Object with nested $ref and existing defs
+        # Test Case 9: Object with nested $ref and a separate root
         (
             {
                 'type': 'OBJECT',
                 'properties': {'address': {'$ref': '#/$defs/Address'}},
             },
-            {'Address': {'type': 'OBJECT', 'properties': {'street': {'type': 'STRING'}}}},
+            {'$defs': {'Address': {'type': 'OBJECT', 'properties': {'street': {'type': 'STRING'}}}}},
             genai_types.Schema(
                 type=genai_types.Type.OBJECT,
                 properties={
@@ -1032,12 +1033,12 @@ def test_gemini_model__create_tool(
 )
 def test_gemini_model__convert_schema_property(
     input_schema: dict[str, object] | None,
-    defs: dict[str, object] | None,
+    root: dict[str, object] | None,
     expected_schema: genai_types.Schema | None,
     gemini_model_instance: GeminiModel,
 ) -> None:
     """Unit tests for  GeminiModel._convert_schema_property with various valid schema inputs."""
-    result_schema = gemini_model_instance._convert_schema_property(input_schema, defs)
+    result_schema = gemini_model_instance._convert_schema_property(input_schema, root)
 
     if expected_schema is None:
         assert result_schema is None
@@ -1070,7 +1071,7 @@ def test_gemini_model__convert_schema_property(
 
 
 @pytest.mark.parametrize(
-    'input_schema, defs',
+    'input_schema, root',
     [
         # Test Case 11: Unresolvable $ref
         (
@@ -1082,24 +1083,149 @@ def test_gemini_model__convert_schema_property(
             {'type': 'OBJECT', 'properties': {'user': {'$ref': '#/$defs/NonExistent'}}},
             None,
         ),
-        # Test Case 13: $ref to the document root
+        # Test Case 13: JSON pointer past the end of a list
         (
-            {'type': 'OBJECT', 'properties': {'user': {'$ref': '#'}}},
+            {'type': 'OBJECT', 'properties': {'user': {'$ref': '#/anyOf/0'}}, 'anyOf': []},
+            None,
+        ),
+        # Test Case 14: Remote $ref
+        (
+            {'type': 'OBJECT', 'properties': {'user': {'$ref': 'https://example.com/user.json'}}},
+            None,
+        ),
+        # Test Case 15: Non-numeric JSON pointer token into a list
+        (
+            {'type': 'OBJECT', 'properties': {'user': {'$ref': '#/anyOf/x'}}, 'anyOf': [{'type': 'STRING'}]},
             None,
         ),
     ],
 )
 def test_gemini_model__convert_schema_property_raises_exception(
     input_schema: dict[str, object],
-    defs: dict[str, object] | None,
+    root: dict[str, object] | None,
     gemini_model_instance: GeminiModel,
 ) -> None:
     """Test GeminiModel._convert_schema_property raises an exception for unresolvable schemas."""
     with pytest.raises(GenkitError) as exc_info:
-        gemini_model_instance._convert_schema_property(input_schema, defs)
+        gemini_model_instance._convert_schema_property(input_schema, root)
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
     assert 'cannot be resolved' in exc_info.value.message
+
+
+@pytest.mark.parametrize('strict', [False, True])
+@pytest.mark.parametrize(
+    'ref, root_extra',
+    [
+        ('#/definitions/Name', {'definitions': {'Name': {'type': 'string'}}}),
+        ('#/properties/a', {}),
+        ('#/properties/list/items', {}),
+        ('#/properties/a~1b~0c', {}),
+        ('#/properties/a~01b', {}),
+        ('#/properties/a%20b', {}),
+        ('#/anyOf/0', {'anyOf': [{'type': 'string'}]}),
+    ],
+)
+def test_gemini_model__convert_schema_property_resolves_json_pointer_ref(
+    ref: str, root_extra: dict[str, object], strict: bool, gemini_model_instance: GeminiModel
+) -> None:
+    """A $ref resolves as a JSON pointer into the document, not only into $defs."""
+    string = {'type': 'string'}
+    input_schema: dict[str, object] = {
+        'type': 'object',
+        'properties': {
+            'a': string,
+            'list': {'type': 'array', 'items': string},
+            'a/b~c': string,
+            'a~1b': string,
+            'a b': string,
+            'ref': {'$ref': ref},
+        },
+        **root_extra,
+    }
+
+    schema = gemini_model_instance._convert_schema_property(input_schema, strict=strict)
+
+    assert schema is not None and schema.properties is not None
+    assert schema.properties['ref'] == genai_types.Schema(type=genai_types.Type.STRING)
+
+
+@pytest.mark.parametrize(
+    'input_schema',
+    [
+        # draft-07 definitions that refer back to themselves
+        {
+            '$ref': '#/definitions/Node',
+            'definitions': {
+                'Node': {
+                    'type': 'object',
+                    'properties': {'value': {'type': 'integer'}, 'next': {'$ref': '#/definitions/Node'}},
+                },
+            },
+        },
+        # a JSON pointer to a property that contains it
+        {
+            'type': 'object',
+            'properties': {
+                'node': {
+                    'type': 'object',
+                    'properties': {'value': {'type': 'integer'}, 'next': {'$ref': '#/properties/node'}},
+                },
+            },
+        },
+        # the document root
+        {'type': 'object', 'properties': {'value': {'type': 'integer'}, 'next': {'$ref': '#'}}},
+    ],
+)
+def test_gemini_model__convert_schema_property_leaves_out_recursive_json_pointer_ref(
+    input_schema: dict[str, object], gemini_model_instance: GeminiModel
+) -> None:
+    """A $ref to a node that contains it is left out, whatever the pointer."""
+    schema = gemini_model_instance._convert_schema_property(input_schema)
+
+    node = genai_types.Schema(
+        type=genai_types.Type.OBJECT, properties={'value': genai_types.Schema(type=genai_types.Type.INTEGER)}
+    )
+    assert schema is not None
+    assert node in (schema, (schema.properties or {}).get('node'))
+
+
+def test_gemini_model__create_tool_drops_unconvertible_output_schema(gemini_model_instance: GeminiModel) -> None:
+    """A tool whose output schema cannot be converted is sent without one."""
+    tool = ToolDefinition(
+        name='t',
+        description='d',
+        input_schema={'type': 'object', 'properties': {'q': {'type': 'string'}}},
+        output_schema={'type': 'object', 'properties': {'r': {'$ref': '#/properties/missing'}}},
+    )
+
+    with capture_logs() as entries:
+        gemini_tool, _ = gemini_model_instance._create_tool(tool)
+
+    declarations = gemini_tool.function_declarations
+    assert declarations is not None
+    assert declarations[0].response is None
+    assert declarations[0].parameters == genai_types.Schema(
+        type=genai_types.Type.OBJECT, properties={'q': genai_types.Schema(type=genai_types.Type.STRING)}
+    )
+    assert [entry['event'] for entry in entries if entry['log_level'] == 'warning'] == [
+        "Sending tool t without its output schema: version: schema $ref '#/properties/missing' cannot be resolved"
+    ]
+
+
+def test_gemini_model__create_tool_rejects_unconvertible_input_schema(gemini_model_instance: GeminiModel) -> None:
+    """A tool whose input schema cannot be converted still fails."""
+    tool = ToolDefinition(
+        name='t',
+        description='d',
+        input_schema={'type': 'object', 'properties': {'q': {'$ref': '#/properties/missing'}}},
+        output_schema={'type': 'string'},
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        gemini_model_instance._create_tool(tool)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 class _LinkedList(BaseModel):
