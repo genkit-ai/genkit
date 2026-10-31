@@ -236,7 +236,8 @@ export const MEDIA_TYPES = {
  * Priority:
  *   1. request.config.apiVersion (per-request override - explicit stable or beta)
  *   2. pluginDefaultApiVersion (plugin-wide default)
- *   3. otherwise stable
+ *   3. non-empty betas array (enables beta surface for beta feature usage)
+ *   4. otherwise stable
  */
 export function resolveBetaEnabled(
   cfg: ClaudeConfig | undefined,
@@ -246,6 +247,9 @@ export function resolveBetaEnabled(
     return cfg.apiVersion === 'beta';
   }
   if (pluginDefaultApiVersion === 'beta') return true;
+  // If betas array has entries, enable beta API surface
+  const betas = (cfg as Record<string, unknown> | undefined)?.betas;
+  if (Array.isArray(betas) && betas.length > 0) return true;
   return false;
 }
 
