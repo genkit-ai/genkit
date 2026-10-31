@@ -233,3 +233,23 @@ def test_extract_json_balanced_non_json_no_throw_returns_none() -> None:
 def test_extract_json_skips_non_json_braces_and_returns_later_object() -> None:
     """extract_json('{1, 2} then {"a": 1}') returns {'a': 1}."""
     assert extract_json('{1, 2} then {"a": 1}') == {'a': 1}
+
+
+@pytest.mark.parametrize('parser', [extract_json, extract_partial_json])
+@pytest.mark.parametrize(
+    'text, expected',
+    [
+        ("Result: {'text': 'a } b'} done", {'text': 'a } b'}),
+        ("Result: {'text': 'a { b'} done", {'text': 'a { b'}),
+        ("Result: ['a ] b'] done", ['a ] b']),
+        ("Result: {'text': 'say \"hello\" }'} done", {'text': 'say "hello" }'}),
+        ("Result: {'text': 'it\\'s } fine'} done", {'text': "it's } fine"}),
+        ("Don't omit this: {'text': 'a } b'} done", {'text': 'a } b'}),
+        ('[don\'t] then {"a": 1}', {'a': 1}),
+        ('{don\'t} then {"a": 1}', {'a': 1}),
+        ('Use \\"literal\\" then {"a": 1}', {'a': 1}),
+    ],
+)
+def test_extract_json5_single_quoted_strings(parser, text: str, expected: Any) -> None:
+    """Bracket matching ignores delimiters inside JSON5 single-quoted strings."""
+    assert parser(text) == expected

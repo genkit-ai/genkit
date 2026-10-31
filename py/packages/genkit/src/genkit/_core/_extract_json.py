@@ -61,8 +61,9 @@ def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any
     closing_char: str | None = None
     start_pos: int | None = None
     nesting_count = 0
-    in_string = False
+    quote_char: str | None = None
     escape_next = False
+    previous_nonspace = ''
 
     for i in range(len(text)):
         char = text[i].replace(CHAR_NON_BREAKING_SPACE, ' ')
@@ -75,11 +76,13 @@ def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any
             escape_next = True
             continue
 
-        if char == '"':
-            in_string = not in_string
+        if quote_char is not None:
+            if char == quote_char:
+                quote_char = None
             continue
 
-        if in_string:
+        if char == '"' or (char == "'" and opening_char is not None and previous_nonspace in ('{', '[', ',', ':')):
+            quote_char = char
             continue
 
         if not opening_char and char in '{[':
@@ -102,6 +105,9 @@ def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any
                     closing_char = None
                     start_pos = None
                     nesting_count = 0
+
+        if not char.isspace():
+            previous_nonspace = char
 
     if allow_partial and start_pos is not None and nesting_count > 0:
         try:
