@@ -22,6 +22,7 @@ import {
   type Transaction,
 } from '@google-cloud/firestore';
 import {
+  GENKIT_VERSION,
   GenkitError,
   applyPatch,
   diff,
@@ -263,7 +264,12 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   protected snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
 
   constructor(opts?: FirestoreSessionStoreOptions) {
-    this.db = opts?.db ?? new Firestore();
+    this.db =
+      opts?.db ??
+      new Firestore({
+        libName: 'genkit-node',
+        libVersion: GENKIT_VERSION,
+      });
     this.collection = opts?.collection ?? 'genkit-sessions';
     this.checkpointInterval =
       opts?.checkpointInterval ?? DEFAULT_CHECKPOINT_INTERVAL;

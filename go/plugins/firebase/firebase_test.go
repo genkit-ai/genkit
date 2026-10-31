@@ -16,9 +16,11 @@ package firebase
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	firebasev4 "firebase.google.com/go/v4"
+	"github.com/firebase/genkit/go/internal"
 )
 
 /*
@@ -58,5 +60,18 @@ func TestInit(t *testing.T) {
 			}
 			f.Init(ctx)
 		})
+	}
+}
+
+func TestGenkitUserAgent(t *testing.T) {
+	t.Parallel()
+
+	wantPrefix := "genkit-go/"
+	if !strings.HasPrefix(genkitUserAgent, wantPrefix) {
+		t.Fatalf("genkitUserAgent = %q, want prefix %q", genkitUserAgent, wantPrefix)
+	}
+	want := wantPrefix + internal.Version
+	if genkitUserAgent != want {
+		t.Fatalf("genkitUserAgent = %q, want %q", genkitUserAgent, want)
 	}
 }
