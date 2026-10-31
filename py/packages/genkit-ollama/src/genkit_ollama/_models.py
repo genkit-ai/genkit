@@ -87,14 +87,14 @@ import binascii
 import json
 import mimetypes
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import ollama as ollama_api
-from pydantic import ValidationError
+from pydantic import ValidationError, model_validator
 from pydantic.alias_generators import to_snake
 
 from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
@@ -214,6 +214,13 @@ def _parse_thinking(content: str) -> tuple[str, str]:
     return reasoning, rest
 
 
+# Ollama's names for settings ModelConfig already has. The plugin sends the
+# common field under the Ollama name, so neither a top-level key nor an
+# ``extra`` entry may set it a second way.
+_NATIVE_NAMES: dict[str, str] = {'num_predict': 'max_output_tokens', 'stop': 'stop_sequences'}
+_REMOVED_KEYS: dict[str, str] = {**_NATIVE_NAMES, 'numPredict': 'max_output_tokens'}
+
+
 class OllamaConfig(ModelConfig):
     """Configuration schema for Ollama models.
 
@@ -223,7 +230,24 @@ class OllamaConfig(ModelConfig):
     running with the default context window. A sampler option this class
     doesn't declare yet goes in ``extra``, which is merged into the request's
     ``options`` as-is and wins over a declared value with the same name.
+
+    ``num_predict`` and ``stop`` are not declared: set ``max_output_tokens``
+    and ``stop_sequences``, which the plugin sends under those names.
     """
+
+    @model_validator(mode='before')
+    @classmethod
+    def _name_common_field_for_native_key(cls, data: object) -> object:
+        """Name the common field instead of the generic unknown-key error."""
+        if not isinstance(data, Mapping):
+            return data
+        for key in cast(Mapping[str, object], data):
+            if key in _REMOVED_KEYS:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'ollama: {key} is not a config field; use {_REMOVED_KEYS[key]}',
+                )
+        return data
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None
@@ -246,7 +270,6 @@ class OllamaConfig(ModelConfig):
     num_thread: int | None = None
     num_keep: int | None = None
     seed: int | None = None
-    num_predict: int | None = None
     tfs_z: float | None = None
     typical_p: float | None = None
     repeat_last_n: int | None = None
@@ -257,7 +280,6 @@ class OllamaConfig(ModelConfig):
     mirostat_tau: float | None = None
     mirostat_eta: float | None = None
     penalize_newline: bool | None = None
-    stop: list[str] | None = None
 
 
 # Declared names, in either spelling. A generic snake-case pass turns
@@ -592,18 +614,18 @@ class OllamaModel:
 
         - ``think``/``keep_alive`` are stripped — they are top-level request
           kwargs, not sampler options (Ollama rejects them inside ``options``).
-        - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
-          explicit ``num_predict`` wins when both are present.
-        - ``stop_sequences`` maps to ``stop``; an explicit ``stop`` wins when
-          both are present. ``version`` (genkit bookkeeping) is dropped.
+        - Genkit's ``max_output_tokens`` is sent as Ollama's ``num_predict``
+          and ``stop_sequences`` as ``stop``. ``version`` (genkit
+          bookkeeping) is dropped.
         - camelCase keys are snake-cased onto the Ollama field. Declared
           names are looked up first so ``f16_kv`` is not rewritten.
         - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
           keys unchanged, so a colliding key wins over a declared field.
+          ``num_predict`` and ``stop`` in ``extra`` raise: the plugin builds
+          them from the common fields.
 
-        Known knobs are routed through ``ollama_api.Options`` purely for type
-        coercion (genkit types ``max_output_tokens``/``top_k`` as floats, but
-        Ollama's ``num_predict``/``top_k`` are integers). The result is then
+        Known knobs are routed through ``ollama_api.Options`` to check their
+        types against the client's (a raw dict skips OllamaConfig). The result is then
         returned as a plain mapping — *not* an ``Options`` — and any knob the
         installed ``Options`` model doesn't yet field (e.g. ``min_p``) is merged
         back in, so newer sampler parameters still reach the server.
@@ -641,14 +663,14 @@ class OllamaModel:
         knobs.pop('version', None)
 
         stop_sequences = knobs.pop('stop_sequences', None)
-        if stop_sequences is not None and knobs.get('stop') is None:
+        if stop_sequences is not None:
             knobs['stop'] = stop_sequences
 
         max_tokens = knobs.pop('max_output_tokens', None)
-        if max_tokens is not None and knobs.get('num_predict') is None:
+        if max_tokens is not None:
             knobs['num_predict'] = max_tokens
 
-        # Coerce the knobs Options models (int num_predict/top_k, etc.), then
+        # Check the knobs Options models (int num_predict/top_k, etc.), then
         # merge back any it drops (e.g. min_p) so they still reach the server.
         try:
             options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)
@@ -658,7 +680,17 @@ class OllamaModel:
         for key, value in knobs.items():
             options.setdefault(key, value)
         if isinstance(extra, dict):
-            options.update(cast(dict[str, Any], extra))
+            extra_options = cast(dict[str, Any], extra)
+            for key, common in _NATIVE_NAMES.items():
+                if key in extra_options:
+                    raise GenkitError(
+                        status='INVALID_ARGUMENT',
+                        message=(
+                            f'ollama: extra field {key!r} is built by Genkit from {common} '
+                            f'and cannot be set from config; use {common}'
+                        ),
+                    )
+            options.update(extra_options)
         return options
 
     @staticmethod

@@ -30,10 +30,12 @@ See Also:
     - Prompt Caching Guide: https://platform.openai.com/docs/guides/prompt-caching
 """
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any, Literal, cast
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
+from genkit import GenkitError
 from genkit.model import ModelConfig
 from genkit.plugin_api import StrEnum
 
@@ -109,6 +111,22 @@ class WebSearchContextSize(StrEnum):
     HIGH = 'high'
 
 
+# OpenAI's names for settings ModelConfig already has, keyed to the common
+# field. The plugin sends max_output_tokens as max_tokens or
+# max_completion_tokens (per model) and stop_sequences as stop, so these are
+# not declared and ``extra`` can't set them either.
+NATIVE_NAMES: dict[str, str] = {
+    'max_tokens': 'max_output_tokens',
+    'max_completion_tokens': 'max_output_tokens',
+    'stop': 'stop_sequences',
+}
+REMOVED_KEYS: dict[str, str] = {
+    **NATIVE_NAMES,
+    'maxTokens': 'max_output_tokens',
+    'maxCompletionTokens': 'max_output_tokens',
+}
+
+
 class OpenAIConfig(ModelConfig):
     """OpenAI configuration for Genkit.
 
@@ -127,15 +145,6 @@ class OpenAIConfig(ModelConfig):
 
         top_p: Nucleus sampling probability (0.0 to 1.0).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
-
-        max_tokens: Maximum tokens to generate (deprecated, use max_completion_tokens).
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
-
-        max_completion_tokens: Upper bound for tokens including reasoning tokens.
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
-
-        stop: Up to 4 sequences where the API will stop generating.
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop
 
         stream: Whether to stream the response.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-stream
@@ -210,8 +219,9 @@ class OpenAIConfig(ModelConfig):
 
         max_output_tokens: Genkit's cross-model reply cap (``maxOutputTokens``
             in the Dev UI). Sent as ``max_tokens``, or ``max_completion_tokens``
-            on reasoning models. ``max_tokens`` and ``max_completion_tokens``
-            win when set.
+            on reasoning models and when ``reasoning_effort`` is set.
+
+        stop_sequences: Genkit's cross-model stop strings. Sent as ``stop``.
 
         extra: Request body fields this class doesn't declare, such as a
             field a newer API version or an OpenAI-compatible server added.
@@ -220,7 +230,9 @@ class OpenAIConfig(ModelConfig):
             wins over ``temperature``. Nothing inside it is checked.
 
     Any other key raises, so a typo like ``temprature`` fails by name instead
-    of reaching OpenAI.
+    of reaching OpenAI. OpenAI's own names for the reply cap and stop strings
+    (``max_tokens``, ``max_completion_tokens``, ``stop``) raise naming the
+    common field, at the top level or in ``extra``.
     """
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
@@ -229,25 +241,29 @@ class OpenAIConfig(ModelConfig):
     # param this class doesn't declare goes in ``extra`` and is sent as
     # ``extra_body``.
 
+    @model_validator(mode='before')
+    @classmethod
+    def _name_common_field_for_native_key(cls, data: object) -> object:
+        """Name the common field instead of the generic unknown-key error."""
+        if not isinstance(data, Mapping):
+            return data
+        for key in cast(Mapping[str, object], data):
+            if key in REMOVED_KEYS:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'openai: {key} is not a config field; use {REMOVED_KEYS[key]}',
+                )
+        return data
+
     # Core generation parameters
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-model
     model: str | None = None
 
+    # temperature and top_p come from ModelConfig; OpenAI's ranges are
+    # applied without re-declaring them.
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-temperature
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
-    # Deprecated: use max_completion_tokens instead
-    max_tokens: int | None = None
-
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
-    max_completion_tokens: int | None = None
-
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop
-    stop: str | list[str] | None = None
+    common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-stream
     stream: bool | None = None

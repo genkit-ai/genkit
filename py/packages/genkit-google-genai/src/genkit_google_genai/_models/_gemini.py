@@ -620,45 +620,10 @@ class GeminiConfig(ModelConfig):
                 )
         return self
 
-    # inherited from ModelConfig:
-    # version, temperature, max_output_tokens, top_k, top_p, stop_sequences
-
-    temperature: Annotated[
-        float | None,
-        WithJsonSchema({
-            'type': 'number',
-            'minimum': 0.0,
-            'maximum': 2.0,
-            'description': (
-                'Controls the randomness of the output. Values can range over [0.0, 2.0]. The default value is 1.0.'
-            ),
-        }),
-    ] = Field(
-        default=None,
-        ge=0.0,
-        le=2.0,
-    )
-
-    top_p: Annotated[
-        float | None,
-        WithJsonSchema({
-            'type': 'number',
-            'minimum': 0.0,
-            'maximum': 1.0,
-            'description': (
-                'The maximum cumulative probability of tokens to consider when sampling. '
-                'Values can range over [0.0, 1.0]. The default value is 0.95.'
-            ),
-        }),
-    ] = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-    )
-    top_k: int | None = Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
-        default=None,
-        description=('The maximum number of tokens to consider when sampling.'),
-    )
+    # version, temperature, max_output_tokens, top_k, top_p and stop_sequences
+    # come from ModelConfig and are not re-declared; Gemini's ranges are
+    # applied through common_field_bounds.
+    common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
 
     thinking_level: ThinkingLevel | None = Field(
         default=None,
@@ -681,13 +646,6 @@ class GeminiConfig(ModelConfig):
             'thought and thoughts are available.'
         ),
     )
-
-    max_output_tokens: int | None = (
-        Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
-            default=None, description='Maximum number of tokens to generate.'
-        )
-    )
-    stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
     # Sampling knobs GenerateContentConfig types. Declared so they stay flat
     # and SDK-validated now that unknown keys raise.
@@ -829,8 +787,8 @@ class GeminiImageConfig(GeminiConfig):
 class GemmaConfig(GeminiConfig):
     """Gemma Config."""
 
-    # Inherits temperature from GeminiConfig
-    temperature: float | None = None
+    # Gemma takes any temperature; top_p keeps Gemini's range.
+    common_field_bounds = {'top_p': (0.0, 1.0)}
 
 
 GEMINI_TEXT_SUPPORTS = ModelSupports(

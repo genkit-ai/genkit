@@ -58,15 +58,17 @@ res = await ai.generate(
     prompt='Write a haiku about the sea.',
     config={
         'temperature': 0.2,
-        'max_tokens': 200,  # caps reply length
+        'max_output_tokens': 200,  # caps reply length
         'extra': {'reasoning': {'effort': 'low'}},  # fields OpenAIConfig doesn't declare
     },
 )
 ```
 
-- `max_tokens` caps reply length. Genkit's cross-model `max_output_tokens`
-  (`maxOutputTokens` in the Dev UI) sends the same cap when `max_tokens` is
-  unset. Reasoning models get the cap as `max_completion_tokens`.
+- `max_output_tokens` (`maxOutputTokens` in the Dev UI) caps reply length.
+  It goes out as `max_tokens`, or as `max_completion_tokens` on reasoning
+  models. `stop_sequences` goes out as `stop`. OpenAI's own names
+  (`max_tokens`, `max_completion_tokens`, `stop`) raise `INVALID_ARGUMENT`
+  naming the common field, at the top level or in `extra`.
 - `extra` goes out as top-level request body fields. A key in `extra`
   replaces a setting of the same name. An API key in `config` or `extra`
   raises `INVALID_ARGUMENT`; it belongs in `context.secrets`.
