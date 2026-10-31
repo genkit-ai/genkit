@@ -18,7 +18,7 @@
     "only-allow": "^1.2.2",
     "tsx": "^4.23.15",
     "zod": "3.25.67",
-    "zod-to-json-schema": "~3.24.5"
+    "zod-to-json-schema": "~3.24.6"
   },
   "pnpm": {
     "overrides": {
