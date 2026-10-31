@@ -1647,7 +1647,7 @@ requires-dist = [
     { name = "genkit-otel", marker = "extra == 'otel'", editable = "packages/genkit-otel" },
     { name = "genkit-vertexai", extras = ["anthropic", "openai"], marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "json5", specifier = ">=0.10.0" },
+    { name = "json5", specifier = ">=0.11.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "partial-json-parser", specifier = ">=0.2.1.1.post5" },
     { name = "pydantic", specifier = ">=2.11" },
