@@ -20,7 +20,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { genkit, z } from 'genkit/beta';
 
 const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [googleAI({ experimental_debugTraces: true })],
 });
 
 ai.defineTool(
