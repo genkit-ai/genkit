@@ -153,3 +153,16 @@ def test_common_field_bounds_show_in_json_schema() -> None:
     assert props['temperature']['maximum'] == 2.0
     assert 'minimum' not in props['topP']
     assert 'minimum' not in ModelConfig.model_json_schema(by_alias=True)['properties']['temperature']
+
+
+def test_common_field_bounds_reject_invalid_field_or_inverted_range() -> None:
+    """Misconfigured ``common_field_bounds`` fails at subclass definition instead of at schema lookup."""
+    with pytest.raises(ValueError, match=r"common_field_bounds key 'maxOutputTokens'"):
+
+        class _WrongSpellingConfig(ModelConfig):
+            common_field_bounds = {'maxOutputTokens': (1, 100)}
+
+    with pytest.raises(ValueError, match=r"common_field_bounds\['temperature'\] min 2\.0 > max 0\.0"):
+
+        class _InvertedBoundsConfig(ModelConfig):
+            common_field_bounds = {'temperature': (2.0, 0.0)}

@@ -139,6 +139,26 @@ class ModelConfig(GenkitConfig):
         ```
     """
 
+    _NUMERIC_COMMON_FIELDS: ClassVar[frozenset[str]] = frozenset({
+        'temperature',
+        'max_output_tokens',
+        'top_k',
+        'top_p',
+    })
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
+        """Reject ``common_field_bounds`` entries that name unknown fields or invert ``(min, max)``."""
+        super().__pydantic_init_subclass__(**kwargs)
+        for name, (low, high) in cls.common_field_bounds.items():
+            if name not in cls._NUMERIC_COMMON_FIELDS:
+                raise ValueError(
+                    f'{cls.__name__}.common_field_bounds key {name!r} must be one of '
+                    f'{sorted(cls._NUMERIC_COMMON_FIELDS)}'
+                )
+            if low > high:
+                raise ValueError(f'{cls.__name__}.common_field_bounds[{name!r}] min {low} > max {high}')
+
     @field_validator('temperature', 'max_output_tokens', 'top_k', 'top_p')
     @classmethod
     def _check_common_field_bounds(cls, value: float | None, info: ValidationInfo) -> float | None:
@@ -155,7 +175,10 @@ class ModelConfig(GenkitConfig):
         properties = resolved.get('properties')
         if isinstance(properties, dict):
             for name, (low, high) in cls.common_field_bounds.items():
-                alias = cls.model_fields[name].alias
+                field = cls.model_fields.get(name)
+                if field is None:
+                    continue
+                alias = field.alias
                 prop = properties.get(alias) if alias in properties else properties.get(name)
                 if isinstance(prop, dict):
                     prop['minimum'] = low
