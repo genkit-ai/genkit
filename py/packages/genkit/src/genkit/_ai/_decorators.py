@@ -24,7 +24,7 @@ from typing import Any, TypeVar, overload
 from pydantic import BaseModel
 
 from genkit._ai._tools import define_tool
-from genkit._core._action import ActionRunContext
+from genkit._core._action import FlowContext
 from genkit._core._flow import Flow, define_flow
 from genkit._core._registry import Registry
 from genkit._core._tool import Tool, ToolContext
@@ -57,26 +57,24 @@ class _FlowDecorator:
     #   best any arrangement can do there without breaking `(ctx: FlowContext)`.
     @overload
     def __call__(
-        self, func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]]
+        self, func: Callable[[FlowContext[ChunkT], object], Awaitable[OutputT]]
     ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def __call__(
-        self, func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]]
+        self, func: Callable[[InputT, FlowContext[ChunkT]], Awaitable[OutputT]]
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
     def __call__(
-        self, func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]]
+        self, func: Callable[[FlowContext[ChunkT], InputT], Awaitable[OutputT]]
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Flow[Any, OutputT]: ...
 
     @overload
-    def __call__(
-        self, func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]]
-    ) -> Flow[None, OutputT, ChunkT]: ...
+    def __call__(self, func: Callable[[FlowContext[ChunkT]], Awaitable[OutputT]]) -> Flow[None, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Flow[InputT, OutputT]: ...
