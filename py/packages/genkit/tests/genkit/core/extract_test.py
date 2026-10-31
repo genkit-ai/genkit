@@ -233,3 +233,11 @@ def test_extract_json_balanced_non_json_no_throw_returns_none() -> None:
 def test_extract_json_skips_non_json_braces_and_returns_later_object() -> None:
     """extract_json('{1, 2} then {"a": 1}') returns {'a': 1}."""
     assert extract_json('{1, 2} then {"a": 1}') == {'a': 1}
+
+
+def test_array_cursor_keeps_searching_until_an_array_opens() -> None:
+    result = extract_json_array_from_text('Example: ')
+    result = extract_json_array_from_text('Example: {"example": 0}', result.cursor)
+    assert result.items == []
+    result = extract_json_array_from_text('Example: {"example": 0}\n[{"id": 1}]', result.cursor)
+    assert result.items == [{'id': 1}]
