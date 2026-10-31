@@ -25,14 +25,12 @@ from genkit_mcp._config import McpServerEntry
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Tool
-from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import ActionKind
-from genkit._core._typing import (
-    FinishReason,
-    Role,
-    ToolRequest,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role, Tool
+
+# Private on purpose: asserts which tools a `server:tool/*` wildcard expands to at generate time.
+from genkit._ai._generate import expand_wildcard_tools  # noqa: TID251
+from genkit.model import ToolRequest
+from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
 ALL_TOOLS = [
@@ -91,7 +89,10 @@ def rendered_for_logs(error: BaseException) -> str:
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        # Raw structlog on purpose: captures what the logger renders for exc_info.
+        structlog.get_logger('test').exception(  # noqa: TID251
+            'listing failed', exc_info=(type(error), error, error.__traceback__)
+        )
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)

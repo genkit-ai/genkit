@@ -24,14 +24,12 @@ from genkit_mcp import McpClient, define_mcp_client
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import McpConnection, _serving
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part
-from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import ActionKind
-from genkit._core._typing import (
-    FinishReason,
-    Role,
-    ToolRequest,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role
+
+# Private on purpose: asserts which tools a `server:tool/*` wildcard expands to at generate time.
+from genkit._ai._generate import expand_wildcard_tools  # noqa: TID251
+from genkit.model import ToolRequest
+from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
 _T = TypeVar('_T')

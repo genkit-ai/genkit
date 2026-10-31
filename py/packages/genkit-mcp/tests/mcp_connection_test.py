@@ -183,7 +183,10 @@ def rendered_for_logs(error: BaseException) -> str:
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        # Raw structlog on purpose: captures what the logger renders for exc_info.
+        structlog.get_logger('test').exception(  # noqa: TID251
+            'listing failed', exc_info=(type(error), error, error.__traceback__)
+        )
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)

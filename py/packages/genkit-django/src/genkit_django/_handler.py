@@ -31,7 +31,8 @@ from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
 from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
 
-logger = logging.getLogger(__name__)
+# Served-failure logs go to the host web server's stdlib logging config.
+logger = logging.getLogger(__name__)  # noqa: TID251
 
 # Compact JSON (no spaces) for smaller wire payload.
 _JSON_SEPARATORS = (',', ':')

@@ -15,7 +15,10 @@ from genkit_middleware._artifacts import Artifacts
 from genkit_middleware._fallback import FallbackModelEntry
 
 from genkit import GenkitError
-from genkit._core._middleware import _MiddlewareMetadata
+
+# Private on purpose: drives the .prompt `use:` config path (key aliasing,
+# unknown-key errors, Dev UI schema) without a registry round trip.
+from genkit._core._middleware import _MiddlewareMetadata  # noqa: TID251
 from genkit.middleware import Middleware
 from genkit.plugin_api import GenkitConfig
 
