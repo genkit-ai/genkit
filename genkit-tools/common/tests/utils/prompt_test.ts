@@ -18,6 +18,7 @@ import { describe, expect, it } from '@jest/globals';
 import type { MessageData } from '../../src/types/model';
 import { PromptFrontmatter } from '../../src/types/prompt';
 import {
+  jsonSchemaToPicoschema,
   renderPromptFile,
   toFrontmatterInput,
   toFrontmatterOutput,
@@ -188,6 +189,143 @@ describe('renderPromptFile', () => {
   });
 });
 
+describe('jsonSchemaToPicoschema', () => {
+  it('converts an object schema with required, optional, and described fields', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        title: { type: 'string' },
+        subtitle: { type: 'string', description: 'optional subtitle' },
+        servings: { type: 'integer' },
+      },
+      required: ['title', 'servings'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      title: 'string',
+      'subtitle?': 'string, optional subtitle',
+      servings: 'integer',
+    });
+  });
+
+  it('encodes an enum', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['PENDING', 'APPROVED'],
+          description: 'approval status',
+        },
+      },
+      required: ['status'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'status(enum, approval status)': ['PENDING', 'APPROVED'],
+    });
+  });
+
+  it('encodes an array of scalars', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'relevant tags',
+        },
+      },
+      required: ['tags'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'tags(array, relevant tags)': 'string',
+    });
+  });
+
+  it('encodes an array of objects', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        authors: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+      },
+      required: ['authors'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'authors(array)': { name: 'string' },
+    });
+  });
+
+  it('encodes a nested object, marking optional fields', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        metadata: {
+          type: 'object',
+          properties: { updatedAt: { type: 'string' } },
+        },
+      },
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      'metadata?(object)': { 'updatedAt?': 'string' },
+    });
+  });
+
+  it('encodes additionalProperties as a wildcard field', () => {
+    const schema = {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: { type: 'number' },
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      id: 'string',
+      '(*)': 'number',
+    });
+  });
+
+  it('passes non-object top-level schemas through unchanged', () => {
+    const arraySchema = { type: 'array', items: { type: 'string' } };
+    expect(jsonSchemaToPicoschema(arraySchema)).toBe(arraySchema);
+  });
+
+  it('returns any for null or malformed properties', () => {
+    const schema = {
+      type: 'object',
+      properties: { id: { type: 'string' }, broken: null, items: {} },
+      required: ['id'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      id: 'string',
+      'broken?': 'any',
+      'items?': 'any',
+    });
+  });
+
+  it('handles nullable types (union with null)', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        title: { type: ['string', 'null'] },
+        tags: {
+          type: ['array', 'null'],
+          items: { type: ['string', 'null'] },
+        },
+      },
+      required: ['title'],
+    };
+    expect(jsonSchemaToPicoschema(schema)).toEqual({
+      title: 'string',
+      'tags?(array)': 'string',
+    });
+  });
+});
+
 describe('toFrontmatterInput', () => {
   const SCHEMA = {
     type: 'object',
@@ -198,11 +336,20 @@ describe('toFrontmatterInput', () => {
     expect(toFrontmatterInput(undefined)).toBeUndefined();
   });
 
-  it('maps schema and default values', () => {
+  it('maps schema and default values as raw schema by default', () => {
     expect(
       toFrontmatterInput({ schema: SCHEMA, default: { name: 'World' } })
     ).toEqual({
       schema: SCHEMA,
+      default: { name: 'World' },
+    });
+  });
+
+  it('converts schema to picoschema when picoSchema is true', () => {
+    expect(
+      toFrontmatterInput({ schema: SCHEMA, default: { name: 'World' } }, true)
+    ).toEqual({
+      schema: { 'name?': 'string' },
       default: { name: 'World' },
     });
   });
@@ -219,10 +366,16 @@ describe('toFrontmatterOutput', () => {
     expect(toFrontmatterOutput(undefined)).toBeUndefined();
   });
 
-  it('reads the schema from jsonSchema and maps json formats', () => {
+  it('reads the schema from jsonSchema and maps json formats as raw schema by default', () => {
     expect(toFrontmatterOutput({ format: 'json', jsonSchema: SCHEMA })).toEqual(
       { format: 'json', schema: SCHEMA }
     );
+  });
+
+  it('converts schema to picoschema when picoSchema is true', () => {
+    expect(
+      toFrontmatterOutput({ format: 'json', jsonSchema: SCHEMA }, true)
+    ).toEqual({ format: 'json', schema: { title: 'string' } });
   });
 
   it('reads the schema from the schema field (model request shape)', () => {
@@ -250,20 +403,21 @@ describe('toFrontmatterOutput', () => {
 });
 
 describe('toPromptFile', () => {
-  it('converts a request object into a .prompt template string', () => {
-    const request = {
-      model: '/model/googleai/gemini-pro',
-      config: { temperature: 0.7 },
-      tools: [{ name: 'getWeather' }],
-      messages: [{ role: 'user' as const, content: [{ text: 'Hello' }] }],
-      input: {
-        schema: { type: 'object', properties: { name: { type: 'string' } } },
-      },
-      output: {
-        format: 'json',
-        schema: { type: 'object', properties: { answer: { type: 'string' } } },
-      },
-    };
+  const request = {
+    model: '/model/googleai/gemini-pro',
+    config: { temperature: 0.7 },
+    tools: [{ name: 'getWeather' }],
+    messages: [{ role: 'user' as const, content: [{ text: 'Hello' }] }],
+    input: {
+      schema: { type: 'object', properties: { name: { type: 'string' } } },
+    },
+    output: {
+      format: 'json',
+      schema: { type: 'object', properties: { answer: { type: 'string' } } },
+    },
+  };
+
+  it('converts a request object into a .prompt template string with raw schemas by default', () => {
     const expected =
       '---\n' +
       'model: googleai/gemini-pro\n' +
@@ -289,5 +443,29 @@ describe('toPromptFile', () => {
       '{{role "user"}}\n' +
       'Hello\n';
     expect(toPromptFile(request)).toStrictEqual(expected);
+  });
+
+  it('formats schemas as picoschema when picoSchema is true', () => {
+    const expected =
+      '---\n' +
+      'model: googleai/gemini-pro\n' +
+      'config:\n' +
+      '  temperature: 0.7\n' +
+      'tools:\n' +
+      '  - getWeather\n' +
+      'input:\n' +
+      '  schema:\n' +
+      '    name?: string\n' +
+      'output:\n' +
+      '  format: json\n' +
+      '  schema:\n' +
+      '    answer?: string\n' +
+      '---\n' +
+      '\n' +
+      '{{role "user"}}\n' +
+      'Hello\n';
+    expect(toPromptFile({ ...request, picoSchema: true })).toStrictEqual(
+      expected
+    );
   });
 });
