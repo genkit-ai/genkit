@@ -35,6 +35,7 @@ from mcp.types import (
 
 import genkit
 from genkit import MultipartToolResponse, Part, Tool, ToolContext, get_logger
+from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY
 from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 from genkit_mcp._errors import _ToolResultError
@@ -201,7 +202,11 @@ def mcp_tool_to_action(
 
     The returned action carries its own name under the ``name`` metadata key,
     which is what a dynamic action provider matches a wildcard selector against,
-    and the server's own tool name under ``metadata['mcp']['tool']``.
+    the server's own tool name under ``metadata['mcp']['tool']``, its display
+    title and behaviour hints under ``metadata['mcp']['title']`` and
+    ``metadata['mcp']['annotations']``, and the server's output schema, if
+    any, as the one the model is sent. A title or hint the server left out is
+    left out of the metadata too.
 
     Args:
         tool: Tool as listed by the server.
@@ -245,7 +250,14 @@ def mcp_tool_to_action(
         input_schema=tool.inputSchema,
     ).action()
     action.metadata['name'] = action.name
-    action.metadata['mcp'] = {'prefix': prefix, 'tool': tool.name, '_meta': mcp_meta}
+    action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = tool.outputSchema
+    mcp: dict[str, object] = {'prefix': prefix, 'tool': tool.name, '_meta': mcp_meta}
+    if tool.title is not None:
+        mcp['title'] = tool.title
+    annotations = tool.annotations.model_dump(exclude_none=True) if tool.annotations is not None else {}
+    if annotations:
+        mcp['annotations'] = annotations
+    action.metadata['mcp'] = mcp
     return action
 
 
