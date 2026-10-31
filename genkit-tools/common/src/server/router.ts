@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 import { TRPCError, initTRPC } from '@trpc/server';
+import type { Request } from 'express';
 import { z } from 'zod';
 import {
   getDatasetStore,
@@ -40,7 +41,13 @@ import {
 import { toolsPackage } from '../utils/package';
 import { toPromptFile } from '../utils/prompt';
 
-const t = initTRPC.create({
+/** Per-request context handed to procedures by the express adapter. */
+export interface ToolsServerContext {
+  /** The incoming request, when the router is mounted on express. */
+  req?: Request;
+}
+
+const t = initTRPC.context<ToolsServerContext>().create({
   errorFormatter(opts) {
     const { shape, error } = opts;
     if (error.cause instanceof GenkitToolsError && error.cause.data) {
@@ -116,9 +123,62 @@ const loggedProcedure = t.procedure.use(async (opts) => {
   return result;
 });
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * Refuses browser requests that did not originate from the Dev UI's own
+ * origin, so state-changing procedures cannot be driven by a page the
+ * developer happens to visit (CSRF) or by DNS rebinding.
+ *
+ * - `Sec-Fetch-Site` is set by every current browser: the Dev UI is served
+ *   from the same origin as this API, so its requests carry `same-origin`;
+ *   a cross-origin image tag or fetch carries `cross-site`. Non-browser
+ *   clients send no header and pass.
+ * - A DNS-rebinding page looks same-origin to the browser, but its requests
+ *   arrive with the attacker's hostname in `Host`. That check only applies
+ *   when the server is bound to loopback, so `--host` deployments that are
+ *   reached through another name are unaffected.
+ */
+const localBrowserOnly = (boundToLoopback: boolean) =>
+  t.middleware(({ ctx, next }) => {
+    const req = ctx.req;
+    if (req) {
+      const site = req.headers['sec-fetch-site'];
+      if (site === 'cross-site' || site === 'same-site') {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Cross-site requests to this procedure are refused.',
+        });
+      }
+      const host = (req.headers.host ?? '').replace(/:\d+$/, '');
+      if (boundToLoopback && !LOOPBACK_HOSTS.has(host)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Unexpected Host header for a loopback server.',
+        });
+      }
+    }
+    return next();
+  });
+
+/** Options for {@link TOOLS_SERVER_ROUTER}. */
+export interface ToolsServerRouterOptions {
+  /**
+   * Whether the server is bound to a loopback address. Enables the `Host`
+   * check on state-changing procedures. Defaults to true.
+   */
+  boundToLoopback?: boolean;
+}
+
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
-export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
-  t.router({
+export const TOOLS_SERVER_ROUTER = (
+  manager: BaseRuntimeManager,
+  options: ToolsServerRouterOptions = {}
+) => {
+  const stateChanging = t.procedure.use(
+    localBrowserOnly(options.boundToLoopback ?? true)
+  );
+  return t.router({
     /** Retrieves all runnable actions. */
     listActions: loggedProcedure
       .input(apis.ListActionsRequestSchema)
@@ -325,12 +385,14 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
       return manager.processManager.status();
     }),
 
-    restartAppProcess: t.procedure.query(async () => {
+    // Kept as queries so the published Dev UI keeps working; the guard above
+    // is what refuses cross-site and rebinding requests.
+    restartAppProcess: stateChanging.query(async () => {
       await manager.processManager?.restart();
       return true;
     }),
 
-    killAppProcess: t.procedure.query(async () => {
+    killAppProcess: stateChanging.query(async () => {
       await manager.processManager?.kill();
       return true;
     }),
@@ -342,5 +404,6 @@ export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
         return manager.cancelAction(input);
       }),
   });
+};
 
 export type ToolsServerRouter = ReturnType<typeof TOOLS_SERVER_ROUTER>;
