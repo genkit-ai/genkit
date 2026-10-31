@@ -73,7 +73,7 @@ def test_unknown_ref_key_names_middleware_and_accepted_keys() -> None:
         _definition(AllergyGuard, 'allergy_guard').instantiate({'maxWarnings': 0})
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.original_message == (
+    assert raised.value.message == (
         'Middleware "allergy_guard" got unknown config key(s) maxWarnings; '
         'accepted keys: blocked_allergens, max_warnings'
     )
@@ -155,7 +155,7 @@ def test_alias_without_validate_by_name_rejects_field_name_in_ref() -> None:
     with pytest.raises(GenkitError) as raised:
         _definition(Mw, 'mw').instantiate({'max_warnings': 1})
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert 'accepted keys: maxWarnings' in raised.value.original_message
+    assert 'accepted keys: maxWarnings' in raised.value.message
     mw = _definition(Mw, 'mw').instantiate({'maxWarnings': 1})
     assert isinstance(mw, Mw)
     assert mw.config.max_warnings == 1
@@ -178,7 +178,7 @@ def test_accepted_keys_show_the_serialization_alias_when_it_is_accepted() -> Non
 
     with pytest.raises(GenkitError) as raised:
         _definition(Mw, 'surfaces').instantiate({'validat': 'strict'})
-    assert raised.value.original_message.endswith('accepted keys: surfaceId, validate')
+    assert raised.value.message.endswith('accepted keys: surfaceId, validate')
 
 
 @pytest.mark.parametrize(
@@ -199,7 +199,7 @@ def test_bad_ref_value_is_invalid_argument_naming_middleware(config: dict[str, A
     with pytest.raises(GenkitError) as raised:
         _definition(Bounded, 'budget').instantiate(config)
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.original_message == 'Middleware "budget" got invalid config'
+    assert raised.value.message == 'Middleware "budget" got invalid config'
     assert field in str(raised.value)
     assert isinstance(raised.value.__cause__, ValidationError)
 

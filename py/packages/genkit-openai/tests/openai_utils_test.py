@@ -858,7 +858,7 @@ def test_reraise_openai_error_classifies_known_in_band_errors(
         reraise_openai_error(error)
 
     assert raised.value.status == expected_status
-    assert raised.value.original_message == body['message']
+    assert raised.value.message == body['message']
     assert raised.value.cause is error
     assert raised.value.__cause__ is error
 
@@ -877,7 +877,7 @@ def test_reraise_openai_error_marks_unknown_in_band_errors_unknown(error: APIErr
         reraise_openai_error(error)
 
     assert raised.value.status == 'UNKNOWN'
-    assert raised.value.original_message == error.message
+    assert raised.value.message == error.message
     assert raised.value.__cause__ is error
 
 
@@ -916,7 +916,7 @@ def test_unmapped_4xx_is_unknown_genkit_error(status_code: int) -> None:
         reraise_openai_error(error)
 
     assert raised.value.status == 'UNKNOWN'
-    assert raised.value.original_message == 'payload too large'
+    assert raised.value.message == 'payload too large'
     assert raised.value.__cause__ is error
 
 

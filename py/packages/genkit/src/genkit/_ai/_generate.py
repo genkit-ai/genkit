@@ -53,6 +53,7 @@ from genkit._ai._tools import (
     normalize_pending_content,
     parts_to_wire,
     restart_interrupt_error,
+    run_restarted_tool,
     run_tool_after_restart,
     run_tool_request,
 )
@@ -111,6 +112,13 @@ from genkit._core._typing import (
 )
 
 DEFAULT_MAX_TURNS = 50
+
+# Interrupt is a BaseException so a tool's `except Exception` can't swallow it.
+# The engine still catches it wherever a raise becomes a result.
+TOOL_RAISES = (Exception, Interrupt)
+# What a hook or model can raise that becomes a FAILED turn (#6255). A
+# foreign CancelledError is re-raised by raise_if_foreign_cancel.
+TURN_FAILURES = (Exception, Interrupt, asyncio.CancelledError)
 
 logger = get_logger(__name__)
 
@@ -1177,15 +1185,15 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
-            return exc.original_message or type(exc).__name__
+            return exc.message or type(exc).__name__
         return str(exc) or type(exc).__name__
     published = public_error(exc)
     if published is not None:
-        return published.original_message or INTERNAL_FINISH_MESSAGE
+        return published.message or INTERNAL_FINISH_MESSAGE
     if isinstance(exc, GenkitError) and (
         exc.cause is None or isinstance(exc.cause, GenkitError) or exc.status != 'INTERNAL'
     ):
-        return exc.original_message or INTERNAL_FINISH_MESSAGE
+        return exc.message or INTERNAL_FINISH_MESSAGE
     return INTERNAL_FINISH_MESSAGE
 
 
@@ -1415,7 +1423,7 @@ async def run_wrap_generate(
             ),
             name=resolved.model.name,
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except TURN_FAILURES as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         # A hook can raise before the model ever built a request. Build it here
         # so the caller still gets back what they asked for; the cost is only
@@ -1503,7 +1511,7 @@ async def generate_turn(
             mw_pipeline=mw_pipeline,
             current_turn=current_turn,
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except TURN_FAILURES as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         return box_from_exc(
             response=call.earned(),
@@ -1785,7 +1793,7 @@ async def run_tools_or_stop(
             mw_pipeline=mw_pipeline,
             tools=resolved.tools,
         )
-    except (Exception, asyncio.CancelledError) as exc:
+    except TURN_FAILURES as exc:
         raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
         return box_from_exc(
             response=response,
@@ -2174,7 +2182,7 @@ async def resolve_tool_requests(
             else:
                 multipart = as_multipart_tool_response(await next_fn(params, ctx), tool_name=trp.tool_request.name)
             return (multipart, None)
-        except Exception as e:
+        except TOOL_RAISES as e:
             # Interrupts (raised by the tool body or by middleware) become a
             # tool-request Part with interrupt metadata.  Any tracing span is the
             # middleware's responsibility (e.g. ToolApproval wraps its raise in
@@ -2239,7 +2247,7 @@ def to_pending_response(request: Part, response: Part) -> Part:
     )
 
 
-def interrupt_from_exc(exc: Exception) -> Interrupt | None:
+def interrupt_from_exc(exc: BaseException) -> Interrupt | None:
     """If ``exc`` is an Interrupt, or was raised from one, return it.
 
     A tool that pauses again on restart is still an interrupt the caller
@@ -2545,7 +2553,7 @@ async def resolve_resumed_tool(
                 restart_trp=restart_trp,
                 mw_pipeline=mw_pipeline,
             )
-        except Exception as e:
+        except TOOL_RAISES as e:
             intr = interrupt_from_exc(e)
             if intr is not None:
                 return (interrupt_request_part(tool_req_root, intr), None)
@@ -2605,7 +2613,9 @@ async def run_restart(
     )
 
     async def next_fn(p: ToolHookParams, ctx: MiddlewareContext) -> MultipartToolResponse:
-        executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
+        # A second Interrupt stays raw through the chain so a middleware
+        # `except Exception` can't swallow it; converted below.
+        executed = await run_restarted_tool(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
         if executed.tool_response is None:
             raise GenkitError(status='INTERNAL', message='Expected a tool response part')
         raw_content = executed.tool_response.content or []
@@ -2625,18 +2635,15 @@ async def run_restart(
             ),
             tool_name=tool_req.name,
         )
-    except Exception as e:
+    except TOOL_RAISES as e:
         intr = interrupt_from_exc(e)
         if intr is not None:
-            # run_tool_after_restart already logged when the tool body interrupted.
-            # wrap_tool can raise Interrupt itself; that's the only interrupt path.
-            if not isinstance(e, GenkitError):
-                logger.debug(
-                    'restarted tool triggered an interrupt',
-                    tool=tool_req.name,
-                )
-            # wrap_tool paused again. generate turns this into the same
-            # INTERRUPTED they already know how to answer.
+            # The tool body or wrap_tool paused again. generate turns this
+            # into the same INTERRUPTED they already know how to answer.
+            logger.debug(
+                'restarted tool triggered an interrupt',
+                tool=tool_req.name,
+            )
             raise restart_interrupt_error(intr) from e
         raise
 
