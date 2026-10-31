@@ -24,7 +24,7 @@ from typing import Protocol
 from pydantic_core import to_jsonable_python
 
 from genkit._ai._agents._client import AgentChunk, AgentResponse
-from genkit._core._error import error_body, error_status
+from genkit._core._error import Interrupt, TaskGroupError, error_body, error_status, interrupt_escape_error
 
 # Compact JSON, the same bytes the FastAPI, Flask and Django adapters send.
 _JSON_SEPARATORS = (',', ':')
@@ -113,7 +113,14 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
             yield _frame('message', _frame_value(chunk))
         result = await handle.response
         yield _frame('result', _frame_value(result))
-    except Exception as e:
+    except (Exception, Interrupt, TaskGroupError) as exc:
+        failure = interrupt_escape_error(exc)
+        if failure is not None:
+            e: Exception = failure
+        elif isinstance(exc, Exception):
+            e = exc
+        else:
+            raise
         if error_status(e) >= 500:
             _logger.exception('served flow stream failed')
         else:

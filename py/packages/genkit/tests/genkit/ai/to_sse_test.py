@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from genkit import FlowContext, Genkit, Message, Part, PublicError
+from genkit import FlowContext, Genkit, Interrupt, Message, Part, PublicError
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk
 from genkit._core._typing import AgentFinishReason, Role, TurnEnd
@@ -155,3 +155,41 @@ async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains() -
 
     assert lines == ['data: {"error":{"message":"agent offline","status":"UNAVAILABLE"}}\n\n']
     assert _unawaited_coroutine_warnings(caught) == []
+
+
+class _RawStreamHandle:
+    """Custom StreamHandle raising an arbitrary BaseException from ``.stream``."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    @property
+    def stream(self) -> AsyncIterator[object]:
+        async def _gen() -> AsyncIterator[object]:
+            if False:
+                yield None
+            raise self._exc
+
+        return _gen()
+
+    @property
+    async def response(self) -> object:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_to_sse_frames_escaping_interrupt_as_internal_error_and_propagates_cancel(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An escaping ``Interrupt`` (a ``BaseException``) frames as 500 Internal Error; ``CancelledError`` propagates."""
+    with caplog.at_level(logging.ERROR, logger='genkit.web._sse'):
+        lines = await _lines(to_sse(_RawStreamHandle(Interrupt({'secret_order': 'A-17'}))))
+
+    assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
+    assert 'A-17' not in lines[0]
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('ERROR', 'served flow stream failed', True),
+    ]
+
+    with pytest.raises(asyncio.CancelledError):
+        await _lines(to_sse(_RawStreamHandle(asyncio.CancelledError())))
