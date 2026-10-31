@@ -24,12 +24,15 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// GetActiveTools retrieves all tools available from the MCP server
+// GetActiveTools retrieves all tools available from the MCP server and, when g
+// is non-nil, registers them in g's action registry so prompts and LookupTool
+// can resolve them by name.
 func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) ([]ai.Tool, error) {
 	if !c.IsEnabled() || c.server == nil {
 		return nil, nil
@@ -42,7 +45,22 @@ func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) 
 	}
 
 	// Create tools from MCP server
-	return c.createTools(mcpTools)
+	tools, err := c.createTools(mcpTools)
+	if err != nil {
+		return nil, err
+	}
+	if g != nil {
+		for i, t := range tools {
+			if existing := genkit.LookupTool(g, t.Name()); existing != nil {
+				tools[i] = existing
+				continue
+			}
+			if reg, ok := t.(api.Registerable); ok {
+				genkit.RegisterAction(g, reg)
+			}
+		}
+	}
+	return tools, nil
 }
 
 // createTools creates Genkit tools from MCP tools
