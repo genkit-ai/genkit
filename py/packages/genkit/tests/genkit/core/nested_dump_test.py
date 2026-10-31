@@ -293,11 +293,54 @@ def _message_with_every_part_kind() -> Message:
 def _request() -> ModelRequest:
     return ModelRequest(
         messages=[_message_with_every_part_kind()],
-        config={'temperature': 0.2},
+        config=ModelConfig(temperature=0.2, max_output_tokens=64),
         tools=[],
         output=OutputConfig(format='json', json_schema={'type': 'object'}),
         docs=[Document.from_text('doc')],
     )
+
+
+class _ProviderConfig(ModelConfig):
+    thinking_level: str | None = None
+    safety_threshold: str | None = None
+
+
+def test_typed_provider_config_on_response_request_nested_in_user_model_dumps_wire_shape() -> None:
+    """A provider GenkitConfig on resp.request.config dumps camelCase without nulls inside a user model."""
+    cfg = _ProviderConfig(temperature=0.5, thinking_level='HIGH')
+    resp = ModelResponse(
+        message=_tool_request_message(),
+        finish_reason=FinishReason.STOP,
+        request=ModelRequest(messages=[_tool_request_message()], config=cfg),
+    )
+
+    nested = Held(value=resp).model_dump()['value']
+    nested_json = json.loads(Held(value=resp).model_dump_json())['value']
+
+    assert nested == resp.model_dump()
+    assert nested_json == json.loads(resp.model_dump_json())
+    assert nested['request']['config'] == {'temperature': 0.5, 'thinkingLevel': 'HIGH'}
+    assert Held(value=resp).model_dump(by_alias=False)['value'] == resp.model_dump(by_alias=False)
+    assert Held(value=resp).model_dump(by_alias=False)['value']['request']['config'] == {
+        'temperature': 0.5,
+        'thinking_level': 'HIGH',
+    }
+    # Standalone GenkitConfig still returns SDK snake_case field names for plugins.
+    assert cfg.model_dump(exclude_none=True) == {'temperature': 0.5, 'thinking_level': 'HIGH'}
+
+
+def test_explicit_exclude_none_false_is_ignored_on_genkit_types() -> None:
+    """Genkit wire types always omit None fields even when exclude_none=False is passed."""
+    msg = Message(role='user', content=[Part.from_text('hi')])
+    req = ModelRequest(messages=[msg], config=ModelConfig(temperature=0.5))
+
+    assert msg.model_dump(exclude_none=False) == {'role': 'user', 'content': [{'text': 'hi'}]}
+    assert req.model_dump(exclude_none=False) == {
+        'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}],
+        'config': {'temperature': 0.5},
+        'output': {},
+    }
+    assert Held(value=req).model_dump(exclude_none=False)['value'] == req.model_dump()
 
 
 WIRE_SAMPLES: dict[str, tuple[str, Any]] = {
@@ -317,7 +360,12 @@ WIRE_SAMPLES: dict[str, tuple[str, Any]] = {
     ),
     'generate_action_options': (
         'GenerateActionOptions',
-        lambda: GenerateActionOptions(model='m', messages=[_message_with_every_part_kind()], max_turns=2),
+        lambda: GenerateActionOptions(
+            model='m',
+            messages=[_message_with_every_part_kind()],
+            config=ModelConfig(temperature=0.2, max_output_tokens=64),
+            max_turns=2,
+        ),
     ),
     'session_snapshot': (
         'SessionSnapshot',

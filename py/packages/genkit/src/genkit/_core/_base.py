@@ -19,10 +19,16 @@
 from __future__ import annotations
 
 import base64
-from typing import Any, ClassVar
+from contextvars import ContextVar
+from typing import Any, ClassVar, cast
 
-from pydantic import BaseModel, ConfigDict, SerializerFunctionWrapHandler, model_serializer
+from pydantic import BaseModel, ConfigDict, SerializationInfo, SerializerFunctionWrapHandler, model_serializer
 from pydantic.alias_generators import to_camel
+
+# True while GenkitModel._serialize_wire is serializing a wire model, so a
+# nested GenkitConfig uses the parent's wire rules (camelCase, no nulls) even
+# when the outer dump started from a plain BaseModel.
+_IN_GENKIT_MODEL_SERIALIZE: ContextVar[bool] = ContextVar('_in_genkit_model_serialize', default=False)
 
 
 def _default_serializer(obj: object) -> object:
@@ -47,7 +53,8 @@ class GenkitModel(BaseModel):
     All Genkit types inherit from this so they serialize to the wire shape
     wherever they sit, including inside a user's own pydantic model:
     - camelCase keys (an explicit ``by_alias=False`` still gets field names)
-    - no ``None`` fields (config models are ``GenkitConfig`` and keep them)
+    - no ``None`` fields (an explicit ``exclude_none=False`` is ignored; config
+      models are ``GenkitConfig`` and keep them on their own)
     - ``bytes`` as base64 when a Genkit type is dumped to JSON
     """
 
@@ -65,7 +72,11 @@ class GenkitModel(BaseModel):
     # shows for these types.
     @model_serializer(mode='wrap')
     def _serialize_wire(self, handler: SerializerFunctionWrapHandler):  # noqa: ANN202
-        dumped = handler(self)
+        token = _IN_GENKIT_MODEL_SERIALIZE.set(True)
+        try:
+            dumped = handler(self)
+        finally:
+            _IN_GENKIT_MODEL_SERIALIZE.reset(token)
         if not isinstance(dumped, dict):
             return dumped
         return self._drop_none_fields(dumped)
@@ -121,3 +132,28 @@ class GenkitConfig(BaseModel):
         validate_by_name=True,
         validate_by_alias=True,
     )
+
+    # No return annotation for the same schema reason as GenkitModel._serialize_wire.
+    @model_serializer(mode='wrap')
+    def _serialize_in_genkit_model(  # noqa: ANN202
+        self,
+        handler: SerializerFunctionWrapHandler,
+        info: SerializationInfo,
+    ):
+        if not _IN_GENKIT_MODEL_SERIALIZE.get():
+            return handler(self)
+        if info.by_alias is None or not info.exclude_none:
+            return self.model_dump(
+                mode=info.mode,
+                include=cast(Any, info.include),
+                exclude=cast(Any, info.exclude),
+                context=info.context,
+                by_alias=True if info.by_alias is None else info.by_alias,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                exclude_none=True,
+                exclude_computed_fields=info.exclude_computed_fields,
+                round_trip=info.round_trip,
+                serialize_as_any=info.serialize_as_any,
+            )
+        return handler(self)
