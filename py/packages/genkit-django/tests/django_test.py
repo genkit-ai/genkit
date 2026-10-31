@@ -25,14 +25,16 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import PermissionDenied
+from django.http import HttpRequest
 from django.test import AsyncClient
 from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit, GenkitError, PublicError, RequestData
+from genkit import FlowContext, Genkit, GenkitError, PublicError
 from genkit.plugin_api import provider_error
+from genkit.web import RequestData
 
 
 class Receipt(BaseModel):
@@ -68,7 +70,7 @@ def _build_views() -> dict[str, Any]:
 
     @genkit_django_handler(ai, context_provider=my_context_provider)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> dict[str, str]:
+    async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
         ctx.send_chunk(1)
         ctx.send_chunk({'username': ctx.context.get('username')})
         ctx.send_chunk({'foo': 'bar'})
@@ -98,7 +100,7 @@ def _build_views() -> dict[str, Any]:
 
     @genkit_django_handler(ai, context_provider=echo_context)
     @ai.flow()
-    async def echo_request(_: str, ctx: ActionRunContext) -> dict[str, Any]:
+    async def echo_request(_: str, ctx: FlowContext) -> dict[str, Any]:
         return {
             'method': ctx.context['method'],
             'authorization': ctx.context['authorization'],
@@ -121,10 +123,26 @@ def _build_views() -> dict[str, Any]:
     async def forbidden(_: str) -> str:
         return 'ok'
 
+    async def from_django_request(request_data: RequestData) -> dict[str, Any]:
+        # The raw HttpRequest carries what the shared fields don't, e.g. cookies.
+        django_request = request_data.request
+        assert isinstance(django_request, HttpRequest)
+        return {'table': django_request.COOKIES.get('table')}
+
+    @genkit_django_handler(ai, context_provider=from_django_request)
+    @ai.flow()
+    async def table_from_cookie(_: str, ctx: FlowContext) -> str:
+        return f'table {ctx.context["table"]}'
+
     @genkit_django_handler(ai)
     @ai.flow()
     async def greet(name: str = 'world') -> str:
         return f'hello {name}'
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def void_flow() -> dict[str, str]:
+        return {'ok': 'true'}
 
     @genkit_django_handler(ai)
     @ai.flow()
@@ -138,6 +156,7 @@ def _build_views() -> dict[str, Any]:
 
     return {
         'greet': greet,
+        'void_flow': void_flow,
         'close_tab': close_tab,
         'say_hi': say_hi,
         'raise_error': raise_error,
@@ -147,6 +166,7 @@ def _build_views() -> dict[str, Any]:
         'gated': gated,
         'forbidden': forbidden,
         'raise_provider': raise_provider,
+        'table_from_cookie': table_from_cookie,
     }
 
 
@@ -166,9 +186,11 @@ def urlconf(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         path('echo_request', views['echo_request']),
         path('gated', views['gated']),
         path('greet', views['greet']),
+        path('void_flow', views['void_flow']),
         path('close_tab', views['close_tab']),
         path('forbidden', views['forbidden']),
         path('provider_flow', views['raise_provider']),
+        path('table_from_cookie', views['table_from_cookie']),
     ]
     monkeypatch.setitem(sys.modules, 'genkit_django_tests_urls', module)
 
@@ -219,19 +241,41 @@ async def test_streaming(urlconf: None) -> None:  # noqa: ARG001
 
 
 @pytest.mark.asyncio
-async def test_400_missing_data_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
-    """400 (missing data) must return valid JSON."""
+async def test_empty_body_runs_no_input_flow_on_every_adapter(urlconf: None) -> None:  # noqa: ARG001
+    """POST {} to a served flow that takes no input returns its result."""
+    client = AsyncClient()
+    response = await client.post('/void_flow', data=json.dumps({}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': {'ok': 'true'}}
+
+
+@pytest.mark.asyncio
+async def test_input_key_body_is_400_on_every_adapter(urlconf: None) -> None:  # noqa: ARG001
+    """POST {"input": 1} to a served flow is a 400 telling the caller to wrap in data."""
+    client = AsyncClient()
+    response = await client.post('/void_flow', data=json.dumps({'input': 1}), content_type='application/json')
+
+    assert response.status_code == 400
+    assert (
+        response.content
+        == b'{"message":"Flow request must be wrapped in {\\"data\\": ...}","status":"INVALID_ARGUMENT"}'
+    )
+
+
+@pytest.mark.asyncio
+async def test_streamed_flow_failure_ends_with_same_error_frame(urlconf: None) -> None:  # noqa: ARG001
+    """A streamed flow raising PublicError('NOT_FOUND', 'no order 99') ends with that exact error frame."""
     client = AsyncClient()
     response = await client.post(
-        '/chat',
-        data=json.dumps({}),  # no 'data' key
+        '/public_flow',
+        data=json.dumps({'data': '99'}),
         content_type='application/json',
+        headers={'accept': 'text/event-stream'},
     )
-    assert response.status_code == 400
-    assert json.loads(response.content) == {
-        'message': 'Action request must be wrapped in {"data": ...} object',
-        'status': 'INVALID_ARGUMENT',
-    }
+
+    chunks = [chunk async for chunk in response.streaming_content]
+    assert chunks[-1] == b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n'
 
 
 @pytest.mark.asyncio
@@ -306,7 +350,7 @@ async def test_django_flow_raising_public_error_returns_its_status_and_message(
         content_type='application/json',
     )
     assert response.status_code == 404
-    assert json.loads(response.content) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+    assert response.content == b'{"message":"no order 99","status":"NOT_FOUND"}'
 
 
 @pytest.mark.asyncio
@@ -448,3 +492,14 @@ async def test_django_stream_provider_401_sends_sse_internal_error(urlconf: None
     error = _sse_error_event(chunks)
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert b'API key not valid' not in b''.join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_context_provider_reads_raw_django_request(urlconf: None) -> None:  # noqa: ARG001
+    """RequestData.request is the Django HttpRequest, for cookies, sessions and request.user."""
+    client = AsyncClient()
+    client.cookies['table'] = 'T7'
+    response = await client.post('/table_from_cookie', data=json.dumps({'data': 'x'}), content_type='application/json')
+
+    assert response.status_code == 200
+    assert json.loads(response.content) == {'result': 'table T7'}

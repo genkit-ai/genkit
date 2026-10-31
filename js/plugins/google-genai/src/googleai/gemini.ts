@@ -57,6 +57,7 @@ import {
   toInteractionSteps,
   toInteractionTool,
   toInteractionToolChoice,
+  withBasicUsageStats,
 } from '../common/interaction-converters.js';
 import {
   InteractionTool,
@@ -332,7 +333,10 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   store: z
     .boolean()
     .describe(
-      'Whether to store the interaction for later retrieval. Defaults to false.'
+      'Interactions API models: whether to store the interaction for later ' +
+        'retrieval (defaults to false). generateContent models: whether ' +
+        "the server logs the request for the API key's project; sent only " +
+        "when set (otherwise the project's logging setting applies)."
     )
     .optional(),
   thinkingConfig: z
@@ -1086,6 +1090,8 @@ export function defineModel(
         previousInteractionId: previousInteractionIdFromConfig,
         store: storeFromConfig,
         responseModalities: responseModalitiesFromConfig,
+        // Not in the schema (passthrough); see jsonMode below.
+        responseMimeType: responseMimeTypeFromConfig,
         // Interactions-only: sent as `response_format` below.
         audioFormat: audioFormatFromConfig,
         videoFormat: videoFormatFromConfig,
@@ -1269,9 +1275,16 @@ export function defineModel(
         };
       }
 
+      // A config `responseMimeType` (the generateContent field) of
+      // 'application/json' asks for JSON output, like `output.format: 'json'`.
+      const configResponseMimeType =
+        typeof responseMimeTypeFromConfig === 'string'
+          ? responseMimeTypeFromConfig
+          : undefined;
       const jsonMode =
         request.output?.format === 'json' ||
-        request.output?.contentType === 'application/json';
+        request.output?.contentType === 'application/json' ||
+        configResponseMimeType === 'application/json';
 
       const sanitizedConfigOptions = {
         ...removeClientOptionOverrides(restOfConfigOptions),
@@ -1293,6 +1306,13 @@ export function defineModel(
         if (toolChoice) {
           interactionGenerationConfig.tool_choice = toolChoice;
         }
+        // There's no `response_mime_type` in the Interactions
+        // `generation_config` (400 "Unknown parameter"). JSON is asked for
+        // with a `response_format` text entry; other values have no
+        // equivalent.
+        if (configResponseMimeType && !jsonMode) {
+          warnDroppedConfigField(modelVersion, 'responseMimeType');
+        }
       }
 
       const generationConfig: GenerationConfig = {
@@ -1301,7 +1321,9 @@ export function defineModel(
           ? { responseModalities: responseModalitiesFromConfig }
           : {}),
         candidateCount: request.candidates || undefined,
-        responseMimeType: jsonMode ? 'application/json' : undefined,
+        responseMimeType: jsonMode
+          ? 'application/json'
+          : configResponseMimeType,
       };
 
       if (isTTSModelName(modelVersion)) {
@@ -1328,7 +1350,9 @@ export function defineModel(
       );
 
       if (useInteractions) {
-        const store = storeFromConfig === true || pluginOptions?.store === true;
+        // The request's `store` wins over the plugin option (so a request
+        // can turn off a plugin-wide `store: true`); stateless by default.
+        const store = storeFromConfig ?? pluginOptions?.store ?? false;
         const { messages: newMessages, previousInteractionId } =
           selectInteractionInput(
             messages,
@@ -1422,11 +1446,14 @@ export function defineModel(
           videoFormat: videoFormatFromConfig,
           json: jsonMode
             ? {
-                schema: request.output?.constrained
-                  ? pluginOptions?.legacyResponseSchema
-                    ? cleanSchema(request.output.schema)
-                    : request.output.schema
-                  : undefined,
+                // Without a schema the server answers in prose (seen live);
+                // an empty schema gives JSON of any shape.
+                schema:
+                  (request.output?.constrained
+                    ? pluginOptions?.legacyResponseSchema
+                      ? cleanSchema(request.output.schema)
+                      : request.output.schema
+                    : undefined) ?? {},
               }
             : undefined,
         });
@@ -1446,8 +1473,10 @@ export function defineModel(
             req,
             clientOpt
           );
-          const out = fromInteractionSync(response);
-          return out;
+          return withBasicUsageStats(
+            fromInteractionSync(response),
+            request.messages
+          );
         } else {
           const result = await createInteractionStream(
             requestApiKey,
@@ -1474,17 +1503,22 @@ export function defineModel(
               out.message.content.map(removeId3FromAudio)
             );
           }
-          return out;
+          return withBasicUsageStats(out, request.messages);
         }
       }
 
-      // `store: false` is already how this model behaves, so only warn when
-      // something would actually be ignored.
-      if (storeFromConfig === true || previousInteractionIdFromConfig) {
+      // There's no stored conversation to continue on generateContent.
+      if (previousInteractionIdFromConfig) {
         logger.warn(
-          'store and previousInteractionId are not supported for this model and will be ignored.'
+          'previousInteractionId is not supported for this model and will be ignored.'
         );
       }
+
+      // On generateContent, `store` only controls whether the server logs
+      // this request for the API key's project (viewable in AI Studio's Logs
+      // and Datasets); there's nothing to continue. Sent only when set;
+      // otherwise the project's logging setting applies.
+      const generateContentStore = storeFromConfig ?? pluginOptions?.store;
 
       let generateContentRequest: GenerateContentRequest = {
         systemInstruction,
@@ -1496,6 +1530,7 @@ export function defineModel(
         ) as SafetySetting[],
         contents: messages.map((message) => toGeminiMessage(message, ref)),
         serviceTier,
+        store: generateContentStore,
       };
 
       let response: GenerateContentResponse;
@@ -1551,6 +1586,14 @@ export function defineModel(
           thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
           totalTokens: response.usageMetadata?.totalTokenCount,
           cachedContentTokens: response.usageMetadata?.cachedContentTokenCount,
+          // Same key as on the Interactions API.
+          ...(response.usageMetadata?.toolUsePromptTokenCount
+            ? {
+                custom: {
+                  toolUseTokens: response.usageMetadata.toolUsePromptTokenCount,
+                },
+              }
+            : {}),
         },
       };
     }

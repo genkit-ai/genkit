@@ -35,7 +35,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -54,7 +53,7 @@ from google.cloud.firestore import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit import GenkitError, GenkitRuntimeError, RuntimeErrorReason, get_logger
 from genkit.exp.agent import (
     TERMINAL_STATUSES,
     AgentFinishReason,
@@ -79,7 +78,7 @@ from genkit.plugin_api import loop_local_client
 
 DEFAULT_COLLECTION = 'genkit-sessions'
 DEFAULT_PREFIX = 'global'
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 # Favor common chat workloads: enough diffs between checkpoints to keep write
 # amplification down, small enough that reconstruct stays cheap.
 DEFAULT_CHECKPOINT_INTERVAL = 25

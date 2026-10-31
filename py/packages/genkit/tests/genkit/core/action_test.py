@@ -5,13 +5,16 @@
 
 """Tests for the action module."""
 
+import asyncio
+import inspect
 import json
 from typing import Any, cast
 
+import anyio
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from genkit import Genkit, Message, Part, PublicError
+from genkit import FlowContext, Genkit, Message, Part, PublicError
 from genkit._core._action import (
     Action,
     ActionKind,
@@ -24,7 +27,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     parse_plugin_name_from_action_name,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
 from genkit._core._model import OutputConfig
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import ModelRequest
@@ -320,7 +323,7 @@ async def test_invalid_input_error_names_the_action_kind(kind: ActionKind, want:
     with pytest.raises(GenkitError) as e:
         await action.run(input='abc')
 
-    assert e.value.original_message == want
+    assert e.value.message == want
 
 
 @pytest.mark.asyncio
@@ -523,8 +526,8 @@ async def test_bidi_send_after_close_raises_connection_closed() -> None:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 0}
 
 
@@ -539,8 +542,8 @@ async def test_bidi_send_after_a_turn_then_close_raises_connection_closed() -> N
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 1}
 
 
@@ -555,8 +558,8 @@ async def test_bidi_send_after_close_twice_raises_connection_closed() -> None:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
     assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 0}
 
 
@@ -626,7 +629,7 @@ async def test_await_flow_that_raises_public_error_keeps_status_and_message() ->
         await order('99')
 
     assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.original_message == 'no order 99'
+    assert exc.value.message == 'no order 99'
 
 
 @pytest.mark.asyncio
@@ -642,7 +645,7 @@ async def test_await_flow_that_raises_genkit_error_keeps_status() -> None:
         await ship('99')
 
     assert exc.value.status == 'FAILED_PRECONDITION'
-    assert exc.value.original_message == 'order is not paid'
+    assert exc.value.message == 'order is not paid'
     assert exc.value.cause is None
 
 
@@ -676,6 +679,99 @@ async def test_await_tool_that_raises_value_error_raises_value_error() -> None:
         await balance('acme')
 
     assert type(exc.value) is ValueError
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_interrupt_raises_internal_genkit_error() -> None:
+    """A flow has no tool loop to pause, so its Interrupt becomes GenkitError INTERNAL.
+
+    Interrupt is a BaseException; letting it escape the flow would skip every
+    `except Exception` between here and the web adapter.
+    """
+    ai = Genkit()
+    interrupt = Interrupt({'reason': 'needs approval', 'order_id': 'A-17'})
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        raise interrupt
+
+    with pytest.raises(GenkitError) as exc:
+        await refund('A-17')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.message == 'Interrupt raised outside a tool'
+    assert (
+        str(exc.value) == "INTERNAL: Interrupt raised outside a tool: {'reason': 'needs approval', 'order_id': 'A-17'}"
+    )
+    assert exc.value.cause is interrupt
+    assert exc.value.__cause__ is interrupt
+
+
+@pytest.mark.asyncio
+async def test_await_flow_with_task_group_interrupt_raises_internal_genkit_error() -> None:
+    """An Interrupt from a task group child fails the flow with GenkitError, not a BaseExceptionGroup.
+
+    The group isn't an Exception, so a served flow would otherwise skip the
+    web adapter's handler and return a bare 500. anyio raises the same
+    builtin group as asyncio.TaskGroup on 3.11+, and the backport on 3.10.
+    """
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, order_id)
+        return 'refunded'
+
+    with pytest.raises(GenkitError) as exc:
+        await refund('A-17')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.message == 'Interrupt raised inside a task group'
+
+
+@pytest.mark.asyncio
+async def test_await_flow_with_task_group_value_error_raises_exception_group() -> None:
+    """A task group with only ordinary failures still propagates as the ExceptionGroup it was."""
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise ValueError(f'unknown order {order_id}')
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, order_id)
+        return 'refunded'
+
+    with pytest.raises(Exception) as exc:  # noqa: PT011 - asserting the exact type below
+        await refund('A-17')
+
+    assert type(exc.value).__name__ == 'ExceptionGroup'
+
+
+@pytest.mark.asyncio
+async def test_await_tool_that_raises_interrupt_raises_interrupt_past_except_exception() -> None:
+    """Calling a tool directly lets its Interrupt through raw, past `except Exception`."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    caught_by_catch_all = False
+    with pytest.raises(Interrupt) as exc:
+        try:
+            await refund_order('A-17')
+        except Exception:  # noqa: BLE001 - the catch-all under test
+            caught_by_catch_all = True
+
+    assert not caught_by_catch_all
+    assert exc.value.metadata == {'reason': 'needs approval', 'order_id': 'A-17'}
 
 
 @pytest.mark.asyncio
@@ -772,3 +868,69 @@ async def test_flow_bad_return_with_tracing_on_has_no_trace_id(hex_ids: None) ->
     assert exc.value.reason is RuntimeErrorReason.INVALID_OUTPUT
     assert exc.value.trace_id is None
     assert 'trace_id' not in (exc.value.details or {})
+
+
+def test_action_run_stream_and_stream_bidi_options_are_keyword_only() -> None:
+    """on_chunk, context, and telemetry_labels are keyword-only on run(), stream(), and stream_bidi()."""
+    run_params = inspect.signature(Action.run).parameters
+    for name in ('on_chunk', 'context', 'telemetry_labels'):
+        assert run_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in run_params
+
+    stream_params = inspect.signature(Action.stream).parameters
+    for name in ('context', 'telemetry_labels'):
+        assert stream_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in stream_params
+
+    bidi_params = inspect.signature(BidiAction.stream_bidi).parameters
+    for name in ('context', 'telemetry_labels'):
+        assert bidi_params[name].kind is inspect.Parameter.KEYWORD_ONLY
+    assert 'abort_signal' not in bidi_params
+
+
+@pytest.mark.asyncio
+async def test_action_run_and_stream_reject_abort_signal_kwarg() -> None:
+    """Passing abort_signal= to public run() or stream() raises TypeError."""
+
+    async def echo(x: str) -> str:
+        return x
+
+    action = Action(name='echo', kind=ActionKind.CUSTOM, fn=echo)
+    signal = asyncio.Event()
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        await action.run('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+    with pytest.raises(TypeError, match='abort_signal'):
+        action.stream('hi', abort_signal=signal)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
+
+
+@pytest.mark.asyncio
+async def test_action_stream_async_with_calls_aclose() -> None:
+    """`async with action.stream(...) as stream:` calls `await stream.aclose()` on exit."""
+    closed: list[bool] = []
+
+    async def make_tea(leaf: str, ctx: FlowContext[str]) -> str:
+        ctx.send_chunk(f'steeping {leaf}')
+        ctx.send_chunk(f'pouring {leaf}')
+        return f'{leaf} served'
+
+    action = Action(name='make_tea', kind=ActionKind.FLOW, fn=make_tea)
+    stream_resp = action.stream('oolong')
+
+    orig_aclose = stream_resp.aclose
+
+    async def tracked_aclose() -> None:
+        closed.append(True)
+        await orig_aclose()
+
+    stream_resp.aclose = tracked_aclose  # type: ignore[method-assign]
+
+    seen: list[str] = []
+    async with stream_resp as s:
+        async for chunk in s:
+            seen.append(chunk)
+            break
+
+    assert seen == ['steeping oolong']
+    assert closed == [True]

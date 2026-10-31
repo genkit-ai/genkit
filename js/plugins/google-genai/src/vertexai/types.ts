@@ -103,9 +103,11 @@ export interface VertexPluginOptions {
   legacyResponseSchema?: boolean;
   /**
    * Whether to store conversations on the server when using the Interactions API.
-   * Defaults to false (stateless) for models. Deep Research uses the
+   * Defaults to false (stateless) for models. A request's `config.store`
+   * takes precedence. Deep Research uses the
    * server's default unless `store` is set here or in the request config;
-   * a `store: false` is sent as is, and the agent rejects it.
+   * a `store: false` is sent as is, and the agent rejects it. On
+   * generateContent models, `store: true` is ignored with a warning.
    */
   store?: boolean;
 }

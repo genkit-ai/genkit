@@ -28,7 +28,6 @@ import json
 from typing import Any, Literal, Protocol, cast
 
 import httpx
-import structlog
 from anthropic import (
     APIConnectionError,
     APIError,
@@ -39,8 +38,8 @@ from anthropic import (
 )
 from anthropic.types import Message as AnthropicMessage
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import Constrained, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
+from genkit.model import ConstrainedSupport, GenerationUsage, ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import StatusName, provider_error
 from genkit_anthropic._config import AnthropicConfig
 from genkit_anthropic._model_info import get_model_info
@@ -54,7 +53,7 @@ from genkit_anthropic._utils import (
     to_anthropic_media,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_MAX_OUTPUT_TOKENS = 4096
 BETA_APIS: tuple[str, ...] = (
@@ -63,7 +62,6 @@ BETA_APIS: tuple[str, ...] = (
     'structured-outputs-2025-11-13',
     'task-budgets-2026-03-13',
 )
-_THINKING_MODE_KEYS = frozenset({'adaptive', 'budget_tokens', 'enabled', 'type'})
 
 
 class _ModelDumpable(Protocol):
@@ -193,49 +191,67 @@ def _normalize_config(config: object | None) -> AnthropicConfig:
     return AnthropicConfig.model_validate({k: v for k, v in vars(config).items() if v is not None})
 
 
-def _to_anthropic_thinking_config(thinking: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Translate the public thinking config to the Anthropic SDK shape."""
-    if not thinking:
+def _to_anthropic_thinking(config: AnthropicConfig) -> dict[str, Any] | None:
+    """Build Anthropic's thinking object from the flat fields; None sends nothing.
+
+    AnthropicConfig.check_merged already guarantees 'enabled' has a budget.
+    Fields the mode doesn't use are left out rather than rejected, because
+    they're usually inherited from another config layer (rule 2 in
+    AnthropicConfig's docstring): 'disabled' sends only the type, and
+    'adaptive' sends no budget.
+    """
+    mode = config.thinking_mode()
+    if mode is None:
         return None
+    if mode == 'disabled':
+        return {'type': 'disabled'}
+    result: dict[str, Any] = {}
+    if config.thinking_display is not None:
+        result['display'] = config.thinking_display
+    result['type'] = mode
+    if mode == 'enabled':
+        result['budget_tokens'] = config.thinking_budget
+    return result
 
-    thinking_type = thinking.get('type')
-    budget_tokens = thinking.get('budget_tokens')
-    adaptive = thinking.get('adaptive') is True or thinking_type == 'adaptive'
-    enabled = thinking.get('enabled') is True or thinking_type == 'enabled'
-    disabled = thinking.get('enabled') is False or thinking_type == 'disabled'
 
-    # Keys that are not mode toggles (display) pass through unchanged.
-    result: dict[str, Any] = {key: value for key, value in thinking.items() if key not in _THINKING_MODE_KEYS}
-
-    if adaptive:
-        result['type'] = 'adaptive'
-        return result
-
-    if enabled or (budget_tokens is not None and not disabled):
-        if budget_tokens is None:
-            raise ValueError('budgetTokens is required when thinking is enabled')
-        if not float(budget_tokens).is_integer():
-            raise ValueError('budgetTokens must be an integer when thinking is enabled')
-        result['type'] = 'enabled'
-        result['budget_tokens'] = int(budget_tokens)
-        return result
-
-    if disabled:
-        result['type'] = 'disabled'
-        return result
-
-    # No mode set: there's no SDK type to send.
-    return None
+def _to_anthropic_output_config(config: AnthropicConfig) -> dict[str, Any] | None:
+    """Build Anthropic's output_config from effort and task_budget; None sends nothing."""
+    result: dict[str, Any] = {}
+    if config.effort is not None:
+        result['effort'] = config.effort
+    if config.task_budget is not None:
+        result['task_budget'] = {'type': 'tokens', 'total': config.task_budget}
+    return result or None
 
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
 # schema can't see inside the passthrough, and overwriting them silently would
 # replace the model the action resolved (pin one with `version`), the
 # conversation, the streaming mode, or the structured-output format Genkit
-# merges into output_config (the declared field still works). `betas` is
+# merges into output_config (effort= and task_budget= still work). `betas` is
 # the header Genkit sends from the declared setting, not a body field.
-_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'tool_choice', 'stream', 'output_config', 'betas')
+# `tool_choice` is left out on purpose: extra={'tool_choice': {...}} is how a
+# caller sends a shape Genkit's option lacks, such as {'type': 'tool', ...}.
+_MANAGED_BODY_FIELDS = ('model', 'messages', 'system', 'tools', 'stream', 'output_config', 'betas')
 _CLIENT_SETTING_FIELDS = ('timeout', 'extra_headers', 'extra_query', 'extra_body')
+
+# Genkit's tool_choice values and the Anthropic tool_choice type each maps to.
+_TOOL_CHOICE_TYPES = {'auto': 'auto', 'required': 'any', 'none': 'none'}
+
+
+def _to_anthropic_tool_choice(tool_choice: str | None, disable_parallel_tool_use: bool) -> dict[str, Any] | None:
+    """Translate Genkit's tool_choice into Anthropic's object; None sends nothing.
+
+    Anthropic carries disable_parallel_tool_use only inside tool_choice, so
+    the flag alone sends {'type': 'auto', ...}, the API's default with tools.
+    The 'none' variant has no such field.
+    """
+    if tool_choice is None:
+        return {'type': 'auto', 'disable_parallel_tool_use': True} if disable_parallel_tool_use else None
+    choice: dict[str, Any] = {'type': _TOOL_CHOICE_TYPES[tool_choice]}
+    if disable_parallel_tool_use and tool_choice != 'none':
+        choice['disable_parallel_tool_use'] = True
+    return choice
 
 
 def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) -> None:
@@ -270,7 +286,11 @@ def _merge_config_extra(params: dict[str, Any], extra: dict[str, Any] | None) ->
                     'and cannot be set from config'
                 )
             raise GenkitError(status='INVALID_ARGUMENT', message=message)
-    params['extra_body'] = dict(extra)
+    extra_body = dict(extra)
+    if 'tools' not in params:
+        extra_body.pop('tool_choice', None)
+    if extra_body:
+        params['extra_body'] = extra_body
 
 
 def pinned_credential_header(client: AsyncAnthropic) -> str | None:
@@ -322,7 +342,7 @@ class AnthropicModel:
         self.client = client
         self._default_api_version = default_api_version
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext | None = None) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
         """Generate response from Anthropic.
 
         Args:
@@ -339,6 +359,9 @@ class AnthropicModel:
         # ValidationError is a ValueError.
         try:
             config = _normalize_config(request.config)
+            # The merged config: every layer and middleware edit is in. Rules
+            # that span fields are judged here and only here.
+            config.check_merged()
             use_beta = self._uses_beta_api(config)
             params = self._build_params(request, config=config, use_beta=use_beta)
         except ValueError as e:
@@ -377,7 +400,7 @@ class AnthropicModel:
         content = maybe_strip_fences(request, content)
 
         response_message = Message(role=Role.MODEL, content=content)
-        basic_usage = get_basic_usage_stats(input_=request.messages, response=response_message)
+        basic_usage = GenerationUsage.from_messages(request.messages, response_message)
 
         finish_reason_map: dict[str, FinishReason] = {
             'compaction': FinishReason.OTHER,
@@ -401,7 +424,7 @@ class AnthropicModel:
             finish_reason=finish_reason,
         )
 
-    def _build_usage(self, response: AnthropicMessage, basic_usage: ModelUsage) -> ModelUsage:
+    def _build_usage(self, response: AnthropicMessage, basic_usage: GenerationUsage) -> GenerationUsage:
         """Build usage stats including cache read/write token counts.
 
         Delegates to :func:`utils.build_cache_usage` for the actual
@@ -412,7 +435,7 @@ class AnthropicModel:
             basic_usage: Basic character/image usage from message content.
 
         Returns:
-            ModelUsage with token and character counts.
+            GenerationUsage with token and character counts.
         """
         return build_cache_usage(
             input_tokens=response.usage.input_tokens,
@@ -473,28 +496,21 @@ class AnthropicModel:
         config = config or _normalize_config(request.config)
         if use_beta is None:
             use_beta = self._uses_beta_api(config)
-        params = config.model_dump(exclude_none=True, by_alias=False)
-        extra = params.pop('extra', None)
+        # Only the fields create() takes as is; a new config field stays out
+        # of the request until it's listed here or built below.
+        params = config.model_dump(include=set(AnthropicConfig.CREATE_KWARGS), exclude_none=True)
+        extra = config.extra
+        max_tokens = config.max_output_tokens if config.max_output_tokens is not None else DEFAULT_MAX_OUTPUT_TOKENS
+        betas = config.betas
+        disable_parallel_tool_use = bool(config.disable_parallel_tool_use)
 
-        # Handle mapped parameters
-        max_tokens = params.pop('max_output_tokens', DEFAULT_MAX_OUTPUT_TOKENS)
-
-        thinking = params.pop('thinking', None)
-        metadata = params.pop('metadata', None)
-        version = params.pop('version', None)
-        betas = params.pop('betas', None)
-
-        params['model'] = version or self.model_name
+        params['model'] = config.version or self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
         params['max_tokens'] = int(max_tokens)
         # ModelConfig types top_k as float, so 40 dumps as 40.0; Claude's top_k is an int.
         top_k = params.get('top_k')
         if isinstance(top_k, float) and top_k.is_integer():
             params['top_k'] = int(top_k)
-
-        # Not create() kwargs; see AnthropicConfig.SDK_UNSUPPORTED_KEYS.
-        for key in AnthropicConfig.SDK_UNSUPPORTED_KEYS:
-            params.pop(key, None)
 
         if use_beta:
             # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.
@@ -505,13 +521,16 @@ class AnthropicModel:
             if beta_headers:
                 params['betas'] = beta_headers
 
-        if isinstance(thinking, dict):
-            anthropic_thinking = _to_anthropic_thinking_config(thinking)
-            if anthropic_thinking is not None:
-                params['thinking'] = anthropic_thinking
+        thinking = _to_anthropic_thinking(config)
+        if thinking is not None:
+            params['thinking'] = thinking
 
-        if metadata is not None:
-            params['metadata'] = metadata
+        output_config = _to_anthropic_output_config(config)
+        if output_config is not None:
+            params['output_config'] = output_config
+
+        if config.user_id is not None:
+            params['metadata'] = {'user_id': config.user_id}
 
         system = self._extract_system(request.messages)
 
@@ -545,6 +564,21 @@ class AnthropicModel:
             params['system'] = system
 
         if request.tools:
+            thinking_mode = config.thinking_mode()
+            if (
+                request.tool_choice == 'required'
+                and thinking_mode in ('enabled', 'adaptive')
+                and 'thinking' not in (extra or {})
+                and 'tool_choice' not in (extra or {})
+            ):
+                # Anthropic: tool use with thinking supports tool_choice auto or none only.
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f"anthropic: thinking='{thinking_mode}' only supports tool_choice='auto' or 'none', "
+                        "not 'required'"
+                    ),
+                )
             params['tools'] = [
                 {
                     'name': t.name,
@@ -553,18 +587,9 @@ class AnthropicModel:
                 }
                 for t in request.tools
             ]
-
-            if request.tool_choice:
-                if request.tool_choice == 'required':
-                    params['tool_choice'] = {'type': 'any'}
-                elif request.tool_choice == 'auto':
-                    params['tool_choice'] = {'type': 'auto'}
-                elif isinstance(request.tool_choice, dict):
-                    params['tool_choice'] = request.tool_choice
-
-        # The API rejects tool_choice when the request carries no tools.
-        if not params.get('tools'):
-            params.pop('tool_choice', None)
+            tool_choice = _to_anthropic_tool_choice(request.tool_choice, disable_parallel_tool_use)
+            if tool_choice is not None:
+                params['tool_choice'] = tool_choice
 
         _merge_config_extra(params, extra)
         return params
@@ -573,14 +598,14 @@ class AnthropicModel:
         """Return whether this model supports native constrained output."""
         supports = self._model_info.supports
         constrained = supports.constrained if supports else None
-        if constrained is None or constrained == Constrained.NONE:
+        if constrained is None or constrained == ConstrainedSupport.NONE:
             return False
-        return constrained != Constrained.NO_TOOLS or not has_tools
+        return constrained != ConstrainedSupport.NO_TOOLS or not has_tools
 
     async def _generate_streaming(
         self,
         params: dict[str, Any],
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         client: object | None = None,
         use_beta: bool = False,
     ) -> AnthropicMessage:

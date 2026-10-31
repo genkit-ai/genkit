@@ -94,17 +94,16 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import ollama as ollama_api
-import structlog
-from pydantic import ConfigDict, ValidationError
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic import ValidationError
+from pydantic.alias_generators import to_snake
 
-from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
+from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
+from genkit.model import GenerationUsage, ModelConfig, ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import loop_local_client, provider_error
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._errors import wrap_connection_errors
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 # Some image hosts (Wikimedia, for one) answer 403 to requests without a real
@@ -218,21 +217,54 @@ def _parse_thinking(content: str) -> tuple[str, str]:
 class OllamaConfig(ModelConfig):
     """Configuration schema for Ollama models.
 
-    Extends the shared :class:`ModelConfig` with Ollama-specific sampler
-    knobs and the ``think`` chain-of-thought control. Unknown keys raise. A
-    sampler option this class doesn't declare (``repeat_penalty``,
-    ``mirostat``, ...) goes in ``extra`` and is merged into the request's
-    ``options`` as-is, so newer sampler parameters work without an SDK bump.
+    Extends the shared :class:`ModelConfig` with every sampler option the
+    installed ``ollama`` client knows, plus ``think`` and ``keep_alive``.
+    Unknown keys raise, so a misspelled ``num_ctx`` fails instead of quietly
+    running with the default context window. A sampler option this class
+    doesn't declare yet goes in ``extra``, which is merged into the request's
+    ``options`` as-is and wins over a declared value with the same name.
     """
-
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None
-    num_ctx: int | None = None
     min_p: float | None = None
+
+    # Sampler options from the installed ollama client. temperature, top_k and
+    # top_p come from ModelConfig.
+    numa: bool | None = None
+    num_ctx: int | None = None
+    num_batch: int | None = None
+    num_gpu: int | None = None
+    main_gpu: int | None = None
+    low_vram: bool | None = None
+    f16_kv: bool | None = None
+    logits_all: bool | None = None
+    vocab_only: bool | None = None
+    use_mmap: bool | None = None
+    use_mlock: bool | None = None
+    embedding_only: bool | None = None
+    num_thread: int | None = None
+    num_keep: int | None = None
     seed: int | None = None
     num_predict: int | None = None
+    tfs_z: float | None = None
+    typical_p: float | None = None
+    repeat_last_n: int | None = None
+    repeat_penalty: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    mirostat: int | None = None
+    mirostat_tau: float | None = None
+    mirostat_eta: float | None = None
+    penalize_newline: bool | None = None
+    stop: list[str] | None = None
+
+
+# Declared names, in either spelling. A generic snake-case pass turns
+# ``f16_kv`` into ``f_16_kv``, which the server would ignore.
+_CONFIG_FIELD_NAMES: dict[str, str] = {
+    key: name for name, info in OllamaConfig.model_fields.items() for key in (name, info.alias) if key is not None
+}
 
 
 @dataclass(frozen=True)
@@ -293,7 +325,7 @@ class OllamaModel:
     async def generate(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext | None = None,
+        ctx: ModelContext | None = None,
         client: ollama_api.AsyncClient | None = None,
     ) -> ModelResponse:
         """Generate a response from Ollama.
@@ -336,7 +368,7 @@ class OllamaModel:
         self,
         *,
         request: ModelRequest,
-        ctx: ActionRunContext | None,
+        ctx: ModelContext | None,
         client: ollama_api.AsyncClient | None,
         content: list[Part],
     ) -> ModelResponse:
@@ -360,9 +392,9 @@ class OllamaModel:
             content=content,
         )
 
-        basic_generation_usage = get_basic_usage_stats(
-            input_=request.messages,
-            response=response_message,
+        basic_generation_usage = GenerationUsage.from_messages(
+            request.messages,
+            response_message,
         )
 
         return ModelResponse(
@@ -379,7 +411,7 @@ class OllamaModel:
     async def _chat_with_ollama(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext | None = None,
+        ctx: ModelContext | None = None,
         client: ollama_api.AsyncClient | None = None,
     ) -> ollama_api.ChatResponse | None:
         """Chat with Ollama.
@@ -562,8 +594,10 @@ class OllamaModel:
           kwargs, not sampler options (Ollama rejects them inside ``options``).
         - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
           explicit ``num_predict`` wins when both are present.
-        - ``stop_sequences`` maps to ``stop``; ``version`` (genkit
-          bookkeeping) is dropped.
+        - ``stop_sequences`` maps to ``stop``; an explicit ``stop`` wins when
+          both are present. ``version`` (genkit bookkeeping) is dropped.
+        - camelCase keys are snake-cased onto the Ollama field. Declared
+          names are looked up first so ``f16_kv`` is not rewritten.
         - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
           keys unchanged, so a colliding key wins over a declared field.
 
@@ -596,8 +630,9 @@ class OllamaModel:
         extra = raw.pop('extra', None)
 
         # Snake-case so camelCase knobs (e.g. ``topP``) hit the server field
-        # instead of being silently dropped.
-        knobs = {to_snake(k): v for k, v in raw.items()}
+        # instead of being silently dropped. Declared names win first:
+        # a generic snake-case pass rewrites ``f16_kv``.
+        knobs = {_CONFIG_FIELD_NAMES.get(k) or to_snake(k): v for k, v in raw.items()}
 
         # Top-level request kwargs, not sampler options.
         knobs.pop('think', None)
@@ -605,8 +640,9 @@ class OllamaModel:
         # Genkit bookkeeping that Ollama does not understand.
         knobs.pop('version', None)
 
-        if 'stop_sequences' in knobs:
-            knobs['stop'] = knobs.pop('stop_sequences')
+        stop_sequences = knobs.pop('stop_sequences', None)
+        if stop_sequences is not None and knobs.get('stop') is None:
+            knobs['stop'] = stop_sequences
 
         max_tokens = knobs.pop('max_output_tokens', None)
         if max_tokens is not None and knobs.get('num_predict') is None:
@@ -635,8 +671,9 @@ class OllamaModel:
         ``chat`` call — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
-        dict. Both paths snake-case the keys (declared fields can arrive
-        camelCased) and return only the values that are set.
+        dict. Both paths snake-case the keys: a wire dict is camelCase, and
+        undeclared extras on a loose ModelConfig subclass keep the caller's
+        spelling. Only set values are returned.
 
         Args:
             config: The configuration to extract request kwargs from.
@@ -817,27 +854,27 @@ class OllamaModel:
                 raise ValueError(f'Unknown role: {role}')
 
     @staticmethod
-    def is_streaming_request(ctx: ActionRunContext | None) -> bool:
+    def is_streaming_request(ctx: ModelContext | None) -> bool:
         """Determines if streaming mode is requested."""
         return bool(ctx and ctx.is_streaming)
 
     @staticmethod
     def get_usage_info(
-        basic_generation_usage: ModelUsage,
+        basic_generation_usage: GenerationUsage,
         api_response: ollama_api.ChatResponse | None,
-    ) -> ModelUsage:
+    ) -> GenerationUsage:
         """Extracts and calculates token usage information from an Ollama API response.
 
         Updates a basic generation usage object with input, output, and total token counts
         based on the details provided in the Ollama API response.
 
         Args:
-            basic_generation_usage: An existing ModelUsage object to update.
+            basic_generation_usage: An existing GenerationUsage object to update.
             api_response: The response object received from the Ollama API,
                 containing token count details.
 
         Returns:
-            The updated ModelUsage object with token counts populated.
+            The updated GenerationUsage object with token counts populated.
         """
         if api_response:
             basic_generation_usage.input_tokens = api_response.prompt_eval_count or 0

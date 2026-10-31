@@ -20,7 +20,6 @@ import json
 from collections.abc import Callable
 from typing import Any, cast
 
-import structlog
 from genkit_openai._models._utils import (
     OPENAI_CALL_ERRORS,
     DictMessageAdapter,
@@ -37,10 +36,10 @@ from openai.lib._pydantic import _ensure_strict_json_schema
 from openai.types import CompletionUsage
 from openai.types.completion_usage import CompletionTokensDetails, PromptTokensDetails
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, Supports, ToolDefinition
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
+from genkit.model import GenerationUsage, ModelConfig, ModelContext, ModelRequest, ModelSupports, ToolDefinition
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # Genkit common fields that are not chat.completions.create() kwargs.
 # version becomes the wire model id; stop_sequences becomes stop; extra
@@ -130,8 +129,8 @@ def _token_count(value: Any) -> float | None:  # noqa: ANN401
     return float(value)
 
 
-def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
-    """Build ModelUsage from a chat completion's usage block.
+def _usage_from_completion(usage: CompletionUsage | None) -> GenerationUsage:
+    """Build GenerationUsage from a chat completion's usage block.
 
     Args:
         usage: The ``usage`` object from a completion or a stream's usage
@@ -141,7 +140,7 @@ def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
         The token counts, empty when there is no usage to report.
     """
     if usage is None:
-        return ModelUsage()
+        return GenerationUsage()
 
     extras = usage.model_extra or {}
     prompt = usage.prompt_tokens_details or PromptTokensDetails()
@@ -166,7 +165,7 @@ def _usage_from_completion(usage: CompletionUsage | None) -> ModelUsage:
     if isinstance(cost, (int, float)) and not isinstance(cost, bool):
         custom['cost'] = float(cost)
 
-    return ModelUsage(
+    return GenerationUsage(
         input_tokens=usage.prompt_tokens,
         output_tokens=usage.completion_tokens,
         total_tokens=usage.total_tokens,
@@ -246,7 +245,7 @@ def _finish_state(
 class OpenAIModel:
     """Handles OpenAI API interactions for the Genkit plugin."""
 
-    def __init__(self, model: str, client: AsyncOpenAI, *, supports: Supports | None = None) -> None:
+    def __init__(self, model: str, client: AsyncOpenAI, *, supports: ModelSupports | None = None) -> None:
         """Initializes the OpenAIModel instance with the specified model and OpenAI client parameters.
 
         Args:
@@ -643,7 +642,7 @@ class OpenAIModel:
         )
         return self._clean_json_response(result, request)
 
-    async def generate(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         """Processes the request using OpenAI's chat completion API.
 
         Args:

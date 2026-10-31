@@ -31,9 +31,9 @@ from genkit_ollama._errors import wrap_connection_errors
 from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest
-from genkit.model import ModelRequest
+from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import ActionKind, to_json_schema
 
 
@@ -476,7 +476,7 @@ async def _call_ollama(plugin: Ollama, surface: str, error: BaseException) -> No
     else:
         action = plugin._create_model_action(_ResolvedModel(name='m'))
         request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-        ctx = ActionRunContext(streaming_callback=MagicMock()) if streaming else None
+        ctx = ModelContext(streaming_callback=MagicMock()) if streaming else None
         await action._fn(request, ctx)
 
 
@@ -813,7 +813,8 @@ async def test_list_actions_probes_each_model_and_skips_embedders() -> None:
     def supports(name: str) -> dict[str, Any]:
         metadata = rows[name].metadata
         assert metadata is not None
-        return cast(dict[str, Any], metadata['model']['supports'])
+        model_meta = cast(dict[str, Any], metadata['model'])
+        return cast(dict[str, Any], model_meta['supports'])
 
     assert supports('ollama/llava')['media'] is True
     assert supports('ollama/gemma2')['tools'] is False
@@ -859,7 +860,8 @@ async def test_list_actions_reprobes_a_repulled_model() -> None:
 
     assert show.await_count == 2
     assert actions[0].metadata is not None
-    assert cast(dict[str, Any], actions[0].metadata['model']['supports'])['tools'] is True
+    model_meta = cast(dict[str, Any], actions[0].metadata['model'])
+    assert cast(dict[str, Any], model_meta['supports'])['tools'] is True
 
 
 @pytest.mark.asyncio
