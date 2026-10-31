@@ -56,6 +56,46 @@ describe('modelName', () => {
   });
 });
 
+describe('maybeCreateRequestScopedOpenAIClient', () => {
+  const defaultClient = new OpenAI({
+    apiKey: 'plugin-key',
+    baseURL: 'https://provider.example/v1',
+  });
+  const request: GenerateRequest = {
+    messages: [],
+    config: { apiKey: 'scoped-key' },
+  };
+
+  it('returns the default client when no per-request apiKey is given', () => {
+    expect(
+      maybeCreateRequestScopedOpenAIClient(
+        { name: 'provider' },
+        { messages: [] },
+        defaultClient
+      )
+    ).toBe(defaultClient);
+  });
+
+  it('keeps the default client baseURL when pluginOptions omit it', () => {
+    const client = maybeCreateRequestScopedOpenAIClient(
+      { name: 'provider' },
+      request,
+      defaultClient
+    );
+    expect(client.baseURL).toBe('https://provider.example/v1');
+    expect(client.apiKey).toBe('scoped-key');
+  });
+
+  it('prefers an explicit pluginOptions baseURL', () => {
+    const client = maybeCreateRequestScopedOpenAIClient(
+      { name: 'provider', baseURL: 'https://override.example/v1' },
+      request,
+      defaultClient
+    );
+    expect(client.baseURL).toBe('https://override.example/v1');
+  });
+});
+
 // TODO, actionName
 
 describe('maybeCreateRequestScopedOpenAIClient', () => {
