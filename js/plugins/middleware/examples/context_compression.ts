@@ -110,7 +110,7 @@ const fetchReport = ai.defineTool(
  */
 export const researchAgent = ai.defineAgent({
   name: 'researchAgent',
-  model: vertexAI.model('gemini-flash-latest'),
+  model: vertexAI.model('gemini-3.8-flash'),
   system:
     'You are an investigative research assistant. When asked about a project, always search for ' +
     'reports first, then fetch every report individually to synthesize a comprehensive summary.',
@@ -125,7 +125,7 @@ export const researchAgent = ai.defineAgent({
         preserveRecent: 1, // Keep most recent tool response intact
       },
       summarize: {
-        model: vertexAI.model('gemini-flash-latest'),
+        model: vertexAI.model('gemini-3.8-flash'),
         preserveRecent: 2,
       },
       skipSummarizationThreshold: 0.3, // Skip LLM summarization if cheap strategies save >= 30%

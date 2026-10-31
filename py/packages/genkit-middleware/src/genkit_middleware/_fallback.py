@@ -21,12 +21,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import Field, field_validator
 
 from genkit import GenkitError, ModelResponse, ModelResponseChunk
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelRef, ModelRequest
-from genkit.plugin_api import Action
+from genkit.plugin_api import Action, GenkitConfig
 from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
@@ -35,14 +35,14 @@ from genkit_middleware._statuses import TRANSIENT_STATUSES
 _DEFAULT_FALLBACK_STATUSES: list[str] = [*TRANSIENT_STATUSES, 'NOT_FOUND', 'UNIMPLEMENTED']
 
 
-class FallbackModelEntry(BaseModel):
+class FallbackModelEntry(GenkitConfig):
     """A backup model and the config that model runs with."""
 
     name: str
     config: dict[str, Any] | None = None
 
 
-class FallbackConfig(BaseModel):
+class FallbackConfig(GenkitConfig):
     """Models and statuses that trigger fallback."""
 
     models: list[str | FallbackModelEntry] = Field(default_factory=list)
@@ -63,9 +63,9 @@ class FallbackConfig(BaseModel):
             elif isinstance(item, dict):
                 entries.append(cast(dict[str, Any], item))
             elif isinstance(item, Action):
-                raise ValueError(f"Fallback models are names or model_ref(...); pass '{item.name}', not the action")
+                raise ValueError(f"Fallback models are names or a ModelRef(...); pass '{item.name}', not the action")
             else:
-                raise ValueError('each Fallback model must be a model name or a model_ref(...)')
+                raise ValueError('each Fallback model must be a model name or a ModelRef(...)')
         return entries
 
 
@@ -75,7 +75,7 @@ def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
     if model.version is not None:
         bag['version'] = model.version
     if model.config is not None:
-        bag.update(model.config.model_dump(exclude_unset=True, exclude_none=True))
+        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=True))
     return bag or None
 
 
@@ -86,12 +86,15 @@ def fallback_request_config(entry: str | FallbackModelEntry) -> dict[str, Any] |
     return entry.config
 
 
-class Fallback(BaseMiddleware[FallbackConfig]):
+class Fallback(Middleware[FallbackConfig]):
     """Fallback middleware to try alternative models on failure."""
+
+    name = 'fallback'
+    description = 'Falls back to alternative models on failure'
 
     async def _resolve_fallback_model(
         self,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
         model_name: str,
     ) -> Action[ModelRequest, ModelResponse, ModelResponseChunk]:
         """Look up a fallback model among the app's models."""
@@ -106,8 +109,8 @@ class Fallback(BaseMiddleware[FallbackConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
@@ -133,9 +136,9 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                 {**dict(params.request), 'config': fallback_request_config(entry) or {}},
             )
             try:
-                result = await fallback_action.run(
+                result = await fallback_action._run(
                     input=fallback_request,
-                    context=ctx.custom_context,
+                    context=ctx.context,
                     on_chunk=on_chunk,
                     abort_signal=ctx.abort_signal,
                 )

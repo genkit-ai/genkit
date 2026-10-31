@@ -114,8 +114,11 @@ print(response.output)
 
 ### Ollama-specific config (`OllamaConfig`)
 
-`OllamaConfig` extends the common Genkit `ModelConfig` with Ollama-only
-knobs (`think`, `keep_alive`, `num_ctx`, `min_p`, `seed`, `num_predict`):
+`OllamaConfig` extends the common Genkit `ModelConfig` with `think`,
+`keep_alive`, and every sampler option the installed `ollama` client knows
+(`num_ctx`, `min_p`, `seed`, `num_predict`, `repeat_penalty`, `mirostat`, ...).
+Unknown keys raise `INVALID_ARGUMENT`, so a misspelled `num_ctx` fails instead
+of running with the default context window.
 
 ```python
 from genkit_ollama import OllamaConfig
@@ -132,6 +135,18 @@ response = await ai.generate(
     ),
 )
 ```
+
+A sampler option this class doesn't declare yet goes in `extra`. It is merged
+into the request's `options` as written and wins over a declared field with the
+same name:
+
+```python
+config={'temperature': 0.2, 'extra': {'new_sampler_option': 0.5}}
+# => options={'temperature': 0.2, 'new_sampler_option': 0.5}
+```
+
+`stop_sequences` maps to Ollama's `stop`. When both are set, `stop` wins, the
+same way `num_predict` wins over `max_output_tokens`.
 
 ### Remote server, headers, and timeouts
 
@@ -168,6 +183,39 @@ Ollama(base_url=OLLAMA_URL, request_headers=cloud_run_auth, timeout=60.0)
 A dict is sent as-is. A callable takes no arguments, may be sync or async, and
 runs before every HTTP request on the plugin's shared connection pool, so it
 should cache its token and only refresh when it expires.
+
+### Per-request API key (hosted Ollama)
+
+A multi-tenant app can bill each call to the caller's own key. Pass it on the
+call's context, not the config, so it never lands in a trace:
+
+```python
+# 1. Plugin runs on OLLAMA_API_KEY (or no key) by default
+ai = Genkit(plugins=[Ollama(base_url='https://ollama.com')])
+
+# 2. This call authenticates as the tenant
+response = await ai.generate(
+    model='ollama/gpt-oss:120b',
+    prompt='Summarize the order history.',
+    context={'secrets': {'api_key': tenant_key}},
+)
+# => sent with Authorization: Bearer <tenant_key>
+```
+
+- **Slot**: `context.secrets.api_key` (`apiKey` works too). It applies to that
+  call only; concurrent tenants each send their own key.
+- **No key in secrets**: `secrets` without `api_key`, or keys elsewhere in the
+  context (an auth provider's `context['api_key']`, another provider's key),
+  are ignored and the call runs on the plugin's headers.
+- **Bad key**: a key that is blank, not a string, or contains whitespace fails
+  the call with `INVALID_ARGUMENT`.
+- **Config**: `config={'api_key': ...}` or `config.extra.api_key` raises
+  `INVALID_ARGUMENT` before anything is sent.
+- **Proxy auth**: if `request_headers` sets `Authorization` (a dict, or a
+  callable that returns one), a per-request key fails with
+  `FAILED_PRECONDITION` rather than replacing the proxy's token.
+- **Embedders**: `embed()` takes no context, so embedders always run on the
+  plugin's headers.
 
 ### Model capabilities
 

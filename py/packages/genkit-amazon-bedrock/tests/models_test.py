@@ -46,9 +46,9 @@ from botocore.exceptions import (
 )
 from genkit_amazon_bedrock._models import BedrockModel
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, Part, Role
-from genkit.model import ModelRequest
-from genkit.plugin_api import served_error_json
+from genkit import FinishReason, GenkitError, Message, Part, Role
+from genkit.model import ModelContext, ModelRequest
+from genkit.web import error_body, error_status
 
 
 class FakeTransport:
@@ -125,7 +125,7 @@ async def test_streaming_context_routes_to_converse_stream() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
     chunks = []
 
-    response = await model.generate(text_request(), ActionRunContext(streaming_callback=chunks.append))
+    response = await model.generate(text_request(), ModelContext(streaming_callback=chunks.append))
 
     # The streaming path builds the same request as the sync one.
     assert transport.stream_kwargs is not None
@@ -142,7 +142,7 @@ async def test_streaming_context_routes_to_converse_stream() -> None:
 async def test_non_streaming_context_uses_converse_and_sends_no_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = FakeTransport(response=text_response())
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
-    ctx = ActionRunContext()
+    ctx = ModelContext()
     # Recorded directly: a context with no callback reports is_streaming False,
     # so only spying on send_chunk proves the guard is what suppresses chunks.
     sent: list[Any] = []
@@ -198,7 +198,7 @@ async def test_botocore_errors_map_to_genkit_statuses(error: BotoCoreError, expe
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     assert excinfo.value.cause is error
 
@@ -214,7 +214,7 @@ async def test_timeout_is_deadline_exceeded(error: BotoCoreError) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'DEADLINE_EXCEEDED'
-    assert 'bedrock converse failed' in genkit_error.original_message
+    assert 'bedrock converse failed' in genkit_error.message
     assert genkit_error.__cause__ is error
 
 
@@ -251,7 +251,8 @@ async def test_bedrock_credentials_error_is_served_as_internal_error() -> None:
 
     error = excinfo.value
     assert error.status == 'UNAUTHENTICATED'
-    assert served_error_json(error=error) == (500, '{"message":"Internal Error","status":"INTERNAL"}')
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
 
 
 @pytest.mark.parametrize(
@@ -271,7 +272,7 @@ async def test_connection_refused_is_unavailable(error: BotoCoreError) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'UNAVAILABLE'
-    assert 'bedrock converse failed' in genkit_error.original_message
+    assert 'bedrock converse failed' in genkit_error.message
     assert genkit_error.__cause__ is error
 
 
@@ -302,7 +303,7 @@ async def test_client_errors_map_to_genkit_statuses(code: str, expected_status: 
         await model.generate(text_request())
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse failed' in excinfo.value.original_message
+    assert 'bedrock converse failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
 
 
@@ -351,7 +352,7 @@ async def test_unmapped_4xx_is_unknown_genkit_error(http_status: int) -> None:
     genkit_error = await generate_error(error)
 
     assert genkit_error.status == 'UNKNOWN'
-    assert genkit_error.original_message == (
+    assert genkit_error.message == (
         'bedrock converse failed: An error occurred (SomeFutureException) when calling the Converse operation: teapot'
     )
     assert str(genkit_error).count('teapot') == 1
@@ -456,10 +457,10 @@ async def test_mid_stream_errors_map_to_genkit_statuses(code: str, expected_stat
     chunks = []
 
     with pytest.raises(GenkitError) as excinfo:
-        await model.generate(text_request(), ActionRunContext(streaming_callback=chunks.append))
+        await model.generate(text_request(), ModelContext(streaming_callback=chunks.append))
 
     assert excinfo.value.status == expected_status
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     # Chunks already delivered stand; the stream is closed on the way out.
     assert len(chunks) == 1
@@ -477,10 +478,10 @@ async def test_mid_stream_connection_drop_is_unavailable() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
 
     with pytest.raises(GenkitError) as excinfo:
-        await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
+        await model.generate(text_request(), ModelContext(streaming_callback=lambda _chunk: None))
 
     assert excinfo.value.status == 'UNAVAILABLE'
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert excinfo.value.__cause__ is error
     assert transport.stream_closed
 
@@ -492,10 +493,10 @@ async def test_stream_botocore_errors_map_to_genkit_statuses() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
 
     with pytest.raises(GenkitError) as excinfo:
-        await model.generate(text_request(), ActionRunContext(streaming_callback=lambda _chunk: None))
+        await model.generate(text_request(), ModelContext(streaming_callback=lambda _chunk: None))
 
     assert excinfo.value.status == 'DEADLINE_EXCEEDED'
-    assert 'bedrock converse stream failed' in excinfo.value.original_message
+    assert 'bedrock converse stream failed' in excinfo.value.message
     assert transport.stream_closed
 
 
@@ -513,7 +514,7 @@ async def test_stream_is_closed_when_a_chunk_callback_raises() -> None:
     model = BedrockModel(model_id='amazon.nova-lite-v1:0', transport=transport)
 
     with pytest.raises(RuntimeError, match='callback failed'):
-        await model.generate(text_request(), ActionRunContext(streaming_callback=explode))
+        await model.generate(text_request(), ModelContext(streaming_callback=explode))
 
     assert transport.stream_closed
 
@@ -564,7 +565,7 @@ async def test_streamed_reasoning_part_has_only_thought_signature() -> None:
     model = BedrockModel(model_id=CLAUDE_ID, transport=transport)
 
     response = await model.generate(
-        text_request('what is 17 * 23?'), ActionRunContext(streaming_callback=lambda _chunk: None)
+        text_request('what is 17 * 23?'), ModelContext(streaming_callback=lambda _chunk: None)
     )
 
     assert response.message is not None

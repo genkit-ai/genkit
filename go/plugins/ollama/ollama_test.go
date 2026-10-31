@@ -19,11 +19,13 @@ package ollama
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1204,5 +1206,134 @@ func TestUsageInputCoversCache(t *testing.T) {
 	want := &ai.GenerationUsage{InputTokens: 20, CachedContentTokens: 20, OutputTokens: 9, TotalTokens: 29}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("toGenkit() = %+v, want %+v", got, want)
+	}
+}
+
+// roundTripFunc adapts a function to an [http.RoundTripper].
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// TestHeadersAndHTTPClientReachEveryEndpoint pins that every request the
+// plugin makes goes through HTTPClient and carries Headers, so a hosted or
+// proxied server can authenticate discovery, generation and embedding alike.
+func TestHeadersAndHTTPClientReachEveryEndpoint(t *testing.T) {
+	var mu sync.Mutex
+	viaClient := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token" {
+			t.Errorf("%s: Authorization = %q, want %q", r.URL.Path, got, "Bearer token")
+		}
+		if got := r.Header.Get("Content-Type"); r.Method == http.MethodPost && got != "application/json" {
+			t.Errorf("%s: Content-Type = %q, want application/json", r.URL.Path, got)
+		}
+		switch r.URL.Path {
+		case "/api/tags":
+			fmt.Fprint(w, `{"models":[{"name":"llama3","model":"llama3"}]}`)
+		case "/api/show":
+			fmt.Fprint(w, `{"capabilities":["completion"]}`)
+		case "/api/chat":
+			fmt.Fprint(w, `{"model":"llama3","message":{"role":"assistant","content":"hi"},"done":true}`)
+		case "/api/generate":
+			fmt.Fprint(w, `{"model":"llama3","response":"hi","done":true}`)
+		case "/api/embed":
+			fmt.Fprint(w, `{"embeddings":[[0.1]]}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	o := &Ollama{
+		ServerAddress: server.URL,
+		Headers:       http.Header{"Authorization": {"Bearer token"}},
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			mu.Lock()
+			viaClient[req.URL.Path] = true
+			mu.Unlock()
+			return http.DefaultTransport.RoundTrip(req)
+		})},
+	}
+	g := genkit.Init(t.Context(), genkit.WithPlugins(o))
+
+	if actions := o.ListActions(t.Context()); len(actions) != 1 {
+		t.Fatalf("ListActions() returned %d actions, want 1", len(actions))
+	}
+	req := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hello")}}
+	for _, typ := range []string{"chat", "generate"} {
+		m := o.DefineModel(g, ModelDefinition{Name: "llama3-" + typ, Type: typ}, nil)
+		if _, err := m.Generate(t.Context(), req, nil); err != nil {
+			t.Fatalf("%s model Generate() error = %v", typ, err)
+		}
+	}
+	e := o.DefineEmbedder(g, "all-minilm", 1, nil)
+	if _, err := e.Embed(t.Context(), &ai.EmbedRequest{Input: []*ai.Document{ai.DocumentFromText("test", nil)}}); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+
+	for _, path := range []string{"/api/tags", "/api/show", "/api/chat", "/api/generate", "/api/embed"} {
+		if !viaClient[path] {
+			t.Errorf("%s did not go through HTTPClient", path)
+		}
+	}
+}
+
+// TestGenerateTimeoutWithHTTPClient pins that Timeout still bounds a generate
+// request sent through a caller-supplied client that has no timeout of its own.
+func TestGenerateTimeoutWithHTTPClient(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	g := &generator{
+		model:         ModelDefinition{Name: "llama3", Type: "chat"},
+		serverAddress: server.URL,
+		timeout:       1,
+		client:        &http.Client{},
+	}
+	_, err := g.generate(t.Context(), &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hello")}}, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("generate() error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// TestAPIKeyFromEnvironment pins that OLLAMA_API_KEY fills in a missing
+// Authorization header and never overrides one the caller set, whatever the
+// case of its key.
+func TestAPIKeyFromEnvironment(t *testing.T) {
+	t.Setenv("OLLAMA_API_KEY", "env-key")
+	for _, tc := range []struct {
+		name    string
+		headers http.Header
+		want    string
+	}{
+		{name: "no headers", want: "Bearer env-key"},
+		{name: "other headers", headers: http.Header{"X-Proxy": {"1"}}, want: "Bearer env-key"},
+		{name: "explicit authorization", headers: http.Header{"Authorization": {"Bearer explicit"}}, want: "Bearer explicit"},
+		{name: "lowercase authorization", headers: http.Header{"authorization": {"Bearer explicit"}}, want: "Bearer explicit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Values("Authorization")
+				fmt.Fprint(w, `{"models":[]}`)
+			}))
+			defer server.Close()
+
+			o := &Ollama{ServerAddress: server.URL, Headers: tc.headers}
+			o.Init(t.Context())
+			if _, err := o.listLocalModels(t.Context()); err != nil {
+				t.Fatalf("listLocalModels() error = %v", err)
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("Authorization = %q, want [%q]", got, tc.want)
+			}
+		})
 	}
 }

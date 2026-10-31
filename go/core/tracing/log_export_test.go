@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	otrace "go.opentelemetry.io/otel/trace"
+	"github.com/firebase/genkit/go/core/logger"
 )
 
 // startLogCollector runs a test telemetry server that accumulates OTLP log
@@ -103,11 +103,12 @@ func TestLogExportHandler(t *testing.T) {
 	e, collect := startLogCollector(t)
 	l := slog.New(&logExportHandler{exporter: e})
 
-	sc := otrace.NewSpanContext(otrace.SpanContextConfig{
-		TraceID: otrace.TraceID{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-		SpanID:  otrace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
-	})
-	ctx := otrace.ContextWithSpanContext(context.Background(), sc)
+	// Correlation now reads Genkit's own span metadata (composite ids), not the
+	// OTel active context, so seed the metadata the dispatcher would have set.
+	wantTraceID := "0102030405060708090a0b0c0d0e0f10"
+	wantSpanID := "0102030405060708"
+	ctx := spanMetaKey.NewContext(context.Background(),
+		&spanMetadata{TraceInfo: TraceInfo{TraceID: wantTraceID, SpanID: wantSpanID}})
 
 	l.Log(ctx, slog.LevelInfo, "correlated message",
 		"str", "value",
@@ -123,11 +124,11 @@ func TestLogExportHandler(t *testing.T) {
 	recs := waitForRecords(t, collect, 1)
 	rec := recs[0]
 
-	if got, want := rec.TraceID, sc.TraceID().String(); got != want {
-		t.Errorf("traceId = %q, want %q", got, want)
+	if got := rec.TraceID; got != wantTraceID {
+		t.Errorf("traceId = %q, want %q", got, wantTraceID)
 	}
-	if got, want := rec.SpanID, sc.SpanID().String(); got != want {
-		t.Errorf("spanId = %q, want %q", got, want)
+	if got := rec.SpanID; got != wantSpanID {
+		t.Errorf("spanId = %q, want %q", got, wantSpanID)
 	}
 	if rec.SeverityText != "INFO" || rec.SeverityNumber != 9 {
 		t.Errorf("severity = %q/%d, want INFO/9", rec.SeverityText, rec.SeverityNumber)
@@ -164,6 +165,116 @@ func TestLogExportHandler(t *testing.T) {
 	}
 	if v := attrs["req.id"]; v.IntValue == nil || *v.IntValue != 7 {
 		t.Errorf("attr req.id = %+v, want 7 (group flattened)", v)
+	}
+}
+
+// traceInfoHandler records, per log record, its message, the Genkit span ids
+// its context resolves to, and its attributes.
+type traceInfoHandler struct {
+	mu   sync.Mutex
+	recs []tracedRecord
+}
+
+type tracedRecord struct {
+	msg   string
+	ti    TraceInfo
+	attrs map[string]string
+}
+
+func (h *traceInfoHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *traceInfoHandler) Handle(ctx context.Context, r slog.Record) error {
+	attrs := map[string]string{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.String()
+		return true
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recs = append(h.recs, tracedRecord{msg: r.Message, ti: SpanTraceInfo(ctx), attrs: attrs})
+	return nil
+}
+
+func (h *traceInfoHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *traceInfoHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *traceInfoHandler) find(msg string) []tracedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []tracedRecord
+	for _, r := range h.recs {
+		if r.msg == msg {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// TestLogCorrelation_CallSiteSpanWinsWithoutOTel checks that a logger bound to
+// an outer span, used with an inner span's context, attributes the record to
+// the inner span when only Genkit (not OTel) knows about the spans.
+func TestLogCorrelation_CallSiteSpanWinsWithoutOTel(t *testing.T) {
+	useInstrumentation(t, NewDirectTelemetryInstrumentation(nil))
+	h := &traceInfoHandler{}
+	ctx := logger.WithContext(context.Background(), slog.New(h))
+
+	var outer, inner TraceInfo
+	_, err := RunInNewSpan(ctx, &SpanMetadata{Name: "outer"}, "in",
+		func(ctx context.Context, in string) (string, error) {
+			outer = SpanTraceInfo(ctx)
+			l := logger.FromContext(ctx)
+			return RunInNewSpan(ctx, &SpanMetadata{Name: "inner"}, in,
+				func(ctx context.Context, _ string) (string, error) {
+					inner = SpanTraceInfo(ctx)
+					l.InfoContext(ctx, "from inner")
+					l.Info("context-free")
+					return "", nil
+				})
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outer.SpanID == inner.SpanID {
+		t.Fatal("outer and inner spans share an id")
+	}
+	if got := h.find("from inner"); len(got) != 1 || got[0].ti != inner {
+		t.Errorf("record with inner context = %+v, want span %+v", got, inner)
+	}
+	// With no span at the call site, the logger's bound (outer) span fills in.
+	if got := h.find("context-free"); len(got) != 1 || got[0].ti != outer {
+		t.Errorf("context-free record = %+v, want span %+v", got, outer)
+	}
+}
+
+// TestSpanFinishedLog_Panic checks that the debug end log of a panicking span
+// reports the error state and lands on that span.
+func TestSpanFinishedLog_Panic(t *testing.T) {
+	useInstrumentation(t, NewDirectTelemetryInstrumentation(nil))
+	h := &traceInfoHandler{}
+	ctx := logger.WithContext(context.Background(), slog.New(h))
+
+	var span TraceInfo
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = RunInNewSpan(ctx, &SpanMetadata{Name: "root"}, "in",
+			func(ctx context.Context, _ string) (string, error) {
+				span = SpanTraceInfo(ctx)
+				panic("kaboom")
+			})
+	}()
+
+	got := h.find("span finished")
+	if len(got) != 1 {
+		t.Fatalf("got %d span finished records, want 1", len(got))
+	}
+	if got[0].ti != span {
+		t.Errorf("span finished logged on %+v, want %+v", got[0].ti, span)
+	}
+	if st := got[0].attrs["state"]; st != string(spanStateError) {
+		t.Errorf("state = %q, want %q", st, spanStateError)
+	}
+	if e := got[0].attrs["error"]; e != "panic: kaboom" {
+		t.Errorf("error = %q, want %q", e, "panic: kaboom")
 	}
 }
 

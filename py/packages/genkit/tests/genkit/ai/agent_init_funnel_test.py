@@ -23,7 +23,6 @@ import pytest
 from genkit import Part
 from genkit._ai._agents._base import define_custom_agent
 from genkit._ai._agents._runtime import AgentInitError, SessionRunner
-from genkit._core._action import ActionRunContext
 from genkit._core._error import GenkitError, RuntimeErrorReason, runtime_error_reason
 from genkit._core._model import AgentInit, AgentInput, AgentResult, Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
@@ -31,10 +30,10 @@ from genkit._core._typing import (
     SnapshotStatus,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore, TurnContext, TurnResult
+from genkit.exp.agent import AgentContext, InMemorySessionStore, TurnContext, TurnResult
 
 
-async def echo_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def echo_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = ''
         if inp.message and inp.message.content:
@@ -159,7 +158,7 @@ async def test_snapshot_id_on_client_managed_agent_raises_agent_init_error() -> 
     assert exc.value.status == 'FAILED_PRECONDITION'
     assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
     assert 'no store configured' in str(exc.value)
-    assert 'SESSION_STORE_NOT_CONFIGURED' not in exc.value.original_message
+    assert 'SESSION_STORE_NOT_CONFIGURED' not in exc.value.message
 
 
 @pytest.mark.asyncio
@@ -187,5 +186,5 @@ async def test_unknown_agent_raises_with_action_not_found() -> None:
 
     assert exc.value.status == 'NOT_FOUND'
     assert exc.value.reason is RuntimeErrorReason.ACTION_NOT_FOUND
-    assert "Agent 'ghost' not found" in exc.value.original_message
-    assert 'ACTION_NOT_FOUND' not in exc.value.original_message
+    assert "Agent 'ghost' not found" in exc.value.message
+    assert 'ACTION_NOT_FOUND' not in exc.value.message

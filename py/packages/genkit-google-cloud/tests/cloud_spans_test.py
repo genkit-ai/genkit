@@ -46,7 +46,6 @@ from opentelemetry.util._once import Once
 from pydantic import BaseModel
 
 from genkit import (
-    ActionRunContext,
     FinishReason,
     Genkit,
     GenkitError,
@@ -56,12 +55,14 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Role,
-    ToolRunContext,
+    ToolContext,
 )
-from genkit.model import ModelRequest, ModelUsage
+
+# Private on purpose: the Dev UI poster is not public API, and this asserts it got installed.
+from genkit._core._telemetry._http import DirectHttpInstrumentation  # noqa: TID251
+from genkit.model import GenerationUsage, ModelContext, ModelRequest
 from genkit.plugin_api import Action, ActionKind
 from genkit.telemetry import (
-    DirectHttpInstrumentation,
     configure_instrumentation,
     is_instrumented_by,
     reset_instrumentation,
@@ -190,14 +191,14 @@ def _echo_response() -> ModelResponse:
     return ModelResponse(
         finish_reason=FinishReason.STOP,
         message=Message(role=Role.MODEL, content=[Part.from_text(_REPLY)]),
-        usage=ModelUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+        usage=GenerationUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
     )
 
 
 def _echo_app() -> Genkit:
     ai = Genkit()
 
-    async def echo_model(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def echo_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(_REPLY)]))
         return _echo_response()
 
@@ -774,7 +775,7 @@ async def test_generate_with_tool_spans_and_span_only_env_shows_redacted_tool_ar
         """Look up a record."""
         return _TOOL_RESULT
 
-    async def tool_model(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def tool_model(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         if any(message.role == Role.TOOL for message in request.messages):
             return _echo_response()
         return ModelResponse(
@@ -783,7 +784,7 @@ async def test_generate_with_tool_spans_and_span_only_env_shows_redacted_tool_ar
                 role=Role.MODEL,
                 content=[Part.from_tool_request(name='lookup', input=_PROMPT, ref='r1')],
             ),
-            usage=ModelUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+            usage=GenerationUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
         )
 
     ai.define_model(_MODEL, tool_model)
@@ -846,7 +847,7 @@ async def test_generate_that_raises_with_span_only_env_has_no_prompt_in_cloud_tr
     monkeypatch.setenv(_CAPTURE_ENV, 'SPAN_ONLY')
     ai = Genkit()
 
-    async def boom(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def boom(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         raise RuntimeError(f'model rejected: {_PROMPT}')
 
     ai.define_model(_MODEL, boom)
@@ -905,7 +906,7 @@ async def test_tool_interrupt_payload_is_redacted_in_cloud_trace() -> None:
         """Ask a human to approve."""
         raise Interrupt({'echo': query})
 
-    async def tool_model(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def tool_model(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(
@@ -932,7 +933,7 @@ async def test_resumed_tool_payload_is_redacted_in_cloud_trace() -> None:
     ai = Genkit()
 
     @ai.tool(name='approve')
-    async def approve(query: str, ctx: ToolRunContext) -> str:
+    async def approve(query: str, ctx: ToolContext) -> str:
         """Ask a human to approve."""
         if not ctx.is_resumed():
             raise Interrupt({'echo': query})

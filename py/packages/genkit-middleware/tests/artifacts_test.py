@@ -21,6 +21,7 @@ from __future__ import annotations
 import subprocess  # noqa: S404
 import sys
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import pytest
 from genkit_middleware import Middleware
@@ -31,9 +32,10 @@ from genkit_middleware._artifacts import (
 )
 from genkit_middleware.exp import Artifacts
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
 from genkit.exp import Genkit
 from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -42,7 +44,7 @@ from genkit.exp.agent import (
     TurnContext,
     TurnResult,
 )
-from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext, MiddlewareRef
+from genkit.middleware import GenerateHookParams, MiddlewareContext
 from genkit.model import GenerateActionOptions, ToolRequest
 from genkit.testing import define_scripted_model
 
@@ -55,7 +57,7 @@ async def _run_in_agent_turn(
     """Run ``check`` inside a real agent turn so the middleware sees an active session."""
     ai = Genkit()
 
-    async def agent_fn(session: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session: SessionRunner, _ctx: AgentContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput, _turn: TurnContext) -> TurnResult:
             if artifacts:
                 await session.add_artifacts(artifacts)
@@ -66,6 +68,12 @@ async def _run_in_agent_turn(
         return await session.result()
 
     await ai.define_custom_agent(name='artifactsTest', fn=agent_fn).chat().send('go')
+
+
+def _middleware_refs(*names: str) -> list[Any]:
+    """Build name-only middleware refs (what a .prompt's ``use:`` produces) via the public options model."""
+    opts = GenerateActionOptions.model_validate({'messages': [], 'use': [{'name': n} for n in names]})
+    return list(opts.use or [])
 
 
 def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookParams:
@@ -100,7 +108,7 @@ def test_extract_artifact_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContext) -> None:
+async def test_write_artifact_uses_current_session(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
 
     async def check(session: SessionRunner) -> None:
@@ -119,7 +127,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
 
 
 @pytest.mark.asyncio
-async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
+async def test_read_artifact_returns_found(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
 
     async def check(_session: SessionRunner) -> None:
@@ -134,7 +142,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
 
 
 @pytest.mark.asyncio
-async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> None:
+async def test_read_artifact_without_session(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
     result = await read.action().run(input={'name': 'missing.txt'})
@@ -144,15 +152,16 @@ async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> 
 
 
 @pytest.mark.asyncio
-async def test_readonly_excludes_write_tool(ctx: GenerateMiddlewareContext) -> None:
+async def test_readonly_excludes_write_tool(ctx: MiddlewareContext) -> None:
     mw = Artifacts(readonly=True)
     names = {t.name for t in mw.tools(ctx)}
     assert names == {'read_artifact'}
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_injects_listing(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
+
     captured: list[GenerateActionOptions] = []
 
     async def next_fn(params, _ctx):
@@ -178,7 +187,7 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_refreshes_listing(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
 
@@ -203,9 +212,10 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_does_not_mutate_envelope(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
+
     captured_request: list[GenerateActionOptions] = []
 
     async def next_fn(params, _ctx):
@@ -262,7 +272,7 @@ async def test_agent_using_artifacts_without_middleware_plugin_saves_written_fil
 
 @pytest.mark.asyncio
 async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raises_not_found() -> None:
-    """With Middleware() registered, use=[MiddlewareRef(name='artifacts')] (a .prompt's use:) raises NOT_FOUND."""
+    """With Middleware() registered, use=[{'name': 'artifacts'}] (a .prompt's use:) raises NOT_FOUND."""
     ai = Genkit(plugins=[Middleware()])
     pm, _ = define_scripted_model(ai)
     pm.responses = [
@@ -273,7 +283,7 @@ async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raise
     ]
 
     with pytest.raises(GenkitError) as err:
-        await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='artifacts')])
+        await ai.generate(model='scriptedModel', prompt='hi', use=_middleware_refs('artifacts'))
 
     assert err.value.status == 'NOT_FOUND'
     assert '"artifacts"' in str(err.value)
@@ -281,7 +291,7 @@ async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raise
 
 @pytest.mark.asyncio
 async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() -> None:
-    """With Middleware() registered, use=[MiddlewareRef(name='retry')] still resolves and the call returns."""
+    """With Middleware() registered, use=[{'name': 'retry'}] still resolves and the call returns."""
     ai = Genkit(plugins=[Middleware()])
     pm, _ = define_scripted_model(ai)
     pm.responses = [
@@ -291,7 +301,7 @@ async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() ->
         )
     ]
 
-    res = await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='retry')])
+    res = await ai.generate(model='scriptedModel', prompt='hi', use=_middleware_refs('retry'))
 
     assert res.text == 'ok'
 

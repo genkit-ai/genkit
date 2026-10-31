@@ -34,6 +34,15 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
+// Compile-time checks that the store has the capabilities it documents. The
+// conformance suite skips the checks for a capability a store lacks, so losing
+// one would otherwise go unnoticed.
+var (
+	_ exp.SessionStore[any]           = (*InMemorySessionStore[any])(nil)
+	_ exp.SnapshotMetadataReader[any] = (*InMemorySessionStore[any])(nil)
+	_ exp.SnapshotSubscriber          = (*InMemorySessionStore[any])(nil)
+)
+
 // InMemorySessionStore provides a thread-safe in-memory snapshot store. State
 // is lost when the process exits; use [FileSessionStore] or a real backend
 // when persistence is needed.
