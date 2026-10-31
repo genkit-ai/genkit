@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
+import genkit_mcp._client
 import psutil
 import pytest
 import structlog
@@ -208,6 +209,27 @@ async def test_a_server_which_cannot_start_leaves_the_others_listed(tmp_path: Pa
         await host.close()
 
     assert tool_names(tools) == hosted('alpha')
+
+
+@pytest.mark.asyncio
+async def test_listing_the_other_servers_does_not_start_a_broken_one_each_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broken server waits out its delay however often the healthy ones are listed."""
+    monkeypatch.setattr(genkit_mcp._client, '_RESPAWN_DELAY_SECONDS', 600.0)
+    starts = tmp_path / 'starts'
+    broken: McpServerEntry = {
+        'command': sys.executable,
+        'args': ['-c', 'import sys; open(sys.argv[1], "a").write("x")', str(starts)],
+    }
+    host = McpHost('hosted', mcp_servers={'broken': broken, **servers(tmp_path, 'alpha')})
+    try:
+        for _ in range(3):
+            assert tool_names(await asyncio.wait_for(host.get_active_tools(), timeout=LIMIT)) == hosted('alpha')
+    finally:
+        await host.close()
+
+    assert starts.read_text(encoding='utf-8') == 'x'
 
 
 @pytest.mark.asyncio

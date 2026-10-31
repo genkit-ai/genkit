@@ -85,6 +85,13 @@ async def list_tools(req: ListToolsRequest) -> ListToolsResult:
         code = int(os.environ.get('MCP_FAKE_APP_ERROR_CODE', CONNECTION_CLOSED))
         raise McpError(ErrorData(code=code, message='application-level failure'))
 
+    exit_list_marker = os.environ.get('MCP_FAKE_EXIT_ON_LIST')
+    if exit_list_marker:
+        # Answers the handshake, then dies on the first request after it.
+        async with await anyio.open_file(exit_list_marker, 'a', encoding='utf-8') as exits:
+            await exits.write('x')
+        os._exit(1)
+
     stall_list_marker = os.environ.get('MCP_FAKE_STALL_LIST')
     if stall_list_marker:
         await anyio.Path(stall_list_marker).write_text('stalled', encoding='utf-8')
