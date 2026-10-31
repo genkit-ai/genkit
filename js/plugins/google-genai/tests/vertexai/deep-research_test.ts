@@ -173,7 +173,11 @@ describe('Vertex AI Deep Research', () => {
         thinking_summaries: 'auto',
         visualization: 'off',
       });
-      assert.deepStrictEqual(body.response_modalities, ['text', 'image']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'text' },
+        { type: 'image' },
+      ]);
+      assert.strictEqual(body.response_modalities, undefined);
     });
 
     it('converts built-in tools from config.tools', async () => {

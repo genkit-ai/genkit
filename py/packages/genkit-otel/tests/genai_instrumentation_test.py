@@ -31,7 +31,7 @@ from opentelemetry._logs import LogRecord
 from opentelemetry.trace import StatusCode
 
 from genkit import FinishReason, Interrupt, Message, ModelResponse, Part, Role
-from genkit.model import Candidate, ModelRequest, ModelUsage, OutputConfig
+from genkit.model import GenerationUsage, ModelRequest, OutputConfig
 from genkit.telemetry import SpanContext, SpanMetadata, SpanNext
 
 
@@ -65,7 +65,7 @@ def _model_response(
     *,
     finish_reason: FinishReason | None = None,
     message: Message | None = None,
-    usage: ModelUsage | None = None,
+    usage: GenerationUsage | None = None,
 ) -> ModelResponse:
     return ModelResponse(
         finish_reason=finish_reason or FinishReason.STOP,
@@ -131,7 +131,7 @@ async def test_records_usage_and_finish_reason(harness) -> None:
         lambda span=None: _awaitable(
             _model_response(
                 finish_reason=FinishReason.LENGTH,
-                usage=ModelUsage(input_tokens=10, output_tokens=20),
+                usage=GenerationUsage(input_tokens=10, output_tokens=20),
             )
         ),
     )
@@ -445,57 +445,6 @@ async def test_capture_action_io_records_raw_io_on_all_span_types(harness) -> No
     assert 'in' in harness.attr(flow, GenkitAttr.INPUT)
     assert 'out' in harness.attr(flow, GenkitAttr.OUTPUT)
     assert harness.attr(flow, GenAiAttr.INPUT_MESSAGES) is None
-
-
-@pytest.mark.asyncio
-async def test_captures_legacy_candidates_message(harness) -> None:
-    instr = harness.instrumentation(content_capturing_mode='SPAN_ONLY')
-    legacy = ModelResponse(
-        finish_reason=FinishReason.STOP,
-        candidates=[
-            Candidate(
-                index=0,
-                finish_reason=FinishReason.STOP,
-                message=Message(role=Role.MODEL, content=[Part.from_text('legacy answer')]),
-            )
-        ],
-    )
-    await _run_model(
-        instr,
-        'googleai/gemini-flash-latest',
-        _model_request(),
-        lambda span=None: _awaitable(legacy),
-    )
-    span = harness.span_named('chat gemini-flash-latest')
-    assert span is not None
-    assert 'legacy answer' in harness.attr(span, GenAiAttr.OUTPUT_MESSAGES)
-
-
-@pytest.mark.asyncio
-async def test_reports_tool_calls_from_legacy_candidates(harness) -> None:
-    instr = harness.instrumentation()
-    legacy = ModelResponse(
-        finish_reason=FinishReason.STOP,
-        candidates=[
-            Candidate(
-                index=0,
-                finish_reason=FinishReason.STOP,
-                message=Message(
-                    role=Role.MODEL,
-                    content=[Part.from_tool_request('lookup', input={})],
-                ),
-            )
-        ],
-    )
-    await _run_model(
-        instr,
-        'googleai/gemini-flash-latest',
-        _model_request(),
-        lambda span=None: _awaitable(legacy),
-    )
-    span = harness.span_named('chat gemini-flash-latest')
-    assert span is not None
-    assert list(harness.attr(span, GenAiAttr.RESPONSE_FINISH_REASONS)) == ['tool_calls']
 
 
 @pytest.mark.asyncio

@@ -34,10 +34,6 @@ information on using pull requests.
 
 ## Setup
 
-**Note:** If you want to setup all runtime environments at the same time
-(js/go/py), you may want to run the `bin/setup` script. Beware, this script may
-break other setup you may already have in your project environment.
-
 Genkit supports JavaScript, Go, and Python. Before contributing in any of these languages, complete these prerequisites:
 
 1. Install Node.js 20 or later using [nvm](https://nodejs.org/en/download)
@@ -202,13 +198,51 @@ Use the following command to build and view the new API reference locally.
 cd js && pnpm build && pnpm typedoc-html && open api-refs-js/index.html
 ```
 
-## Send it
+## Submitting Changes
 
-Once done coding you will want to send a PR. Always do things in a separate branch (by convention name the branch `your-name/feature-something`).
+1.  **Create a Branch**: Create a new branch for your feature or bug fix.
 
-Before sending the PR, always run:
+    ```bash
+    git checkout -b your-name/my-feature-branch
+    ```
 
-```
-pnpm format
-pnpm build
-```
+2.  **Format and Build**: Before submitting a pull request, ensure your changes are formatted and build cleanly:
+
+    ```bash
+    pnpm format
+    pnpm build
+    ```
+
+3.  **Commit Your Changes**: Make your changes and commit them using [Conventional Commits](https://www.conventionalcommits.org/). Both commit messages and **Pull Request titles** must include a **type** and a **scope**:
+
+    ```text
+    <type>(<scope>): <description>
+    ```
+
+    Examples:
+
+    - `feat(js/ai): add support for custom tool output handlers`
+    - `fix(go/plugins/googlegenai): default ResponseModalities for image models`
+    - `chore(global): update root formatting configuration`
+
+    Common types include:
+
+    - `feat`: A new feature
+    - `fix`: A bug fix
+    - `docs`: Documentation only changes
+    - `style`: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc.)
+    - `refactor`: A code change that neither fixes a bug nor adds a feature
+    - `perf`: A code change that improves performance
+    - `test`: Adding missing tests or correcting existing tests
+    - `build`: Changes that affect the build system or external dependencies
+    - `ci`: Changes to CI configuration files and scripts
+    - `chore`: Changes to the build process or auxiliary tools and libraries that don't modify source or test files
+    - `revert`: Reverts a previous commit
+
+4.  **Open a Pull Request**: Submit your pull request to the `main` branch. Provide a clear description of the changes and link to any related issues.
+
+## Pull Request Guidelines
+
+- **Keep it Focused**: A pull request should ideally do one thing. If you have multiple unrelated changes, please split them into separate PRs.
+- **Update Documentation**: If your changes introduce new features or change existing behavior, please update the relevant documentation and code comments as necessary.
+- **Test Your Changes**: Ensure that your changes are well-tested and don't break existing functionality.

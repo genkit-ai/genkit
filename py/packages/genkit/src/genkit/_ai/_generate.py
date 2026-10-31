@@ -30,7 +30,8 @@ from typing import Any, TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from genkit._ai import _aio
-from genkit._ai._formats._types import FormatDef, Formatter
+from genkit._ai._background_model import ensure_model_operation
+from genkit._ai._formats._types import FormatHandler, Formatter
 from genkit._ai._messages import inject_instructions
 from genkit._ai._model import (
     Message,
@@ -65,22 +66,19 @@ from genkit._core._action import (
     parse_action_key,
     parse_dap_qualified_name,
 )
-from genkit._core._background import (
-    _ensure_operation,
-    missing_operation_error,
-    stamp_operation_action,
-)
+from genkit._core._background import missing_operation_error, stamp_operation_action
 from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
-    BaseMiddleware,
     GenerateHookParams,
-    GenerateMiddleware,
-    GenerateMiddlewareContext,
+    Middleware,
+    MiddlewareContext,
     MiddlewareDef,
     ModelHookParams,
     ToolHookParams,
     _copy_middleware_instance,
+    _dump_middleware_ref_config,
+    _MiddlewareMetadata,
     middleware_class_index,
 )
 from genkit._core._model import (
@@ -95,15 +93,16 @@ from genkit._core._model import (
     reject_config_api_key,
     reject_unanswered_interrupts,
 )
+from genkit._core._operation import Operation
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
 from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
 from genkit._core._tool import Tool
 from genkit._core._typing import (
+    ConstrainedSupport,
     FinishReason,
     GenerateActionOutputConfig,
     MiddlewareRef,
-    Operation,
     OperationError,
     Role,
     ToolDefinition,
@@ -121,8 +120,8 @@ HookResultT = TypeVar('HookResultT')
 HookWrap = Callable[
     [
         HookParamsT,
-        GenerateMiddlewareContext,
-        Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
+        MiddlewareContext,
+        Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]],
     ],
     Awaitable[HookResultT],
 ]
@@ -168,7 +167,7 @@ def log_output_parse(
     model: str | None,
     finish_reason: FinishReason | None,
     finish_message: str | None,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
     message: Message | None,
 ) -> None:
     """Warn on an abnormal finish; debug when the formatter cannot parse."""
@@ -228,9 +227,9 @@ async def run_logged_hook(
     mw: MiddlewareDef,
     hook: str,
     params: HookParamsT,
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
     wrap: HookWrap[HookParamsT, HookResultT],
-    inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
+    inner: Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]],
     extra: dict[str, object] | None = None,
 ) -> HookResultT:
     """Run one middleware hook, with started/finished records when debug is on."""
@@ -242,7 +241,7 @@ async def run_logged_hook(
     start = time.monotonic()
     seen = {'next_called': False, 'error': None}
 
-    async def tracked(tp: HookParamsT, tc: GenerateMiddlewareContext) -> HookResultT:
+    async def tracked(tp: HookParamsT, tc: MiddlewareContext) -> HookResultT:
         seen['next_called'] = True
         return await inner(tp, tc)
 
@@ -281,41 +280,39 @@ class CallScope:
 
 def register_middleware(
     registry: Registry,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None,
+    use: Sequence[Middleware | MiddlewareRef] | None,
 ) -> list[MiddlewareRef] | None:
     """Normalize ``use=`` to ``MiddlewareRef`` entries (name + config only).
 
-    Inline ``BaseMiddleware`` instances are not stored on the registry. Their
+    Inline ``Middleware`` instances are not stored on the registry. Their
     config is serialized onto the ref and, when the class is not registered on
-    a parent registry, a ``GenerateMiddleware`` is registered on this layer so
+    a parent registry, a ``_MiddlewareMetadata`` is registered on this layer so
     ``resolve_middleware_from_use`` can build a fresh instance per ``generate()``.
     """
     if use is None:
         return None
     refs: list[MiddlewareRef] = []
-    # Track how many times each name appears so duplicates get unique suffixes.
-    name_counts: dict[str, int] = {}
     # Build the class→name index once so resolving the use list is O(M+N).
     cls_index = middleware_class_index(registry)
     for i, entry in enumerate(use):
-        if isinstance(entry, BaseMiddleware):
+        if isinstance(entry, Middleware):
             # Prefer the registered name so traces show ``concise_reply_mw``
             # instead of an opaque id. For an unregistered ``use=[Foo()]``
             # passed inline, fall back to a synthetic id that can't collide
             # with any globally registered middleware.
             mw_cls = type(entry)
             registered = cls_index.get(mw_cls)
-            base_name = registered or f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
-            count = name_counts.get(base_name, 0)
-            name_counts[base_name] = count + 1
-            reg_name = base_name if count == 0 else f'{base_name}__{count}'
-            if registered is None and registry.lookup_value('middleware', reg_name) is None:
+            # Each ref carries its own config and resolves to a fresh instance,
+            # so the same registered name can appear more than once.
+            reg_name = registered or f'dynamic-middleware-{i}-{secrets.token_hex(5)}'
+            if registered is None:
                 registry.register_value(
                     'middleware',
                     reg_name,
-                    GenerateMiddleware(cls=mw_cls, name=reg_name),
+                    mw_cls._middleware_metadata(reg_name),
                 )
-            config = cast(BaseModel, entry.config).model_dump(exclude_none=True, mode='json') or None
+            # Dump keys that match the schema and that the config class validates.
+            config = _dump_middleware_ref_config(entry.config)
             refs.append(MiddlewareRef(name=reg_name, config=config))
         else:
             refs.append(entry)
@@ -325,15 +322,15 @@ def register_middleware(
 def resolve_middleware_from_use(
     registry: Registry,
     use: Sequence[MiddlewareRef] | None,
-) -> list[BaseMiddleware]:
-    """Resolve ``MiddlewareRef`` entries to fresh ``BaseMiddleware`` instances.
+) -> list[Middleware]:
+    """Resolve ``MiddlewareRef`` entries to fresh ``Middleware`` instances.
 
-    Each ref is instantiated from the registered ``GenerateMiddleware`` and
+    Each ref is instantiated from the registered ``_MiddlewareMetadata`` and
     ``ref.config`` (same path for Dev UI, dotprompt, and inline ``use=[Mw(...)]``).
     """
     if not use:
         return []
-    out: list[BaseMiddleware] = []
+    out: list[Middleware] = []
     for entry in use:
         defn = registry.lookup_value('middleware', entry.name)
         if defn is None:
@@ -341,19 +338,19 @@ def resolve_middleware_from_use(
                 status='NOT_FOUND',
                 message=(
                     f'A middleware with the name "{entry.name}" cannot be found. '
-                    'Register it via @ai.middleware(...), a middleware plugin, or pass '
-                    'a BaseMiddleware instance in use= so the framework can normalize it.'
+                    "Register it via @ai.middleware(...), a plugin's list_middleware(), or pass "
+                    'a Middleware instance in use= so the framework can normalize it.'
                 ),
                 source='genkit.generate',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        if not isinstance(defn, GenerateMiddleware):
+        if not isinstance(defn, _MiddlewareMetadata):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
                     f'Middleware "{entry.name}" is registered with the wrong type '
-                    f'({type(defn).__name__}). Expected GenerateMiddleware from '
-                    '@ai.middleware(...), a middleware plugin, or inline use= normalization.'
+                    f'({type(defn).__name__}). Expected middleware registered via '
+                    "@ai.middleware(...), a plugin's list_middleware(), or inline use= normalization."
                 ),
                 source='genkit.generate',
                 reason=RuntimeErrorReason.INVALID_INPUT,
@@ -368,15 +365,15 @@ class MiddlewarePipeline:
     """Holds the middleware chain and the shared context for a single generate call."""
 
     middleware: list[MiddlewareDef]
-    ctx: GenerateMiddlewareContext
+    ctx: MiddlewareContext
 
 
 def prepare_middleware(
-    middleware: list[BaseMiddleware],
+    middleware: list[Middleware],
     *,
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
 ) -> MiddlewarePipeline:
-    """Return per-call middleware defs sharing one ``GenerateMiddlewareContext``."""
+    """Return per-call middleware defs sharing one ``MiddlewareContext``."""
     return MiddlewarePipeline(
         middleware=[_copy_middleware_instance(mw) for mw in middleware],
         ctx=ctx,
@@ -426,8 +423,8 @@ async def dispatch_hooks(
     middleware: list[MiddlewareDef],
     hook: str,
     params: HookParamsT,
-    ctx: GenerateMiddlewareContext,
-    next_fn: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
+    ctx: MiddlewareContext,
+    next_fn: Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]],
     extra: Callable[[HookParamsT], dict[str, object] | None] | None = None,
     after_result: Callable[[HookResultT], None] | None = None,
     on_handoff: Callable[[HookParamsT, MiddlewareDef], None] | None = None,
@@ -441,13 +438,13 @@ async def dispatch_hooks(
     """
 
     def with_after_result(
-        fn: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
-    ) -> Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]]:
+        fn: Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]],
+    ) -> Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]]:
         if after_result is None:
             return fn
         callback = after_result
 
-        async def stamped(p: HookParamsT, c: GenerateMiddlewareContext) -> HookResultT:
+        async def stamped(p: HookParamsT, c: MiddlewareContext) -> HookResultT:
             result = await fn(p, c)
             callback(result)
             return result
@@ -456,13 +453,13 @@ async def dispatch_hooks(
 
     def checked_by(
         mw: MiddlewareDef,
-        fn: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]],
-    ) -> Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]]:
+        fn: Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]],
+    ) -> Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]]:
         if on_handoff is None:
             return fn
         check = on_handoff
 
-        async def checked(p: HookParamsT, c: GenerateMiddlewareContext) -> HookResultT:
+        async def checked(p: HookParamsT, c: MiddlewareContext) -> HookResultT:
             check(p, mw)
             return await fn(p, c)
 
@@ -470,7 +467,7 @@ async def dispatch_hooks(
 
     async def leaf(
         p: HookParamsT,
-        c: GenerateMiddlewareContext,
+        c: MiddlewareContext,
     ) -> HookResultT:
         # Hop even when use=[] so a logging middleware cannot change whether
         # a ContextVar the model set is still set after generate.
@@ -483,9 +480,9 @@ async def dispatch_hooks(
 
         async def run_next(
             p: HookParamsT,
-            c: GenerateMiddlewareContext,
+            c: MiddlewareContext,
             _mw: MiddlewareDef = mw,
-            _inner: Callable[[HookParamsT, GenerateMiddlewareContext], Awaitable[HookResultT]] = inner,
+            _inner: Callable[[HookParamsT, MiddlewareContext], Awaitable[HookResultT]] = inner,
             _wrap: HookWrap[HookParamsT, HookResultT] = wrap,
         ) -> HookResultT:
             return await hop(
@@ -508,8 +505,8 @@ async def dispatch_tool(
     *,
     middleware: list[MiddlewareDef],
     params: ToolHookParams,
-    ctx: GenerateMiddlewareContext,
-    next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+    ctx: MiddlewareContext,
+    next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
 ) -> MultipartToolResponse:
     """Chain wrap_tool middleware and call next_fn."""
     return await dispatch_hooks(
@@ -804,9 +801,9 @@ async def run_generate(
         except Exception as exc:
             raise StreamingCallbackError(exc) from exc
 
-    ctx = GenerateMiddlewareContext(
+    ctx = MiddlewareContext(
         ai=scope.ai,
-        custom_context=dict(context or {}),
+        context=dict(context or {}),
         on_chunk=send_caller_chunk if caller_on_chunk is not None else None,
         abort_signal=abort_signal if abort_signal is not None else asyncio.Event(),
     )
@@ -885,7 +882,7 @@ class ChunkAccumulator:
     def __init__(
         self,
         message_index: int,
-        formatter: Formatter[Any, Any] | None,
+        formatter: FormatHandler[Any, Any] | None,
         schema_type: type[BaseModel] | None = None,
     ) -> None:
         self.message_index = message_index
@@ -920,7 +917,7 @@ class ChunkAccumulator:
         *,
         chunk: ModelResponseChunk[Any],
         role: Role,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
     ) -> None:
         """Send one framework-wrapped chunk through the current stream chain."""
         if ctx.on_chunk is None:
@@ -930,7 +927,7 @@ class ChunkAccumulator:
     @contextlib.contextmanager
     def intercept_model_stream(
         self,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
         *,
         role: Role,
     ) -> Generator[None, None, None]:
@@ -962,7 +959,7 @@ def box_background_start(
 
     Timing comes from Action.run, not from the ticket.
     """
-    op = _ensure_operation(response=raw, name=name)
+    op = ensure_model_operation(response=raw, name=name)
     stamp_operation_action(operation=op, name=name)
     return ModelResponse(operation=op, request=request, latency_ms=latency_ms)
 
@@ -998,7 +995,6 @@ def as_model_response(*, raw: object, name: str) -> ModelResponse:
         raw=raw.raw,
         request=raw.request,
         operation=raw.operation,
-        candidates=raw.candidates,
     )
     walked._message_parser = raw._message_parser
     walked._schema_type = raw._schema_type
@@ -1011,7 +1007,7 @@ class ResolvedTurn:
 
     model: Action
     tools: list[Action]
-    formatter: Formatter[Any, Any] | None = None
+    formatter: FormatHandler[Any, Any] | None = None
 
 
 @dataclass
@@ -1076,7 +1072,6 @@ def request_with_messages(*, request: ModelRequest, messages: list[Message]) -> 
 def output_config_from(out: GenerateActionOutputConfig) -> OutputConfig:
     return OutputConfig(
         format=out.format,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=out.json_schema,
         constrained=out.constrained,
         content_type=out.content_type,
@@ -1336,7 +1331,11 @@ async def resolve_door(
             ),
             reason=RuntimeErrorReason.INVALID_RESUME,
         )
-    options, formatter = apply_format(options=options, format_def=format_def)
+    options, formatter = apply_format(
+        options=options,
+        format_def=format_def,
+        model_supports_constrained=supports_constrained(turn_model, has_tools=bool(turn_tools)),
+    )
     assert_valid_tool_names(turn_tools)
     return options, ResolvedTurn(model=turn_model, tools=turn_tools, formatter=formatter)
 
@@ -1383,7 +1382,7 @@ async def run_wrap_generate(
 
     async def run_turn(
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
     ) -> ModelResponse:
         return await generate_turn(
             params=params,
@@ -1454,7 +1453,7 @@ async def run_wrap_generate(
 async def generate_turn(
     *,
     params: GenerateHookParams,
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
     registry: Registry,
     resolved: ResolvedTurn,
     call: GenerateRun,
@@ -1572,7 +1571,7 @@ async def call_model(
     resolved: ResolvedTurn,
     call: GenerateRun,
     chunks: ChunkAccumulator,
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
     mw_pipeline: MiddlewarePipeline,
     current_turn: int,
 ) -> ModelResponse:
@@ -1590,7 +1589,7 @@ async def call_model(
     # request the caller made instead of a rebuilt subset of it.
     call.request = request
 
-    async def run_action(params: ModelHookParams, c: GenerateMiddlewareContext) -> ModelResponse:
+    async def run_action(params: ModelHookParams, c: MiddlewareContext) -> ModelResponse:
         # After they stop, another model call would be billed and thrown away.
         raise_if_aborted(c.abort_signal)
         if is_debug_enabled(logger):
@@ -1600,9 +1599,9 @@ async def call_model(
                 turn=current_turn,
                 messages=len(params.request.messages),
             )
-        result = await turn_model.run(
+        result = await turn_model._run(
             input=params.request,
-            context=c.custom_context,
+            context=c.context,
             on_chunk=c.on_chunk,
             abort_signal=c.abort_signal,
         )
@@ -1663,7 +1662,7 @@ def stop_after_model(
     response: ModelResponse,
     options: GenerateActionOptions,
     current_turn: int,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
 ) -> ModelResponse | None:
     """Return when this model call is the whole turn (ticket, no tools, or they asked to stop)."""
     generated_msg = response.message
@@ -1713,7 +1712,7 @@ async def run_tools_or_stop(
     tool_requests: list[Part],
     options: GenerateActionOptions,
     resolved: ResolvedTurn,
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
     mw_pipeline: MiddlewarePipeline,
     current_turn: int,
     chunks: ChunkAccumulator,
@@ -1851,7 +1850,7 @@ def stamp_output(
     response: ModelResponse,
     options: GenerateActionOptions,
     call: GenerateRun,
-    formatter: Formatter[Any, Any] | None,
+    formatter: FormatHandler[Any, Any] | None,
 ) -> ModelResponse:
     """Put format and schema on the response they get back."""
     out = call.output
@@ -1879,8 +1878,9 @@ def stamp_output(
 def apply_format(
     *,
     options: GenerateActionOptions,
-    format_def: FormatDef | None,
-) -> tuple[GenerateActionOptions, Formatter[Any, Any] | None]:
+    format_def: Formatter | None,
+    model_supports_constrained: bool,
+) -> tuple[GenerateActionOptions, FormatHandler[Any, Any] | None]:
     """Apply format definition to request, injecting instructions and output config."""
     if not format_def:
         return options, None
@@ -1895,25 +1895,32 @@ def apply_format(
     str_instructions = raw_instructions if isinstance(raw_instructions, str) else None
     instructions = resolve_instructions(formatter=formatter, instructions=str_instructions)
 
-    should_inject = False
-    if options.output and options.output.instructions is not None:
-        should_inject = bool(options.output.instructions)
-    elif format_def.config.default_instructions is not None:
-        should_inject = format_def.config.default_instructions
-    elif instructions:
-        should_inject = True
+    # The request's final output shape: the format sets it, the caller can override constrained.
+    output_format = format_def.config.format or (options.output.format if options.output else None)
+    json_schema = options.output.json_schema if options.output else None
+    requested = (
+        options.output.constrained
+        if options.output and options.output.constrained is not None
+        else format_def.config.constrained
+    )
+    # Native mode only when asked for, there is a schema, and the model can do it.
+    constrained = bool(requested) and json_schema is not None and model_supports_constrained
 
-    if should_inject and instructions is not None:
+    if raw_instructions is not None:
+        should_inject = bool(raw_instructions)
+    else:
+        # Natively constrained JSON already follows the schema; everything else needs the
+        # text. Same rule as Go's generate.
+        should_inject = not (constrained and output_format == 'json')
+
+    if should_inject and instructions:
         out_request.messages = inject_instructions(out_request.messages, instructions)  # type: ignore[arg-type]
 
     # Ensure output is set before modifying its properties
     if out_request.output is None:
         return (out_request, formatter)
 
-    if format_def.config.constrained is not None:
-        out_request.output.constrained = format_def.config.constrained
-    if options.output and options.output.constrained is not None:
-        out_request.output.constrained = options.output.constrained
+    out_request.output.constrained = constrained
 
     if format_def.config.content_type is not None:
         out_request.output.content_type = format_def.config.content_type
@@ -1923,7 +1930,15 @@ def apply_format(
     return (out_request, formatter)
 
 
-def resolve_instructions(*, formatter: Formatter[Any, Any], instructions: str | None) -> str | None:
+def supports_constrained(model: Action | None, *, has_tools: bool) -> bool:
+    """Whether the model declares native constrained output for this request."""
+    model_options = model.metadata.get('model') if model else None
+    supports = cast(dict[str, object], model_options).get('supports') if isinstance(model_options, dict) else None
+    value = cast(dict[str, object], supports).get('constrained') if isinstance(supports, dict) else None
+    return value == ConstrainedSupport.ALL or (value == ConstrainedSupport.NO_TOOLS and not has_tools)
+
+
+def resolve_instructions(*, formatter: FormatHandler[Any, Any], instructions: str | None) -> str | None:
     """Return custom instructions if provided, otherwise use formatter defaults."""
     if instructions is not None:
         return instructions
@@ -2004,7 +2019,7 @@ async def resolve_parameters(
     *,
     registry: Registry,
     options: GenerateActionOptions,
-) -> tuple[Action, list[Action], FormatDef | None]:
+) -> tuple[Action, list[Action], Formatter | None]:
     """Resolve model, tools, and format from registry for a generation request."""
     model_action = await resolve_model_action(registry, options.model)
 
@@ -2012,7 +2027,7 @@ async def resolve_parameters(
     # can wrap that call; it cannot add names we have not resolved.
     tools = await resolve_tools_from_options(registry, options.tools)
 
-    format_def: FormatDef | None = None
+    format_def: Formatter | None = None
     if options.output and options.output.format:
         looked_up_format = registry.lookup_value('format', options.output.format)
         if looked_up_format is None:
@@ -2021,7 +2036,7 @@ async def resolve_parameters(
                 message=f'Unable to resolve format {options.output.format}',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        format_def = cast(FormatDef, looked_up_format)
+        format_def = cast(Formatter, looked_up_format)
 
     if options.output and options.output.json_schema is not None:
         json_schema = options.output.json_schema
@@ -2056,7 +2071,6 @@ async def to_model_request(
         tool_choice=options.tool_choice,
         output=OutputConfig(
             format=output.format if output else None,
-            # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
             json_schema=out_schema,
             constrained=output.constrained if output else None,
             content_type=output.content_type if output else None,
@@ -2139,7 +2153,7 @@ async def resolve_tool_requests(
         raise_if_aborted(ctx.abort_signal)
         params = ToolHookParams(tool_request_part=trp, tool=tool)
 
-        async def next_fn(p: ToolHookParams, c: GenerateMiddlewareContext) -> MultipartToolResponse:
+        async def next_fn(p: ToolHookParams, c: MiddlewareContext) -> MultipartToolResponse:
             return await execute_tool_request(
                 tool=p.tool,
                 tool_request_part=p.tool_request_part,
@@ -2245,17 +2259,17 @@ async def execute_tool_request(
     *,
     tool: Action,
     tool_request_part: Part,
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
 ) -> MultipartToolResponse:
     """Execute a tool and return its response.
 
     Interrupts from the tool body propagate to the caller (the engine
     stamps interrupt metadata on the tool-request Part at the top of
     ``run_one_tool``).  This keeps the contract symmetric with
-    ``BaseMiddleware.wrap_tool``: responses are return values, interrupts
+    ``Middleware.wrap_tool``: responses are return values, interrupts
     are exceptions.
     """
-    # run_tool_request threads custom_context/telemetry (and the abort signal) into
+    # run_tool_request threads context/telemetry (and the abort signal) into
     # the tool. We still watch abort_signal here so a tool that ignores it gets hard
     # cancelled instead of hanging past a client abort.
     abort_signal = ctx.abort_signal
@@ -2590,7 +2604,7 @@ async def run_restart(
         tool=tool,
     )
 
-    async def next_fn(p: ToolHookParams, ctx: GenerateMiddlewareContext) -> MultipartToolResponse:
+    async def next_fn(p: ToolHookParams, ctx: MiddlewareContext) -> MultipartToolResponse:
         executed = await run_tool_after_restart(tool=p.tool, restart_trp=p.tool_request_part, ctx=ctx)
         if executed.tool_response is None:
             raise GenkitError(status='INTERNAL', message='Expected a tool response part')

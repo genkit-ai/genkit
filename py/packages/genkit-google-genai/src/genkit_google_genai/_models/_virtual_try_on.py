@@ -53,8 +53,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import Constrained, ModelInfo, ModelRequest, Supports, get_basic_usage_stats
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.model import ConstrainedSupport, GenerationUsage, ModelContext, ModelInfo, ModelRequest, ModelSupports
 
 # Ids ``virtual_try_on_model`` offers for autocomplete. Other
 # ``virtual-try-on-`` ids still resolve.
@@ -129,12 +129,12 @@ class VirtualTryOnConfig(BaseModel):
     )
 
 
-DEFAULT_VIRTUAL_TRY_ON_SUPPORT = Supports(
+DEFAULT_VIRTUAL_TRY_ON_SUPPORT = ModelSupports(
     media=True,
     multiturn=False,
     tools=False,
     system_role=False,
-    constrained=Constrained.NONE,
+    constrained=ConstrainedSupport.NONE,
     output=['media'],
 )
 
@@ -328,7 +328,7 @@ def _from_recontext_response(
             raw=raw,
         )
 
-    usage = get_basic_usage_stats(input_=request.messages, response=message)
+    usage = GenerationUsage.from_messages(messages=request.messages, response=message)
     usage.custom = {'generations': len(parts)}
     return ModelResponse(
         message=message,
@@ -367,7 +367,7 @@ class VirtualTryOnModel:
 
     def _client_for_context(
         self,
-        ctx: ActionRunContext,
+        ctx: ModelContext,
         *,
         config: Mapping[str, Any] | None = None,
     ) -> genai.Client:
@@ -429,7 +429,7 @@ class VirtualTryOnModel:
                 cause=e,
             ) from e
 
-    async def generate(self, request: ModelRequest[VirtualTryOnConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def generate(self, request: ModelRequest[VirtualTryOnConfig], ctx: ModelContext) -> ModelResponse:
         """Generate try-on images for the tagged person and product media.
 
         Every image comes back in the one response; there is nothing to stream.

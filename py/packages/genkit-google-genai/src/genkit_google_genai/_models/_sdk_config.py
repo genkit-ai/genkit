@@ -16,6 +16,7 @@
 
 """Dump a family config and translate SDK ValidationErrors into Genkit errors."""
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from google.genai import types as genai_types
@@ -47,7 +48,7 @@ def dump_family_config(
         return None
     if not isinstance(config, expected_type):
         raise unexpected_config_error(action_name=action_name)
-    dumped = config.model_dump(exclude_none=True, by_alias=False)
+    dumped = config.model_dump(exclude_none=True)
     return dumped or None
 
 
@@ -91,6 +92,13 @@ def attach_leftovers(
 GEMINI_MANAGED_BODY_FIELDS = frozenset({'contents', 'systeminstruction', 'tools', 'toolconfig', 'cachedcontent'})
 # generationConfig fields Genkit sets from the request's output config.
 GEMINI_MANAGED_GENERATION_FIELDS = frozenset({'responseschema', 'responsejsonschema', 'responsemimetype'})
+# generationConfig fields Gemini models refuse in extra, with the reason.
+# candidateCount: the plugin reads only candidate 0, so N > 1 bills output
+# tokens for N candidates and returns one. Go refuses anything but 1 the same
+# way. With one candidate guaranteed, list position 0 is candidate.index 0.
+GEMINI_UNSUPPORTED_GENERATION_FIELDS = {
+    'candidatecount': 'Gemini models return one candidate; candidateCount is not supported',
+}
 # Veo's predictLongRunning body: `instances` carries the prompt and input media.
 VEO_MANAGED_BODY_FIELDS = frozenset({'instances'})
 # Virtual Try-On's predict body: `instances` carries the person and product images.
@@ -146,6 +154,7 @@ def attach_config_extra(
     action_name: str,
     managed_body_fields: frozenset[str],
     managed_generation_fields: frozenset[str] = frozenset(),
+    unsupported_generation_fields: Mapping[str, str] | None = None,
 ) -> Any:  # noqa: ANN401
     """Send ``config.extra`` verbatim at the top level of the request body.
 
@@ -154,10 +163,20 @@ def attach_config_extra(
     ``{'generationConfig': {'newKnob': 1}}`` adds one key instead of replacing
     the block, and a colliding leaf wins over the declared field. Fields
     Genkit builds from the request (``managed_body_fields``, and
-    ``managed_generation_fields`` under ``generationConfig``) are rejected.
+    ``managed_generation_fields`` under ``generationConfig``) are rejected,
+    and so is each ``unsupported_generation_fields`` key, with its reason.
     """
     if not extra:
         return config
+    for key, value in extra.items():
+        if _wire_key(key) != 'generationconfig' or not isinstance(value, dict):
+            continue
+        for inner in cast(dict[str, Any], value):
+            reason = (unsupported_generation_fields or {}).get(_wire_key(inner))
+            if reason is not None:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT', message=f'{action_name}: extra field {key}.{inner}: {reason}'
+                )
     field = _managed_extra_field(extra, body_fields=managed_body_fields, generation_fields=managed_generation_fields)
     if field is not None:
         raise GenkitError(

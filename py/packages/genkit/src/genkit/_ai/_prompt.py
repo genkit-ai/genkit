@@ -19,10 +19,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 import weakref
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
@@ -65,14 +64,15 @@ from genkit._core._action import (
     Action,
     ActionKind,
     StreamingCallback,
+    StreamResponse,
     create_action_key,
     get_current_context,
 )
-from genkit._core._channel import Channel
+from genkit._core._channel import start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
-from genkit._core._middleware import BaseMiddleware, middleware_class_index
+from genkit._core._middleware import Middleware, _dump_middleware_ref_config, middleware_class_index
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
@@ -110,7 +110,7 @@ class PromptSettings(TypedDict, total=False):
     tools: Sequence[str | Tool] | None
     tool_choice: ToolChoice | None
     docs: list[Document] | None
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None
+    use: Sequence[Middleware | MiddlewareRef] | None
     max_turns: int | None
     return_tool_requests: bool | None
     resume_respond: Part | list[Part] | None
@@ -150,57 +150,34 @@ class PromptGenerateOptions(PromptSettings, ModelSettings, total=False):
     context: dict[str, Any] | None
 
 
-class ModelStreamResponse(Generic[OutputT]):
-    """Response from streaming prompt execution with stream and response properties."""
+# Generic[OutputT] is spelled out because ModelResponse[OutputT] is a Pydantic
+# generic, which typing doesn't scan for type parameters.
+class ModelStreamResponse(StreamResponse[ModelResponseChunk[OutputT], ModelResponse[OutputT]], Generic[OutputT]):
+    """Chunks of a model reply, then the full ``ModelResponse``.
 
-    def __init__(
-        self,
-        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]],
-        response_future: asyncio.Future[ModelResponse[OutputT]],
-    ) -> None:
-        """Initialize with streaming channel and response future."""
-        self._channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = channel
-        self._response_future: asyncio.Future[ModelResponse[OutputT]] = response_future
+    Returned by ``ai.generate_stream()`` and ``prompt.stream()``. Iteration
+    and ``.response`` follow ``StreamResponse``; failures don't:
 
-    @property
-    def stream(self) -> AsyncIterable[ModelResponseChunk[OutputT]]:
-        """Async iterable of response chunks.
+    - **Before the request** (unknown model, bad config, ...): the loop and
+      ``.response`` both raise the ``GenkitError`` (``NOT_FOUND``, ...).
+    - **Model or tool failure on any turn, including the first**: the loop
+      ends normally and ``.response`` resolves with ``error`` set and
+      ``finish_reason == FAILED``. The chunks already received are the record
+      of what was shown.
 
-        Returns:
-            An async iterable that yields ModelResponseChunk objects
-            as they are received from the model. Each chunk contains:
-            - text: The partial text generated so far
-            - index: The chunk index
-            - Additional metadata from the model
-        """
-        return self._channel
+    Example:
+        ```python
+        result = ai.generate_stream(prompt='Describe miso soup in one line.')
+        async for chunk in result:
+            print(chunk.text)
+        # => Savory soybean broth
+        #    with tofu and scallions.
 
-    @property
-    def response(self) -> Awaitable[ModelResponse[OutputT]]:
-        """Awaitable for the complete response.
-
-        Returns:
-            An awaitable that resolves to a ModelResponse containing:
-            - text: The complete generated text
-            - output: The typed output, or None when the reply isn't that shape
-            - messages: The full message history
-            - usage: Token usage statistics
-            - finish_reason: Why generation stopped (e.g., 'stop', 'length')
-            - Any tool calls or interrupts from the response
-
-        If the model fails partway through, this still resolves rather than
-        raising: ``finish_reason`` is FAILED, ``error`` is set, ``text`` is
-        empty, ``message`` is None, and ``messages`` ends at the last complete
-        turn. The chunks already streamed are the record of what was shown.
-        """
-        return self._response_future
-
-    # The natural Python expectation is `async for chunk in ai.generate_stream(...)`.
-    # Delegating to the underlying channel lets that work without forcing the
-    # caller to remember the extra `.stream` hop, while `.stream` and `.response`
-    # remain available for cases where you want both halves explicitly.
-    def __aiter__(self) -> AsyncIterator[ModelResponseChunk[OutputT]]:
-        return self._channel.__aiter__()
+        response = await result.response
+        print(response.finish_reason)
+        # => stop
+        ```
+    """
 
 
 @dataclass
@@ -215,7 +192,7 @@ class PromptCache:
 class GenerateCall(BaseModel):
     """User-shaped args for one generate. Prompts fill this; ``ai.generate`` builds it."""
 
-    # arbitrary_types_allowed: Tool, BaseMiddleware and ModelRef are plain classes, so
+    # arbitrary_types_allowed: Tool, Middleware and ModelRef are plain classes, so
     # Pydantic only isinstance-checks them.
     # extra='forbid': a misspelled field raises instead of being dropped.
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
@@ -250,7 +227,7 @@ class GenerateCall(BaseModel):
     tools: Sequence[str | Tool] | None = None
     tool_choice: ToolChoice | None = None
     docs: list[Document] | None = None
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None
+    use: Sequence[Middleware | MiddlewareRef] | None = None
     max_turns: int | None = None
     return_tool_requests: bool | None = None
     resume_respond: Part | list[Part] | None = None
@@ -296,7 +273,7 @@ class Prompt(Generic[InputT, OutputT]):
         metadata: dict[str, Any] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         name: str | None = None,
         ns: str | None = None,
@@ -443,7 +420,7 @@ class Prompt(Generic[InputT, OutputT]):
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
         docs: list[Document] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         max_turns: int | None = None,
         context: dict[str, Any] | None = None,
         return_tool_requests: bool | None = None,
@@ -493,7 +470,7 @@ class Prompt(Generic[InputT, OutputT]):
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
         docs: list[Document] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         max_turns: int | None = None,
         context: dict[str, Any] | None = None,
         return_tool_requests: bool | None = None,
@@ -506,11 +483,10 @@ class Prompt(Generic[InputT, OutputT]):
         Iterate the returned stream for chunks; there's no callback here so
         chunks only arrive one way.
         """
-        channel: Channel[ModelResponseChunk[OutputT], ModelResponse[OutputT]] = Channel()
 
         # Same run path as __call__; only the chunk sink differs.
-        response_future: asyncio.Future[ModelResponse[OutputT]] = asyncio.create_task(
-            self(
+        async def run(send_chunk: Callable[[ModelResponseChunk[OutputT]], None]) -> ModelResponse[OutputT]:
+            return await self(
                 input,
                 model=model,
                 config=config,
@@ -525,12 +501,12 @@ class Prompt(Generic[InputT, OutputT]):
                 resume_respond=resume_respond,
                 resume_restart=resume_restart,
                 resume_metadata=resume_metadata,
-                on_chunk=lambda c: channel.send(cast('ModelResponseChunk[OutputT]', c)),
+                on_chunk=lambda c: send_chunk(cast('ModelResponseChunk[OutputT]', c)),
             )
-        )
-        channel.set_close_future(response_future)
 
-        return ModelStreamResponse[OutputT](channel=channel, response_future=response_future)
+        channel, task = start_stream(run)
+
+        return ModelStreamResponse[OutputT](stream=channel, response=task)
 
     async def render(
         self,
@@ -542,7 +518,7 @@ class Prompt(Generic[InputT, OutputT]):
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
         docs: list[Document] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         max_turns: int | None = None,
         context: dict[str, Any] | None = None,
         return_tool_requests: bool | None = None,
@@ -1000,7 +976,6 @@ async def to_prompt_model_request(*, registry: Registry, options: GenerateAction
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
@@ -1344,17 +1319,17 @@ def define_schema(registry: Registry, name: str, schema: type[BaseModel]) -> Non
 
 def _use_to_wire_metadata(
     registry: Registry,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None,
+    use: Sequence[Middleware | MiddlewareRef] | None,
 ) -> list[dict[str, Any]] | None:
     """Serialize a prompt's ``use=`` list into the wire-shape the Dev UI reads.
 
     Produces the ``[{name, config?}]`` list the Prompt Runner sidebar pre-fills
-    from ``metadata.prompt.use``. Inline ``BaseMiddleware`` instances surface
+    from ``metadata.prompt.use``. Inline ``Middleware`` instances surface
     their configured fields so the sidebar matches what the prompt will
     actually run with. The registered name is resolved off ``registry`` so a
     class can live under multiple names without us tying it to a single
     identity. Unregistered instances — subclasses passed inline without going
-    through ``@ai.middleware``, ``GenerateMiddleware(...)``, or a middleware plugin —
+    through ``@ai.middleware``, ``ai.define_middleware(...)``, or a plugin's ``list_middleware()`` —
     are dropped because the Dev UI has no name to address them by.
     """
     if use is None:
@@ -1368,11 +1343,11 @@ def _use_to_wire_metadata(
                 item['config'] = entry.config
             out.append(item)
             continue
-        if isinstance(entry, BaseMiddleware):
+        if isinstance(entry, Middleware):
             name = cls_index.get(type(entry))
             if not name:
                 continue
-            config = entry.config.model_dump(exclude_none=True, mode='json')
+            config = _dump_middleware_ref_config(entry.config)
             item = {'name': name}
             if config:
                 item['config'] = config

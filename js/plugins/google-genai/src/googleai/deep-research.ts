@@ -25,13 +25,13 @@ import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
 import {
   ensureToolIds,
   fromInteraction,
+  toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
 } from '../common/interaction-converters.js';
 import {
   InteractionAllowedTools,
   InteractionTool,
-  ResponseModality,
 } from '../common/interaction-types.js';
 import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
@@ -214,8 +214,10 @@ export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
 // they don't show up in autocomplete. Set `stage` on each one (keeping the
 // default `supports`).
 const HIDDEN_MODELS = {
-  // Deprecated; shuts down on Oct 23 2026 (changelog, Oct 8 2026). Replaced
-  // by deep-research-preview-04-2026 and deep-research-max-preview-04-2026.
+  // Deprecated; the shutdown date was Oct 23 2026 (changelog, Oct 8 2026),
+  // but it still accepted requests on Oct 27 2026. Remove it once the server
+  // returns 404. Replaced by deep-research-preview-04-2026 and
+  // deep-research-max-preview-04-2026.
   'deep-research-pro-preview-12-2025': commonRef(
     'deep-research-pro-preview-12-2025',
     { ...GENERIC_MODEL.info, stage: 'deprecated' }
@@ -382,26 +384,21 @@ export function defineModel(
         }
       }
 
-      let responseFormat: any = undefined;
-      if (
+      // JSON output and the requested output types, as `response_format`
+      // entries.
+      const jsonOutput =
         request.output?.format === 'json' ||
-        request.output?.contentType === 'application/json'
-      ) {
-        responseFormat = {
-          type: 'text',
-          mime_type: 'application/json',
-        };
-        if (request.output.schema) {
-          responseFormat.schema = cleanSchema(request.output.schema);
-        }
-      }
-
-      let responseModalitiesConverted: ResponseModality[] | undefined;
-      if (responseModalities) {
-        responseModalitiesConverted = responseModalities.map(
-          (m) => m.toLowerCase() as ResponseModality
-        );
-      }
+        request.output?.contentType === 'application/json';
+      const responseFormat = toInteractionResponseFormat({
+        modalities: responseModalities,
+        json: jsonOutput
+          ? {
+              schema: request.output?.schema
+                ? cleanSchema(request.output.schema)
+                : undefined,
+            }
+          : undefined,
+      });
 
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
@@ -423,7 +420,6 @@ export function defineModel(
         store,
         tools: tools.length ? tools : undefined,
         response_format: responseFormat,
-        response_modalities: responseModalitiesConverted,
         ...rest,
       };
 

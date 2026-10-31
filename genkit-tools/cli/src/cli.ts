@@ -47,7 +47,7 @@ import { traceList } from './commands/trace-list';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
 import { cleanupLegacyAiToolContext } from './utils/legacy-context-cleanup';
-import { detectCLIRuntime } from './utils/runtime-detector.js';
+import { detectCLIRuntime } from './utils/runtime-detector';
 import { showUpdateNotification } from './utils/updates';
 import { version } from './utils/version';
 

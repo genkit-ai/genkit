@@ -230,6 +230,29 @@ describe('waitForRuntime', () => {
     await expect(waitPromise).resolves.toBeUndefined();
   });
 
+  it('should ignore existingRuntimeIds and wait for a new runtime ID', async () => {
+    mockManager.listRuntimes.mockReturnValue([{ id: 'old-id' }]);
+    let eventCallback: (event: RuntimeEvent, runtime: any) => void;
+
+    mockManager.onRuntimeEvent.mockImplementation((cb: any) => {
+      eventCallback = cb;
+      return jest.fn();
+    });
+
+    const waitPromise = waitForRuntime(
+      mockManager,
+      mockProcessPromise,
+      30000,
+      new Set(['old-id'])
+    );
+
+    setTimeout(() => {
+      eventCallback(RuntimeEvent.ADD, { id: 'new-id' });
+    }, 10);
+
+    await expect(waitPromise).resolves.toBeUndefined();
+  });
+
   it('should reject if process exits early', async () => {
     mockManager.listRuntimes.mockReturnValue([]);
     mockManager.onRuntimeEvent.mockReturnValue(jest.fn());
