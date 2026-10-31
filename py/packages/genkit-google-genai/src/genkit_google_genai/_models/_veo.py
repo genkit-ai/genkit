@@ -28,8 +28,8 @@ from genkit_google_genai._constants import is_multi_regional_location, multi_reg
 from genkit_google_genai._models._sdk_config import (
     VEO_MANAGED_BODY_FIELDS,
     attach_config_extra,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     sdk_config_error,
 )
 from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
@@ -317,7 +317,7 @@ class VeoModel:
 
         kwargs = dict(self._client_kwargs or {})
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
         if api_key is not None:
             kwargs['api_key'] = api_key
             # The SDK rejects api_key with credentials, project, or location.
@@ -435,8 +435,7 @@ class VeoModel:
         except ValidationError as e:
             raise sdk_config_error(action_name=self._name, error=e) from e
 
-        cfg = attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
-        return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
+        return attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
 
     @property
     def metadata(self) -> dict:

@@ -34,8 +34,8 @@ from genkit_google_genai._models._sdk_config import (
     GEMINI_UNSUPPORTED_GENERATION_FIELDS,
     attach_config_extra,
     attach_leftovers,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     sdk_config_error,
     split_sdk_fields,
 )
@@ -2036,7 +2036,7 @@ class GeminiModel:
         # plugin's credentials, endpoint, headers, and timeouts.
         kwargs = dict(self._client_kwargs)
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
 
         if api_version:
             opts.api_version = api_version
@@ -2438,7 +2438,7 @@ class GeminiModel:
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
             cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
-            cfg = attach_config_extra(
+            return attach_config_extra(
                 cfg,
                 extra,
                 action_name=self._version,
@@ -2446,7 +2446,6 @@ class GeminiModel:
                 managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
                 unsupported_generation_fields=GEMINI_UNSUPPORTED_GENERATION_FIELDS,
             )
-            return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
         return None
 
