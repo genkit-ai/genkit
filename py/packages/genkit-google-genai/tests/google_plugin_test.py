@@ -31,8 +31,8 @@ from genkit_google_genai import GoogleAI, VertexAI
 from genkit_google_genai._evaluators._evaluation import VertexAIEvaluationMetricType
 from genkit_google_genai._google import (
     GenaiModels,
-    _inject_attribution_headers,
     _plugin_client,
+    _plugin_http_options,
     googleai_name,
     vertexai_name,
 )
@@ -47,7 +47,6 @@ from google import genai
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai.errors import APIError
-from google.genai.types import HttpOptions
 from pydantic import ValidationError
 
 from genkit import Document, Genkit, GenkitError, Message, Part, Role
@@ -90,8 +89,7 @@ class TestGoogleAIInit(unittest.TestCase):
             vertexai=False,
             api_key=api_key,
             credentials=None,
-            debug_config=None,
-            http_options=_inject_attribution_headers(),
+            http_options=_plugin_http_options(),
         )
         self.assertIsInstance(plugin, GoogleAI)
         self.assertFalse(plugin._vertexai)
@@ -107,8 +105,7 @@ class TestGoogleAIInit(unittest.TestCase):
             vertexai=False,
             api_key='env_api_key',
             credentials=None,
-            debug_config=None,
-            http_options=_inject_attribution_headers(),
+            http_options=_plugin_http_options(),
         )
         self.assertIsInstance(plugin, GoogleAI)
         self.assertFalse(plugin._vertexai)
@@ -124,8 +121,7 @@ class TestGoogleAIInit(unittest.TestCase):
             vertexai=False,
             api_key=ANY,
             credentials=mock_credentials,
-            debug_config=None,
-            http_options=_inject_attribution_headers(),
+            http_options=_plugin_http_options(),
         )
         self.assertIsInstance(plugin, GoogleAI)
         self.assertFalse(plugin._vertexai)
@@ -388,7 +384,7 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
 
 
 @pytest.mark.parametrize(
-    'input_options, expected_headers',
+    'headers, expected_headers',
     [
         (
             None,
@@ -405,7 +401,7 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
             },
         ),
         (
-            {'headers': {'existing-header': 'value'}},
+            {'existing-header': 'value'},
             {
                 'existing-header': 'value',
                 'x-goog-api-client': GENKIT_USER_AGENT,
@@ -413,100 +409,41 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
             },
         ),
         (
-            {'headers': {'x-goog-api-client': 'initial-client'}},
+            {'x-goog-api-client': 'initial-client'},
             {
                 'x-goog-api-client': f'initial-client {GENKIT_USER_AGENT}',
                 'user-agent': GENKIT_USER_AGENT,
             },
         ),
         (
-            {'headers': {'user-agent': 'initial-agent'}},
+            {'user-agent': 'initial-agent'},
             {
                 'x-goog-api-client': GENKIT_USER_AGENT,
                 'user-agent': f'initial-agent {GENKIT_USER_AGENT}',
             },
         ),
         (
-            {'headers': {'x-goog-api-client': 'old', 'user-agent': 'old-ua'}},
+            {'x-goog-api-client': 'old', 'user-agent': 'old-ua'},
             {
                 'x-goog-api-client': f'old {GENKIT_USER_AGENT}',
                 'user-agent': f'old-ua {GENKIT_USER_AGENT}',
             },
         ),
         (
-            HttpOptions(),
+            {'User-Agent': 'acme', 'X-Goog-Api-Client': 'wrapper'},
             {
-                'x-goog-api-client': GENKIT_USER_AGENT,
-                'user-agent': GENKIT_USER_AGENT,
-            },
-        ),
-        (
-            HttpOptions(headers={'other': 'value'}),
-            {
-                'other': 'value',
-                'x-goog-api-client': GENKIT_USER_AGENT,
-                'user-agent': GENKIT_USER_AGENT,
-            },
-        ),
-        (
-            HttpOptions(headers={'x-goog-api-client': 'initial'}),
-            {
-                'x-goog-api-client': f'initial {GENKIT_USER_AGENT}',
-                'user-agent': GENKIT_USER_AGENT,
-            },
-        ),
-        (
-            HttpOptions(headers={'user-agent': 'initial-u'}),
-            {
-                'x-goog-api-client': GENKIT_USER_AGENT,
-                'user-agent': f'initial-u {GENKIT_USER_AGENT}',
-            },
-        ),
-        (
-            HttpOptions(headers={'x-goog-api-client': 'pre', 'user-agent': 'pre-u'}),
-            {
-                'x-goog-api-client': f'pre {GENKIT_USER_AGENT}',
-                'user-agent': f'pre-u {GENKIT_USER_AGENT}',
-            },
-        ),
-        (
-            HttpOptions(timeout=10),
-            {
-                'x-goog-api-client': GENKIT_USER_AGENT,
-                'user-agent': GENKIT_USER_AGENT,
-            },
-        ),
-        (
-            {'timeout': 5},
-            {
-                'x-goog-api-client': GENKIT_USER_AGENT,
-                'user-agent': GENKIT_USER_AGENT,
-            },
-        ),
-        (
-            {'headers': {'one': '1'}},
-            {
-                'one': '1',
-                'x-goog-api-client': GENKIT_USER_AGENT,
-                'user-agent': GENKIT_USER_AGENT,
-            },
-        ),
-        (
-            HttpOptions(headers={'X-Goog-Api-Client': 'custom-client', 'User-Agent': 'custom-agent'}),
-            {
-                'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
-                'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
+                'user-agent': f'acme {GENKIT_USER_AGENT}',
+                'x-goog-api-client': f'wrapper {GENKIT_USER_AGENT}',
             },
         ),
     ],
 )
-def test_inject_attribution_headers(
-    input_options: HttpOptions | dict[str, object] | None, expected_headers: dict[str, str]
+def test_plugin_headers_get_genkit_attribution(
+    headers: dict[str, str] | None, expected_headers: dict[str, str]
 ) -> None:
-    """Tests the _inject_attribution_headers function with various inputs."""
-    result = _inject_attribution_headers(input_options)  # type: ignore
-    assert isinstance(result, HttpOptions)
-    assert result.headers == expected_headers
+    """GoogleAI(headers=...) keeps the caller's headers and appends Genkit's attribution once."""
+    plugin = GoogleAI(api_key='k', headers=headers)
+    assert plugin._client_kwargs['http_options'].headers == expected_headers
 
 
 class TestVertexAIInit(unittest.TestCase):
@@ -525,8 +462,7 @@ class TestVertexAIInit(unittest.TestCase):
             credentials=None,
             project='project',
             location='us-central1',
-            debug_config=None,
-            http_options=_inject_attribution_headers(),
+            http_options=_plugin_http_options(),
         )
         self.assertIsInstance(plugin, VertexAI)
         self.assertTrue(plugin._vertexai)
@@ -545,8 +481,7 @@ class TestVertexAIInit(unittest.TestCase):
             credentials=mock_credentials,
             project='project',
             location='us-central1',
-            debug_config=None,
-            http_options=_inject_attribution_headers(),
+            http_options=_plugin_http_options(),
         )
         self.assertIsInstance(plugin, VertexAI)
         self.assertTrue(plugin._vertexai)
@@ -570,8 +505,7 @@ class TestVertexAIInit(unittest.TestCase):
             credentials=mock_credentials,
             project='project',
             location='location',
-            debug_config=None,
-            http_options=_inject_attribution_headers(),
+            http_options=_plugin_http_options(),
         )
         self.assertIsInstance(plugin, VertexAI)
         self.assertTrue(plugin._vertexai)

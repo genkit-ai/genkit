@@ -25,6 +25,18 @@ from pydantic import BaseModel, ValidationError
 from genkit import GenkitError
 
 
+def copy_http_options(opts: genai_types.HttpOptions) -> genai_types.HttpOptions:
+    """Copy ``opts`` so per-request edits never reach the plugin's options.
+
+    ``headers`` is the only container the plugin sets, so it gets a fresh dict.
+    The loop's ``httpx_async_client`` stays shared: it holds locks and sockets
+    that can't be copied, and every request on that loop goes through it.
+    """
+    if opts.headers is None:
+        return opts.model_copy()
+    return opts.model_copy(update={'headers': dict(opts.headers)})
+
+
 def unexpected_config_error(*, action_name: str) -> GenkitError:
     """Fail when the dump leaf sees a config Action did not produce."""
     return GenkitError(
@@ -189,20 +201,6 @@ def attach_config_extra(
     http = config.http_options or genai_types.HttpOptions()
     http.extra_body = _deep_merge(dict(http.extra_body or {}), extra)
     config.http_options = http
-    return config
-
-
-def keep_client_extra_body(config: Any, client_http_options: object) -> Any:  # noqa: ANN401
-    """Layer a request's extra_body over the plugin's instead of replacing it.
-
-    google-genai swaps in a per-request ``extra_body`` wholesale, so without
-    this a request carrying ``extra`` would drop ``GoogleAI(http_options=
-    HttpOptions(extra_body=...))``. The request's keys win.
-    """
-    request_body = config.http_options.extra_body if config.http_options else None
-    client_body = getattr(client_http_options, 'extra_body', None)
-    if request_body and isinstance(client_body, dict):
-        config.http_options.extra_body = _deep_merge(cast(dict[str, Any], client_body), request_body)
     return config
 
 
