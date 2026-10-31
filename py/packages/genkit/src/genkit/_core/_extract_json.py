@@ -132,7 +132,7 @@ def extract_json_array_from_text(text: str, cursor: int = 0) -> ExtractItemsResu
     if cursor == 0:
         array_start = text.find('[')
         if array_start == -1:
-            return ExtractItemsResult(items=[], cursor=len(text))
+            return ExtractItemsResult(items=[], cursor=0)
         current_cursor = array_start + 1
 
     object_start = -1

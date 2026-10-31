@@ -153,3 +153,16 @@ class TestArrayFormatInstructions:
 
         assert fmt.instructions is not None
         assert '"type": "object"' in fmt.instructions
+
+
+def test_streaming_ignores_objects_before_the_array_opens() -> None:
+    fmt = ArrayFormat().handle({'type': 'array', 'items': {'type': 'object'}})
+    previous = []
+    for text, expected in [
+        ('Here is an example: ', []),
+        ('{"example": 0}\n', []),
+        ('The actual list:\n[{"id": 1}]', [{'id': 1}]),
+    ]:
+        chunk = ModelResponseChunk(content=[Part.from_text(text)])
+        assert fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=previous)) == expected
+        previous.append(chunk)
