@@ -9,6 +9,7 @@ import asyncio
 import contextvars
 import json
 import pathlib
+import sys
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar, cast
@@ -6198,9 +6199,15 @@ async def test_generate_with_400_middleware_cancelled_on_a_later_turn_raises_can
         ),
     )
     await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    previous_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(1000)
+    try:
+        assert repr(task)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        sys.setrecursionlimit(previous_limit)
 
     assert model_calls == 2
     await _assert_no_extra_tasks(before)

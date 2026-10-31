@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, RootModel, field_validator
+from pydantic import ConfigDict, Field, RootModel
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitConfig, GenkitModel
@@ -75,14 +75,6 @@ class SnapshotStatus(StrEnum):
     ABORTED = 'aborted'
     FAILED = 'failed'
     EXPIRED = 'expired'
-
-
-class ScoreStatus(StrEnum):
-    """ScoreStatus data type class."""
-
-    UNKNOWN = 'UNKNOWN'
-    PASS = 'PASS'
-    FAIL = 'FAIL'
 
 
 class FinishReason(StrEnum):
@@ -330,78 +322,6 @@ class Embedding(GenkitModel):
     )
     embedding: list[float] = Field(...)
     metadata: Metadata | None = None
-
-
-class BaseDataPoint(GenkitModel):
-    """Model for basedatapoint data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    input: Any | None = Field(default=None)
-    output: Any | None = Field(default=None)
-    context: list[Any] | None = None
-    reference: Any | None = Field(default=None)
-    test_case_id: str | None = None
-    trace_ids: list[str] | None = None
-
-
-class BaseEvalDataPoint(GenkitModel):
-    """Model for baseevaldatapoint data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    input: Any | None = Field(default=None)
-    output: Any | None = Field(default=None)
-    context: list[Any] | None = None
-    reference: Any | None = Field(default=None)
-    test_case_id: str = Field(...)
-    trace_ids: list[str] | None = None
-
-
-class EvaluatorResponse(GenkitModel):
-    """Model for evaluatorresponse data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    sample_index: float | None = None
-    test_case_id: str = Field(...)
-    trace_id: str | None = None
-    span_id: str | None = None
-    evaluation: list[Score] = Field(...)
-
-    @field_validator('evaluation', mode='before')
-    @classmethod
-    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401
-        # saved runs may store one score object. wrap that dict;
-        # a Score built in code must already be a list.
-        return [value] if isinstance(value, dict) else value
-
-
-class EvaluatorRequest(GenkitModel):
-    """Model for evaluatorrequest data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    dataset: list[BaseDataPoint] = Field(...)
-    eval_run_id: str = Field(...)
-    options: Any | None = Field(default=None)
-
-
-class Score(GenkitModel):
-    """Model for score data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True
-    )
-    id: str | None = None
-    score: bool | float | str | None = Field(default=None)
-    status: ScoreStatus | None = None
-    error: str | None = None
-    details: ScoreDetails | None = None
 
 
 class GenkitError(GenkitModel):
@@ -1095,15 +1015,6 @@ class Resume(GenkitModel):
 StateSchema = dict[str, Any]  # type alias for stateschema (typed string map)
 
 
-class ScoreDetails(GenkitModel):
-    """Model for scoredetails data."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
-    )
-    reasoning: str | None = None
-
-
 class Data(GenkitModel):
     """Model for data data."""
 
@@ -1224,12 +1135,6 @@ class JsonPatch(RootModel[list[JsonPatchOperation]]):
     """Root model for jsonpatch."""
 
     root: list[JsonPatchOperation]
-
-
-class EvalResponse(RootModel[list[EvaluatorResponse]]):
-    """Root model for evalresponse."""
-
-    root: list[EvaluatorResponse]
 
 
 class ConstrainedSupport(StrEnum):

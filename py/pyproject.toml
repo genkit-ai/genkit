@@ -22,7 +22,6 @@ dependencies = [
   "genkit-anthropic",
   "genkit-openai",
   "genkit-django",
-  "genkit-evaluators",
   "genkit-fastapi",
   "genkit-flask",
   "genkit-google-cloud",
@@ -146,7 +145,6 @@ basic-flows          = { workspace = true }
 context              = { workspace = true }
 django-hello         = { workspace = true }
 dynamic-tools        = { workspace = true }
-evaluators           = { workspace = true }
 fastapi-bugbot       = { workspace = true }
 flask-hello          = { workspace = true }
 gemini-code-execution = { workspace = true }
@@ -170,7 +168,6 @@ genkit-amazon-bedrock = { workspace = true }
 genkit-anthropic    = { workspace = true }
 genkit-openai       = { workspace = true }
 genkit-django       = { workspace = true }
-genkit-evaluators   = { workspace = true }
 genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
@@ -388,7 +385,6 @@ root = [
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
-  "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
@@ -426,7 +422,6 @@ extraPaths = [
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
-  "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
@@ -476,7 +471,6 @@ search-path = [
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
-  "packages/genkit-evaluators/src",
   "packages/genkit-fastapi/src",
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",

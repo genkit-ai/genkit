@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""One config pipeline for models, embedders and evaluators.
+"""One config pipeline for models and embedders.
 
 The definition sets the config class (annotation and/or config_schema) and
 its defaults. Callers layer on the values they set. The fn sees the same
