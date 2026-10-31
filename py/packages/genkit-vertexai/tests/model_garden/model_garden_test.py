@@ -36,9 +36,8 @@ from genkit_vertexai._model_garden._plugin import ModelGardenModel
 from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, Role
-from genkit._ai._formats._builtin import built_in_formats
-from genkit.model import ModelRequest, OutputConfig
+from genkit import Genkit, GenkitError, Message, Part, Role
+from genkit.model import ModelContext, ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
 CLAUDE = 'modelgarden/anthropic/claude-sonnet-4@20250514'
@@ -55,11 +54,13 @@ OPENAI_EXTRA_MISSING = (
 
 def test_catalog_output_names_are_known_formats() -> None:
     """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
-    known = {f.name for f in built_in_formats}
+    ai = Genkit()
     entries = {name: info.supports for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()}
     entries['<default>'] = DEFAULT_SUPPORTS
     for name, supports in entries.items():
-        unknown = set((supports.output if supports else None) or []) - known
+        unknown = {
+            o for o in (supports.output if supports else None) or [] if ai.lookup_value(kind='format', name=o) is None
+        }
         assert not unknown, f'{name}: {sorted(unknown)}'
 
 
@@ -234,7 +235,7 @@ async def test_model_garden_llama_json_request_sends_json_object() -> None:
         location='us-central1',
         project='p',
     )
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=False)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
@@ -421,7 +422,7 @@ async def test_generate_model_garden_model_without_its_extra_raises_install_comm
         await ai.generate(model=model, prompt='hi')
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert exc_info.value.original_message == message
+    assert exc_info.value.message == message
 
 
 @pytest.mark.asyncio
@@ -482,6 +483,27 @@ async def test_model_garden_list_actions_with_openai_extra_lists_llama_models() 
     catalog = SUPPORTED_OPENAI_COMPAT_MODELS['meta/llama-3.1-405b-instruct-maas'].supports
     assert catalog is not None
     assert llama['supports'] == catalog.model_dump(by_alias=True, exclude_none=True)
+
+
+@pytest.mark.asyncio
+async def test_model_garden_list_actions_needs_no_project_and_skips_adc() -> None:
+    """Listing works with no project and never probes ADC; the project is looked up when a model runs."""
+    with patch.dict('os.environ', {}, clear=True):
+        plugin = ModelGarden(location='us-central1')
+
+    with patch(_ADC, side_effect=AssertionError('listing must not probe ADC')):
+        actions = await plugin.list_actions()
+
+    assert [a.name for a in actions] == [f'modelgarden/{model}' for model in SUPPORTED_OPENAI_COMPAT_MODELS]
+
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part(text='hi')])])
+    with (
+        patch(_ADC, side_effect=DefaultCredentialsError('no ADC')),
+        pytest.raises(GenkitError, match=r'ModelGarden\(project=\.\.\.\) or set GOOGLE_CLOUD_PROJECT') as raised,
+    ):
+        await actions[0].run(request)
+
+    assert raised.value.status == 'FAILED_PRECONDITION'
 
 
 @pytest.mark.asyncio

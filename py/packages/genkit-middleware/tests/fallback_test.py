@@ -23,7 +23,6 @@ from genkit_middleware import Fallback
 from pydantic import Field, ValidationError
 
 from genkit import (
-    ActionRunContext,
     FinishReason,
     Genkit,
     GenkitError,
@@ -33,8 +32,8 @@ from genkit import (
     Part,
     Role,
 )
-from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
-from genkit.model import ModelConfig, ModelRequest, model_ref
+from genkit.middleware import MiddlewareContext, ModelHookParams
+from genkit.model import ModelConfig, ModelContext, ModelRef, ModelRequest
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
 
@@ -115,10 +114,10 @@ async def test_fallback_to_other_model_sends_only_the_entry_config() -> None:
     ai = Genkit()
     seen: list[object] = []
 
-    async def primary(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='down')
 
-    async def backup(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         seen.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -152,10 +151,10 @@ async def test_fallback_to_other_provider_does_not_pass_thinking_config() -> Non
     ai = Genkit()
     seen: list[object] = []
 
-    async def primary(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='down')
 
-    async def backup(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         seen.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -179,16 +178,16 @@ async def test_fallback_ref_entry_config_reaches_fallback_model() -> None:
     ai = Genkit()
     seen: list[object] = []
 
-    async def primary(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='down')
 
-    async def backup(request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         seen.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
     ai.define_model(name='gem', fn=primary, config_schema=ThinkingConfig)
     ai.define_model(name='oai', fn=backup, config_schema=ModelConfig)
-    ref = model_ref('oai', config_schema=ModelConfig, config=ModelConfig(temperature=0.2))
+    ref = ModelRef(name='oai', config_schema=ModelConfig, config=ModelConfig(temperature=0.2))
 
     response = await ai.generate(
         model='gem',
@@ -207,7 +206,7 @@ async def test_fallback_ref_entry_config_reaches_fallback_model() -> None:
 @pytest.mark.parametrize(
     ('entry', 'temperature'),
     [
-        (model_ref('backup', config_schema=ThinkingConfig, config=ThinkingConfig(temperature=0.2)), 0.2),
+        (ModelRef(name='backup', config_schema=ThinkingConfig, config=ThinkingConfig(temperature=0.2)), 0.2),
         ('backup', None),
     ],
     ids=['ref_entry', 'string_entry'],
@@ -217,10 +216,10 @@ async def test_fallback_backup_with_same_config_class_gets_that_class(entry: obj
     ai = Genkit()
     seen: list[object] = []
 
-    async def primary(_request: ModelRequest[ThinkingConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def primary(_request: ModelRequest[ThinkingConfig], _ctx: ModelContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='down')
 
-    async def backup(request: ModelRequest[ThinkingConfig], _ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest[ThinkingConfig], _ctx: ModelContext) -> ModelResponse:
         seen.append(request.config)
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
@@ -244,10 +243,10 @@ async def test_fallback_switches_model_when_primary_is_unreachable() -> None:
     """With `Fallback(models=['backup'])`, an UNAVAILABLE provider_error on a dead connection gets backup's answer."""
     ai = Genkit()
 
-    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise provider_error(ConnectionError('connection refused'), status='UNAVAILABLE')
 
-    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
@@ -268,7 +267,7 @@ async def test_fallback_unknown_backup_model_is_not_found() -> None:
     """A backup name nothing on the app answers to fails the call with NOT_FOUND naming that model."""
     ai = Genkit()
 
-    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='provider is down')
 
     ai.define_model(name='primary', fn=down)
@@ -288,10 +287,10 @@ async def test_generate_with_model_raising_connection_error_and_fallback_keeps_t
     ai = Genkit()
     backup_calls = 0
 
-    async def down(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise ConnectionError('connection refused')
 
-    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal backup_calls
         backup_calls += 1
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]))
@@ -323,7 +322,7 @@ async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() 
     pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
     backup_calls = 0
 
-    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal backup_calls
         backup_calls += 1
         return ModelResponse(
@@ -350,11 +349,11 @@ async def test_fallback_stops_when_aborted() -> None:
     ai = Genkit()
     ran: list[str] = []
 
-    async def backup1(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup1(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup1')
         raise GenkitError(status='UNAVAILABLE', message='backup1 down')
 
-    async def backup2(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup2')
         return ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -364,11 +363,11 @@ async def test_fallback_stops_when_aborted() -> None:
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
-    ctx = GenerateMiddlewareContext(ai=ai)
+    ctx = MiddlewareContext(ai=ai)
     ctx.abort_signal.set()
     fallback = Fallback(models=['backup1', 'backup2'])
 
-    async def next_fn(_params: ModelHookParams, _ctx: GenerateMiddlewareContext) -> ModelResponse:
+    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     with pytest.raises(GenkitError, match='primary down'):
@@ -383,12 +382,12 @@ async def test_fallback_halts_subsequent_models_on_abort() -> None:
     ai = Genkit()
     ran: list[str] = []
 
-    async def backup1(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def backup1(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ran.append('backup1')
         ctx.abort_signal.set()
         raise GenkitError(status='UNAVAILABLE', message='backup1 down')
 
-    async def backup2(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup2')
         return ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -398,10 +397,10 @@ async def test_fallback_halts_subsequent_models_on_abort() -> None:
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
-    ctx = GenerateMiddlewareContext(ai=ai)
+    ctx = MiddlewareContext(ai=ai)
     fallback = Fallback(models=['backup1', 'backup2'])
 
-    async def next_fn(_params: ModelHookParams, _ctx: GenerateMiddlewareContext) -> ModelResponse:
+    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     with pytest.raises(GenkitError, match='backup1 down'):
@@ -415,10 +414,10 @@ async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
     """Test that fallback streams chunks emitted by the fallback model."""
     ai = Genkit()
 
-    async def fail(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def fail(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
-    async def backup(_request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def backup(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('from-backup')]))
         return ModelResponse(
             finish_reason=FinishReason.STOP,
@@ -441,7 +440,7 @@ async def test_fallback_streams_chunks_from_the_fallback_model() -> None:
 def test_fallback_given_a_model_action_names_the_string_to_pass() -> None:
     """Fallback config is JSON, so a define_model action is refused with its name in the message."""
 
-    async def backup(_request: ModelRequest, _ctx: ActionRunContext) -> ModelResponse:
+    async def backup(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
     backup_model = Genkit().define_model(name='backup', fn=backup)
@@ -456,7 +455,7 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
     ai = Genkit()
     backup_calls = 0
 
-    async def wraps_stream_errors(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def wraps_stream_errors(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         try:
             ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
         except Exception as e:
@@ -466,7 +465,7 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
             message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
         )
 
-    async def backup(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         nonlocal backup_calls
         backup_calls += 1
         return ModelResponse(
@@ -485,3 +484,11 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
 
     assert backup_calls == 0
     assert response.finish_reason == FinishReason.FAILED
+
+
+def test_fallback_model_ref_entry_dumps_camel_case_config_keys() -> None:
+    """A ModelRef entry in Fallback writes camelCase config keys in the middleware ref."""
+    ref = ModelRef(name='echo/b', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=5, top_k=3))
+    fb = Fallback(models=[ref])
+    dumped = fb.config.model_dump(by_alias=True, exclude_none=True, mode='json')
+    assert dumped['models'] == [{'name': 'echo/b', 'config': {'maxOutputTokens': 5, 'topK': 3}}]

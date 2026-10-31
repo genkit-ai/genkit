@@ -34,7 +34,7 @@ Example:
 
     # 2. Generate content using any discovered Gemini model
     response = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-flash-latest'),
+        model=GoogleAI.gemini('gemini-flash-latest'),
         prompt='Suggest 3 names for a space-themed coffee shop.',
     )
 
@@ -48,7 +48,6 @@ Example:
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import Callable
 from typing import Any, NoReturn
@@ -63,42 +62,39 @@ from google.genai.types import HttpOptions, HttpOptionsDict, Model as GenaiModel
 from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
-from genkit import ActionRunContext, GenkitError, ModelResponse, Operation
-from genkit.embedder import EmbedderRef, embedder, embedder_action_metadata
+from genkit import GenkitError, ModelResponse, Operation, get_logger
+from genkit.embedder import Embedder, EmbedderRef
 from genkit.model import (
-    BackgroundAction,
+    BackgroundModel,
+    Model,
+    ModelContext,
     ModelInfo,
     ModelRef,
     ModelRequest,
-    background_model,
-    model,
-    model_action_metadata,
 )
 from genkit.plugin_api import (
-    GENKIT_CLIENT_HEADER,
+    GENKIT_USER_AGENT,
     Action,
     ActionKind,
-    ActionMetadata,
+    BackgroundAction,
     Plugin,
     loop_local_client,
-    to_json_schema,
 )
 from genkit_google_genai._auth import GOOGLE_AUTH_ERRORS, raise_auth_error
 from genkit_google_genai._evaluators._evaluation import (
     VertexAIEvaluationMetricType,
     create_vertex_evaluators,
-    vertex_evaluator_action,
 )
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._antigravity import AntigravityConfig, create_antigravity_action
 from genkit_google_genai._models._deep_research import (
     DeepResearchConfig,
-    create_deep_research_background_action,
+    create_deep_research_background_model,
     deep_research_model,
 )
 from genkit_google_genai._models._embedder import (
     VERTEX_KNOWN_EMBEDDERS,
-    Embedder,
+    Embedder as GoogleEmbedder,
     EmbeddingConfig,
     get_embedder_info,
 )
@@ -114,7 +110,6 @@ from genkit_google_genai._models._gemini import (
     KnownGemma,
     KnownGoogleAIGemini,
     KnownVertexAIGemini,
-    get_model_config_schema,
     google_model_info,
     is_gemma_model,
     is_image_model,
@@ -127,7 +122,6 @@ from genkit_google_genai._models._interactions_lyria import (
 )
 from genkit_google_genai._models._interactions_registry import (
     KnownLyria,
-    antigravity_model_info,
     deep_research_model_info,
     is_antigravity_model_name,
     is_deep_research_model_name,
@@ -135,7 +129,6 @@ from genkit_google_genai._models._interactions_registry import (
     list_known_antigravity_models,
     list_known_deep_research_models,
     list_known_lyria_models,
-    lyria_model_info,
 )
 from genkit_google_genai._models._model_refs import (
     family_embedder_ref,
@@ -164,7 +157,7 @@ from genkit_google_genai._models._virtual_try_on import (
 )
 from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class GenaiModels:
@@ -289,18 +282,9 @@ def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
     )
 
 
-def _model_action(name: str, fn: Callable[..., Any], model_info: ModelInfo, config_schema: type[BaseModel]) -> Action:
+def _model_action(name: str, fn: Callable[..., Any], model_info: ModelInfo, config_schema: type[BaseModel]) -> Model:
     """Build a MODEL Action with family-specific request typing on ``fn``."""
-    return model(
-        name,
-        fn,
-        config_schema=config_schema,
-        metadata=model_action_metadata(
-            name=name,
-            info=model_info.model_dump(by_alias=True),
-            config_schema=config_schema,
-        ).metadata,
-    )
+    return Model(name, fn, config_schema=config_schema, info=model_info)
 
 
 def googleai_name(name: str) -> str:
@@ -351,27 +335,27 @@ def _create_embedder_action(
     )
 
     async def _run(request: Any) -> Any:  # noqa: ANN401
-        embedder = Embedder(
+        embedder_client = GoogleEmbedder(
             version=name,
             client=client_getter(),
             is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
         )
-        return await embedder.generate(request)
+        return await embedder_client.generate(request)
 
-    return embedder(full_name, _run, info=embed_info)
+    return Embedder(full_name, _run, info=embed_info)
 
 
-def _create_veo_background_action(
+def _create_veo_background_model(
     name: str,
     client_getter: Callable[[], genai.Client],
     plugin_name: str,
     client_kwargs: dict[str, Any] | None = None,
-) -> BackgroundAction:
+) -> BackgroundModel:
     """Create the start/check action pair for a Veo video generation model.
 
     Veo runs as a background operation: callers start a generation and poll
     it, they never block a generate call on a multi-minute video render. Both
-    plugins therefore expose Veo only as BACKGROUND_MODEL + CHECK_OPERATION,
+    plugins therefore expose Veo only as a BackgroundModel (start + check),
     never as a blocking MODEL.
 
     Args:
@@ -382,19 +366,19 @@ def _create_veo_background_action(
             overrides the key or endpoint.
 
     Returns:
-        BackgroundAction pairing the start and check actions.
+        BackgroundModel pairing the start and check actions.
     """
     full_name = f'{plugin_name}/{name}'
 
-    async def _start(request: ModelRequest[VeoConfig], ctx: ActionRunContext) -> Operation:
+    async def _start(request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
         veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
         return await veo.start(request, ctx)
 
-    async def _check(op: Operation, ctx: ActionRunContext) -> Operation:
+    async def _check(op: Operation, ctx: ModelContext) -> Operation:
         veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs)
         return await veo.check(op, ctx)
 
-    return background_model(
+    return BackgroundModel(
         full_name,
         start=_start,
         check=_check,
@@ -416,7 +400,7 @@ class GoogleFamilyRefs:
     name: str  # plugin namespace ('googleai' or 'vertexai')
 
     @classmethod
-    def gemini_tts_model(
+    def gemini_tts(
         cls, name: KnownGeminiTts | str, *, config: GeminiTtsConfig | None = None
     ) -> ModelRef[GeminiTtsConfig]:
         """Typed ref for a Gemini TTS model (``gemini-…-tts``)."""
@@ -425,13 +409,13 @@ class GoogleFamilyRefs:
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='tts',
-            method='gemini_tts_model',
+            method='gemini_tts',
             config_schema=GeminiTtsConfig,
             config=config,
         )
 
     @classmethod
-    def gemini_image_model(
+    def gemini_image(
         cls, name: KnownGeminiImage | str, *, config: GeminiImageConfig | None = None
     ) -> ModelRef[GeminiImageConfig]:
         """Typed ref for a Gemini native-image model (``gemini-…-image``)."""
@@ -440,19 +424,19 @@ class GoogleFamilyRefs:
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='image',
-            method='gemini_image_model',
+            method='gemini_image',
             config_schema=GeminiImageConfig,
             config=config,
         )
 
     @classmethod
-    def imagen_model(cls, name: str, *, config: object | None = None) -> NoReturn:
-        """Always raises: Imagen is no longer supported. Use ``gemini_image_model``."""
+    def imagen(cls, name: str, *, config: object | None = None) -> NoReturn:
+        """Always raises: Imagen is no longer supported. Use ``gemini_image``."""
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(
-                f'{cls.__name__}.imagen_model: Imagen is no longer supported; '
-                f'for image generation use {cls.__name__}.gemini_image_model().'
+                f'{cls.__name__}.imagen: Imagen is no longer supported; '
+                f'for image generation use {cls.__name__}.gemini_image().'
             ),
         )
 
@@ -472,29 +456,6 @@ class GoogleFamilyRefs:
         end up in ``generate(model=...)``.
         """
         return family_embedder_ref(name, namespace=cls.name, plugin_class=cls.__name__, config=config, version=version)
-
-
-def _veo_background_action_metadata(name: str) -> ActionMetadata:
-    """Build list_actions metadata for a Veo model as a background model.
-
-    The kind advertised here has to match what resolve() will actually hand
-    back, otherwise the Dev UI and registry offer a generate model that does
-    not exist.
-    """
-    local = name.split('/')[-1]
-    return ActionMetadata(
-        action_type=ActionKind.BACKGROUND_MODEL,
-        name=name,
-        input_schema=to_json_schema(ModelRequest[VeoConfig]),
-        output_schema=to_json_schema(Operation),
-        metadata={
-            'model': {
-                **veo_model_info(local).model_dump(by_alias=True),
-                'customOptions': to_json_schema(VeoConfig),
-            },
-            'type': 'background-model',
-        },
-    )
 
 
 class GoogleAI(GoogleFamilyRefs, Plugin):
@@ -521,7 +482,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         # 2. Generate text using Gemini Flash
         res = await ai.generate(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             prompt='Explain quantum computing in one sentence.',
         )
 
@@ -543,10 +504,8 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
     _vertexai = False
 
     @classmethod
-    def gemini_model(
-        cls, name: KnownGoogleAIGemini | str, *, config: GeminiConfig | None = None
-    ) -> ModelRef[GeminiConfig]:
-        """Typed ref for a Gemini text model, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``.
+    def gemini(cls, name: KnownGoogleAIGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
+        """Typed ref for a Gemini text model, e.g. ``GoogleAI.gemini('gemini-flash-latest')``.
 
         Unknown ids are allowed so a brand-new Gemini release works before
         this plugin learns its name; ids from other families are refused.
@@ -556,41 +515,39 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemini',
-            method='gemini_model',
+            method='gemini',
             config_schema=GeminiConfig,
             config=config,
         )
 
     @classmethod
-    def gemma_model(cls, name: KnownGemma | str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
+    def gemma(cls, name: KnownGemma | str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
         """Typed ref for a Gemma open model (``gemma-…``)."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemma',
-            method='gemma_model',
+            method='gemma',
             config_schema=GemmaConfig,
             config=config,
         )
 
     @classmethod
-    def veo_model(cls, name: KnownGoogleAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+    def veo(cls, name: KnownGoogleAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
         """Typed ref for a Veo video model (``veo-…``)."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='veo',
-            method='veo_model',
+            method='veo',
             config_schema=VeoConfig,
             config=config,
         )
 
     @classmethod
-    def deep_research_model(
-        cls, name: str, *, config: DeepResearchConfig | None = None
-    ) -> ModelRef[DeepResearchConfig]:
+    def deep_research(cls, name: str, *, config: DeepResearchConfig | None = None) -> ModelRef[DeepResearchConfig]:
         """Typed ref for a Deep Research agent. Pass to generate_operation()."""
         clean = strip_ref_prefixes(name) if isinstance(name, str) else ''
         return family_model_ref(
@@ -598,27 +555,27 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='deep-research',
-            method='deep_research_model',
+            method='deep_research',
             config_schema=DeepResearchConfig,
             config=config,
             info=deep_research_model_info(clean) if clean else None,
         )
 
     @classmethod
-    def antigravity_model(cls, name: str, *, config: AntigravityConfig | None = None) -> ModelRef[AntigravityConfig]:
+    def antigravity(cls, name: str, *, config: AntigravityConfig | None = None) -> ModelRef[AntigravityConfig]:
         """Typed ref for an Antigravity agent."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='antigravity',
-            method='antigravity_model',
+            method='antigravity',
             config_schema=AntigravityConfig,
             config=config,
         )
 
     @classmethod
-    def lyria_model(
+    def lyria(
         cls, name: KnownLyria | str, *, config: InteractionsLyriaConfig | None = None
     ) -> ModelRef[InteractionsLyriaConfig]:
         """Typed ref for Google AI Interactions Lyria (lyria-3-clip-preview, …)."""
@@ -627,7 +584,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='lyria',
-            method='lyria_model',
+            method='lyria',
             config_schema=InteractionsLyriaConfig,
             config=config,
         )
@@ -687,9 +644,12 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         }
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         self._legacy_response_schema = legacy_response_schema
-        # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
-        self._list_actions_cache: list[ActionMetadata] | None = None
+        self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
+
+    @loop_local_client
+    def _runtime_client(self) -> genai.Client:
+        # One client per event loop, used everywhere in plugin runtime paths.
+        return _plugin_client(self._client_kwargs)
 
     def _interactions_client_options(self) -> ClientOptions:
         """Plugin-level transport knobs for Interactions models.
@@ -711,15 +671,15 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         raw = self._client_kwargs.get('api_key')
         return raw if isinstance(raw, str) else None
 
-    async def init(self) -> list[Action]:
+    async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
 
         Returns:
-            List of Action objects for known/supported models.
+            Actions and background models for known/supported models.
         """
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
 
-        actions: list[Action] = []
+        actions: list[Action | BackgroundAction[Any, Any]] = []
         # Gemini Models
         for name in genai_models.gemini:
             if action := self._resolve_model(name):
@@ -727,17 +687,17 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(self._resolve_veo_model(name).actions)
+            actions.append(self._resolve_veo_model(name))
 
         client_options = self._interactions_client_options()
         plugin_api_key = self._plugin_api_key()
         for name in list_known_deep_research_models():
-            actions.extend(
-                create_deep_research_background_action(
+            actions.append(
+                create_deep_research_background_model(
                     name,
                     plugin_api_key=plugin_api_key,
                     client_options=client_options,
-                ).actions
+                )
             )
         for name in list_known_antigravity_models():
             actions.append(
@@ -762,7 +722,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         return actions
 
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
         """Resolve an action by creating and returning an Action object.
 
         Args:
@@ -770,45 +730,39 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             name: The id without the ``googleai/`` prefix.
 
         Returns:
-            Action object if found, None otherwise.
+            Action or BackgroundModel if found, None otherwise. Genkit
+            registers a BackgroundModel's check and cancel actions with it.
         """
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         if action_type == ActionKind.BACKGROUND_MODEL:
-            bg = self._resolve_background_action(name)
-            return bg.start_action if bg else None
-        if action_type == ActionKind.CHECK_OPERATION and name.endswith('/check'):
-            bg = self._resolve_background_action(name.removesuffix('/check'))
-            return bg.check_action if bg else None
-        if action_type == ActionKind.CANCEL_OPERATION and name.endswith('/cancel'):
-            bg = self._resolve_background_action(name.removesuffix('/cancel'))
-            return bg.cancel_action if bg else None
+            return self._resolve_background_model(name)
         if action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
         return None
 
-    def _resolve_background_action(self, name: str) -> BackgroundAction | None:
-        """Resolve a background action for Veo or Deep Research."""
+    def _resolve_background_model(self, name: str) -> BackgroundModel | None:
+        """Resolve a background model for Veo or Deep Research."""
         if is_veo_model(name):
             return self._resolve_veo_model(name)
         if is_deep_research_model_name(name):
-            return create_deep_research_background_action(
+            return create_deep_research_background_model(
                 deep_research_model(name),
                 plugin_api_key=self._plugin_api_key(),
                 client_options=self._interactions_client_options(),
             )
         return None
 
-    def _resolve_veo_model(self, name: str) -> BackgroundAction:
-        """Create a BackgroundAction for a Veo video generation model.
+    def _resolve_veo_model(self, name: str) -> BackgroundModel:
+        """Create a BackgroundModel for a Veo video generation model.
 
         Args:
             name: The model id without the ``googleai/`` prefix.
 
         Returns:
-            BackgroundAction for the Veo model.
+            BackgroundModel for the Veo model.
         """
-        return _create_veo_background_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._client_kwargs)
+        return _create_veo_background_model(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._client_kwargs)
 
     def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Google AI model.
@@ -849,26 +803,26 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         if is_tts_model(name):
 
-            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(name):
 
-            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(name):
 
-            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
-        async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
             return await _new_gemini(self, name).generate(request, ctx)
 
         return _model_action(action_name, _run, model_info, GeminiConfig)
@@ -884,76 +838,48 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         """
         return _create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME)
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Generate a list of available actions or models.
 
         Returns:
-            list[ActionMetadata]: A list of ActionMetadata objects, each with the following attributes:
-                - name (str): The name of the action or model.
-                - kind (ActionKind): The type or category of the action.
-                - info (dict): The metadata dictionary describing the model configuration and properties.
-                - config_schema (type): The schema class used for validating the model's configuration.
+            list[Action | BackgroundAction[Any, Any]]: Actions and background models.
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
-        actions_list = []
+        actions_list: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
-            actions_list.append(
-                model_action_metadata(
-                    name=googleai_name(name),
-                    info=google_model_info(name).model_dump(by_alias=True),
-                    config_schema=get_model_config_schema(name),
-                )
-            )
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
 
         for name in genai_models.veo:
-            actions_list.append(_veo_background_action_metadata(googleai_name(name)))
+            actions_list.append(
+                _create_veo_background_model(
+                    name,
+                    self._runtime_client,
+                    GOOGLEAI_PLUGIN_NAME,
+                    client_kwargs=self._client_kwargs,
+                )
+            )
 
         for name in list_known_deep_research_models():
             actions_list.append(
-                ActionMetadata(
-                    action_type=ActionKind.BACKGROUND_MODEL,
-                    name=googleai_name(name),
-                    input_schema=to_json_schema(ModelRequest[DeepResearchConfig]),
-                    output_schema=to_json_schema(Operation),
-                    metadata={
-                        'model': {
-                            **deep_research_model_info(name).model_dump(by_alias=True),
-                            'customOptions': to_json_schema(DeepResearchConfig),
-                        },
-                        'type': 'background-model',
-                    },
+                create_deep_research_background_model(
+                    googleai_name(name),
+                    plugin_api_key=self._plugin_api_key(),
+                    client_options=self._interactions_client_options(),
                 )
             )
         for name in list_known_antigravity_models():
-            actions_list.append(
-                model_action_metadata(
-                    name=googleai_name(name),
-                    info=antigravity_model_info(name).model_dump(by_alias=True),
-                    config_schema=AntigravityConfig,
-                )
-            )
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
         for name in list_known_lyria_models():
-            actions_list.append(
-                model_action_metadata(
-                    name=googleai_name(name),
-                    info=lyria_model_info(name).model_dump(by_alias=True),
-                    config_schema=InteractionsLyriaConfig,
-                )
-            )
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
 
         for name in genai_models.embedders:
-            actions_list.append(
-                embedder_action_metadata(
-                    name=googleai_name(name),
-                    info=get_embedder_info(
-                        name=name,
-                        label=f'{PLUGIN_DISPLAY_NAME[GOOGLEAI_PLUGIN_NAME]} - {name}',
-                    ),
-                )
-            )
+            actions_list.append(_create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME))
 
         self._list_actions_cache = actions_list
         return actions_list
@@ -991,7 +917,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         # 2. Generate text using Gemini on Vertex AI
         res = await ai.generate(
-            model=VertexAI.gemini_model('gemini-2.5-flash'),
+            model=VertexAI.gemini('gemini-2.5-flash'),
             prompt='Explain quantum computing in one sentence.',
         )
 
@@ -1013,10 +939,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
     name = VERTEXAI_PLUGIN_NAME
 
     @classmethod
-    def gemini_model(
-        cls, name: KnownVertexAIGemini | str, *, config: GeminiConfig | None = None
-    ) -> ModelRef[GeminiConfig]:
-        """Typed ref for a Gemini text model, e.g. ``VertexAI.gemini_model('gemini-2.5-flash')``.
+    def gemini(cls, name: KnownVertexAIGemini | str, *, config: GeminiConfig | None = None) -> ModelRef[GeminiConfig]:
+        """Typed ref for a Gemini text model, e.g. ``VertexAI.gemini('gemini-2.5-flash')``.
 
         Unknown ids are allowed so a brand-new Gemini release works before
         this plugin learns its name; ids from other families are refused.
@@ -1026,39 +950,39 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemini',
-            method='gemini_model',
+            method='gemini',
             config_schema=GeminiConfig,
             config=config,
         )
 
     @classmethod
-    def gemma_model(cls, name: str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
+    def gemma(cls, name: str, *, config: GemmaConfig | None = None) -> ModelRef[GemmaConfig]:
         """Typed ref for a Gemma open model (``gemma-…``); Vertex AI serves none through generate_content."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='gemma',
-            method='gemma_model',
+            method='gemma',
             config_schema=GemmaConfig,
             config=config,
         )
 
     @classmethod
-    def veo_model(cls, name: KnownVertexAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
+    def veo(cls, name: KnownVertexAIVeo | str, *, config: VeoConfig | None = None) -> ModelRef[VeoConfig]:
         """Typed ref for a Veo video model (``veo-…``)."""
         return family_model_ref(
             name,
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='veo',
-            method='veo_model',
+            method='veo',
             config_schema=VeoConfig,
             config=config,
         )
 
     @classmethod
-    def virtual_try_on_model(
+    def virtual_try_on(
         cls, name: KnownVirtualTryOn | str, *, config: VirtualTryOnConfig | None = None
     ) -> ModelRef[VirtualTryOnConfig]:
         """Typed ref for a Virtual Try-On model (``virtual-try-on-…``)."""
@@ -1067,7 +991,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             namespace=cls.name,
             plugin_class=cls.__name__,
             family='virtual-try-on',
-            method='virtual_try_on_model',
+            method='virtual_try_on',
             config_schema=VirtualTryOnConfig,
             config=config,
         )
@@ -1157,18 +1081,21 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             'debug_config': debug_config,
             'http_options': opts,
         }
-        # Single loop-local client accessor used everywhere in plugin runtime paths.
-        self._runtime_client = loop_local_client(lambda: _plugin_client(self._client_kwargs))
-        self._list_actions_cache: list[Action | ActionMetadata] | None = None
+        self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
 
-    async def init(self) -> list[Action]:
+    @loop_local_client
+    def _runtime_client(self) -> genai.Client:
+        # One client per event loop, used everywhere in plugin runtime paths.
+        return _plugin_client(self._client_kwargs)
+
+    async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
 
         Returns:
-            List of Action objects for known/supported models.
+            Actions and background models for known/supported models.
         """
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
-        actions: list[Action] = []
+        actions: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
             if action := self._resolve_model(name):
@@ -1176,7 +1103,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         # Veo Models (background models)
         for name in genai_models.veo:
-            actions.extend(self._resolve_veo_model(name).actions)
+            actions.append(self._resolve_veo_model(name))
 
         for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
             if action := self._resolve_model(name):
@@ -1213,7 +1140,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             actions.append(self._resolve_embedder(name))
         return actions
 
-    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | BackgroundAction[Any, Any] | None:
         """Resolve an action by creating and returning an Action object.
 
         Args:
@@ -1221,21 +1148,14 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             name: The id without the ``vertexai/`` prefix.
 
         Returns:
-            Action object if found, None otherwise.
+            Action or BackgroundModel if found, None otherwise. Genkit
+            registers a BackgroundModel's check action with it.
         """
         if action_type == ActionKind.MODEL:
             return self._resolve_model(name)
         elif action_type == ActionKind.BACKGROUND_MODEL:
             if is_veo_model(name):
-                bg_action = self._resolve_veo_model(name)
-                return bg_action.start_action
-            return None
-        elif action_type == ActionKind.CHECK_OPERATION:
-            if name.endswith('/check'):
-                model_name = name.removesuffix('/check')
-                if is_veo_model(model_name):
-                    bg_action = self._resolve_veo_model(model_name)
-                    return bg_action.check_action
+                return self._resolve_veo_model(name)
             return None
         elif action_type == ActionKind.EMBEDDER:
             return self._resolve_embedder(name)
@@ -1243,16 +1163,16 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             return self._resolve_evaluator(name)
         return None
 
-    def _resolve_veo_model(self, name: str) -> BackgroundAction:
-        """Create a BackgroundAction for a Veo video generation model.
+    def _resolve_veo_model(self, name: str) -> BackgroundModel:
+        """Create a BackgroundModel for a Veo video generation model.
 
         Args:
             name: The model id without the ``vertexai/`` prefix.
 
         Returns:
-            BackgroundAction for the Veo model.
+            BackgroundModel for the Veo model.
         """
-        return _create_veo_background_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._client_kwargs)
+        return _create_veo_background_model(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._client_kwargs)
 
     def _resolve_evaluator(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI evaluator.
@@ -1263,9 +1183,12 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         Returns:
             Action object for the evaluator.
         """
-        try:
-            metric_type = VertexAIEvaluationMetricType(name.upper())
-        except ValueError:
+        # Iterate instead of calling VertexAIEvaluationMetricType(value): on
+        # Python 3.10 StrEnum comes from `strenum`, whose stub types __new__
+        # as returning the base StrEnum, so the constructor loses the subtype.
+        value = name.upper()
+        metric_type = next((m for m in VertexAIEvaluationMetricType if m.value == value), None)
+        if metric_type is None:
             return None
 
         # The name is a real Vertex metric, so "not found" would send people
@@ -1305,7 +1228,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         # keep the family unroutable while Vertex actually serves it.
         if is_virtual_try_on_model(name):
 
-            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_try_on(request: ModelRequest[VirtualTryOnConfig], ctx: ModelContext) -> ModelResponse:
                 model = VirtualTryOnModel(
                     name,
                     self._runtime_client(),
@@ -1330,7 +1253,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 supports=google_model_info('gemini').supports,
             )
 
-            async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_tuned, model_info, GeminiConfig)
@@ -1340,26 +1263,26 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
         if is_tts_model(name):
 
-            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(name):
 
-            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(name):
 
-            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ActionRunContext) -> ModelResponse:
+            async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
                 return await _new_gemini(self, name).generate(request, ctx)
 
             return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
-        async def _run(request: ModelRequest[GeminiConfig], ctx: ActionRunContext) -> ModelResponse:
+        async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
             return await _new_gemini(self, name).generate(request, ctx)
 
         return _model_action(action_name, _run, model_info, GeminiConfig)
@@ -1375,53 +1298,46 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """
         return _create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME)
 
-    async def list_actions(self) -> list[Action | ActionMetadata]:
+    async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Generate a list of available actions or models.
 
         Returns:
-            list[Action | ActionMetadata]: Available actions and metadata rows.
+            list[Action | BackgroundAction[Any, Any]]: Actions and background models.
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
         genai_models = await _list_genai_models(self._runtime_client(), is_vertex=True)
-        actions_list: list[Action | ActionMetadata] = []
+        actions_list: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
-            actions_list.append(
-                model_action_metadata(
-                    name=vertexai_name(name),
-                    info=google_model_info(name).model_dump(by_alias=True),
-                    config_schema=get_model_config_schema(name),
-                )
-            )
+            if (model_action := self._resolve_model(name)) is not None:
+                actions_list.append(model_action)
 
         for name in genai_models.veo:
-            actions_list.append(_veo_background_action_metadata(vertexai_name(name)))
+            actions_list.append(
+                _create_veo_background_model(
+                    name,
+                    self._runtime_client,
+                    VERTEXAI_PLUGIN_NAME,
+                    client_kwargs=self._client_kwargs,
+                )
+            )
 
         for name in VERTEX_KNOWN_VIRTUAL_TRY_ON:
-            actions_list.append(
-                model_action_metadata(
-                    name=vertexai_name(name),
-                    info=virtual_try_on_model_info(name).model_dump(by_alias=True),
-                    config_schema=VirtualTryOnConfig,
-                )
-            )
+            if (action := self._resolve_model(name)) is not None:
+                actions_list.append(action)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
-            actions_list.append(
-                embedder_action_metadata(
-                    name=vertexai_name(name),
-                    info=get_embedder_info(
-                        name=name,
-                        label=f'{PLUGIN_DISPLAY_NAME[VERTEXAI_PLUGIN_NAME]} - {name}',
-                        is_vertex=True,
-                    ),
-                )
-            )
+            actions_list.append(_create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME))
 
         if self._project:
-            for metric in VertexAIEvaluationMetricType:
-                actions_list.append(vertex_evaluator_action(metric))
+            actions_list.extend(
+                create_vertex_evaluators(
+                    list(VertexAIEvaluationMetricType),
+                    project=self._project,
+                    location=self._location,
+                )
+            )
 
         self._list_actions_cache = actions_list
         return actions_list
@@ -1450,14 +1366,12 @@ def _inject_attribution_headers(
     if not opts.headers:
         opts.headers = {}
 
-    if 'x-goog-api-client' not in opts.headers:
-        opts.headers['x-goog-api-client'] = GENKIT_CLIENT_HEADER
-    else:
-        opts.headers['x-goog-api-client'] += f' {GENKIT_CLIENT_HEADER}'
-
-    if 'user-agent' not in opts.headers:
-        opts.headers['user-agent'] = GENKIT_CLIENT_HEADER
-    else:
-        opts.headers['user-agent'] += f' {GENKIT_CLIENT_HEADER}'
+    headers_lower = {k.lower(): k for k in opts.headers}
+    for header_name in ('x-goog-api-client', 'user-agent'):
+        key = headers_lower.get(header_name, header_name)
+        if key not in opts.headers:
+            opts.headers[key] = GENKIT_USER_AGENT
+        else:
+            opts.headers[key] += f' {GENKIT_USER_AGENT}'
 
     return opts

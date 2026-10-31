@@ -22,14 +22,13 @@ from collections.abc import AsyncIterator
 from typing import Any, cast
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-import httpx
 import ollama as ollama_api
 import pytest
-from genkit_ollama._models import OllamaConfig, OllamaModel, _convert_parameters, _image_fetch_client, _ResolvedModel
+from genkit_ollama._models import OllamaConfig, OllamaModel, _convert_parameters, _ResolvedModel
 from pydantic import ConfigDict, ValidationError
 
-from genkit import ActionRunContext, GenkitError, Message, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolDefinition
+from genkit import GenkitError, Message, ModelResponseChunk, Part, Role
+from genkit.model import GenerationUsage, ModelConfig, ModelContext, ModelRequest, ToolDefinition
 
 
 class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
@@ -39,7 +38,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         """Common setup for all async tests."""
         self.mock_client = MagicMock()
         self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-        self.ctx = ActionRunContext()
+        self.ctx = ModelContext()
         cast(Any, self.ctx).send_chunk = MagicMock()
 
     async def test_generate_classifies_http_400(self) -> None:
@@ -138,14 +137,14 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         client.chat.assert_not_called()
 
     @patch(
-        'genkit_ollama._models.get_basic_usage_stats',
-        return_value=ModelUsage(
+        'genkit_ollama._models.GenerationUsage.from_messages',
+        return_value=GenerationUsage(
             input_tokens=10,
             output_tokens=20,
             total_tokens=30,
         ),
     )
-    async def test_generate_chat_non_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
+    async def test_generate_chat_non_streaming(self, mock_from_messages: MagicMock) -> None:
         """Test generate method with CHAT API type in non-streaming mode."""
         model_def = _ResolvedModel(name='chat-model')
         ollama_model = OllamaModel(
@@ -167,7 +166,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
             return_value=[Part.from_text('Parsed chat content')],
         )
         cast(Any, ollama_model).get_usage_info = MagicMock(
-            return_value=ModelUsage(
+            return_value=GenerationUsage(
                 input_tokens=5,
                 output_tokens=10,
                 total_tokens=15,
@@ -193,18 +192,18 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(cast(Message, response.message).content), 1)
         self.assertEqual(cast(Message, response.message).content[0].text, 'Parsed chat content')
         self.assertIsNotNone(response.usage)
-        self.assertEqual(cast(ModelUsage, response.usage).input_tokens, 5)
-        self.assertEqual(cast(ModelUsage, response.usage).output_tokens, 10)
+        self.assertEqual(cast(GenerationUsage, response.usage).input_tokens, 5)
+        self.assertEqual(cast(GenerationUsage, response.usage).output_tokens, 10)
 
     @patch(
-        'genkit_ollama._models.get_basic_usage_stats',
-        return_value=ModelUsage(),
+        'genkit_ollama._models.GenerationUsage.from_messages',
+        return_value=GenerationUsage(),
     )
-    async def test_generate_chat_streaming(self, mock_get_basic_usage_stats: MagicMock) -> None:
+    async def test_generate_chat_streaming(self, mock_from_messages: MagicMock) -> None:
         """Test generate method with CHAT API type in streaming mode."""
         model_def = _ResolvedModel(name='chat-model')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
-        streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
+        streaming_ctx = ModelContext(streaming_callback=MagicMock())
 
         # Mock internal methods
         mock_chat_response = ollama_api.ChatResponse(
@@ -221,7 +220,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
         cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
         cast(Any, ollama_model).get_usage_info = MagicMock(
-            return_value=ModelUsage(
+            return_value=GenerationUsage(
                 input_tokens=0,
                 output_tokens=0,
                 total_tokens=0,
@@ -246,10 +245,10 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         )
 
     @patch(
-        'genkit_ollama._models.get_basic_usage_stats',
-        return_value=ModelUsage(),
+        'genkit_ollama._models.GenerationUsage.from_messages',
+        return_value=GenerationUsage(),
     )
-    async def test_generate_chat_api_response_none(self, mock_get_basic_usage_stats: MagicMock) -> None:
+    async def test_generate_chat_api_response_none(self, mock_from_messages: MagicMock) -> None:
         """Test generate method when _chat_with_ollama returns None."""
         model_def = _ResolvedModel(name='chat-model')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
@@ -257,7 +256,7 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         cast(Any, ollama_model)._chat_with_ollama = AsyncMock(return_value=None)
         cast(Any, ollama_model)._build_multimodal_chat_response = MagicMock()
         cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=False)
-        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=ModelUsage())
+        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=GenerationUsage())
 
         response = await ollama_model.generate(self.request, self.ctx)
 
@@ -266,22 +265,22 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(response.message)
         self.assertEqual(cast(Message, response.message).content[0].text, 'Failed to get response from Ollama API')
         self.assertIsNotNone(response.usage)
-        self.assertEqual(cast(ModelUsage, response.usage).input_tokens, None)
-        self.assertEqual(cast(ModelUsage, response.usage).output_tokens, None)
+        self.assertEqual(cast(GenerationUsage, response.usage).input_tokens, None)
+        self.assertEqual(cast(GenerationUsage, response.usage).output_tokens, None)
 
     @patch(
-        'genkit_ollama._models.get_basic_usage_stats',
-        return_value=ModelUsage(),
+        'genkit_ollama._models.GenerationUsage.from_messages',
+        return_value=GenerationUsage(),
     )
-    async def test_generate_chat_streaming_zero_chunks(self, mock_get_basic_usage_stats: MagicMock) -> None:
+    async def test_generate_chat_streaming_zero_chunks(self, mock_from_messages: MagicMock) -> None:
         """Streaming with zero chunks returns empty content, not the error default."""
         model_def = _ResolvedModel(name='chat-model')
         ollama_model = OllamaModel(client=self.mock_client, model_definition=model_def)
-        streaming_ctx = ActionRunContext(streaming_callback=MagicMock())
+        streaming_ctx = ModelContext(streaming_callback=MagicMock())
 
         cast(Any, ollama_model)._chat_with_ollama = AsyncMock(return_value=None)
         cast(Any, ollama_model).is_streaming_request = MagicMock(return_value=True)
-        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=ModelUsage())
+        cast(Any, ollama_model).get_usage_info = MagicMock(return_value=GenerationUsage())
 
         response = await ollama_model.generate(self.request, streaming_ctx)
 
@@ -299,7 +298,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         self.model_definition = _ResolvedModel(name='test-chat-model')
         self.ollama_model = OllamaModel(client=self.mock_ollama_client_factory, model_definition=self.model_definition)
         self.request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('Hello')])])
-        self.ctx = ActionRunContext()
+        self.ctx = ModelContext()
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         # Properly mock methods of ollama_model using patch.object
@@ -385,7 +384,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
         """Test _chat_with_ollama in streaming mode with multiple chunks."""
         self.mock_is_streaming_request.return_value = True
         # Create a streaming context with a callback
-        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        self.ctx = ModelContext(streaming_callback=MagicMock())
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         # Simulate an async iterator of chunks
@@ -427,7 +426,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
     async def test_streaming_chat_accumulates_thinking(self) -> None:
         """Thinking from non-final chunks is concatenated into the returned response."""
         self.mock_is_streaming_request.return_value = True
-        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        self.ctx = ModelContext(streaming_callback=MagicMock())
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -457,7 +456,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
     async def test_streaming_chat_accumulates_tool_calls(self) -> None:
         """Tool calls from a mid-stream chunk survive into the returned response."""
         self.mock_is_streaming_request.return_value = True
-        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        self.ctx = ModelContext(streaming_callback=MagicMock())
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         tool_call = ollama_api.Message.ToolCall(
@@ -485,7 +484,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
     async def test_streaming_chat_empty_stream_returns_none(self) -> None:
         """An empty stream (zero chunks) returns None from the real helper."""
         self.mock_is_streaming_request.return_value = True
-        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        self.ctx = ModelContext(streaming_callback=MagicMock())
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         async def mock_empty_stream() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -502,7 +501,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
     async def test_streaming_chat_empty_role_maps_to_model(self) -> None:
         """Streamed chunks with an empty role should be labeled MODEL, not TOOL."""
         self.mock_is_streaming_request.return_value = True
-        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        self.ctx = ModelContext(streaming_callback=MagicMock())
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -521,7 +520,7 @@ class TestOllamaModelChatWithOllama(unittest.IsolatedAsyncioTestCase):
     async def test_streaming_chat_tool_role_maps_to_tool(self) -> None:
         """Streamed chunks explicitly labeled as tools should remain TOOL."""
         self.mock_is_streaming_request.return_value = True
-        self.ctx = ActionRunContext(streaming_callback=MagicMock())
+        self.ctx = ModelContext(streaming_callback=MagicMock())
         cast(Any, self.ctx).send_chunk = MagicMock()
 
         async def mock_streaming_chunks() -> AsyncIterator[ollama_api.ChatResponse]:
@@ -795,8 +794,8 @@ class TestBuildRequestKwargs:
         assert kwargs == {'think': True, 'keep_alive': '5m'}
 
     def test_dumped_dict_surfaces_think_and_keep_alive(self) -> None:
-        """A dumped OllamaConfig (camelCased keys) still surfaces think/keep_alive."""
-        dumped = OllamaConfig(think='low', keep_alive='10m').model_dump(exclude_none=True, mode='json')
+        """A wire-shaped OllamaConfig dict (camelCased keys) still surfaces think/keep_alive."""
+        dumped = OllamaConfig(think='low', keep_alive='10m').model_dump(by_alias=True, exclude_none=True, mode='json')
         # The dumped dict carries the camelCase alias for keep_alive.
         assert 'keepAlive' in dumped
         kwargs = OllamaModel.build_request_kwargs(dumped)
@@ -948,7 +947,7 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
 
         client_instance.chat.return_value = chunks()
 
-        ctx = ActionRunContext(streaming_callback=MagicMock())
+        ctx = ModelContext(streaming_callback=MagicMock())
         sent: list[ModelResponseChunk] = []
         cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
 
@@ -979,7 +978,7 @@ class TestReasoningStreaming(unittest.IsolatedAsyncioTestCase):
 
         client_instance.chat.return_value = chunks()
 
-        ctx = ActionRunContext(streaming_callback=MagicMock())
+        ctx = ModelContext(streaming_callback=MagicMock())
         sent: list[ModelResponseChunk] = []
         cast(Any, ctx).send_chunk = MagicMock(side_effect=lambda chunk: sent.append(chunk))
 
@@ -1016,99 +1015,6 @@ class TestThinkingRequested:
         assert OllamaModel._thinking_requested(OllamaConfig(num_ctx=8)) is False
         assert OllamaModel._thinking_requested(None) is False
         assert OllamaModel._thinking_requested({'think': 'low'}) is True
-
-
-class TestResolveImage(unittest.IsolatedAsyncioTestCase):
-    """Tests for OllamaModel._resolve_image."""
-
-    async def test_data_uri_strips_prefix(self) -> None:
-        """Data URIs should have their prefix stripped, returning raw base64."""
-        data_uri = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
-        result = await OllamaModel._resolve_image(data_uri)
-        assert result == '/9j/4AAQSkZJRg=='
-
-    async def test_data_uri_png(self) -> None:
-        """PNG data URI should also be stripped correctly."""
-        data_uri = 'data:image/png;base64,iVBORw0KGgo='
-        result = await OllamaModel._resolve_image(data_uri)
-        assert result == 'iVBORw0KGgo='
-
-    async def test_data_uri_without_comma_raises(self) -> None:
-        """A malformed data URI with no comma separator should raise ValueError."""
-        with self.assertRaises(ValueError):
-            await OllamaModel._resolve_image('data:image/png;base64')
-
-    async def test_raw_base64_passthrough(self) -> None:
-        """Raw base64 strings (not data URIs, not URLs) pass through unchanged."""
-        raw_b64 = '/9j/4AAQSkZJRgABAQ=='
-        result = await OllamaModel._resolve_image(raw_b64)
-        assert result == raw_b64
-
-    async def test_local_file_path_passthrough(self) -> None:
-        """Local file paths pass through unchanged for Image to handle."""
-        path = './test_images/cat.jpg'
-        result = await OllamaModel._resolve_image(path)
-        assert result == path
-
-    @patch('genkit_ollama._models._image_fetch_client')
-    async def test_http_url_downloads_image(self, mock_get_client: MagicMock) -> None:
-        """HTTP URLs should be downloaded and returned as bytes."""
-        mock_response = MagicMock()
-        mock_response.content = b'\x89PNG\r\n\x1a\n'
-        mock_response.raise_for_status = MagicMock()
-
-        mock_client = AsyncMock()
-        mock_client.get.return_value = mock_response
-        mock_get_client.return_value = mock_client
-
-        result = await OllamaModel._resolve_image('https://example.com/cat.jpg')
-
-        assert result == b'\x89PNG\r\n\x1a\n'
-        mock_client.get.assert_awaited_once_with('https://example.com/cat.jpg')
-        mock_response.raise_for_status.assert_called_once()
-
-    async def test_image_fetch_sends_user_agent_and_follows_redirects(self) -> None:
-        """Image hosts that 403 bare requests still serve Ollama's image fetch."""
-        client = _image_fetch_client()
-        try:
-            assert client.headers['User-Agent'].startswith('Genkit/')
-            assert client.follow_redirects is True
-            assert client.timeout == httpx.Timeout(60.0)
-        finally:
-            await client.aclose()
-
-    @patch('genkit_ollama._models._image_fetch_client')
-    async def test_http_url_client_error_is_invalid_argument(self, mock_get_client: MagicMock) -> None:
-        """A 4xx from the image host means the caller's URL is bad.
-
-        INVALID_ARGUMENT, not NOT_FOUND, so Fallback does not switch models
-        over a URL no model can fetch.
-        """
-        for status in (403, 404, 410):
-            with self.subTest(status=status):
-                request = httpx.Request('GET', 'https://menu.example/dishes/tiramisu.jpg')
-                mock_client = AsyncMock()
-                mock_client.get.return_value = httpx.Response(status, request=request)
-                mock_get_client.return_value = mock_client
-
-                with self.assertRaises(GenkitError) as raised:
-                    await OllamaModel._resolve_image('https://menu.example/dishes/tiramisu.jpg')
-
-                self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
-                self.assertIsInstance(raised.exception.__cause__, httpx.HTTPStatusError)
-
-    @patch('genkit_ollama._models._image_fetch_client')
-    async def test_http_url_transient_error_stays_raw(self, mock_get_client: MagicMock) -> None:
-        """408/429/5xx from the image host stay unclassified so Retry can try again."""
-        for status in (408, 429, 500, 503):
-            with self.subTest(status=status):
-                request = httpx.Request('GET', 'https://menu.example/dishes/tiramisu.jpg')
-                mock_client = AsyncMock()
-                mock_client.get.return_value = httpx.Response(status, request=request)
-                mock_get_client.return_value = mock_client
-
-                with self.assertRaises(httpx.HTTPStatusError):
-                    await OllamaModel._resolve_image('https://menu.example/dishes/tiramisu.jpg')
 
 
 class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
@@ -1195,7 +1101,7 @@ class TestGetUsageInfo:
 
     def test_with_counts(self) -> None:
         """Token counts are taken from the API response and summed."""
-        basic = ModelUsage(input_characters=100)
+        basic = GenerationUsage(input_characters=100)
         api_response = ollama_api.ChatResponse(
             message=ollama_api.Message(role='assistant', content='x'), prompt_eval_count=10, eval_count=20
         )
@@ -1211,7 +1117,7 @@ class TestGetUsageInfo:
         """Missing counts on the response default to zero."""
         api_response = ollama_api.ChatResponse(message=ollama_api.Message(role='assistant', content='x'))
 
-        got = OllamaModel.get_usage_info(basic_generation_usage=ModelUsage(), api_response=api_response)
+        got = OllamaModel.get_usage_info(basic_generation_usage=GenerationUsage(), api_response=api_response)
 
         assert got.input_tokens == 0
         assert got.output_tokens == 0
@@ -1219,7 +1125,7 @@ class TestGetUsageInfo:
 
     def test_none_response_passthrough(self) -> None:
         """A missing API response leaves the basic usage untouched."""
-        basic = ModelUsage(input_characters=5)
+        basic = GenerationUsage(input_characters=5)
 
         got = OllamaModel.get_usage_info(basic_generation_usage=basic, api_response=None)
 

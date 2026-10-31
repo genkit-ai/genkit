@@ -42,9 +42,18 @@ from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
 from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._json_patch import diff_json
-from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
+from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason, StatusName
+from genkit._core._error import (
+    GenkitError,
+    GenkitRuntimeError,
+    Interrupt,
+    PublicError,
+    RuntimeErrorReason,
+    StatusName,
+    TaskGroupError,
+    interrupt_escape_error,
+)
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     AgentInit,
@@ -163,7 +172,15 @@ class SessionRunner(Generic[StateT]):
             try:
 
                 async def body(span: SpanContext, turn_input: AgentInput = inp, ctx: TurnContext = turn_ctx) -> object:
-                    turn_result = await fn(turn_input, ctx)
+                    try:
+                        turn_result = await fn(turn_input, ctx)
+                    except (Interrupt, TaskGroupError) as exc:
+                        # No generate loop here to pause. Convert inside the
+                        # span so runTurn-N records the failure.
+                        failure = interrupt_escape_error(exc)
+                        if failure is None:
+                            raise
+                        raise failure from exc
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
@@ -191,9 +208,18 @@ class SessionRunner(Generic[StateT]):
                 self.last_good_state_version = self.session.version
                 self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
-            except Exception as exc:
+            except (Exception, Interrupt, TaskGroupError) as exc:
+                # body converts the turn's own Interrupt; this covers one
+                # raised from a hook outside it.
+                failure = interrupt_escape_error(exc)
+                if failure is not None:
+                    turn_error: Exception = failure
+                elif isinstance(exc, Exception):
+                    turn_error = exc
+                else:
+                    raise
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
-                self.last_turn_error = to_error_details(exc)
+                self.last_turn_error = to_error_details(turn_error)
 
                 if self.on_end_turn is not None:
                     await self.on_end_turn(AgentFinishReason.FAILED)
@@ -237,11 +263,20 @@ class SessionRunner(Generic[StateT]):
         await self.session.update_custom(fn)
 
 
-# AgentFn — custom agent entrypoint; receives SessionRunner + ActionRunContext.
+# The context a custom agent fn receives; ctx.send_chunk() takes an AgentStreamChunk.
+AgentContext = ActionRunContext[AgentStreamChunk]
+"""Execution context passed to a custom agent function.
+
+An alias for :class:`~genkit.ActionRunContext[AgentStreamChunk]`. Provides access
+to streaming agent chunks, caller context data, and cancellation signals.
+"""
+
+# AgentFn — custom agent entrypoint; receives SessionRunner + AgentContext.
 AgentFn = Callable[
-    [SessionRunner, ActionRunContext],
+    [SessionRunner, AgentContext],
     Awaitable[AgentResult],
 ]
+"""Custom agent entrypoint: takes a `SessionRunner` and the run context, returns an `AgentResult`."""
 
 
 # ---------------------------------------------------------------------------
@@ -816,9 +851,9 @@ class AgentRuntime:
         """
         detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         abort_signal = asyncio.Event()
-        action_ctx = ActionRunContext(
+        action_ctx: AgentContext = ActionRunContext(
             context=get_current_context(),
-            streaming_callback=cast(StreamingCallback, self.send_chunk),
+            streaming_callback=self.send_chunk,
             abort_signal=abort_signal,
         )
 
@@ -869,8 +904,14 @@ class AgentRuntime:
                     coro=fn(self.session_runner, action_ctx),
                 )
                 result_holder.append(result)
-            except Exception as e:  # noqa: BLE001
-                err_holder.append(e)
+            except (Exception, Interrupt, TaskGroupError) as e:  # noqa: BLE001
+                failure = interrupt_escape_error(e)
+                if failure is not None:
+                    err_holder.append(failure)
+                elif isinstance(e, Exception):
+                    err_holder.append(e)
+                else:
+                    raise
             finally:
                 # Synchronously close self.turn_inputs to signal turn completion,
                 # letting SessionRunner stop waiting for more inputs.
@@ -1041,7 +1082,7 @@ class AgentRuntime:
 async def generate_prompt_agent_turn(
     *,
     session_runner: SessionRunner,
-    ctx: ActionRunContext,
+    ctx: AgentContext,
     scope: CallScope,
     options: GenerateActionOptions,
     history: list[Message],
@@ -1098,7 +1139,7 @@ async def generate_prompt_agent_turn(
 def to_error_details(exc: Exception) -> GenkitRuntimeError:
     status = getattr(exc, 'status', None) or 'INTERNAL'
     if isinstance(exc, GenkitError):
-        message = exc.original_message
+        message = exc.message
     else:
         message = str(exc) or 'Internal failure'
     details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)

@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 
 from genkit import Genkit, GenkitError, RuntimeErrorReason, get_logger
-from genkit.middleware import GenerateMiddlewareContext
+from genkit.middleware import MiddlewareContext
 
 from ._catalog import BASIC_CATALOG, A2uiCatalog
 from ._types import A2UI_CATALOG_VALUE_TYPE, BASIC_CATALOG_ID, DEFAULT_CATALOG_ID
@@ -91,7 +91,7 @@ def read_catalog_file(*, path: str) -> A2uiCatalog:
     return catalog
 
 
-def resolve_catalog(*, ctx: GenerateMiddlewareContext, catalog: str | None) -> A2uiCatalog:
+def resolve_catalog(*, ctx: MiddlewareContext, catalog: str | None) -> A2uiCatalog:
     lookup = catalog or DEFAULT_CATALOG_ID
     found = ctx.ai.lookup_value(kind=A2UI_CATALOG_VALUE_TYPE, name=lookup)
     if found is not None:

@@ -70,8 +70,12 @@ export {
   UserFacingError,
   assertUnstable,
   getCallableJSON,
+  getErrorMessage,
   getHttpStatus,
+  inheritSpanMarks,
   type ErrorResponseMetadata,
+  type HttpErrorWireFormat,
+  type SpanFailureMarks,
   type StatusName,
 } from './error.js';
 export {
