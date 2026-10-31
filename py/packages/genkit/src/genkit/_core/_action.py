@@ -184,8 +184,11 @@ class ActionKind(StrEnum):
     FLOW = 'flow'
     MODEL = 'model'
     PROMPT = 'prompt'
-    # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
-    TOOL = 'tool.v2'
+    # A tool: run returns what the function returned. Generate runs this one.
+    TOOL = 'tool'
+    # The same tool returning the MultipartToolResponse envelope. The Dev UI
+    # lists and runs this one when both exist (same as JS and Go).
+    TOOL_V2 = 'tool.v2'
     UTIL = 'util'
 
 
@@ -373,7 +376,7 @@ class ActionParams:
 
 def _kind_label(kind: ActionKind) -> str:
     """The action kind as error messages say it: `flow`, `model`, `tool`, `background model`."""
-    # ActionKind.TOOL is 'tool.v2' (the catalog key); people call it a tool.
+    # ActionKind.TOOL_V2 is 'tool.v2'; people call it a tool.
     return str(kind).split('.')[0].replace('-', ' ')
 
 
@@ -398,7 +401,7 @@ def _public_context_name(kind: ActionKind) -> str:
     FlowContext for everything else. FlowContext is the public name of the
     run-context class, so it's correct for embedders, evaluators and the rest.
     """
-    if kind == ActionKind.TOOL:
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2):
         return 'ToolContext'
     if kind in _MODEL_CONTEXT_KINDS:
         return 'ModelContext'
@@ -458,7 +461,7 @@ def find_input_and_context(
     # A tool's input type is the schema the model sees, and a flow's is its
     # public API, so those need one. Other actions (models, embedders, ...)
     # get a fixed input from Genkit and may leave it unannotated.
-    if kind in (ActionKind.TOOL, ActionKind.FLOW) and input_param is not None:
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2, ActionKind.FLOW) and input_param is not None:
         if hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty:
             raise TypeError(
                 f"{owner} input '{input_param.name}' has no type annotation. "
@@ -752,8 +755,8 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
         return None
-    # Catalog kind, not a selector. People write provider:tool/name.
-    if inner_kind == ActionKind.TOOL:
+    # Envelope kind, not a selector. People write provider:tool/name.
+    if inner_kind == ActionKind.TOOL_V2:
         return None
     return DapQualifiedName(provider, inner_kind, inner_name)
 
@@ -1059,13 +1062,16 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._metadata[ActionMetadataKey.INPUT_KEY] = value
 
     @property
-    def output_schema(self) -> dict[str, object]:
+    def output_schema(self) -> dict[str, object] | None:
         return self._output_schema
 
     @output_schema.setter
-    def output_schema(self, value: dict[str, object]) -> None:
+    def output_schema(self, value: dict[str, object] | None) -> None:
         self._output_schema = value
-        self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
+        if value is None:
+            self._metadata.pop(ActionMetadataKey.OUTPUT_KEY, None)
+        else:
+            self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
 
     def _override_input_schema(
         self,
@@ -1414,7 +1420,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if on_trace_start:
                 await on_trace_start(trace_id, span_id)
 
-            tool_token = _inside_tool.set(True) if self._kind == ActionKind.TOOL else None
+            is_tool = self._kind in (ActionKind.TOOL, ActionKind.TOOL_V2)
+            tool_token = _inside_tool.set(True) if is_tool else None
             try:
                 if execute is not None:
                     output = await execute()
@@ -1429,7 +1436,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 # miss, so it becomes an error. Under a tool (a flow the tool
                 # calls) it stays raw, so the tool's own catch-all can't
                 # swallow the approval.
-                if self._kind != ActionKind.TOOL and not _inside_tool.get():
+                if not is_tool and not _inside_tool.get():
                     raise interrupt_outside_tool_error(e) from e
                 raise
             except TaskGroupError as e:
