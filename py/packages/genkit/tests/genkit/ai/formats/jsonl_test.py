@@ -160,3 +160,22 @@ class TestJsonlFormatInstructions:
 
         assert fmt.instructions is not None
         assert '"type": "object"' in fmt.instructions
+
+
+@pytest.mark.parametrize('text', ['{}\n', '{}\n{"id": 1}\n'])
+def test_streaming_preserves_empty_objects(text: str) -> None:
+    """A valid empty object is emitted just like a nonempty object."""
+    fmt = JsonlFormat().handle({'type': 'array', 'items': {'type': 'object'}})
+    chunk = ModelResponseChunk(content=[Part.from_text(text)])
+    result = fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=[]))
+    expected = fmt.parse_message(Message(role='model', content=chunk.content))
+    assert result == expected
+
+
+def test_streaming_preserves_empty_object_split_across_chunks() -> None:
+    """An empty object is emitted once it becomes complete."""
+    fmt = JsonlFormat().handle({'type': 'array', 'items': {'type': 'object'}})
+    first = ModelResponseChunk(content=[Part.from_text('{')])
+    second = ModelResponseChunk(content=[Part.from_text('}\n')])
+    assert fmt.parse_chunk(chunk_for_stream(first, index=0, previous_chunks=[])) == []
+    assert fmt.parse_chunk(chunk_for_stream(second, index=0, previous_chunks=[first])) == [{}]
