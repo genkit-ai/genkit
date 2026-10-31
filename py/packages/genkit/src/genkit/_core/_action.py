@@ -46,7 +46,15 @@ from typing_extensions import Self, TypeVar
 
 from genkit._core._channel import Channel, CloseableQueue, StoppableStream
 from genkit._core._compat import StrEnum
-from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason, mark_request_error
+from genkit._core._error import (
+    GenkitError,
+    Interrupt,
+    RuntimeErrorReason,
+    TaskGroupError,
+    interrupt_escape_error,
+    interrupt_outside_tool_error,
+    mark_request_error,
+)
 from genkit._core._model import (
     EmbedRequest,
     ModelRequest,
@@ -56,6 +64,7 @@ from genkit._core._model import (
     declared_config_type,
     reject_config_api_key,
 )
+from genkit._core._operation import Operation
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._attrs import Attr, metadata_key
 from genkit._core._telemetry._instrumentation import (
@@ -63,7 +72,7 @@ from genkit._core._telemetry._instrumentation import (
     run_in_new_span,
     to_json_attr,
 )
-from genkit._core._typing import ActionMetadata, EmbedResponse, Operation
+from genkit._core._typing import ActionMetadata, EmbedResponse
 
 # =============================================================================
 # Span attribute types and tracing helpers
@@ -486,16 +495,60 @@ def known_annotation_names(kind: ActionKind) -> dict[str, object]:
     return {}
 
 
+def config_field(kind: ActionKind) -> str | None:
+    """The request field that carries this kind's config, or None if it has none."""
+    if kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
+        return 'config'
+    if kind == ActionKind.EMBEDDER:
+        return 'options'
+    return None
+
+
+def with_request_annotation(
+    fn: Callable[..., Awaitable[_CallT]], request_type: type, *, kind: ActionKind
+) -> Callable[..., Awaitable[_CallT]]:
+    """``fn``, or a forwarder whose unannotated input parameter is ``request_type``.
+
+    An unannotated input gives the action nothing to validate against, so a
+    Dev UI or CLI run would hand the fn the raw JSON dict. The forwarder
+    keeps ``fn``'s parameter names, so Genkit still passes input and context
+    by name.
+    """
+    hints = resolve_type_hints(fn, known_annotation_names(kind))
+    sig = signature_of(fn)
+    inputs = [
+        p
+        for p in sig.parameters.values()
+        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        and not _is_context_annotation(hints.get(p.name, p.annotation))
+    ]
+    if len(inputs) != 1 or hints.get(inputs[0].name, inputs[0].annotation) is not inspect.Parameter.empty:
+        return fn
+    target = inputs[0].name
+
+    async def forward(*args: Any, **kwargs: Any) -> _CallT:  # noqa: ANN401
+        return await fn(*args, **kwargs)
+
+    forward.__doc__ = fn.__doc__
+    forward.__annotations__ = {**hints, target: request_type}
+    parameters = [p.replace(annotation=request_type) if p.name == target else p for p in sig.parameters.values()]
+    setattr(forward, '__signature__', sig.replace(parameters=parameters))  # noqa: B010
+    return forward
+
+
 def json_schema_for(
     annotation: object,
     *,
     kind: ActionKind,
     name: str,
     label: str,
+    schema: dict[str, object] | None = None,
 ) -> tuple[TypeAdapter[Any], dict[str, object]]:
     """A validator and JSON schema for an action's input or output type.
 
     ``label`` says which one, e.g. ``"input 'query'"`` or ``'output'``.
+    A given ``schema`` is published as is instead of being generated from
+    the annotation; the validator is still built from the annotation.
     Pydantic's own errors here name neither the action nor the fix, so each
     one is re-raised as a TypeError that does.
     """
@@ -507,7 +560,7 @@ def json_schema_for(
     type_name = annotation.__name__ if isinstance(annotation, type) and not is_generic else repr(annotation)
     try:
         adapter: TypeAdapter[Any] = TypeAdapter(annotation)
-        return adapter, adapter.json_schema()
+        return adapter, schema if schema is not None else adapter.json_schema()
     except (PydanticSchemaGenerationError, PydanticInvalidForJsonSchema) as e:
         # e.g. `-> Thermometer`, where Thermometer is a plain class
         raise TypeError(
@@ -760,6 +813,20 @@ BidiFn = Callable[
 _action_context: ContextVar[dict[str, Any] | None] = ContextVar('context')
 _ = _action_context.set(None)
 
+# True while an action body runs. An input check that fails inside one is the
+# server calling a nested action wrong, not the HTTP caller's request.
+_inside_action: ContextVar[bool] = ContextVar('inside_action', default=False)
+
+# True while a tool body runs, including actions it calls. An Interrupt from a
+# flow the tool calls has to reach generate's tool loop as an Interrupt, so only
+# an action with no tool above it turns one into an error.
+_inside_tool: ContextVar[bool] = ContextVar('inside_tool', default=False)
+
+
+def _request_error(error: GenkitError) -> GenkitError:
+    """Mark an input/init failure as the caller's request only on the outermost action."""
+    return error if _inside_action.get() else mark_request_error(error=error)
+
 
 class NoInput:
     def __repr__(self) -> str:
@@ -839,6 +906,11 @@ class ActionRunContext(Generic[ChunkT]):
 
 # The app-facing name for a flow's ctx. Same class, so FlowContext[str] works.
 FlowContext = ActionRunContext
+"""Execution context passed to a flow function.
+
+An alias for :class:`~genkit.ActionRunContext`. Provides access to streaming,
+caller context data, and cancellation signals.
+"""
 
 # The context parameter passed to model and background-model functions.
 ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
@@ -870,6 +942,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         init_schema: type[BaseModel] | dict[str, object] | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
+        _io_schemas: tuple[dict[str, object], dict[str, object]] | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
@@ -897,8 +970,42 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._fn_is_wrapper: bool = metadata_fn is not None
-        self._initialize_io_schemas(hints)
+        # _io_schemas: the (input, output) JSON schemas to publish, from a
+        # subclass whose kind always publishes the same ones (Model publishes
+        # ModelRequest/ModelResponse whatever the fn's ModelRequest[Cfg]).
+        # Skips generating schemas from the annotations only to discard them.
+        self._initialize_io_schemas(hints, _io_schemas)
+        self._config_schema = self._resolve_config_class(self._config_schema)
         self._initialize_init_schema(init_schema)
+
+    def _resolve_config_class(
+        self, declared: type[BaseModel] | dict[str, object] | None
+    ) -> type[BaseModel] | dict[str, object] | None:
+        """The one config class this action takes, from ``config_schema=`` and/or the fn annotation.
+
+        Both must name the same class. With a subclass, a dict would validate
+        into the annotated class and drop the other class's fields, so only
+        the identical class is accepted.
+        """
+        field = config_field(self._kind)
+        annotated = declared_config_type(self._input_class) if field and self._input_class is not None else None
+        if annotated is None:
+            return declared
+        if isinstance(declared, type) and declared is not annotated:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{describe_action(self._kind, self._name)}: config_schema is {config_type_path(declared)}, '
+                    f'but the function takes {field} as {config_type_path(annotated)}. '
+                    'Pass the same class to both, or only one of them.'
+                ),
+            )
+        return annotated
+
+    @property
+    def config_schema(self) -> type[BaseModel] | dict[str, object] | None:
+        """The config class set at definition time, from ``config_schema=`` or the fn annotation."""
+        return self._config_schema
 
     @property
     def params(self) -> ActionParams:
@@ -922,7 +1029,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         return self._metadata
 
     def _action_metadata(self) -> ActionMetadata:
-        """Return the internal ActionMetadata descriptor for the Dev UI catalog."""
+        """Return the ActionMetadata descriptor for Registry.list_actions()."""
         meta = {
             k: v
             for k, v in self._metadata.items()
@@ -1055,6 +1162,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         token = None
         if context is not None:
             token = _action_context.set(context)
+        inside_token = _inside_action.set(True)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
         action_ctx = ActionRunContext(
@@ -1074,6 +1182,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             )
 
         finally:
+            _inside_action.reset(inside_token)
             if token is not None:
                 _action_context.reset(token)
 
@@ -1200,28 +1309,41 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         chunks = StoppableStream(chunks=channel, stop=stop if stop_on_early_exit else None)
         return StreamResponse(stream=chunks, response=result_future)
 
-    def _initialize_io_schemas(self, annotations: dict[str, Any]) -> None:
+    def _initialize_io_schemas(
+        self,
+        annotations: dict[str, Any],
+        published: tuple[dict[str, object], dict[str, object]] | None = None,
+    ) -> None:
+        published_input, published_output = published if published is not None else (None, None)
         if self._params.input is not None:
             input_type = annotations.get(self._params.input.name, Any)
             type_adapter, self._input_schema = json_schema_for(
-                input_type, kind=self._kind, name=self._name, label=f"input '{self._params.input.name}'"
+                input_type,
+                kind=self._kind,
+                name=self._name,
+                label=f"input '{self._params.input.name}'",
+                schema=published_input,
             )
             self._input_type: TypeAdapter[InputT] | None = cast(TypeAdapter[InputT], type_adapter)
             self._input_class: type | None = input_type if isinstance(input_type, type) else None
         else:
-            self._input_schema = TypeAdapter(object).json_schema()
+            self._input_schema = published_input or TypeAdapter(object).json_schema()
             self._input_type = None
             self._input_class = None
         self._metadata[ActionMetadataKey.INPUT_KEY] = self._input_schema
 
         if ActionMetadataKey.RETURN in annotations:
             output_adapter, self._output_schema = json_schema_for(
-                annotations[ActionMetadataKey.RETURN], kind=self._kind, name=self._name, label='output'
+                annotations[ActionMetadataKey.RETURN],
+                kind=self._kind,
+                name=self._name,
+                label='output',
+                schema=published_output,
             )
             self._output_type: TypeAdapter[OutputT] | None = cast(TypeAdapter[OutputT], output_adapter)
         else:
             self._output_type = None
-            self._output_schema = TypeAdapter(object).json_schema()
+            self._output_schema = published_output or TypeAdapter(object).json_schema()
         self._metadata[ActionMetadataKey.OUTPUT_KEY] = self._output_schema
 
     def _initialize_init_schema(
@@ -1263,15 +1385,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             return self._init_type.validate_python(init if init is not None else {})
         except ValidationError as e:
             if init is None:
-                raise mark_request_error(
-                    error=GenkitError(
+                raise _request_error(
+                    GenkitError(
                         message=(f"{self._kind_label.capitalize()} '{self.name}' requires init but none was provided."),
                         status='INVALID_ARGUMENT',
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     )
                 ) from e
-            raise mark_request_error(
-                error=GenkitError(
+            raise _request_error(
+                GenkitError(
                     message=f"Invalid init for {self._kind_label} '{self.name}'",
                     status='INVALID_ARGUMENT',
                     cause=e,
@@ -1299,15 +1421,15 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             try:
                 return self._input_type.validate_python(input)
             except ValidationError:
-                config = getattr(input, 'config', None)
+                config = getattr(input, config_field(self._kind) or 'config', None)
                 if isinstance(config, BaseModel):
                     expected = declared_config_type(self._input_class) if self._input_class is not None else None
                     want = config_type_path(expected) if isinstance(expected, type) else 'the plugin config class'
-                    raise mark_request_error(
-                        error=GenkitError(
+                    raise _request_error(
+                        GenkitError(
                             message=(
                                 f"Invalid input for {self._kind_label} '{self.name}': "
-                                f'config must be {want} or a mapping, '
+                                f'{config_field(self._kind) or "config"} must be {want} or a mapping, '
                                 f'got {config_type_path(type(config))}'
                             ),
                             status='INVALID_ARGUMENT',
@@ -1324,8 +1446,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if omitted
                 else f"Invalid input for {self._kind_label} '{self.name}'"
             )
-            raise mark_request_error(
-                error=GenkitError(
+            raise _request_error(
+                GenkitError(
                     message=msg,
                     status='INVALID_ARGUMENT',
                     # Nothing was passed, so Pydantic's "got None" would only mislead.
@@ -1374,6 +1496,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if on_trace_start:
                 await on_trace_start(trace_id, span_id)
 
+            tool_token = _inside_tool.set(True) if self._kind == ActionKind.TOOL else None
             try:
                 if execute is not None:
                     output = await execute()
@@ -1382,7 +1505,25 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             except Interrupt as e:
                 if e.metadata:
                     span.set_metadata({'interrupt': e.metadata})
+                # Only generate's tool loop turns an Interrupt into a pause.
+                # With no tool above, it is a BaseException that `except
+                # Exception` handlers (web adapters, agent transports) would
+                # miss, so it becomes an error. Under a tool (a flow the tool
+                # calls) it stays raw, so the tool's own catch-all can't
+                # swallow the approval.
+                if self._kind != ActionKind.TOOL and not _inside_tool.get():
+                    raise interrupt_outside_tool_error(e) from e
                 raise
+            except TaskGroupError as e:
+                # asyncio.TaskGroup / anyio wrap a child's Interrupt in a
+                # BaseExceptionGroup, which every `except Exception` misses.
+                failure = interrupt_escape_error(e)
+                if failure is None:
+                    raise
+                raise failure from e
+            finally:
+                if tool_token is not None:
+                    _inside_tool.reset(tool_token)
             if self._strict_io:
                 output = self._validate_output(output)
             latency_ms = (time.perf_counter() - start_time) * 1000

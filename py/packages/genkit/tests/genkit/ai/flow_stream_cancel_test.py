@@ -9,8 +9,8 @@ from typing import TypeVar
 
 import pytest
 
-from genkit import Genkit, GenkitError
-from genkit._core._action import Action, ActionRunContext
+from genkit import FlowContext, Genkit, GenkitError, Interrupt
+from genkit._core._action import Action
 
 T = TypeVar('T')
 
@@ -25,7 +25,7 @@ class SlowFlow:
         self.fail_midway = fail_midway
         self.cancelled = asyncio.Event()
 
-    async def __call__(self, n: int, ctx: ActionRunContext) -> str:
+    async def __call__(self, n: int, ctx: FlowContext) -> str:
         ctx.send_chunk(1)
         if self.fail_midway:
             raise ValueError('flow blew up')
@@ -43,7 +43,7 @@ def setup(**kwargs: bool) -> tuple[Action, SlowFlow]:
     body = SlowFlow(**kwargs)
 
     @ai.flow()
-    async def count(n: int, ctx: ActionRunContext) -> str:
+    async def count(n: int, ctx: FlowContext) -> str:
         return await body(n, ctx)
 
     return count, body
@@ -179,17 +179,48 @@ async def test_flow_stream_consumer_exception_cancels_flow() -> None:
 
 @pytest.mark.asyncio
 async def test_flow_stream_timeout_cancels_flow() -> None:
-    """An enclosing asyncio.timeout cancels the reader task and cancels the flow."""
+    """A `wait_for` deadline on the reader cancels it and cancels the flow."""
     count, body = setup()
     stream = count.stream(1)
 
-    with pytest.raises(TimeoutError):
-        async with asyncio.timeout(0.02):
-            async for _ in stream:
-                await asyncio.sleep(1)
+    async def read_slowly() -> None:
+        async for _ in stream:
+            await asyncio.sleep(1)
+
+    # asyncio.TimeoutError, not TimeoutError: they're only the same class on 3.11+.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(read_slowly(), timeout=0.02)
 
     with pytest.raises(GenkitError) as err:
         await settle(stream.response)
 
     assert body.cancelled.is_set()
     assert err.value.status == 'CANCELLED'
+
+
+@pytest.mark.asyncio
+async def test_flow_stream_interrupt_outside_tool_raises_internal_not_cancelled() -> None:
+    """An Interrupt from a streamed flow fails the loop and `.response` with INTERNAL, not CANCELLED.
+
+    Interrupt and CancelledError are both BaseExceptions; the stream must not
+    read one as the reader stopping.
+    """
+    ai = Genkit()
+
+    @ai.flow()
+    async def refund(order_id: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(1)
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    stream = refund.stream('A-17')
+    seen = []
+    with pytest.raises(GenkitError) as loop_err:
+        async for chunk in stream:
+            seen.append(chunk)
+    with pytest.raises(GenkitError) as response_err:
+        await settle(stream.response)
+
+    assert seen == [1]
+    assert loop_err.value.status == 'INTERNAL'
+    assert response_err.value.status == 'INTERNAL'
+    assert response_err.value.message == 'Interrupt raised outside a tool'

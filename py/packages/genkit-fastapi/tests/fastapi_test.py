@@ -20,17 +20,19 @@
 import asyncio
 import json
 import logging
-from typing import Any
+from collections.abc import MutableMapping
+from typing import Any, cast
 
 import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, serve_flow
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from genkit import FlowContext, Genkit, GenkitError, PublicError, RequestData
+from genkit import FlowContext, Genkit, GenkitError, Interrupt, PublicError
 from genkit.plugin_api import provider_error
+from genkit.web import RequestData
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -75,12 +77,23 @@ def create_app() -> FastAPI:
     return app
 
 
-def test_void_flow_accepts_empty_body() -> None:
-    """runFlow() with no input sends {}; void flows should still run."""
+def test_empty_body_runs_no_input_flow_on_every_adapter() -> None:
+    """POST {} to a served flow that takes no input returns its result."""
     client = TestClient(create_app())
     response = client.post('/void_flow', json={})
     assert response.status_code == 200
-    assert response.json()['result'] == {'ok': 'true'}
+    assert response.json() == {'result': {'ok': 'true'}}
+
+
+def test_input_key_body_is_400_on_every_adapter() -> None:
+    """POST {"input": 1} to a served flow is a 400 telling the caller to wrap in data."""
+    client = TestClient(create_app())
+    response = client.post('/void_flow', json={'input': 1})
+    assert response.status_code == 400
+    assert (
+        response.content
+        == b'{"message":"Flow request must be wrapped in {\\"data\\": ...}","status":"INVALID_ARGUMENT"}'
+    )
 
 
 def test_void_flow_accepts_explicit_null_data() -> None:
@@ -99,20 +112,72 @@ def test_required_input_empty_body_fails_at_action_not_wire() -> None:
     parsed = json.loads(response.text)
     assert_is_error_response(parsed)
     assert parsed['status'] == 'INVALID_ARGUMENT'
-    assert parsed['message'] == 'Invalid argument'
+    assert parsed['message'] == "Flow 'say_hi' requires input but none was provided."
 
 
-def test_fastapi_flow_posted_wrong_input_type_returns_400_without_validation_text() -> None:
-    """Posting a dict to a ``str`` flow is a 400 INVALID_ARGUMENT that doesn't echo the input."""
+def test_fastapi_flow_posted_wrong_input_type_returns_400_naming_the_problem_not_the_value() -> None:
+    """Posting a dict to a ``str`` flow is a 400 that says what was expected and doesn't echo the input."""
     client = TestClient(create_app())
     response = client.post('/chat', json={'data': {'ssn': '123-45-6789'}})
 
     assert response.status_code == 400
     assert response.json() == {
-        'message': 'Invalid argument',
+        'message': "Invalid input for flow 'say_hi': Input should be a valid string",
         'status': 'INVALID_ARGUMENT',
     }
     assert '123-45-6789' not in response.text
+
+
+def test_fastapi_nested_flow_called_with_bad_input_is_500_not_400() -> None:
+    """A flow that calls another flow with the wrong shape is a server bug: 500, nothing echoed."""
+    ai = Genkit()
+
+    class Order(BaseModel):
+        order_id: str
+
+    @ai.flow()
+    async def place(order: Order) -> str:
+        return order.order_id
+
+    @ai.flow()
+    async def checkout(cart_id: str) -> str:
+        return await place(cast(Any, {'qty': 'internal-row-42'}))
+
+    app = FastAPI()
+    app.include_router(serve_flow(checkout, base_path='/checkout'))
+    response = TestClient(app).post('/checkout', json={'data': 'c1'})
+
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_custom_validator_text_never_reaches_the_400() -> None:
+    """A field_validator's ValueError naming the value and a tenant is 'Invalid value' on the wire."""
+    ai = Genkit()
+
+    class Card(BaseModel):
+        number: str
+
+        @field_validator('number')
+        @classmethod
+        def known_card(cls, v: str) -> str:
+            raise ValueError(f'card {v} rejected for tenant acme-internal-db-7')
+
+    @ai.flow()
+    async def pay(card: Card) -> str:
+        return card.number
+
+    app = FastAPI()
+    app.include_router(serve_flow(pay, base_path='/pay'))
+    response = TestClient(app).post('/pay', json={'data': {'number': '4111111111111111'}})
+
+    assert response.status_code == 400
+    assert response.json() == {
+        'message': "Invalid input for flow 'pay': number: Invalid value",
+        'status': 'INVALID_ARGUMENT',
+    }
+    assert '4111' not in response.text
+    assert 'acme' not in response.text
 
 
 def test_unknown_body_shape_still_returns_400() -> None:
@@ -121,7 +186,7 @@ def test_unknown_body_shape_still_returns_400() -> None:
     response = client.post('/chat', json={'foo': 'bar'})
     assert response.status_code == 400
     assert response.json() == {
-        'message': 'Action request must be wrapped in {"data": ...} object',
+        'message': 'Flow request must be wrapped in {"data": ...}',
         'status': 'INVALID_ARGUMENT',
     }
 
@@ -148,8 +213,6 @@ def test_serve_flow_message_body_is_rejected_as_bad_request() -> None:
 
 def test_500_flow_exception_returns_valid_json() -> None:
     """500 (flow exception) must return valid JSON (not TypeError).
-
-    get_callable_json now returns a dict, so json.dumps works directly.
 
     Uses real code snippet (SQL injection pattern) to exercise error path realistically.
     """
@@ -219,6 +282,32 @@ def test_fastapi_flow_raising_public_error_returns_its_status_and_message() -> N
     assert response.json() == {'message': 'no order 99', 'status': 'NOT_FOUND'}
 
 
+def test_fastapi_flow_error_response_is_redacted_body_and_status() -> None:
+    """A flow raising GenkitError('secret') is a compact 500 Internal Error; a bad input stays a compact 400."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def save(_: str) -> None:
+        raise GenkitError(status='INVALID_ARGUMENT', message='secret')
+
+    app = FastAPI()
+    app.include_router(serve_flow(save, base_path='/save'))
+    client = TestClient(app)
+
+    crashed = client.post('/save', json={'data': 'x'})
+    assert crashed.status_code == 500
+    assert crashed.content == b'{"message":"Internal Error","status":"INTERNAL"}'
+    assert crashed.headers['content-type'] == 'application/json'
+
+    bad_input = client.post('/save', json={'data': {'ssn': '123-45-6789'}})
+    assert bad_input.status_code == 400
+    assert bad_input.json() == {
+        'message': "Invalid input for flow 'save': Input should be a valid string",
+        'status': 'INVALID_ARGUMENT',
+    }
+    assert b'123-45-6789' not in bad_input.content
+
+
 def test_fastapi_flow_raising_value_error_returns_500_internal_error_without_stack() -> None:
     """FastAPI POST to a flow that raises ValueError returns a generic 500."""
     ai = Genkit()
@@ -258,8 +347,8 @@ def test_fastapi_stream_flow_raising_not_found_sends_sse_internal_error() -> Non
     assert 'alice@example.com' not in response.text
 
 
-def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message() -> None:
-    """FastAPI SSE to a flow that raises PublicError ends with an error event carrying its message."""
+def test_streamed_flow_failure_ends_with_same_error_frame() -> None:
+    """A streamed flow raising PublicError('NOT_FOUND', 'no order 99') ends with that exact error frame."""
     ai = Genkit()
 
     @ai.flow()
@@ -274,7 +363,7 @@ def test_fastapi_stream_flow_raising_public_error_sends_its_status_and_message()
         headers={'Accept': 'text/event-stream'},
     )
 
-    assert sse_error_event(response.text) == {'message': 'no order 99', 'status': 'NOT_FOUND'}
+    assert response.content.endswith(b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n')
 
 
 def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_without_stack() -> None:
@@ -297,6 +386,32 @@ def test_fastapi_stream_flow_raising_value_error_sends_sse_internal_error_withou
     assert error == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'secret' not in response.text
     assert 'stack' not in error
+
+
+def test_fastapi_flow_raising_interrupt_returns_500_and_sse_internal_error() -> None:
+    """A flow raising Interrupt (a BaseException) still gets the Genkit 500 body and SSE error frame.
+
+    The action boundary turns it into GenkitError INTERNAL, so the adapter's
+    `except Exception` sees it; without that the run is a bare 500 and the
+    stream a 200 with no error event.
+    """
+    ai = Genkit()
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    app = FastAPI()
+    app.include_router(serve_flow(refund, base_path='/refund'))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post('/refund', json={'data': 'A-17'})
+    assert response.status_code == 500
+    assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    response = client.post('/refund', json={'data': 'A-17'}, headers={'Accept': 'text/event-stream'})
+    assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert 'A-17' not in response.text
 
 
 def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> None:
@@ -644,7 +759,7 @@ def test_fastapi_handler_sync_wrapper_returns_json_internal_error() -> None:
     app = FastAPI()
 
     @app.post('/chat', response_model=None)
-    @genkit_fastapi_handler(ai)
+    @genkit_fastapi_handler(ai)  # pyright: ignore[reportArgumentType]
     def chat_route():
         return chat
 
@@ -660,7 +775,7 @@ def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_erro
     app = FastAPI()
 
     @app.post('/chat', response_model=None)
-    @genkit_fastapi_handler(ai)
+    @genkit_fastapi_handler(ai)  # pyright: ignore[reportArgumentType]
     async def chat_route():
         return 'not an action'
 
@@ -767,7 +882,7 @@ async def post_sse_then_hang_up(app: FastAPI, path: str) -> list[bytes]:
         await first_chunk.wait()
         return {'type': 'http.disconnect'}
 
-    async def send(message: dict[str, Any]) -> None:
+    async def send(message: MutableMapping[str, Any]) -> None:
         if message['type'] == 'http.response.body' and message.get('body'):
             bodies.append(message['body'])
             first_chunk.set()
@@ -797,7 +912,7 @@ async def test_fastapi_streaming_client_disconnect_cancels_flow() -> None:
     flow_cancelled = asyncio.Event()
 
     @ai.flow()
-    async def slow(_: str, ctx: ActionRunContext) -> str:
+    async def slow(_: str, ctx: FlowContext) -> str:
         ctx.send_chunk(1)
         try:
             await asyncio.Event().wait()

@@ -73,7 +73,7 @@ from genkit._core._channel import StoppableStream, start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
-from genkit._core._middleware import BaseMiddleware, middleware_class_index
+from genkit._core._middleware import Middleware, _dump_middleware_ref_config, middleware_class_index
 from genkit._core._model import (
     Document,
     GenerateActionOptions,
@@ -111,7 +111,7 @@ class PromptSettings(TypedDict, total=False):
     tools: Sequence[str | Tool] | None
     tool_choice: ToolChoice | None
     docs: list[Document] | None
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None
+    use: Sequence[Middleware | MiddlewareRef] | None
     max_turns: int | None
     return_tool_requests: bool | None
     resume_respond: Part | list[Part] | None
@@ -193,7 +193,7 @@ class PromptCache:
 class GenerateCall(BaseModel):
     """User-shaped args for one generate. Prompts fill this; ``ai.generate`` builds it."""
 
-    # arbitrary_types_allowed: Tool, BaseMiddleware and ModelRef are plain classes, so
+    # arbitrary_types_allowed: Tool, Middleware and ModelRef are plain classes, so
     # Pydantic only isinstance-checks them.
     # extra='forbid': a misspelled field raises instead of being dropped.
     model_config: ClassVar[ConfigDict] = ConfigDict(arbitrary_types_allowed=True, extra='forbid')
@@ -228,7 +228,7 @@ class GenerateCall(BaseModel):
     tools: Sequence[str | Tool] | None = None
     tool_choice: ToolChoice | None = None
     docs: list[Document] | None = None
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None
+    use: Sequence[Middleware | MiddlewareRef] | None = None
     max_turns: int | None = None
     return_tool_requests: bool | None = None
     resume_respond: Part | list[Part] | None = None
@@ -274,7 +274,7 @@ class Prompt(Generic[InputT, OutputT]):
         metadata: dict[str, Any] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware | MiddlewareRef] | None = None,
         docs: list[Document] | None = None,
         name: str | None = None,
         ns: str | None = None,
@@ -421,7 +421,7 @@ class Prompt(Generic[InputT, OutputT]):
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
         docs: list[Document] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         max_turns: int | None = None,
         context: dict[str, Any] | None = None,
         return_tool_requests: bool | None = None,
@@ -482,7 +482,7 @@ class Prompt(Generic[InputT, OutputT]):
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
         docs: list[Document] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         max_turns: int | None = None,
         context: dict[str, Any] | None = None,
         return_tool_requests: bool | None = None,
@@ -541,7 +541,7 @@ class Prompt(Generic[InputT, OutputT]):
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
         docs: list[Document] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         max_turns: int | None = None,
         context: dict[str, Any] | None = None,
         return_tool_requests: bool | None = None,
@@ -958,7 +958,7 @@ def check_prompt_input(
             parse_schema(data=json_form(checked), json_schema=schema)
         except GenkitError as error:
             raise GenkitError(
-                message=f"Invalid input for action '{name}': {error.original_message}",
+                message=f"Invalid input for action '{name}': {error.message}",
                 status='INVALID_ARGUMENT',
                 cause=error,
                 reason=RuntimeErrorReason.INVALID_INPUT,
@@ -999,7 +999,6 @@ async def to_prompt_model_request(*, registry: Registry, options: GenerateAction
     output_config = OutputConfig(
         content_type=options.output.content_type if options.output else None,
         format=options.output.format if options.output else None,
-        # pyrefly: ignore[unexpected-keyword] - populate_by_name accepts the field name
         json_schema=options.output.json_schema if options.output else None,
         constrained=options.output.constrained if options.output else None,
     )
@@ -1343,17 +1342,17 @@ def define_schema(registry: Registry, name: str, schema: type[BaseModel]) -> Non
 
 def _use_to_wire_metadata(
     registry: Registry,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None,
+    use: Sequence[Middleware | MiddlewareRef] | None,
 ) -> list[dict[str, Any]] | None:
     """Serialize a prompt's ``use=`` list into the wire-shape the Dev UI reads.
 
     Produces the ``[{name, config?}]`` list the Prompt Runner sidebar pre-fills
-    from ``metadata.prompt.use``. Inline ``BaseMiddleware`` instances surface
+    from ``metadata.prompt.use``. Inline ``Middleware`` instances surface
     their configured fields so the sidebar matches what the prompt will
     actually run with. The registered name is resolved off ``registry`` so a
     class can live under multiple names without us tying it to a single
     identity. Unregistered instances — subclasses passed inline without going
-    through ``@ai.middleware``, ``GenerateMiddleware(...)``, or a middleware plugin —
+    through ``@ai.middleware``, ``ai.define_middleware(...)``, or a plugin's ``list_middleware()`` —
     are dropped because the Dev UI has no name to address them by.
     """
     if use is None:
@@ -1367,11 +1366,11 @@ def _use_to_wire_metadata(
                 item['config'] = entry.config
             out.append(item)
             continue
-        if isinstance(entry, BaseMiddleware):
+        if isinstance(entry, Middleware):
             name = cls_index.get(type(entry))
             if not name:
                 continue
-            config = entry.config.model_dump(exclude_none=True, mode='json')
+            config = _dump_middleware_ref_config(entry.config)
             item = {'name': name}
             if config:
                 item['config'] = config

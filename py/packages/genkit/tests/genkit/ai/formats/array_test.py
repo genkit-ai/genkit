@@ -111,7 +111,7 @@ class TestArrayFormatErrors:
             array_fmt.handle({'type': 'string'})
         assert "Must supply an 'array' schema type" in str(exc_info.value)
         assert exc_info.value.reason is RuntimeErrorReason.INVALID_SCHEMA
-        assert 'INVALID_SCHEMA' not in exc_info.value.original_message
+        assert 'INVALID_SCHEMA' not in exc_info.value.message
 
     def test_throws_error_for_object_schema_type(self) -> None:
         """Test that object schema type raises error."""
@@ -121,7 +121,7 @@ class TestArrayFormatErrors:
             array_fmt.handle({'type': 'object'})
         assert "Must supply an 'array' schema type" in str(exc_info.value)
         assert exc_info.value.reason is RuntimeErrorReason.INVALID_SCHEMA
-        assert 'INVALID_SCHEMA' not in exc_info.value.original_message
+        assert 'INVALID_SCHEMA' not in exc_info.value.message
 
 
 class TestArrayFormatInstructions:

@@ -39,10 +39,9 @@ import json
 from collections.abc import Coroutine
 from typing import Any, Literal, Protocol, TypeVar, cast
 
-import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import Document, Embedding, GenkitError
+from genkit import Document, Embedding, GenkitError, get_logger
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -53,7 +52,7 @@ from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # One call's result: a single vector per document, or a chunk of them for Cohere.
 _T = TypeVar('_T')
@@ -433,7 +432,7 @@ class BedrockEmbedder:
                 mime, image = image_from_document(document)
             except GenkitError as error:
                 raise GenkitError(
-                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
+                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.message)}',
                     status=error.status,
                     response_metadata=error.response_metadata,
                 ) from error
@@ -527,7 +526,7 @@ class BedrockEmbedder:
                         # but the inner message already names the plugin. Keep
                         # response_metadata so retry still honours Retry-After.
                         # Everything in here is the Bedrock call or its reply.
-                        detail = _without_own_prefix(error.original_message)
+                        detail = _without_own_prefix(error.message)
                         # Wrap the provider's own error, not the inner GenkitError,
                         # whose str() would repeat the whole message as the cause.
                         raise provider_error(

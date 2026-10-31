@@ -54,7 +54,7 @@ from google.genai.errors import APIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import Constrained, ModelContext, ModelInfo, ModelRequest, Supports, get_basic_usage_stats
+from genkit.model import ConstrainedSupport, GenerationUsage, ModelContext, ModelInfo, ModelRequest, ModelSupports
 
 # Ids ``virtual_try_on_model`` offers for autocomplete. Other
 # ``virtual-try-on-`` ids still resolve.
@@ -129,12 +129,12 @@ class VirtualTryOnConfig(BaseModel):
     )
 
 
-DEFAULT_VIRTUAL_TRY_ON_SUPPORT = Supports(
+DEFAULT_VIRTUAL_TRY_ON_SUPPORT = ModelSupports(
     media=True,
     multiturn=False,
     tools=False,
     system_role=False,
-    constrained=Constrained.NONE,
+    constrained=ConstrainedSupport.NONE,
     output=['media'],
 )
 
@@ -328,7 +328,7 @@ def _from_recontext_response(
             raw=raw,
         )
 
-    usage = get_basic_usage_stats(input_=request.messages, response=message)
+    usage = GenerationUsage.from_messages(messages=request.messages, response=message)
     usage.custom = {'generations': len(parts)}
     return ModelResponse(
         message=message,

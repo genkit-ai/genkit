@@ -4,14 +4,15 @@
 """Stopping `ai.generate_stream` / `prompt.stream` early stops the model call."""
 
 import asyncio
+import sys
 from collections.abc import Awaitable
 from typing import TypeVar
 
 import pytest
 
 from genkit import FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest
+from genkit.model import ModelContext, ToolRequest
 
 T = TypeVar('T')
 
@@ -27,7 +28,7 @@ class SlowModel:
         self.cancelled = asyncio.Event()
         self.abort_set_when_cancelled: bool | None = None
 
-    async def __call__(self, request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def __call__(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('one ')]))
         if self.fail_midway:
             raise ValueError('model blew up')
@@ -48,7 +49,7 @@ def setup(**kwargs: bool) -> tuple[Genkit, SlowModel]:
     ai = Genkit()
     model = SlowModel(**kwargs)
 
-    async def slow(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def slow(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return await model(request, ctx)
 
     ai.define_model(name='slow', fn=slow)
@@ -234,16 +235,63 @@ async def test_generate_stream_consumer_exception_cancels_model_and_response_is_
 
 @pytest.mark.asyncio
 async def test_generate_stream_timeout_cancels_model_and_response_is_aborted() -> None:
-    """An enclosing asyncio.timeout cancels the reader task and cancels the model."""
+    """A `wait_for` deadline on the reader cancels it and cancels the model."""
     ai, model = setup()
     stream = ai.generate_stream(model='slow', prompt='hi')
 
-    with pytest.raises(TimeoutError):
-        async with asyncio.timeout(0.02):
-            async for _ in stream:
-                await asyncio.sleep(1)
+    async def read_slowly() -> None:
+        async for _ in stream:
+            await asyncio.sleep(1)
+
+    # asyncio.TimeoutError, not TimeoutError: they're only the same class on 3.11+.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(read_slowly(), timeout=0.02)
 
     response = await settle(stream.response)
 
     assert model.cancelled.is_set()
     assert response.finish_reason == FinishReason.ABORTED
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_break_during_tool_cancels_tool_and_response_is_aborted() -> None:
+    """`break` while a tool runs cancels the tool; `.response` is ABORTED and the caller task isn't left cancelling."""
+    ai = Genkit()
+    tool_started = asyncio.Event()
+    tool_cancelled = asyncio.Event()
+
+    @ai.tool()
+    async def check_pantry(item: str) -> str:
+        """Blocks until cancelled; ignores the abort signal."""
+        tool_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            tool_cancelled.set()
+            raise
+        return 'never'
+
+    async def chef(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('checking ')]))
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='check_pantry', ref='1', input='flour'))],
+            ),
+        )
+
+    ai.define_model(name='chef', fn=chef)
+
+    stream = ai.generate_stream(model='chef', prompt='bake bread', tools=['check_pantry'])
+    async for _ in stream:
+        await settle(tool_started.wait())
+        break
+    response = await settle(stream.response)
+
+    assert tool_cancelled.is_set()
+    assert response.finish_reason == FinishReason.ABORTED
+    current = asyncio.current_task()
+    assert current is not None
+    if sys.version_info >= (3, 11):
+        assert current.cancelling() == 0

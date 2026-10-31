@@ -37,8 +37,8 @@ from genkit.exp.agent import AgentResponse
 # The capable default; a couple of agents also reach for the lite model below
 # for cheap sub-steps (decomposition, safety checks) so the main model isn't
 # paying for busywork.
-DEFAULT_MODEL = GoogleAI.gemini_model('gemini-flash-latest')
-LITE_MODEL = GoogleAI.gemini_model('gemini-flash-lite-latest')
+DEFAULT_MODEL = GoogleAI.gemini('gemini-flash-latest')
+LITE_MODEL = GoogleAI.gemini('gemini-flash-lite-latest')
 
 # The Middleware plugin lists `ToolApproval`, `Filesystem` and the rest in the
 # Dev UI; the agents pass their middleware instances directly in `use=[...]`.

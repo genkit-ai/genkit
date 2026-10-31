@@ -214,9 +214,9 @@ def test_parse_schema_rejects_wrong_shape() -> None:
     with pytest.raises(GenkitError, match='Schema validation failed') as raised:
         parse_schema(data='nope', json_schema={'type': 'object'})
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert '(root)' in raised.value.original_message
-    assert 'Provided data' not in raised.value.original_message
-    assert 'Required JSON schema' not in raised.value.original_message
+    assert '(root)' in raised.value.message
+    assert 'Provided data' not in raised.value.message
+    assert 'Required JSON schema' not in raised.value.message
 
 
 def test_parse_schema_invalid_schema_is_invalid_argument() -> None:
@@ -225,5 +225,5 @@ def test_parse_schema_invalid_schema_is_invalid_argument() -> None:
         parse_schema(data={'a': 1}, json_schema={'type': 'not-a-json-type'})
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'INVALID_SCHEMA' not in raised.value.original_message
+    assert 'INVALID_SCHEMA' not in raised.value.message
     assert isinstance(raised.value, GenkitError)

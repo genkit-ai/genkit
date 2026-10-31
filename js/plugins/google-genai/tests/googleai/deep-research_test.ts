@@ -379,10 +379,12 @@ describe('Deep Research', () => {
         totalTokens: 300,
         cachedContentTokens: 60,
         thoughtsTokens: 10,
-        inputCharacters: 80,
-        inputImages: 20,
-        outputCharacters: 150,
-        outputAudioFiles: 50,
+        custom: {
+          inputTextTokens: 80,
+          inputImageTokens: 20,
+          outputTextTokens: 150,
+          outputAudioTokens: 50,
+        },
       });
     });
 
