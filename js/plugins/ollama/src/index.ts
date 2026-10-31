@@ -301,28 +301,54 @@ function defineOllamaModel(
         const reader = res.body.getReader();
         const textDecoder = new TextDecoder();
         let textResponse = '';
+        const toolRequests: ToolRequestPart[] = [];
+        // Ollama streams newline-delimited JSON. A network chunk can hold
+        // several lines or only part of one, so buffer the text and parse
+        // only complete lines.
+        let buffer = '';
+        const handleLine = (line: string) => {
+          if (!line.trim()) {
+            return;
+          }
+          const json = JSON.parse(line);
+          const message = parseMessage(json, type);
+          streamingCallback({
+            index: 0,
+            content: message.content,
+          });
+          for (const part of message.content) {
+            if (part.toolRequest) {
+              toolRequests.push(part as ToolRequestPart);
+            } else if (typeof part.text === 'string') {
+              textResponse += part.text;
+            }
+          }
+        };
         try {
           for await (const chunk of readChunks(reader)) {
-            const chunkText = textDecoder.decode(chunk);
-            const json = JSON.parse(chunkText);
-            const message = parseMessage(json, type);
-            streamingCallback({
-              index: 0,
-              content: message.content,
-            });
-            textResponse += message.content[0].text;
+            buffer += textDecoder.decode(chunk, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+            for (const line of lines) {
+              handleLine(line);
+            }
           }
+          // The last line may not be terminated by a newline.
+          buffer += textDecoder.decode();
+          handleLine(buffer);
         } finally {
           // Catch prevents unhandled promise rejection if the stream was already cleanly finalized
           reader.cancel().catch(() => {});
         }
         message = {
           role: 'model',
-          content: [
-            {
-              text: textResponse,
-            },
-          ],
+          content:
+            toolRequests.length > 0
+              ? [
+                  ...(textResponse ? [{ text: textResponse }] : []),
+                  ...toolRequests,
+                ]
+              : [{ text: textResponse }],
         };
       } else {
         const txtBody = await res.text();
