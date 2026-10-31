@@ -812,6 +812,11 @@ _ = _action_context.set(None)
 # server calling a nested action wrong, not the HTTP caller's request.
 _inside_action: ContextVar[bool] = ContextVar('inside_action', default=False)
 
+# True while a tool body runs, including actions it calls. An Interrupt from a
+# flow the tool calls has to reach generate's tool loop as an Interrupt, so only
+# an action with no tool above it turns one into an error.
+_inside_tool: ContextVar[bool] = ContextVar('inside_tool', default=False)
+
 
 def _request_error(error: GenkitError) -> GenkitError:
     """Mark an input/init failure as the caller's request only on the outermost action."""
@@ -1409,6 +1414,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if on_trace_start:
                 await on_trace_start(trace_id, span_id)
 
+            tool_token = _inside_tool.set(True) if self._kind == ActionKind.TOOL else None
             try:
                 if execute is not None:
                     output = await execute()
@@ -1418,9 +1424,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if e.metadata:
                     span.set_metadata({'interrupt': e.metadata})
                 # Only generate's tool loop turns an Interrupt into a pause.
-                # Anywhere else it is a BaseException that `except Exception`
-                # handlers (web adapters, agent transports) would miss.
-                if self._kind != ActionKind.TOOL:
+                # With no tool above, it is a BaseException that `except
+                # Exception` handlers (web adapters, agent transports) would
+                # miss, so it becomes an error. Under a tool (a flow the tool
+                # calls) it stays raw, so the tool's own catch-all can't
+                # swallow the approval.
+                if self._kind != ActionKind.TOOL and not _inside_tool.get():
                     raise interrupt_outside_tool_error(e) from e
                 raise
             except TaskGroupError as e:
@@ -1430,6 +1439,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 if failure is None:
                     raise
                 raise failure from e
+            finally:
+                if tool_token is not None:
+                    _inside_tool.reset(tool_token)
             if self._strict_io:
                 output = self._validate_output(output)
             latency_ms = (time.perf_counter() - start_time) * 1000
