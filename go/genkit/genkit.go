@@ -173,9 +173,14 @@ func WithPlugins(plugins ...api.Plugin) GenkitOption {
 }
 
 // WithDefaultModel sets the default model name to use for generation tasks
-// when no specific model is provided in the request options. The name should
-// correspond to a model registered either by a plugin or via [DefineModel].
-// This option can only be applied once.
+// when no specific model is provided in the request options, formatted as
+// "<provider>/<model-id>" (for example,
+// genkit.WithDefaultModel("googleai/gemini-flash-latest")). The "<provider>/"
+// prefix is required; bare model IDs without a provider prefix do not resolve.
+//
+// The name may refer to a model registered via [DefineModelAction] or one
+// served by a plugin; dynamic plugins resolve arbitrary model IDs on demand at
+// request time. This option can only be applied once.
 func WithDefaultModel(model string) GenkitOption {
 	return &genkitOptions{DefaultModel: model}
 }
@@ -785,11 +790,12 @@ func DefineBackgroundModel(g *Genkit, name string, opts *ai.BackgroundModelOptio
 	return m
 }
 
-// LookupModel retrieves a registered [ai.Model] by its provider and name.
-// It returns the model instance if found, or `nil` if no model with the
-// given identifier is registered (e.g., via [DefineModel] or a plugin).
-// It will try to resolve the model dynamically by matching the provider name;
-// this does not necessarily mean the model is valid.
+// LookupModel retrieves a registered [ai.Model] by its "<provider>/<model-id>"
+// name (for example, "googleai/gemini-flash-latest"). It returns the model
+// instance if found, or `nil` if no model with the given identifier is
+// registered (e.g., via [DefineModelAction] or a plugin). It will try to
+// resolve the model dynamically by matching the provider prefix; this does not
+// necessarily mean the model ID is valid.
 func LookupModel(g *Genkit, name string) ai.Model {
 	return ai.LookupModel(g.reg, name)
 }
