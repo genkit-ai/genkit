@@ -174,11 +174,7 @@ class ModelGardenModel:
         supports = model_info.supports
         return {
             'name': model_info.label,
-            'supports': (
-                supports.model_dump(by_alias=False, exclude_none=False)
-                if supports and hasattr(supports, 'model_dump')
-                else {}
-            ),
+            'supports': supports.model_dump(by_alias=False) if supports and hasattr(supports, 'model_dump') else {},
         }
 
     def to_openai_compatible_model(self) -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
