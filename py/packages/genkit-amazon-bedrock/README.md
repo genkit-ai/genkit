@@ -104,6 +104,35 @@ ai = Genkit(
 )
 ```
 
+To pick a model per call, use a typed ref. Each constructor binds the config
+class that model's action validates, so the IDE completes the fields and a
+config for the wrong family is caught:
+
+```python
+from genkit_amazon_bedrock import Bedrock, BedrockConfig
+
+# 1. Text model (Converse) with a default config
+claude = Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0', config=BedrockConfig(max_output_tokens=512))
+
+# 2. Generate
+response = await ai.generate(model=claude, prompt='Pair a wine with mushroom risotto.')
+print(response.text)
+# => A dry white such as a Pinot Grigio ...
+```
+
+The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,
+served over Converse, including models that take image or document input),
+`Bedrock.nova_canvas`, `Bedrock.titan_image` and `Bedrock.stability` (IMAGE,
+one per request shape), and `Bedrock.embedding` (EMBEDDING, an `EmbedderRef`
+for `ai.embed()`). Each takes a bare ID or a `bedrock/`-prefixed one, and
+returns `bedrock/<id>`. They route the ID the same way the plugin does at runtime,
+inference-profile prefixes (`us.`, `eu.`, ...) and model ARNs included, and an
+ID from another family raises `INVALID_ARGUMENT` naming the right constructor
+(`Bedrock.text('amazon.nova-canvas-v1:0')` points at `Bedrock.nova_canvas()`).
+An application inference profile ARN carries no model ID, so it routes to
+Converse and only `Bedrock.text` takes it. Plain `'bedrock/<id>'` strings still
+work everywhere.
+
 Credentials resolve through the standard AWS SDK chain (environment,
 `~/.aws/credentials`, instance metadata). Pass a pre-configured
 `boto3.session.Session` via `session=` for custom wiring. The region comes
@@ -293,7 +322,7 @@ ai = Genkit(
 )
 
 response = await ai.generate(
-    model='bedrock/stability.sd3-5-large-v1:0',
+    model=Bedrock.stability('stability.sd3-5-large-v1:0'),
     prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
 )
 image = response.media[0].url  # data:image/png;base64,...
@@ -312,65 +341,82 @@ final response.
 
 ### Request shapes
 
-The two families take incompatible bodies, so the request is built from the
-model ID.
+Each family registers its own config class, picked from the model ID. Generate
+validates `config` against it before the call, so a typo raises
+`INVALID_ARGUMENT` instead of being dropped, and the Dev UI renders the fields
+as a form. Dicts work too and are validated against the same class, in either
+snake_case or camelCase.
 
-Amazon (IDs containing `titan-image` or `nova-canvas`) nests its options under
-`imageGenerationConfig`, and that is the only top-level config key read; other
-top-level keys are dropped. To set any other body field, use `extra` (see
-below). Your `imageGenerationConfig` entries are merged key by key over these
-defaults:
+Titan Image (IDs containing `titan-image`) takes `TitanImageConfig`, and Nova
+Canvas (`nova-canvas`) takes `NovaCanvasConfig`. Both have the same flat fields,
+which the plugin nests under `imageGenerationConfig` by their Bedrock wire
+names:
 
 ```python
-config={
-    'imageGenerationConfig': {
-        'numberOfImages': 1,
-        'height': 1024,
-        'width': 1024,
-        'cfgScale': 8.0,
-        'seed': 0,
-        'quality': 'standard',  # Nova Canvas only, not sent for Titan Image
-    }
-}
+from genkit_amazon_bedrock import Bedrock, NovaCanvasConfig
+
+# 1. Typed ref and flat, typed fields
+response = await ai.generate(
+    model=Bedrock.nova_canvas('amazon.nova-canvas-v1:0'),
+    prompt='A dim sum spread on a marble table.',
+    config=NovaCanvasConfig(seed=7, width=512, height=512, quality='premium', number_of_images=2, cfg_scale=6.5),
+)
+# => imageGenerationConfig: {'numberOfImages': 2, 'height': 512, 'width': 512,
+#                            'cfgScale': 6.5, 'seed': 7, 'quality': 'premium'}
+
+# 2. The same as a dict; unset fields keep the defaults
+config={'seed': 7, 'width': 512}
 ```
 
-Output is always `image/png`.
+Defaults: `number_of_images=1`, `height=1024`, `width=1024`, `cfg_scale=8.0`,
+`seed=0`, plus `quality='standard'` on Nova Canvas only. Titan sends `quality`
+only when you set it. Nova Canvas checks `height` and `width` locally
+(320-4096, divisible by 16); Titan accepts only fixed size pairs, which
+Bedrock validates. Output is always `image/png`.
 
 Stability (IDs containing `sd3-`, `stable-image-core`, or `stable-image-ultra`)
-takes flat top-level fields, and the whole config dict is merged over the
-defaults (`{'prompt': ..., 'output_format': 'png'}`), so `aspect_ratio`,
-`seed`, `negative_prompt`, `output_format` and the rest all apply:
+takes `StabilityImageConfig`. Its field names are Stability's wire names and go
+at the top of the body, over `{'prompt': ..., 'output_format': 'png'}`:
 
 ```python
-config={'aspect_ratio': '16:9', 'output_format': 'jpeg', 'seed': 42}
+from genkit_amazon_bedrock import Bedrock, StabilityImageConfig
+
+model=Bedrock.stability('stability.sd3-5-large-v1:0')
+config=StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg')
+# => {'prompt': ..., 'output_format': 'jpeg', 'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
 ```
 
 The media part's MIME type follows `output_format`.
 
-Image models register an open config schema. It declares no fields and rejects
-nothing, on purpose: the two families take disjoint keys, and `BedrockConfig`
-describes Converse parameters, so it would reject every family-specific key
-here. Pass image options as a plain dict.
+A config class from another family fails: `NovaCanvasConfig` on a Titan model
+raises `INVALID_ARGUMENT`. So does the old nested
+`config={'imageGenerationConfig': {...}}`, with a message naming the flat
+fields that replace it.
 
-Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
-and the rest of the common config) are not forwarded to image models, since
-Bedrock's image APIs do not accept them. `extra` is the exception.
+The image classes extend `GenkitConfig`, like the Veo config, not
+`ModelConfig`: Bedrock's image APIs take none of Genkit's generic generation
+options, so `temperature`, `topP`, `maxOutputTokens` and the rest raise
+`INVALID_ARGUMENT` as unknown keys, and the Dev UI form shows only real image
+fields.
 
 ### `extra` on image models
 
-`extra` is deep-merged into the finished `InvokeModel` body, using Bedrock's
-wire names. Nested objects merge key by key, and a colliding leaf takes your
-value:
+Body fields the config classes don't declare go in `extra`, which is
+deep-merged into the finished `InvokeModel` body using Bedrock's wire names.
+Nested objects merge key by key, and a colliding leaf takes your value:
 
 ```python
-# 1. Nova Canvas: add negativeText next to the prompt, override one default
+# 1. Nova Canvas: add negativeText next to the prompt
 response = await ai.generate(
-    model='bedrock/amazon.nova-canvas-v1:0',
+    model=Bedrock.nova_canvas('amazon.nova-canvas-v1:0'),
     prompt='a coral reef',
-    config={'extra': {'textToImageParams': {'negativeText': 'blurry'}, 'imageGenerationConfig': {'seed': 7}}},
+    config=NovaCanvasConfig(seed=7, extra={'textToImageParams': {'negativeText': 'blurry'}}),
 )
 # => textToImageParams: {'text': 'a coral reef', 'negativeText': 'blurry'}
 #    imageGenerationConfig: the defaults above, with seed 7
+
+# 2. Stability: a field the class doesn't declare
+config=StabilityImageConfig(extra={'mode': 'text-to-image'})
 ```
 
 Fields Genkit builds from the prompt fail with `INVALID_ARGUMENT` instead of
@@ -427,10 +473,9 @@ the ID.
 
 **Any other `ValidationException`.** The request or config is malformed for
 that particular model: a thinking budget outside the bounds the model allows,
-or an image config field the family does not accept (the whole config dict
-reaches Stability, and everything inside `imageGenerationConfig` reaches the
-Amazon family). Bedrock validates per model, so a config that works on one
-model can be rejected by the next.
+or an image size Titan does not offer, or an `extra` field the family does not
+accept (`extra` is sent unchecked). Bedrock validates per model, so a config
+that works on one model can be rejected by the next.
 
 **`ThrottlingException`.** The on-demand capacity limit for that model and
 region. The plugin retries automatically with exponential backoff, up to
