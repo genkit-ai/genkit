@@ -33,7 +33,8 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionName,
-    ActionRunContext,
+    FlowContext,
+    ModelContext,
     SpanAttributeValue,
     create_action_key,
     parse_action_key,
@@ -82,7 +83,8 @@ ChunkT = TypeVar('ChunkT', default=Never)
 ActionFn = (
     Callable[[], OutputT | Awaitable[OutputT]]
     | Callable[[InputT], OutputT | Awaitable[OutputT]]
-    | Callable[[InputT, ActionRunContext], OutputT | Awaitable[OutputT]]
+    | Callable[[InputT, FlowContext], OutputT | Awaitable[OutputT]]
+    | Callable[[InputT, ModelContext], OutputT | Awaitable[OutputT]]
 )
 
 

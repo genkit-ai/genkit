@@ -31,7 +31,15 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_arg
 from pydantic import BaseModel, ValidationError
 from typing_extensions import Self
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context, set_action_name
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    ActionRunContext,
+    FlowContext,
+    ModelContext,
+    get_current_context,
+    set_action_name,
+)
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._operation import Operation
 from genkit._core._schema import fixed_json_schema
@@ -46,9 +54,15 @@ OutT = TypeVar('OutT')
 # Annotation-only aliases. Operation[OutT] is a concrete pydantic class at
 # runtime, so CheckOpFn[X] can't be subscripted outside an annotation; spell
 # the Callable out when you need a runtime alias.
-StartOpFn = Callable[[InT, ActionRunContext], Awaitable[Operation]]
-CheckOpFn = Callable[[Operation[OutT], ActionRunContext], Awaitable[Operation]]
-CancelOpFn = Callable[[Operation[OutT], ActionRunContext], Awaitable[Operation]]
+StartOpFn = Callable[[InT, FlowContext], Awaitable[Operation]]
+CheckOpFn = (
+    Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
+    | Callable[[Operation[OutT], ModelContext], Awaitable[Operation]]
+)
+CancelOpFn = (
+    Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
+    | Callable[[Operation[OutT], ModelContext], Awaitable[Operation]]
+)
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:

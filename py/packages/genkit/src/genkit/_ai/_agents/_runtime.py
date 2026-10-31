@@ -263,13 +263,14 @@ class SessionRunner(Generic[StateT]):
         await self.session.update_custom(fn)
 
 
-# The context a custom agent fn receives; ctx.send_chunk() takes an AgentStreamChunk.
-AgentContext = ActionRunContext[AgentStreamChunk]
-"""Execution context passed to a custom agent function.
+class AgentContext(ActionRunContext[AgentStreamChunk]):
+    """Execution context passed to a custom agent function.
 
-An alias for :class:`~genkit.ActionRunContext[AgentStreamChunk]`. Provides access
-to streaming agent chunks, caller context data, and cancellation signals.
-"""
+    Provides ``ctx.send_chunk(chunk)`` for streaming :class:`AgentStreamChunk`
+    items, ``ctx.context`` for caller context data, and ``ctx.abort_signal``
+    for cancellation.
+    """
+
 
 # AgentFn — custom agent entrypoint; receives SessionRunner + AgentContext.
 AgentFn = Callable[
@@ -851,7 +852,7 @@ class AgentRuntime:
         """
         detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         abort_signal = asyncio.Event()
-        action_ctx: AgentContext = ActionRunContext(
+        action_ctx = AgentContext(
             context=get_current_context(),
             streaming_callback=self.send_chunk,
             abort_signal=abort_signal,

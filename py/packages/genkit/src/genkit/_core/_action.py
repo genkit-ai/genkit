@@ -31,7 +31,6 @@ from typing import (
     ClassVar,
     Generic,
     NamedTuple,
-    TypeAlias,
     Union,
     cast,
     get_args,
@@ -320,8 +319,8 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 #   async def ping(ctx: FlowContext) -> str: ...                      # no input
 #
 # Rules for the function:
-#   - The context is the parameter annotated ActionRunContext (FlowContext is
-#     the same class) or a subclass (ToolContext).
+#   - The context is the parameter annotated ActionRunContext or a subclass
+#     (FlowContext, ToolContext, ModelContext, AgentContext).
 #   - Any other parameter is the input, so there's only one. Put more fields
 #     on one input model.
 #   - Input and return types need a JSON schema: a Pydantic model, dataclass,
@@ -395,8 +394,7 @@ def _public_context_name(kind: ActionKind) -> str:
 
     ToolContext for tools, ModelContext (genkit.model) for model and
     background-model ops, AgentContext (genkit.exp.agent) for agents, and
-    FlowContext for everything else. FlowContext is the public name of the
-    run-context class, so it's correct for embedders, evaluators and the rest.
+    FlowContext for flows, embedders, evaluators, and custom actions.
     """
     if kind == ActionKind.TOOL:
         return 'ToolContext'
@@ -659,9 +657,10 @@ def _resolve_one(annotation: object, module_globals: dict[str, Any]) -> object:
 def _is_context_annotation(annotation: object) -> bool:
     """True if ``annotation`` marks the run-context parameter.
 
-    That's ActionRunContext (FlowContext) or any subclass, written any of these
-    ways: ``ToolContext``, ``FlowContext[str]``, ``ToolContext | None``, or as
-    a string (see _string_names_context).
+    That's ActionRunContext or any subclass (FlowContext, ToolContext,
+    ModelContext, AgentContext), written any of these ways: ``ToolContext``,
+    ``FlowContext[str]``, ``ToolContext | None``, or as a string
+    (see _string_names_context).
     """
     # On 3.14 a name missing at runtime is a ForwardRef; use its text.
     forward_arg = getattr(annotation, '__forward_arg__', None)
@@ -673,14 +672,14 @@ def _is_context_annotation(annotation: object) -> bool:
     origin = get_origin(annotation)
     if origin is Union or origin is types.UnionType:
         return any(_is_context_annotation(arg) for arg in get_args(annotation))
-    # FlowContext[str] -> ActionRunContext
+    # FlowContext[str] -> FlowContext
     cls = origin if origin is not None else annotation
     return isinstance(cls, type) and issubclass(cls, ActionRunContext)
 
 
-# Public names for the run-context classes. FlowContext, ModelContext, and
-# AgentContext are aliases over ActionRunContext; ToolContext is listed so a
-# string annotation matches even before genkit._ai._tools is imported.
+# Public run-context subclasses of ActionRunContext. ToolContext and
+# AgentContext live in submodules that may not be imported yet when
+# ActionRunContext.__subclasses__() runs, so list all four explicitly.
 _CONTEXT_ALIAS_NAMES = frozenset({'FlowContext', 'ToolContext', 'AgentContext', 'ModelContext'})
 
 
@@ -691,7 +690,7 @@ def _string_names_context(annotation: str) -> bool:
     'FlowContext[str]' and 'genkit.ToolContext' all do.
     """
     # The annotation couldn't be resolved to a class, so match by name against
-    # the public aliases, ActionRunContext and every subclass defined so far.
+    # the public context classes, ActionRunContext, and every subclass defined so far.
     context_names: set[str] = set(_CONTEXT_ALIAS_NAMES)
     classes: list[type] = [ActionRunContext]
     while classes:
@@ -839,10 +838,11 @@ def input_from_json(value: object) -> object:
 
 
 class ActionRunContext(Generic[ChunkT]):
-    """What an action sees while it runs: request context, streaming, and an abort signal.
+    """Base execution context for a running action: request context, streaming, and an abort signal.
 
-    Apps use it as ``genkit.FlowContext``; model and background-model plugins
-    use ``genkit.model.ModelContext``. ``ChunkT`` is the type ``send_chunk`` accepts.
+    Subclassed publicly as ``genkit.FlowContext``, ``genkit.ToolContext``,
+    ``genkit.model.ModelContext``, and ``genkit.exp.agent.AgentContext``.
+    ``ChunkT`` is the type ``send_chunk`` accepts.
 
         @ai.flow()
         async def plate_dish(dish: str, ctx: FlowContext[str]) -> str:
@@ -899,27 +899,23 @@ class ActionRunContext(Generic[ChunkT]):
         return _action_context.get(None)
 
 
-# The app-facing name for a flow's ctx. Same class, so FlowContext[str] works.
-FlowContext = ActionRunContext
-"""Execution context passed to a flow function.
+class FlowContext(ActionRunContext[ChunkT]):
+    """Execution context passed to flow, embedder, evaluator, and custom action functions.
 
-An alias for :class:`~genkit.ActionRunContext`. Provides access to streaming,
-caller context data, and cancellation signals.
-"""
+    Provides ``ctx.send_chunk(chunk)`` for streaming ``ChunkT`` chunks,
+    ``ctx.context`` for caller context data, and ``ctx.abort_signal`` for
+    cancellation.
+    """
 
-# The context parameter passed to model and background-model functions.
-ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
-"""Annotation alias for ``ActionRunContext[ModelResponseChunk]``: the ctx a model function gets.
 
-- ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
-- ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
-- ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
-- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+class ModelContext(ActionRunContext[ModelResponseChunk]):
+    """Execution context passed to model and background-model functions.
 
-Use it in annotations only. It's a subscripted generic, so
-``isinstance(ctx, ModelContext)`` raises TypeError; runtime checks should use
-``isinstance(ctx, ActionRunContext)``.
-"""
+    - ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
+    - ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
+    - ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
+    - ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+    """
 
 
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
@@ -1160,13 +1156,31 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         inside_token = _inside_action.set(True)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
-        action_ctx = ActionRunContext(
-            context=_action_context.get(None),
-            streaming_callback=streaming_cb,
-            abort_signal=abort_signal,
-            init=init,
-            input_stream=input_stream,
-        )
+        ctx_data = _action_context.get(None)
+        if self._kind in _MODEL_CONTEXT_KINDS:
+            action_ctx: ActionRunContext[Any] = ModelContext(
+                context=ctx_data,
+                streaming_callback=streaming_cb,
+                abort_signal=abort_signal,
+                init=init,
+                input_stream=input_stream,
+            )
+        elif self._kind in (ActionKind.TOOL, ActionKind.AGENT):
+            action_ctx = ActionRunContext(
+                context=ctx_data,
+                streaming_callback=streaming_cb,
+                abort_signal=abort_signal,
+                init=init,
+                input_stream=input_stream,
+            )
+        else:
+            action_ctx = FlowContext(
+                context=ctx_data,
+                streaming_callback=streaming_cb,
+                abort_signal=abort_signal,
+                init=init,
+                input_stream=input_stream,
+            )
 
         try:
             return await self._run_with_telemetry(
