@@ -160,3 +160,25 @@ class TestJsonlFormatInstructions:
 
         assert fmt.instructions is not None
         assert '"type": "object"' in fmt.instructions
+
+
+@pytest.mark.parametrize(
+    'texts, expected',
+    [
+        (['{"id": 1}', '\n'], [{'id': 1}]),
+        (['{"id": 1}', ' ', '\n'], [{'id': 1}]),
+        (['{"id": 1}', '\n{"id": 1}', '\n'], [{'id': 1}, {'id': 1}]),
+        (['{"id": 1}', ' /', '* note */\n'], [{'id': 1}]),
+        (['{"id": 1} /', '* note */\n'], [{'id': 1}]),
+        (['{"id":', ' 1}', '\n{"id": 2', '}'], [{'id': 1}, {'id': 2}]),
+    ],
+)
+def test_streaming_emits_each_completed_line_once(texts: list[str], expected: list[object]) -> None:
+    fmt = JsonlFormat().handle({'type': 'array', 'items': {'type': 'object'}})
+    previous = []
+    output = []
+    for text in texts:
+        chunk = ModelResponseChunk(content=[Part.from_text(text)])
+        output.extend(fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=previous)))
+        previous.append(chunk)
+    assert output == expected
