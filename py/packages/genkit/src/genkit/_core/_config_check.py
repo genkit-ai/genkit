@@ -1,86 +1,75 @@
 # Copyright 2026 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model config checks shared by regular and background models.
+"""Config checks for models, background models, embedders and evaluators.
 
-Before the turn, only the values a call sets are judged; a required field
-left out may still be filled by middleware. Inside the model action (or a
-background model's start action), the whole config is judged. A Pydantic
-class and a JSON-schema dict follow the same rules.
+Two checkpoints, one set of rules:
+
+- Call time (``check_config_values``): only the keys the caller set. A
+  required top-level field left out passes; the schema defaults, another
+  layer, or a ``wrap_model`` middleware may still fill it.
+- The action boundary (``validate_whole_config``, from ``Action.run``): the
+  merged config, after every middleware. A required field nothing filled
+  fails here.
+
+On both, a key that is present is judged, an explicit ``None`` included; an
+absent key is unset. Spellings of one field fold to the key the class
+accepts. ``version`` comes from ``ModelRef.version``, which Genkit adds to
+config itself, so a schema that doesn't declare it isn't judged on it. A
+Pydantic class and a JSON-schema dict follow the same rules and are reported
+in the same words.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any, cast
 
 from jsonschema.exceptions import SchemaError, best_match
 from jsonschema.validators import validator_for
-from pydantic import AliasChoices, BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError
+from pydantic_core import ErrorDetails
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import (
+    GenkitError,
+    RuntimeErrorReason,
+    validation_error_details,
+    validation_input_is_printable,
+    validation_problem,
+)
+from genkit._core._model import config_field_names, fold_config_aliases
 
-
-def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
-    """Map each field name and alias to the Python field name."""
-    names: dict[str, str] = {}
-    for name, field in schema.model_fields.items():
-        names[name] = name
-        if field.alias:
-            names[field.alias] = name
-        accepted = field.validation_alias
-        if isinstance(accepted, str):
-            names[accepted] = name
-        elif isinstance(accepted, AliasChoices):
-            for choice in accepted.choices:
-                if isinstance(choice, str):
-                    names[choice] = name
-    return names
+ConfigSchema = type[BaseModel] | dict[str, Any]
 
 
-def check_request_config(request: object, *, schema: type[BaseModel] | dict[str, Any], model: str) -> None:
-    """Raise if a model request's config doesn't fit ``schema``, missing fields included.
+def check_config_values(*, config: object, schema: ConfigSchema | None, model: str) -> None:
+    """Raise INVALID_ARGUMENT if a key the caller set doesn't fit ``schema``.
 
-    The model action and a background model's start action both run this
-    first, after every middleware. A function with an unannotated request
-    param gets the raw dict on a direct run, so either shape is read.
-    """
-    if isinstance(request, Mapping):
-        config = cast(Mapping[str, Any], request).get('config')
-    else:
-        config = getattr(request, 'config', None)
-    check_whole_config(config=config, schema=schema, model=model)
-
-
-def check_config_values(*, config: object, schema: type[BaseModel] | dict[str, Any] | None, model: str) -> None:
-    """Raise if a value the config sets doesn't fit the model's config schema.
-
-    Only fields the config sets are judged. A required field it leaves out is
-    not an error yet: another config layer or a wrap_model middleware may add
-    it, and the model action rejects it if nothing does. ``None`` means
-    "clear the default" and isn't checked. A JSON-schema dict is judged the
-    same way as a class.
+    A required top-level field left out is not an error yet. A nested object
+    is sent whole, so a field missing inside one is.
     """
     if schema is None or not isinstance(config, Mapping):
         return
-    _raise_config_problems(values=_judged_values(config, schema), schema=schema, model=model, report_missing=False)
+    _check(config=cast(Mapping[str, Any], config), schema=schema, model=model, report_missing=False)
 
 
-def check_whole_config(*, config: object, schema: type[BaseModel] | dict[str, Any], model: str) -> None:
-    """Raise if the config the model is about to run with doesn't fit its config schema.
+def validate_whole_config(*, config: object, schema: ConfigSchema, model: str) -> BaseModel | None:
+    """Raise INVALID_ARGUMENT if the config an action is about to run with doesn't fit ``schema``.
 
-    Unlike ``check_config_values``, a missing required field is an error:
-    this runs inside the model action, where nothing is left to fill it.
+    A missing required field is an error: this runs at the action boundary,
+    after every layer and middleware. Returns the validated instance for a
+    class schema, ``None`` for a JSON-schema dict or a config that isn't a
+    mapping (request validation reports the wrong type).
     """
     if isinstance(schema, type) and isinstance(config, schema):
-        return
+        return config
     if isinstance(config, BaseModel):
         config = config_values(config)
     if config is None:
         config = {}
     if not isinstance(config, Mapping):
-        return
-    _raise_config_problems(values=_judged_values(config, schema), schema=schema, model=model, report_missing=True)
+        return None
+    return _check(config=cast(Mapping[str, Any], config), schema=schema, model=model, report_missing=True)
 
 
 def check_config_json_schema(schema: dict[str, Any], *, model: str) -> None:
@@ -105,31 +94,9 @@ def config_values(config: BaseModel) -> dict[str, Any]:
     return BaseModel.model_dump(config, by_alias=True, round_trip=True, exclude_none=False, warnings=False)
 
 
-def _judged_values(config: Mapping[Any, Any], schema: type[BaseModel] | dict[str, Any]) -> dict[str, Any]:
-    """The config values a schema is judged on.
-
-    ``None`` means "clear the default" and is dropped. ``version`` comes from
-    ``ModelRef.version``, which Genkit adds to config itself, so a schema that
-    doesn't name it isn't judged on it.
-    """
-    declared = schema.get('properties', {}) if isinstance(schema, dict) else schema.model_fields
-    return {
-        key: value
-        for key, value in cast(Mapping[str, Any], config).items()
-        if value is not None and (key != 'version' or key in declared)
-    }
-
-
-def _raise_config_problems(
-    *, values: dict[str, Any], schema: type[BaseModel] | dict[str, Any], model: str, report_missing: bool
-) -> None:
-    """Raise INVALID_ARGUMENT listing what in ``values`` breaks ``schema``.
-
-    With ``report_missing=False``, a required top-level field left out isn't a
-    problem. A field missing inside a nested object always is: the object is
-    sent whole and can't be filled later.
-    """
+def _check(*, config: Mapping[str, Any], schema: ConfigSchema, model: str, report_missing: bool) -> BaseModel | None:
     if isinstance(schema, dict):
+        values = {k: v for k, v in config.items() if k != 'version' or k in schema.get('properties', {})}
         described = _json_schema_problems(values, schema=schema, model=model, report_missing=report_missing)
         if described:
             raise GenkitError(
@@ -137,23 +104,69 @@ def _raise_config_problems(
                 message=f'{model}: {"; ".join(described)}',
                 reason=RuntimeErrorReason.INVALID_INPUT,
             )
-        return
+        return None
+    names = config_field_names(schema)
+    values = {k: v for k, v in config.items() if k != 'version' or k in names}
+    return _check_class(values, schema=schema, names=names, model=model, report_missing=report_missing)
+
+
+def _check_class(
+    values: dict[str, Any], *, schema: type[BaseModel], names: dict[str, str], model: str, report_missing: bool
+) -> BaseModel | None:
+    """Fold, validate, and raise one INVALID_ARGUMENT naming every problem.
+
+    Two spellings of one setting in the same dict (``max_output_tokens`` and
+    ``maxOutputTokens``) are reported as their own problem, whatever the
+    class's ``extra`` setting. Folding would keep whichever came last in dict
+    order, and under ``extra='forbid'`` pydantic would call the other one
+    unknown; the caller didn't misspell anything, they wrote the setting
+    twice. Spellings in different layers (a ModelRef's config and the call's)
+    are folded before they get here, so the later layer still wins.
+    """
+    spellings: dict[str, list[str]] = {}
+    for key in values:
+        spellings.setdefault(names.get(key, key), []).append(key)
+    repeated = [sorted(keys, key=lambda k: k != field) for field, keys in spellings.items() if len(keys) > 1]
+    instance: BaseModel | None = None
+    problems: list[ErrorDetails] = []
+    cause: ValidationError | None = None
     try:
-        schema.model_validate(values)
+        instance = schema.model_validate(fold_config_aliases(config=values, schema=schema))
     except ValidationError as e:
+        cause = e
         # Pydantic reports a required field left out as type 'missing' at a
         # one-part path.
         problems = [
             err for err in e.errors() if report_missing or not (err['type'] == 'missing' and len(err['loc']) == 1)
         ]
-        if not problems:
-            return
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'{model}: {_describe_config_problems(problems, values=values, schema=schema)}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
-            cause=e,
-        ) from e
+    if not repeated and not problems:
+        return instance
+    parts = [f'{_join_words(keys)} are the same setting; pass one' for keys in repeated]
+    unknown = [_config_path(err['loc']) for err in problems if err['type'] == 'extra_forbidden']
+    if unknown:
+        keys = ', '.join(repr(key) for key in unknown)
+        noun = 'key' if len(unknown) == 1 else 'keys'
+        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
+    printable = cause is not None and validation_input_is_printable(cause)
+    # An error with no path is a model validator; its input is the whole config.
+    parts.extend(
+        f'config {_config_path(err["loc"])!r}: {validation_problem(err, show_input=printable and bool(err["loc"]))}'
+        for err in problems
+        if err['type'] != 'extra_forbidden'
+    )
+    error = GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'{model}: {"; ".join(parts)}',
+        reason=RuntimeErrorReason.INVALID_INPUT,
+        details={'errors': validation_error_details(cause)} if cause is not None else None,
+    )
+    if cause is None:
+        raise error
+    # The message already names every problem. Passing cause= would append
+    # Pydantic's wording of the same problems to str(error), so the cause is
+    # attached after construction instead.
+    error.cause = cause
+    raise error from cause
 
 
 def _json_schema_problems(
@@ -191,35 +204,6 @@ def _json_schema_problems(
         path = _config_path(tuple(err.absolute_path))
         described.append(f'config {path!r}: {err.message}' if path else f'config: {err.message}')
     return list(dict.fromkeys(described))
-
-
-def _describe_config_problems(
-    problems: Sequence[Mapping[str, Any]], *, values: Mapping[str, Any], schema: type[BaseModel]
-) -> str:
-    # pydantic binds one spelling of a setting and calls the other unknown;
-    # the caller didn't misspell anything, they wrote the setting twice.
-    names = config_field_names(schema)
-    repeated: dict[str, list[str]] = {}
-    unknown: list[str] = []
-    for err in problems:
-        if err['type'] != 'extra_forbidden':
-            continue
-        key = _config_path(err['loc'])
-        field = names.get(key) if len(err['loc']) == 1 else None
-        spellings = [k for k in values if field and names.get(k) == field]
-        if field and len(spellings) > 1:
-            repeated[field] = sorted(spellings, key=lambda k: k != field)
-        else:
-            unknown.append(key)
-    parts = [f'{_join_words(spellings)} are the same setting; pass one' for spellings in repeated.values()]
-    if unknown:
-        keys = ', '.join(repr(key) for key in unknown)
-        noun = 'key' if len(unknown) == 1 else 'keys'
-        parts.append(f"unknown config {noun} {keys}; put provider-only settings in config['extra']")
-    parts.extend(
-        f'config {_config_path(err["loc"])!r}: {err["msg"]}' for err in problems if err['type'] != 'extra_forbidden'
-    )
-    return '; '.join(parts)
 
 
 def _join_words(words: list[str]) -> str:

@@ -29,14 +29,29 @@ from typing import Any, Literal, get_args, get_origin
 from unittest.mock import patch
 
 import pytest
-from genkit_google_genai import GeminiConfig, GeminiImageConfig, GeminiTtsConfig, GemmaConfig, VeoConfig, VertexAI
+from genkit_google_genai import (
+    EmbeddingConfig,
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
+    VeoConfig,
+    VertexAI,
+)
 from google.auth.credentials import AnonymousCredentials
 from google.genai import _api_client, types as genai_types
 from pydantic import BaseModel
 
 from genkit import Genkit
 
-_PUBLIC_CONFIGS: list[type[BaseModel]] = [GeminiConfig, GeminiTtsConfig, GeminiImageConfig, GemmaConfig, VeoConfig]
+_PUBLIC_CONFIGS: list[type[BaseModel]] = [
+    EmbeddingConfig,
+    GeminiConfig,
+    GeminiTtsConfig,
+    GeminiImageConfig,
+    GemmaConfig,
+    VeoConfig,
+]
 
 
 # googlegenai_gemini_test.py pins each Literal to its google-genai enum.

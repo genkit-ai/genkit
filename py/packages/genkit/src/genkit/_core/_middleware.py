@@ -29,7 +29,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, PrivateAttr, Validatio
 from typing_extensions import TypeVar
 
 from genkit._core._action import Action
-from genkit._core._config_check import config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -123,23 +122,18 @@ def _config_key_spellings(config_cls: type[BaseModel]) -> dict[str, str] | None:
     accepts_field_name = bool(
         config_cls.model_config.get('validate_by_name') or config_cls.model_config.get('populate_by_name')
     )
-    # config_field_names is the same walk model config folding uses; pydantic
-    # only rejects the bare field name when it has an alias and the class
-    # doesn't validate by name.
-    names = config_field_names(config_cls)
-    alias_keys = set(names) - set(fields)
+    accepted: dict[str, str] = {}
     for name, info in fields.items():
-        if name == info.alias or name == info.validation_alias:
-            alias_keys.add(name)
-        elif isinstance(info.validation_alias, AliasChoices) and name in info.validation_alias.choices:
-            alias_keys.add(name)
-    accepted = {
-        key: name
-        for key, name in names.items()
-        if key in alias_keys
-        or accepts_field_name
-        or (fields[name].alias is None and fields[name].validation_alias is None)
-    }
+        if accepts_field_name or (info.alias is None and info.validation_alias is None):
+            accepted[name] = name
+        if info.alias:
+            accepted[info.alias] = name
+        if isinstance(info.validation_alias, str):
+            accepted[info.validation_alias] = name
+        elif isinstance(info.validation_alias, AliasChoices):
+            for choice in info.validation_alias.choices:
+                if isinstance(choice, str):
+                    accepted[choice] = name
     spellings: dict[str, str] = {}
     for key, name in accepted.items():
         info = fields[name]

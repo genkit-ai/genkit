@@ -39,12 +39,11 @@ from genkit._core._background import (
     resolve_operation_action,
     validate_operation,
 )
-from genkit._core._config_check import check_config_json_schema, check_request_config
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema
 from genkit._core._typing import ModelInfo
 
 # Spelled out, not CheckOpFn[ModelResponse]: Operation[ModelResponse] is a
@@ -126,17 +125,8 @@ class BackgroundModel(BackgroundAction[ModelRequest, ModelResponse]):
         resolved_label = label or model_options.get('label') or name
         model_options['label'] = resolved_label
         if config_schema:
-            model_options['customOptions'] = to_json_schema(config_schema)
+            model_options['customOptions'] = custom_options_schema(config_schema)
         model_meta['model'] = model_options
-
-        if isinstance(config_schema, dict):
-            check_config_json_schema(config_schema, model=name)
-
-        def check_start_input(request: object, action_name: str) -> None:
-            # Same check as a regular model action: the whole config, after
-            # every middleware, before the provider starts an operation.
-            if config_schema:
-                check_request_config(request, schema=config_schema, model=action_name)
 
         start_action, check_action, cancel_action = operation_actions(
             type(self),
@@ -149,12 +139,11 @@ class BackgroundModel(BackgroundAction[ModelRequest, ModelResponse]):
             description=description or f'Background model: {resolved_label}',
             label=resolved_label,
             config_schema=config_schema,
-            check_start_input=check_start_input,
         )
         # Annotation only: the Dev UI form comes from ModelRequest[Cfg]. Start,
         # check and cancel share this dict, so all three see it.
         if 'customOptions' not in model_options and start_action.config_schema is not None:
-            model_options['customOptions'] = to_json_schema(start_action.config_schema)
+            model_options['customOptions'] = custom_options_schema(start_action.config_schema)
         # BackgroundAction.__init__ takes no model options; build, then bind.
         self._bind(start_action, check_action, cancel_action)
 

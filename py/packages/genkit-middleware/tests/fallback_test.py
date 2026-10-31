@@ -492,3 +492,35 @@ def test_fallback_model_ref_entry_dumps_camel_case_config_keys() -> None:
     fb = Fallback(models=[ref])
     dumped = fb.config.model_dump(by_alias=True, exclude_none=True, mode='json')
     assert dumped['models'] == [{'name': 'echo/b', 'config': {'maxOutputTokens': 5, 'topK': 3}}]
+
+
+@pytest.mark.asyncio
+async def test_fallback_model_ref_entry_preserves_explicit_none_over_backup_defaults() -> None:
+    """An explicit None on a backup ModelRef overrides the backup model's non-None schema default."""
+
+    class KitchenBackupConfig(ModelConfig):
+        seed: int | None = 42
+        max_output_tokens: float = 128
+
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='down')
+
+    async def backup(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        seen.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='primary', fn=primary)
+    ai.define_model(name='backup', fn=backup, config_schema=KitchenBackupConfig)
+    ref = ModelRef(
+        name='backup',
+        config_schema=KitchenBackupConfig,
+        config=KitchenBackupConfig(seed=None, max_output_tokens=64),
+    )
+
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=[ref])])
+
+    assert response.text == 'ok'
+    assert seen == [{'seed': None, 'max_output_tokens': 64.0}]

@@ -28,6 +28,7 @@ from typing import Any, ClassVar, Literal, TypedDict, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
+from pydantic_core import ErrorDetails
 from pydantic_core.core_schema import ErrorType
 
 from genkit._core._compat import StrEnum
@@ -395,6 +396,26 @@ def _join_problems(problems: list[str], *, total: int, max_errors: int) -> str:
     return '; '.join(clauses)
 
 
+def validation_input_is_printable(error: ValidationError) -> bool:
+    """Follow Pydantic's own decision about whether the input values are safe to print."""
+    return error.error_count() == 0 or 'input_value=' in str(error)
+
+
+def validation_problem(err: ErrorDetails, *, show_input: bool) -> str:
+    """Pydantic's message for one error, plus ``, got <value>`` when the value is worth printing.
+
+    For a missing field the input is the whole parent object, which says nothing new.
+    """
+    if err['type'] == 'missing' or not show_input:
+        return err['msg']
+    return f'{err["msg"]}, got {_value_preview.repr(err["input"])}'
+
+
+def validation_error_details(error: ValidationError) -> list[dict[str, Any]]:
+    """The ``details['errors']`` entries for a ValidationError: path, message, type."""
+    return [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in error.errors()]
+
+
 def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PROBLEMS) -> str:
     """One short clause per Pydantic error: where, what was expected, what came in.
 
@@ -406,14 +427,10 @@ def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PR
     Example:
         ``items[1].qty: Field required; table: Input should be a valid integer, got 'x'``
     """
-    # Follow Pydantic's own decision about whether the value is safe to print.
-    hide_input = error.error_count() > 0 and 'input_value=' not in str(error)
+    show_input = validation_input_is_printable(error)
     problems: list[str] = []
     for err in error.errors(include_url=False)[:max_errors]:
-        text = err['msg']
-        # For a missing field the input is the whole parent object, which says nothing new.
-        if err['type'] != 'missing' and not hide_input:
-            text = f'{text}, got {_value_preview.repr(err["input"])}'
+        text = validation_problem(err, show_input=show_input)
         path = _loc_path(err['loc'])
         problems.append(f'{path}: {text}' if path else text)
     return _join_problems(problems, total=error.error_count(), max_errors=max_errors)
@@ -480,9 +497,7 @@ class GenkitError(Exception):
             details['reason'] = reason.value
         if isinstance(cause, ValidationError) and 'errors' not in details:
             details = dict(details)
-            details['errors'] = [
-                {'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in cause.errors()
-            ]
+            details['errors'] = validation_error_details(cause)
         if 'stack' not in details:
             details['stack'] = get_error_stack(cause if cause else self)
         if 'trace_id' not in details and trace_id:

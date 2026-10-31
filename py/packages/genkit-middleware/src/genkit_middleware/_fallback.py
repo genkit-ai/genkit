@@ -18,10 +18,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import copy
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from genkit import GenkitError, ModelResponse, ModelResponseChunk
 from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
@@ -70,12 +71,20 @@ class FallbackConfig(GenkitConfig):
 
 
 def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
-    """The config this backup runs with: the ref's version and config only."""
+    """The config this backup runs with: the ref's version and config only.
+
+    Stored as wire keys (``by_alias=True``) because ``FallbackConfig`` is a
+    JSON middleware config, with ``ref.version < ref.config`` and an explicit
+    ``None`` kept. The backup model's own defaults and validation apply when
+    it runs.
+    """
     bag: dict[str, Any] = {}
     if model.version is not None:
         bag['version'] = model.version
-    if model.config is not None:
-        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=True))
+    if isinstance(model.config, BaseModel):
+        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=False))
+    elif isinstance(model.config, Mapping):
+        bag.update(copy.deepcopy(dict(model.config)))
     return bag or None
 
 

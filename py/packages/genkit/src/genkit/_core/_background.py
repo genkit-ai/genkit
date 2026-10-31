@@ -469,7 +469,6 @@ def _operation_action(
     metadata: dict[str, object],
     suffix: str = '',
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
-    check_start_input: Callable[[object, str], None] | None = None,
 ) -> Action:
     """An Action for start/check/cancel that validates and stamps the Operation.
 
@@ -490,8 +489,6 @@ def _operation_action(
     # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
     @wraps(fn)
     async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
-        if check_start_input is not None:
-            check_start_input(input, action.name)
         if isinstance(input, Operation):
             # check/cancel: the caller's handle, often reloaded from storage.
             input = validate_operation(input, output_type=output_type, name=action.name, status='INVALID_ARGUMENT')  # noqa: A001
@@ -525,7 +522,6 @@ def operation_actions(
     description: str | None = None,
     label: str | None = None,
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
-    check_start_input: Callable[[object, str], None] | None = None,
 ) -> tuple[Action, Action, Action | None]:
     """Build the start, check and cancel actions for a ``cls`` background job.
 
@@ -550,7 +546,6 @@ def operation_actions(
         metadata=start_meta,
         description=description or f'{cls._noun}: {label}',
         config_schema=config_schema,
-        check_start_input=check_start_input,
     )
     if not start_action.input_schema and cls._input_type is not None:
         start_action.input_schema = fixed_json_schema(cls._input_type)

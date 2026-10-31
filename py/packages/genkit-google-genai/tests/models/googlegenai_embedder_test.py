@@ -19,13 +19,13 @@
 import asyncio
 import base64
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable
 from typing import Any, get_args
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from genkit_google_genai import EmbeddingConfig
+from genkit_google_genai import EmbeddingConfig, GeminiConfig
 from genkit_google_genai._models._embedder import (
     EMBED_CONCURRENCY_LIMIT,
     GOOGLEAI_EMBED_BATCH_SIZE,
@@ -37,8 +37,8 @@ from genkit_google_genai._models._embedder import (
 from google import genai
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai.errors import APIError
+from pydantic import ValidationError
 from pytest_mock import MockerFixture
-from structlog.testing import capture_logs
 
 from genkit import Document, GenkitError, Part
 from genkit.embedder import EmbedRequest, EmbedResponse
@@ -147,68 +147,52 @@ async def test_vertex_only_options_map_to_embed_content_config(mocker: MockerFix
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    'options',
+    ('options', 'expected_fields'),
     [
-        {'taskType': 'CLUSTERING', 'autoTruncate': False, 'mimeType': 'text/plain'},
-        EmbeddingConfig(task_type='CLUSTERING', auto_truncate=False, mime_type='text/plain'),
+        ({'mimeType': 'text/plain'}, 'mime_type'),
+        ({'autoTruncate': False}, 'auto_truncate'),
+        ({'mime_type': 'text/plain', 'autoTruncate': False}, 'mime_type, auto_truncate'),
+        (
+            EmbeddingConfig(task_type='CLUSTERING', auto_truncate=False, mime_type='text/plain'),
+            'mime_type, auto_truncate',
+        ),
     ],
-    ids=['dict', 'typed'],
+    ids=['mime_type', 'auto_truncate', 'both_dict', 'both_typed'],
 )
-async def test_vertex_only_options_are_not_forwarded_on_gemini_api(mocker: MockerFixture, options: object) -> None:
-    """Gemini API embedders accept autoTruncate and mimeType but leave them out of EmbedContentConfig."""
+async def test_gemini_api_rejects_vertex_only_options(
+    mocker: MockerFixture, options: object, expected_fields: str
+) -> None:
+    """Gemini Developer API embedders reject non-None Vertex-only options with INVALID_ARGUMENT."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(
+            EmbedRequest(input=[Document.from_text('text')], options=options)  # pyright: ignore[reportArgumentType]
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.message == (
+        f'gemini-embedding-001: {expected_fields}: Vertex AI only, not supported on the Gemini Developer API'
+    )
+    client.aio.models.embed_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_gemini_api_allows_explicit_none_for_vertex_only_options(mocker: MockerFixture) -> None:
+    """Explicit None for Vertex-only options clears them cleanly without raising on Gemini API."""
     client = _single_embedding_client(mocker)
     embedder = Embedder('gemini-embedding-001', client)
 
     await embedder.generate(
-        EmbedRequest(input=[Document.from_text('text')], options=options)  # pyright: ignore[reportArgumentType]
+        EmbedRequest(
+            input=[Document.from_text('text')],
+            options=EmbeddingConfig(task_type='CLUSTERING', mime_type=None, auto_truncate=None),  # pyright: ignore[reportArgumentType]
+        )
     )
 
     config = client.aio.models.embed_content.call_args.kwargs['config']
     assert config == genai.types.EmbedContentConfig(task_type='CLUSTERING')
-
-
-def _warnings(entries: Sequence[Mapping[str, Any]]) -> list[str]:
-    """Warning events from structlog's captured entries, as formatted messages."""
-    return [entry['event'] for entry in entries if entry['log_level'] == 'warning']
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('options', 'expected'),
-    [
-        ({'mimeType': 'text/plain'}, 'mimeType'),
-        ({'mime_type': 'text/plain', 'autoTruncate': False}, 'mimeType, autoTruncate'),
-    ],
-    ids=['one_key', 'several_keys'],
-)
-async def test_gemini_api_warns_about_dropped_vertex_only_options(
-    mocker: MockerFixture, options: dict[str, object], expected: str
-) -> None:
-    """A Gemini API embedder names the Vertex-only options it drops instead of ignoring them silently."""
-    client = _single_embedding_client(mocker)
-    embedder = Embedder('gemini-embedding-001', client)
-
-    with capture_logs() as entries:
-        await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
-
-    assert _warnings(entries) == [
-        f'Dropping {expected} from the gemini-embedding-001 embed config: '
-        'Vertex AI only, not accepted by the Gemini Developer API.'
-    ]
-
-
-@pytest.mark.asyncio
-async def test_vertex_does_not_warn_about_vertex_only_options(mocker: MockerFixture) -> None:
-    """Vertex embedders type mimeType and autoTruncate, so nothing is dropped and nothing is logged."""
-    client = _single_embedding_client(mocker)
-    embedder = Embedder('text-embedding-005', client, is_vertex=True)
-
-    with capture_logs() as entries:
-        await embedder.generate(
-            EmbedRequest(input=[Document.from_text('text')], options={'mimeType': 'text/plain', 'autoTruncate': False})
-        )
-
-    assert _warnings(entries) == []
 
 
 @pytest.mark.asyncio
@@ -235,24 +219,41 @@ async def test_unknown_option_keys_are_rejected(mocker: MockerFixture) -> None:
     ],
     ids=['camel_case_first', 'snake_case_first'],
 )
-def test_camel_case_option_key_wins_over_snake_case(options: dict[str, str]) -> None:
-    """When both spellings are given the camelCase one is the field, whatever the key order."""
-    parsed = EmbeddingConfig.model_validate(options)
+def test_duplicate_spellings_in_one_dict_are_rejected(options: dict[str, str]) -> None:
+    """Both spellings of the same field in a single dict fail GenkitConfig extra='forbid' validation."""
+    with pytest.raises(ValidationError):
+        EmbeddingConfig.model_validate(options)
 
-    assert parsed.task_type == 'CLUSTERING'
-    assert parsed.model_dump(exclude_none=True) == {'task_type': 'CLUSTERING'}
+
+@pytest.mark.asyncio
+async def test_foreign_base_model_options_are_rejected(mocker: MockerFixture) -> None:
+    """Passing a non-EmbeddingConfig BaseModel directly to Embedder.generate raises INVALID_ARGUMENT."""
+    client = mocker.AsyncMock()
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(
+            EmbedRequest.model_construct(
+                input=[Document.from_text('text')],
+                options=GeminiConfig(temperature=0.5),
+            )
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'EmbeddingConfig' in exc_info.value.message
+    client.aio.models.embed_content.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_typed_options_instance_is_accepted(mocker: MockerFixture) -> None:
-    """An EmbeddingConfig instance can be passed as the request options."""
+    """An EmbeddingConfig instance on EmbedRequest[EmbeddingConfig] reaches EmbedContentConfig."""
     client = _single_embedding_client(mocker)
     embedder = Embedder('gemini-embedding-001', client)
 
     await embedder.generate(
-        EmbedRequest(
+        EmbedRequest[EmbeddingConfig](
             input=[Document.from_text('text')],
-            options=EmbeddingConfig(task_type='CLASSIFICATION'),  # pyright: ignore[reportArgumentType]
+            options=EmbeddingConfig(task_type='CLASSIFICATION'),
         )
     )
 
@@ -748,7 +749,7 @@ async def test_multimodal_embedding_omits_parameters_without_dimension(mocker: M
     """Options without output_dimensionality do not produce a parameters field."""
     request = EmbedRequest(
         input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
-        options={'task_type': 'RETRIEVAL_QUERY'},
+        options={'version': 'multimodalembedding@001'},
     )
     predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
     client_mock = mocker.AsyncMock()
@@ -761,6 +762,49 @@ async def test_multimodal_embedding_omits_parameters_without_dimension(mocker: M
 
     call = client_mock._api_client.async_request.call_args
     assert 'parameters' not in call.kwargs['request_dict']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('options', 'expected_fields'),
+    [
+        ({'task_type': 'RETRIEVAL_QUERY'}, 'task_type'),
+        ({'title': 'Menu'}, 'title'),
+        ({'mime_type': 'text/plain'}, 'mime_type'),
+        ({'auto_truncate': False}, 'auto_truncate'),
+        (
+            EmbeddingConfig(
+                task_type='RETRIEVAL_DOCUMENT',
+                title='Menu',
+                mime_type='text/plain',
+                auto_truncate=True,
+                output_dimensionality=512,
+            ),
+            'task_type, title, mime_type, auto_truncate',
+        ),
+    ],
+    ids=['task_type', 'title', 'mime_type', 'auto_truncate', 'all_four'],
+)
+async def test_multimodal_embedding_rejects_text_only_options(
+    mocker: MockerFixture, options: object, expected_fields: str
+) -> None:
+    """Vertex multimodalembedding rejects text-embedding-only options with INVALID_ARGUMENT."""
+    request = EmbedRequest(
+        input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
+        options=options,  # pyright: ignore[reportArgumentType]
+    )
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding@001', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.message == (
+        f'multimodalembedding@001: {expected_fields}: not supported by multimodal embedding; '
+        'only output_dimensionality and version apply'
+    )
+    client_mock._api_client.async_request.assert_not_called()
 
 
 @pytest.mark.asyncio

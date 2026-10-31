@@ -32,6 +32,7 @@ import pytest
 from genkit_google_genai import (
     AntigravityConfig,
     DeepResearchConfig,
+    EmbeddingConfig,
     GeminiConfig,
     GeminiImageConfig,
     GeminiTtsConfig,
@@ -53,12 +54,14 @@ from genkit_google_genai import (
     SearchType,
     ThinkingLevel,
     VeoConfig,
+    VertexAI,
     VideoCompressionQuality,
 )
 from pydantic import BaseModel, ValidationError
 from typing_extensions import assert_type
 
 from genkit import Genkit
+from genkit.embedder import EmbedderRef
 
 
 def _wire(config: BaseModel) -> dict[str, object]:
@@ -68,6 +71,7 @@ def _wire(config: BaseModel) -> dict[str, object]:
 def test_empty_construction() -> None:
     """Every field is optional, so a bare constructor type-checks and validates."""
     for cls in (
+        EmbeddingConfig,
         GeminiConfig,
         GeminiTtsConfig,
         GeminiImageConfig,
@@ -78,6 +82,29 @@ def test_empty_construction() -> None:
         DeepResearchConfig,
     ):
         assert _wire(cls()) == {}
+
+
+def test_embedding_config_and_ref_types() -> None:
+    """EmbeddingConfig takes flat snake_case kwargs, and embedding() returns EmbedderRef[EmbeddingConfig]."""
+    config = EmbeddingConfig(
+        task_type='RETRIEVAL_DOCUMENT',
+        title='Menu',
+        output_dimensionality=256,
+        version='gemini-embedding-001',
+        mime_type='text/plain',
+        auto_truncate=False,
+    )
+    assert_type(GoogleAI.embedding('gemini-embedding-001', config=config), EmbedderRef[EmbeddingConfig])
+    assert_type(VertexAI.embedding('text-embedding-005', config=config), EmbedderRef[EmbeddingConfig])
+    assert _wire(config) == {
+        'taskType': 'RETRIEVAL_DOCUMENT',
+        'title': 'Menu',
+        'outputDimensionality': 256,
+        'version': 'gemini-embedding-001',
+        'mimeType': 'text/plain',
+        'autoTruncate': False,
+    }
+    assert EmbeddingConfig.model_validate(_wire(config)) == config
 
 
 def test_gemini_config_flat_kwargs() -> None:

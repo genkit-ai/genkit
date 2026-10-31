@@ -25,11 +25,6 @@ from genkit._core._typing import Role
 from genkit.model import GenerateActionOptions, ModelContext
 from genkit.plugin_api import ActionKind
 
-QUALITY_SCHEMA: dict[str, object] = {
-    'type': 'object',
-    'properties': {'quality': {'type': 'string', 'enum': ['low', 'high']}},
-}
-
 
 class SketchConfig(BaseModel):
     """Config the sketch model's function is typed with."""
@@ -61,7 +56,7 @@ def sketch_model() -> tuple[
     'define_kwargs',
     [
         pytest.param({}, id='no-config-schema'),
-        pytest.param({'config_schema': QUALITY_SCHEMA}, id='dict-config-schema'),
+        pytest.param({'config_schema': SketchConfig}, id='same-class-config-schema'),
     ],
 )
 async def test_generate_with_bad_config_raises_invalid_argument(define_kwargs: dict[str, object]) -> None:
@@ -83,7 +78,7 @@ async def test_generate_with_good_config_reaches_model_as_annotation_class() -> 
     """Valid config is still coerced into the annotation's class."""
     ai = Genkit()
     sketch, configs = sketch_model()
-    ai.define_model('acme/sketch', sketch, config_schema=QUALITY_SCHEMA)
+    ai.define_model('acme/sketch', sketch)
 
     response = await ai.generate(model='acme/sketch', prompt='a lighthouse', config={'quality': 'high'})
 

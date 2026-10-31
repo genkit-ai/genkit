@@ -48,8 +48,9 @@ from genkit_google_genai._models._veo import VeoConfig, VeoModel
 from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 from google.genai import types as genai_types
 
-from genkit import Genkit, GenkitError, Message, Operation, Part, Role
-from genkit._core._schema import to_json_schema
+from genkit import Document, Genkit, GenkitError, Message, Operation, Part, Role
+from genkit._core._schema import custom_options_schema, to_json_schema
+from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.evaluator import BaseDataPoint
 from genkit.model import BackgroundModel, ModelRequest
 from genkit.plugin_api import Action, ActionKind
@@ -324,6 +325,38 @@ async def test_googleai_resolve_model(mock_list_models: MagicMock, mock_client: 
     assert action.name == 'googleai/gemini-2.0-flash'
 
 
+def _null_defaults(node: object, path: str = '') -> list[str]:
+    """Paths in a JSON schema that publish ``"default": null``."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in cast('dict[str, object]', node).items():
+            if key == 'default' and value is None:
+                found.append(path)
+            found.extend(_null_defaults(value, f'{path}/{key}'))
+    elif isinstance(node, list):
+        for i, item in enumerate(cast('list[object]', node)):
+            found.extend(_null_defaults(item, f'{path}/{i}'))
+    return found
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_gemini_custom_options_publish_no_null_defaults(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """A Dev UI form that prefills defaults must not send every optional field back as null."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash')
+
+    assert action is not None
+    custom_options = _custom_options(action)
+    assert cast('dict[str, object]', custom_options)['properties']
+    assert _null_defaults(custom_options) == []
+
+
 @patch('genkit_google_genai._google.genai.client.Client')
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
@@ -337,7 +370,7 @@ async def test_googleai_resolve_gemini_image_uses_image_config(
     action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash-image')
 
     assert isinstance(action, Action)
-    assert _custom_options(action) == to_json_schema(GeminiImageConfig)
+    assert _custom_options(action) == custom_options_schema(GeminiImageConfig)
     assert _request_config_type(action) is GeminiImageConfig
     assert action._config_schema is GeminiImageConfig
 
@@ -622,22 +655,44 @@ async def test_vertexai_veo_listing_has_input_schema(mock_list_models: MagicMock
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_embedder(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI plugin resolves embedder actions."""
+    """GoogleAI and VertexAI embedder actions declare EmbeddingConfig and backend-specific Dev UI customOptions."""
     mock_list_models.return_value = GenaiModels()
 
-    plugin = GoogleAI(api_key='test-key')
-    action = await plugin.resolve(ActionKind.EMBEDDER, 'gemini-embedding-001')
+    google_plugin = GoogleAI(api_key='test-key')
+    google_action = await google_plugin.resolve(ActionKind.EMBEDDER, 'gemini-embedding-001')
 
-    assert action is not None
-    assert action.kind == ActionKind.EMBEDDER
-    assert action.name == 'googleai/gemini-embedding-001'
+    assert isinstance(google_action, Action)
+    assert google_action.kind == ActionKind.EMBEDDER
+    assert google_action.name == 'googleai/gemini-embedding-001'
+    assert google_action.config_schema is EmbeddingConfig
+    assert _request_config_type(google_action) is EmbeddingConfig
+    google_embed_meta = cast('dict[str, object]', google_action.metadata['embedder'])
+    google_schema = cast('dict[str, object]', google_embed_meta['customOptions'])
+    google_props = cast('dict[str, dict[str, object]]', google_schema['properties'])
+    assert 'taskType' in google_props
+    assert 'mimeType' not in google_props
+    assert 'autoTruncate' not in google_props
+    assert all('default' not in prop for prop in google_props.values())
+
+    vertex_plugin = VertexAI(project='test-project', location='us-central1')
+    vertex_action = await vertex_plugin.resolve(ActionKind.EMBEDDER, 'text-embedding-005')
+
+    assert isinstance(vertex_action, Action)
+    assert vertex_action.config_schema is EmbeddingConfig
+    assert _request_config_type(vertex_action) is EmbeddingConfig
+    vertex_embed_meta = cast('dict[str, object]', vertex_action.metadata['embedder'])
+    vertex_schema = cast('dict[str, object]', vertex_embed_meta['customOptions'])
+    vertex_props = cast('dict[str, dict[str, object]]', vertex_schema['properties'])
+    assert 'mimeType' in vertex_props
+    assert 'autoTruncate' in vertex_props
+    assert all('default' not in prop for prop in vertex_props.values())
 
 
 @patch('genkit_google_genai._google.genai.client.Client')
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_embed_applies_a_typed_ref_config(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """ai.embed() merges a typed ref config and version into the API call."""
+    """ai.embed() merges a typed ref config (including version) into the API call."""
     mock_list_models.return_value = GenaiModels()
     embed_content = AsyncMock(
         return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
@@ -646,8 +701,11 @@ async def test_embed_applies_a_typed_ref_config(mock_list_models: MagicMock, moc
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
     ref = GoogleAI.embedding(
         'gemini-embedding-001',
-        config=EmbeddingConfig(task_type='RETRIEVAL_QUERY', output_dimensionality=256),
-        version='gemini-embedding-2',
+        config=EmbeddingConfig(
+            task_type='RETRIEVAL_QUERY',
+            output_dimensionality=256,
+            version='gemini-embedding-2',
+        ),
     )
 
     embeddings = await ai.embed(embedder=ref, content='hello')
@@ -664,27 +722,30 @@ async def test_embed_applies_a_typed_ref_config(mock_list_models: MagicMock, moc
 @patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('ref_config', 'call_config'),
+    'call_config',
     [
-        ({'taskType': 'RETRIEVAL_DOCUMENT'}, {'task_type': 'RETRIEVAL_QUERY'}),
-        ({'task_type': 'RETRIEVAL_DOCUMENT'}, {'taskType': 'RETRIEVAL_QUERY'}),
+        EmbeddingConfig(task_type='RETRIEVAL_QUERY'),
+        {'task_type': 'RETRIEVAL_QUERY'},
+        {'taskType': 'RETRIEVAL_QUERY'},
     ],
-    ids=['camel_ref_snake_call', 'snake_ref_camel_call'],
+    ids=['typed_call', 'snake_dict_call', 'camel_dict_call'],
 )
 async def test_embed_call_config_overrides_the_ref_config_in_either_spelling(
     mock_list_models: MagicMock,
     mock_client: MagicMock,
-    ref_config: dict[str, object],
-    call_config: dict[str, object],
+    call_config: EmbeddingConfig | dict[str, object],
 ) -> None:
-    """A per-call config overrides the same field on the ref whatever spelling each side uses."""
+    """A per-call EmbeddingConfig or dict (snake_case or camelCase) overrides the ref's EmbeddingConfig."""
     mock_list_models.return_value = GenaiModels()
     embed_content = AsyncMock(
         return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
     )
     mock_client.return_value.aio.models.embed_content = embed_content
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    ref = GoogleAI.embedding('gemini-embedding-001', config=ref_config)
+    ref = GoogleAI.embedding(
+        'gemini-embedding-001',
+        config=EmbeddingConfig(task_type='RETRIEVAL_DOCUMENT'),
+    )
 
     await ai.embed(embedder=ref, content='hello', config=call_config)
 
@@ -1341,7 +1402,8 @@ async def test_embed_call_config_keeps_the_ref_fields_it_does_not_set(
     mock_client.return_value.aio.models.embed_content = embed_content
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
     ref = GoogleAI.embedding(
-        'gemini-embedding-001', config=EmbeddingConfig(output_dimensionality=256), version='gemini-embedding-2'
+        'gemini-embedding-001',
+        config=EmbeddingConfig(output_dimensionality=256, version='gemini-embedding-2'),
     )
 
     await ai.embed(embedder=ref, content='hello', config={'taskType': 'RETRIEVAL_QUERY'})
@@ -1351,3 +1413,117 @@ async def test_embed_call_config_keeps_the_ref_fields_it_does_not_set(
     assert call.kwargs['model'] == 'gemini-embedding-2'
     assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
     assert call.kwargs['config'].output_dimensionality == 256
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'call_config',
+    [
+        {'task_type': None},
+        {'taskType': None},
+        EmbeddingConfig(task_type=None),
+    ],
+    ids=['snake_dict_none', 'camel_dict_none', 'typed_none'],
+)
+async def test_embed_call_config_explicit_none_clears_ref_field(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    call_config: EmbeddingConfig | dict[str, object],
+) -> None:
+    """An explicit None in call config clears the field from the ref while preserving untouched ref fields."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    ref = GoogleAI.embedding(
+        'gemini-embedding-001',
+        config=EmbeddingConfig(task_type='RETRIEVAL_DOCUMENT', output_dimensionality=256),
+    )
+
+    await ai.embed(embedder=ref, content='hello', config=call_config)
+
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['config'].task_type is None
+    assert call.kwargs['config'].output_dimensionality == 256
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_rejects_duplicate_spellings_in_one_call_dict(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Passing both snake_case and camelCase for the same setting in one call dict raises INVALID_ARGUMENT."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock()
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+
+    with pytest.raises(GenkitError, match='are the same setting; pass one') as exc_info:
+        await ai.embed(
+            embedder=GoogleAI.embedding('gemini-embedding-001'),
+            content='hello',
+            config={'task_type': 'RETRIEVAL_QUERY', 'taskType': 'CLUSTERING'},
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    embed_content.assert_not_awaited()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_rejects_wrong_config_class_at_call_time(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Passing a non-EmbeddingConfig BaseModel to ai.embed(config=...) raises INVALID_ARGUMENT."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock()
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+
+    with pytest.raises(GenkitError, match='EmbeddingConfig') as exc_info:
+        await ai.embed(
+            embedder=GoogleAI.embedding('gemini-embedding-001'),
+            content='hello',
+            config=GeminiConfig(temperature=0.5),
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    embed_content.assert_not_awaited()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embedder_action_run_validates_embed_request_options(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Calling embed_action.run(EmbedRequest(...)) directly validates options into EmbeddingConfig."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'gemini-embedding-001')
+    assert isinstance(action, Action)
+
+    result = await action.run(
+        EmbedRequest(
+            input=[Document.from_text('hello')],
+            options={'taskType': 'RETRIEVAL_QUERY', 'outputDimensionality': 128},
+        )
+    )
+
+    assert isinstance(result.response, EmbedResponse)
+    assert [e.embedding for e in result.response.embeddings] == [[0.5]]
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
+    assert call.kwargs['config'].output_dimensionality == 128
