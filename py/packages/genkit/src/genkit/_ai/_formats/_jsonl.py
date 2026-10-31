@@ -130,13 +130,15 @@ class JsonlFormat(Formatter):
             for line in lines:
                 trimmed = line.strip()
                 if trimmed.startswith('{'):
-                    try:
-                        result = json5.loads(trimmed)
-                        if result:
-                            results.append(result)
-                    except ValueError:
+                    # Parse the object prefix so split trailing comments cannot
+                    # change the point at which a line becomes complete.
+                    result, error, end = json5.parse(line, consume_trailing=False)
+                    if error is not None:
                         # Incomplete or invalid JSON line, stop processing this chunk
                         break
+                    if result and start_index + end > previous_text_len:
+                        results.append(result)
+                start_index += len(line) + 1
             return results
 
         instructions = None
