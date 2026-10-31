@@ -46,6 +46,7 @@ import { traceGet } from './commands/trace-get';
 import { traceList } from './commands/trace-list';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
+import { cleanupLegacyAiToolContext } from './utils/legacy-context-cleanup';
 import { detectCLIRuntime } from './utils/runtime-detector';
 import { showUpdateNotification } from './utils/updates';
 import { version } from './utils/version';
@@ -116,6 +117,9 @@ export async function startCLI(): Promise<void> {
       const { isCompiledBinary } = detectCLIRuntime();
       const projectRoot = await findProjectRoot();
       const projectRuntime = await detectRuntime(projectRoot);
+      if (projectRuntime) {
+        await cleanupLegacyAiToolContext(projectRoot);
+      }
       await record(
         new RunCommandEvent(
           commandName,
@@ -146,7 +150,7 @@ export async function startCLI(): Promise<void> {
     program.addCommand(serverHarness);
   }
 
-  const deprecatedCommands = new Set([uiStart, uiStop]);
+  const deprecatedCommands = new Set([uiStart, uiStop, initAiTools]);
   for (const command of commands) {
     program.addCommand(command, {
       hidden: deprecatedCommands.has(command),
