@@ -34,4 +34,10 @@ var (
 	// Every store implementation rejects this: a snapshot with no session cannot
 	// be resolved back to a conversation.
 	ErrSessionIDRequired = status.ErrInvalidArgument.Subtype("session ID is required")
+
+	// ErrSessionDeleted means a snapshot was written that continues the chain
+	// of a session removed with [Agent.DeleteSession]. Stores reject it so a
+	// late writer cannot bring the session back; the runtime treats it as "stop
+	// persisting" rather than a failure.
+	ErrSessionDeleted = status.ErrFailedPrecondition.Subtype("session deleted")
 )
