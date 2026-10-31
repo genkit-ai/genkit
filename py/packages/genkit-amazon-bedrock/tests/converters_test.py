@@ -38,7 +38,7 @@ from genkit_amazon_bedrock._converters import (
 )
 
 from genkit import FinishReason, GenkitError, Message, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ToolDefinition
+from genkit.model import ModelConfig, ModelRequest, ToolDefinition, ToolRequest
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\nfakeimagedata'
 PNG_B64 = base64.b64encode(PNG_BYTES).decode()
@@ -466,6 +466,34 @@ def test_tools_become_tool_specs() -> None:
     assert tool_spec['inputSchema']['json']['properties'] == {'city': {'type': 'string'}}
     # No toolChoice unless requested; Bedrock defaults to auto.
     assert 'toolChoice' not in kwargs['toolConfig']
+
+
+def test_string_tool_input_round_trips_as_bare_string() -> None:
+    """Converse sees an object, while Genkit receives the original string."""
+    tool = ToolDefinition(name='weather', description='Get weather', input_schema={'type': 'string'})
+    request = user_text_request(tools=[tool])
+    schema = build_converse_request('amazon.nova-lite-v1:0', request)['toolConfig']['tools'][0]['toolSpec'][
+        'inputSchema'
+    ]['json']
+    assert schema['type'] == 'object'
+    assert schema['properties']['input'] == {'type': 'string'}
+    parts = content_blocks_to_parts(
+        [{'toolUse': {'toolUseId': 'tool_1', 'name': 'weather', 'input': {'input': 'Paris'}}}], [tool]
+    )
+    assert parts[0].tool_request.input == 'Paris'
+
+
+def test_string_tool_history_uses_wire_envelope() -> None:
+    """A previous bare-string call is valid Converse input on the next turn."""
+    tool = ToolDefinition(name='weather', description='Get weather', input_schema={'type': 'string'})
+    messages = [
+        Message(role=Role.USER, content=[Part.from_text('Weather in Paris?')]),
+        Message(role=Role.MODEL, content=[Part(tool_request=ToolRequest(name='weather', ref='old', input='Paris'))]),
+        Message(role=Role.TOOL, content=[Part.from_text('Sunny')]),
+    ]
+    kwargs = build_converse_request('amazon.nova-lite-v1:0', ModelRequest(messages=messages, tools=[tool]))
+    assert kwargs['messages'][1]['content'][0]['toolUse']['input'] == {'input': 'Paris'}
+    assert messages[1].content[0].tool_request.input == 'Paris'
 
 
 def test_tool_schema_defaults_injected() -> None:
