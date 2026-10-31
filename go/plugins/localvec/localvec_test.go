@@ -265,3 +265,14 @@ func TestDocIDMarshalError(t *testing.T) {
 		t.Errorf("docID error = %v, want errors.Is ErrInvalidArgument", err)
 	}
 }
+
+// TestDefineRetrieverRequiresEmbedder checks that a missing embedder, such as
+// a lookup of one that was never defined, fails when the retriever is defined
+// rather than panicking when documents are first indexed.
+func TestDefineRetrieverRequiresEmbedder(t *testing.T) {
+	g := genkit.Init(context.Background())
+	_, _, err := DefineRetriever(g, "noEmbedder", Config{Dir: t.TempDir(), Embedder: genkit.LookupEmbedder(g, "undefined/embedder")}, nil)
+	if !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("DefineRetriever with a nil embedder: err = %v, want INVALID_ARGUMENT", err)
+	}
+}

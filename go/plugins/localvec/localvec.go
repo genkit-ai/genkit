@@ -95,6 +95,11 @@ type DbValue struct {
 
 // newDocStore returns a new ai.DocumentStore to register.
 func newDocStore(dir, name string, embedder ai.Embedder, embedderOptions any) (*DocStore, error) {
+	// A lookup of an embedder that was never defined returns nil; fail here
+	// rather than with a nil pointer panic on the first index or retrieve.
+	if embedder == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "localvec: retriever %q needs an Embedder; check that the embedder is defined", name)
+	}
 	if dir == "" {
 		dir = os.TempDir()
 	}
