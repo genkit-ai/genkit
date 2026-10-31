@@ -91,7 +91,7 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
 from genkit._core._background import missing_operation_error
-from genkit._core._channel import run_loop, start_stream
+from genkit._core._channel import StoppableStream, run_loop, start_stream
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
@@ -1821,10 +1821,19 @@ class Genkit:
                 use=use,
                 docs=docs,
                 on_chunk=send_chunk,
+                abort_signal=abort_signal,
             )
 
+        abort_signal = asyncio.Event()
         channel, task = start_stream(_run_generate)
-        return ModelStreamResponse[Any](stream=channel, response=task)
+
+        async def stop_model() -> None:
+            if task.done():
+                return
+            abort_signal.set()
+            await asyncio.wait([task])
+
+        return ModelStreamResponse[Any](stream=StoppableStream(chunks=channel, stop=stop_model), response=task)
 
     async def _generate(
         self,
@@ -1850,6 +1859,7 @@ class Genkit:
         use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+        abort_signal: asyncio.Event | None = None,
     ) -> ModelResponse[Any]:
         """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
 
@@ -1904,6 +1914,7 @@ class Genkit:
             options,
             on_chunk=on_chunk,
             context=context,
+            abort_signal=abort_signal,
         )
 
     async def embed(

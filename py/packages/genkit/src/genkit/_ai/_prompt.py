@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -68,7 +69,7 @@ from genkit._core._action import (
     create_action_key,
     get_current_context,
 )
-from genkit._core._channel import start_stream
+from genkit._core._channel import StoppableStream, start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
@@ -450,6 +451,16 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
+        return await self._run(input=input, opts=opts, on_chunk=on_chunk, abort_signal=None)
+
+    async def _run(
+        self,
+        *,
+        input: InputT | dict[str, Any] | None,
+        opts: PromptGenerateOptions,
+        on_chunk: ModelStreamingCallback | None,
+        abort_signal: asyncio.Event | None,
+    ) -> ModelResponse[OutputT]:
         prepared = await prepare_prompt(prompt=self, input=input, opts=opts)
         result = await generate_action(
             prepared.scope,
@@ -457,6 +468,7 @@ class Prompt(Generic[InputT, OutputT]):
             on_chunk=on_chunk,
             # Same context the template already rendered, so {{@auth}} and tools agree.
             context=prepared.context,
+            abort_signal=abort_signal,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -483,30 +495,41 @@ class Prompt(Generic[InputT, OutputT]):
         Iterate the returned stream for chunks; there's no callback here so
         chunks only arrive one way.
         """
+        opts = PromptGenerateOptions(
+            model=model,
+            config=config,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            docs=docs,
+            use=use,
+            max_turns=max_turns,
+            context=context,
+            return_tool_requests=return_tool_requests,
+            resume_respond=resume_respond,
+            resume_restart=resume_restart,
+            resume_metadata=resume_metadata,
+        )
+        abort_signal = asyncio.Event()
 
         # Same run path as __call__; only the chunk sink differs.
         async def run(send_chunk: Callable[[ModelResponseChunk[OutputT]], None]) -> ModelResponse[OutputT]:
-            return await self(
-                input,
-                model=model,
-                config=config,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                docs=docs,
-                use=use,
-                max_turns=max_turns,
-                context=context,
-                return_tool_requests=return_tool_requests,
-                resume_respond=resume_respond,
-                resume_restart=resume_restart,
-                resume_metadata=resume_metadata,
+            return await self._run(
+                input=input,
+                opts=opts,
                 on_chunk=lambda c: send_chunk(cast('ModelResponseChunk[OutputT]', c)),
+                abort_signal=abort_signal,
             )
 
         channel, task = start_stream(run)
 
-        return ModelStreamResponse[OutputT](stream=channel, response=task)
+        async def stop_model() -> None:
+            if task.done():
+                return
+            abort_signal.set()
+            await asyncio.wait([task])
+
+        return ModelStreamResponse[OutputT](stream=StoppableStream(chunks=channel, stop=stop_model), response=task)
 
     async def render(
         self,

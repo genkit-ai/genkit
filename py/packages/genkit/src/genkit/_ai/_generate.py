@@ -61,6 +61,7 @@ from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
+    ActionResponse,
     ActionRunContext,
     create_action_key,
     get_current_context,
@@ -68,6 +69,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
 )
 from genkit._core._background import missing_operation_error, stamp_operation_action
+from genkit._core._compat import uncancel
 from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
@@ -1573,6 +1575,60 @@ async def generate_turn(
     )
 
 
+async def run_model_until_aborted(
+    *,
+    model: Action,
+    request: ModelRequest,
+    ctx: MiddlewareContext,
+) -> ActionResponse[Any]:
+    """Run the model action; cancel it once the caller stops.
+
+    The model gets ``abort_signal`` too, but one that never checks it would keep
+    streaming (and billing) after nobody is reading. The cancel arrives as
+    ``CancelledError`` with the signal set, which generate boxes as ABORTED.
+
+    The model runs in this task, not a child one, so a SystemExit or
+    KeyboardInterrupt from it still unwinds straight through the caller.
+    """
+    abort_signal = ctx.abort_signal
+    if abort_signal is None:
+        return await model._run(
+            input=request,
+            context=ctx.context,
+            on_chunk=ctx.on_chunk,
+            abort_signal=None,
+        )
+
+    this_task = asyncio.current_task()
+    cancelled_by_abort = asyncio.Event()
+
+    async def watch_abort() -> None:
+        await abort_signal.wait()
+        if this_task is not None:
+            # Model plugins often block on socket I/O and do not cooperatively check
+            # abort_signal. Forcibly cancelling this_task interrupts pending I/O
+            # inside the provider SDK, immediately halting token streaming and billing.
+            cancelled_by_abort.set()
+            this_task.cancel()
+
+    watcher_task = asyncio.create_task(watch_abort())
+    try:
+        return await model._run(
+            input=request,
+            context=ctx.context,
+            on_chunk=ctx.on_chunk,
+            abort_signal=abort_signal,
+        )
+    finally:
+        watcher_task.cancel()
+        # Genkit catches the resulting CancelledError in generate_turn and boxes it
+        # into a valid ModelResponse(finish_reason=FinishReason.ABORTED). Because this
+        # abort is handled locally rather than re-raised, decrement the task's cancel
+        # count on Python 3.11+ so it does not poison an enclosing timeout or TaskGroup.
+        if cancelled_by_abort.is_set():
+            uncancel(this_task)
+
+
 async def call_model(
     *,
     options: GenerateActionOptions,
@@ -1592,6 +1648,7 @@ async def call_model(
     # Last turn's model answer does not belong to this one. It is set again
     # the moment the model answers.
     call.answered = None
+
     request = await turn_request(options=options, resolved=resolved)
     # Stashed before the model runs so a failure on this turn still echoes the
     # request the caller made instead of a rebuilt subset of it.
@@ -1607,11 +1664,10 @@ async def call_model(
                 turn=current_turn,
                 messages=len(params.request.messages),
             )
-        result = await turn_model._run(
-            input=params.request,
-            context=c.context,
-            on_chunk=c.on_chunk,
-            abort_signal=c.abort_signal,
+        result = await run_model_until_aborted(
+            model=turn_model,
+            request=params.request,
+            ctx=c,
         )
         raw = result.response
         if turn_model.kind == ActionKind.BACKGROUND_MODEL:
