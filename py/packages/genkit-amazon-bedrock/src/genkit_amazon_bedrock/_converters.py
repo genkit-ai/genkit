@@ -28,7 +28,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelRequest, ModelUsage, ToolDefinition, ToolRequest
+from genkit.model import GenerationUsage, ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock._config import BedrockConfig
 
 # Bedrock returns signed and sometimes redacted reasoning that has to be sent
@@ -186,8 +186,7 @@ def normalize_config(config: Any) -> BedrockConfig | None:  # noqa: ANN401
             raise GenkitError(
                 message=(
                     f'bedrock: unknown config key(s): {", ".join(unknown)}; only declared BedrockConfig '
-                    'fields (e.g. maxOutputTokens) are sent, model-specific options go in '
-                    'extra or additionalModelRequestFields'
+                    "fields (e.g. maxOutputTokens) are sent, model-specific options go in config['extra']"
                 ),
                 status='INVALID_ARGUMENT',
             ) from e
@@ -526,14 +525,10 @@ def build_converse_request(model_id: str, request: ModelRequest[Any]) -> dict[st
     if inference_config:
         kwargs['inferenceConfig'] = inference_config
 
-    if config is not None and (config.additional_model_request_fields or config.extra):
-        # Forwarded verbatim (e.g. Claude extended thinking budgets). Converse
-        # rejects unknown top-level fields, so `extra` lands here too, merged
-        # last so a colliding key wins.
-        kwargs['additionalModelRequestFields'] = {
-            **(config.additional_model_request_fields or {}),
-            **(config.extra or {}),
-        }
+    if config is not None and config.extra:
+        # Converse rejects unknown top-level fields, so model-specific options
+        # travel in this one slot, as the caller wrote them.
+        kwargs['additionalModelRequestFields'] = config.extra
 
     if send_tool_config:
         tool_config: dict[str, Any] = {'tools': [to_bedrock_tool(tool) for tool in tools]}
@@ -696,7 +691,7 @@ def map_finish_reason(stop_reason: str | None) -> FinishReason:
     return STOP_REASON_MAP.get(stop_reason or '', FinishReason.OTHER)
 
 
-def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # noqa: ANN401
+def usage_from_response(usage: dict[str, Any] | None) -> GenerationUsage | None:  # noqa: ANN401
     """Maps Converse token usage; totals are trusted verbatim from AWS.
 
     Only ``cacheReadInputTokens`` surfaces (as ``cached_content_tokens``);
@@ -704,7 +699,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
     """
     if usage is None:
         return None
-    return ModelUsage(
+    return GenerationUsage(
         input_tokens=usage.get('inputTokens'),
         output_tokens=usage.get('outputTokens'),
         total_tokens=usage.get('totalTokens'),
@@ -715,7 +710,7 @@ def usage_from_response(usage: dict[str, Any] | None) -> ModelUsage | None:  # n
 def usage_log_fields(usage: dict[str, Any] | None) -> dict[str, Any]:  # noqa: ANN401
     """Token counts as structlog keys; empty when the response reported none.
 
-    Cache writes are here but not on ``ModelUsage``, so the log is the only
+    Cache writes are here but not on ``GenerationUsage``, so the log is the only
     place they surface.
     """
     if not usage:

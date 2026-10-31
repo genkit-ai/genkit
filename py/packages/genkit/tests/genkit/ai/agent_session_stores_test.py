@@ -410,7 +410,7 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
     assert exc.value.status == 'INVALID_ARGUMENT'
     assert exc.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
     assert 'Invalid snapshotId' in str(exc.value)
-    assert 'INVALID_SNAPSHOT_ID' not in exc.value.original_message
+    assert 'INVALID_SNAPSHOT_ID' not in exc.value.message
 
     with pytest.raises(GenkitError) as exc:
         await store.save_snapshot(
@@ -419,7 +419,7 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
         )
     assert exc.value.status == 'INVALID_ARGUMENT'
     assert exc.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert 'INVALID_SNAPSHOT_ID' not in exc.value.original_message
+    assert 'INVALID_SNAPSHOT_ID' not in exc.value.message
 
     # Path traversal must not create files outside the store directory.
     assert not (tmp_path.parent / 'escape.json').exists()
@@ -435,8 +435,8 @@ async def test_get_snapshot_empty_snapshot_id_raises_invalid_snapshot_id() -> No
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
-    assert 'snapshot_id must not be empty' in error.original_message
-    assert 'INVALID_SNAPSHOT_ID' not in error.original_message
+    assert 'snapshot_id must not be empty' in error.message
+    assert 'INVALID_SNAPSHOT_ID' not in error.message
 
 
 @pytest.mark.asyncio
@@ -449,8 +449,8 @@ async def test_get_snapshot_empty_session_id_raises_session_id_required() -> Non
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert 'session_id must not be empty' in error.original_message
-    assert 'SESSION_ID_REQUIRED' not in error.original_message
+    assert 'session_id must not be empty' in error.message
+    assert 'SESSION_ID_REQUIRED' not in error.message
 
 
 @pytest.mark.asyncio
@@ -474,8 +474,8 @@ async def test_file_store_save_without_session_id_raises_session_id_required(tmp
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
-    assert 'sessionId' in error.original_message
-    assert 'SESSION_ID_REQUIRED' not in error.original_message
+    assert 'sessionId' in error.message
+    assert 'SESSION_ID_REQUIRED' not in error.message
 
 
 @pytest.mark.asyncio

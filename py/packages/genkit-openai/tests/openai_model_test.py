@@ -33,9 +33,16 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelContext, ModelRequest, OutputConfig, Supports, ToolRequest
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Operation, Part, Role
+from genkit.model import (
+    GenerationUsage,
+    ModelConfig,
+    ModelContext,
+    ModelRequest,
+    ModelSupports,
+    OutputConfig,
+    ToolRequest,
+)
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -74,7 +81,7 @@ def test_openai_model_text_only_supports_json_request_sends_text() -> None:
     model = OpenAIModel(
         model='some-text-only-compat',
         client=MagicMock(),
-        supports=Supports(output=['text']),
+        supports=ModelSupports(output=['text']),
     )
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
@@ -1799,7 +1806,7 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
     assert chunks == ['Grilled']
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'Rate limit reached for gpt-4o'
+    assert error.message == 'Rate limit reached for gpt-4o'
     assert type(error.cause) is APIError
 
 
@@ -1814,7 +1821,7 @@ async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_
     assert chunks == ['Grilled']
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
-    assert error.original_message == 'Upstream reset'
+    assert error.message == 'Upstream reset'
     assert type(error.cause) is APIError
 
 
