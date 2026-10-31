@@ -125,7 +125,11 @@ class ExtractItemsResult:
 
 
 def extract_json_array_from_text(text: str, cursor: int = 0) -> ExtractItemsResult:
-    """Extract complete JSON objects from the first array found in text."""
+    """Extract complete JSON values from the first array found in text.
+
+    Numbers and other unquoted scalars wait for a comma or closing bracket,
+    so a chunk ending in ``[1`` cannot prematurely emit the start of ``12``.
+    """
     items: list = []
     current_cursor = cursor
 
@@ -135,40 +139,52 @@ def extract_json_array_from_text(text: str, cursor: int = 0) -> ExtractItemsResu
             return ExtractItemsResult(items=[], cursor=len(text))
         current_cursor = array_start + 1
 
-    object_start = -1
-    brace_count = 0
-    in_string = False
+    item_start = -1
+    depth = 0
+    quote: str | None = None
     escape_next = False
 
     for i in range(current_cursor, len(text)):
         char = text[i]
+        if item_start == -1:
+            if char.isspace() or char == ',':
+                continue
+            if char == ']':
+                break
+            item_start = i
 
-        if escape_next:
-            escape_next = False
-            continue
-        if char == '\\':
-            escape_next = True
-            continue
-        if char == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
+        end: int | None = None
+        array_closed = False
+        if quote is not None:
+            if escape_next:
+                escape_next = False
+            elif char == '\\':
+                escape_next = True
+            elif char == quote:
+                quote = None
+                if depth == 0:
+                    end = i + 1
+        elif char in ('"', "'"):
+            quote = char
+        elif char in '[{':
+            depth += 1
+        elif char in ']}':
+            if depth > 0:
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+            else:
+                end = i
+                array_closed = True
+        elif char == ',' and depth == 0:
+            end = i
 
-        if char == '{':
-            if brace_count == 0:
-                object_start = i
-            brace_count += 1
-        elif char == '}':
-            brace_count -= 1
-            if brace_count == 0 and object_start != -1:
-                try:
-                    items.append(json5.loads(text[object_start : i + 1]))
-                    current_cursor = i + 1
-                    object_start = -1
-                except Exception:  # noqa: S110
-                    pass
-        elif char == ']' and brace_count == 0:
+        if end is not None:
+            with suppress(ValueError):
+                items.append(json5.loads(text[item_start:end]))
+                current_cursor = end
+            item_start = -1
+        if array_closed:
             break
 
     return ExtractItemsResult(items=items, cursor=current_cursor)
