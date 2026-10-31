@@ -16,6 +16,8 @@
 
 """Error classes and utilities for the Genkit framework."""
 
+import builtins
+import importlib
 import math
 import reprlib
 import time
@@ -349,15 +351,24 @@ class ErrorResponseMetadata(TypedDict, total=False):
     headers: dict[str, str]
 
 
-class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Error for style
-    """Pause a tool or generate so the caller can approve, reply, or restart.
+class Interrupt(BaseException):
+    """Pause a tool so the caller can approve, reply, or restart.
 
     Raise ``Interrupt(metadata)`` from a tool or from tool middleware.
-    Tracing treats this as control flow, not a failed span.
+    It is a control-flow signal like ``asyncio.CancelledError``, so it
+    subclasses ``BaseException``: an ``except Exception`` in tool code can't
+    swallow it and skip the approval. Catch ``Interrupt`` by name if a tool
+    needs to clean up, then re-raise. Raised anywhere else (a flow, an
+    agent turn body), the action fails with ``GenkitError`` INTERNAL.
+    Tracing treats it as control flow, not a failed span.
     """
 
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
-        super().__init__()
+        # Metadata goes in args so str(interrupt) and tracebacks show it.
+        if metadata is None:
+            super().__init__()
+        else:
+            super().__init__(metadata)
         self.metadata: dict[str, Any] = {} if metadata is None else metadata
 
 
@@ -604,6 +615,69 @@ def provider_error(
     return mark_provider_error(error=result)
 
 
+def interrupt_outside_tool_error(interrupt: Interrupt) -> GenkitError:
+    """The error an Interrupt becomes when it escapes something that isn't a tool.
+
+    Only generate's tool loop can turn an Interrupt into a pause. Anywhere
+    else it would escape ``except Exception`` handlers as a bare
+    BaseException, so the action boundary and the agent turn loop report it
+    as a failed run instead. ``cause`` keeps the metadata for debugging.
+    """
+    error = GenkitError(status='INTERNAL', message='Interrupt raised outside a tool', cause=interrupt)
+    error.__cause__ = interrupt
+    return error
+
+
+class _NoTaskGroupError(BaseException):
+    """Never raised; stands in when no task-group exception type exists."""
+
+
+def _task_group_error() -> type[BaseException]:
+    builtin = getattr(builtins, 'BaseExceptionGroup', None)  # 3.11+
+    if builtin is not None:
+        return builtin
+    # 3.10 has no asyncio.TaskGroup; anyio task groups raise the
+    # `exceptiongroup` backport, which anyio installs there.
+    try:
+        backport = importlib.import_module('exceptiongroup')
+    except ImportError:
+        return _NoTaskGroupError
+    return backport.BaseExceptionGroup
+
+
+# What asyncio.TaskGroup / anyio raise when a child task raises a
+# BaseException. An Interrupt in a child task arrives wrapped in one of these.
+TaskGroupError: type[BaseException] = _task_group_error()
+
+
+def _group_has_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, Interrupt):
+        return True
+    children = getattr(exc, 'exceptions', None) if isinstance(exc, TaskGroupError) else None
+    return any(_group_has_interrupt(child) for child in children or ())
+
+
+def interrupt_escape_error(exc: BaseException) -> GenkitError | None:
+    """The failure for an Interrupt that reached a boundary that can't pause on it.
+
+    Returns None when ``exc`` carries no Interrupt, so the caller re-raises it
+    as is. An Interrupt inside a task group can't pause generate: the group may
+    also hold other failures, and there's no single interrupt to answer. It
+    fails the run, as it did when Interrupt was an Exception.
+    """
+    if isinstance(exc, Interrupt):
+        return interrupt_outside_tool_error(exc)
+    if isinstance(exc, TaskGroupError) and _group_has_interrupt(exc):
+        error = GenkitError(
+            status='INTERNAL',
+            message='Interrupt raised inside a task group',
+            cause=exc,
+        )
+        error.__cause__ = exc
+        return error
+    return None
+
+
 class PublicError(GenkitError):
     """Error class for issues to be returned to users.
 
@@ -799,7 +873,7 @@ def get_error_stack(error: object) -> str | None:
     Returns:
         The stack trace string if available, None otherwise.
     """
-    if isinstance(error, Exception):
+    if isinstance(error, BaseException):
         # Stack traces are valuable for debugging; consider making this configurable
         # to enable them in development/staging and suppress in production.
         # For now, return an empty string to keep Dev UI clean as per requirements.
