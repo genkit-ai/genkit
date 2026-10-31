@@ -762,7 +762,13 @@ class TestInboundFlattensToSingleModelMessage:
             }),
         ]
         parts = parts_from_steps(steps)
-        assert parts[0].tool_request is not None
+        assert parts[0].tool_request is None
+        assert parts[0].custom is not None
+        assert parts[0].custom['serverFunctionCall'] == {
+            'id': 'c1',
+            'name': 'get_weather',
+            'arguments': {'city': 'Austin'},
+        }
         assert parts[1].custom is not None
         assert parts[2].text is not None
         stash = parts[1].custom['serverFunctionResult']
@@ -1001,7 +1007,53 @@ class TestFromInteractionSync:
         assert raised.value.status == 'UNKNOWN'
         assert str(raised.value) == 'UNKNOWN: model crashed'
 
-    @pytest.mark.parametrize('status', ['queued', 'requires_action'])
+    def test_requires_action_returns_pending_client_calls(self) -> None:
+        result = from_interaction_sync(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'requires_action',
+                'steps': [
+                    {'type': 'function_call', 'id': 'sandbox', 'name': 'write_to_file', 'arguments': {}},
+                    {'type': 'function_result', 'call_id': 'sandbox', 'name': 'write_to_file', 'result': 'ok'},
+                    {'type': 'function_call', 'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Paris'}},
+                ],
+            })
+        )
+        assert result.finish_reason == 'stop'
+        assert result.message is not None
+        content = result.message.content
+        assert content[0].tool_request is None
+        assert content[0].custom is not None
+        assert content[0].custom['serverFunctionCall']['name'] == 'write_to_file'
+        assert content[2].tool_request is not None
+        assert content[2].tool_request.name == 'get_weather'
+        assert content[2].tool_request.ref == 'c1'
+
+    def test_requires_action_without_pending_calls_is_failed_precondition(self) -> None:
+        with pytest.raises(GenkitError, match='still running') as raised:
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'requires_action'}))
+        assert raised.value.status == 'FAILED_PRECONDITION'
+
+    def test_completed_sandbox_call_is_not_a_tool_request(self) -> None:
+        result = from_interaction_sync(
+            Interaction.model_validate({
+                'id': '123',
+                'status': 'completed',
+                'steps': [
+                    {'type': 'function_call', 'id': 's1', 'name': 'write_to_file', 'arguments': {}},
+                    {'type': 'function_result', 'call_id': 's1', 'name': 'write_to_file', 'result': 'ok'},
+                ],
+            })
+        )
+        assert result.message is not None
+        assert all(part.tool_request is None for part in result.message.content)
+
+    def test_server_function_call_replays_as_function_call_step(self) -> None:
+        part = Part.from_custom({'serverFunctionCall': {'id': 's1', 'name': 'write_to_file', 'arguments': {'p': 1}}})
+        steps = to_interaction_steps([Message(role='model', content=[part])])
+        assert steps == [{'type': 'function_call', 'name': 'write_to_file', 'arguments': {'p': 1}, 'id': 's1'}]
+
+    @pytest.mark.parametrize('status', ['queued'])
     def test_other_in_flight_statuses_are_failed_precondition(self, status: str) -> None:
         with pytest.raises(GenkitError, match='still running') as raised:
             from_interaction_sync(Interaction.model_validate({'id': '123', 'status': status}))
