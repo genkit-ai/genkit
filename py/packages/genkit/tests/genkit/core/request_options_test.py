@@ -20,11 +20,13 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic.config import JsonDict
 
 from genkit._core._error import GenkitError
 from genkit._core._model import (
     EmbedRequest,
     ModelRequest,
+    _untyped_options_schema,
     declared_config_type,
 )
 
@@ -99,3 +101,20 @@ def test_typed_options_json_schema_references_the_class() -> None:
     schema = TypeAdapter(EmbedRequest[CrmEmbedConfig]).json_schema()
 
     assert schema['properties']['options'] == {'$ref': '#/$defs/CrmEmbedConfig'}
+
+
+def test_untyped_options_schema_populates_missing_properties() -> None:
+    bare_schema: JsonDict = {'type': 'object'}
+    _untyped_options_schema(bare_schema, EmbedRequest)
+
+    assert bare_schema == {
+        'type': 'object',
+        'properties': {
+            'options': {'additionalProperties': True, 'title': 'Options', 'type': 'object'},
+        },
+    }
+
+    typed_schema: JsonDict = {'type': 'object'}
+    _untyped_options_schema(typed_schema, EmbedRequest[CrmEmbedConfig])
+
+    assert typed_schema == {'type': 'object'}

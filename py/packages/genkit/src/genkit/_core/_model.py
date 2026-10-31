@@ -973,7 +973,7 @@ def check_options_value(cls: type, value: object) -> object:
 def _untyped_options_schema(schema: JsonDict, cls: type) -> None:
     """Bare options validate to a dict, so the schema says object instead of any."""
     if declared_config_type(cls) is None:
-        properties = cast(dict[str, Any], schema['properties'])
+        properties = cast(dict[str, Any], schema.setdefault('properties', {}))
         properties['options'] = {'additionalProperties': True, 'title': 'Options', 'type': 'object'}
 
 
