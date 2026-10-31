@@ -31,17 +31,25 @@ from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._gemini import file_search_fields, flattened_key_error
 from genkit_google_genai._models._interactions_registry import deep_research_model_info
 from genkit_google_genai._models._interactions_utils import (
+    EXTRA_DESCRIPTION,
+    INPUT_HINT,
+    MODEL_ID_HINT,
+    TIMEOUT_DESCRIPTION,
     api_key_for_context,
+    client_overrides_from_call_config,
     client_overrides_from_config,
     extract_version,
     lowercase_choice,
     lowercase_choice_list,
     partition_keys,
+    pop_extra,
+    reject_managed_extra,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, deep_merge, reject_bool_timeout
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import ConfigDict, WithJsonSchema, field_validator, model_validator, with_config
+from pydantic import ConfigDict, Field, WithJsonSchema, field_validator, model_validator, with_config
 from pydantic.alias_generators import to_snake
 from typing_extensions import NotRequired, TypedDict
 
@@ -100,12 +108,24 @@ _MCP_SERVERS_SCHEMA = WithJsonSchema({
 
 
 class DeepResearchConfig(GenkitConfig):
-    """Deep Research model configuration."""
+    """Deep Research model configuration.
+
+    Unknown keys are rejected. An API field this class doesn't declare goes in
+    ``extra``, which is deep-merged into the create body. Fields Genkit builds
+    from the request (``agent``, ``input``, ``tools``) raise there: Deep
+    Research's tools are the declared settings (``google_search``,
+    ``url_context``, ``code_execution``, ``file_search_store_names``,
+    ``mcp_servers``).
+
+    ``timeout`` is seconds, the Python convention (httpx, requests, the OpenAI
+    and Anthropic SDKs), here and in ``check_operation``/``cancel_operation``
+    ``config``. It was milliseconds before, so ``timeout=30000`` becomes
+    ``timeout=30``.
+    """
 
     base_url: str | None = None
     api_version: str | None = None
-    # Milliseconds — applied to the HTTP call, not the create body.
-    timeout: float | None = None
+    timeout: float | None = Field(default=None, description=TIMEOUT_DESCRIPTION)
     custom_headers: dict[str, str] | None = None
     thinking_summaries: Literal['auto', 'none'] | None = None
     previous_interaction_id: str | None = None
@@ -120,6 +140,7 @@ class DeepResearchConfig(GenkitConfig):
     file_search_metadata_filter: str | None = None
     file_search_top_k: int | None = None
     mcp_servers: Annotated[list[McpServerConfig] | None, _MCP_SERVERS_SCHEMA] = None
+    extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
 
     @model_validator(mode='before')
     @classmethod
@@ -132,6 +153,18 @@ class DeepResearchConfig(GenkitConfig):
                     if error is not None:
                         raise error
         return data
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
+
+    @field_validator('timeout')
+    @classmethod
+    def check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
 
     @field_validator('mcp_servers', mode='before')
     @classmethod
@@ -199,6 +232,17 @@ def build_tools(request: ModelRequest[DeepResearchConfig], config: DeepResearchC
     return tools
 
 
+# Fields Genkit builds from the request; extra can't replace them.
+DEEP_RESEARCH_MANAGED_EXTRA = {
+    'agent': MODEL_ID_HINT,
+    'input': INPUT_HINT,
+    'tools': (
+        'Use the declared tool settings: google_search, url_context, code_execution, '
+        'file_search_store_names, mcp_servers.'
+    ),
+}
+
+
 def create_deep_research_background_model(
     target: str | ModelRef,
     *,
@@ -218,6 +262,7 @@ def create_deep_research_background_model(
         options = client_options.merge(client_overrides_from_config(config))
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
+        extra = pop_extra(dumped)
         # GenkitConfig rejects undeclared keys, so nothing is left over.
         agent_fields, _tool_fields, create_options, _ = partition_keys(
             dumped,
@@ -228,6 +273,7 @@ def create_deep_research_background_model(
         agent_config: dict[str, Any] = {'type': 'deep-research', **agent_fields}
 
         tools = build_tools(request, config)
+        reject_managed_extra(full_name, extra, DEEP_RESEARCH_MANAGED_EXTRA)
         create_kwargs: dict[str, Any] = {
             'agent': version,
             'input': steps_with_folded_system_instruction(request.messages),
@@ -238,12 +284,11 @@ def create_deep_research_background_model(
         if tools:
             create_kwargs['tools'] = tools
 
-        interaction = await create_interaction(api_key, create_kwargs, options)
+        interaction = await create_interaction(api_key, deep_merge(create_kwargs, extra), options)
         return from_interaction(interaction)
 
     def _op_key_and_options(ctx: ModelContext) -> tuple[str, ClientOptions]:
-        call_config = ctx.context.get('config')
-        options = client_options.merge(call_config if isinstance(call_config, dict) else None)
+        options = client_options.merge(client_overrides_from_call_config(ctx.context.get('config')))
         return api_key_for_context(ctx.context, plugin_api_key), options
 
     async def check(operation: Operation, ctx: ModelContext) -> Operation:

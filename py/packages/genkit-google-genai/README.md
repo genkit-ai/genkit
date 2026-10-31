@@ -173,6 +173,9 @@ Setting any `google_search_*` option turns Google Search on;
 `google_search=False` next to an option raises. A nested key such as
 `thinkingConfig` raises and names the flat fields that replace it.
 
+`timeout` sets the HTTP timeout for one request, in seconds, over the
+plugin's: `GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise.
+
 Function calling mode is controlled by `ai.generate(tool_choice=...)`, not config:
 `'auto'`, `'required'`, or `'none'`. In `'required'` mode, Gemini binds the request's
 function tools as `allowedFunctionNames`.
@@ -222,6 +225,32 @@ config = GeminiConfig.model_validate({
 `extra` can't set the fields Genkit builds from the request (`contents`,
 `systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
 `generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
+
+Antigravity, Interactions Lyria, and Deep Research also reject unknown keys
+and take undeclared fields in `extra`, which is merged into the Interactions
+create body (snake_case names). A nested object merges key by key. Keys match
+ignoring case and underscores, the same way the Gemini merge aligns them. A
+`None` value means unset and is skipped. Like Gemini, fields Genkit builds from
+the request raise in `extra`: the model id (`agent`, or `model` on Lyria),
+`input`, `tools`, and Lyria's `system_instruction`. Deep Research's tools are
+its declared settings (`google_search`, `url_context`, `code_execution`,
+`file_search_store_names`, `mcp_servers`); Antigravity and Lyria take none, and
+`generate(tools=...)` raises on them. Blocks with defaults, such as
+`agent_config` and `environment`, merge key by key.
+
+`timeout` on these three configs (and in Deep Research's `check_operation` /
+`cancel_operation` `config`) is the HTTP timeout in seconds. It used to be
+milliseconds: `config={'timeout': 30000}` becomes `config={'timeout': 30}`.
+
+```python
+op = await ai.generate_operation(
+    model='googleai/deep-research-preview-04-2026',
+    prompt='Summarize recent advances in quantum error correction.',
+    config={'thinking_summaries': 'auto', 'extra': {'agent_config': {'visualization': 'auto'}}},
+)
+# create body: {..., "agent_config": {"type": "deep-research",
+#                                     "thinking_summaries": "auto", "visualization": "auto"}}
+```
 
 ### Structured output
 
