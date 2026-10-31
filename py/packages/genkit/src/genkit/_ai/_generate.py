@@ -2411,19 +2411,45 @@ async def execute_tool_request(
             tool_task.cancel()
 
     watcher_task = asyncio.create_task(watch_abort())
+    closing = False
     try:
-        tool_response = await tool_task
-    except asyncio.CancelledError:
-        # An outer cancel (deadline / gather teardown) is delivered to *us*, not to
-        # the detached tool_task — cancel it so the tool body actually winds down
-        # instead of running to completion after the caller is gone. (Idempotent on
-        # the abort path, where the watcher already cancelled it.)
+        tool_response = await asyncio.shield(tool_task)
+    except GeneratorExit:
+        closing = True
         tool_task.cancel()
-        if abort_signal.is_set():
-            raise GenkitError(status='CANCELLED', message='Task aborted') from None
         raise
+    except BaseException as exc:
+        aborted = isinstance(exc, asyncio.CancelledError) and abort_signal.is_set()
+        if (
+            isinstance(exc, asyncio.CancelledError)
+            and not aborted
+            and tool_task.done()
+            and not tool_task.cancelled()
+            and tool_task.exception() is None
+        ):
+            # tool_task already committed its return value before the outer cancel
+            # reached the shield wrapper; preserve the completed output.
+            tool_response = tool_task.result()
+        else:
+            # An outer cancel (deadline / gather teardown) cancels the shield waiter,
+            # not tool_task itself — cancel and await tool_task so its finally blocks
+            # and async context managers finish cleanly and any teardown exception is
+            # retrieved.
+            if not tool_task.done():
+                tool_task.cancel()
+            with contextlib.suppress(BaseException):
+                await tool_task
+            if aborted:
+                raise GenkitError(status='CANCELLED', message='Task aborted') from None
+            raise
     finally:
         watcher_task.cancel()
+        if not closing:
+            try:
+                await watcher_task
+            except BaseException as watcher_exc:
+                if isinstance(watcher_exc, asyncio.CancelledError) and not watcher_task.cancelled():
+                    raise
 
     tool_req = tool_request_part.tool_request
     if tool_req is None:
