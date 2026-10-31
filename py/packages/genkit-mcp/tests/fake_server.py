@@ -20,6 +20,7 @@ from mcp.types import (
     CONNECTION_CLOSED,
     CallToolRequest,
     CallToolResult,
+    EmptyResult,
     ErrorData,
     ListToolsRequest,
     ListToolsResult,
@@ -147,6 +148,14 @@ if os.environ.get('MCP_FAKE_APP_ERROR_CALL'):
         raise McpError(ErrorData(code=CONNECTION_CLOSED, message='application-level failure'))
 
     app.request_handlers[CallToolRequest] = failing_call
+
+if os.environ.get('MCP_FAKE_MALFORMED_REPLY'):
+    # An empty result is valid JSON-RPC but lacks the fields tools/list and tools/call require.
+    async def empty_reply(req: ListToolsRequest | CallToolRequest) -> ServerResult:
+        return ServerResult(EmptyResult())
+
+    app.request_handlers[ListToolsRequest] = empty_reply
+    app.request_handlers[CallToolRequest] = empty_reply
 
 if os.environ.get('MCP_FAKE_NO_TOOLS'):
     # Without these handlers the server neither advertises tools nor answers tools/list.
