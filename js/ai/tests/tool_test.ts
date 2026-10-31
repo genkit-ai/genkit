@@ -17,20 +17,109 @@
 import { action, z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
+import { runInNewSpan } from '@genkit-ai/core/tracing';
 import * as assert from 'assert';
 import { afterEach, describe, it } from 'node:test';
 import {
+  asTool,
   defineInterrupt,
   defineTool,
   interrupt,
   isDynamicTool,
   isMultipartTool,
+  resolveTools,
   respondTool,
   restartTool,
   tool,
+  type MultipartToolAction,
+  type ToolAction,
 } from '../src/tool.js';
 
 initNodeFeatures();
+
+describe('asTool', () => {
+  for (const dynamic of [true, false]) {
+    it(`preserves a ${dynamic ? 'dynamic' : 'registered'} multipart action`, async () => {
+      const registry = new Registry();
+      const config = {
+        name: 'multipart',
+        description: 'Returns content alongside a typed result',
+        multipart: true as const,
+        inputSchema: z.string(),
+        outputSchema: z.number(),
+      };
+      const implementation = async (input: string) => ({
+        output: input.length,
+        content: [{ text: input }],
+        metadata: { source: 'tool' },
+      });
+      const original = dynamic
+        ? tool(config, implementation)
+        : defineTool(registry, config, implementation);
+      const resolved = asTool(registry, original) satisfies MultipartToolAction<
+        z.ZodString,
+        z.ZodNumber
+      >;
+
+      assert.strictEqual(resolved, original);
+      assert.strictEqual(resolved.__action.metadata.type, 'tool.v2');
+      assert.strictEqual(
+        (await resolveTools(registry, [original]))[0],
+        original
+      );
+      assert.deepStrictEqual(await resolved('hello'), {
+        output: 5,
+        content: [{ text: 'hello' }],
+        metadata: { source: 'tool' },
+      });
+      assert.deepStrictEqual(
+        resolved.respond(
+          { toolRequest: { name: 'multipart', input: 'hello' } },
+          5
+        ),
+        {
+          toolResponse: { name: 'multipart', output: 5 },
+          metadata: { interruptResponse: true },
+        }
+      );
+    });
+  }
+
+  it('preserves ordinary tools and the typed conversion of other actions', async () => {
+    const registry = new Registry();
+    const config = {
+      name: 'length',
+      description: 'Returns the input length',
+      inputSchema: z.string(),
+      outputSchema: z.number(),
+    };
+    const original = tool(config, async (input) => input.length);
+    assert.strictEqual(asTool(registry, original), original);
+    const multipart = tool({ ...config, multipart: true }, async (input) => ({
+      output: input.length,
+    }));
+    for (const candidate of [original, multipart]) {
+      assert.strictEqual(asTool(registry, candidate), candidate);
+    }
+    const otherAction = action(
+      { ...config, actionType: 'util' },
+      async (input) => input.length
+    );
+    const converted = asTool(registry, otherAction) satisfies ToolAction<
+      z.ZodString,
+      z.ZodNumber
+    >;
+
+    assert.strictEqual(converted.__action.metadata.type, 'tool');
+    assert.strictEqual(
+      await runInNewSpan({ metadata: { name: 'test' } }, () =>
+        converted('hello')
+      ),
+      5
+    );
+    assert.notStrictEqual(otherAction.__action.metadata?.type, 'tool');
+  });
+});
 
 describe('defineInterrupt', () => {
   let registry = new Registry();
@@ -310,7 +399,7 @@ describe('isMultipartTool', () => {
     const multipart = defineTool(
       registry,
       { name: 'multipart', description: 'test', multipart: true },
-      async () => {}
+      async () => ({})
     );
     assert.strictEqual(isMultipartTool(multipart), true);
   });
@@ -531,7 +620,7 @@ describe('defineTool', () => {
     defineTool(
       registry,
       { name: 'test', description: 'test', multipart: true },
-      async () => {}
+      async () => ({})
     );
     assert.ok(await registry.lookupAction('/tool.v2/test'));
     assert.equal(await registry.lookupAction('/tool/test'), undefined);
