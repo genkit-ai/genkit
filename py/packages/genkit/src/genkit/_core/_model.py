@@ -1594,7 +1594,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
 
         Recomputed each read so attaching ``request`` later still shows up.
         """
-        if self.message is None:
+        if self.message is None or (
+            self.error is not None and self.finish_reason in (FinishReason.FAILED, FinishReason.ABORTED)
+        ):
             return [as_message(m) for m in self.request.messages] if self.request else []
         return [
             *(as_message(m) for m in (self.request.messages if self.request else [])),

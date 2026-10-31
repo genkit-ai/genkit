@@ -7,6 +7,7 @@
 
 import asyncio
 import contextvars
+import gc
 import json
 import pathlib
 import time
@@ -2480,6 +2481,295 @@ async def test_parallel_tool_requests_all_complete() -> None:
     ]
 
 
+def _model_calls_tools(*names: str) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(tool_request=ToolRequest(name=n, ref=f'ref-{n}', input={})) for n in names],
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_failing_tool_cancels_and_awaits_other_tools_in_turn() -> None:
+    """One tool fails: the other is cancelled before generate returns and never commits."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    charges: list[str] = []
+    charge_started = asyncio.Event()
+    charge_cancelled = asyncio.Event()
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens() -> str:
+        await charge_started.wait()
+        raise GenkitError(status='UNAVAILABLE', message='allergen db down')
+
+    @ai.tool(name='charge_card')
+    async def charge_card() -> str:
+        charge_started.set()
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            charge_cancelled.set()
+            raise
+        charges.append('order-42')
+        return 'charged'
+
+    pm.responses.append(_model_calls_tools('check_allergens', 'charge_card'))
+
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('order')])],
+            tools=['check_allergens', 'charge_card'],
+        ),
+    )
+
+    assert response.error is not None
+    assert response.error.message == 'allergen db down'
+    assert charge_cancelled.is_set()
+    await asyncio.sleep(0.1)
+    assert charges == []
+
+
+@pytest.mark.asyncio
+async def test_abort_during_parallel_tools_lets_each_cleanup_finish() -> None:
+    """Abort while two tools run: each finally completes before generate returns (no second cancel)."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    abort_signal = asyncio.Event()
+    started: list[str] = []
+    both_started = asyncio.Event()
+    released: list[str] = []
+
+    async def hold(name: str, cleanup_s: float) -> str:
+        started.append(name)
+        if len(started) == 2:
+            both_started.set()
+        try:
+            # Ignores abort_signal; execute_tool_request's watcher cancels it.
+            await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(cleanup_s)
+            released.append(name)
+        return 'held'
+
+    @ai.tool(name='hold_table')
+    async def hold_table() -> str:
+        return await hold('table', 0)
+
+    @ai.tool(name='hold_inventory')
+    async def hold_inventory() -> str:
+        return await hold('inventory', 0.05)
+
+    pm.responses = [_model_calls_tools('hold_table', 'hold_inventory')]
+
+    task = asyncio.create_task(
+        generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('book')])],
+                tools=['hold_table', 'hold_inventory'],
+            ),
+            abort_signal=abort_signal,
+        )
+    )
+    await asyncio.wait_for(both_started.wait(), timeout=2.0)
+    abort_signal.set()
+    response = await asyncio.wait_for(task, timeout=2.0)
+
+    assert response.finish_reason == FinishReason.ABORTED
+    assert sorted(released) == ['inventory', 'table']
+
+
+@pytest.mark.asyncio
+async def test_failed_tool_turn_leaves_no_unretrieved_task_exceptions() -> None:
+    """A sibling that fails during teardown is retrieved; the first failure is the one raised."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        ai = Genkit()
+        pm, _ = define_scripted_model(ai)
+        void_started = asyncio.Event()
+
+        @ai.tool(name='check_allergens')
+        async def check_allergens() -> str:
+            await void_started.wait()
+            raise GenkitError(status='UNAVAILABLE', message='allergen db down')
+
+        @ai.tool(name='void_order')
+        async def void_order() -> str:
+            void_started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise RuntimeError('void failed during cleanup') from None
+            return 'voided'
+
+        pm.responses.append(_model_calls_tools('check_allergens', 'void_order'))
+
+        response = await generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('order')])],
+                tools=['check_allergens', 'void_order'],
+            ),
+        )
+        assert response.error is not None
+        assert response.error.message == 'allergen db down'
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert [c.get('message') for c in reported] == []
+
+
+@pytest.mark.asyncio
+async def test_sibling_interrupt_past_catch_all_does_not_cancel_running_sibling() -> None:
+    """An Interrupt (BaseException) past `except Exception` pauses the turn without cancelling a running sibling."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    refund_paused = asyncio.Event()
+
+    @ai.tool(name='refund_order')
+    async def refund_order() -> str:
+        try:
+            refund_paused.set()
+            raise Interrupt({'reason': 'needs approval'})
+        except Exception as e:  # noqa: BLE001 - catch-all under test
+            return f'swallowed: {e!r}'
+
+    @ai.tool(name='lookup_receipt')
+    async def lookup_receipt() -> str:
+        await refund_paused.wait()
+        await asyncio.sleep(0.02)
+        return 'receipt-88'
+
+    pm.responses.append(_model_calls_tools('refund_order', 'lookup_receipt'))
+
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('refund')])],
+            tools=['refund_order', 'lookup_receipt'],
+        ),
+    )
+
+    assert response.finish_reason == FinishReason.INTERRUPTED
+    assert response.message is not None
+    assert response.message.content[0].metadata == {'interrupt': {'reason': 'needs approval'}}
+    assert response.message.content[1].metadata == {'pendingOutput': 'receipt-88'}
+
+
+@pytest.mark.asyncio
+async def test_failing_tool_with_sibling_interrupt_retrieves_base_exception_cleanly() -> None:
+    """When one tool fails while a sibling raises Interrupt during teardown, no BaseException goes unretrieved."""
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        ai = Genkit()
+        pm, _ = define_scripted_model(ai)
+        refund_started = asyncio.Event()
+
+        @ai.tool(name='check_allergens')
+        async def check_allergens() -> str:
+            await refund_started.wait()
+            raise GenkitError(status='UNAVAILABLE', message='allergen db down')
+
+        @ai.tool(name='refund_order')
+        async def refund_order() -> str:
+            refund_started.set()
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                raise Interrupt({'reason': 'needs approval'}) from None
+            return 'refunded'
+
+        pm.responses.append(_model_calls_tools('check_allergens', 'refund_order'))
+
+        response = await generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('order')])],
+                tools=['check_allergens', 'refund_order'],
+            ),
+        )
+        assert response.finish_reason == FinishReason.FAILED
+        assert response.error is not None
+        assert response.error.message == 'allergen db down'
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+
+    assert [c.get('message') for c in reported] == []
+
+
+@pytest.mark.asyncio
+async def test_failing_restart_cancels_and_awaits_other_restarts() -> None:
+    """Resume with two restarts: one fails, the other is cancelled before generate returns."""
+    ai = Genkit()
+    define_scripted_model(ai)
+    receipts: list[str] = []
+    receipt_started = asyncio.Event()
+    receipt_cancelled = asyncio.Event()
+
+    @ai.tool(name='confirm_booking')
+    async def confirm_booking() -> str:
+        await receipt_started.wait()
+        raise GenkitError(status='UNAVAILABLE', message='booking gone')
+
+    @ai.tool(name='send_receipt')
+    async def send_receipt() -> str:
+        receipt_started.set()
+        try:
+            await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            receipt_cancelled.set()
+            raise
+        receipts.append('order-42')
+        return 'sent'
+
+    names = ('confirm_booking', 'send_receipt')
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[
+                Message(role=Role.USER, content=[Part.from_text('book')]),
+                Message(
+                    role=Role.MODEL,
+                    content=[
+                        Part.from_tool_request(name=n, input={}, ref=f'ref-{n}', metadata={'interrupt': True})
+                        for n in names
+                    ],
+                ),
+            ],
+            tools=list(names),
+            resume=Resume(restart=[Part.from_tool_request(name=n, input={}, ref=f'ref-{n}') for n in names]),
+        ),
+    )
+
+    assert response.error is not None
+    assert response.error.message == 'booking gone'
+    assert receipt_cancelled.is_set()
+    await asyncio.sleep(0.1)
+    assert receipts == []
+
+
 @pytest.mark.asyncio
 async def test_generate_inline_tool_without_root_registration() -> None:
     """Passing a Tool from another registry into ``ai.generate`` resolves for that call only."""
@@ -4230,7 +4520,7 @@ async def test_provider_failed_finish_is_not_relabelled_invalid_output() -> None
 
 @pytest.mark.asyncio
 async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
-    """A partial set of tool responses is not a resendable conversation round."""
+    """A partial set of tool responses stays off resendable messages while response.message stashes pendingOutput."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
     stable_calls = 0
@@ -4262,7 +4552,9 @@ async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
     response = await ai.generate(prompt='keep going', tools=['stable', 'broken'])
 
     assert response.finish_reason == FinishReason.FAILED
-    assert response.message is None
+    assert response.message is not None
+    assert response.message.content[0].metadata == {'pendingOutput': 'ok-2'}
+    assert response.message.content[1].metadata is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
@@ -5859,7 +6151,7 @@ async def test_generate_with_400_middleware_tool_hook_error_returns_internal() -
 
 @pytest.mark.asyncio
 async def test_generate_with_400_middleware_one_of_two_tools_failing_drops_the_open_round() -> None:
-    """One of two tools raising drops both outputs; the caller gets the user message only."""
+    """One of two tools raising keeps response.messages at the user message while stashing pendingOutput."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
@@ -5894,7 +6186,9 @@ async def test_generate_with_400_middleware_one_of_two_tools_failing_drops_the_o
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
-    assert response.message is None
+    assert response.message is not None
+    assert response.message.content[0].metadata == {'pendingOutput': 'ok'}
+    assert response.message.content[1].metadata is None
     assert [message.role for message in response.messages] == [Role.USER]
 
 
@@ -9076,3 +9370,241 @@ async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() 
 
     assert response.output == _City(name='X', population=21)
     assert response.error is None
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_failure_preserves_completed_sibling_pending_output_and_resumes_without_rerun() -> None:
+    """When one parallel tool fails after a sibling completes, response.message stashes pendingOutput for resume."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    charges: list[str] = []
+    charge_done = asyncio.Event()
+    reserve_attempts = 0
+
+    @ai.tool(name='charge_card')
+    async def charge_card() -> str:
+        charges.append('charged-100')
+        charge_done.set()
+        return 'charged-100'
+
+    @ai.tool(name='reserve_table')
+    async def reserve_table() -> str:
+        nonlocal reserve_attempts
+        reserve_attempts += 1
+        await charge_done.wait()
+        if reserve_attempts == 1:
+            raise RuntimeError('reservation system offline')
+        return 'table-7'
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(tool_request=ToolRequest(name='charge_card', ref='ref-charge', input={'amount': 100})),
+                    Part(tool_request=ToolRequest(name='reserve_table', ref='ref-reserve', input={'party': 2})),
+                ],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('booked table 7')]),
+        ),
+    ]
+
+    failed = await ai.generate(prompt='book dinner', tools=['charge_card', 'reserve_table'])
+
+    assert failed.finish_reason == FinishReason.FAILED
+    assert failed.error is not None
+    assert failed.error.status == 'INTERNAL'
+    assert failed.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert [m.role for m in failed.messages] == [Role.USER]
+    assert failed.message is not None
+    assert failed.message.content[0].metadata == {'pendingOutput': 'charged-100'}
+    assert failed.message.content[1].metadata is None
+    assert charges == ['charged-100']
+    assert reserve_attempts == 1
+
+    resumed = await ai.generate(
+        messages=[*failed.messages, failed.message],
+        tools=['charge_card', 'reserve_table'],
+        resume_restart=[failed.message.content[1].restart()],
+    )
+
+    assert resumed.finish_reason == FinishReason.STOP
+    assert resumed.text == 'booked table 7'
+    assert charges == ['charged-100']
+    assert reserve_attempts == 2
+    assert [m.role for m in resumed.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert resumed.messages[1].content[0].metadata is None
+    assert resumed.messages[1].content[1].metadata is None
+    tool_parts = [p for p in resumed.messages[2].content if p.tool_response is not None]
+    assert [
+        (p.tool_response.name, p.tool_response.ref, p.tool_response.output)
+        for p in tool_parts
+        if p.tool_response is not None
+    ] == [
+        ('charge_card', 'ref-charge', 'charged-100'),
+        ('reserve_table', 'ref-reserve', 'table-7'),
+    ]
+    assert tool_parts[0].metadata == {'source': 'pending'}
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_abort_signal_preserves_completed_sibling_pending_output_with_cancelled_status() -> None:
+    """Mid-turn abort_signal after a sibling tool finishes preserves pendingOutput with status CANCELLED."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    abort_signal = asyncio.Event()
+    charge_done = asyncio.Event()
+    reserve_started = asyncio.Event()
+    reserve_cleaned_up = asyncio.Event()
+    charges: list[str] = []
+
+    @ai.tool(name='charge_card')
+    async def charge_card() -> str:
+        charges.append('charged-100')
+        charge_done.set()
+        return 'charged-100'
+
+    @ai.tool(name='reserve_table')
+    async def reserve_table() -> str:
+        await charge_done.wait()
+        reserve_started.set()
+        try:
+            await asyncio.sleep(10)
+        finally:
+            reserve_cleaned_up.set()
+        return 'table-7'
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(tool_request=ToolRequest(name='charge_card', ref='ref-charge', input={'amount': 100})),
+                    Part(tool_request=ToolRequest(name='reserve_table', ref='ref-reserve', input={'party': 2})),
+                ],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('completed on retry')]),
+        ),
+    ]
+
+    task = asyncio.create_task(
+        generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('book dinner')])],
+                tools=['charge_card', 'reserve_table'],
+            ),
+            abort_signal=abort_signal,
+        )
+    )
+    await reserve_started.wait()
+    abort_signal.set()
+    response = await asyncio.wait_for(task, timeout=2.0)
+
+    assert reserve_cleaned_up.is_set()
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert response.message is not None
+    assert response.message.content[0].metadata == {'pendingOutput': 'charged-100'}
+    assert response.message.content[1].metadata is None
+    assert charges == ['charged-100']
+
+    resumed = await ai.generate(
+        messages=[*response.messages, response.message],
+        tools=['charge_card', 'reserve_table'],
+        resume_respond=[response.message.content[1].respond('manual-table-9')],
+    )
+    assert resumed.finish_reason == FinishReason.STOP
+    assert resumed.text == 'completed on retry'
+    assert charges == ['charged-100']
+    tool_parts = [p for p in resumed.messages[2].content if p.tool_response is not None]
+    assert [
+        (p.tool_response.name, p.tool_response.ref, p.tool_response.output)
+        for p in tool_parts
+        if p.tool_response is not None
+    ] == [
+        ('charge_card', 'ref-charge', 'charged-100'),
+        ('reserve_table', 'ref-reserve', 'manual-table-9'),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_task_cancel_attaches_closed_history_and_completed_sibling_pending_output() -> None:
+    """Cancelling the generate task mid-turn attaches .messages and .message onto CancelledError."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    charge_done = asyncio.Event()
+    reserve_started = asyncio.Event()
+    reserve_cleaned_up = asyncio.Event()
+    charges: list[str] = []
+
+    @ai.tool(name='charge_card')
+    async def charge_card() -> str:
+        charges.append('charged-100')
+        charge_done.set()
+        return 'charged-100'
+
+    @ai.tool(name='reserve_table')
+    async def reserve_table() -> str:
+        await charge_done.wait()
+        reserve_started.set()
+        try:
+            await asyncio.sleep(10)
+        finally:
+            reserve_cleaned_up.set()
+        return 'table-7'
+
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(tool_request=ToolRequest(name='charge_card', ref='ref-charge', input={'amount': 100})),
+                    Part(tool_request=ToolRequest(name='reserve_table', ref='ref-reserve', input={'party': 2})),
+                ],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('recovered from cancel')]),
+        ),
+    ]
+
+    task = asyncio.create_task(ai.generate(prompt='book dinner', tools=['charge_card', 'reserve_table']))
+    await reserve_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError) as exc_info:
+        await task
+
+    await asyncio.wait_for(reserve_cleaned_up.wait(), timeout=2.0)
+    cancelled_exc = exc_info.value if hasattr(exc_info.value, 'messages') else task
+    saved_messages = getattr(cancelled_exc, 'messages', None)
+    saved_message = getattr(cancelled_exc, 'message', None)
+    assert isinstance(saved_messages, list)
+    assert [m.role for m in saved_messages] == [Role.USER]
+    assert isinstance(saved_message, Message)
+    assert saved_message.content[0].metadata == {'pendingOutput': 'charged-100'}
+    assert saved_message.content[1].metadata is None
+    assert charges == ['charged-100']
+
+    resumed = await ai.generate(
+        messages=[*saved_messages, saved_message],
+        tools=['charge_card', 'reserve_table'],
+        resume_respond=[saved_message.content[1].respond('manual-table-11')],
+    )
+    assert resumed.finish_reason == FinishReason.STOP
+    assert resumed.text == 'recovered from cancel'
+    assert charges == ['charged-100']
