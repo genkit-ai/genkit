@@ -89,7 +89,7 @@ class TestEnumFormatErrors:
             enum_fmt.handle({'type': 'number'})
         assert "Must supply a schema of type 'string' with an 'enum' property" in str(exc_info.value)
         assert exc_info.value.reason is RuntimeErrorReason.INVALID_SCHEMA
-        assert 'INVALID_SCHEMA' not in exc_info.value.original_message
+        assert 'INVALID_SCHEMA' not in exc_info.value.message
 
     def test_throws_error_for_array_schema_type(self) -> None:
         """Test that array schema type raises error."""
@@ -99,7 +99,7 @@ class TestEnumFormatErrors:
             enum_fmt.handle({'type': 'array'})
         assert "Must supply a schema of type 'string' with an 'enum' property" in str(exc_info.value)
         assert exc_info.value.reason is RuntimeErrorReason.INVALID_SCHEMA
-        assert 'INVALID_SCHEMA' not in exc_info.value.original_message
+        assert 'INVALID_SCHEMA' not in exc_info.value.message
 
     def test_accepts_enum_schema_type(self) -> None:
         """Test that 'enum' schema type is accepted."""

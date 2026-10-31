@@ -117,6 +117,19 @@ function selectLeafSnapshot<S>(
 }
 
 /**
+ * Copies a stored snapshot for a reader, leaving the state out of a
+ * metadata-only read rather than copying it only to be dropped.
+ */
+function cloneSnapshot<S>(
+  snap: SessionSnapshot<S>,
+  metadataOnly?: boolean
+): SessionSnapshot<S> {
+  if (!metadataOnly) return structuredClone(snap);
+  const { state: _state, ...metadata } = snap;
+  return structuredClone(metadata);
+}
+
+/**
  * In-memory implementation of persistent Session Store.
  */
 export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
@@ -145,7 +158,7 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     if (snapshotId) {
       const snap = this.snapshots.get(snapshotId);
       if (!snap) return undefined;
-      return structuredClone(snap);
+      return cloneSnapshot(snap, opts.metadataOnly);
     }
 
     // sessionId lookup: gather every snapshot belonging to this session and
@@ -161,7 +174,7 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
       sessionId!,
       this.rejectBranchingSessions
     );
-    return leaf ? structuredClone(leaf) : undefined;
+    return leaf ? cloneSnapshot(leaf, opts.metadataOnly) : undefined;
   }
 
   async saveSnapshot(
@@ -184,11 +197,12 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     };
 
     this.snapshots.set(id, structuredClone(full));
-    const snapshotListeners = this.listeners.get(id);
-    if (snapshotListeners) {
-      for (const listener of snapshotListeners) {
-        listener(structuredClone(full));
-      }
+    // Dispatch over a copy: a listener that unsubscribes while being notified
+    // (the detach runtime does, on an abort) splices itself out of the live
+    // array, and iterating that array would skip the listener after it.
+    const snapshotListeners = [...(this.listeners.get(id) ?? [])];
+    for (const listener of snapshotListeners) {
+      listener(structuredClone(full));
     }
     return id;
   }
@@ -711,9 +725,9 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
    * parsed snapshot whenever it changes.
    *
    * Unlike {@link InMemorySessionStore}, file-backed snapshots are frequently
-   * mutated by a *different* process (e.g. the request handler that received an
-   * abort writes `status: 'aborted'`, while a detached background worker is the
-   * one watching). Detecting that requires observing the filesystem rather than
+   * mutated by a *different* process (e.g. the request handler that received
+   * an abort writes `status: 'aborting'`, while a detached background worker
+   * is the one watching). Detecting that requires observing the filesystem rather than
    * in-process `saveSnapshot` calls.
    *
    * Reliability comes from two layers:

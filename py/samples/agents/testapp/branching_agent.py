@@ -31,7 +31,7 @@ from typing import Any
 
 from _ai import ai, reply_text
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 from genkit.exp.agent import InMemorySessionStore
 
 branching_agent = ai.define_agent(
@@ -42,7 +42,7 @@ branching_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_branching_agent(text: str, ctx: ActionRunContext) -> dict[str, Any]:
+async def test_branching_agent(text: str, ctx: FlowContext) -> dict[str, Any]:
     """Establish a root turn, then fork two branches off the same snapshot."""
     root = branching_agent.chat()
     res1 = await root.send(text or 'Hello!')

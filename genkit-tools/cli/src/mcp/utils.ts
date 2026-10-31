@@ -14,9 +14,22 @@
  * limitations under the License.
  */
 
-import { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
+import {
+  BaseRuntimeManager,
+  GenkitToolsError,
+} from '@genkit-ai/tools-common/manager';
 import { z } from 'zod';
 import { startDevProcessManager, startManager } from '../utils/manager-utils';
+
+export function formatMcpError(err: unknown): string {
+  if (err instanceof GenkitToolsError) {
+    return err.formatError();
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return typeof err === 'string' ? err : (JSON.stringify(err) ?? String(err));
+}
 
 export interface McpToolOptions {
   projectRoot: string;

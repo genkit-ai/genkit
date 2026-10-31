@@ -49,14 +49,15 @@ This means we must resolve media URLs client-side before passing to Ollama::
     image_bytes = await fetch(url)
     ollama.Image(value=image_bytes)  # ✅ Works
 
-The ``_resolve_image()`` method handles three cases:
+The ``_resolve_image()`` method always hands ``Image`` bytes, so a media
+string is never read as a file on the server:
 
-- **Data URIs** (``data:image/jpeg;base64,...``): Strips the prefix and
-  returns the raw base64 string, matching the JS canonical Ollama plugin.
-- **HTTP/HTTPS URLs**: Downloads the image using the shared
-  loop-local ``httpx`` client and returns raw bytes.
-- **Other strings** (local file paths, raw base64): Passed through
-  unchanged for the ``Image`` type to handle.
+- **Data URIs** (``data:image/jpeg;base64,...``): The payload is decoded.
+- **HTTP/HTTPS URLs**: Downloaded using the shared loop-local ``httpx``
+  client; a body over 20MB raises ``INVALID_ARGUMENT``.
+- **Bare base64 strings**: Decoded strictly.
+- **Anything else** (local file paths, ``file://`` URLs): Raises
+  ``INVALID_ARGUMENT``.
 
 **User-Agent Header Requirement**
 
@@ -81,26 +82,28 @@ that rejects URLs, so we must download images explicitly. This is the only
 behavioral divergence from the JS plugin.
 """
 
+import base64
+import binascii
 import json
 import mimetypes
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import ollama as ollama_api
-import structlog
-from pydantic import ConfigDict, ValidationError
-from pydantic.alias_generators import to_camel, to_snake
+from pydantic import ValidationError
+from pydantic.alias_generators import to_snake
 
-from genkit import ActionRunContext, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit.model import ModelConfig, ModelRequest, ModelUsage, ToolRequest, get_basic_usage_stats
+from genkit import GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
+from genkit.model import GenerationUsage, ModelConfig, ModelContext, ModelRequest, ToolRequest
 from genkit.plugin_api import loop_local_client, provider_error
 from genkit_ollama._constants import DEFAULT_OLLAMA_SERVER_URL
 from genkit_ollama._errors import wrap_connection_errors
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 # Some image hosts (Wikimedia, for one) answer 403 to requests without a real
@@ -109,9 +112,79 @@ logger = structlog.get_logger(__name__)
 def _image_fetch_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         timeout=httpx.Timeout(60.0),
-        headers={'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)'},
+        headers={
+            'User-Agent': 'Genkit/1.0 (https://github.com/genkit-ai/genkit; genkit@google.com)',
+            'Accept-Encoding': 'identity',
+        },
         follow_redirects=True,
     )
+
+
+# A truncated image is a corrupt file, so a URL over the cap fails instead of
+# sending the first 20MB.
+_MAX_MEDIA_DOWNLOAD_BYTES = 20 * 1024 * 1024
+_ASCII_WHITESPACE = str.maketrans('', '', ' \t\n\r\f\v')
+
+
+async def _download_media(url: str) -> bytes:
+    """Download an http(s) image, failing with INVALID_ARGUMENT past 20MB.
+
+    Redirects are followed and private or loopback addresses are not
+    blocked, so apps that pass end-user URLs here should vet them first;
+    upfront vetting of the initial URL does not cover 302 redirects to
+    loopback or link-local addresses (such as ``169.254.169.254``).
+    """
+    async with _image_fetch_client().stream('GET', url) as response:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            where = _redact_url(str(e.request.url))
+            sanitized = httpx.HTTPStatusError(
+                f'HTTP {status} for {where}',
+                request=e.request,
+                response=e.response,
+            )
+            # A 4xx means the caller's URL is bad (missing, forbidden,
+            # gone). Not NOT_FOUND: Fallback would switch models over a URL
+            # no model can fetch. 408/429 and 5xx stay raw so Retry can try
+            # the image host again.
+            if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'ollama: could not fetch media URL (HTTP {status} for {where})',
+                    cause=sanitized,
+                ) from sanitized
+            raise sanitized from None
+        encoding = response.headers.get('content-encoding', '').strip().lower()
+        if encoding not in ('', 'identity'):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'media at {_redact_url(url)} sent unsupported '
+                    f'Content-Encoding {encoding!r}; expected uncompressed bytes'
+                ),
+            )
+        declared = response.headers.get('content-length', '')
+        if declared.isdigit() and int(declared) > _MAX_MEDIA_DOWNLOAD_BYTES:
+            raise _media_too_large(url)
+        body = bytearray()
+        chunks = response.aiter_bytes() if response.is_stream_consumed else response.aiter_raw()
+        async for chunk in chunks:
+            body.extend(chunk)
+            if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                raise _media_too_large(url)
+        return bytes(body)
+
+
+def _redact_url(url: str) -> str:
+    # Signed URLs carry credentials in the query string, so error messages only name host and path.
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc.rpartition('@')[2], parts.path, '', ''))
+
+
+def _media_too_large(url: str) -> GenkitError:
+    return GenkitError(status='INVALID_ARGUMENT', message=f'media at {_redact_url(url)} is larger than 20MB')
 
 
 # Matches <think>/<thinking> blocks case-insensitively (``i``) across newlines
@@ -144,21 +217,54 @@ def _parse_thinking(content: str) -> tuple[str, str]:
 class OllamaConfig(ModelConfig):
     """Configuration schema for Ollama models.
 
-    Extends the shared :class:`ModelConfig` with Ollama-specific sampler
-    knobs and the ``think`` chain-of-thought control. Unknown keys raise. A
-    sampler option this class doesn't declare (``repeat_penalty``,
-    ``mirostat``, ...) goes in ``extra`` and is merged into the request's
-    ``options`` as-is, so newer sampler parameters work without an SDK bump.
+    Extends the shared :class:`ModelConfig` with every sampler option the
+    installed ``ollama`` client knows, plus ``think`` and ``keep_alive``.
+    Unknown keys raise, so a misspelled ``num_ctx`` fails instead of quietly
+    running with the default context window. A sampler option this class
+    doesn't declare yet goes in ``extra``, which is merged into the request's
+    ``options`` as-is and wins over a declared value with the same name.
     """
-
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
     keep_alive: float | str | None = None
-    num_ctx: int | None = None
     min_p: float | None = None
+
+    # Sampler options from the installed ollama client. temperature, top_k and
+    # top_p come from ModelConfig.
+    numa: bool | None = None
+    num_ctx: int | None = None
+    num_batch: int | None = None
+    num_gpu: int | None = None
+    main_gpu: int | None = None
+    low_vram: bool | None = None
+    f16_kv: bool | None = None
+    logits_all: bool | None = None
+    vocab_only: bool | None = None
+    use_mmap: bool | None = None
+    use_mlock: bool | None = None
+    embedding_only: bool | None = None
+    num_thread: int | None = None
+    num_keep: int | None = None
     seed: int | None = None
     num_predict: int | None = None
+    tfs_z: float | None = None
+    typical_p: float | None = None
+    repeat_last_n: int | None = None
+    repeat_penalty: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+    mirostat: int | None = None
+    mirostat_tau: float | None = None
+    mirostat_eta: float | None = None
+    penalize_newline: bool | None = None
+    stop: list[str] | None = None
+
+
+# Declared names, in either spelling. A generic snake-case pass turns
+# ``f16_kv`` into ``f_16_kv``, which the server would ignore.
+_CONFIG_FIELD_NAMES: dict[str, str] = {
+    key: name for name, info in OllamaConfig.model_fields.items() for key in (name, info.alias) if key is not None
+}
 
 
 @dataclass(frozen=True)
@@ -219,7 +325,7 @@ class OllamaModel:
     async def generate(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext | None = None,
+        ctx: ModelContext | None = None,
         client: ollama_api.AsyncClient | None = None,
     ) -> ModelResponse:
         """Generate a response from Ollama.
@@ -262,7 +368,7 @@ class OllamaModel:
         self,
         *,
         request: ModelRequest,
-        ctx: ActionRunContext | None,
+        ctx: ModelContext | None,
         client: ollama_api.AsyncClient | None,
         content: list[Part],
     ) -> ModelResponse:
@@ -286,9 +392,9 @@ class OllamaModel:
             content=content,
         )
 
-        basic_generation_usage = get_basic_usage_stats(
-            input_=request.messages,
-            response=response_message,
+        basic_generation_usage = GenerationUsage.from_messages(
+            request.messages,
+            response_message,
         )
 
         return ModelResponse(
@@ -305,7 +411,7 @@ class OllamaModel:
     async def _chat_with_ollama(
         self,
         request: ModelRequest,
-        ctx: ActionRunContext | None = None,
+        ctx: ModelContext | None = None,
         client: ollama_api.AsyncClient | None = None,
     ) -> ollama_api.ChatResponse | None:
         """Chat with Ollama.
@@ -488,8 +594,10 @@ class OllamaModel:
           kwargs, not sampler options (Ollama rejects them inside ``options``).
         - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
           explicit ``num_predict`` wins when both are present.
-        - ``stop_sequences`` maps to ``stop``; ``version`` (genkit
-          bookkeeping) is dropped.
+        - ``stop_sequences`` maps to ``stop``; an explicit ``stop`` wins when
+          both are present. ``version`` (genkit bookkeeping) is dropped.
+        - camelCase keys are snake-cased onto the Ollama field. Declared
+          names are looked up first so ``f16_kv`` is not rewritten.
         - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
           keys unchanged, so a colliding key wins over a declared field.
 
@@ -522,8 +630,9 @@ class OllamaModel:
         extra = raw.pop('extra', None)
 
         # Snake-case so camelCase knobs (e.g. ``topP``) hit the server field
-        # instead of being silently dropped.
-        knobs = {to_snake(k): v for k, v in raw.items()}
+        # instead of being silently dropped. Declared names win first:
+        # a generic snake-case pass rewrites ``f16_kv``.
+        knobs = {_CONFIG_FIELD_NAMES.get(k) or to_snake(k): v for k, v in raw.items()}
 
         # Top-level request kwargs, not sampler options.
         knobs.pop('think', None)
@@ -531,8 +640,9 @@ class OllamaModel:
         # Genkit bookkeeping that Ollama does not understand.
         knobs.pop('version', None)
 
-        if 'stop_sequences' in knobs:
-            knobs['stop'] = knobs.pop('stop_sequences')
+        stop_sequences = knobs.pop('stop_sequences', None)
+        if stop_sequences is not None and knobs.get('stop') is None:
+            knobs['stop'] = stop_sequences
 
         max_tokens = knobs.pop('max_output_tokens', None)
         if max_tokens is not None and knobs.get('num_predict') is None:
@@ -561,8 +671,9 @@ class OllamaModel:
         ``chat`` call — not sampler ``options``. The framework
         dumps a ``BaseModel`` config to a dict before the model fn sees it, so
         this reads them from any :class:`ModelConfig` instance *or* a dumped
-        dict. Both paths snake-case the keys (declared fields can arrive
-        camelCased) and return only the values that are set.
+        dict. Both paths snake-case the keys: a wire dict is camelCase, and
+        undeclared extras on a loose ModelConfig subclass keep the caller's
+        spelling. Only set values are returned.
 
         Args:
             config: The configuration to extract request kwargs from.
@@ -616,15 +727,9 @@ class OllamaModel:
     async def build_chat_messages(cls, request: ModelRequest) -> list[ollama_api.Message]:
         """Build the messages for the chat API.
 
-        Handles MediaPart by converting image URLs to the format expected
-        by the Ollama Python client's ``Image`` type, which only accepts
-        base64 strings, raw bytes, or local file paths — not HTTP URLs
-        or full data URIs.
-
-        For HTTP/HTTPS URLs, the image is downloaded and passed as raw
-        bytes. For data URIs, the ``data:...;base64,`` prefix is stripped
-        to extract the base64 payload. This matches the JS canonical
-        Ollama plugin's ``toOllamaRequest()`` behavior.
+        Each MediaPart becomes image bytes via ``_resolve_image``: data
+        URIs and bare base64 are decoded, HTTP/HTTPS URLs are downloaded,
+        and anything else raises ``INVALID_ARGUMENT``.
 
         Args:
             request: The request to build the messages for.
@@ -651,54 +756,55 @@ class OllamaModel:
         return messages
 
     @staticmethod
-    async def _resolve_image(url: str) -> str | bytes:
-        """Convert a media URL to a value the Ollama Image type accepts.
+    async def _resolve_image(url: str) -> bytes:
+        """Convert a media URL to bytes the Ollama Image type accepts.
 
-        The Ollama Python client's ``Image`` type only accepts base64
-        strings, raw bytes, or local file paths. This method handles:
+        The Ollama client's ``Image`` reads any string that happens to be
+        an existing path off the server's disk, so this always returns
+        bytes:
 
-        - **Data URIs**: Strips the ``data:...;base64,`` prefix and
-          returns the raw base64 string.
-        - **HTTP/HTTPS URLs**: Downloads the image and returns the raw
-          bytes.
-        - **Other strings** (e.g. local file paths or raw base64):
-          Passed through unchanged.
+        - **Data URIs**: Decodes the base64 payload.
+        - **HTTP/HTTPS URLs**: Downloads the image (up to 20MB).
+        - **Bare base64 strings**: Decoded strictly.
+
+        Anything else (such as a ``file://`` URL or a path with characters or
+        length outside the base64 alphabet) raises ``INVALID_ARGUMENT``. A
+        string whose characters happen to be valid base64 (for example
+        ``/usr/bin/env``, 12 base64 characters) is decoded as those base64
+        bytes rather than opened from the filesystem.
 
         Args:
             url: The media URL from a ``MediaPart``.
 
         Returns:
-            A value suitable for ``ollama.Image(value=...)``.
+            Image bytes for ``ollama.Image(value=...)``.
+
+        Raises:
+            GenkitError: INVALID_ARGUMENT for a malformed data URI, a 4xx
+                (other than 408/429) from the image host, a download over
+                20MB, or a string that is none of the above.
         """
         if url.startswith('data:'):
-            # Strip data URI prefix → raw base64: "data:image/jpeg;base64,ABC" → "ABC"
-            comma_idx = url.find(',')
-            if comma_idx == -1:
-                raise ValueError(f'Malformed data URI (missing comma separator): {url!r}')
-            return url[comma_idx + 1 :]
+            _, comma, payload = url.partition(',')
+            if not comma:
+                raise GenkitError(status='INVALID_ARGUMENT', message='Malformed data: URL (missing comma separator).')
+            try:
+                return base64.b64decode(payload.translate(_ASCII_WHITESPACE), validate=True)
+            except binascii.Error as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT', message='Malformed data: URL (payload is not valid base64).'
+                ) from e
 
         if url.startswith(('http://', 'https://')):
-            # TODO(#4360): Replace with downloadRequestMedia middleware (G15 parity).
-            response = await _image_fetch_client().get(url)
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                # A 4xx means the caller's URL is bad (missing, forbidden,
-                # gone). Not NOT_FOUND: Fallback would switch models over a URL
-                # no model can fetch. 408/429 and 5xx stay raw so Retry can try
-                # the image host again.
-                if isinstance(status, int) and 400 <= status < 500 and status not in (408, 429):
-                    raise GenkitError(
-                        status='INVALID_ARGUMENT',
-                        message=f'ollama: could not fetch media URL (HTTP {status})',
-                        cause=e,
-                    ) from e
-                raise
-            return response.content
+            return await _download_media(url)
 
-        # Local file path or raw base64 — pass through to Image.
-        return url
+        try:
+            return base64.b64decode(url.translate(_ASCII_WHITESPACE), validate=True)
+        except binascii.Error as e:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message='Ollama media must be a data: URL, an http(s) URL, or base64 image data.',
+            ) from e
 
     @staticmethod
     def _from_ollama_role(role: str | None) -> Role:
@@ -748,27 +854,27 @@ class OllamaModel:
                 raise ValueError(f'Unknown role: {role}')
 
     @staticmethod
-    def is_streaming_request(ctx: ActionRunContext | None) -> bool:
+    def is_streaming_request(ctx: ModelContext | None) -> bool:
         """Determines if streaming mode is requested."""
         return bool(ctx and ctx.is_streaming)
 
     @staticmethod
     def get_usage_info(
-        basic_generation_usage: ModelUsage,
+        basic_generation_usage: GenerationUsage,
         api_response: ollama_api.ChatResponse | None,
-    ) -> ModelUsage:
+    ) -> GenerationUsage:
         """Extracts and calculates token usage information from an Ollama API response.
 
         Updates a basic generation usage object with input, output, and total token counts
         based on the details provided in the Ollama API response.
 
         Args:
-            basic_generation_usage: An existing ModelUsage object to update.
+            basic_generation_usage: An existing GenerationUsage object to update.
             api_response: The response object received from the Ollama API,
                 containing token count details.
 
         Returns:
-            The updated ModelUsage object with token counts populated.
+            The updated GenerationUsage object with token counts populated.
         """
         if api_response:
             basic_generation_usage.input_tokens = api_response.prompt_eval_count or 0

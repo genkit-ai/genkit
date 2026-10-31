@@ -1,0 +1,443 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Genkit client for a single MCP server."""
+
+from __future__ import annotations
+
+import asyncio
+import concurrent.futures
+import os
+import threading
+import time
+import weakref
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
+
+from mcp.types import CallToolResult
+
+from genkit import Genkit, Tool, get_logger
+from genkit.plugin_api import Action, ActionKind, DynamicActionProvider
+from genkit_mcp._config import McpStdioServerConfig
+from genkit_mcp._connection import DEFAULT_REQUEST_TIMEOUT_MILLIS, McpConnection, validate_request_timeout
+from genkit_mcp._errors import _ConnectionClosedError, _ConnectionFailedError
+from genkit_mcp._tools import (
+    mcp_tool_name,
+    mcp_tools_to_actions,
+    mcp_tools_to_handles,
+    validate_provider_name,
+    validate_tool_prefix,
+)
+
+_T = TypeVar('_T')
+
+logger = get_logger(__name__)
+
+# Well past a graceful server shutdown, which can take seconds.
+_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS = 30.0
+
+_LOOP_POLL_SECONDS = 0.1
+
+_registered_clients: weakref.WeakKeyDictionary[Action[Any, Any], weakref.ref[McpClient]] = weakref.WeakKeyDictionary()
+"""The client behind each provider :func:`define_mcp_client` registered."""
+
+
+class McpClient:
+    """One MCP server, its connections, and the tools it serves as Genkit actions.
+
+    A client holds no Genkit instance. It builds actions and manages the child
+    process; registering those actions is :func:`define_mcp_client`.
+
+    A client built directly is unregistered: no selector reaches it, and its
+    tools come from :meth:`get_active_tools`.
+    """
+
+    _provider: DynamicActionProvider | None
+    """The provider serving this client's tools, or ``None`` when unregistered.
+
+    Dropping its cache is how this client tells Genkit that a listing it handed
+    out no longer holds.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | os.PathLike[str] | None = None,
+        request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+    ) -> None:
+        """Build a client. No process starts until its tools are listed.
+
+        Args:
+            name: Client name, which :func:`define_mcp_client` registers as the
+                provider name used in tool selectors. It also prefixes this
+                server's tool names.
+            command: Executable that runs the server.
+            args: Arguments passed to ``command``.
+            env: Extra environment for the server process, over the minimal set
+                that ``mcp.client.stdio.get_default_environment()`` returns.
+            cwd: Working directory for the server process.
+            request_timeout_millis: How long one MCP request may take before it
+                fails. Must be positive. ``None`` is the only way to disable the
+                timeout.
+
+        Raises:
+            ValueError: If ``name`` cannot appear in a tool selector or a
+                model-facing tool name, or if ``request_timeout_millis`` is zero
+                or negative.
+        """
+        validate_provider_name(name)
+        validate_tool_prefix(name)
+        validate_request_timeout(request_timeout_millis)
+        self._provider = None
+        self._name = name
+        self._server = McpStdioServerConfig(command=command, args=args, env=env, cwd=cwd)
+        self._request_timeout_millis = request_timeout_millis
+        self._closed = False
+        self._connections: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, McpConnection] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._closing: weakref.WeakKeyDictionary[
+            McpConnection, tuple[asyncio.AbstractEventLoop, concurrent.futures.Future[None]]
+        ] = weakref.WeakKeyDictionary()
+        self._close_tasks: set[asyncio.Task[None]] = set()
+        self._connections_lock = threading.Lock()
+
+    @property
+    def name(self) -> str:
+        """Name this client was given.
+
+        Once registered it is also the provider name in tool selectors, for
+        example ``everything`` in ``everything:tool/*``.
+        """
+        return self._name
+
+    def tool_name(self, tool: str) -> str:
+        """Return the Genkit name of one of this server's tools.
+
+        Use it to build a selector for ``generate`` without assembling the prefix
+        by hand::
+
+            tools = [f'{client.name}:tool/{client.tool_name("opening_hours")}']
+
+        Args:
+            tool: Tool name as the server lists it, without any prefix.
+
+        Returns:
+            The namespaced name, for example ``bookshop_opening_hours``.
+        """
+        return mcp_tool_name(self._name, tool)
+
+    async def get_active_tools(self) -> list[Tool]:
+        """List the tools this server currently offers, as Genkit tools.
+
+        Every call lists from the server, so the answer is what the server serves
+        now whether or not this client is registered, and ``tool.name`` is the
+        namespaced name a model is shown. ``tool.output_schema`` is the schema
+        the server declared, if any.
+
+        The list can go straight into ``generate`` as ``tools=``, and each tool
+        can be called directly. A registered client's tools are also selected
+        as ``<name>:tool/*``.
+
+        Returns:
+            One tool per server tool, in server order, leaving out tools which
+            share a Genkit tool name.
+
+        Raises:
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed,
+                ``UNAVAILABLE`` if the server cannot be started,
+                ``DEADLINE_EXCEEDED`` if it does not answer in time,
+                ``INTERNAL`` if it breaks the protocol, or the status for the
+                JSON-RPC error code it answers the listing with.
+        """
+        tools = await self._on_connection(McpConnection.list_tools)
+        return mcp_tools_to_handles(tools, self._name, self._call_tool)
+
+    async def _list_actions(self) -> list[Action[Any, Any]]:
+        """List the server's tools as unregistered actions, for a provider to hand out."""
+        tools = await self._on_connection(McpConnection.list_tools)
+        return mcp_tools_to_actions(tools, self._name, self._call_tool)
+
+    async def restart(self) -> None:
+        """Reconnect a live client to the server, replacing any connection it has.
+
+        The calling loop reconnects and re-lists before this returns, so a server
+        which still cannot be started says so here rather than on the next
+        generate. Any other loop reconnects when it next asks for a tool.
+
+        A request still running on any loop's connection fails with
+        ``UNAVAILABLE``, and can be retried once this returns.
+
+        Raises:
+            GenkitError: ``FAILED_PRECONDITION`` if this client is closed,
+                ``UNAVAILABLE`` if the server cannot be started,
+                ``DEADLINE_EXCEEDED`` if it does not answer in time,
+                ``INTERNAL`` if it breaks the protocol, or the status for the
+                JSON-RPC error code it answers the listing with.
+        """
+        with self._connections_lock:
+            self._refuse_when_closed()
+        try:
+            await self._disconnect_all()
+        finally:
+            self._invalidate_listing()
+        await self._list_actions()
+
+    async def close(self) -> None:
+        """Disconnect from the server, stop its process, and keep it that way.
+
+        A connection belongs to the event loop that opened it, so each one is
+        shut down on its own loop, and the shutdown carries on if this call is
+        cancelled. A loop finished by ``asyncio.run`` cancelled its connection on
+        the way out, taking the server process with it. A loop which is not
+        running shuts its connection down when it next runs, and is not waited
+        on. A loop still running is waited on for at most 30 seconds, and then
+        left to finish the shutdown on its own.
+
+        Closing is final, as it is for a file or an ``httpx.AsyncClient``: a
+        closed client cannot be restarted, so build a new one with
+        :func:`define_mcp_client`. A provider registered for this client stays
+        registered and its tools now fail as closed.
+        """
+        with self._connections_lock:
+            self._closed = True
+        try:
+            await self._disconnect_all()
+        finally:
+            self._invalidate_listing()
+
+    def _invalidate_listing(self) -> None:
+        """Drop the registered listing of this client's tools, if it has one."""
+        if self._provider is not None:
+            self._provider.invalidate_cache()
+
+    async def _disconnect_all(self) -> None:
+        """Shut every connection down on the loop which opened it.
+
+        The shutdowns run on their own loops whatever happens to this call, and
+        a second call waits for those the first one started.
+        """
+        with self._connections_lock:
+            self._drop_closed_loops()
+            for loop, connection in self._connections.items():
+                self._start_close(loop, connection)
+            self._connections.clear()
+            closing = list(self._closing.values())
+        results = await asyncio.gather(
+            *(self._wait_for_close(loop, closed) for loop, closed in closing),
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+    def _start_close(self, loop: asyncio.AbstractEventLoop, connection: McpConnection) -> None:
+        """Close a connection on its own loop once that loop runs. Call under the connections lock."""
+        closed: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        def finish(task: asyncio.Task[None]) -> None:
+            # Only the loop shutting down cancels the task, and that takes the
+            # server process with it.
+            error = None if task.cancelled() else task.exception()
+            with self._connections_lock:
+                self._close_tasks.discard(task)
+                self._closing.pop(connection, None)
+                if error is not None:
+                    # Still open, so leave it where the next close finds it.
+                    self._connections.setdefault(loop, connection)
+            if error is not None:
+                closed.set_exception(error)
+            else:
+                closed.set_result(None)
+
+        def start() -> None:
+            task = loop.create_task(connection.close())
+            with self._connections_lock:
+                self._close_tasks.add(task)
+            task.add_done_callback(finish)
+
+        try:
+            loop.call_soon_threadsafe(start)
+        except RuntimeError:
+            # The loop is closed, so nothing can run a close on it.
+            return
+        self._closing[connection] = (loop, closed)
+
+    async def _wait_for_close(self, loop: asyncio.AbstractEventLoop, closed: concurrent.futures.Future[None]) -> None:
+        """Wait for a close on the given loop, unless that loop stops or stalls."""
+        deadline = time.monotonic() + _CROSS_LOOP_CLOSE_TIMEOUT_SECONDS
+        while not closed.done():
+            if not loop.is_running():
+                return
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    'MCP connection did not close on its event loop in time',
+                    client=self._name,
+                    timeout_seconds=_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS,
+                )
+                return
+            await asyncio.sleep(_LOOP_POLL_SECONDS)
+        closed.result()
+
+    def _drop_closed_loops(self) -> None:
+        """Forget what belongs to loops which have closed. Call under the connections lock.
+
+        A connection holds its loop, so the weak keys alone never let a closed
+        loop go, and a close queued on a loop which closed first never finishes.
+        """
+        for loop in [loop for loop in self._connections if loop.is_closed()]:
+            del self._connections[loop]
+        for connection, (loop, _) in list(self._closing.items()):
+            if loop.is_closed():
+                del self._closing[connection]
+        self._close_tasks -= {task for task in self._close_tasks if task.get_loop().is_closed()}
+
+    def _refuse_when_closed(self) -> None:
+        """Raise if this client has been closed. Call under the connections lock."""
+        if self._closed:
+            raise _ConnectionClosedError(f'MCP client {self._name!r} is closed')
+
+    def _connection(self) -> McpConnection:
+        """Return the calling loop's connection, replacing one which has ended."""
+        loop = asyncio.get_running_loop()
+        with self._connections_lock:
+            self._refuse_when_closed()
+            self._drop_closed_loops()
+            existing = self._connections.get(loop)
+            if existing is not None and not existing.is_terminal:
+                return existing
+            connection = McpConnection(self._server, request_timeout_millis=self._request_timeout_millis)
+            self._connections[loop] = connection
+            return connection
+
+    async def _on_connection(self, operation: Callable[[McpConnection], Awaitable[_T]]) -> _T:
+        """Run an operation on the calling loop's connection, reporting one a restart closed as unavailable."""
+        try:
+            return await operation(self._connection())
+        except _ConnectionClosedError:
+            if self._closed:
+                raise
+            raise _ConnectionFailedError(f'MCP client {self._name!r} restarted during the request; retry it') from None
+
+    async def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        meta: dict[str, Any] | None,
+    ) -> CallToolResult:
+        """Invoke a tool on the connection belonging to the calling event loop."""
+        try:
+            return await self._on_connection(lambda connection: connection.call_tool(name, arguments, meta))
+        except Exception:
+            # Any failure can mean the listing is stale, and re-listing costs one
+            # round trip, so drop the cache rather than classify the error.
+            self._invalidate_listing()
+            raise
+
+
+def define_mcp_client(
+    ai: Genkit,
+    name: str,
+    *,
+    command: str,
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    cwd: str | os.PathLike[str] | None = None,
+    cache_ttl_millis: int | None = None,
+    request_timeout_millis: int | None = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+) -> McpClient:
+    """Register an MCP server's tools with Genkit.
+
+    The server's tools become ``tool.v2`` actions behind a dynamic action provider
+    named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
+    them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
+    process starts on the first tool listing.
+
+    The client holds one connection, and so one server process, per event loop.
+    While the Dev UI runs, its reflection server has its own loop, so a second
+    process starts for the same server. The two processes do not share state,
+    and servers that bind a port, take a lock file or own a browser profile can
+    clash.
+
+    A name can be reused once the client holding it is closed. Tool names are not
+    checked across clients, because they are unknown until each server lists
+    them: a client ``fake`` serving ``await_stall`` and a client ``fake_await``
+    serving ``stall`` both offer ``fake_await_stall``, and ``generate`` refuses
+    to bind both.
+
+    Args:
+        ai: The Genkit instance to register with.
+        name: Provider name, used in tool selectors and as the namespace of
+            this server's tool names.
+        command: Executable that runs the server, for example ``npx`` or ``uv``.
+        args: Arguments passed to ``command``.
+        env: Extra environment for the server process, over the minimal set
+            that ``mcp.client.stdio.get_default_environment()`` returns. The
+            parent environment is not inherited, so list every variable the
+            server needs, API keys included.
+        cwd: Working directory for the server process.
+        cache_ttl_millis: How long a tool listing stays fresh. ``None`` or
+            ``0`` uses the default of 3 seconds. A negative value disables the
+            cache, so every lookup lists the tools again.
+        request_timeout_millis: How long one MCP request may take before it
+            fails. Must be positive. ``None`` is the only way to disable the
+            timeout.
+
+    Returns:
+        A handle for listing tools, restarting and disconnecting.
+
+    Raises:
+        ValueError: If ``name`` cannot appear in a tool selector or a
+            model-facing tool name, if a dynamic action provider other than a
+            closed MCP client's is already registered under it, or if
+            ``request_timeout_millis`` is zero or negative.
+    """
+    client = McpClient(
+        name,
+        command=command,
+        args=args,
+        env=env,
+        cwd=cwd,
+        request_timeout_millis=request_timeout_millis,
+    )
+
+    async def list_tools() -> dict[str, list[Action[Any, Any]]]:
+        """Provide this client's tools to the dynamic action provider."""
+        return {'tool': await client._list_actions()}
+
+    existing = ai._registry.registered_action(ActionKind.DYNAMIC_ACTION_PROVIDER, name)
+    if existing is not None:
+        owner_ref = _registered_clients.get(existing)
+        owner = owner_ref() if owner_ref is not None else None
+        if owner is None or not owner._closed:
+            raise ValueError(
+                f'A dynamic action provider named {name!r} is already registered. '
+                'Close the MCP client registered under it first, or choose another name.'
+            )
+
+    client._provider = ai.define_dynamic_action_provider(
+        name,
+        list_tools,
+        description=f'Tools of the MCP server {name}.',
+        cache_ttl_millis=cache_ttl_millis,
+    )
+    # A strong reference would keep the action, its key, alive for good.
+    _registered_clients[client._provider.action] = weakref.ref(client)
+    return client

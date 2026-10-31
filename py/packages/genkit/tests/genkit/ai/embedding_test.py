@@ -24,26 +24,30 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from genkit import Document, Genkit, GenkitError
-from genkit._ai._embedding import (
-    EmbedderInfo,
-    EmbedderRef,
-    EmbedderSupports,
-    embedder,
-    embedder_action_metadata,
-)
 from genkit._core._action import Action, ActionResponse
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, Embedding, EmbedResponse
-from genkit.embedder import EmbedRequest
+from genkit.embedder import (
+    Embedder,
+    EmbedderInfo,
+    EmbedderRef,
+    EmbedderSupports,
+    EmbedRequest,
+)
+
+
+async def _noop_embedder(request: EmbedRequest) -> EmbedResponse:
+    return EmbedResponse(embeddings=[])
 
 
 def test_embedder_action_metadata() -> None:
-    """Test for embedder_action_metadata with a catalog card."""
+    """Test Embedder._action_metadata() with a catalog card."""
     info = EmbedderInfo(label='Test Embedder', dimensions=128)
-    action_metadata = embedder_action_metadata(
+    action_metadata = Embedder(
         name='test_model',
+        fn=_noop_embedder,
         info=info,
-    )
+    )._action_metadata()
 
     assert isinstance(action_metadata, ActionMetadata)
     assert action_metadata.input_schema is not None
@@ -53,12 +57,12 @@ def test_embedder_action_metadata() -> None:
             'label': info.label,
             'dimensions': info.dimensions,
             'customOptions': None,
-        }
+        },
     }
 
 
 def test_embedder_action_metadata_with_supports_and_config_schema() -> None:
-    """Test for embedder_action_metadata with supports and config_schema."""
+    """Test Embedder._action_metadata() with supports and config_schema."""
 
     class CustomConfig(BaseModel):
         param1: str
@@ -70,10 +74,11 @@ def test_embedder_action_metadata_with_supports_and_config_schema() -> None:
         supports=EmbedderSupports(input=['text', 'image']),
         config_schema=to_json_schema(CustomConfig),
     )
-    action_metadata = embedder_action_metadata(
+    action_metadata = Embedder(
         name='advanced_model',
+        fn=_noop_embedder,
         info=info,
-    )
+    )._action_metadata()
     assert isinstance(action_metadata, ActionMetadata)
     assert action_metadata.metadata is not None
     metadata = action_metadata.metadata
@@ -95,21 +100,27 @@ def test_embedder_action_metadata_with_supports_and_config_schema() -> None:
 
 
 def test_embedder_action_metadata_no_options() -> None:
-    """Test embedder_action_metadata when no options are provided."""
-    action_metadata = embedder_action_metadata(name='default_model')
+    """Test Embedder._action_metadata() when no options are provided."""
+    action_metadata = Embedder(name='default_model', fn=_noop_embedder)._action_metadata()
     assert isinstance(action_metadata, ActionMetadata)
-    assert action_metadata.metadata == {'embedder': {'customOptions': None, 'dimensions': None}}
+    assert action_metadata.metadata == {
+        'embedder': {
+            'label': 'default_model',
+            'customOptions': None,
+            'dimensions': None,
+        },
+    }
 
 
 @pytest.mark.asyncio
 async def test_embedder_factory_does_not_register() -> None:
-    """Plugin resolve builds via embedder(); the registry is what registers."""
+    """Plugin resolve builds via Embedder(); the registry is what registers."""
 
     async def embed_fn(request: EmbedRequest) -> EmbedResponse:
         return EmbedResponse(embeddings=[Embedding(embedding=[1.0])])
 
     ai = Genkit()
-    action = embedder('text-plugin-style', embed_fn)
+    action = Embedder('text-plugin-style', embed_fn)
 
     assert await ai._registry.resolve_action(action.kind, action.name) is None
 
@@ -242,7 +253,7 @@ async def test_embed_with_embedder_ref(
         name='my-plugin/my-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('my-plugin/my-embedder', info=embedder_info).metadata,
+        metadata=Embedder('my-plugin/my-embedder', fake_embedder_fn, info=embedder_info).metadata,
         description='A fake embedder for testing',
     )
     embedder_ref = EmbedderRef(name='my-plugin/my-embedder', config={'param': 'value'}, version='v1')
@@ -278,7 +289,7 @@ async def test_create_embedder_ref_config_keyword_reaches_the_embedder(
         name='kw-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('kw-embedder').metadata,
+        metadata=Embedder('kw-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
     ref = EmbedderRef(name='kw-embedder', config={'task': 'retrieval'})
@@ -307,7 +318,7 @@ async def test_embed_config_reaches_embedder_as_options(
         name='another-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('another-embedder', info=embedder_info).metadata,
+        metadata=Embedder('another-embedder', fake_embedder_fn, info=embedder_info).metadata,
         description='Another fake embedder',
     )
 
@@ -335,7 +346,7 @@ async def test_embed_many(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry
         name='multi-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('multi-embedder').metadata,
+        metadata=Embedder('multi-embedder', fake_embedder_fn).metadata,
         description='A multi embedder for testing',
     )
 
@@ -365,7 +376,7 @@ async def test_embed_many_strings_with_metadata_attach_it_to_every_document(
         name='faq-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('faq-embedder').metadata,
+        metadata=Embedder('faq-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
 
@@ -400,7 +411,7 @@ async def test_embedder_writing_request_metadata_leaves_caller_documents_alone(
         name='tagging-embedder',
         kind='embedder',
         fn=tagging_embedder_fn,
-        metadata=embedder_action_metadata('tagging-embedder').metadata,
+        metadata=Embedder('tagging-embedder', tagging_embedder_fn).metadata,
         description='A fake embedder that writes to request metadata',
     )
     faq = Document.from_text('Nut-free kitchen.', metadata={'source': 'allergy-faq'})
@@ -434,7 +445,7 @@ async def test_embed_many_with_embedder_ref_merges_config_the_same_as_embed(
         name='my-plugin/my-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('my-plugin/my-embedder').metadata,
+        metadata=Embedder('my-plugin/my-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
     embedder_ref = EmbedderRef(name='my-plugin/my-embedder', config={'param': 'value'}, version='v1')
@@ -467,7 +478,7 @@ async def test_embed_many_call_config_wins_over_embedder_ref_config(
         name='override-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('override-embedder').metadata,
+        metadata=Embedder('override-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
     embedder_ref = EmbedderRef(name='override-embedder', config={'param': 'from_ref'})
@@ -498,7 +509,7 @@ async def test_embed_many_does_not_change_the_embedder_ref_config(
         name='stable-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('stable-embedder').metadata,
+        metadata=Embedder('stable-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
     config = {'param': 'value'}
@@ -528,7 +539,7 @@ async def test_embed_many_config_reaches_embedder_as_options(
         name='plain-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('plain-embedder').metadata,
+        metadata=Embedder('plain-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
 
@@ -540,10 +551,10 @@ async def test_embed_many_config_reaches_embedder_as_options(
 
 
 @pytest.mark.asyncio
-async def test_embed_with_no_config_sends_none_options(
+async def test_embed_with_no_config_sends_empty_dict_options(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:
-    """With no ref config, no version, and no config=, the embedder gets options=None like a Dev UI run."""
+    """With no ref config, no version, and no config=, the embedder gets options={}."""
     genkit_instance, registry = mock_genkit_instance
 
     async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
@@ -553,7 +564,7 @@ async def test_embed_with_no_config_sends_none_options(
         name='bare-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('bare-embedder').metadata,
+        metadata=Embedder('bare-embedder', fake_embedder_fn).metadata,
         description='A fake embedder for testing',
     )
 
@@ -561,7 +572,76 @@ async def test_embed_with_no_config_sends_none_options(
     await genkit_instance.embed_many(embedder='bare-embedder', content=['hi'])
 
     embed_action = await registry.resolve_action('embedder', 'bare-embedder')
-    assert [call.args[0].options for call in embed_action.run.call_args_list] == [None, None]
+    assert [call.args[0].options for call in embed_action.run.call_args_list] == [{}, {}]
+
+
+def test_embed_request_options_none_or_missing_becomes_empty_dict() -> None:
+    """EmbedRequest built in code or parsed from the wire (Dev UI sends options: null) always carries a dict."""
+    docs = [Document.from_text('hi')]
+
+    assert EmbedRequest(input=docs).options == {}
+    assert EmbedRequest(input=docs, options=None).options == {}  # type: ignore[arg-type] - wire null
+    assert EmbedRequest.model_validate({'input': [{'content': [{'text': 'hi'}]}], 'options': None}).options == {}
+
+
+@pytest.mark.parametrize('bad_options', [[], [('dimensions', 256)], 'x'], ids=['empty_list', 'pairs', 'str'])
+def test_embed_request_non_mapping_options_raises(bad_options: object) -> None:
+    """EmbedRequest.options must be a mapping, same as ModelRequest.config; a list or str fails validation."""
+    with pytest.raises(ValidationError, match='options must be a mapping'):
+        EmbedRequest(input=[Document.from_text('hi')], options=bad_options)  # type: ignore[arg-type] - bad wire value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_config', [[], [('dimensions', 256)], 'x'], ids=['empty_list', 'pairs', 'str'])
+async def test_embed_with_non_mapping_config_raises_invalid_argument(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry], bad_config: object
+) -> None:
+    """ai.embed config= must be a dict or a BaseModel, same as generate; a list or str raises."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0])])
+
+    registry.register_action(
+        name='strict-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=Embedder('strict-embedder', fake_embedder_fn).metadata,
+        description='A fake embedder for testing',
+    )
+
+    with pytest.raises(GenkitError) as exc_info:
+        await genkit_instance.embed(embedder='strict-embedder', content='hi', config=bad_config)  # type: ignore[arg-type]
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_embed_with_basemodel_config_sends_dict_options(
+    mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
+) -> None:
+    """A BaseModel config= is dumped, so the untyped embedder still gets a dict."""
+
+    class CrmEmbedConfig(BaseModel):
+        dimensions: int = 768
+
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0])])
+
+    registry.register_action(
+        name='crm-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=Embedder('crm-embedder', fake_embedder_fn).metadata,
+        description='A fake embedder for testing',
+    )
+
+    await genkit_instance.embed(embedder='crm-embedder', content='hi', config=CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+
+    embed_action = await registry.resolve_action('embedder', 'crm-embedder')
+    assert embed_action.run.call_args.args[0].options == {'dimensions': 256}
 
 
 @pytest.mark.asyncio
@@ -632,7 +712,7 @@ async def test_embed_string_with_metadata_attaches_it_to_the_document(
         name='meta-embedder',
         kind='embedder',
         fn=fake_embedder_fn,
-        metadata=embedder_action_metadata('meta-embedder').metadata,
+        metadata=Embedder('meta-embedder', fake_embedder_fn).metadata,
         description='An embedder that records its request',
     )
 
@@ -682,3 +762,64 @@ def test_resolve_embedder_name_with_embedder_ref() -> None:
     ref = EmbedderRef(name='ref-embedder', config={'key': 'value'}, version='v1')
     result = genkit_instance._resolve_embedder_name(ref)
     assert result == 'ref-embedder'
+
+
+class _CrmEmbedConfig(BaseModel):
+    dimensions: int = 768
+    task_type: str = 'RETRIEVAL_DOCUMENT'
+
+
+def _recording_embedder(ai: Genkit, seen: list[dict[str, Any]]) -> None:
+    async def crm_embedder(request: EmbedRequest) -> EmbedResponse:
+        seen.append(request.options)
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.0]) for _ in request.input])
+
+    ai.define_embedder(name='crm-embedder', fn=crm_embedder)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('config', 'expected'),
+    [
+        (_CrmEmbedConfig(), {}),
+        (_CrmEmbedConfig(task_type='QUESTION_ANSWERING'), {'task_type': 'QUESTION_ANSWERING'}),
+    ],
+)
+async def test_embed_with_basemodel_config_sends_only_set_fields(
+    config: _CrmEmbedConfig, expected: dict[str, object]
+) -> None:
+    """An untyped embedder gets the fields the caller set, same as an untyped model fn's config."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    _recording_embedder(ai, seen)
+
+    await ai.embed(embedder='crm-embedder', content='hi', config=config)  # type: ignore[arg-type]
+
+    assert seen == [expected]
+
+
+@pytest.mark.asyncio
+async def test_embed_ref_config_survives_unset_basemodel_field() -> None:
+    """ref < call per field: a BaseModel call config doesn't clobber ref keys it left unset."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+    _recording_embedder(ai, seen)
+    ref = EmbedderRef(name='crm-embedder', config={'dimensions': 256})
+
+    await ai.embed(embedder=ref, content='hi', config=_CrmEmbedConfig(task_type='QUESTION_ANSWERING'))  # type: ignore[arg-type]
+
+    assert seen == [{'dimensions': 256, 'task_type': 'QUESTION_ANSWERING'}]
+
+
+def test_embed_request_basemodel_options_becomes_dict_of_set_fields() -> None:
+    """EmbedRequest takes a BaseModel the same way ai.embed(config=...) does."""
+    request = EmbedRequest(input=[], options=_CrmEmbedConfig(dimensions=256))  # type: ignore[arg-type]
+
+    assert request.options == {'dimensions': 256}
+
+
+def test_embed_request_options_schema_is_an_object() -> None:
+    """The embedder input schema says options is an object, not Any."""
+    schema = to_json_schema(EmbedRequest)
+
+    assert schema['properties']['options']['type'] == 'object'
