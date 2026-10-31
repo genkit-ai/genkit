@@ -35,19 +35,28 @@ import uvicorn
 from pydantic import BaseModel
 from typing_extensions import Never
 
-from genkit._ai._embedding import EmbedderFn, EmbedderInfo, EmbedderRef, EmbedderRefConfigT, define_embedder
+from genkit._ai._background_model import (
+    BackgroundModel,
+    CancelModelOpFn,
+    CheckModelOpFn,
+    StartModelOpFn,
+    as_model_operation,
+    cancel_operation,
+    check_operation,
+    define_background_model,
+)
+from genkit._ai._embedding import Embedder, EmbedderFn, EmbedderInfo, EmbedderRef, EmbedderRefConfigT, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluator,
     BatchEvaluatorFn,
     Evaluator,
     EvaluatorFn,
     EvaluatorRef,
-    EvaluatorRefConfigT,
     define_batch_evaluator,
     define_evaluator,
 )
 from genkit._ai._formats._builtin import built_in_formats
-from genkit._ai._formats._types import FormatDef
+from genkit._ai._formats._types import Formatter
 from genkit._ai._generate import (
     CallScope,
     define_generate_action,
@@ -57,6 +66,7 @@ from genkit._ai._generate import (
 )
 from genkit._ai._model import (
     Message,
+    Model,
     ModelArg,
     ModelFn,
     ModelResponse,
@@ -81,29 +91,16 @@ from genkit._ai._prompt import (
     to_generate_options,
 )
 from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
-from genkit._core._background import (
-    BackgroundAction,
-    CancelModelOpFn,
-    CheckModelOpFn,
-    StartModelOpFn,
-    cancel_operation,
-    check_operation,
-    define_background_model,
-    missing_operation_error,
-)
-from genkit._core._channel import Channel, run_loop
+from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
+from genkit._core._background import missing_operation_error
+from genkit._core._channel import run_loop, start_stream
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._flow import Flow
 from genkit._core._logger import configure_logging, get_logger, resolve_level
-from genkit._core._middleware import (
-    BaseMiddleware,
-    GenerateMiddleware,
-    _validate_middleware_key_segment,
-)
+from genkit._core._middleware import Middleware
 from genkit._core._model import (
-    BatchEvaluatorRequest,
     Document,
     EmbedRequest,
     ModelConfigDict,
@@ -113,6 +110,7 @@ from genkit._core._model import (
     Part,
     ToolChoice,
 )
+from genkit._core._operation import Operation
 from genkit._core._plugin import Plugin
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
 from genkit._core._reflection_config import (
@@ -131,14 +129,13 @@ from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
     EmbedResponse,
+    EvaluatorRequest,
     EvaluatorResponse,
-    MiddlewareRef,
     ModelInfo,
-    Operation,
     Role,
 )
 
-from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
+from ._decorators import _FlowDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -150,7 +147,7 @@ ChunkT = TypeVar('ChunkT')
 
 R = TypeVar('R')
 T = TypeVar('T')
-MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+MiddlewareT = TypeVar('MiddlewareT', bound=Middleware)
 
 # Value kinds core reads with a fixed type, and the API that registers each.
 _CORE_VALUE_KINDS: dict[str, str] = {
@@ -179,13 +176,19 @@ def init_keyword_example(value: object) -> str:
 class Genkit:
     """The main entry point for building AI-powered applications.
 
-    Registers plugins, defines flows and tools, and runs generation.
+    Registers plugins, defines flows and tools, and runs generation. Both
+    ``Genkit(model=...)`` and ``ai.generate(model=...)`` accept a typed
+    ``ModelRef`` from a plugin constructor (recommended, e.g.
+    ``GoogleAI.gemini_model('gemini-flash-latest')``) or a plugin-prefixed
+    string (``'googleai/gemini-flash-latest'``). Plugins resolve models lazily
+    on demand when ``ai.generate()`` is called, without needing pre-registration
+    or SDK updates.
 
     Example:
         from genkit import Genkit
         from genkit_google_genai import GoogleAI
 
-        ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+        ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
         @ai.tool()
         async def current_weather(city: str) -> str:
@@ -221,13 +224,23 @@ class Genkit:
         # Type checkers see the keyword-only signature above. Runtime still
         # accepts *args so we can raise a TypeError that names the keyword they
         # probably meant, instead of silently binding a model id as plugins.
-        def __init__(
+        def __init__(  # noqa: D417
             self,
             *args: object,
             plugins: list[Plugin] | None = None,
             model: ModelArg | None = None,
             prompt_dir: str | Path | None = None,
         ) -> None:
+            """Initialize a Genkit instance.
+
+            Args:
+                plugins: Plugins to register (e.g. ``[GoogleAI()]``). Plugins resolve
+                    models lazily on demand when ``ai.generate()`` is called.
+                model: Default model for ``ai.generate()``. Accepts a typed ``ModelRef``
+                    (recommended, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``) or
+                    a plugin-prefixed string (``'googleai/gemini-flash-latest'``).
+                prompt_dir: Optional directory for loading ``.prompt`` files.
+            """
             if args:
                 raise TypeError(
                     f'Genkit() takes no positional arguments, got {len(args)}. '
@@ -293,55 +306,104 @@ class Genkit:
         name: str | None = None,
         *,
         description: str | None = None,
-        chunk_type: None = None,
     ) -> _FlowDecorator: ...
+
+    # Overload order matters; see _FlowDecorator.__call__ for why the
+    # `object` shapes come before the context shapes.
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        name: str | None = None,
-        *,
-        description: str | None = None,
-        chunk_type: type[ChunkT],
-    ) -> _FlowDecoratorWithChunk[ChunkT]: ...
+        func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[..., Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, Any]: ...
 
     def flow(
         self,
-        name: str | None = None,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
         *,
         description: str | None = None,
-        chunk_type: type[Any] | None = None,
-    ) -> _FlowDecorator | _FlowDecoratorWithChunk[Any]:
+    ) -> _FlowDecorator | Flow[Any, Any, Any]:
         """Decorator to register an async function as a flow.
 
+        Can be used bare (``@ai.flow``) or with arguments (``@ai.flow()``,
+        ``@ai.flow('custom_name', description='...')``).
+
         A flow takes at most one input. To read the request context or stream
-        chunks, add a parameter annotated ``ActionRunContext``, in any position.
+        chunks, add a parameter annotated ``FlowContext``, in any position.
         Any other second parameter raises ``TypeError`` when the flow is defined.
 
         Args:
-            name: Optional name for the flow. Defaults to the function name.
+            name: Optional name for the flow (or the function itself when used
+                as ``@ai.flow``). Defaults to the function name.
             description: Optional description for the flow.
-            chunk_type: Optional type for streaming chunks. When provided,
-                the returned Action will be typed as Action[InputT, OutputT, ChunkT].
 
         Example:
-            from genkit import Genkit
+            from genkit import FlowContext, Genkit
             from genkit_google_genai import GoogleAI
 
-            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
-            @ai.flow()
+            @ai.flow
             async def my_flow(prompt: str) -> str:
                 res = await ai.generate(prompt=prompt)
                 return res.text
 
-            @ai.flow(chunk_type=str)
-            async def streaming_flow(x: int, ctx: ActionRunContext) -> str:
+            @ai.flow
+            async def streaming_flow(x: int, ctx: FlowContext[str]) -> str:
                 ctx.send_chunk('progress')
                 return 'done'
         """
-        if chunk_type is not None:
-            return _FlowDecoratorWithChunk(self._registry, name, description, chunk_type)
+        if not isinstance(name, str) and name is not None:
+            return _FlowDecorator(self._registry, None, description)(name)
         return _FlowDecorator(self._registry, name, description)
 
     def define_helper(self, name: str, fn: Callable[..., Any]) -> None:
@@ -381,25 +443,44 @@ class Genkit:
             metadata=metadata,
         )
 
+    @overload
     def tool(
         self,
         name: str | None = None,
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool]:
+    ) -> Callable[[Callable[..., Any]], Tool]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[..., Any],
+        /,
+    ) -> Tool: ...
+
+    def tool(
+        self,
+        name: str | Callable[..., Any] | None = None,
+        *,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Callable[[Callable[..., Any]], Tool] | Tool:
         """Decorator to register a function as a tool.
+
+        Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
+        ``@ai.tool('custom_name', description='...')``).
 
         The return annotation is what the model binds as ``outputSchema``.
 
         A tool takes at most one input, and that input's type is the schema the
         model fills in. For several fields, use one Pydantic model. To read the
         request context or interrupt, add a parameter annotated
-        ``ToolRunContext``, in any position. Any other second parameter raises
+        ``ToolContext``, in any position. Any other second parameter raises
         ``TypeError`` when the tool is defined.
 
         Example:
-            @ai.tool()
+            @ai.tool
             async def current_weather(city: str) -> str:
                 return f'Sunny in {city}'
 
@@ -407,19 +488,29 @@ class Genkit:
                 city: str
                 days: int = 3
 
-            @ai.tool()
-            async def forecast(input: Forecast, ctx: ToolRunContext) -> str:
+            @ai.tool
+            async def forecast(input: Forecast, ctx: ToolContext) -> str:
                 user = ctx.context.get('user_id')
                 return f'{input.days}-day forecast for {input.city} ({user})'
 
             res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
+        if callable(name):
+            return define_tool(
+                self._registry,
+                name,
+                None,
+                description,
+                input_schema=input_schema,
+            )
+
+        tool_name: str | None = name
 
         def wrapper(func: Callable[..., Any]) -> Tool:
             return define_tool(
                 self._registry,
                 func,
-                name,
+                tool_name,
                 description,
                 input_schema=input_schema,
             )
@@ -428,31 +519,44 @@ class Genkit:
 
     def define_middleware(
         self,
-        cls: type[BaseMiddleware],
+        cls: type[MiddlewareT],
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
-    ) -> GenerateMiddleware:
-        """Register a middleware class on this app's registry under ``name``."""
-        res = _validate_middleware_key_segment(name)
-        if res.errored:
-            raise ValueError(f'middleware name {res.error_message}')
-        desc = GenerateMiddleware(cls=cls, name=name, description=description)
-        self._registry.register_value('middleware', name, desc)
-        return desc
+    ) -> type[MiddlewareT]:
+        """Register a middleware class on this app's registry."""
+        desc = cls._middleware_metadata(name, description=description)
+        self._registry.register_value('middleware', desc.name, desc)
+        return cls
 
+    @overload
+    def middleware(
+        self,
+        cls: type[MiddlewareT],
+    ) -> type[MiddlewareT]: ...
+
+    @overload
     def middleware(
         self,
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
-    ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]:
+    ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]: ...
+
+    def middleware(
+        self,
+        cls: type[MiddlewareT] | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> type[MiddlewareT] | Callable[[type[MiddlewareT]], type[MiddlewareT]]:
         """Decorator that registers a custom middleware on this app's registry."""
 
-        def decorator(cls: type[MiddlewareT]) -> type[MiddlewareT]:
-            self.define_middleware(cls, name=name, description=description)
-            return cls
+        def decorator(target: type[MiddlewareT]) -> type[MiddlewareT]:
+            return self.define_middleware(target, name=name, description=description)
 
+        if cls is not None:
+            return decorator(cls)
         return decorator
 
     def define_interrupt(
@@ -489,7 +593,7 @@ class Genkit:
     def define_evaluator(
         self,
         name: str,
-        fn: EvaluatorFn,
+        fn: EvaluatorFn[Any],
         *,
         display_name: str,
         definition: str,
@@ -500,21 +604,12 @@ class Genkit:
     ) -> Evaluator:
         """Register an evaluator that scores one dataset row at a time.
 
-        ``fn`` takes one ``EvaluatorRequest``: ``req.row`` is the dataset row
-        and ``req.options`` the call's config. Annotate it as
-        ``EvaluatorRequest[Cfg]`` to get a validated ``Cfg`` (and a Dev UI
-        options form); bare ``EvaluatorRequest`` gives a dict.
-
         Example:
             ```python
-            # 1. Score whether the answer mentions the configured dish
-            class DishConfig(BaseModel):
-                dish: str = 'salmon'
-
-
-            async def mentions_dish(req: EvaluatorRequest[DishConfig]) -> EvaluatorResponse:
-                hit = req.options.dish in str(req.row.output).lower()
-                return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=hit)])
+            # 1. Score whether the answer mentions the expected dish
+            async def mentions_dish(row: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+                hit = row.reference.lower() in str(row.output).lower()
+                return EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=hit)])
 
 
             # 2. Register it under a name
@@ -522,11 +617,11 @@ class Genkit:
                 'mentions_dish',
                 mentions_dish,
                 display_name='Mentions dish',
-                definition='Whether the answer names the configured dish.',
+                definition='Whether the answer names the expected dish.',
             )
 
-            # 3. Run it over a dataset; config is validated into DishConfig
-            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset, config={'dish': 'tartine'})
+            # 3. Run it over a dataset
+            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset)
             # => [EvaluatorResponse(test_case_id='...', evaluation=[Score(score=True)]), ...]
             ```
         """
@@ -554,38 +649,10 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         description: str | None = None,
     ) -> BatchEvaluator:
-        """Register a batch evaluator that scores the whole dataset in one call.
+        """Register a batch evaluator.
 
-        ``fn`` takes one ``BatchEvaluatorRequest`` (``req.dataset``,
-        ``req.options``) and returns ``list[EvaluatorResponse]``. Annotate it as
-        ``BatchEvaluatorRequest[Cfg]`` to get a validated ``Cfg``. A second
-        parameter raises ``TypeError`` when defined.
-
-        Example:
-            ```python
-            # 1. Score every answer in one call
-            async def mentions_dish(req: BatchEvaluatorRequest[DishConfig]) -> list[EvaluatorResponse]:
-                return [
-                    EvaluatorResponse(
-                        test_case_id=row.test_case_id or '',
-                        evaluation=[Score(score=req.options.dish in str(row.output).lower())],
-                    )
-                    for row in req.dataset
-                ]
-
-
-            # 2. Register it under a name
-            ai.define_batch_evaluator(
-                'mentions_dish_batch',
-                mentions_dish,
-                display_name='Mentions dish (batch)',
-                definition='Whether each answer names the configured dish.',
-            )
-
-            # 3. Run it over a dataset
-            rows = await ai.evaluate(evaluator='mentions_dish_batch', dataset=dataset, config={'dish': 'tartine'})
-            # => [EvaluatorResponse(test_case_id='...', evaluation=[Score(score=True)]), ...]
-            ```
+        The function takes one ``EvaluatorRequest`` and returns ``list[EvaluatorResponse]``.
+        Read options from ``req.options``. A second parameter raises ``TypeError`` when defined.
         """
         return define_batch_evaluator(
             self._registry,
@@ -608,7 +675,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         info: ModelInfo | None = None,
         description: str | None = None,
-    ) -> Action:
+    ) -> Model:
         """Register a custom model action."""
         return define_model(self._registry, name, fn, config_schema, metadata, info, description)
 
@@ -623,7 +690,7 @@ class Genkit:
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
-    ) -> BackgroundAction:
+    ) -> BackgroundModel:
         """Register a background model for long-running AI operations."""
         return define_background_model(
             registry=self._registry,
@@ -646,7 +713,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         description: str | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Action:
+    ) -> Embedder:
         """Register a custom embedder action.
 
         The options class comes from ``config_schema`` or the fn's
@@ -654,9 +721,9 @@ class Genkit:
         """
         return define_embedder(self._registry, name, fn, info, metadata, description, config_schema=config_schema)
 
-    def define_format(self, format: FormatDef) -> None:
-        """Register a custom output format."""
-        self._registry.register_value('format', format.name, format)
+    def define_format(self, formatter: Formatter) -> None:
+        """Register a custom output format. See `genkit.formats.Formatter`."""
+        self._registry.register_value('format', formatter.name, formatter)
 
     async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
         """Return the model action registered under ``name``, or None.
@@ -694,7 +761,7 @@ class Genkit:
         if action is None:
             return None
         schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
-        return Tool(
+        return Tool._from_action(
             action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None
         )
 
@@ -738,7 +805,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
@@ -765,7 +832,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
@@ -793,7 +860,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
@@ -820,7 +887,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
@@ -848,7 +915,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
@@ -875,7 +942,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
@@ -903,7 +970,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -930,7 +997,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -956,7 +1023,7 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
@@ -1225,12 +1292,12 @@ class Genkit:
                     raise ValueError(f'Invalid {plugin=} provided to Genkit: must be of type `genkit.ai.Plugin`')
 
     def _register_plugin_middleware(self, plugins: list[Plugin] | None) -> None:
-        """Register middleware descriptors returned by ``Plugin.list_middleware``."""
+        """Register middleware classes returned by ``Plugin.list_middleware``."""
         if not plugins:
             return
         for plugin in plugins:
-            for desc in plugin.list_middleware():
-                self._registry.register_value('middleware', desc.name, desc)
+            for mw_cls in plugin.list_middleware():
+                self.define_middleware(mw_cls)
 
     def run_main(self, coro: Coroutine[Any, Any, T]) -> T:
         """Run your ``main`` coroutine and return its result, like ``asyncio.run``.
@@ -1252,7 +1319,7 @@ class Genkit:
             from genkit_google_genai import GoogleAI
 
             # 1. Initialize Genkit and define a flow
-            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
             @ai.flow()
@@ -1418,7 +1485,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[OutputT]: ...
 
@@ -1445,7 +1512,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[OutputT]: ...
 
@@ -1472,7 +1539,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]: ...
 
@@ -1499,7 +1566,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]: ...
 
@@ -1524,10 +1591,23 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]:
         """Generate text or structured data using a language model.
+
+        ``model`` accepts a typed ``ModelRef`` from a plugin constructor
+        (recommended, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``,
+        which takes the bare model ID, stamps the ``'googleai/'`` namespace
+        prefix, and type-checks ``config``), a plugin-prefixed string
+        (``'googleai/gemini-flash-latest'``), a registered model ``Action``, or
+        ``None`` to use the default ``model=`` passed to ``Genkit(...)``. When
+        passing a plain ``str`` for a plugin model, the ``<plugin>/`` prefix
+        (such as ``'googleai/'`` or ``'vertexai/'``) is required; passing an
+        unprefixed string raises ``GenkitError`` with ``NOT_FOUND``. Any model
+        ID served by the provider (including newly released models) is resolved
+        lazily on demand at call time without needing pre-registration or SDK
+        updates.
 
         ``tools`` is typed as ``Sequence`` rather than ``list`` because ``Sequence``
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
@@ -1602,7 +1682,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
@@ -1629,7 +1709,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
@@ -1656,7 +1736,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
@@ -1683,7 +1763,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
@@ -1708,7 +1788,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]:
         """Stream generated text, returning a ModelStreamResponse with .stream and .response.
@@ -1716,7 +1796,7 @@ class Genkit:
         With ``output_schema=Recipe``, each ``chunk.output`` is a partial of
         that type: same attributes, any field may still be ``None`` or a
         prefix. Guard the field you are about to use. The finished
-        ``Recipe`` is only ``(await stream.response).output``, and it's ``None``
+        ``Recipe`` is only ``(await result.response).output``, and it's ``None``
         when the reply isn't a ``Recipe``.
 
         If the model fails partway through, the ``async for`` still ends
@@ -1726,14 +1806,13 @@ class Genkit:
         chunks you already received are the record of what was shown.
 
         Example:
-            stream = ai.generate_stream(prompt='Write a haiku about rain.')
-            async for chunk in stream.stream:
+            result = ai.generate_stream(prompt='Write a haiku about rain.')
+            async for chunk in result:
                 print(chunk.text)
-            final = await stream.response
+            final = await result.response
         """
-        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel()
 
-        async def _run_generate() -> ModelResponse[Any]:
+        async def _run_generate(send_chunk: Callable[[ModelResponseChunk], None]) -> ModelResponse[Any]:
             return await self._generate(
                 model=model,
                 prompt=prompt,
@@ -1755,13 +1834,11 @@ class Genkit:
                 output_constrained=output_constrained,
                 use=use,
                 docs=docs,
-                on_chunk=lambda c: channel.send(c),
+                on_chunk=send_chunk,
             )
 
-        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
-        channel.set_close_future(response_future)
-
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+        channel, task = start_stream(_run_generate)
+        return ModelStreamResponse[Any](stream=channel, response=task)
 
     async def _generate(
         self,
@@ -1784,7 +1861,7 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
     ) -> ModelResponse[Any]:
@@ -1799,7 +1876,7 @@ class Genkit:
         scope = CallScope(self)
         registry = scope.registry
         await register_tools(registry, tools)
-        use = register_middleware(registry, use)
+        use_refs = register_middleware(registry, use)
         resolved = await resolve_for_generate(model=model, config=config, registry=registry)
         check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
         # strings passed at call time are content, not templates: braces may be
@@ -1833,7 +1910,7 @@ class Genkit:
                 output_schema=output_schema,
                 output_constrained=output_constrained,
                 docs=docs,
-                use=use,
+                use=use_refs,
             ),
         )
         return await generate_action(
@@ -1918,9 +1995,9 @@ class Genkit:
     async def evaluate(
         self,
         *,
-        evaluator: str | EvaluatorRef[EvaluatorRefConfigT],
+        evaluator: str | EvaluatorRef,
         dataset: list[BaseDataPoint],
-        config: EvaluatorRefConfigT | Mapping[str, Any] | None = None,
+        config: dict[str, object] | None = None,
         eval_run_id: str | None = None,
     ) -> list[EvaluatorResponse]:
         """Evaluate a dataset using the specified evaluator.
@@ -1930,12 +2007,10 @@ class Genkit:
         function returned, as returned. Each row's ``evaluation`` is a list of
         scores.
 
-        ``config`` is layered over the ``EvaluatorRef``'s config (the call
-        wins per key) the same way generate layers a ModelRef, and handed to
-        the evaluator as ``req.options``: a dict, or its options class when the
-        evaluator declares one. When nothing is set, an untyped evaluator gets
-        ``{}``. An evaluator name that isn't registered raises
-        ``GenkitError`` with ``NOT_FOUND``.
+        ``config`` is merged over the ``EvaluatorRef``'s config (the call
+        wins per key) and handed to the evaluator as its second argument. When
+        neither sets anything, the evaluator gets ``None``. An evaluator name
+        that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
 
         Example:
             from genkit.evaluator import BaseDataPoint
@@ -1949,13 +2024,17 @@ class Genkit:
                     print(row.test_case_id, score.score)
         """
         if isinstance(evaluator, EvaluatorRef):
-            ref: EvaluatorRef[BaseModel] | None = evaluator
             evaluator_name = evaluator.name
-        elif isinstance(evaluator, str):
-            ref = None
-            evaluator_name = evaluator
+            ref_config = evaluator.config
         else:
-            raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
+            evaluator_name = evaluator
+            ref_config = None
+
+        # same rule as _embedder_options: None when nothing was set, matching
+        # what the CLI / Dev UI send, so `options is None` is the one check.
+        final_options: dict[str, object] | None = None
+        if ref_config is not None or config is not None:
+            final_options = {**(ref_config or {}), **(config or {})}
 
         eval_action = await self._registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
@@ -1964,20 +2043,12 @@ class Genkit:
                 message=f"Evaluator '{evaluator_name}' not found.",
                 reason=RuntimeErrorReason.ACTION_NOT_FOUND,
             )
-        _, final_options = resolve_call_config(
-            name=evaluator_name,
-            kind='evaluator',
-            action_schema=python_config_schema(eval_action.config_schema),
-            call=config,
-            ref_schema=ref.config_schema if ref else None,
-            ref_config=ref.config if ref else None,
-        )
 
         if not eval_run_id:
             eval_run_id = str(uuid.uuid4())
 
         response = await eval_action.run(
-            BatchEvaluatorRequest(
+            EvaluatorRequest(
                 dataset=dataset,
                 options=final_options,
                 eval_run_id=eval_run_id,
@@ -2007,31 +2078,107 @@ class Genkit:
         attributes = {metadata_key(k): str(v) for k, v in (metadata or {}).items()}
         return await run_in_new_span(name, body, action_type='flowStep', attributes=attributes)
 
+    @overload
     async def check_operation(
         self,
-        operation: Operation,
+        operation: Operation[T],
         *,
         context: dict[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> Operation:
+    ) -> Operation[T]: ...
+
+    @overload
+    async def check_operation(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]: ...
+
+    async def check_operation(
+        self,
+        operation: Operation[Any] | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]:
         """Poll a background job.
+
+        Generic like JS ``checkOperation<T>``: an ``Operation[T]`` comes back
+        as ``Operation[T]``, a stored dict as ``Operation[Any]``. The handle's
+        ``action`` key finds the job. For a background model the handle is
+        validated as ``Operation[ModelResponse]`` before anything runs: an
+        unknown key, a missing ``id``, or an ``output`` that isn't a
+        ModelResponse is INVALID_ARGUMENT.
 
         Pass ``context={'secrets': {'api_key': ...}}`` again when start used a
         per-request key. ``config`` is client knobs (``base_url``,
         ``location``, ``api_version``), not video settings.
+
+        Example:
+            ```python
+            # 1. Start a job and store the handle as JSON
+            op = await ai.generate_operation(
+                model='googleai/veo-3.1-generate-preview',
+                prompt='A chef plating risotto.',
+            )
+            saved = op.model_dump_json()
+
+            # 2. Later, reload it typed and poll
+            op = await ai.check_operation(Operation[ModelResponse].model_validate_json(saved))
+            print(op.done)
+            # => False
+
+            # 3. Poll until done; output is a ModelResponse
+            while not op.done:
+                op = await ai.check_operation(op)
+            print(op.output.media[0].url)
+            # => https://storage.googleapis.com/.../risotto.mp4
+            ```
         """
         return await check_operation(self._registry, operation, context=context, config=config)
 
+    @overload
     async def cancel_operation(
         self,
-        operation: Operation,
+        operation: Operation[T],
         *,
         context: dict[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
-    ) -> Operation:
+    ) -> Operation[T]: ...
+
+    @overload
+    async def cancel_operation(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]: ...
+
+    async def cancel_operation(
+        self,
+        operation: Operation[Any] | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]:
         """Cancel a background job.
 
-        Same ``context`` / ``config`` pockets as ``check_operation``.
+        Same input and return types as ``check_operation``: ``Operation[T]``
+        in, ``Operation[T]`` out; a stored dict in, ``Operation[Any]`` out.
+        Same ``context`` / ``config`` pockets.
+
+        Example:
+            ```python
+            # 1. Reload the stored handle and cancel it
+            op = await ai.cancel_operation(json.loads(saved))
+
+            # 2. The returned handle reflects the cancel attempt
+            print(op.id)
+            # => operations/risotto-123
+            ```
         """
         return await cancel_operation(self._registry, operation, context=context, config=config)
 
@@ -2039,42 +2186,42 @@ class Genkit:
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundModel | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         config: ModelConfigDict,
         context: dict[str, object] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation: ...
+    ) -> Operation[ModelResponse]: ...
 
     @overload
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundModel | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         config: ModelRefConfigT | Mapping[str, Any] | None = None,
         context: dict[str, object] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation: ...
+    ) -> Operation[ModelResponse]: ...
 
     async def generate_operation(
         self,
         *,
-        model: ModelRef[ModelRefConfigT] | BackgroundAction | str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundModel | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         context: dict[str, object] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation:
+    ) -> Operation[ModelResponse]:
         """Generate content using a long-running model, returning an Operation to poll.
 
         A background start is one request that returns a job handle. There is
@@ -2089,7 +2236,7 @@ class Genkit:
             while not op.done:
                 op = await ai.check_operation(op)
         """
-        if isinstance(model, BackgroundAction):
+        if isinstance(model, BackgroundModel):
             # Same as its name, once we know this registry holds that object.
             model = background_model_name(model=model, registry=self._registry)
         resolved = await resolve_for_generate(
@@ -2139,4 +2286,4 @@ class Genkit:
             )
         if not response.operation:
             raise missing_operation_error(name=model_action.name)
-        return response.operation
+        return as_model_operation(response.operation, name=model_action.name, status='INTERNAL')

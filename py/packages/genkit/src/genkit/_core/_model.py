@@ -27,7 +27,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
+from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     AliasChoices,
@@ -51,12 +51,12 @@ from genkit._core._base import GenkitModel, dump_keeping_unknown
 from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
+from genkit._core._operation import Operation
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
     AgentFinishReason,
     Artifact as ArtifactData,
-    BaseDataPoint,
     DocumentData,
     FinishReason,
     GenerateActionOutputConfig,
@@ -67,7 +67,6 @@ from genkit._core._typing import (
     MessageData,
     MiddlewareRef,
     ModelInfo,
-    Operation,
     OutputConfig as OutputConfigData,
     PartData,
     Resource,
@@ -83,6 +82,9 @@ from genkit._core._typing import (
 
 # ModelConfigDict is the hand-copied autocomplete list for this class — keep
 # the keys matching so a new knob shows up in the IDE the same day it becomes legal.
+#
+# GenerationCommonConfig is generated as a GenkitConfig, so model_dump()
+# returns field names for provider SDKs and by_alias=True gives the wire shape.
 class ModelConfig(GenerationCommonConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
@@ -92,8 +94,6 @@ class ModelConfig(GenerationCommonConfig):
     here.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
-
     extra: dict[str, Any] | None = None
     """Provider settings the model's config class doesn't declare, sent as-is.
 
@@ -102,7 +102,8 @@ class ModelConfig(GenerationCommonConfig):
     builds from the request (messages, tools) are rejected rather than
     overwritten. Where the map lands depends on the provider: the request
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
-    ``additionalModelRequestFields`` for Bedrock.
+    ``additionalModelRequestFields`` for Bedrock chat models (the InvokeModel
+    body for Bedrock image models).
 
     Keys aren't validated, except that an API key here raises like one at the
     top level: config travels with the request into traces. Don't put other
@@ -110,10 +111,9 @@ class ModelConfig(GenerationCommonConfig):
     """
 
 
-ModelUsage = GenerationUsage  # public name for GenerationUsage
-
 # what callers pass as tool_choice; they type the string, not an enum.
 ToolChoice = Literal['auto', 'required', 'none']
+"""Whether the model may call tools (`auto`), must call one (`required`), or must not (`none`)."""
 
 # A termination known to carry no conforming output. Every path that would
 # parse a response against its output schema consults this first: a schema
@@ -125,14 +125,12 @@ ToolChoice = Literal['auto', 'required', 'none']
 # to it, so treating it as abnormal would silently drop validation for
 # responses the model may well have completed.
 #
-# Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go).
-ABNORMAL_FINISH_REASONS = frozenset({
-    FinishReason.BLOCKED,
-    FinishReason.ABORTED,
-    FinishReason.FAILED,
-    FinishReason.INTERRUPTED,
-    FinishReason.OTHER,
-})
+# Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go). Derived from
+# FinishReason.is_abnormal so the two can't drift.
+ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset(
+    reason for reason in FinishReason if reason.is_abnormal()
+)
+"""Finish reasons that skip output-schema validation because the response carries no conforming output."""
 
 logger = get_logger(__name__)
 
@@ -613,7 +611,8 @@ class Part(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
         validate_assignment=True,
     )
 
@@ -999,35 +998,6 @@ class Message(GenkitModel):
         return [p for p in self.tool_requests if p.metadata and p.metadata.get('interrupt')]
 
 
-class Candidate(GenkitModel):
-    """One sampled reply from a generate call."""
-
-    index: float
-    message: Message
-    usage: GenerationUsage | None = None
-    finish_reason: FinishReason
-    finish_message: str | None = None
-    custom: Any | None = Field(default=None)
-
-    @field_validator('message', mode='before')
-    @classmethod
-    def _wrap_message(cls, v: object) -> object:
-        return as_message(v)
-
-
-def as_candidate(value: object) -> Candidate:
-    if isinstance(value, Candidate):
-        return Candidate(
-            index=value.index,
-            message=value.message,
-            usage=value.usage,
-            finish_reason=value.finish_reason,
-            finish_message=value.finish_message,
-            custom=value.custom,
-        )
-    return Candidate.model_validate(value)
-
-
 class GenerateActionOptions(GenkitModel):
     """Generate options with messages as list[Message] for type-safe use with ai.generate()."""
 
@@ -1135,7 +1105,7 @@ class Artifact(GenkitModel):
 
 
 def options_dict(value: object) -> dict[str, Any]:
-    """The options dict an untyped embedder or evaluator receives.
+    """The options dict an untyped embedder receives.
 
     ``None`` is ``{}``. A mapping is copied. A BaseModel is dumped with only
     the fields the caller set, the same as an untyped model fn's config, so a
@@ -1157,7 +1127,7 @@ def options_dict(value: object) -> dict[str, Any]:
 
 
 def check_options_value(cls: type, value: object) -> object:
-    """The before-validator for ``options`` on EmbedRequest and the evaluator requests.
+    """The before-validator for ``options`` on EmbedRequest.
 
     Untyped, options is always a dict (see options_dict). Typed, it follows
     ModelRequest's config rule, and ``None`` is ``{}`` so the fn gets the
@@ -1207,84 +1177,45 @@ class EmbedRequest(GenkitModel, Generic[RequestOptionsT]):
         return check_options_value(cls, v)
 
 
-def _batch_evaluator_request_schema(schema: JsonDict, cls: type) -> None:
-    """The action input schema, titled as before the Python class was renamed.
+def count_message_usage(messages: Sequence[Message], response: Message) -> dict[str, int]:
+    """Character and media counts behind ``GenerationUsage.from_messages``."""
 
-    The shared schema calls this type EvalRequest and Python used to call it
-    EvaluatorRequest, so the Dev UI and reflection see the same JSON schema.
-    """
-    _untyped_options_schema(schema, cls)
-    title = schema.get('title')
-    if isinstance(title, str) and title.startswith('BatchEvaluatorRequest'):
-        schema['title'] = title.removeprefix('Batch')
+    def count_parts(parts: Sequence[Part]) -> tuple[int, int, int, int]:
+        characters = 0
+        images = 0
+        videos = 0
+        audio = 0
 
+        for part in parts:
+            if part.text:
+                characters += len(part.text)
 
-class BatchEvaluatorRequest(GenkitModel, Generic[RequestOptionsT]):
-    """What an evaluator action receives: the whole dataset plus options.
+            media = part.media
+            if media:
+                content_type = media.content_type or ''
+                url = media.url or ''
 
-    The wire ``EvalRequest`` (``dataset``, ``evalRunId``, ``options``). A batch
-    evaluator's fn takes it as is. A per-row evaluator's fn gets one
-    ``EvaluatorRequest`` per row instead. Bare ``BatchEvaluatorRequest`` has
-    ``options`` as ``dict[str, Any]`` so evaluators read it without a None
-    guard. ``BatchEvaluatorRequest[JudgeConfig]`` validates it into ``JudgeConfig``.
-    See ``Genkit.define_batch_evaluator`` for an example.
-    """
+                if content_type.startswith('image') or url.startswith('data:image'):
+                    images += 1
+                elif content_type.startswith('video') or url.startswith('data:video'):
+                    videos += 1
+                elif content_type.startswith('audio') or url.startswith('data:audio'):
+                    audio += 1
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_batch_evaluator_request_schema)
-    dataset: list[BaseDataPoint]
-    eval_run_id: str
-    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
+        return characters, images, videos, audio
 
-    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
-        """``BatchEvaluatorRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
-        check_config_type_arg(request='BatchEvaluatorRequest', field='options', typevar_values=typevar_values)
-        return super().__class_getitem__(typevar_values)
-
-    @field_validator('options', mode='before')
-    @classmethod
-    def _check_options_type(cls, v: object) -> object:
-        return check_options_value(cls, v)
-
-
-class EvaluatorRequest(GenkitModel, Generic[RequestOptionsT]):
-    """What a per-row evaluator's fn receives: one dataset row plus options.
-
-    Python only, never on the wire: the action receives a
-    ``BatchEvaluatorRequest`` and builds one of these per row. Bare
-    ``EvaluatorRequest`` has ``options`` as a dict.
-    ``EvaluatorRequest[RelevanceConfig]`` gives a validated ``RelevanceConfig``.
-
-    Example:
-        ```python
-        # 1. Score one row against the configured keyword
-        async def relevance(req: EvaluatorRequest[RelevanceConfig]) -> EvaluatorResponse:
-            hit = req.options.keyword in str(req.row.output).lower()
-            return EvaluatorResponse(test_case_id=req.row.test_case_id or '', evaluation=[Score(score=hit)])
-
-
-        # 2. Register it; RelevanceConfig is the Dev UI options form
-        ai.define_evaluator('relevance', relevance, display_name='Relevance', definition='Mentions the keyword.')
-
-        # 3. Run it over a dataset
-        rows = await ai.evaluate(evaluator='relevance', dataset=dataset, config={'keyword': 'salmon'})
-        print(rows[0].evaluation[0].score)
-        # => True
-        ```
-    """
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
-    row: BaseDataPoint
-    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
-
-    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
-        """``EvaluatorRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
-        check_config_type_arg(request='EvaluatorRequest', field='options', typevar_values=typevar_values)
-        return super().__class_getitem__(typevar_values)
-
-    @field_validator('options', mode='before')
-    @classmethod
-    def _check_options_type(cls, v: object) -> object:
-        return check_options_value(cls, v)
+    in_chars, in_imgs, in_vids, in_audio = count_parts([part for msg in messages for part in msg.content])
+    out_chars, out_imgs, out_vids, out_audio = count_parts(response.content)
+    return {
+        'input_characters': in_chars,
+        'input_images': in_imgs,
+        'input_videos': in_vids,
+        'input_audio_files': in_audio,
+        'output_characters': out_chars,
+        'output_images': out_imgs,
+        'output_videos': out_vids,
+        'output_audio_files': out_audio,
+    }
 
 
 class SessionState(GenkitModel):
@@ -1446,7 +1377,7 @@ class OutputConfig(GenkitModel):
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
+        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True, protected_namespaces=()
     )
     format: str | None = None
     json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
@@ -1482,7 +1413,9 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         so passing them there leaves output unset.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
+    )
     messages: list[Message]
     docs: list[Document] | None = None
     config: ModelRequestConfigT | None = None
@@ -1612,7 +1545,37 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     raw: dict[str, Any] | None = None
     request: ModelRequest | None = None
     operation: Operation | None = None
-    candidates: list[Candidate] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _drop_candidates(cls, data: object) -> object:
+        # JS responses, stored traces, session snapshots and older plugins may
+        # still carry the deprecated `candidates` list. Drop it instead of
+        # failing on extra='forbid'. When the top-level reply is missing, fill
+        # it from candidate 0, as JS GenerateResponse does.
+        if not isinstance(data, dict) or 'candidates' not in data:
+            return data
+        raw = cast(dict[str, Any], data)
+        fields = {k: v for k, v in raw.items() if k != 'candidates'}
+        candidates: object = raw['candidates']
+        if fields.get('message') is not None or not isinstance(candidates, list) or not candidates:
+            return fields
+        candidate_list = cast(list[Any], candidates)
+        first: object = next(
+            (c for c in candidate_list if isinstance(c, Mapping) and cast(Mapping[str, Any], c).get('index', 0) == 0),
+            candidate_list[0],
+        )
+        if isinstance(first, BaseModel):
+            first = first.model_dump(by_alias=True, exclude_none=True)
+        if not isinstance(first, Mapping):
+            return fields
+        candidate = cast(Mapping[str, Any], first)
+        fields['message'] = candidate.get('message')
+        for camel, snake in (('finishReason', 'finish_reason'), ('finishMessage', 'finish_message')):
+            value = candidate.get(camel, candidate.get(snake))
+            if value is not None and fields.get(camel) is None and fields.get(snake) is None:
+                fields[camel] = value
+        return fields
 
     @field_validator('message', mode='before')
     @classmethod
@@ -1627,13 +1590,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         if v is None:
             return v
         return as_model_request(v)
-
-    @field_validator('candidates', mode='before')
-    @classmethod
-    def _wrap_candidates(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_candidate(c) for c in v]
 
     def model_post_init(self, __context: object) -> None:
         """Initialize default usage and custom dict if not provided."""
@@ -1684,7 +1640,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         try:
             parsed = self._raw_parsed_output()
         except Exception as exc:
-            if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
+            if isinstance(exc, GenkitError) and (exc.message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
             if cut_off:
@@ -1712,9 +1668,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             try:
                 parse_schema(data=parsed, json_schema=schema)
             except GenkitError as error:
-                if error.original_message.startswith('Invalid output_schema'):
+                if error.message.startswith('Invalid output_schema'):
                     raise
-                self._mark_invalid_output(error.original_message)
+                self._mark_invalid_output(error.message)
                 return
 
         # A custom format's parser can return a scalar (e.g. enum string).
@@ -1986,7 +1942,6 @@ AgentInit.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentInput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentOutput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentResult.model_rebuild(force=True, _types_namespace=_VENEER_NS)
-Candidate.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 ModelResponse.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 ModelResponseChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentStreamChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
@@ -2065,54 +2020,6 @@ def text_from_content(content: Sequence[Part]) -> str:
         if p.text is not None:
             texts.append(str(p.text))
     return ''.join(texts)
-
-
-def get_basic_usage_stats(input_: list[Message], response: Message) -> GenerationUsage:
-    """Calculate usage stats (characters, media counts) from messages."""
-    request_parts: list[Part] = []
-    for msg in input_:
-        request_parts.extend(msg.content)
-
-    response_parts = response.content
-
-    def count_parts(parts: list[Part]) -> tuple[int, int, int, int]:
-        """Count characters, images, videos, audio in parts."""
-        characters = 0
-        images = 0
-        videos = 0
-        audio = 0
-
-        for part in parts:
-            if part.text:
-                characters += len(part.text)
-
-            media = part.media
-            if media:
-                content_type = media.content_type or ''
-                url = media.url or ''
-
-                if content_type.startswith('image') or url.startswith('data:image'):
-                    images += 1
-                elif content_type.startswith('video') or url.startswith('data:video'):
-                    videos += 1
-                elif content_type.startswith('audio') or url.startswith('data:audio'):
-                    audio += 1
-
-        return characters, images, videos, audio
-
-    in_chars, in_imgs, in_vids, in_audio = count_parts(request_parts)
-    out_chars, out_imgs, out_vids, out_audio = count_parts(response_parts)
-
-    return GenerationUsage(
-        input_characters=in_chars,
-        input_images=in_imgs,
-        input_videos=in_vids,
-        input_audio_files=in_audio,
-        output_characters=out_chars,
-        output_images=out_imgs,
-        output_videos=out_vids,
-        output_audio_files=out_audio,
-    )
 
 
 # Rebuild schema after all types (including Message) are fully defined.

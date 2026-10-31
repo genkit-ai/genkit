@@ -22,7 +22,7 @@ from typing import Any
 
 from genkit import Genkit
 from genkit.evaluator import (
-    EvaluatorRequest,
+    BaseDataPoint,
     EvaluatorResponse,
     Score,
     ScoreStatus,
@@ -41,9 +41,8 @@ def genkit_eval_name(local: str) -> str:
     return f'{PROVIDER}/{local}'
 
 
-async def _regex_impl(req: EvaluatorRequest) -> EvaluatorResponse:
+async def _regex_impl(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
     """Regex evaluator: reference must be a regex string; output tested against it."""
-    datapoint = req.row
     if datapoint.output is None:
         raise ValueError('output was not provided')
     if datapoint.reference is None:
@@ -59,9 +58,8 @@ async def _regex_impl(req: EvaluatorRequest) -> EvaluatorResponse:
     )
 
 
-async def _deep_equal_impl(req: EvaluatorRequest) -> EvaluatorResponse:
+async def _deep_equal_impl(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
     """Deep equal evaluator: output must equal reference."""
-    datapoint = req.row
     if datapoint.output is None:
         raise ValueError('output was not provided')
     if datapoint.reference is None:
@@ -74,9 +72,8 @@ async def _deep_equal_impl(req: EvaluatorRequest) -> EvaluatorResponse:
     )
 
 
-async def _jsonata_impl(req: EvaluatorRequest) -> EvaluatorResponse:
+async def _jsonata_impl(datapoint: BaseDataPoint, _options: object | None = None) -> EvaluatorResponse:
     """JSONata evaluator: reference is a JSONata expression; evaluated against output."""
-    datapoint = req.row
     if datapoint.output is None:
         raise ValueError('output was not provided')
     if datapoint.reference is None:

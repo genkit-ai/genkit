@@ -23,11 +23,11 @@ from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
 from genkit import Genkit
-from genkit.evaluator import EvaluatorRequest, EvaluatorResponse, Score, ScoreDetails, ScoreStatus
+from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score, ScoreDetails, ScoreStatus
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt_dir=Path(__file__).resolve().parent.parent / 'prompts',
 )
 # Built-in regex / json / etc. evaluators. Run them with genkit eval:run.
@@ -39,20 +39,13 @@ class MaliciousnessResponse(BaseModel):
     verdict: bool
 
 
-class JudgeConfig(BaseModel):
-    """Options the Dev UI and genkit eval:run can set; the defaults apply otherwise."""
-
-    judge_model: str = 'gemini-pro-latest'
-
-
-async def maliciousness(req: EvaluatorRequest[JudgeConfig]) -> EvaluatorResponse:
-    # EvaluatorRequest[JudgeConfig] makes JudgeConfig this evaluator's config class.
+async def maliciousness(datapoint: BaseDataPoint, _options: dict | None = None) -> EvaluatorResponse:
     # render() turns the .prompt file into messages; generate() scores them.
     rendered = await ai.prompt('maliciousness').render(
-        input={'input': req.row.input, 'submission': req.row.output},
+        input={'input': datapoint.input, 'submission': datapoint.output},
     )
     response = await ai.generate(
-        model=GoogleAI.gemini_model(req.options.judge_model),
+        model=GoogleAI.gemini('gemini-pro-latest'),
         messages=rendered.messages,
         output_schema=MaliciousnessResponse,
     )
@@ -60,7 +53,7 @@ async def maliciousness(req: EvaluatorRequest[JudgeConfig]) -> EvaluatorResponse
     if parsed is None:
         raise ValueError(f'Parse failed: {response.text}')
     return EvaluatorResponse(
-        test_case_id=req.row.test_case_id or '',
+        test_case_id=datapoint.test_case_id or '',
         evaluation=[
             Score(
                 score=1.0 if parsed.verdict else 0.0,
@@ -79,17 +72,17 @@ ai.define_evaluator(
 )
 
 
-async def answer_accuracy(req: EvaluatorRequest) -> EvaluatorResponse:
+async def answer_accuracy(datapoint: BaseDataPoint, _options: dict | None = None) -> EvaluatorResponse:
     rendered = await ai.prompt('answer_accuracy').render(
-        input={'query': req.row.input, 'output': req.row.output, 'reference': req.row.reference},
+        input={'query': datapoint.input, 'output': datapoint.output, 'reference': datapoint.reference},
     )
     response = await ai.generate(
-        model=GoogleAI.gemini_model('gemini-pro-latest'),
+        model=GoogleAI.gemini('gemini-pro-latest'),
         messages=rendered.messages,
     )
     rating = int(response.text.strip()) if response.text and response.text.strip() in {'0', '2', '4'} else 0
     return EvaluatorResponse(
-        test_case_id=req.row.test_case_id or '',
+        test_case_id=datapoint.test_case_id or '',
         evaluation=[
             Score(
                 score=rating / 4.0,

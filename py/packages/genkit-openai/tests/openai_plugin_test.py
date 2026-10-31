@@ -28,17 +28,16 @@ import pytest
 from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
 from genkit_openai._models._handler import OpenAIModelHandler
 from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
-from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
 from genkit_openai._openai_plugin import OpenAI
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 from openai.types import Model
 from openai.types.chat import ChatCompletion
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
-from genkit._ai._formats._builtin import built_in_formats
 from genkit.embedder import EmbedRequest, EmbedResponse
-from genkit.model import Supports
-from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
+from genkit.model import ConstrainedSupport, ModelSupports
+from genkit.plugin_api import Action, ActionKind, loop_local_client
 
 
 @pytest.mark.asyncio
@@ -94,6 +93,7 @@ GPT_6_ASTRA_SUPPORTS = {
     'tools': False,
     'systemRole': True,
     'output': ['json', 'text'],
+    'constrained': 'all',
 }
 
 
@@ -102,17 +102,36 @@ def test_gpt_6_astra_catalog_entry() -> None:
     info = SUPPORTED_OPENAI_MODELS['gpt-6-astra']
 
     assert info.label == 'OpenAI - gpt-6-astra'
-    assert info.supports == Supports(
+    assert info.supports == ModelSupports(
         multiturn=True,
         media=True,
         tools=False,
         system_role=True,
         output=['json', 'text'],
+        constrained=ConstrainedSupport.ALL,
     )
 
 
-# Image and audio models list 'media' in addition to the built-in formats.
-KNOWN_OUTPUTS = {f.name for f in built_in_formats} | {'media'}
+@pytest.mark.parametrize(
+    ('model', 'constrained'),
+    [
+        ('gpt-4o', ConstrainedSupport.ALL),
+        ('gpt-4.1', ConstrainedSupport.ALL),
+        ('o3-mini', ConstrainedSupport.ALL),
+        ('gpt-5', ConstrainedSupport.ALL),
+        ('gpt-4-turbo', None),
+        ('gpt-4', None),
+        ('gpt-3.5-turbo', None),
+        ('gpt-5-chat-latest', None),
+    ],
+)
+def test_catalog_declares_native_json_only_where_json_schema_works(
+    model: KnownGpt, constrained: ConstrainedSupport | None
+) -> None:
+    """Models with response_format json_schema skip the prompt's schema text; json_object-only models keep it."""
+    supports = SUPPORTED_OPENAI_MODELS[model].supports
+    assert supports is not None
+    assert supports.constrained == constrained
 
 
 @pytest.mark.parametrize(
@@ -122,9 +141,11 @@ KNOWN_OUTPUTS = {f.name for f in built_in_formats} | {'media'}
 )
 def test_catalog_output_names_are_known_formats(catalog: dict[str, Any]) -> None:
     """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
+    ai = Genkit()
     for name, info in catalog.items():
         outputs = info.supports.output if info.supports else None
-        unknown = set(outputs or []) - KNOWN_OUTPUTS
+        # Image and audio models list 'media' in addition to the formats Genkit registers.
+        unknown = {o for o in outputs or [] if o != 'media' and ai.lookup_value(kind='format', name=o) is None}
         assert not unknown, f'{name}: {sorted(unknown)}'
 
 
@@ -182,7 +203,7 @@ async def test_openai_plugin_list_actions() -> None:
 
     plugin._runtime_client = lambda: mock_client
 
-    actions: list[ActionMetadata] = await plugin.list_actions()
+    actions: list[Action] = await plugin.list_actions()
     mock_client.models.list.assert_called_once()
     _ = await plugin.list_actions()
     # list_actions is cached after the first API fetch.
@@ -200,7 +221,8 @@ async def test_openai_plugin_list_actions() -> None:
 
     chat = next(a for a in actions if a.name == 'openai/gpt-4')
     assert chat.metadata is not None
-    chat_props = chat.metadata['model']['customOptions']['properties']
+    chat_model = cast(dict[str, Any], chat.metadata['model'])
+    chat_props = chat_model['customOptions']['properties']
     assert 'frequencyPenalty' in chat_props
     assert 'maxTokens' in chat_props
 
@@ -212,7 +234,8 @@ async def test_openai_plugin_list_actions() -> None:
 
     embed = next(a for a in actions if a.name == 'openai/text-embedding-ada-002')
     assert embed.metadata is not None
-    embed_options = embed.metadata.get('embedder', {}).get('customOptions')
+    embed_meta = cast(dict[str, Any], embed.metadata.get('embedder', {}))
+    embed_options = embed_meta.get('customOptions')
     assert embed_options is None or 'frequencyPenalty' not in (embed_options.get('properties') or {})
 
 

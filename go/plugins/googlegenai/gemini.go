@@ -406,7 +406,11 @@ func toGeminiRole(role ai.Role) string {
 func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
 	gcc := config
 
-	isTTS := len(modelName) > 0 && isTTSModelName(modelName[0])
+	var name string
+	if len(modelName) > 0 {
+		name = modelName[0]
+	}
+	isTTS := isTTSModelName(name)
 
 	// candidate count might not be set to 1 and will keep its zero value if not set
 	// e.g. default value from reflection server is 0. TTS models leave it unset.
@@ -414,7 +418,13 @@ func toGeminiRequest(input *ai.ModelRequest, config *genai.GenerateContentConfig
 		gcc.CandidateCount = 1
 	}
 	if isTTS && len(gcc.ResponseModalities) == 0 {
-		gcc.ResponseModalities = []string{"AUDIO"}
+		gcc.ResponseModalities = []string{string(genai.ModalityAudio)}
+	}
+	// Image-output models answer a bare prompt (e.g. from the dev UI) with
+	// text only unless asked for an image. Callers can still override the
+	// modalities via ai.WithConfig.
+	if isImageModelName(name) && len(gcc.ResponseModalities) == 0 {
+		gcc.ResponseModalities = []string{string(genai.ModalityText), string(genai.ModalityImage)}
 	}
 	// TTS generateContent requires a speechConfig with a voice; the API rejects
 	// audio requests without one. Supply a default voice so the dedicated TTS
@@ -550,8 +560,24 @@ func hasSpeechVoiceConfig(sc *genai.SpeechConfig) bool {
 	return sc.VoiceConfig.PrebuiltVoiceConfig != nil || sc.VoiceConfig.ReplicatedVoiceConfig != nil
 }
 
+// modelID returns the bare model ID of name, which is either an ID or a
+// resource path such as projects/p/locations/l/gemini-3-pro-image. Matching
+// on the full path would let a project ID like "my-tts-app" classify every
+// model.
+func modelID(name string) string {
+	return name[strings.LastIndex(name, "/")+1:]
+}
+
+// isTTSModelName reports whether name is a Gemini text-to-speech model.
 func isTTSModelName(name string) bool {
-	return strings.Contains(strings.TrimPrefix(name, "googleai/"), "-tts")
+	return strings.Contains(modelID(name), "-tts")
+}
+
+// isImageModelName reports whether name is a Gemini model that generates
+// images (e.g. gemini-3.1-flash-image), as opposed to Imagen.
+func isImageModelName(name string) bool {
+	id := modelID(name)
+	return strings.HasPrefix(id, "gemini-") && strings.Contains(id, "-image")
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.

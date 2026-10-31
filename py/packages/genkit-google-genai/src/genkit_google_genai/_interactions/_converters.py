@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 from typing import Any, Literal, cast
 
 from google.genai.interactions import (
@@ -60,9 +59,9 @@ from google.genai.interactions import (
 )
 from pydantic import BaseModel
 
-from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part
+from genkit import FinishReason, GenkitError, Media, Message, ModelResponse, Operation, Part, get_logger
 from genkit.model import (
-    ModelUsage,
+    GenerationUsage,
     OperationError,
     ToolDefinition,
     ToolRequest,
@@ -70,7 +69,7 @@ from genkit.model import (
 )
 from genkit.plugin_api import StatusName, provider_error
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 InteractionRole = Literal['user', 'model']
 
@@ -753,9 +752,9 @@ def interaction_message_metadata(interaction: Interaction) -> dict[str, Any] | N
     return metadata or None
 
 
-def usage_from_interaction(usage: Usage) -> ModelUsage:
-    """Map Interactions Usage onto Genkit ModelUsage."""
-    response_usage = ModelUsage(
+def usage_from_interaction(usage: Usage) -> GenerationUsage:
+    """Map Interactions Usage onto Genkit GenerationUsage."""
+    response_usage = GenerationUsage(
         input_tokens=usage.total_input_tokens,
         output_tokens=usage.total_output_tokens,
         total_tokens=usage.total_tokens,

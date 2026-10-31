@@ -18,16 +18,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import copy
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator
 
 from genkit import GenkitError, ModelResponse, ModelResponseChunk
-from genkit._ai._model import layer_call_config
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelRef, ModelRequest
-from genkit.plugin_api import Action
+from genkit.plugin_api import Action, GenkitConfig
 from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
@@ -36,14 +36,14 @@ from genkit_middleware._statuses import TRANSIENT_STATUSES
 _DEFAULT_FALLBACK_STATUSES: list[str] = [*TRANSIENT_STATUSES, 'NOT_FOUND', 'UNIMPLEMENTED']
 
 
-class FallbackModelEntry(BaseModel):
+class FallbackModelEntry(GenkitConfig):
     """A backup model and the config that model runs with."""
 
     name: str
     config: dict[str, Any] | None = None
 
 
-class FallbackConfig(BaseModel):
+class FallbackConfig(GenkitConfig):
     """Models and statuses that trigger fallback."""
 
     models: list[str | FallbackModelEntry] = Field(default_factory=list)
@@ -64,20 +64,27 @@ class FallbackConfig(BaseModel):
             elif isinstance(item, dict):
                 entries.append(cast(dict[str, Any], item))
             elif isinstance(item, Action):
-                raise ValueError(f"Fallback models are names or model_ref(...); pass '{item.name}', not the action")
+                raise ValueError(f"Fallback models are names or a ModelRef(...); pass '{item.name}', not the action")
             else:
-                raise ValueError('each Fallback model must be a model name or a model_ref(...)')
+                raise ValueError('each Fallback model must be a model name or a ModelRef(...)')
         return entries
 
 
 def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
     """The config this backup runs with: the ref's version and config only.
 
-    Layered the way generate layers a ref (ref.version < ref.config, folded
-    to the ref's class, an explicit None kept). The backup model's own
-    defaults and validation apply when it runs.
+    Stored as wire keys (``by_alias=True``) because ``FallbackConfig`` is a
+    JSON middleware config, with ``ref.version < ref.config`` and an explicit
+    ``None`` kept. The backup model's own defaults and validation apply when
+    it runs.
     """
-    bag = layer_call_config(call=None, version=model.version, ref_config=model.config, schema=model.config_schema)
+    bag: dict[str, Any] = {}
+    if model.version is not None:
+        bag['version'] = model.version
+    if isinstance(model.config, BaseModel):
+        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=False))
+    elif isinstance(model.config, Mapping):
+        bag.update(copy.deepcopy(dict(model.config)))
     return bag or None
 
 
@@ -88,12 +95,15 @@ def fallback_request_config(entry: str | FallbackModelEntry) -> dict[str, Any] |
     return entry.config
 
 
-class Fallback(BaseMiddleware[FallbackConfig]):
+class Fallback(Middleware[FallbackConfig]):
     """Fallback middleware to try alternative models on failure."""
+
+    name = 'fallback'
+    description = 'Falls back to alternative models on failure'
 
     async def _resolve_fallback_model(
         self,
-        ctx: GenerateMiddlewareContext,
+        ctx: MiddlewareContext,
         model_name: str,
     ) -> Action[ModelRequest, ModelResponse, ModelResponseChunk]:
         """Look up a fallback model among the app's models."""
@@ -108,8 +118,8 @@ class Fallback(BaseMiddleware[FallbackConfig]):
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
@@ -135,9 +145,9 @@ class Fallback(BaseMiddleware[FallbackConfig]):
                 {**dict(params.request), 'config': fallback_request_config(entry) or {}},
             )
             try:
-                result = await fallback_action.run(
+                result = await fallback_action._run(
                     input=fallback_request,
-                    context=ctx.custom_context,
+                    context=ctx.context,
                     on_chunk=on_chunk,
                     abort_signal=ctx.abort_signal,
                 )

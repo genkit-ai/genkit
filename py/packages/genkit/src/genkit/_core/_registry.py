@@ -40,23 +40,19 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     set_action_name,
 )
+from genkit._core._background import BackgroundAction, background_base_id
 from genkit._core._dap import DapFn, DapMetadata, DynamicActionProvider
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
 from genkit._core._model import (
-    BatchEvaluatorRequest,
     EmbedRequest,
     ModelRequest,
     ModelResponse,
     ModelResponseChunk,
 )
+from genkit._core._operation import Operation
 from genkit._core._plugin import Plugin, resolved_action_name
-from genkit._core._typing import (
-    ActionMetadata,
-    EmbedResponse,
-    EvalResponse,
-    Operation,
-)
+from genkit._core._typing import ActionMetadata, EmbedResponse, EvalResponse, EvaluatorRequest
 
 logger = get_logger(__name__)
 
@@ -292,7 +288,6 @@ class Registry:
         description: str | None = None,
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
-        config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
     ) -> Action[InputT, OutputT, ChunkT]:
         """Register a new action with the registry.
@@ -309,7 +304,6 @@ class Registry:
             description: Optional human-readable description of the action.
             metadata: Optional dictionary of metadata about the action.
             span_metadata: Optional dictionary of tracing span metadata.
-            config_schema: Optional config class (or JSON schema) the action takes.
             _strict_io: Treat None as a value and validate the return.
 
         Returns:
@@ -323,7 +317,6 @@ class Registry:
             description=description,
             metadata=metadata,
             span_metadata=span_metadata,
-            config_schema=config_schema,
             _strict_io=_strict_io,
         )
         action_typed = cast(Action[InputT, OutputT, ChunkT], action)
@@ -416,7 +409,7 @@ class Registry:
                 logger.exception('Error listing actions for plugin %s', plugin_name)
                 continue
             for item in advertised or []:
-                meta = item._action_metadata() if isinstance(item, Action) else item
+                meta = item._action_metadata() if isinstance(item, (Action, BackgroundAction)) else item
                 if not meta.name:
                     raise ValueError(f'Invalid ActionMetadata from {plugin_name}: name required')
                 if not meta.action_type:
@@ -574,8 +567,11 @@ class Registry:
                     # Assert for type narrowing inside closure (pyrefly doesn't propagate from outer scope)
                     assert plugin is not None
                     actions = await plugin.init()
-                    for action in actions or []:
-                        self.register_action_instance(action, namespace=plugin_name)
+                    for item in actions or []:
+                        # A background action is three registry entries.
+                        members = item.actions if isinstance(item, BackgroundAction) else [item]
+                        for action in members:
+                            self.register_action_instance(action, namespace=plugin_name)
 
                 task = asyncio.create_task(run_init())
                 loop_tasks[plugin_name] = task
@@ -707,8 +703,6 @@ class Registry:
                 return await self._parent.resolve_action(kind, name)
             return None
 
-        action: Action | None = None
-
         # Namespaced request
         if '/' in name:
             plugin_name, local = name.split('/', 1)
@@ -725,14 +719,27 @@ class Registry:
                     if kind in self._entries and target in self._entries[kind]:
                         return await self._trigger_lazy_loading(self._entries[kind][target])
 
-                action = await plugin.resolve(kind, local)
-                if action is not None:
+                resolved = await plugin.resolve(kind, local)
+                if resolved is None and kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
+                    # Check and cancel belong to the start action's background
+                    # job; a plugin only has to resolve that.
+                    resolved = await plugin.resolve(ActionKind.BACKGROUND_MODEL, background_base_id(kind, local))
+                    if not isinstance(resolved, BackgroundAction):
+                        resolved = None
+                if isinstance(resolved, BackgroundAction):
+                    # Same naming rule as below, for all three members.
+                    base = background_base_id(kind, local)
+                    resolved._rename(resolved_action_name(plugin=plugin_name, requested_id=base))
+                    for member in resolved.actions:
+                        self.register_action_instance(member, namespace=plugin_name)
+                    return await self._trigger_lazy_loading(resolved._action_for(kind))
+                if resolved is not None:
                     # The caller asked for ``target``; store and name it there
                     # so a later lookup of that id finds this action, even if
                     # the plugin returned a different name.
-                    set_action_name(action, resolved_action_name(plugin=plugin_name, requested_id=local))
-                    self.register_action_instance(action, namespace=plugin_name)
-                    return await self._trigger_lazy_loading(action)
+                    set_action_name(resolved, resolved_action_name(plugin=plugin_name, requested_id=local))
+                    self.register_action_instance(resolved, namespace=plugin_name)
+                    return await self._trigger_lazy_loading(resolved)
 
         # Final fallback: delegate to parent registry.
         if self._parent is not None:
@@ -889,7 +896,7 @@ class Registry:
             action,
         )
 
-    async def resolve_evaluator(self, name: str) -> Action[BatchEvaluatorRequest, EvalResponse, Never] | None:
+    async def resolve_evaluator(self, name: str) -> Action[EvaluatorRequest, EvalResponse, Never] | None:
         """Resolve an evaluator action by name with full type information.
 
         Args:
@@ -901,7 +908,7 @@ class Registry:
         action = await self.resolve_action(ActionKind.EVALUATOR, name)
         if action is None:
             return None
-        return cast(Action[BatchEvaluatorRequest, EvalResponse, Never], action)
+        return cast(Action[EvaluatorRequest, EvalResponse, Never], action)
 
 
 def define_dynamic_action_provider(

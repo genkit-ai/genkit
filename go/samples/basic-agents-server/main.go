@@ -38,6 +38,13 @@
 //
 //	go run .
 //
+// Or keep chat's sessions in PostgreSQL instead of local files. Every server
+// on the same database then sees every session, and a background turn started
+// on one server can be aborted from another. The connection URL comes from
+// DATABASE_URL, or the standard PG* variables when it is unset:
+//
+//	DATABASE_URL=postgres://user:password@localhost:5432/app go run . -store=postgres
+//
 // Or with the Dev UI, to call the agents from a browser and read a trace of
 // every turn at http://localhost:4000/traces:
 //
@@ -90,18 +97,27 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 	"github.com/firebase/genkit/go/plugins/googlegenai"
+	"github.com/firebase/genkit/go/plugins/postgresql"
+	pgexp "github.com/firebase/genkit/go/plugins/postgresql/exp"
 	"github.com/firebase/genkit/go/plugins/server"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/genai"
 )
+
+var storeKind = flag.String("store", "file", `where "chat" keeps its sessions: "file" or "postgres"`)
 
 // model is shared by every agent below, so switching models or thinking levels
 // for the whole sample is a one-line change.
@@ -112,16 +128,31 @@ var model = googlegenai.ModelRef("googleai/gemini-flash-latest", &genai.Generate
 })
 
 func main() {
+	flag.Parse()
 	ctx := context.Background()
 
 	// The Google AI plugin reads the API key from GEMINI_API_KEY or
 	// GOOGLE_API_KEY, which is the recommended practice.
-	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}), genkit.WithExperimental())
+	plugins := []api.Plugin{&googlegenai.GoogleAI{}}
+	if *storeKind == "postgres" {
+		// The PostgreSQL session store shares the pool of the PostgreSQL
+		// plugin, as the plugin's vector store does.
+		pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			log.Fatalf("connecting to PostgreSQL: %v", err)
+		}
+		defer pool.Close()
+		engine, err := postgresql.NewPostgresEngine(ctx, postgresql.WithPool(pool))
+		if err != nil {
+			log.Fatalf("creating the PostgreSQL engine: %v", err)
+		}
+		plugins = append(plugins, &postgresql.Postgres{Engine: engine})
+	}
+	g := genkit.Init(ctx, genkit.WithPlugins(plugins...), genkit.WithExperimental())
 
 	// "chat" persists every conversation to a snapshot store, so a client
-	// only needs to hold on to the sessionId between requests. Snapshots
-	// land under ./.genkit/snapshots/chat/.
-	store, err := localstore.NewFileSessionStore[any]("./.genkit/snapshots/chat")
+	// only needs to hold on to the sessionId between requests.
+	store, err := newStore(ctx, g)
 	if err != nil {
 		log.Fatalf("creating session store: %v", err)
 	}
@@ -162,5 +193,19 @@ func main() {
 	}
 	if err := server.Start(ctx, "127.0.0.1:8080", mux); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// newStore returns the session store that -store selects. With "file",
+// snapshots land under ./.genkit/snapshots/chat/; with "postgres", in a table
+// the store creates when it does not exist.
+func newStore(ctx context.Context, g *genkit.Genkit) (aix.SessionStore[any], error) {
+	switch *storeKind {
+	case "file":
+		return localstore.NewFileSessionStore[any]("./.genkit/snapshots/chat")
+	case "postgres":
+		return pgexp.NewPostgresSessionStore[any](ctx, g)
+	default:
+		return nil, fmt.Errorf(`unknown -store %q: want "file" or "postgres"`, *storeKind)
 	}
 }
