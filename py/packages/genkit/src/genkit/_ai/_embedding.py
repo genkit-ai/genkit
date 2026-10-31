@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never
 
-from genkit._core._action import Action, ActionKind, get_func_description, with_request_annotation
+from genkit._core._action import Action, ActionKind, FlowContext, get_func_description, with_request_annotation
 from genkit._core._model import EmbedRequest
 from genkit._core._registry import Registry
 from genkit._core._schema import fixed_json_schema, to_json_schema
@@ -60,7 +60,10 @@ class EmbedderRef(BaseModel):
     version: str | None = None
 
 
-EmbedderFn = Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
+EmbedderFn = (
+    Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
+    | Callable[[EmbedRequest[Any], FlowContext[Any]], Awaitable[EmbedResponse]]
+)
 
 
 class Embedder(Action[EmbedRequest, EmbedResponse, Never]):

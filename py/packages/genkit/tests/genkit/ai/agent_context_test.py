@@ -3,7 +3,7 @@
 
 """AgentContext: the ctx a custom agent fn gets, where send_chunk takes an AgentStreamChunk."""
 
-from typing import get_args, get_origin
+from typing import Any, cast, get_args, get_origin
 
 import pytest
 
@@ -23,10 +23,16 @@ from genkit.exp.agent import (
 )
 
 
-def test_agent_context_is_action_run_context_of_agent_stream_chunk() -> None:
-    """`AgentContext` is `ActionRunContext[AgentStreamChunk]`, not a new class."""
-    assert get_origin(AgentContext) is ActionRunContext
-    assert get_args(AgentContext) == (AgentStreamChunk,)
+def test_agent_context_is_subclass_of_action_run_context() -> None:
+    """`AgentContext` subclasses `ActionRunContext[AgentStreamChunk]` so `isinstance(ctx, AgentContext)` works."""
+    assert issubclass(AgentContext, ActionRunContext)
+    orig_bases = cast(tuple[Any, ...], getattr(AgentContext, '__orig_bases__', ()))
+    assert len(orig_bases) == 1
+    assert get_origin(orig_bases[0]) is ActionRunContext
+    assert get_args(orig_bases[0]) == (AgentStreamChunk,)
+    ctx = AgentContext()
+    assert isinstance(ctx, AgentContext)
+    assert isinstance(ctx, ActionRunContext)
 
 
 def _send_status(ctx: AgentContext) -> None:
@@ -41,10 +47,13 @@ def _send_status(ctx: AgentContext) -> None:
 
 @pytest.mark.asyncio
 async def test_custom_agent_fn_typed_agent_context_streams_chunks() -> None:
-    """A custom agent fn annotated `ctx: AgentContext` streams through `ctx.send_chunk` to the turn's stream."""
+    """A custom agent fn annotated `ctx: AgentContext` receives an `AgentContext` and streams chunks."""
     ai = Genkit()
+    seen_contexts: list[object] = []
 
     async def concierge(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
+        seen_contexts.append(ctx)
+
         async def handle_turn(_: AgentInput, __: TurnContext) -> TurnResult | None:
             ctx.send_chunk(
                 AgentStreamChunk(
@@ -62,3 +71,5 @@ async def test_custom_agent_fn_typed_agent_context_streams_chunks() -> None:
     texts = [chunk.text async for chunk in turn.stream if chunk.text]
 
     assert texts == ['Table for two at 7pm']
+    assert len(seen_contexts) == 1
+    assert isinstance(seen_contexts[0], AgentContext)

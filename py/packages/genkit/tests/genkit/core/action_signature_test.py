@@ -11,7 +11,7 @@ from typing import Optional, cast
 import pytest
 from pydantic import TypeAdapter
 
-from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Operation, Part
+from genkit import Document, FlowContext, Genkit, GenkitError, Message, ModelResponse, Operation, Part
 from genkit._ai._background_model import CheckModelOpFn, StartModelOpFn
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._typing import Role
@@ -68,7 +68,7 @@ async def test_action_with_postponed_context_annotations_gets_context() -> None:
     for fn in (plain, parameterized):
         await Action(ActionKind.CUSTOM, fn.__name__, fn).run('soup')
 
-    assert seen == [ActionRunContext, ActionRunContext]
+    assert seen == [FlowContext, FlowContext]
 
 
 # A user module that imports its context type only for type checkers, so the

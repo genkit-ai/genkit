@@ -27,8 +27,8 @@ from typing_extensions import TypeVar
 from genkit._core._action import (
     Action,
     ActionKind,
-    ActionRunContext,
     ChunkT,
+    FlowContext,
     InputT,
     OutputT,
     get_func_description,
@@ -52,7 +52,7 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
     @overload
     def __init__(
         self,
-        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT], object], Awaitable[OutputT]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -61,7 +61,7 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
     @overload
     def __init__(
         self,
-        func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        func: Callable[[InputT, FlowContext[ChunkT]], Awaitable[OutputT]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -70,7 +70,7 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
     @overload
     def __init__(
         self,
-        func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT], InputT], Awaitable[OutputT]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -79,7 +79,7 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
     @overload
     def __init__(
         self,
-        func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT]], Awaitable[OutputT]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -146,7 +146,7 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
 @overload
 def define_flow(
     registry: Registry,
-    func: Callable[[ActionRunContext[_FlowChunkT], object], Awaitable[_FlowOutputT]],
+    func: Callable[[FlowContext[_FlowChunkT], object], Awaitable[_FlowOutputT]],
     name: str | None = None,
     description: str | None = None,
 ) -> Flow[Any, _FlowOutputT, _FlowChunkT]: ...
@@ -155,7 +155,7 @@ def define_flow(
 @overload
 def define_flow(
     registry: Registry,
-    func: Callable[[_FlowInputT, ActionRunContext[_FlowChunkT]], Awaitable[_FlowOutputT]],
+    func: Callable[[_FlowInputT, FlowContext[_FlowChunkT]], Awaitable[_FlowOutputT]],
     name: str | None = None,
     description: str | None = None,
 ) -> Flow[_FlowInputT, _FlowOutputT, _FlowChunkT]: ...
@@ -164,7 +164,7 @@ def define_flow(
 @overload
 def define_flow(
     registry: Registry,
-    func: Callable[[ActionRunContext[_FlowChunkT], _FlowInputT], Awaitable[_FlowOutputT]],
+    func: Callable[[FlowContext[_FlowChunkT], _FlowInputT], Awaitable[_FlowOutputT]],
     name: str | None = None,
     description: str | None = None,
 ) -> Flow[_FlowInputT, _FlowOutputT, _FlowChunkT]: ...
@@ -182,7 +182,7 @@ def define_flow(
 @overload
 def define_flow(
     registry: Registry,
-    func: Callable[[ActionRunContext[_FlowChunkT]], Awaitable[_FlowOutputT]],
+    func: Callable[[FlowContext[_FlowChunkT]], Awaitable[_FlowOutputT]],
     name: str | None = None,
     description: str | None = None,
 ) -> Flow[None, _FlowOutputT, _FlowChunkT]: ...
