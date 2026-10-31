@@ -223,7 +223,7 @@ async def test_unknown_option_keys_are_rejected(mocker: MockerFixture) -> None:
         )
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.original_message == 'gemini-embedding-001: invalid config field someFutureFlag'
+    assert exc_info.value.message == 'gemini-embedding-001: invalid config field someFutureFlag'
     client.aio.models.embed_content.assert_not_called()
 
 
@@ -279,7 +279,7 @@ async def test_invalid_options_are_rejected(mocker: MockerFixture, options: dict
         await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.original_message == f'gemini-embedding-001: invalid config field {field}'
+    assert exc_info.value.message == f'gemini-embedding-001: invalid config field {field}'
     client.aio.models.embed_content.assert_not_called()
 
 

@@ -19,7 +19,7 @@
 import re
 from typing import Any
 
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
+from genkit._ai._formats._types import FormatHandler, Formatter, FormatterConfig
 from genkit._ai._model import (
     Message,
     ModelResponseChunk,
@@ -28,7 +28,7 @@ from genkit._core._compat import override
 from genkit._core._error import GenkitError, RuntimeErrorReason
 
 
-class EnumFormat(FormatDef):
+class EnumFormat(Formatter):
     """Defines an Enum format for use with AI models.
 
     This format instructs the model to output a single value from a specified list of enum options.
@@ -66,14 +66,14 @@ class EnumFormat(FormatDef):
         )
 
     @override
-    def handle(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Creates a Formatter for handling Enum values.
+    def handle(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Creates a FormatHandler for handling Enum values.
 
         Args:
             schema: The JSON schema. Must be type 'string' with an 'enum' property listing allowed values.
 
         Returns:
-            A Formatter configured to parse enum values.
+            A FormatHandler configured to parse enum values.
 
         Raises:
             GenkitError: If the schema type is not 'string' or 'enum'.
@@ -104,7 +104,7 @@ class EnumFormat(FormatDef):
                     f'{enum_text}'
                 )
 
-        return Formatter(
+        return FormatHandler(
             chunk_parser=chunk_parser,
             message_parser=message_parser,
             instructions=instructions,

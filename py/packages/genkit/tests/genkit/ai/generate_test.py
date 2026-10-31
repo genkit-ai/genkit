@@ -19,7 +19,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_type
 
 from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, Tool
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import (
     DEFAULT_MAX_TURNS,
     CallScope,
@@ -43,6 +42,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.formats import FormatHandler, Formatter, FormatterConfig
 from genkit.middleware import (
     GenerateHookParams,
     Middleware,
@@ -2074,7 +2074,7 @@ async def test_middleware_tool_already_on_the_request_raises() -> None:
         await ai.generate(prompt='hi', tools=['ping'], use=[AlsoPing()])
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -3045,7 +3045,7 @@ async def test_generate_rejects_negative_max_turns() -> None:
         await ai.generate(prompt='hi', max_turns=-1)
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -3193,7 +3193,8 @@ async def test_generate_schema_failure_preserves_history() -> None:
     assert response.message is not None
     assert response.message.text == 'not json'
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
-    assert response.messages[0].text == 'give me a recipe'
+    # The scripted model has no native JSON mode, so the schema instructions follow the prompt.
+    assert response.messages[0].content[0].text == 'give me a recipe'
     assert response.messages[1] == response.message
 
 
@@ -7986,18 +7987,18 @@ async def test_generate_format_parse_error_keeps_model_text() -> None:
     class Recipe(BaseModel):
         title: str
 
-    class BoomFormat(FormatDef):
+    class BoomFormat(Formatter):
         def __init__(self) -> None:
             super().__init__('boom', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
             def message_parser(_msg: Message) -> object:
                 raise TypeError('parser exploded')
 
             def chunk_parser(_chunk: ModelResponseChunk) -> object:
                 return None
 
-            return Formatter(
+            return FormatHandler(
                 message_parser=message_parser,
                 chunk_parser=chunk_parser,
                 instructions=None,
@@ -8254,7 +8255,7 @@ async def test_generate_unknown_format_is_invalid_argument() -> None:
         await ai.generate(prompt='hi', output_format='no-such-format')
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ACTION_NOT_FOUND' not in raised.value.original_message
+    assert 'ACTION_NOT_FOUND' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -8268,8 +8269,8 @@ async def test_unknown_middleware_raises_with_invalid_input() -> None:
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ghost' in error.original_message
-    assert 'ACTION_NOT_FOUND' not in error.original_message
+    assert 'ghost' in error.message
+    assert 'ACTION_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8282,8 +8283,8 @@ async def test_unknown_model_raises_with_model_not_found() -> None:
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert "Failed to resolve model 'nope/ghost'" in error.original_message
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert "Failed to resolve model 'nope/ghost'" in error.message
+    assert 'MODEL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8297,8 +8298,8 @@ async def test_unknown_tool_on_request_raises_with_tool_not_found() -> None:
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
-    assert 'Unable to resolve tool ghost' in error.original_message
-    assert 'TOOL_NOT_FOUND' not in error.original_message
+    assert 'Unable to resolve tool ghost' in error.message
+    assert 'TOOL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8312,7 +8313,7 @@ async def test_generate_with_tool_ref_slash_retriever_raises_tool_not_found() ->
     error = raised.value
     assert error.status == 'NOT_FOUND'
     assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
-    assert error.original_message == 'Unable to resolve tool /retriever/x'
+    assert error.message == 'Unable to resolve tool /retriever/x'
 
 
 @pytest.mark.asyncio
@@ -8325,8 +8326,8 @@ async def test_generate_without_model_or_default_raises_model_not_found() -> Non
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'No model configured' in error.original_message
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert 'No model configured' in error.message
+    assert 'MODEL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8340,8 +8341,8 @@ async def test_generate_jsonl_with_object_schema_raises_invalid_schema() -> None
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'jsonl' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert 'jsonl' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8355,8 +8356,8 @@ async def test_generate_enum_with_object_schema_raises_invalid_schema() -> None:
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'enum' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert 'enum' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8370,8 +8371,8 @@ async def test_generate_array_with_object_schema_raises_invalid_schema() -> None
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
     assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'array' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert 'array' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -9048,16 +9049,16 @@ async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() -> None:
-    """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
+    """A custom Formatter whose parser closes a cut-off object still gets its City back."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
-    class ClosingFormat(FormatDef):
+    class ClosingFormat(Formatter):
         def __init__(self) -> None:
             super().__init__('closing', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
-            return Formatter(
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
+            return FormatHandler(
                 message_parser=lambda msg: json.loads(msg.text + '}'),
                 chunk_parser=lambda _chunk: None,
                 instructions=None,

@@ -64,6 +64,7 @@ _SHARED_GEMINI = {
     'gemini-3.5-flash',
     'gemini-3.6-flash',
     'gemini-3.7-flash',
+    'gemini-3.8-flash',
 }
 _GOOGLEAI_LATEST = {'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'}
 _SHARED_TTS = {
@@ -327,7 +328,7 @@ class TestEmbeddingConstructor:
         with pytest.raises(GenkitError) as exc_info:
             GoogleAI.embedding('gemini-embedding-001', config=config)
         assert exc_info.value.status == 'INVALID_ARGUMENT'
-        assert exc_info.value.original_message == f'GoogleAI.embedding: invalid config field {key}'
+        assert exc_info.value.message == f'GoogleAI.embedding: invalid config field {key}'
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""
