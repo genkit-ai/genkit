@@ -27,12 +27,19 @@ from mcp.types import (
     ServerResult,
     TextContent,
     Tool,
+    ToolAnnotations,
 )
 
 app = Server('fake-server')
 
 TOOLS = [
-    Tool(name='echo', description='Echo input.', inputSchema={'type': 'object'}),
+    Tool(
+        name='echo',
+        title='Echo',
+        description='Echo input.',
+        inputSchema={'type': 'object'},
+        annotations=ToolAnnotations.model_validate({'readOnlyHint': True, 'costHint': 'free'}),
+    ),
     Tool(name='second', description='Another tool.', inputSchema={'type': 'object'}),
     Tool(name='wait', description='Wait before replying.', inputSchema={'type': 'object'}),
     Tool(name='list_requests', description='Count tools/list requests.', inputSchema={'type': 'object'}),
