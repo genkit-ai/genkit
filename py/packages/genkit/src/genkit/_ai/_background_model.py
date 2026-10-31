@@ -40,7 +40,7 @@ from genkit._core._background import (
     validate_operation,
 )
 from genkit._core._config_check import check_config_json_schema, check_request_config
-from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._error import ErrorReason, GenkitError, StatusName
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._registry import Registry
@@ -69,13 +69,13 @@ def reject_model_response(value: object) -> None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='got ModelResponse; pass response.operation',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     if isinstance(value, Mapping) and 'id' not in value and not _MODEL_RESPONSE_KEYS.isdisjoint(value):
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='got a ModelResponse dump; pass response.operation',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
 
 
@@ -88,7 +88,7 @@ class BackgroundModel(BackgroundAction[ModelRequest, ModelResponse]):
     """
 
     _noun: ClassVar[str] = 'Background model'
-    _cancel_unsupported_reason: ClassVar[RuntimeErrorReason | None] = RuntimeErrorReason.UNSUPPORTED_BY_MODEL
+    _cancel_unsupported_reason: ClassVar[ErrorReason | None] = ErrorReason.UNSUPPORTED_BY_MODEL
 
     label: str
     config_schema: type[BaseModel] | dict[str, Any] | None

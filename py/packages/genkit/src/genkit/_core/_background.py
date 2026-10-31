@@ -32,7 +32,7 @@ from pydantic import BaseModel, ValidationError
 from typing_extensions import Self
 
 from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context, set_action_name
-from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._error import ErrorReason, GenkitError, StatusName
 from genkit._core._operation import Operation
 from genkit._core._schema import fixed_json_schema
 from genkit._core._typing import ActionMetadata
@@ -108,9 +108,7 @@ def validate_operation(
         raise GenkitError(
             status=status,
             message=f"'{name}': invalid Operation: {first_validation_error(e)}",
-            reason=RuntimeErrorReason.INVALID_INPUT
-            if status == 'INVALID_ARGUMENT'
-            else RuntimeErrorReason.INVALID_OUTPUT,
+            reason=ErrorReason.INVALID_INPUT if status == 'INVALID_ARGUMENT' else ErrorReason.INVALID_OUTPUT,
         ) from e
 
 
@@ -130,7 +128,7 @@ def require_operation(*, value: object, output_type: type[Any] | None = None) ->
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'got {type(value).__name__}, expected Operation',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     try:
         return _operation_class(output_type).model_validate(fields)
@@ -138,7 +136,7 @@ def require_operation(*, value: object, output_type: type[Any] | None = None) ->
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'invalid Operation: {first_validation_error(e)}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -226,7 +224,7 @@ class BackgroundAction(Generic[InT, OutT]):
     _output_type: ClassVar[type[Any] | None] = None
     # How error messages name this kind of job.
     _noun: ClassVar[str] = 'Background action'
-    _cancel_unsupported_reason: ClassVar[RuntimeErrorReason | None] = None
+    _cancel_unsupported_reason: ClassVar[ErrorReason | None] = None
 
     start_action: Action
     check_action: Action
@@ -597,7 +595,7 @@ async def resolve_operation_action(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='Provided operation is missing original request information',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     try:
         found = await lookup(registry, key)
@@ -607,13 +605,13 @@ async def resolve_operation_action(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve {noun} from original request: {key}',
-            reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            reason=ErrorReason.ACTION_NOT_FOUND,
         ) from e
     if found is None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve {noun} from original request: {key}',
-            reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            reason=ErrorReason.ACTION_NOT_FOUND,
         )
     return found
 

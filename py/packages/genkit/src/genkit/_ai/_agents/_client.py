@@ -35,9 +35,9 @@ from genkit._ai._json_patch import apply_json_patch
 from genkit._core._channel import CloseableQueue
 from genkit._core._error import (
     _STATUS_CODE_MAP,
+    ErrorReason,
+    Failure,
     GenkitError,
-    GenkitRuntimeError,
-    RuntimeErrorReason,
     StatusCodes,
     StatusName,
 )
@@ -83,7 +83,7 @@ _NO_REPLY = frozenset({AgentFinishReason.FAILED, AgentFinishReason.ABORTED})
 
 # A custom agent can return TurnResult(finish_reason=FAILED) without raising.
 # Same fallback JS uses when it raises AgentError for that turn.
-_UNEXPLAINED_FAILURE = GenkitRuntimeError(status='UNKNOWN', message='Agent turn failed.')
+_UNEXPLAINED_FAILURE = Failure(status='UNKNOWN', message='Agent turn failed.')
 
 
 @dataclass(frozen=True)
@@ -287,7 +287,7 @@ class AgentResponse(Generic[StateT]):
         return self.raw.artifacts or []
 
     @property
-    def error(self) -> GenkitRuntimeError | None:
+    def error(self) -> Failure | None:
         """Why this turn failed, or None when it didn't.
 
         Same fields generate puts on ``response.error`` (status, message,
@@ -655,7 +655,7 @@ class AgentClient(Generic[StateT]):
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Snapshot {lookup_label(snapshot_id=snapshot_id, session_id=session_id)!r} not found.',
-                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+                reason=ErrorReason.SNAPSHOT_NOT_FOUND,
             )
         session_transport = copy.copy(self._transport)
         session_transport.state_management = 'server'

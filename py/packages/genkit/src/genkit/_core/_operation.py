@@ -17,8 +17,8 @@
 """Operation: the poll handle for a background job.
 
 Hand-written instead of generated from the wire schema because it is generic
-over its output. Depends only on ``_base`` and ``_typing`` so any module can
-import it without a cycle.
+over its output. Depends only on ``_base``, ``_typing``, and ``_error`` so any
+module can import it without a cycle.
 """
 
 from __future__ import annotations
@@ -29,7 +29,8 @@ from pydantic import ConfigDict, Field
 from typing_extensions import TypeVar
 
 from genkit._core._base import GenkitModel
-from genkit._core._typing import Metadata, OperationError
+from genkit._core._error import Failure
+from genkit._core._typing import Metadata
 
 # Defaults to Any, same as JS Operation<O = any>.
 OutputT = TypeVar('OutputT', default=Any)
@@ -75,5 +76,5 @@ class Operation(GenkitModel, Generic[OutputT]):
     id: str = Field(...)
     done: bool | None = None
     output: OutputT | None = None
-    error: OperationError | None = None
+    error: Failure | None = None
     metadata: Metadata | None = None

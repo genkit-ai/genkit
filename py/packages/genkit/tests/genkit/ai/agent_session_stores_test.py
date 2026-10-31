@@ -23,7 +23,7 @@ import pytest
 from genkit import Part
 from genkit._ai._agents._session_stores._util import apply_save
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
@@ -408,7 +408,7 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
     with pytest.raises(GenkitError) as exc:
         await store.get_snapshot(snapshot_id=bad_id)
     assert exc.value.status == 'INVALID_ARGUMENT'
-    assert exc.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert exc.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
     assert 'Invalid snapshotId' in str(exc.value)
     assert 'INVALID_SNAPSHOT_ID' not in exc.value.message
 
@@ -418,7 +418,7 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
             lambda current: make_snapshot('sess', 'x') if current is None else current,
         )
     assert exc.value.status == 'INVALID_ARGUMENT'
-    assert exc.value.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert exc.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
     assert 'INVALID_SNAPSHOT_ID' not in exc.value.message
 
     # Path traversal must not create files outside the store directory.
@@ -434,7 +434,7 @@ async def test_get_snapshot_empty_snapshot_id_raises_invalid_snapshot_id() -> No
         await store.get_snapshot(snapshot_id='   ')
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.INVALID_SNAPSHOT_ID
+    assert error.reason is ErrorReason.INVALID_SNAPSHOT_ID
     assert 'snapshot_id must not be empty' in error.message
     assert 'INVALID_SNAPSHOT_ID' not in error.message
 
@@ -448,7 +448,7 @@ async def test_get_snapshot_empty_session_id_raises_session_id_required() -> Non
         await store.get_snapshot(session_id='')
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert error.reason is ErrorReason.SESSION_ID_REQUIRED
     assert 'session_id must not be empty' in error.message
     assert 'SESSION_ID_REQUIRED' not in error.message
 
@@ -473,7 +473,7 @@ async def test_file_store_save_without_session_id_raises_session_id_required(tmp
         await store.save_snapshot('snap-1', mutator)
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.SESSION_ID_REQUIRED
+    assert error.reason is ErrorReason.SESSION_ID_REQUIRED
     assert 'sessionId' in error.message
     assert 'SESSION_ID_REQUIRED' not in error.message
 
