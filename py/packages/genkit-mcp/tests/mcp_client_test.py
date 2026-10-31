@@ -673,9 +673,9 @@ async def test_a_call_cut_off_by_close_fails_as_closed(tmp_path: Path) -> None:
 async def test_restart_reports_a_server_which_cannot_be_started(tmp_path: Path) -> None:
     """The caller of restart hears about a broken server, not the next generate."""
     ai = Genkit()
-    client = define_mcp_client(ai, 'fake', command=str(tmp_path / 'no-such-server'))
+    client = define_mcp_client(ai, 'bookshop', command=str(tmp_path / 'no-such-server'))
     try:
-        with pytest.raises(GenkitError, match='failed') as raised:
+        with pytest.raises(GenkitError, match="MCP connection to 'bookshop' .* failed") as raised:
             await client.restart()
         assert raised.value.status == 'UNAVAILABLE'
     finally:
@@ -902,4 +902,4 @@ def test_define_mcp_client_rejects_a_timeout_that_is_not_positive(timeout: int) 
 def test_connection_rejects_a_timeout_that_is_not_positive(timeout: int) -> None:
     """The connection guards the timeout too, for callers that build one directly."""
     with pytest.raises(ValueError, match='request_timeout_millis'):
-        McpConnection(McpStdioServerConfig(command='npx'), request_timeout_millis=timeout)
+        McpConnection('fake', McpStdioServerConfig(command='npx'), request_timeout_millis=timeout)
