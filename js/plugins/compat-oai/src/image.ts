@@ -88,15 +88,24 @@ function toImageGenerateParams(
   return options;
 }
 
-function toGenerateResponse(result: ImagesResponse): GenerateResponseData {
+function toGenerateResponse(
+  result: ImagesResponse,
+  outputFormat?: ImageGenerateParams['output_format']
+): GenerateResponseData {
   const images = result.data;
   if (!images) {
     return { finishReason: 'stop' };
   } else {
-    const content = (result.data ?? []).map((image) => ({
+    const contentType =
+      outputFormat === 'jpeg'
+        ? 'image/jpeg'
+        : outputFormat === 'webp'
+          ? 'image/webp'
+          : 'image/png';
+    const content = images.map((image) => ({
       media: {
-        contentType: 'image/png',
-        url: image.url || `data:image/png;base64,${image.b64_json}`,
+        contentType,
+        url: image.url || `data:${contentType};base64,${image.b64_json}`,
       },
     }));
     return { message: { role: 'model', content }, raw: result };
@@ -152,11 +161,11 @@ export function defineCompatOpenAIImageModel<
         request,
         defaultClient
       );
-      const result = await client.images.generate(
-        toImageGenerateParams(modelName, request, requestBuilder),
-        { signal: abortSignal }
-      );
-      return toGenerateResponse(result);
+      const params = toImageGenerateParams(modelName, request, requestBuilder);
+      const result = await client.images.generate(params, {
+        signal: abortSignal,
+      });
+      return toGenerateResponse(result, params.output_format);
     }
   );
 }

@@ -64,6 +64,31 @@ const response = await ai.generate({
 console.log(response.text);
 ```
 
+### Image generation
+
+Use GPT image model references for the Images API:
+
+```typescript
+import { genkit } from 'genkit';
+import { openAI } from '@genkit-ai/compat-oai/openai';
+
+const ai = genkit({ plugins: [openAI()] });
+const response = await ai.generate({
+  model: openAI.model('gpt-image-2'),
+  prompt: 'A watercolor drawing of a cat',
+  config: { size: '1024x1024', quality: 'high' },
+});
+
+console.log(response.message);
+```
+
+`gpt-image-2`, `gpt-image-2.5-sunburst`, and `gpt-image-2.5-flare` are predefined.
+GPT image names and `chatgpt-image-*` aliases also resolve dynamically, including model snapshots.
+Their config supports optional `n`, `background`, `output_format` (`png`, `jpeg`, or `webp`),
+`output_compression`, and GPT image quality and size options. Supported values depend on the model;
+see the [OpenAI Images API reference](https://developers.openai.com/api/reference/resources/images/methods/generate).
+GPT image models return base64 data and do not accept `response_format` or DALL·E `style`.
+
 ### Structured Outputs
 
 Use `config.strict: true` with an output schema on a model that supports OpenAI Structured Outputs:
