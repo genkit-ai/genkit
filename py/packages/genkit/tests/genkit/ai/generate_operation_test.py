@@ -52,12 +52,8 @@ import pytest
 from genkit import Document, Genkit, Message, ModelResponse, Part
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest
-from genkit._core._typing import (
-    ModelInfo,
-    Operation,
-    Role,
-    Supports,
-)
+from genkit._core._operation import Operation
+from genkit._core._typing import ModelInfo, ModelSupports, Role
 from genkit.model import ModelContext
 
 
@@ -75,7 +71,7 @@ async def test_generate_operation_no_model_specified(ai: Genkit) -> None:
 
     assert 'No model specified' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'MODEL_NOT_FOUND' not in exc_info.value.original_message
+    assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -86,7 +82,7 @@ async def test_generate_operation_model_not_found(ai: Genkit) -> None:
 
     assert 'not found' in str(exc_info.value).lower()
     assert exc_info.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'MODEL_NOT_FOUND' not in exc_info.value.original_message
+    assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -109,7 +105,7 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
         name='standard-model',
         fn=model_fn,
         info=ModelInfo(
-            supports=Supports(
+            supports=ModelSupports(
                 multiturn=True,
                 tools=True,
                 media=False,
@@ -123,7 +119,7 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
 
     assert 'does not support long running operations' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -146,7 +142,7 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
 
     assert 'does not support long running operations' in str(exc_info.value)
     assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 def test_define_model_rejects_long_running(ai: Genkit) -> None:
@@ -161,7 +157,7 @@ def test_define_model_rejects_long_running(ai: Genkit) -> None:
         ai.define_model(
             name='fake-lro-model',
             fn=model_fn,
-            info=ModelInfo(supports=Supports(long_running=True)),
+            info=ModelInfo(supports=ModelSupports(long_running=True)),
         )
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'

@@ -22,14 +22,14 @@ the request body and headers the API would have received.
 
 import json
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 import pytest
-from genkit_anthropic import Anthropic
+from genkit_anthropic import Anthropic, AnthropicConfig
 
 from genkit import FinishReason, Genkit, GenkitError
-from genkit.middleware import BaseMiddleware
+from genkit.middleware import Middleware
 from genkit.plugin_api import ActionKind
 
 MODEL = 'anthropic/claude-sonnet-4-6'
@@ -152,7 +152,9 @@ async def test_generate_claude_sends_integer_top_k() -> None:
         ({'max_output_tokens': 50, 'extra': {'max_tokens': 100}}, 'max_tokens', 100),
         (
             {
-                'thinking': {'enabled': True, 'budgetTokens': 2048, 'display': 'summarized'},
+                'thinking': 'enabled',
+                'thinkingBudget': 2048,
+                'thinkingDisplay': 'summarized',
                 'extra': {'thinking': {'type': 'enabled', 'budget_tokens': 4096}},
             },
             'thinking',
@@ -176,13 +178,12 @@ async def test_generate_claude_extra_key_wins_over_declared_setting(
 
 @pytest.mark.asyncio
 async def test_anthropic_model_advertises_config_without_additional_properties() -> None:
-    """The Dev UI config schema says `additionalProperties: false`, at the top and inside `thinking`."""
+    """The Dev UI config schema says `additionalProperties: false`."""
     action = await Anthropic(api_key=PLUGIN_KEY).resolve(ActionKind.MODEL, MODEL)
 
     assert action is not None
     options = cast(dict[str, Any], action.metadata['model'])['customOptions']
     assert options['additionalProperties'] is False
-    assert options['properties']['thinking']['additionalProperties'] is False
     assert 'apiKey' not in options['properties']
 
 
@@ -367,18 +368,38 @@ async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    'tool_choice',
+    ('tool_choice', 'disable_parallel', 'sent'),
     [
-        {'type': 'auto', 'disable_parallel_tool_use': True},
-        {'type': 'any', 'disable_parallel_tool_use': True},
-        {'type': 'tool', 'name': 'lookup_menu', 'disable_parallel_tool_use': True},
+        ('auto', False, {'type': 'auto'}),
+        ('auto', True, {'type': 'auto', 'disable_parallel_tool_use': True}),
+        ('required', False, {'type': 'any'}),
+        ('required', True, {'type': 'any', 'disable_parallel_tool_use': True}),
+        # 'none' is sent as {'type': 'none'}, so Claude can't call the tools.
+        ('none', False, {'type': 'none'}),
+        # Anthropic's none variant has no disable_parallel_tool_use field.
+        ('none', True, {'type': 'none'}),
+        (None, False, None),
+        # The flag only travels inside tool_choice; auto is the API default with tools.
+        (None, True, {'type': 'auto', 'disable_parallel_tool_use': True}),
     ],
-    ids=['auto', 'any', 'tool'],
+    ids=[
+        'auto',
+        'auto-single',
+        'required',
+        'required-single',
+        'none',
+        'none-single',
+        'unset',
+        'unset-single',
+    ],
 )
-async def test_generate_claude_tool_choice_disable_parallel_tool_use_reaches_request(
-    tool_choice: dict[str, Any],
+async def test_generate_claude_tool_choice_request_body(
+    tool_choice: Literal['auto', 'required', 'none'] | None,
+    disable_parallel: bool,
+    sent: dict[str, Any] | None,
 ) -> None:
-    """`tool_choice.disable_parallel_tool_use` is a Claude field, so it validates and goes out as written."""
+    """Genkit's tool_choice goes out as Anthropic's tool_choice object."""
+    # 1. A Claude call with one tool attached
     api = FakeClaudeApi()
     ai = _genkit(api)
 
@@ -386,57 +407,253 @@ async def test_generate_claude_tool_choice_disable_parallel_tool_use_reaches_req
     async def lookup_menu(dish: str) -> str:
         return 'ramen'
 
-    response = await ai.generate(model=MODEL, prompt='hi', tools=['lookup_menu'], config={'tool_choice': tool_choice})
+    # 2. Generate with the tool choice and the single-call flag
+    config = AnthropicConfig(disable_parallel_tool_use=True) if disable_parallel else None
+    response = await ai.generate(
+        model=MODEL, prompt='hi', tools=['lookup_menu'], tool_choice=tool_choice, config=config
+    )
 
+    # 3. The body carries the translated object, or nothing for unset
     assert response.text == 'ok'
-    assert api.body()['tool_choice'] == tool_choice
+    assert api.body().get('tool_choice') == sent
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_tool_choice_dropped_without_tools() -> None:
+    """The API rejects tool_choice on a request with no tools, so option, flag, and extra tool_choice are dropped."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    await ai.generate(
+        model=MODEL,
+        prompt='hi',
+        tool_choice='required',
+        config=AnthropicConfig(disable_parallel_tool_use=True, extra={'tool_choice': {'type': 'any'}}),
+    )
+
+    assert 'tool_choice' not in api.body()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'config',
+    [AnthropicConfig(thinking='enabled', thinking_budget=2048), AnthropicConfig(thinking='adaptive')],
+    ids=['enabled', 'adaptive'],
+)
+async def test_generate_claude_thinking_rejects_tool_choice_required(config: AnthropicConfig) -> None:
+    """Thinking only supports tool_choice auto or none, so required fails before sending."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    @ai.tool(name='lookup_menu')
+    async def lookup_menu(dish: str) -> str:
+        return 'ramen'
+
+    response = await ai.generate(
+        model=MODEL,
+        prompt='hi',
+        tools=['lookup_menu'],
+        tool_choice='required',
+        config=config,
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert f"thinking='{config.thinking}' only supports tool_choice='auto' or 'none'" in response.error.message
+    assert api.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_extra_tool_choice_overrides() -> None:
+    """extra={'tool_choice': {...}} sends Anthropic's object as written, over the translated option."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    @ai.tool(name='lookup_menu')
+    async def lookup_menu(dish: str) -> str:
+        return 'ramen'
+
+    await ai.generate(
+        model=MODEL,
+        prompt='hi',
+        tools=['lookup_menu'],
+        tool_choice='auto',
+        config=AnthropicConfig(extra={'tool_choice': {'type': 'tool', 'name': 'lookup_menu'}}),
+    )
+
+    assert api.body()['tool_choice'] == {'type': 'tool', 'name': 'lookup_menu'}
+
+
+@pytest.mark.asyncio
+async def test_generate_claude_config_tool_choice_points_to_generate_option() -> None:
+    """The removed config key fails before the call, naming ai.generate(tool_choice=...)."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    with pytest.raises(GenkitError, match=r'ai\.generate\(tool_choice='):
+        await ai.generate(model=MODEL, prompt='hi', config={'tool_choice': {'type': 'any'}})
+
+    assert api.requests == []
+
+
+ENABLED_4096: dict[str, Any] = {'thinking': 'enabled', 'thinking_budget': 4096}
+
+
+@pytest.mark.parametrize(
+    ('default', 'call_config', 'sent'),
+    [
+        # Rule 1: a call's partial config picks up the rest from the default.
+        (ENABLED_4096, None, {'type': 'enabled', 'budget_tokens': 4096}),
+        (ENABLED_4096, {'thinking': 'enabled'}, {'type': 'enabled', 'budget_tokens': 4096}),
+        (ENABLED_4096, {'thinkingBudget': 8192}, {'type': 'enabled', 'budget_tokens': 8192}),
+        ({'thinking': 'enabled'}, {'thinkingBudget': 4096}, {'type': 'enabled', 'budget_tokens': 4096}),
+        (None, {'thinkingBudget': 8192}, {'type': 'enabled', 'budget_tokens': 8192}),
+        (
+            ENABLED_4096,
+            {'thinkingDisplay': 'omitted'},
+            {'type': 'enabled', 'budget_tokens': 4096, 'display': 'omitted'},
+        ),
+        # Rule 2: the mode is the switch; settings it doesn't use aren't sent.
+        (
+            {**ENABLED_4096, 'thinking_display': 'summarized'},
+            {'thinking': 'disabled'},
+            {'type': 'disabled'},
+        ),
+        (
+            {**ENABLED_4096, 'thinking_display': 'summarized'},
+            {'thinking': 'adaptive'},
+            {'type': 'adaptive', 'display': 'summarized'},
+        ),
+        # Settings carry across mode changes.
+        (
+            {'thinking': 'adaptive', 'thinking_budget': 4096},
+            {'thinking': 'enabled'},
+            {'type': 'enabled', 'budget_tokens': 4096},
+        ),
+        (
+            {'thinking': 'disabled', 'thinking_budget': 4096},
+            {'thinking': 'enabled'},
+            {'type': 'enabled', 'budget_tokens': 4096},
+        ),
+        # The one ambiguous merge: a budget over an inherited 'disabled' stays disabled.
+        ({'thinking': 'disabled'}, {'thinkingBudget': 8192}, {'type': 'disabled'}),
+        # None clears the inherited mode, so a budget alone means enabled again.
+        (
+            {'thinking': 'disabled'},
+            {'thinking': None, 'thinkingBudget': 8192},
+            {'type': 'enabled', 'budget_tokens': 8192},
+        ),
+    ],
+    ids=[
+        'inherit-all',
+        'enabled-inherits-budget',
+        'budget-over-enabled',
+        'budget-fills-enabled-default',
+        'budget-alone',
+        'display-over-enabled',
+        'disabled-over-enabled',
+        'adaptive-over-enabled',
+        'enabled-over-adaptive-keeps-budget',
+        'enabled-over-disabled-keeps-budget',
+        'budget-over-disabled-stays-disabled',
+        'none-clears-disabled',
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_layered_thinking_config(
+    default: dict[str, Any] | None, call_config: dict[str, Any] | None, sent: dict[str, Any]
+) -> None:
+    """The call's config merges over the ModelRef default key by key; rules judge the merged result."""
+    # 1. A model default from Anthropic.claude(config=...)
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+    claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(**default) if default else None)
+
+    # 2. One call overrides part of it
+    response = await ai.generate(model=claude, prompt='Is shellfish safe for this guest?', config=call_config)
+
+    # 3. The request carries only the fields the merged mode uses
+    assert response.text == 'ok'
+    assert api.body()['thinking'] == sent
+
+
+@pytest.mark.parametrize(
+    ('default', 'call_config'),
+    [
+        ({'thinking': 'adaptive'}, {'thinking': 'enabled'}),
+        (None, {'thinking': 'enabled'}),
+    ],
+    ids=['enabled-over-adaptive-no-budget', 'enabled-no-budget-anywhere'],
+)
+@pytest.mark.asyncio
+async def test_generate_layered_thinking_without_any_budget_fails_before_send(
+    default: dict[str, Any] | None, call_config: dict[str, Any]
+) -> None:
+    """'enabled' with no budget in any layer is INVALID_ARGUMENT, and nothing is sent."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+    claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(**default) if default else None)
+
+    response = await ai.generate(model=claude, prompt='hi', config=call_config)
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert "thinking_budget is required when thinking is 'enabled'" in response.error.message
+    assert api.requests == []
+
+
+@pytest.mark.asyncio
+async def test_generate_prompt_thinking_default_filled_by_call() -> None:
+    """A prompt's config is a layer too: thinking='enabled' there takes the call's budget."""
+    # 1. A prompt that turns thinking on and leaves the budget to the caller
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+    triage = ai.define_prompt(name='allergy_triage', model=MODEL, config={'thinking': 'enabled'}, prompt='hi')
+
+    # 2. The call supplies the budget
+    response = await triage(config={'thinkingBudget': 4096})
+
+    # 3. The merged config is sent
+    assert response.text == 'ok'
+    assert api.body()['thinking'] == {'type': 'enabled', 'budget_tokens': 4096}
 
 
 # --- middleware edits ---------------------------------------------------------
 
 
 def _edit_thinking_budget(config: Any) -> None:  # noqa: ANN401
-    config.thinking.budget_tokens = 10
+    config.thinking_budget = 10
 
 
 def _edit_thinking_mode(config: Any) -> None:  # noqa: ANN401
-    config.thinking.adaptive = True
+    config.thinking = 'enabled'
 
 
 def _edit_task_budget(config: Any) -> None:  # noqa: ANN401
-    config.output_config.task_budget = {'total': 20000}
+    config.task_budget = 20000
 
 
 @pytest.mark.parametrize(
     ('config', 'edit', 'message'),
     [
         (
-            {'thinking': {'type': 'enabled', 'budgetTokens': 2048}},
+            {'thinking': 'enabled', 'thinkingBudget': 2048},
             _edit_thinking_budget,
-            "set config 'thinking.budgetTokens': Input should be greater than or equal to 1024",
-        ),
-        (
-            {'thinking': {'enabled': True, 'budgetTokens': 2048}},
-            _edit_thinking_mode,
-            "set config 'thinking': Value error, Cannot use both enabled and adaptive thinking modes simultaneously",
-        ),
-        (
-            {'apiVersion': 'stable', 'output_config': {}},
-            _edit_task_budget,
-            "set config 'output_config': Value error, output_config.task_budget require the beta API surface",
+            "set config 'thinking_budget': Input should be greater than or equal to 1024",
         ),
     ],
-    ids=['thinking-budget-bound', 'thinking-check', 'api-surface-check'],
+    ids=['thinking-budget-bound'],
 )
 @pytest.mark.asyncio
-async def test_middleware_edit_inside_nested_claude_setting_is_validated(
+async def test_middleware_edit_of_claude_setting_is_validated(
     config: dict[str, Any], edit: Callable[[Any], None], message: str
 ) -> None:
-    """An in-place edit inside thinking or output_config runs Claude's bounds and validators; nothing is sent."""
+    """An in-place config edit runs Claude's bounds and cross-field validators; nothing is sent."""
     api = FakeClaudeApi()
     ai = _genkit(api)
 
-    class Tune(BaseMiddleware):
+    class Tune(Middleware):
         async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
             edit(params.request.config)
             return await next_fn(params, ctx)
@@ -446,6 +663,36 @@ async def test_middleware_edit_inside_nested_claude_setting_is_validated(
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert response.finish_message.startswith(f"{MODEL}: middleware 'Tune' {message}")
+    assert api.requests == []
+
+
+@pytest.mark.parametrize(
+    ('config', 'edit', 'message'),
+    [
+        ({'thinking': 'adaptive'}, _edit_thinking_mode, "thinking_budget is required when thinking is 'enabled'"),
+        ({'apiVersion': 'stable'}, _edit_task_budget, 'task_budget require the beta API surface'),
+    ],
+    ids=['thinking-check', 'api-surface-check'],
+)
+@pytest.mark.asyncio
+async def test_middleware_edit_that_breaks_a_merged_rule_fails_before_send(
+    config: dict[str, Any], edit: Callable[[Any], None], message: str
+) -> None:
+    """Cross-field rules run on the config the request is built from, after every middleware edit."""
+    api = FakeClaudeApi()
+    ai = _genkit(api)
+
+    class Tune(Middleware):
+        async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
+            edit(params.request.config)
+            return await next_fn(params, ctx)
+
+    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert message in response.error.message
     assert api.requests == []
 
 

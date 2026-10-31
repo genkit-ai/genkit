@@ -25,7 +25,7 @@ from genkit import (
     Tool,
     ToolContext,
 )
-from genkit._ai._tools import define_tool, tool
+from genkit._ai._tools import define_tool
 from genkit._core._action import Action
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -590,12 +590,12 @@ async def test_await_tool_with_unserializable_output_raises_invalid_argument() -
     with pytest.raises(GenkitError) as exc:
         await snap()
     assert exc.value.status == 'INVALID_ARGUMENT'
-    assert exc.value.original_message == "Tool 'snap' output is not JSON-serializable."
+    assert exc.value.message == "Tool 'snap' output is not JSON-serializable."
 
     generated = await _generate_tool_turn(ai, pm, name='snap')
     assert generated.finish_reason == FinishReason.FAILED
     assert generated.finish_message is not None
-    assert exc.value.original_message in generated.finish_message
+    assert exc.value.message in generated.finish_message
 
 
 @pytest.mark.asyncio
@@ -630,7 +630,7 @@ async def test_tool_response_with_non_dict_metadata_raises_invalid_argument_nami
         MultipartToolResponse(output=ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert raised.value.original_message == 'MultipartToolResponse metadata must be a dict, got str.'
+    assert raised.value.message == 'MultipartToolResponse metadata must be a dict, got str.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
@@ -652,10 +652,7 @@ async def test_tool_response_with_non_part_in_parts_raises_invalid_part_naming_t
         MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[object()])  # type: ignore[list-item]
     assert raised.value.status == 'INVALID_ARGUMENT'
     assert raised.value.reason is RuntimeErrorReason.INVALID_PART
-    assert (
-        raised.value.original_message
-        == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
-    )
+    assert raised.value.message == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
@@ -723,11 +720,10 @@ async def test_tool_input_type_inference_across_shapes() -> None:
     assert_type(ai.tool(stream_order), Tool[_Order, str, str])
     assert_type(ai.tool(specials), Tool[None, str, Any])
 
-    # 2. define_tool and the ephemeral tool().
+    # 2. define_tool.
     assert_type(define_tool(Registry(), stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
     assert_type(define_tool(Registry(), echo_object), Tool[Any, str, Any])
-    assert_type(tool(stream_any), Tool[Any, str, str])  # ty: ignore[type-assertion-failure]
-    assert_type(tool(echo_any), Tool[Any, str, Any])
+    assert_type(define_tool(Registry(), echo_any), Tool[Any, str, Any])
 
     # 3. Tool(fn). ty doesn't solve overloaded generic constructors yet (see
     # test_tool_constructor_infers_types_from_function).

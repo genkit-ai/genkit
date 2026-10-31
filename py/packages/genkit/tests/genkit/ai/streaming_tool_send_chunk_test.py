@@ -21,13 +21,14 @@ from genkit import (
     Message,
     ModelResponse,
     ModelResponseChunk,
+    MultipartToolResponse,
     Part,
     Role,
     ToolContext,
 )
 from genkit._ai._agents._client import StreamedMessageAccumulator
 from genkit._core._action import StreamResponse
-from genkit._core._middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit._core._middleware import GenerateHookParams, Middleware, MiddlewareContext, ToolHookParams
 from genkit._core._model import AgentStreamChunk, ModelRequest
 from genkit._core._typing import ToolRequest
 from genkit.testing import define_scripted_model
@@ -245,8 +246,8 @@ async def test_generate_stream_excludes_partial_chunks_from_next_model_turn_and_
     pm, _ = define_scripted_model(ai)
     seen_requests: list[ModelRequest[Any]] = []
 
-    class RecordModelRequests(BaseMiddleware):
-        async def wrap_model(self, params: Any, ctx: GenerateMiddlewareContext, next_fn: Any) -> ModelResponse[Any]:
+    class RecordModelRequests(Middleware):
+        async def wrap_model(self, params: Any, ctx: MiddlewareContext, next_fn: Any) -> ModelResponse[Any]:
             seen_requests.append(params.request.model_copy(deep=True))
             return await next_fn(params, ctx)
 
@@ -672,6 +673,66 @@ async def test_generate_stream_resume_restart_emits_fresh_partial_without_replay
 
 
 @pytest.mark.asyncio
+async def test_generate_stream_resume_restart_with_catch_all_middleware_streams_partial_and_pauses_again() -> None:
+    """Restarted tool under wrap_tool catch-all streams fresh partials and propagates a second Interrupt."""
+
+    class SwallowToolErrors(Middleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Any,
+        ) -> MultipartToolResponse[Any]:
+            try:
+                return await next_fn(params, ctx)
+            except Exception as exc:  # pragma: no cover - raw Interrupt must bypass this
+                return MultipartToolResponse(output=f'swallowed:{exc}')
+
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    step = {'n': 0}
+
+    @ai.tool(name='pay')
+    async def pay(_inp: dict[str, Any], ctx: ToolContext[str]) -> str:
+        step['n'] += 1
+        ctx.send_chunk(f'phase-{step["n"]}')
+        if step['n'] == 1:
+            raise Interrupt({'stage': 1})
+        if step['n'] == 2:
+            raise Interrupt({'stage': 2})
+        return 'paid'
+
+    pm.responses = [_model_calls(('pay', 'p1')), _model_says('final')]
+    first_chunks, first = await _collect_stream(ai, prompt='go', tools=[pay], use=[SwallowToolErrors()])
+    assert first.finish_reason == FinishReason.INTERRUPTED
+    assert [p.tool_response.output for p in _partial_parts(first_chunks) if p.tool_response] == ['phase-1']
+
+    second_chunks, second = await _collect_stream(
+        ai,
+        messages=list(first.messages),
+        tools=[pay],
+        use=[SwallowToolErrors()],
+        resume_restart=first.interrupts[0].restart(),
+    )
+    assert second.finish_reason == FinishReason.INTERRUPTED
+    assert [p.tool_response.output for p in _partial_parts(second_chunks) if p.tool_response] == ['phase-2']
+    assert _final_parts(second_chunks) == []
+    assert second.interrupts[0].tool_request is not None
+    assert second.interrupts[0].metadata == {'interrupt': {'stage': 2}}
+
+    third_chunks, third = await _collect_stream(
+        ai,
+        messages=list(second.messages),
+        tools=[pay],
+        use=[SwallowToolErrors()],
+        resume_restart=second.interrupts[0].restart(),
+    )
+    assert third.finish_reason == FinishReason.STOP
+    assert [p.tool_response.output for p in _partial_parts(third_chunks) if p.tool_response] == ['phase-3']
+    assert [p.tool_response.output for p in _final_parts(third_chunks) if p.tool_response] == ['paid']
+
+
+@pytest.mark.asyncio
 async def test_generate_stream_resume_respond_emits_no_partial_chunks() -> None:
     """Answering an interrupt via resume_respond emits only the final tool response, no partials."""
     ai = Genkit(model='scriptedModel')
@@ -787,11 +848,11 @@ async def test_generate_stream_tool_failure_after_send_chunk_emits_no_final_tool
 async def test_generate_stream_error_during_partial_chunk_is_swallowed_and_tool_returns() -> None:
     """A listener error on a partial tool chunk is dropped; the tool still returns its final response."""
 
-    class BoomOnPartial(BaseMiddleware):
+    class BoomOnPartial(Middleware):
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            ctx: GenerateMiddlewareContext,
+            ctx: MiddlewareContext,
             next_fn: Any,
         ) -> ModelResponse[Any]:
             downstream = ctx.on_chunk
@@ -828,11 +889,11 @@ async def test_generate_stream_error_during_partial_chunk_is_swallowed_and_tool_
 async def test_generate_stream_error_on_final_tool_response_fails_generate() -> None:
     """A listener error on the final tool response chunk fails generate."""
 
-    class BoomOnFinal(BaseMiddleware):
+    class BoomOnFinal(Middleware):
         async def wrap_generate(
             self,
             params: GenerateHookParams,
-            ctx: GenerateMiddlewareContext,
+            ctx: MiddlewareContext,
             next_fn: Any,
         ) -> ModelResponse[Any]:
             downstream = ctx.on_chunk

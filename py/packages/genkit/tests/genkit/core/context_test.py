@@ -16,7 +16,7 @@
 
 """Tests for action context definitions."""
 
-from genkit import RequestData
+from genkit.web import RequestData
 
 
 def test_request_data_subclass_with_super_init_still_builds() -> None:
@@ -61,3 +61,9 @@ def test_request_data_duplicate_authorization_is_comma_joined() -> None:
     """Two Authorization values become one comma-joined string."""
     data = RequestData(headers={'Authorization': 'Bearer a', 'authorization': 'Bearer b'})
     assert data.headers.get('authorization') == 'Bearer a, Bearer b'
+
+
+def test_request_data_lowercases_and_joins_repeated_headers() -> None:
+    """RequestData(headers=[('Authorization', 'a'), ('authorization', 'b')]) reads as one 'a, b' header."""
+    data = RequestData(headers=[('Authorization', 'a'), ('authorization', 'b')])
+    assert data.headers == {'authorization': 'a, b'}

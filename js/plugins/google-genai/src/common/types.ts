@@ -487,6 +487,8 @@ export declare interface UsageMetadata {
   cachedContentTokenCount?: number;
   /** Optional. Number of tokens present in thoughts output. */
   thoughtsTokenCount?: number;
+  /** Optional. Number of tokens present in tool-use prompt(s). */
+  toolUsePromptTokenCount?: number;
   /** Optional. The traffic type for the request (e.g. ON_DEMAND_FLEX or ON_DEMAND_PRIORITY). */
   trafficType?: string;
 }

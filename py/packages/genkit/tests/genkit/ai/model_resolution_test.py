@@ -17,12 +17,12 @@ from pydantic.alias_generators import to_camel
 
 from genkit import Genkit
 from genkit._ai._model import (
+    Model,
     ModelConfig,
     ResolvedModel,
     assert_correct_config_class,
     config_schema_at_define,
     fold_config_aliases,
-    model,
     normalize_config,
     overlay_config,
     resolve_call_model,
@@ -33,9 +33,10 @@ from genkit._ai._model import (
 )
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import EmbedRequest, Message, ModelRequest, ModelResponse, Part
+from genkit._core._operation import Operation
 from genkit._core._registry import Registry
-from genkit._core._typing import EmbedResponse, Operation, Role
-from genkit.model import ModelContext, model_ref
+from genkit._core._typing import EmbedResponse, Role
+from genkit.model import ModelContext, ModelRef
 
 
 class CustomConfig(BaseModel):
@@ -74,9 +75,8 @@ class AliasedNestedConfig(BaseModel):
 
 def test_resolve_model_ref_merges_without_overwrite() -> None:
     """resolve_model_ref keeps ref-only keys and lets call-time keys win."""
-    ref = model_ref(
-        'gemini-pro-latest',
-        namespace='googleai',
+    ref = ModelRef(
+        name='googleai/gemini-pro-latest',
         config_schema=CustomConfig,
         config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
     )
@@ -96,9 +96,8 @@ def test_normalize_config_dumps_pydantic() -> None:
 
 def test_resolve_model_ref_strips_explicit_none() -> None:
     """Post-merge None-strip: cleared keys are absent from the resolved config."""
-    ref = model_ref(
-        'gemini-pro-latest',
-        namespace='googleai',
+    ref = ModelRef(
+        name='googleai/gemini-pro-latest',
         config_schema=CustomConfig,
         config=CustomConfig(temperature=0.7, top_k=40),
     )
@@ -145,7 +144,7 @@ def test_normalize_config_preserves_explicit_none() -> None:
 
 def test_resolve_model_ref_version_lowest_precedence() -> None:
     """ref.version seeds the config but is overridden by ref config and call config."""
-    ref = model_ref('m1', config_schema=CustomConfig, version='001')
+    ref = ModelRef(name='m1', config_schema=CustomConfig, version='001')
     assert resolve_model_ref(model=ref, config={}).config == {'version': '001'}
     assert resolve_model_ref(model=ref, config={'version': '002'}).config == {'version': '002'}
 
@@ -162,7 +161,7 @@ def test_normalize_config_rejects_unsupported_type() -> None:
     with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel') as exc_info:
         normalize_config(config=123)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 def test_resolve_model_name_raises_when_default_is_not_string() -> None:
@@ -172,7 +171,7 @@ def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef') as exc_info:
         resolve_model_name(model=None, registry=registry)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 def test_resolve_model_name_empty_string_falls_back_to_default() -> None:
@@ -202,8 +201,8 @@ def test_resolve_model_name_empty_default_means_not_configured() -> None:
         resolve_model_name(model=None, registry=registry)
     assert empty.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
     assert omitted.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'MODEL_NOT_FOUND' not in empty.value.original_message
-    assert 'MODEL_NOT_FOUND' not in omitted.value.original_message
+    assert 'MODEL_NOT_FOUND' not in empty.value.message
+    assert 'MODEL_NOT_FOUND' not in omitted.value.message
 
 
 def test_normalize_config_preserves_explicit_none_on_model_config() -> None:
@@ -218,7 +217,7 @@ def test_normalize_config_keeps_python_field_names() -> None:
 
 def test_resolve_model_ref_model_config_none_clears_default() -> None:
     """ModelConfig(temperature=None) clears a ref default, not just a dict None."""
-    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
+    ref = ModelRef(name='m', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
     resolved = resolve_model_ref(
         model=ref,
         config=normalize_config(config=ModelConfig(temperature=None)),
@@ -228,7 +227,7 @@ def test_resolve_model_ref_model_config_none_clears_default() -> None:
 
 def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
     """Call-time max_output_tokens replaces the ref's, rather than sitting beside maxOutputTokens."""
-    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
+    ref = ModelRef(name='m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
     resolved = resolve_model_ref(model=ref, config={'max_output_tokens': 200})
     assert resolved.config == {'max_output_tokens': 200}
 
@@ -253,21 +252,21 @@ def test_normalize_config_accepts_snake_case_keys() -> None:
 def test_resolve_model_name_unwraps_model_ref_default() -> None:
     """A constructor ModelRef stored as defaultModel resolves to its wire name."""
     registry = Registry()
-    ref = model_ref('echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    ref = ModelRef(name='echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
     registry.register_value('defaultModel', 'defaultModel', ref)
     assert resolve_model_name(model=None, registry=registry) == 'echo-model'
 
 
 def test_resolve_model_name_unwraps_explicit_model_ref() -> None:
     """An explicit ModelRef argument resolves to its wire name."""
-    ref = model_ref('echo-model', namespace='googleai', config_schema=CustomConfig)
+    ref = ModelRef(name='googleai/echo-model', config_schema=CustomConfig)
     assert resolve_model_name(model=ref, registry=Registry()) == 'googleai/echo-model'
 
 
 def test_resolve_model_arg_returns_default_model_ref() -> None:
     """resolve_model_arg keeps the stored ModelRef so callers can merge its config."""
     registry = Registry()
-    ref = model_ref('echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
+    ref = ModelRef(name='echo-model', config_schema=CustomConfig, config=CustomConfig(temperature=0.7))
     registry.register_value('defaultModel', 'defaultModel', ref)
     assert resolve_model_arg(model=None, registry=registry) is ref
 
@@ -275,8 +274,8 @@ def test_resolve_model_arg_returns_default_model_ref() -> None:
 def test_resolve_call_model_merges_constructor_model_ref() -> None:
     """A stored constructor ref contributes version and config when model= is omitted."""
     registry = Registry()
-    ref = model_ref(
-        'echo-model',
+    ref = ModelRef(
+        name='echo-model',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -291,8 +290,8 @@ def test_resolve_call_model_merges_constructor_model_ref() -> None:
 def test_resolve_call_model_call_time_config_wins() -> None:
     """Call-time config overlays the constructor ref per key."""
     registry = Registry()
-    ref = model_ref(
-        'echo-model',
+    ref = ModelRef(
+        name='echo-model',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(temperature=0.7),
@@ -308,8 +307,8 @@ def test_resolve_model_ref_keeps_explicit_empty_values() -> None:
     Only ``None`` means omit the field. Clearing stop sequences is ``[]``,
     not dropping the key; a blank version is ``''``.
     """
-    ref = model_ref(
-        'm',
+    ref = ModelRef(
+        name='m',
         config_schema=ModelConfig,
         config=ModelConfig(temperature=0.7, stop_sequences=['STOP'], version='001'),
     )
@@ -336,8 +335,8 @@ def test_resolve_model_ref_keeps_explicit_empty_values() -> None:
 
 def test_resolve_model_ref_config_version_beats_ref_version() -> None:
     """ref.config.version overlays the constructor version= field."""
-    ref = model_ref(
-        'm',
+    ref = ModelRef(
+        name='m',
         config_schema=ModelConfig,
         version='001',
         config=ModelConfig(version='002'),
@@ -382,8 +381,8 @@ def test_resolve_model_arg_rejects_action_from_another_instance() -> None:
 
 
 def test_resolve_model_arg_rejects_unregistered_action() -> None:
-    """An action built with genkit.model.model() and never registered raises INVALID_ARGUMENT, not NOT_FOUND."""
-    loose = model(name='loose', fn=_echo_fn)
+    """An action built with genkit.model.Model() and never registered raises INVALID_ARGUMENT, not NOT_FOUND."""
+    loose = Model(name='loose', fn=_echo_fn)
     with pytest.raises(GenkitError, match="model action 'loose' is not the one registered") as exc_info:
         resolve_model_arg(model=loose, registry=Genkit()._registry)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
@@ -457,8 +456,8 @@ def test_resolve_call_model_string_path_does_not_fold() -> None:
 def test_resolve_call_model_explicit_string_ignores_default_ref_config() -> None:
     """An explicit name is a different model; constructor knobs stay off it."""
     registry = Registry()
-    default = model_ref(
-        'flash',
+    default = ModelRef(
+        name='flash',
         config_schema=CustomConfig,
         config=CustomConfig(temperature=0.7, safety_settings={'HARM': 'BLOCK'}),
     )
@@ -477,7 +476,7 @@ async def _unused_model_fn(request: ModelRequest, ctx: ModelContext) -> ModelRes
 async def test_resolve_for_generate_string_reads_action_class() -> None:
     """A string name picks up the class the action registered."""
     registry = Registry()
-    registry.register_action_from_instance(model('flash', _unused_model_fn, config_schema=CustomConfig))
+    registry.register_action_from_instance(Model('flash', _unused_model_fn, config_schema=CustomConfig))
     resolved = await resolve_for_generate(model='flash', config={}, registry=registry)
     assert resolved.config_schema is CustomConfig
 
@@ -493,11 +492,11 @@ async def test_resolve_for_generate_string_without_action_has_no_class() -> None
 def test_config_schema_at_define_reads_ref_and_registered_action() -> None:
     """Define-time lookup is sync: ModelRef or an already-registered model."""
     registry = Registry()
-    ref = model_ref('flash', config_schema=CustomConfig)
+    ref = ModelRef(name='flash', config_schema=CustomConfig)
     assert config_schema_at_define(model=ref, registry=registry) == ('flash', CustomConfig)
 
     assert config_schema_at_define(model='flash', registry=registry) == ('flash', None)
-    registry.register_action_from_instance(model('flash', _unused_model_fn, config_schema=CustomConfig))
+    registry.register_action_from_instance(Model('flash', _unused_model_fn, config_schema=CustomConfig))
     assert config_schema_at_define(model='flash', registry=registry) == ('flash', CustomConfig)
 
     empty = Registry()
@@ -522,7 +521,7 @@ def test_assert_correct_config_class_uses_schema_only() -> None:
     ) as exc_info:
         assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
     assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 def test_resolve_model_ref_keeps_other_family_keys() -> None:
@@ -531,9 +530,8 @@ def test_resolve_model_ref_keeps_other_family_keys() -> None:
     A prompt can still be holding a Gemini bag when the call picks OpenAI.
     Those leftovers stay; the helper does not know families.
     """
-    openai = model_ref(
-        'gpt',
-        namespace='openai',
+    openai = ModelRef(
+        name='openai/gpt',
         config_schema=OtherFamilyConfig,
         config=OtherFamilyConfig(frequency_penalty=0.5),
     )
@@ -554,8 +552,8 @@ def test_resolve_model_ref_replaces_nested_bag() -> None:
 
     Call-time ``thinking={'budget': 256}`` drops the ref's ``level``.
     """
-    ref = model_ref(
-        'm',
+    ref = ModelRef(
+        name='m',
         config_schema=NestedConfig,
         config=NestedConfig(thinking={'budget': 1024, 'level': 'low'}),
     )
@@ -605,14 +603,14 @@ def test_overlay_config_unknown_keys_pass_through() -> None:
 
 def test_resolve_model_ref_alias_overlay_replaces_field() -> None:
     """Call-time maxOutputTokens replaces the dumped max_output_tokens."""
-    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
+    ref = ModelRef(name='m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
     resolved = resolve_model_ref(model=ref, config={'maxOutputTokens': 5})
     assert resolved.config == {'max_output_tokens': 5}
 
 
 def test_resolve_model_ref_alias_none_clears_field() -> None:
     """Call-time maxOutputTokens=None clears the dumped ref default."""
-    ref = model_ref('m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
+    ref = ModelRef(name='m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
     resolved = resolve_model_ref(model=ref, config={'maxOutputTokens': None})
     assert 'max_output_tokens' not in resolved.config
     assert 'maxOutputTokens' not in resolved.config
@@ -624,8 +622,8 @@ def test_resolve_model_ref_alias_replaces_nested_bag() -> None:
     ``thinking_level`` and ``include_thoughts`` from the ref are gone. Inner
     keys stay as written — fold does not walk into the nested dict.
     """
-    ref = model_ref(
-        'm',
+    ref = ModelRef(
+        name='m',
         config_schema=AliasedNestedConfig,
         config=AliasedNestedConfig(
             thinking_config={
@@ -641,8 +639,8 @@ def test_resolve_model_ref_alias_replaces_nested_bag() -> None:
 
 def test_resolve_model_ref_alias_none_clears_nested_bag() -> None:
     """thinkingConfig=None clears the whole thinking_config slot."""
-    ref = model_ref(
-        'm',
+    ref = ModelRef(
+        name='m',
         config_schema=AliasedNestedConfig,
         config=AliasedNestedConfig(thinking_config={'thinking_budget': 1024, 'thinking_level': 'low'}),
     )
@@ -653,7 +651,7 @@ def test_resolve_model_ref_alias_none_clears_nested_bag() -> None:
 
 def test_resolve_model_ref_does_not_fold_inner_keys() -> None:
     """Both spellings inside a nested bag stay. Only the outer key folds."""
-    ref = model_ref('m', config_schema=AliasedNestedConfig)
+    ref = ModelRef(name='m', config_schema=AliasedNestedConfig)
     resolved = resolve_model_ref(
         model=ref,
         config={'thinkingConfig': {'thinking_budget': 1, 'thinkingBudget': 256}},
@@ -663,7 +661,7 @@ def test_resolve_model_ref_does_not_fold_inner_keys() -> None:
 
 def test_resolve_model_ref_both_spellings_last_write_wins() -> None:
     """Both keys in one dict fold onto one field; later key wins."""
-    ref = model_ref('m', config_schema=ModelConfig)
+    ref = ModelRef(name='m', config_schema=ModelConfig)
     camel_last = resolve_model_ref(
         model=ref,
         config={'max_output_tokens': 1, 'maxOutputTokens': 5},

@@ -23,7 +23,7 @@ from genkit._ai._agents._types import TurnContext
 from genkit._core._channel import CloseableQueue
 from genkit._core._model import AgentInput, AgentResult, SessionState
 from genkit.exp.agent import AgentContext
-from genkit.middleware import GenerateMiddlewareContext
+from genkit.middleware import MiddlewareContext
 
 
 @pytest.mark.asyncio
@@ -35,7 +35,7 @@ async def test_get_current_session_outside_bind() -> None:
 async def test_middleware_context_ai_current_session_inside_agent_session_raises_attribute_error() -> None:
     """Inside an agent session, a hook calling ctx.ai.current_session() gets AttributeError."""
     ai = Genkit()
-    ctx = GenerateMiddlewareContext(ai=ai)
+    ctx = MiddlewareContext(ai=ai)
     session = Session(SessionState(custom={'bound': True}))
 
     async def check() -> None:
