@@ -508,8 +508,13 @@ func ListValues(g *Genkit) map[string]any {
 	return g.reg.ListValues()
 }
 
-// DefineFlow defines a non-streaming flow, registers it as a [core.Action] of type Flow,
-// and returns a [core.Flow] runner.
+// DefineFlow defines a non-streaming flow, registers it by name as a
+// [core.Action] of type Flow on g (making it discoverable by the Genkit CLI,
+// Developer UI, and Reflection API), and returns a [core.Flow] runner for
+// invoking the flow directly from Go via [core.Flow.Run]. When a flow is only
+// invoked externally via the Genkit CLI or HTTP server, the returned value can
+// be ignored.
+//
 // The provided function `fn` takes an input of type `In` and returns an output of type `Out`.
 // Flows are the primary mechanism for orchestrating multi-step AI tasks in Genkit.
 // Each run of a flow is traced, and steps within the flow can be traced using [Run].
@@ -536,8 +541,11 @@ func DefineFlow[In, Out any](g *Genkit, name string, fn core.Func[In, Out]) *cor
 	return f
 }
 
-// DefineStreamingFlow defines a streaming flow, registers it as a [core.Action] of type Flow,
-// and returns a [core.Flow] runner capable of streaming.
+// DefineStreamingFlow defines a streaming flow, registers it by name as a
+// [core.Action] of type Flow on g (making it discoverable by the Genkit CLI,
+// Developer UI, and Reflection API), and returns a [core.Flow] runner capable
+// of streaming. When a flow is only invoked externally via the Genkit CLI or
+// HTTP server, the returned value can be ignored.
 //
 // The provided function `fn` takes an input of type `In`. It can optionally stream
 // intermediate results of type `Stream` by invoking the provided callback function.
