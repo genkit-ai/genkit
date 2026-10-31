@@ -256,6 +256,68 @@ async def test_tool_catch_all_does_not_swallow_interrupt() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('nesting', ['flow', 'flow_in_flow'])
+async def test_tool_catch_all_does_not_swallow_interrupt_from_a_flow_it_calls(nesting: str) -> None:
+    """An approval raised in a flow the tool calls pauses generate too.
+
+    The flow boundary would turn an Interrupt into GenkitError INTERNAL, an
+    Exception the tool's catch-all swallows. Under a tool it stays raw.
+    """
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.flow()
+    async def manager_approval(order_id: str) -> str:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    @ai.flow()
+    async def refund_policy(order_id: str) -> str:
+        return await manager_approval(order_id)
+
+    approval = manager_approval if nesting == 'flow' else refund_policy
+
+    @ai.tool(name='refund_order')
+    async def refund_order(inp: dict) -> str:
+        try:
+            if inp['amount'] > 500:
+                await approval(inp['order_id'])
+            return 'refunded'
+        except Exception as e:  # noqa: BLE001 - the catch-all under test
+            return f'error: {e!r}'
+
+    pm.responses.append(_refund_request(order_id='A-17', amount=900))
+
+    r = await generate_action(
+        CallScope(ai),
+        _gen_opts(
+            ai,
+            tools=['refund_order'],
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
+        ),
+    )
+    assert r.finish_reason == FinishReason.INTERRUPTED
+    assert _wire(r.messages) == _refund_turn_wire(order_id='A-17', amount=900)
+
+
+@pytest.mark.asyncio
+async def test_flow_interrupt_after_a_tool_returns_is_still_an_error() -> None:
+    """The inside-tool flag ends with the tool: a flow called afterwards converts as before."""
+    ai = Genkit()
+
+    @ai.tool(name='lookup_order')
+    async def lookup_order(order_id: str) -> str:
+        return 'found'
+
+    @ai.flow()
+    async def manager_approval(order_id: str) -> str:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    await lookup_order('A-17')
+    with pytest.raises(GenkitError, match='Interrupt raised outside a tool'):
+        await manager_approval('A-17')
+
+
+@pytest.mark.asyncio
 async def test_wrap_tool_catch_all_does_not_swallow_interrupt() -> None:
     """A wrap_tool middleware that degrades failures to an output still lets Interrupt through."""
     ai = Genkit()
