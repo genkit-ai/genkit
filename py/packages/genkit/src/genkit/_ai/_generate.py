@@ -401,11 +401,23 @@ def hook_wrap(mw: MiddlewareDef, hook: str) -> HookWrap[HookParamsT, HookResultT
     return cast(HookWrap[HookParamsT, HookResultT], wrap)
 
 
+def _settle_waiter(waiter: asyncio.Future[None]) -> Callable[[object], None]:
+    def _callback(_task: object) -> None:
+        if not waiter.done():
+            waiter.set_result(None)
+
+    return _callback
+
+
 async def hop(*, body: Awaitable[T]) -> T:
     """Run ``body`` on a child task so a long use= list or tool loop can return.
 
     The child yields once before ``body`` so an eager task factory does not
     keep stacking hops on this call.
+
+    The parent awaits a local ``Future`` instead of ``child_task`` directly so
+    ``Task._fut_waiter`` never chains across hops: ``task.cancel()`` and
+    ``repr(task)`` stay O(1) in stack depth on Python 3.10/3.11.
 
     asyncio re-raises KeyboardInterrupt and SystemExit out of the event loop
     instead of into the awaiting task. The child returns them as a value and
@@ -420,7 +432,46 @@ async def hop(*, body: Awaitable[T]) -> T:
         except (KeyboardInterrupt, SystemExit) as exc:
             return None, exc
 
-    result, exc = await asyncio.create_task(child())
+    loop = asyncio.get_running_loop()
+    done: asyncio.Future[tuple[T | None, KeyboardInterrupt | SystemExit | None]] = loop.create_future()
+    child_task = asyncio.create_task(child())
+
+    def on_child_done(
+        task: asyncio.Task[tuple[T | None, KeyboardInterrupt | SystemExit | None]],
+    ) -> None:
+        if task.cancelled():
+            if not done.done():
+                done.cancel()
+            return
+        err = task.exception()
+        if err is not None:
+            if not done.done():
+                done.set_exception(err)
+            return
+        res = task.result()
+        if not done.done():
+            done.set_result(res)
+
+    child_task.add_done_callback(on_child_done)
+    try:
+        result, exc = await done
+    except asyncio.CancelledError:
+        child_task.cancel()
+        while not child_task.done():
+            settled: asyncio.Future[None] = loop.create_future()
+            child_task.add_done_callback(_settle_waiter(settled))
+            try:
+                await settled
+            except asyncio.CancelledError:
+                child_task.cancel()
+        if not child_task.cancelled():
+            err = child_task.exception()
+            if err is not None:
+                raise err from None
+            _, child_exc = child_task.result()
+            if child_exc is not None:
+                raise child_exc from None
+        raise
     if exc is not None:
         raise exc
     return cast(T, result)
