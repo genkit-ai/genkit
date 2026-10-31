@@ -113,7 +113,7 @@ func TestGeminiEmbedding2Registered(t *testing.T) {
 // from supportedGeminiModels still resolves, silently, to the unknown-model
 // fallback, which is labelled with the raw model ID.
 func TestNewlyRegisteredModels(t *testing.T) {
-	for _, name := range []string{gemini37Flash, gemini36Flash, gemini35FlashLite, gemini31ProPreview, gemini31FlashLiteImage} {
+	for _, name := range []string{gemini37Flash, gemini36Flash, gemini35FlashLite, gemini31ProPreview, gemini31FlashLiteImage, gemini38Flash, gemini4Argon, geminiNanoBanana21} {
 		if got := ClassifyModel(name); got != ModelTypeGemini {
 			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
 		}
@@ -131,6 +131,66 @@ func TestNewlyRegisteredModels(t *testing.T) {
 			}
 		}
 
+		if !slices.Contains(vertexAIModels, name) {
+			t.Errorf("vertexAIModels missing %q", name)
+		}
+		if !slices.Contains(googleAIModels, name) {
+			t.Errorf("googleAIModels missing %q", name)
+		}
+	}
+}
+
+// TestOmni11BackendSpellings pins that the omni 1.1 pair is split by backend the
+// same way gemini-omni-flash already is: Google AI without the preview suffix,
+// Vertex with it.
+func TestOmni11BackendSpellings(t *testing.T) {
+	cases := map[string]string{
+		geminiOmni11Flash:        googleAIProvider,
+		geminiOmni11FlashPreview: vertexAIProvider,
+	}
+	for name, provider := range cases {
+		ownBackend, otherBackend := googleAIModels, vertexAIModels
+		if provider == vertexAIProvider {
+			ownBackend, otherBackend = vertexAIModels, googleAIModels
+		}
+		if !slices.Contains(ownBackend, name) {
+			t.Errorf("%s list missing %q", provider, name)
+		}
+		if slices.Contains(otherBackend, name) {
+			t.Errorf("%s list should not carry the other backend's spelling %q", provider, name)
+		}
+		opts := GetModelOptions(name, provider)
+		if hitUnknownModelFallback(opts, name) {
+			t.Errorf("GetModelOptions(%q, %q).Label = %q, want a curated label (hit the unknown-model fallback)", name, provider, opts.Label)
+		}
+		if opts.Supports == nil || !opts.Supports.Multiturn || !opts.Supports.Media {
+			t.Errorf("GetModelOptions(%q, %q): expected multimodal supports, got %+v", name, provider, opts.Supports)
+		}
+		if opts.ConfigSchema == nil {
+			t.Errorf("GetModelOptions(%q, %q): ConfigSchema is nil", name, provider)
+		}
+	}
+}
+
+// TestNewlyRegisteredTTSModels pins that the 3.8 TTS pair is registered with
+// TTSSupports and a config schema, not the unknown-model fallback.
+func TestNewlyRegisteredTTSModels(t *testing.T) {
+	for _, name := range []string{gemini38FlashTTS, gemini38FlashLiteTTS} {
+		if got := ClassifyModel(name); got != ModelTypeGemini {
+			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
+		}
+		for _, provider := range []string{googleAIProvider, vertexAIProvider} {
+			opts := GetModelOptions(name, provider)
+			if hitUnknownModelFallback(opts, name) {
+				t.Errorf("GetModelOptions(%q, %q).Label = %q, want a curated label (hit the unknown-model fallback)", name, provider, opts.Label)
+			}
+			if opts.Supports == nil || opts.Supports.Multiturn || opts.Supports.Media || !slices.Contains(opts.Supports.Output, ai.OutputFormatMedia) {
+				t.Errorf("GetModelOptions(%q, %q): expected TTS supports, got %+v", name, provider, opts.Supports)
+			}
+			if opts.ConfigSchema == nil {
+				t.Errorf("GetModelOptions(%q, %q): ConfigSchema is nil", name, provider)
+			}
+		}
 		if !slices.Contains(vertexAIModels, name) {
 			t.Errorf("vertexAIModels missing %q", name)
 		}
