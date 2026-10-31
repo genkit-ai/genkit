@@ -27,7 +27,6 @@ from genkit_google_genai._constants import (
     multi_regional_base_url,
     vertex_api_host,
 )
-from genkit_google_genai._evaluators._evaluation import EvaluatorFactory
 from genkit_google_genai._models import _gemini as gemini_module
 from genkit_google_genai._models._gemini import GeminiConfig, GeminiModel
 from google import genai
@@ -196,8 +195,8 @@ class TestVertexAIPluginProject:
     def test_regional_resolves_project_from_adc(self) -> None:
         """A regional plugin resolves the project via ADC when none is configured.
 
-        Evaluator registration in init() needs a concrete project, so leaving
-        it unresolved would fail a deployment that relies purely on ADC.
+        The plugin resolves it up front, so the SDK never does the blocking
+        ADC lookup on the event loop.
         """
         with patch.dict(os.environ, {}, clear=True):
             with patch('genkit_google_genai._google.genai.client.Client'):
@@ -322,27 +321,6 @@ class TestRealClientHonorsPinnedBaseUrl:
         assert client._api_client._http_options.base_url == US_REP_URL
         assert client._api_client.project == 'p'
         assert client._api_client.location == 'us'
-
-
-class TestEvaluatorApiHost:
-    """Tests for evaluator endpoint host selection."""
-
-    def test_regional_host(self) -> None:
-        """Regional locations use the {location}-aiplatform pattern."""
-        factory = EvaluatorFactory(project='p', location='us-central1')
-        assert factory._api_host() == 'us-central1-aiplatform.googleapis.com'
-
-    def test_global_rejected(self) -> None:
-        """The evaluation service is regional; 'global' is rejected."""
-        factory = EvaluatorFactory(project='p', location='global')
-        with pytest.raises(GenkitError, match='does not support'):
-            factory._api_host()
-
-    def test_multi_region_rejected(self) -> None:
-        """The evaluation service is regional; multi-regions are rejected."""
-        factory = EvaluatorFactory(project='p', location='eu')
-        with pytest.raises(GenkitError, match='does not support'):
-            factory._api_host()
 
 
 class TestGeminiConfigLocation:

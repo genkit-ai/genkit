@@ -214,23 +214,23 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
-# ModelRequest[X], EmbedRequest[X] and the evaluator requests take a pydantic
-# model class; __class_getitem__ rejects the rest. Not bound to BaseModel: type
-# checkers would then reject the common bare ModelRequest(config={...}), where
-# the config is solved as a dict. Invariant: config is writable, so
+# ModelRequest[X] and EmbedRequest[X] take a pydantic model class;
+# __class_getitem__ rejects the rest. Not bound to BaseModel: type checkers
+# would then reject the common bare ModelRequest(config={...}), where the
+# config is solved as a dict. Invariant: config is writable, so
 # ModelRequest[GeminiConfig] is not a ModelRequest[ModelConfig] you can assign
 # a ModelConfig into. Defaults to Any so bare ModelRequest means
 # ModelRequest[Any], and Callable[[ModelRequest], ...] accepts a fn typed
 # ModelRequest[GeminiConfig].
 ModelRequestConfigT = TypeVar('ModelRequestConfigT', default=Any)
-# Bare EmbedRequest / evaluator request options are always a dict at runtime, so the
-# default says so. Fn aliases take EmbedRequest[Any] / EvaluatorRequest[Any] so a fn
-# typed EmbedRequest[CrmEmbedConfig] still fits them.
+# Bare EmbedRequest options are always a dict at runtime, so the default says
+# so. Fn aliases take EmbedRequest[Any] so a fn typed
+# EmbedRequest[CrmEmbedConfig] still fits them.
 RequestOptionsT = TypeVar('RequestOptionsT', default=dict[str, Any])
 
 
 def declared_config_type(cls: type) -> type[BaseModel] | None:
-    """The config class on ``ModelRequest[ThatClass]`` (or the embed / evaluator requests), else None.
+    """The config class on ``ModelRequest[ThatClass]`` or ``EmbedRequest[ThatClass]``, else None.
 
     None when unparametrized or ``Any``.
     """
@@ -245,7 +245,7 @@ def declared_config_type(cls: type) -> type[BaseModel] | None:
 
 
 def check_config_type_arg(*, request: str, field: str, typevar_values: object) -> None:
-    """Reject ``ModelRequest[X]`` / ``EmbedRequest[X]`` / evaluator requests unless X is a model class.
+    """Reject ``ModelRequest[X]`` / ``EmbedRequest[X]`` unless X is a model class.
 
     Runs where the annotation is evaluated, so a TypedDict or dict config
     fails when the fn is defined, with the same error on every Python version.

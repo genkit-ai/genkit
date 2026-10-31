@@ -25,7 +25,6 @@ from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._telemetry._log_exporter import build_log_record
-from genkit.evaluator import BaseDataPoint, EvaluatorResponse, Score
 from genkit.model import ModelContext
 from genkit.telemetry import (
     SpanMetadata,
@@ -647,17 +646,3 @@ def test_genkit_init_has_docstring() -> None:
     assert 'model:' in doc
     assert 'prompt_dir:' in doc
     assert 'GoogleAI.gemini_model' in doc
-
-
-def test_define_evaluator_takes_name_and_fn_positionally() -> None:
-    """define_evaluator(name, fn, *, ...) matches define_model; options stay keyword-only."""
-    ai = Genkit()
-
-    async def exact(row: BaseDataPoint, options: object | None) -> EvaluatorResponse:
-        return EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=True)])
-
-    action = ai.define_evaluator('exact', exact, display_name='Exact', definition='Matches exactly.')
-    assert action.name == 'exact'
-
-    with pytest.raises(TypeError):
-        ai.define_evaluator('exact2', exact, 'Exact', 'Matches exactly.')  # type: ignore[misc]  # pyright: ignore[reportCallIssue]
