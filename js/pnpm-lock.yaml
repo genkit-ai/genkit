@@ -240,6 +240,9 @@ importers:
       '@genkit-ai/core':
         specifier: workspace:*
         version: link:../core
+      '@opentelemetry/api':
+        specifier: 1.9.0
+        version: 1.9.0
       uuid:
         specifier: ^10.0.0
         version: 10.0.0

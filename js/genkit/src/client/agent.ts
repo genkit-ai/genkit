@@ -29,6 +29,7 @@ import type {
   AgentStreamChunk,
 } from '@genkit-ai/ai';
 import type { SessionSnapshot } from '@genkit-ai/ai/session';
+import { context, isSpanContextValid, trace } from '@opentelemetry/api';
 import { HttpStatusError, runFlow, streamFlow } from './client.js';
 
 // Re-export the transport-agnostic agent-client surface, including the pieces
@@ -150,11 +151,20 @@ export function remoteAgentTransport(
   const resolveHeaders = async (): Promise<
     Record<string, string> | undefined
   > => {
-    if (!options.headers) return undefined;
-    if (typeof options.headers === 'function') {
-      return options.headers();
+    const headers =
+      typeof options.headers === 'function'
+        ? await options.headers()
+        : options.headers;
+    if (
+      headers &&
+      Object.keys(headers).some((key) => key.toLowerCase() === 'traceparent')
+    ) {
+      return headers;
     }
-    return options.headers;
+    const span = trace.getSpanContext(context.active());
+    if (!span || !isSpanContextValid(span)) return headers;
+    const traceparent = `00-${span.traceId}-${span.spanId}-${span.traceFlags.toString(16).padStart(2, '0')}`;
+    return { ...headers, traceparent };
   };
 
   return {
