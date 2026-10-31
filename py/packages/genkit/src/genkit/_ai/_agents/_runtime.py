@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Generic, cast
 from uuid import uuid4
@@ -45,11 +45,11 @@ from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
 from genkit._core._error import (
+    ErrorReason,
+    Failure,
     GenkitError,
-    GenkitRuntimeError,
     Interrupt,
     PublicError,
-    RuntimeErrorReason,
     StatusName,
     TaskGroupError,
     interrupt_escape_error,
@@ -113,7 +113,7 @@ class SessionRunner(Generic[StateT]):
         self.on_end_turn = on_end_turn
         self.turn_index: int = 0
         self.last_turn_finish_reason: AgentFinishReason | None = None
-        self.last_turn_error: GenkitRuntimeError | None = None
+        self.last_turn_error: Failure | None = None
         self.last_good_state: SessionState | None = None
         self.last_good_state_version: int | None = None
         self.last_good_finish_reason: AgentFinishReason | None = None
@@ -307,7 +307,7 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
             details={
                 'schema': state_schema.model_json_schema(),
             },
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -326,7 +326,7 @@ class AgentInitError(PublicError):
     in-process.
     """
 
-    def __init__(self, *, status: StatusName, message: str, reason: RuntimeErrorReason | None = None) -> None:
+    def __init__(self, *, status: StatusName, message: str, reason: ErrorReason | None = None) -> None:
         """Initialize an AgentInitError.
 
         Args:
@@ -375,7 +375,7 @@ def assert_init_matches_state_management(
                 f"Cannot use '{field}' with agent '{agent_name}': this agent has no "
                 "store configured (client-managed state). Send 'state' instead."
             ),
-            reason=RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED,
+            reason=ErrorReason.SESSION_STORE_NOT_CONFIGURED,
         )
     if init.state is not None and store is not None:
         raise AgentInitError(
@@ -420,7 +420,7 @@ async def load_session(
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
-                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+                reason=ErrorReason.SNAPSHOT_NOT_FOUND,
             )
         # When init carries both ids, the snapshot id picks the row and the
         # session id is an ownership check: the snapshot must belong to that
@@ -432,7 +432,7 @@ async def load_session(
                 raise AgentInitError(
                     status='INVALID_ARGUMENT',
                     message=f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.',
-                    reason=RuntimeErrorReason.INVALID_SESSION_ID,
+                    reason=ErrorReason.INVALID_SESSION_ID,
                 )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
@@ -444,7 +444,7 @@ async def load_session(
                     f'(status: {snap.status.value if snap.status else "unknown"}). '
                     "Only 'completed' snapshots can be resumed."
                 ),
-                reason=RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE,
+                reason=ErrorReason.SNAPSHOT_NOT_RESUMABLE,
             )
         validate_custom_state(
             custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
@@ -579,7 +579,7 @@ class AgentRuntime:
         *,
         finish_reason: AgentFinishReason | None = None,
         status: SnapshotStatus | None = None,
-        error: GenkitRuntimeError | None = None,
+        error: Failure | None = None,
         force: bool = False,
         snapshot_id: str | None = None,
     ) -> str | None:
@@ -1119,10 +1119,10 @@ async def generate_prompt_agent_turn(
     )
 
     # Bad JSON is not a dead turn — generate already kept the model text.
-    if response.error is not None and response.error.reason is not RuntimeErrorReason.INVALID_OUTPUT:
+    if response.error is not None and response.error.reason is not ErrorReason.INVALID_OUTPUT:
         raise GenkitError(
             message=response.error.message,
-            status=cast(Any, response.error.status),
+            status=response.error.status,
             details=response.error.details,
         )
 
@@ -1136,14 +1136,30 @@ async def generate_prompt_agent_turn(
 # ---------------------------------------------------------------------------
 
 
-def to_error_details(exc: Exception) -> GenkitRuntimeError:
-    status = getattr(exc, 'status', None) or 'INTERNAL'
+def to_error_details(exc: BaseException) -> Failure:
+    """A turn failure as data, with the status classified like Go's ``status.Classified``.
+
+    Only a GenkitError names its own status. A third-party ``.status``
+    attribute (aiohttp's ``status=429``) isn't a Genkit status, so it never
+    leaks through.
+    """
+    status: StatusName
+    details: dict[str, Any] | None = None
     if isinstance(exc, GenkitError):
+        status = exc.status
         message = exc.message
+        if isinstance(exc.details, Mapping) and exc.details:
+            details = dict(cast(Mapping[str, Any], exc.details))
     else:
+        if isinstance(exc, asyncio.CancelledError):
+            status = 'CANCELLED'
+        # asyncio.TimeoutError is a separate class until 3.11.
+        elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            status = 'DEADLINE_EXCEEDED'
+        else:
+            status = 'INTERNAL'
         message = str(exc) or 'Internal failure'
-    details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
-    return GenkitRuntimeError(status=str(status), message=message, details=details)
+    return Failure(status=status, message=message, details=details)
 
 
 def to_agent_finish_reason(fr: FinishReason) -> AgentFinishReason:

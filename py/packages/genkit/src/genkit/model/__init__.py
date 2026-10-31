@@ -17,7 +17,6 @@
 """Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
 from genkit._ai._background_model import BackgroundModel
-from genkit._ai._generate import StreamingCallbackError
 from genkit._ai._model import (
     Model,
 )
@@ -35,15 +34,12 @@ from genkit._core._typing import (
     ModelInfo,
     ModelStage,
     ModelSupports,
-    OperationError,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
 )
 
 __all__ = [
-    # Errors
-    'StreamingCallbackError',
     # Models, request and context types
     'Model',
     'BackgroundModel',
@@ -53,8 +49,6 @@ __all__ = [
     'OutputConfig',
     # Usage and metadata
     'GenerationUsage',
-    # Long-running operations
-    'OperationError',
     # Tool types
     'ToolRequest',
     'ToolDefinition',

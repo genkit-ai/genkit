@@ -2719,7 +2719,7 @@ async def test_generate_credential_failure_is_unauthenticated(mocker: MockerFixt
         await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is auth_error
+    assert raised.value.__cause__ is auth_error
 
 
 @pytest.mark.asyncio
@@ -2735,7 +2735,7 @@ async def test_streaming_generate_credential_failure_is_unauthenticated(mocker: 
         await gemini.generate(_hi_request(), ctx)
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is revoked
+    assert raised.value.__cause__ is revoked
 
 
 @pytest.mark.asyncio
@@ -2756,7 +2756,7 @@ async def test_generate_metadata_server_refresh_error_is_unavailable(mocker: Moc
         await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
-    assert raised.value.cause is blip
+    assert raised.value.__cause__ is blip
 
 
 @pytest.mark.asyncio
@@ -2771,7 +2771,7 @@ async def test_generate_retryable_refresh_error_is_unavailable(mocker: MockerFix
         await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
-    assert raised.value.cause is flaky
+    assert raised.value.__cause__ is flaky
 
 
 @pytest.mark.asyncio
@@ -2786,7 +2786,7 @@ async def test_generate_bare_auth_transport_error_is_unavailable(mocker: MockerF
         await gemini.generate(_hi_request(), ModelContext())
 
     assert raised.value.status == 'UNAVAILABLE'
-    assert raised.value.cause is blip
+    assert raised.value.__cause__ is blip
 
 
 async def _generate_failure(mocker: MockerFixture, failure: BaseException, *, streaming: bool = False) -> GenkitError:
@@ -2822,7 +2822,7 @@ async def test_connection_refused_is_unavailable(mocker: MockerFixture, failure:
     error = await _generate_failure(mocker, failure, streaming=streaming)
 
     assert error.status == 'UNAVAILABLE'
-    assert error.cause is failure
+    assert error.__cause__ is failure
 
 
 @pytest.mark.asyncio
@@ -2833,7 +2833,7 @@ async def test_timeout_is_deadline_exceeded(mocker: MockerFixture, failure: Exce
     error = await _generate_failure(mocker, failure, streaming=streaming)
 
     assert error.status == 'DEADLINE_EXCEEDED'
-    assert error.cause is failure
+    assert error.__cause__ is failure
 
 
 @pytest.mark.asyncio
@@ -2845,7 +2845,7 @@ async def test_unmapped_4xx_is_unknown_genkit_error(mocker: MockerFixture, code:
     error = await _generate_failure(mocker, api_error)
 
     assert error.status == 'UNKNOWN'
-    assert error.cause is api_error
+    assert error.__cause__ is api_error
     assert error.message == 'Request payload too large'
 
 
@@ -2855,28 +2855,28 @@ async def test_429_retry_after_header_sets_retry_delay(mocker: MockerFixture) ->
     error = await _generate_failure(mocker, _quota_error(headers={'Retry-After': '7'}))
 
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.response_metadata == {'retry_after_ms': 7000.0}
+    assert error.retry_after_ms == 7000.0
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ('retry_delay', 'headers', 'expected'),
     [
-        ('30s', {}, {'retry_after_ms': 30000.0}),
-        ('1.5s', {}, {'retry_after_ms': 1500.0}),
-        ('30s', {'Retry-After': '7'}, {'retry_after_ms': 30000.0}),
+        ('30s', {}, 30000.0),
+        ('1.5s', {}, 1500.0),
+        ('30s', {'Retry-After': '7'}, 30000.0),
         ('soon', {}, None),
         (30, {}, None),
     ],
 )
 async def test_429_retry_info_sets_retry_delay(
-    mocker: MockerFixture, retry_delay: object, headers: dict[str, str], expected: dict[str, float] | None
+    mocker: MockerFixture, retry_delay: object, headers: dict[str, str], expected: float | None
 ) -> None:
     """A Gemini 429 whose body says RetryInfo "30s" waits 30000 ms, over any header; a malformed delay is ignored."""
     error = await _generate_failure(mocker, _quota_error(retry_delay=retry_delay, headers=headers))
 
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.response_metadata == expected
+    assert error.retry_after_ms == expected
 
 
 @pytest.mark.asyncio
@@ -2923,7 +2923,7 @@ async def test_rejected_api_key_is_unauthenticated(mocker: MockerFixture) -> Non
 
     assert error.status == 'UNAUTHENTICATED'
     assert error.message == message
-    assert error.cause is rejected
+    assert error.__cause__ is rejected
 
 
 @pytest.mark.asyncio
@@ -2976,7 +2976,7 @@ async def test_retrieve_cached_content_classifies_api_error(
         )
 
     assert raised.value.status == status
-    assert raised.value.cause is api_error
+    assert raised.value.__cause__ is api_error
 
 
 @pytest.mark.asyncio
@@ -3014,7 +3014,7 @@ async def test_request_client_credential_failure_is_unauthenticated() -> None:
             )
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is no_adc
+    assert raised.value.__cause__ is no_adc
 
 
 @pytest.mark.asyncio
@@ -3032,7 +3032,7 @@ async def test_request_client_bad_override_is_invalid_argument() -> None:
             )
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.cause is rejected
+    assert raised.value.__cause__ is rejected
 
 
 @pytest.mark.asyncio
@@ -3165,7 +3165,7 @@ async def test_generate_no_candidates_without_block_is_internal(
         await gemini.generate(_hi_request(), ModelContext())
     assert raised.value.status == 'INTERNAL'
     assert raised.value.message == 'Model returned no candidates.'
-    assert raised.value.cause is None
+    assert raised.value.__cause__ is None
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@
 
 """Tests for Fallback middleware."""
 
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 import pytest
@@ -23,6 +24,7 @@ from genkit_middleware import Fallback
 from pydantic import Field, ValidationError
 
 from genkit import (
+    ErrorReason,
     FinishReason,
     Genkit,
     GenkitError,
@@ -32,7 +34,7 @@ from genkit import (
     Part,
     Role,
 )
-from genkit.middleware import MiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelConfig, ModelContext, ModelRef, ModelRequest
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
@@ -340,6 +342,68 @@ async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() 
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'model sink closed'
+    assert response.error is not None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert backup_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fallback_does_not_call_backup_when_inner_middleware_chunk_callback_raises() -> None:
+    """Fallback outside a middleware whose replaced on_chunk raises: backup never runs."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon Tartine')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')])]]
+    backup_calls = 0
+
+    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='backup', fn=backup)
+
+    class RaisingChunkRewriter(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            previous = ctx.on_chunk
+
+            def rewrite(_: ModelResponseChunk) -> None:
+                raise KeyError('dish_id')
+
+            ctx.replace_on_chunk(rewrite)
+            try:
+                return await next_fn(params, ctx)
+            finally:
+                ctx.replace_on_chunk(previous)
+
+    stream = ai.generate_stream(
+        prompt='Suggest a dish.',
+        use=[
+            Fallback(models=['backup'], statuses=['INTERNAL', 'UNKNOWN', 'UNAVAILABLE']),
+            RaisingChunkRewriter(),
+        ],
+    )
+    chunks = [chunk.text async for chunk in stream]
+    response = await stream.response
+
+    assert chunks == []
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert pm.request_count == 1
     assert backup_calls == 0
 
 

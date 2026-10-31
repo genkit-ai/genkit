@@ -60,6 +60,7 @@ from pydantic.alias_generators import to_camel, to_snake
 from typing_extensions import NotRequired, Self, TypedDict
 
 from genkit import (
+    ErrorReason,
     FinishReason,
     GenkitError,
     Message,
@@ -67,7 +68,6 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Role,
-    RuntimeErrorReason,
 )
 from genkit.model import (
     ConstrainedSupport,
@@ -399,7 +399,7 @@ def file_search_fields(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'{prefix}{names} needs file_search_store_names',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     return stores, set_options
 
@@ -438,7 +438,7 @@ def flattened_key_error(key: str, value: object, fields: Collection[str]) -> Gen
         message = f'{key} takes True or False'
     else:
         return None
-    return GenkitError(status='INVALID_ARGUMENT', message=message, reason=RuntimeErrorReason.INVALID_INPUT)
+    return GenkitError(status='INVALID_ARGUMENT', message=message, reason=ErrorReason.INVALID_INPUT)
 
 
 def _both_set_error(first: str, second: str) -> ValueError:
@@ -2506,7 +2506,7 @@ class GeminiModel:
 
     def _invalid_config(self, message: str) -> GenkitError:
         return GenkitError(
-            status='INVALID_ARGUMENT', message=f'{self._version}: {message}', reason=RuntimeErrorReason.INVALID_INPUT
+            status='INVALID_ARGUMENT', message=f'{self._version}: {message}', reason=ErrorReason.INVALID_INPUT
         )
 
     def _check_backend_fields(self, config: Mapping[str, Any]) -> None:

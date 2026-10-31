@@ -1284,8 +1284,7 @@ async def test_invalid_config_raises_from_generate() -> None:
         await model.generate(_text_request({'thinkingBudget': 512}))
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert isinstance(exc_info.value.cause, ValidationError)
-    assert exc_info.value.__cause__ is exc_info.value.cause
+    assert isinstance(exc_info.value.__cause__, ValidationError)
     mock_client.messages.create.assert_not_called()
 
 
