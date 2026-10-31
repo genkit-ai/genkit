@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import copy
+import functools
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
@@ -47,6 +49,22 @@ def to_json_schema(schema: type | dict[str, Any] | str | None) -> dict[str, Any]
         return schema
     type_adapter = TypeAdapter(schema)
     return type_adapter.json_schema()
+
+
+@functools.cache
+def _generated_schema(cls: type) -> dict[str, Any]:
+    return TypeAdapter(cls).json_schema()
+
+
+def fixed_json_schema(cls: type) -> dict[str, Any]:
+    """JSON schema for a class every action of a kind publishes the same way.
+
+    ``ModelRequest``, ``ModelResponse``, ``EmbedRequest``, ... Generating one
+    takes milliseconds and the result never changes, so it's built once per
+    class. Each caller gets its own copy because action metadata is handed
+    out and may be edited.
+    """
+    return copy.deepcopy(_generated_schema(cls))
 
 
 def check_output_schema(json_schema: dict[str, Any]) -> None:

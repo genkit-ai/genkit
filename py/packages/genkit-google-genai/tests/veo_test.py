@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from genkit_google_genai._constants import multi_regional_base_url
 from genkit_google_genai._models._veo import (
-    KnownVeo,
+    KnownGoogleAIVeo,
+    KnownVertexAIVeo,
     VeoConfig,
     VeoModel,
     _from_veo_operation,
@@ -32,8 +33,8 @@ from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai import types as genai_types
 from google.genai.errors import APIError
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.model import ModelRequest
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelContext, ModelRequest
 
 
 def _sdk_op(
@@ -87,10 +88,10 @@ class TestIsVeoModel:
         assert is_veo_model('devotional-hymn') is False
 
 
-class TestKnownVeo:
-    """Every id in the ``KnownVeo`` catalog routes to the Veo family."""
+class TestKnownVeoIds:
+    """Every id in both backends' Veo catalogs routes to the Veo family."""
 
-    @pytest.mark.parametrize('version', get_args(KnownVeo))
+    @pytest.mark.parametrize('version', get_args(KnownGoogleAIVeo) + get_args(KnownVertexAIVeo))
     def test_known_ids_are_veo_models(self, version: str) -> None:
         """Each autocomplete id is recognized as a Veo model."""
         assert is_veo_model(version) is True
@@ -333,7 +334,7 @@ class TestVeoModelLifecycle:
             }),
         )
 
-        await veo.start(request, ActionRunContext())
+        await veo.start(request, ModelContext())
 
         called = client.aio.models.generate_videos.await_args
         assert called is not None
@@ -350,7 +351,7 @@ class TestVeoModelLifecycle:
         client.aio.models.generate_videos = AsyncMock(return_value=_sdk_op(name='operations/1', done=False))
         veo = VeoModel('veo-3.1-generate-001', client)
 
-        await veo.start(_text_request(), ActionRunContext())
+        await veo.start(_text_request(), ModelContext())
 
         called = client.aio.models.generate_videos.await_args
         assert called is not None
@@ -372,7 +373,7 @@ class TestVeoModelLifecycle:
             ),
         )
         model = VeoModel('veo-3.1-generate-001', client)
-        updated = await model.check(Operation(id='operations/123'), ActionRunContext())
+        updated = await model.check(Operation(id='operations/123'), ModelContext())
 
         assert updated.done is True
         assert _media(updated.output)[0].url == 'https://example.com/done.mp4'
@@ -385,7 +386,7 @@ class TestVeoModelLifecycle:
         model = VeoModel('veo-3.1-generate-001', client)
 
         with pytest.raises(GenkitError) as raised:
-            await model.check(Operation(id='operations/abc'), ActionRunContext())
+            await model.check(Operation(id='operations/abc'), ModelContext())
         assert raised.value.status == 'UNAVAILABLE'
 
     def test_invalid_sdk_field_raises_invalid_argument(self) -> None:
@@ -437,8 +438,8 @@ class TestVeoContextClient:
         veo = VeoModel('veo-3.1-generate-001', plugin)
 
         with patch('genkit_google_genai._models._veo.genai.Client') as ctor:
-            started = await veo.start(_text_request(), ActionRunContext())
-            await veo.check(started, ActionRunContext())
+            started = await veo.start(_text_request(), ModelContext())
+            await veo.check(started, ModelContext())
 
         ctor.assert_not_called()
         plugin.aio.models.generate_videos.assert_awaited_once()
@@ -455,7 +456,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             op = await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+                ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}),
             )
 
         ctor.assert_called_once()
@@ -482,7 +483,7 @@ class TestVeoContextClient:
                 'extra': {'parameters': {'fooBar': 1}},
             }),
         )
-        ctx = ActionRunContext(context={'config': {'base_url': 'https://context.example'}})
+        ctx = ModelContext(context={'config': {'base_url': 'https://context.example'}})
 
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.start(request, ctx)
@@ -511,7 +512,7 @@ class TestVeoContextClient:
         request = _text_request(config=VeoConfig(location='eu'))
 
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
-            await veo.start(request, ActionRunContext())
+            await veo.start(request, ModelContext())
 
         kwargs = ctor.call_args.kwargs
         assert kwargs['location'] == 'eu'
@@ -528,9 +529,9 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override):
             ticket = await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+                ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}),
             )
-        await veo.check(ticket, ActionRunContext())
+        await veo.check(ticket, ModelContext())
 
         override.aio.models.generate_videos.assert_awaited_once()
         plugin.aio.operations.get.assert_awaited_once()
@@ -545,7 +546,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'apiKey': 'sk-camel'}}),
+                ModelContext(context={'secrets': {'apiKey': 'sk-camel'}}),
             )
 
         assert ctor.call_args.kwargs['api_key'] == 'sk-camel'
@@ -563,7 +564,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             updated = await veo.check(
                 ticket,
-                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+                ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}),
             )
 
         assert ctor.call_args.kwargs['api_key'] == 'sk-tenant'
@@ -579,7 +580,7 @@ class TestVeoContextClient:
         override.aio.models.generate_videos = AsyncMock(return_value=_pending_sdk_op())
         override.aio.operations.get = AsyncMock(return_value=_pending_sdk_op())
         veo = VeoModel('veo-3.1-generate-001', plugin)
-        ctx = ActionRunContext(
+        ctx = ModelContext(
             context={
                 'secrets': {'api_key': 'sk-tenant'},
                 'config': {'base_url': 'https://x.example'},
@@ -617,7 +618,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+                ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}),
             )
 
         kwargs = ctor.call_args.kwargs
@@ -637,7 +638,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client') as ctor:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'config': {'location': 'us-central1'}}),
+                ModelContext(context={'config': {'location': 'us-central1'}}),
             )
 
         ctor.assert_not_called()
@@ -663,7 +664,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.check(
                 Operation(id='operations/1', done=False),
-                ActionRunContext(context={'config': {'location': 'eu'}}),
+                ModelContext(context={'config': {'location': 'eu'}}),
             )
 
         kwargs = ctor.call_args.kwargs
@@ -690,7 +691,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.check(
                 Operation(id='operations/1', done=False),
-                ActionRunContext(context={'config': {'location': 'us-central1'}}),
+                ModelContext(context={'config': {'location': 'us-central1'}}),
             )
 
         kwargs = ctor.call_args.kwargs
@@ -705,7 +706,7 @@ class TestVeoContextClient:
         with pytest.raises(GenkitError) as raised:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'config': bag}),
+                ModelContext(context={'config': bag}),
             )
 
         assert raised.value.status == 'INVALID_ARGUMENT'
@@ -718,7 +719,7 @@ class TestVeoContextClient:
         with pytest.raises(GenkitError) as raised:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': 'sk-tenant'}),
+                ModelContext(context={'secrets': 'sk-tenant'}),
             )
 
         assert raised.value.status == 'INVALID_ARGUMENT'
@@ -730,7 +731,7 @@ class TestVeoContextClient:
         with pytest.raises(GenkitError) as raised:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'api_key': 123}}),
+                ModelContext(context={'secrets': {'api_key': 123}}),
             )
 
         assert raised.value.status == 'INVALID_ARGUMENT'
@@ -747,7 +748,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'config': {'api_version': 'v1'}}),
+                ModelContext(context={'config': {'api_version': 'v1'}}),
             )
 
         opts = ctor.call_args.kwargs.get('http_options')
@@ -761,7 +762,7 @@ class TestVeoContextClient:
             with pytest.raises(GenkitError) as raised:
                 await veo.start(
                     _text_request(),
-                    ActionRunContext(context={'secrets': pocket}),
+                    ModelContext(context={'secrets': pocket}),
                 )
             assert raised.value.status == 'INVALID_ARGUMENT'
 
@@ -770,7 +771,7 @@ class TestVeoContextClient:
         veo = VeoModel('veo-3.1-generate-001', MagicMock())
         for bag in ({'api_key': 'sk-wrong'}, {'apiKey': 'sk-wrong'}):
             with pytest.raises(GenkitError) as raised:
-                await veo.start(_text_request(), ActionRunContext(context=bag))
+                await veo.start(_text_request(), ModelContext(context=bag))
             assert raised.value.status == 'INVALID_ARGUMENT'
             assert 'secrets' in str(raised.value)
 
@@ -789,7 +790,7 @@ class TestVeoContextClient:
         ):
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+                ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}),
             )
 
         assert raised.value.status == 'INVALID_ARGUMENT'
@@ -815,7 +816,7 @@ class TestVeoContextClient:
         with patch('genkit_google_genai._models._veo.genai.Client', return_value=override) as ctor:
             await veo.start(
                 _text_request(),
-                ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}),
+                ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}),
             )
 
         kwargs = ctor.call_args.kwargs
@@ -867,7 +868,7 @@ class TestVeoErrorClassification:
         veo = VeoModel('veo-3.1-generate-001', client)
 
         with pytest.raises(GenkitError) as raised:
-            await veo.start(_text_request(), ActionRunContext())
+            await veo.start(_text_request(), ModelContext())
 
         assert raised.value.status == 'UNAUTHENTICATED'
         assert raised.value.__cause__ is revoked
@@ -879,7 +880,7 @@ class TestVeoErrorClassification:
         veo = VeoModel('veo-3.1-generate-001', client)
 
         with pytest.raises(GenkitError) as raised:
-            await veo.check(Operation(id='operations/abc'), ActionRunContext())
+            await veo.check(Operation(id='operations/abc'), ModelContext())
 
         assert raised.value.status == 'UNAUTHENTICATED'
 
@@ -892,7 +893,7 @@ class TestVeoErrorClassification:
         veo = VeoModel('veo-3.1-generate-001', client)
 
         with pytest.raises(GenkitError) as raised:
-            await veo.check(Operation(id='operations/abc'), ActionRunContext())
+            await veo.check(Operation(id='operations/abc'), ModelContext())
 
         assert raised.value.status == 'UNAVAILABLE'
         assert raised.value.__cause__ is dropped
@@ -912,7 +913,7 @@ class TestVeoErrorClassification:
             patch('genkit_google_genai._models._veo.genai.Client', side_effect=DefaultCredentialsError('no ADC')),
             pytest.raises(GenkitError) as raised,
         ):
-            await veo.start(_text_request(config=VeoConfig(location='europe-west4')), ActionRunContext())
+            await veo.start(_text_request(config=VeoConfig(location='europe-west4')), ModelContext())
 
         assert raised.value.status == 'UNAUTHENTICATED'
 
@@ -927,6 +928,6 @@ class TestVeoErrorClassification:
             patch('genkit_google_genai._models._veo.genai.Client', side_effect=boom),
             pytest.raises(RuntimeError) as raised,
         ):
-            await veo.start(_text_request(), ActionRunContext(context={'secrets': {'api_key': 'sk-tenant'}}))
+            await veo.start(_text_request(), ModelContext(context={'secrets': {'api_key': 'sk-tenant'}}))
 
         assert raised.value is boom

@@ -57,6 +57,7 @@ export {
   type JsonPatch,
   type RemoteAgentOptions,
   type SnapshotLookup,
+  type WaitForSnapshotOptions,
 } from './agent.js';
 
 export { runFlow, streamFlow } from './client.js';

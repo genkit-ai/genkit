@@ -109,7 +109,7 @@ class SessionSnapshot(SessionSnapshotVeneer, Generic[StateT]):
 
     # Narrows the wire model's plain SessionState to the typed one so snap.state.custom
     # reads as the declared model; the runtime shape is identical (same JSON fields).
-    state: SessionState[StateT] | None = None  # pyrefly: ignore[bad-override]
+    state: SessionState[StateT] | None = None  # pyright: ignore[reportIncompatibleVariableOverride] # pyrefly: ignore[bad-override]
 
     @field_validator('state', mode='before')
     @classmethod

@@ -147,20 +147,5 @@ def map_output_message(message: Message, finish_reason: str) -> dict[str, Any]:
 
 
 def resolve_response_message(response: ModelResponse) -> Message | None:
-    """Resolve the effective response message.
-
-    Prefers the top-level ``message``. Falls back to
-    ``candidates[0].message`` when the reply only arrived on the older
-    candidate shape. Missing both returns ``None``.
-    """
-    if response.message is not None:
-        return response.message
-    candidates = response.candidates
-    if not candidates:
-        return None
-    message = candidates[0].message
-    if isinstance(message, Message):
-        return message
-    if message is not None:
-        return Message(message)
-    return None
+    """The response message, or ``None`` when the model sent none."""
+    return response.message

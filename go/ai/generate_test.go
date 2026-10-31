@@ -33,6 +33,7 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 	test_utils "github.com/firebase/genkit/go/tests/utils"
 	"github.com/google/go-cmp/cmp"
 )
@@ -877,6 +878,46 @@ func TestGenerate(t *testing.T) {
 			t.Errorf("unexpected error message: %v", err)
 		}
 	})
+}
+
+// Tool definitions reach the model in declaration order. Building them from a
+// map shuffled the order per call, which defeats provider-side prompt caching.
+func TestGenerateKeepsToolOrder(t *testing.T) {
+	r := newTestRegistry(t)
+
+	var got []string
+	m := defineModel(r, "test/toolOrder", &metadata, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		got = got[:0]
+		for _, td := range req.Tools {
+			got = append(got, td.Name)
+		}
+		return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+	})
+
+	noop := func(tc *ToolContext, in struct{}) (string, error) { return "", nil }
+	names := []string{"kilo", "alpha", "juliet", "bravo", "india", "charlie", "hotel", "delta", "golf", "echo", "foxtrot"}
+	var tools []ToolRef
+	for _, n := range names {
+		tools = append(tools, NewTool(n, n, noop))
+	}
+	mw := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{Tools: []Tool{NewTool("mw", "mw", noop)}}, nil
+	})
+	want := append(slices.Clone(names), "mw")
+
+	for range 5 {
+		if _, err := Generate(context.Background(), r,
+			WithModel(m),
+			WithPrompt("go"),
+			WithTools(tools...),
+			WithUse(mw),
+		); err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("request tool order mismatch (-want +got):\n%s", diff)
+		}
+	}
 }
 
 func TestGenerateWithOutputSchemaName(t *testing.T) {
@@ -3406,11 +3447,11 @@ func TestMediaParts(t *testing.T) {
 
 // generateSpanMessageCounts returns, sorted, the number of messages each
 // collected span named "generate" recorded as its input.
-func generateSpanMessageCounts(t *testing.T, c *spanCollector) []int {
+func generateSpanMessageCounts(t *testing.T, c *tracingtest.Recorder) []int {
 	t.Helper()
 	var counts []int
-	for _, s := range c.allByName("generate") {
-		input, ok := spanAttr(s, "genkit:input")
+	for _, s := range c.ByName("generate") {
+		input, ok := tracingtest.Attr(s, "genkit:input")
 		if !ok {
 			t.Errorf("generate span recorded no input")
 			continue
@@ -3440,7 +3481,7 @@ func TestGenerateSpanRecordsAccumulatedMessages(t *testing.T) {
 	const turns = 3
 	want := []int{1, 3, 5}
 
-	setup := func(t *testing.T) (api.Registry, *spanCollector) {
+	setup := func(t *testing.T) (api.Registry, *tracingtest.Recorder) {
 		t.Helper()
 		r := newTestRegistry(t)
 		defineFakeModel(t, r, fakeModelConfig{
@@ -3449,7 +3490,7 @@ func TestGenerateSpanRecordsAccumulatedMessages(t *testing.T) {
 		})
 		defineTool(r, "myTool", "A test tool",
 			func(ctx *ToolContext, in map[string]any) (string, error) { return "ok", nil })
-		return r, collectSpans(t)
+		return r, tracingtest.Capture(t)
 	}
 
 	t.Run("through Generate", func(t *testing.T) {
@@ -3467,9 +3508,9 @@ func TestGenerateSpanRecordsAccumulatedMessages(t *testing.T) {
 		}
 		// The loop's spans are annotated by type alone. A subtype would show
 		// up in their trace paths, and in every path built under them.
-		for _, s := range spans.allByName("generate") {
+		for _, s := range spans.ByName("generate") {
 			assertSpanAttr(t, s, "genkit:type", "util")
-			if got, ok := spanAttr(s, "genkit:metadata:subtype"); ok {
+			if got, ok := tracingtest.Attr(s, "genkit:metadata:subtype"); ok {
 				t.Errorf("generate span carries subtype %q, want none", got)
 			}
 		}
@@ -3569,7 +3610,7 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 	t.Run("keeps the caller's step name", func(t *testing.T) {
 		r, tool, res := interruptedForResume(t)
 		respond := tool.Respond(res.Message.Content[0], "answer", nil)
-		spans := collectSpans(t)
+		spans := tracingtest.Capture(t)
 
 		_, err := Generate(testCtx, r, WithModelName("test/resumeModel"),
 			WithMessages(res.History()...), WithTools(tool),
@@ -3577,10 +3618,10 @@ func TestResumeCarriesOptionsForward(t *testing.T) {
 		assertNoError(t, err)
 
 		// Both turns are the caller's step, so neither may fall back to the default.
-		if got := len(spans.allByName("generate")); got != 0 {
+		if got := len(spans.ByName("generate")); got != 0 {
 			t.Errorf("got %d spans named %q, want 0: every iteration is the named step", got, "generate")
 		}
-		if got := len(spans.allByName("myStep")); got != 2 {
+		if got := len(spans.ByName("myStep")); got != 2 {
 			t.Errorf("got %d spans named %q, want 2 (one per iteration)", got, "myStep")
 		}
 	})

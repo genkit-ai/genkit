@@ -40,6 +40,7 @@ import (
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingbridge"
 )
 
 // genkitCtxKey is the context key for the Genkit instance.
@@ -50,11 +51,11 @@ var genkitCtxKey = base.NewContextKey[*Genkit]()
 var configureLoggingOnce sync.Once
 
 // configureLogging applies GENKIT_LOG_LEVEL to the console handler and, when a
-// telemetry server is reachable, installs the handler that streams logs to it,
-// correlated with the active trace span.
+// telemetry server is reachable, wires trace and log export to it (logs are
+// correlated with the active trace span).
 //
 // reflectionOn comes from the first Init's resolved reflection config, so a
-// runtime with GENKIT_REFLECTION_ENABLED=true still streams logs to whatever
+// runtime with GENKIT_REFLECTION_ENABLED=true still exports to whatever
 // telemetry server it is given.
 func configureLogging(reflectionOn bool) {
 	if v := os.Getenv("GENKIT_LOG_LEVEL"); v != "" {
@@ -74,8 +75,11 @@ func configureLogging(reflectionOn bool) {
 		logger.AddHandler(tracing.LogExportHandler())
 		// The CLI normally provides the telemetry server URL in the
 		// environment; when it arrives later via the reflection API instead,
-		// configureTelemetry enables export at that point.
-		tracing.EnableLogExport(os.Getenv("GENKIT_TELEMETRY_SERVER"))
+		// configureTelemetry enables export at that point. Read once here,
+		// not per span.
+		url := os.Getenv("GENKIT_TELEMETRY_SERVER")
+		tracingbridge.SetDevTelemetryServer(url)
+		tracing.EnableLogExport(url)
 	}
 }
 
@@ -1285,7 +1289,8 @@ func DefinePrompt(g *Genkit, name string, opts ...ai.PromptOption) ai.Prompt {
 // LookupPrompt retrieves a registered [ai.Prompt] by its name.
 // Prompts can be registered via [DefinePrompt] or loaded automatically from
 // `.prompt` files in the directory specified by [WithPromptDir] or [LoadPromptDir].
-// It returns the prompt instance if found, or `nil` otherwise.
+// It returns the prompt instance if found, or `nil` otherwise. See
+// [ai.LookupPrompt] for how prompts loaded from subdirectories are found.
 func LookupPrompt(g *Genkit, name string) ai.Prompt {
 	return ai.LookupPrompt(g.reg, name)
 }
@@ -1987,7 +1992,8 @@ func Evaluate(ctx context.Context, g *Genkit, opts ...ai.EvaluatorOption) (*ai.E
 // it logs a debug message (if using the default) or panics (if specified).
 // The `namespace` acts as a prefix to the prompt name (e.g., namespace "myApp" and
 // file "greeting.prompt" results in prompt name "myApp/greeting"). Use an empty
-// string for no namespace.
+// string for no namespace. A file in a subdirectory is named after its path:
+// "support/greeting.prompt" results in "myApp/support/greeting".
 //
 // This function is often called implicitly by [Init] using the directory specified
 // by [WithPromptDir], but can be called explicitly to load prompts from other
@@ -2034,7 +2040,8 @@ func loadPromptDirOS(r api.Registry, dir, namespace string) {
 // prompts are located (e.g., "prompts" if using `//go:embed prompts/*`).
 // The `namespace` acts as a prefix to the prompt name (e.g., namespace "myApp" and
 // file "greeting.prompt" results in prompt name "myApp/greeting"). Use an empty
-// string for no namespace.
+// string for no namespace. A file in a subdirectory is named after its path:
+// "support/greeting.prompt" results in "myApp/support/greeting".
 //
 // This function provides an alternative to [LoadPromptDir] for loading prompts
 // from embedded filesystems, enabling self-contained binaries without external

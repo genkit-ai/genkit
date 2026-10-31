@@ -43,7 +43,8 @@ pytestmark = [
 ]
 
 _ENABLED_THINKING_CONFIG: dict[str, Any] = {
-    'thinking': {'enabled': True, 'budgetTokens': 1024},
+    'thinking': 'enabled',
+    'thinkingBudget': 1024,
     'maxOutputTokens': 2048,
 }
 
@@ -107,7 +108,7 @@ async def test_thinking_adaptive(ai: Genkit) -> None:
     response = await ai.generate(
         model='anthropic/claude-opus-4-8',
         prompt='Write a one-sentence story about a robot.',
-        config={'thinking': {'adaptive': True, 'display': 'summarized'}},
+        config={'thinking': 'adaptive', 'thinkingDisplay': 'summarized'},
     )
 
     assert response.message is not None
@@ -119,7 +120,7 @@ async def test_thinking_disabled(ai: Genkit) -> None:
     response = await ai.generate(
         model='anthropic/claude-haiku-4-5',
         prompt='What is 2 + 2? Answer with just the number.',
-        config={'thinking': {'enabled': False}},
+        config={'thinking': 'disabled'},
     )
 
     assert response.message is not None

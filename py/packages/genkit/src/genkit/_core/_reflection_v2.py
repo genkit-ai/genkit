@@ -54,7 +54,7 @@ from genkit._core._error import (
     interrupt_escape_error,
 )
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddleware
+from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import AgentInput, ModelRef
 from genkit._core._reflection import as_agent_input_dict, resolve_agent_init, resolve_runnable_key
 from genkit._core._reflection_config import REFLECTION_AUTH_ERROR_CODE
@@ -578,7 +578,7 @@ class ReflectionServerV2:
                 await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
 
         try:
-            output = await action.run(
+            output = await action._run(
                 input=input_from_json(p.input),
                 on_chunk=on_chunk,
                 context=ctx or None,
@@ -612,7 +612,7 @@ class ReflectionServerV2:
         p: ReflectionRunActionParams,
         action: BidiAction,
     ) -> None:
-        """Drive a bidi (agent) runAction through action.run() with a per-turn input stream.
+        """Drive a bidi (agent) runAction through action._run() with a per-turn input stream.
 
         A one-shot call passes the single resolved input; a ``streamInput`` call
         registers a live stream under ``sid`` so ``sendInputStreamChunk`` /
@@ -646,8 +646,8 @@ class ReflectionServerV2:
         input_stream: CloseableQueue[Any] | None = None
         if p.stream_input:
             # Register before the run starts so sendInputStreamChunk can find the
-            # stream while run() is in flight (the client waits for runActionState
-            # before sending turns, and that fires from on_trace_start inside run).
+            # stream while _run() is in flight (the client waits for runActionState
+            # before sending turns, and that fires from on_trace_start inside _run).
             input_stream = CloseableQueue()
             self.bidi_input_streams[sid] = input_stream
         else:
@@ -661,7 +661,7 @@ class ReflectionServerV2:
                 return
 
         try:
-            output = await action.run(
+            output = await action._run(
                 input=input_val,
                 input_stream=input_stream,
                 init=init,
@@ -735,8 +735,8 @@ class ReflectionServerV2:
         for name in self.registry.list_values(p.type):
             value = self.registry.lookup_value(p.type, name)
             if p.type == 'middleware':
-                assert isinstance(value, GenerateMiddleware), (
-                    f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
+                assert isinstance(value, _MiddlewareMetadata), (
+                    f'registry middleware/{name!r} must be _MiddlewareMetadata, got {type(value).__name__}'
                 )
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
             elif p.type == 'defaultModel':

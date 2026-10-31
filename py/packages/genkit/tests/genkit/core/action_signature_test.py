@@ -11,10 +11,10 @@ from typing import Optional, cast
 import pytest
 from pydantic import TypeAdapter
 
-from genkit import ActionRunContext, Document, Genkit, GenkitError, Message, ModelResponse, Operation, Part
-from genkit._core._action import Action, ActionKind
-from genkit._core._background import CheckModelOpFn, StartModelOpFn
-from genkit._core._typing import ActionMetadata, Role
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Operation, Part
+from genkit._ai._background_model import CheckModelOpFn, StartModelOpFn
+from genkit._core._action import Action, ActionKind, ActionRunContext
+from genkit._core._typing import Role
 from genkit.model import ModelRequest
 from genkit.plugin_api import Plugin
 
@@ -72,24 +72,29 @@ async def test_action_with_postponed_context_annotations_gets_context() -> None:
 
 
 # A user module that imports its context type only for type checkers, so the
-# annotation stays the string 'ToolRunContext | None' at runtime.
+# annotation stays the string 'ToolContext | None' at runtime.
 _TYPE_CHECKING_CONTEXT_MODULE = """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from genkit import ToolRunContext
+    from genkit import ToolContext
+    from genkit.exp.agent import AgentContext
 
 
-async def plate(order: str, ctx: ToolRunContext | None) -> str:
+async def plate(order: str, ctx: ToolContext | None) -> str:
+    return f'{order} for table {ctx.context["table"]}'
+
+
+async def serve(order: str, ctx: AgentContext) -> str:
     return f'{order} for table {ctx.context["table"]}'
 """
 
 
 @pytest.mark.asyncio
 async def test_action_with_unresolvable_context_subclass_union_gets_context() -> None:
-    """An unresolvable `'ToolRunContext | None'` still marks the context, by class name."""
+    """An unresolvable `'ToolContext | None'` still marks the context, by class name."""
     module_globals: dict[str, object] = {}
     exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
     plate = cast(Callable[[str, ActionRunContext], Awaitable[str]], module_globals['plate'])
@@ -99,10 +104,25 @@ async def test_action_with_unresolvable_context_subclass_union_gets_context() ->
     assert result.response == 'soup for table 4'
 
 
+@pytest.mark.asyncio
+async def test_action_with_agent_context_string_annotation_gets_context() -> None:
+    """An unresolvable `'AgentContext'` annotation marks the context parameter rather than a second input."""
+    module_globals: dict[str, object] = {}
+    exec(_TYPE_CHECKING_CONTEXT_MODULE, module_globals)  # noqa: S102 - builds a module with postponed annotations
+    serve = cast(Callable[[str, ActionRunContext], Awaitable[str]], module_globals['serve'])
+
+    action = Action(ActionKind.CUSTOM, 'serve', serve)
+    result = await action.run('soup', context={'table': 4})
+
+    assert action.params.input is not None and action.params.input.name == 'order'
+    assert action.params.context is not None and action.params.context.name == 'ctx'
+    assert result.response == 'soup for table 4'
+
+
 @pytest.mark.skipif(sys.version_info < (3, 14), reason='annotations are evaluated lazily from Python 3.14')
 @pytest.mark.asyncio
 async def test_action_with_type_checking_only_context_runs_without_future_import() -> None:
-    """On 3.14, a `TYPE_CHECKING`-only `ToolRunContext` without the `__future__` import still runs."""
+    """On 3.14, a `TYPE_CHECKING`-only `ToolContext` without the `__future__` import still runs."""
     module_globals: dict[str, object] = {}
     source = _TYPE_CHECKING_CONTEXT_MODULE.replace('from __future__ import annotations\n', '')
     exec(source, module_globals)  # noqa: S102 - builds a module whose annotations are evaluated lazily
@@ -137,14 +157,41 @@ async def test_custom_action_allows_unannotated_input() -> None:
 
 
 def test_action_with_unannotated_second_parameter_raises_type_error() -> None:
-    """`(request, ctx)` with no ctx annotation raises at definition, saying to annotate ActionRunContext."""
+    """`(request, ctx)` with no ctx annotation raises at definition, saying to annotate ModelContext."""
 
     async def chef(request: ModelRequest, ctx) -> ModelResponse:  # noqa: ANN001
         return _REPLY
 
     with pytest.raises(TypeError, match="model 'chef' takes one input, but 'ctx' is a second parameter") as exc:
         Action(ActionKind.MODEL, 'chef', chef)
-    assert "annotate 'ctx' as ActionRunContext" in str(exc.value)
+    assert "annotate 'ctx' as ModelContext" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ('kind', 'expected'),
+    [
+        (ActionKind.MODEL, 'ModelContext'),
+        (ActionKind.BACKGROUND_MODEL, 'ModelContext'),
+        (ActionKind.CHECK_OPERATION, 'ModelContext'),
+        (ActionKind.CANCEL_OPERATION, 'ModelContext'),
+        (ActionKind.FLOW, 'FlowContext'),
+        (ActionKind.TOOL, 'ToolContext'),
+        (ActionKind.AGENT, 'AgentContext'),
+        (ActionKind.EMBEDDER, 'FlowContext'),
+        (ActionKind.EVALUATOR, 'FlowContext'),
+        (ActionKind.CUSTOM, 'FlowContext'),
+    ],
+)
+def test_signature_error_names_public_context_for_kind(kind: ActionKind, expected: str) -> None:
+    """The fix-it hint names the public context for each kind, never the internal ActionRunContext."""
+
+    async def handler(order: str, extra: str) -> str:
+        return order
+
+    with pytest.raises(TypeError) as exc:
+        Action(kind, 'handler', handler)
+    assert f"annotate 'extra' as {expected}" in str(exc.value)
+    assert 'ActionRunContext' not in str(exc.value)
 
 
 def test_action_with_positional_only_parameter_raises_type_error() -> None:
@@ -255,8 +302,8 @@ from pydantic import BaseModel
 from genkit import Message, ModelResponse as _ModelResponse, Part, Role
 
 if TYPE_CHECKING:
-    from genkit import ActionRunContext, ModelResponse
-    from genkit.model import ModelRequest
+    from genkit import ModelResponse
+    from genkit.model import ModelContext, ModelRequest
 
     class AllergyRequest(ModelRequest):
         pass
@@ -272,7 +319,7 @@ def _plate(text: str) -> _ModelResponse:
     return _ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text(text)]))
 
 
-async def chef(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+async def chef(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
     seen.append(request)
     return _plate('Smoked Salmon Tartine')
 
@@ -366,7 +413,7 @@ class _KitchenPlugin(Plugin):
             return Action(kind=ActionKind.EMBEDDER, name=name, fn=self._fn)
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 

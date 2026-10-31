@@ -92,7 +92,7 @@ async def test_await_tool_from_raw_action_returns_multipart_envelope() -> None:
     async def raw_shot() -> MultipartToolResponse[ShotOut]:
         return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()], metadata={'src': 'cam'})
 
-    handle = Tool(Action(name='shot', kind=ActionKind.TOOL, fn=raw_shot))
+    handle = Tool._from_action(Action(name='shot', kind=ActionKind.TOOL, fn=raw_shot))
     out = await handle()
     assert isinstance(out, MultipartToolResponse)
     assert out.output == SHOT
