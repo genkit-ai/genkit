@@ -29,14 +29,11 @@ from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, tr
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from pydantic.alias_generators import to_camel
+from pydantic import BaseModel, Field, ValidationError
 
-from genkit import Document, Embedding, GenkitError, Part, get_logger
-from genkit._core._schema import custom_options_schema
+from genkit import Document, Embedding, GenkitError, Part, RuntimeErrorReason
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
-
-logger = get_logger(__name__)
+from genkit.plugin_api import GenkitConfig, to_json_schema
 
 # Known task_type values, offered for autocomplete. Any other string is
 # forwarded as given, so a task type newer than this list still works.
@@ -52,16 +49,15 @@ EmbeddingTaskType: TypeAlias = Literal[
 ]
 
 
-class EmbeddingConfig(BaseModel):
-    """Settings an embedder accepts, on both backends.
+class EmbeddingConfig(GenkitConfig):
+    """Settings an embedder accepts across Google AI and Vertex AI.
 
-    Pass an instance or a dict of these fields to ``embedding()``; pass a dict
-    of them to ``ai.embed(config=...)``. Keys may be written in snake_case or
-    camelCase (``task_type`` or ``taskType``); when both spellings of one
-    field are given, the camelCase one wins. Unknown keys raise.
+    Pass an instance to ``GoogleAI.embedding(config=...)``,
+    ``VertexAI.embedding(config=...)``, or ``ai.embed(config=...)``;
+    ``ai.embed(config=...)`` also accepts a dict in snake_case or camelCase.
+    Unknown keys and duplicate spellings in a single dict raise
+    ``GenkitError(INVALID_ARGUMENT)``.
     """
-
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
     task_type: EmbeddingTaskType | str | None = Field(
         default=None,
@@ -89,27 +85,6 @@ class EmbeddingConfig(BaseModel):
         description='Truncate inputs longer than the model maximum instead of failing. Vertex AI only.',
     )
 
-    @model_validator(mode='before')
-    @classmethod
-    def _camel_case_key_wins(cls, data: object) -> object:
-        """Drop the snake_case key of a field whose camelCase alias is also given.
-
-        A ref config is stored in snake_case and a per-call config is merged
-        over it as typed, so a field present in both spellings carries the
-        per-call value under the camelCase key.
-        """
-        if not isinstance(data, dict):
-            return data
-        raw = cast(dict[str, object], data)
-        shadowed = [
-            name
-            for name, field in cls.model_fields.items()
-            if field.alias and field.alias != name and field.alias in raw and name in raw
-        ]
-        if not shadowed:
-            return data
-        return {key: value for key, value in raw.items() if key not in shadowed}
-
 
 # Per-request input limits of the embedding endpoints. The Gemini API's
 # batchEmbedContents endpoint accepts up to 100 contents per call; the Vertex AI
@@ -125,6 +100,9 @@ EMBED_CONCURRENCY_LIMIT = 10
 
 # Fields only the Vertex AI embedding endpoint accepts: field name and wire alias.
 VERTEX_ONLY_OPTIONS: tuple[tuple[str, str], ...] = (('mime_type', 'mimeType'), ('auto_truncate', 'autoTruncate'))
+
+# Text-embedding fields rejected by Vertex multimodalembedding (:predict).
+MULTIMODAL_UNSUPPORTED_OPTIONS: tuple[str, ...] = ('task_type', 'title', 'mime_type', 'auto_truncate')
 
 
 # Static dimensions for known embedders. Keys are version-suffix free
@@ -171,9 +149,22 @@ def _base_name(name: str) -> str:
     return name.split('@', 1)[0]
 
 
+def _without_null_defaults(node: object) -> object:
+    """Strip ``"default": null`` entries from a generated JSON schema."""
+    if isinstance(node, dict):
+        return {
+            key: _without_null_defaults(value)
+            for key, value in cast(dict[str, Any], node).items()
+            if not (key == 'default' and value is None)
+        }
+    if isinstance(node, list):
+        return [_without_null_defaults(item) for item in cast(list[Any], node)]
+    return node
+
+
 def _config_schema(is_vertex: bool) -> dict[str, Any]:
     """JSON schema of ``EmbeddingConfig`` as this backend accepts it."""
-    schema = dict(custom_options_schema(EmbeddingConfig))
+    schema = dict(cast(dict[str, Any], _without_null_defaults(to_json_schema(EmbeddingConfig))))
     if not is_vertex:
         properties = dict(schema.get('properties') or {})
         for _name, alias in VERTEX_ONLY_OPTIONS:
@@ -311,7 +302,7 @@ class Embedder:
         self._version = version
         self._is_vertex = is_vertex
 
-    async def generate(self, request: EmbedRequest) -> EmbedResponse:
+    async def generate(self, request: EmbedRequest[Any]) -> EmbedResponse:
         """Generate embeddings for a given request.
 
         Requests with more documents than the endpoint accepts per call are
@@ -331,7 +322,8 @@ class Embedder:
                 fails validation; INTERNAL when the endpoint returns a different
                 number of embeddings than documents were sent.
         """
-        request = EmbedRequest.model_validate(request)
+        if not isinstance(request, EmbedRequest):
+            request = EmbedRequest.model_validate(request)
         if not request.input:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
@@ -342,6 +334,7 @@ class Embedder:
         model = self._embed_model(options)
         if self._is_multimodal(model):
             return await self._generate_multimodal(request, model, options)
+        self._check_vertex_only_options(model, options)
         contents = await self._build_contents(request)
         config = self._genkit_to_googleai_cfg(options)
         batch_size = self._embed_batch_size(model)
@@ -401,43 +394,42 @@ class Embedder:
         """Validate raw request options into an ``EmbeddingConfig``.
 
         Args:
-            options: Request options as a dict, an ``EmbeddingConfig`` or another
-                model with these fields, or None.
+            options: Request options as a dict, an ``EmbeddingConfig``, or None.
 
         Returns:
             The validated config.
 
         Raises:
-            GenkitError: INVALID_ARGUMENT naming the key that failed validation.
+            GenkitError: INVALID_ARGUMENT naming the key or class that failed validation.
         """
         if options is None:
             return EmbeddingConfig()
         if isinstance(options, EmbeddingConfig):
-            parsed = options
-        else:
-            if isinstance(options, BaseModel):
-                options = options.model_dump(exclude_none=True)
-            try:
-                parsed = EmbeddingConfig.model_validate(options)
-            except ValidationError as e:
-                raise sdk_config_error(action_name=str(self._version), error=e) from e
-        self._warn_vertex_only_options(parsed)
-        return parsed
+            return options
+        if isinstance(options, BaseModel):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{self._version}: options must be {EmbeddingConfig.__module__}.{EmbeddingConfig.__qualname__} '
+                    f'or a mapping, got {type(options).__module__}.{type(options).__qualname__}'
+                ),
+                reason=RuntimeErrorReason.INVALID_INPUT,
+            )
+        try:
+            return EmbeddingConfig.model_validate(options)
+        except ValidationError as e:
+            raise sdk_config_error(action_name=str(self._version), error=e) from e
 
-    def _warn_vertex_only_options(self, options: EmbeddingConfig) -> None:
-        """Log the Vertex-only settings a Gemini Developer API embedder drops.
-
-        Args:
-            options: Validated embedding config.
-        """
+    def _check_vertex_only_options(self, model: str, options: EmbeddingConfig) -> None:
+        """Reject Vertex-only settings on the Gemini Developer API."""
         if self._is_vertex:
             return
-        dropped = [alias for name, alias in VERTEX_ONLY_OPTIONS if getattr(options, name) is not None]
-        if dropped:
-            logger.warning(
-                'Dropping %s from the %s embed config: Vertex AI only, not accepted by the Gemini Developer API.',
-                ', '.join(dropped),
-                self._version,
+        unsupported = [name for name, _alias in VERTEX_ONLY_OPTIONS if getattr(options, name) is not None]
+        if unsupported:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{model}: {", ".join(unsupported)}: Vertex AI only, not supported on the Gemini Developer API',
+                reason=RuntimeErrorReason.INVALID_INPUT,
             )
 
     def _embed_model(self, options: EmbeddingConfig) -> str:
@@ -468,7 +460,9 @@ class Embedder:
         """
         return 'multimodalembedding' in model.lower()
 
-    async def _generate_multimodal(self, request: EmbedRequest, model: str, options: EmbeddingConfig) -> EmbedResponse:
+    async def _generate_multimodal(
+        self, request: EmbedRequest[Any], model: str, options: EmbeddingConfig
+    ) -> EmbedResponse:
         """Embed text/image/video via the Vertex multimodal ``:predict`` endpoint.
 
         ``multimodalembedding@001`` accepts one instance per ``:predict`` call,
@@ -476,7 +470,7 @@ class Embedder:
         ``EMBED_CONCURRENCY_LIMIT`` (10) in flight at once, and the resulting
         embeddings are concatenated in document order. All documents are
         validated before the first request is made. Of the config, only
-        ``output_dimensionality`` applies to ``:predict``.
+        ``output_dimensionality`` and ``version`` apply to ``:predict``.
 
         Args:
             request: Genkit embed request.
@@ -491,6 +485,16 @@ class Embedder:
                 status='INVALID_ARGUMENT',
                 message=f'{model} embedding is only available on Vertex AI; '
                 'it is not supported by the Gemini Developer API. Use the VertexAI plugin instead.',
+            )
+        unsupported = [name for name in MULTIMODAL_UNSUPPORTED_OPTIONS if getattr(options, name) is not None]
+        if unsupported:
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{model}: {", ".join(unsupported)}: not supported by multimodal embedding; '
+                    'only output_dimensionality and version apply'
+                ),
+                reason=RuntimeErrorReason.INVALID_INPUT,
             )
         instances = [self._build_multimodal_instance(doc) for doc in request.input]
 
@@ -676,7 +680,7 @@ class Embedder:
                 embeddings.append(Embedding(embedding=values, metadata=metadata))
         return embeddings
 
-    async def _build_contents(self, request: EmbedRequest) -> list[genai.types.Content]:
+    async def _build_contents(self, request: EmbedRequest[Any]) -> list[genai.types.Content]:
         """Build google-genai request contents from Genkit request.
 
         Args:

@@ -291,50 +291,69 @@ class TestClosedRejectSet:
 
 
 class TestEmbeddingConstructor:
-    """embedding() returns an EmbedderRef so it can't be passed as a model."""
+    """embedding() returns a typed EmbedderRef[EmbeddingConfig] matching gemini()."""
 
     def test_embedding_ref(self) -> None:
-        """embedding() returns an EmbedderRef under this plugin namespace."""
-        ref = GoogleAI.embedding('gemini-embedding-001')
-        assert isinstance(ref, EmbedderRef)
-        assert not isinstance(ref, ModelRef)
-        assert ref.name == 'googleai/gemini-embedding-001'
+        """embedding() returns an EmbedderRef[EmbeddingConfig] under each plugin namespace."""
+        google_ref = GoogleAI.embedding('gemini-embedding-001')
+        assert isinstance(google_ref, EmbedderRef)
+        assert not isinstance(google_ref, ModelRef)
+        assert google_ref.name == 'googleai/gemini-embedding-001'
+        assert google_ref.config_schema is EmbeddingConfig
+        assert google_ref.config is None
 
-    def test_embedding_stores_a_typed_config_as_a_dict(self) -> None:
-        """A typed EmbeddingConfig lands on the ref as the dict ai.embed() merges."""
-        config = EmbeddingConfig(task_type='RETRIEVAL_QUERY', output_dimensionality=256)
+        vertex_ref = VertexAI.embedding('text-embedding-005')
+        assert isinstance(vertex_ref, EmbedderRef)
+        assert vertex_ref.name == 'vertexai/text-embedding-005'
+        assert vertex_ref.config_schema is EmbeddingConfig
+        assert vertex_ref.config is None
+
+    def test_embedding_stores_deep_copied_typed_config_and_preserves_explicit_none(self) -> None:
+        """A typed EmbeddingConfig stays an EmbeddingConfig copy, including explicit None fields."""
+        config = EmbeddingConfig(task_type=None, output_dimensionality=256, version='gemini-embedding-2')
         ref = GoogleAI.embedding('gemini-embedding-001', config=config)
-        assert ref.config == {'task_type': 'RETRIEVAL_QUERY', 'output_dimensionality': 256}
 
-    def test_embedding_normalizes_a_dict_config_to_snake_case(self) -> None:
-        """A camelCase dict config is stored by field name on both plugins."""
-        config: dict[str, object] = {'taskType': 'RETRIEVAL_DOCUMENT', 'mimeType': 'text/plain'}
-        expected = {'task_type': 'RETRIEVAL_DOCUMENT', 'mime_type': 'text/plain'}
-        assert GoogleAI.embedding('gemini-embedding-001', config=config).config == expected
-        assert VertexAI.embedding('text-embedding-005', config=config).config == expected
+        assert isinstance(ref.config, EmbeddingConfig)
+        assert ref.config is not config
+        assert ref.config == config
+        assert ref.config.model_fields_set == {'task_type', 'output_dimensionality', 'version'}
+        assert ref.config.version == 'gemini-embedding-2'
 
-    def test_embedding_keeps_the_camel_case_value_when_both_spellings_are_given(self) -> None:
-        """With both spellings in one dict the camelCase value is the field and the only one stored."""
-        config: dict[str, object] = {'taskType': 'CLUSTERING', 'task_type': 'RETRIEVAL_QUERY'}
-        assert GoogleAI.embedding('gemini-embedding-001', config=config).config == {'task_type': 'CLUSTERING'}
+    def test_embedding_rejects_raw_dict_and_wrong_config_class(self) -> None:
+        """Typed embedding() constructors reject raw dicts and foreign config models."""
+        with pytest.raises(GenkitError) as dict_exc:
+            GoogleAI.embedding(
+                'gemini-embedding-001',
+                config={'task_type': 'RETRIEVAL_QUERY'},  # type: ignore[arg-type]
+            )
+        assert dict_exc.value.status == 'INVALID_ARGUMENT'
+        assert 'EmbeddingConfig' in dict_exc.value.message
 
-    @pytest.mark.parametrize(
-        ('config', 'key'),
-        [({'outputDimensionality': 0}, 'outputDimensionality'), ({'someFutureFlag': True}, 'someFutureFlag')],
-        ids=['invalid_value', 'unknown_key'],
-    )
-    def test_embedding_rejects_an_invalid_dict_config(self, config: dict[str, object], key: str) -> None:
-        """A dict config that fails validation raises INVALID_ARGUMENT at construction, naming the key."""
-        with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.embedding('gemini-embedding-001', config=config)
-        assert exc_info.value.status == 'INVALID_ARGUMENT'
-        assert exc_info.value.message == f'GoogleAI.embedding: invalid config field {key}'
+        with pytest.raises(GenkitError) as model_exc:
+            VertexAI.embedding(
+                'text-embedding-005',
+                config=GeminiConfig(temperature=0.5),  # type: ignore[arg-type]
+            )
+        assert model_exc.value.status == 'INVALID_ARGUMENT'
+        assert 'EmbeddingConfig' in model_exc.value.message
+
+    def test_embedding_has_no_version_kwarg(self) -> None:
+        """version lives on EmbeddingConfig(version=...), not as a kwarg on embedding()."""
+        with pytest.raises(TypeError, match='version'):
+            GoogleAI.embedding(
+                'gemini-embedding-001',
+                version='gemini-embedding-2',  # type: ignore[call-arg]
+            )
 
     def test_embedding_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""
-        ref = VertexAI.embedding('embedders/googleai/text-embedding-004', version='text-embedding-005')
+        ref = VertexAI.embedding(
+            'embedders/googleai/text-embedding-004',
+            config=EmbeddingConfig(version='text-embedding-005'),
+        )
         assert ref.name == 'vertexai/text-embedding-004'
-        assert ref.version == 'text-embedding-005'
+        assert isinstance(ref.config, EmbeddingConfig)
+        assert ref.config.version == 'text-embedding-005'
 
     def test_embedding_rejects_generate_models(self) -> None:
         """Generate-model ids cannot mint an EmbedderRef."""

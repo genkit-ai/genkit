@@ -26,7 +26,15 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from genkit_google_genai import GeminiConfig, GeminiImageConfig, GoogleAI, VeoConfig, VertexAI, VirtualTryOnConfig
+from genkit_google_genai import (
+    EmbeddingConfig,
+    GeminiConfig,
+    GeminiImageConfig,
+    GoogleAI,
+    VeoConfig,
+    VertexAI,
+    VirtualTryOnConfig,
+)
 from google.auth.credentials import AnonymousCredentials
 from google.genai import _api_client
 from pydantic import BaseModel
@@ -391,7 +399,9 @@ async def test_generate_gemini_google_search_with_function_tools_sends_both(sent
 # -- Dev UI -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('config_class', [GeminiConfig, GeminiImageConfig, VeoConfig, VirtualTryOnConfig])
+@pytest.mark.parametrize(
+    'config_class', [EmbeddingConfig, GeminiConfig, GeminiImageConfig, VeoConfig, VirtualTryOnConfig]
+)
 def test_config_form_advertises_no_additional_properties(config_class: type[BaseModel]) -> None:
     """The Dev UI config form says `additionalProperties: false`, so it doesn't offer free-form keys."""
     assert config_class.model_json_schema(by_alias=True)['additionalProperties'] is False

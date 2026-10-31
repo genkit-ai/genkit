@@ -63,7 +63,7 @@ from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
 from genkit import GenkitError, ModelResponse, Operation, get_logger
-from genkit.embedder import Embedder, EmbedderRef
+from genkit.embedder import Embedder, EmbedderRef, EmbedRequest, EmbedResponse
 from genkit.model import (
     BackgroundModel,
     Model,
@@ -334,7 +334,7 @@ def _create_embedder_action(
         is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
     )
 
-    async def _run(request: Any) -> Any:  # noqa: ANN401
+    async def _run(request: EmbedRequest[EmbeddingConfig]) -> EmbedResponse:
         embedder_client = GoogleEmbedder(
             version=name,
             client=client_getter(),
@@ -342,7 +342,7 @@ def _create_embedder_action(
         )
         return await embedder_client.generate(request)
 
-    return Embedder(full_name, _run, info=embed_info)
+    return Embedder(full_name, _run, config_schema=EmbeddingConfig, info=embed_info)
 
 
 def _create_veo_background_model(
@@ -441,21 +441,14 @@ class GoogleFamilyRefs:
         )
 
     @classmethod
-    def embedding(
-        cls,
-        name: str,
-        *,
-        config: EmbeddingConfig | dict[str, object] | None = None,
-        version: str | None = None,
-    ) -> EmbedderRef:
-        """EmbedderRef for ``ai.embed()``, e.g. ``GoogleAI.embedding('gemini-embedding-001')``.
+    def embedding(cls, name: str, *, config: EmbeddingConfig | None = None) -> EmbedderRef[EmbeddingConfig]:
+        """Typed ref for an embedder, e.g. ``GoogleAI.embedding('gemini-embedding-001')``.
 
-        ``config`` takes an ``EmbeddingConfig`` or a dict of its fields; a
-        dict is validated here, and either form is stored as a snake_case dict.
-        Returns an EmbedderRef, not a ModelRef: an embedder id must never
-        end up in ``generate(model=...)``.
+        Returns an ``EmbedderRef[EmbeddingConfig]``, not a ``ModelRef``: an
+        embedder id must never end up in ``generate(model=...)``. Pass raw
+        dicts to ``ai.embed(config=...)`` at call time.
         """
-        return family_embedder_ref(name, namespace=cls.name, plugin_class=cls.__name__, config=config, version=version)
+        return family_embedder_ref(name, namespace=cls.name, plugin_class=cls.__name__, config=config)
 
 
 class GoogleAI(GoogleFamilyRefs, Plugin):
