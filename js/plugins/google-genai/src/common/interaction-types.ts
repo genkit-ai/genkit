@@ -740,7 +740,7 @@ export declare type ResponseModality =
 
 /**
  * A safety setting: the threshold for blocking one harm category.
- * vertexAI only (googleAI rejects `safety_settings` with a 400).
+ * Used by both the googleAI and vertexAI Interactions paths.
  */
 export declare interface InteractionSafetySetting {
   /** The harm category, e.g. `hate_speech`. */

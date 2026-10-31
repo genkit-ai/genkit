@@ -53,6 +53,7 @@ import {
   selectInteractionInput,
   toInteractionConfigTool,
   toInteractionGenerationConfig,
+  toInteractionSafetySettings,
   toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
@@ -118,26 +119,6 @@ const SafetySettingsSchema = z
     ]),
   })
   .passthrough();
-
-/**
- * Reports whether a safety setting is equivalent to the model default (no
- * additional filtering), i.e. it can be omitted without changing behavior.
- *
- * Per the Gemini API docs, the adjustable safety filters are Off by default for
- * current Gemini models, so `BLOCK_NONE` requests the same behavior as sending
- * no safety settings. `HARM_CATEGORY_UNSPECIFIED` entries are also dropped on
- * the generateContent path.
- * See https://ai.google.dev/gemini-api/docs/safety-settings
- */
-function isDefaultSafetySetting(setting: {
-  category?: string;
-  threshold?: string;
-}): boolean {
-  return (
-    setting.category === 'HARM_CATEGORY_UNSPECIFIED' ||
-    setting.threshold === 'BLOCK_NONE'
-  );
-}
 
 const VoiceConfigSchema = z
   .object({
@@ -1147,33 +1128,6 @@ export function defineModel(
       }
 
       if (useInteractions) {
-        // The Gemini API's Interactions endpoint does not accept
-        // `safety_settings` (it returns 400), even though the published
-        // Interactions spec lists the field. The Gemini Enterprise Agent
-        // Platform accepts it, so the vertexAI plugin should map safety
-        // settings rather than copy this guard. Permissive settings can be
-        // dropped safely: per the Gemini API docs, the adjustable safety
-        // filters are Off by default for current Gemini models, so BLOCK_NONE
-        // (and HARM_CATEGORY_UNSPECIFIED entries) never block anything beyond
-        // the default. Built-in protections against core harms always apply.
-        // See https://ai.google.dev/gemini-api/docs/safety-settings
-        //
-        // Blocking thresholds (BLOCK_ONLY_HIGH and stricter) cannot be honored,
-        // so throw rather than silently weaken the requested filtering.
-        const blockingSafetySettings = (safetySettingsFromConfig ?? []).filter(
-          (setting) => !isDefaultSafetySetting(setting)
-        );
-        if (blockingSafetySettings.length > 0) {
-          throw new GenkitError({
-            status: 'INVALID_ARGUMENT',
-            message:
-              `safetySettings with blocking thresholds are not supported for model '${modelVersion}'. ` +
-              'This model applies no additional safety filters by default ' +
-              '(built-in protections against core harms still apply). ' +
-              'Remove the safetySettings or set their thresholds to BLOCK_NONE.',
-            detail: { safetySettings: blockingSafetySettings },
-          });
-        }
         if (toolConfigConfig) {
           logger.warn(
             'toolConfig is not supported for this model with the Interactions API and will be ignored.'
@@ -1420,6 +1374,14 @@ export function defineModel(
           model: modelVersion,
           tools: interactionsTools.length ? interactionsTools : undefined,
           generation_config: interactionGenerationConfig,
+          safety_settings: toInteractionSafetySettings(
+            safetySettingsFromConfig?.map((setting) => ({
+              ...setting,
+              // The Gemini Interactions API names this threshold `off`.
+              threshold:
+                setting.threshold === 'BLOCK_NONE' ? 'OFF' : setting.threshold,
+            }))
+          ),
           stream: streamingRequested,
           input: toInteractionSteps(newMessages),
           service_tier: serviceTier,
