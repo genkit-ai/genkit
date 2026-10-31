@@ -116,7 +116,7 @@ print(response.output)
 
 `OllamaConfig` extends the common Genkit `ModelConfig` with `think`,
 `keep_alive`, and every sampler option the installed `ollama` client knows
-(`num_ctx`, `min_p`, `seed`, `num_predict`, `repeat_penalty`, `mirostat`, ...).
+(`num_ctx`, `min_p`, `seed`, `repeat_penalty`, `mirostat`, ...).
 Unknown keys raise `INVALID_ARGUMENT`, so a misspelled `num_ctx` fails instead
 of running with the default context window.
 
@@ -145,8 +145,17 @@ config={'temperature': 0.2, 'extra': {'new_sampler_option': 0.5}}
 # => options={'temperature': 0.2, 'new_sampler_option': 0.5}
 ```
 
-`stop_sequences` maps to Ollama's `stop`. When both are set, `stop` wins, the
-same way `num_predict` wins over `max_output_tokens`.
+Set the reply cap and stop strings with the common fields. The plugin sends
+`max_output_tokens` as Ollama's `num_predict` and `stop_sequences` as `stop`.
+The Ollama names raise, at the top level or in `extra`:
+
+```python
+config={'max_output_tokens': 256, 'stop_sequences': ['###']}
+# => options={'num_predict': 256, 'stop': ['###']}
+
+config={'num_predict': 256}
+# => GenkitError INVALID_ARGUMENT: ollama: num_predict is not a config field; use max_output_tokens
+```
 
 ### Remote server, headers, and timeouts
 

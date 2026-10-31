@@ -53,7 +53,7 @@ def test_extra_colliding_key_is_kept_for_sdk_merge() -> None:
 
 def test_camel_case_dict_extra_is_read() -> None:
     """A Dev UI dict `{'extra': {...}}` validates into the field."""
-    config = OpenAIConfig.model_validate({'maxTokens': 5, 'extra': {'user_tier': 'pro'}})
+    config = OpenAIConfig.model_validate({'maxOutputTokens': 5, 'extra': {'user_tier': 'pro'}})
 
     assert _openai_create_kwargs(config=config)['extra_body'] == {'user_tier': 'pro'}
 
@@ -66,6 +66,47 @@ def test_extra_cannot_set_genkit_built_fields(field: str) -> None:
 
     assert err.value.status == 'INVALID_ARGUMENT'
     assert repr(field) in str(err.value)
+
+
+@pytest.mark.parametrize(
+    ('key', 'common'),
+    [
+        ('max_tokens', 'max_output_tokens'),
+        ('maxTokens', 'max_output_tokens'),
+        ('max_completion_tokens', 'max_output_tokens'),
+        ('maxCompletionTokens', 'max_output_tokens'),
+        ('stop', 'stop_sequences'),
+    ],
+)
+def test_native_name_raises_naming_common_field(key: str, common: str) -> None:
+    """`config={'max_tokens': 256}` raises INVALID_ARGUMENT naming `max_output_tokens`."""
+    with pytest.raises(GenkitError, match=f'openai: {key} is not a config field; use {common}') as err:
+        OpenAIConfig.model_validate({key: 1})
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+
+
+def test_config_declares_no_native_name_for_a_common_field() -> None:
+    """The Dev UI form shows maxOutputTokens / stopSequences, not OpenAI's names."""
+    props = OpenAIConfig.model_json_schema(by_alias=True)['properties']
+
+    assert 'maxOutputTokens' in props
+    assert 'stopSequences' in props
+    assert not {'maxTokens', 'maxCompletionTokens', 'stop', 'max_tokens', 'max_completion_tokens'} & props.keys()
+
+
+@pytest.mark.parametrize(
+    ('key', 'common'),
+    [('max_tokens', 'max_output_tokens'), ('max_completion_tokens', 'max_output_tokens'), ('stop', 'stop_sequences')],
+)
+def test_extra_cannot_set_native_name_for_a_common_field(key: str, common: str) -> None:
+    """`extra={'stop': [...]}` collides with the field Genkit builds from `stop_sequences`."""
+    with pytest.raises(GenkitError) as err:
+        _openai_create_kwargs(config=OpenAIConfig(extra={key: 1}))
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert f'extra field {key!r} is built by Genkit' in str(err.value)
+    assert f'use {common}' in str(err.value)
 
 
 def test_no_extra_sends_no_extra_body() -> None:
@@ -137,3 +178,13 @@ def test_generate_openai_tts_model_in_extra_raises() -> None:
 
     assert err.value.status == 'INVALID_ARGUMENT'
     assert "'model'" in str(err.value)
+
+
+@pytest.mark.parametrize(('key', 'value'), [('temperature', 2.5), ('top_p', 1.5)])
+def test_openai_range_applies_to_inherited_field(key: str, value: float) -> None:
+    """OpenAI's temperature [0, 2] and top_p [0, 1] still apply, without re-declaring the fields."""
+    with pytest.raises(ValidationError, match=f'{key} must be between'):
+        OpenAIConfig.model_validate({key: value})
+    props = OpenAIConfig.model_json_schema(by_alias=True)['properties']
+    assert (props['temperature']['minimum'], props['temperature']['maximum']) == (0.0, 2.0)
+    assert (props['topP']['minimum'], props['topP']['maximum']) == (0.0, 1.0)

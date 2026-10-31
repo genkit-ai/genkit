@@ -96,14 +96,14 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         client.chat = AsyncMock()
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part.from_text('Suggest a dish.')])],
-            config={'numPredict': 'a lot'},
+            config={'numCtx': 'a lot'},
         )
 
         with self.assertRaises(GenkitError) as raised:
             await model.generate(request, client=client)
 
         self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
-        self.assertIn('num_predict', str(raised.exception))
+        self.assertIn('num_ctx', str(raised.exception))
         client.chat.assert_not_called()
 
     async def test_generate_rejects_malformed_tool_schema_as_invalid_argument(self) -> None:
@@ -752,10 +752,26 @@ class TestBuildRequestOptions:
         validated = OllamaModel.build_request_options(OllamaConfig.model_validate({'extra': {'repeat_penalty': 1.2}}))
         assert validated['repeat_penalty'] == 1.2
 
-    def test_num_predict_wins_over_max_output_tokens(self) -> None:
-        """An explicit num_predict beats the inherited max_output_tokens."""
-        options = OllamaModel.build_request_options(OllamaConfig(num_predict=10, max_output_tokens=99))
-        assert options['num_predict'] == 10
+    def test_ollama_config_declares_no_native_name_for_a_common_field(self) -> None:
+        """num_predict and stop are set through max_output_tokens and stop_sequences."""
+        assert 'num_predict' not in OllamaConfig.model_fields
+        assert 'stop' not in OllamaConfig.model_fields
+
+    def test_native_name_raises_naming_common_field(self) -> None:
+        """`OllamaConfig(num_predict=10)` raises INVALID_ARGUMENT naming max_output_tokens."""
+        with pytest.raises(GenkitError, match='use max_output_tokens') as raised:
+            OllamaConfig.model_validate({'num_predict': 10})
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        with pytest.raises(GenkitError, match='use stop_sequences'):
+            OllamaConfig.model_validate({'stop': ['###']})
+
+    def test_native_name_in_extra_raises(self) -> None:
+        """`extra={'num_predict': 10}` would override max_output_tokens, so it raises."""
+        with pytest.raises(GenkitError, match="extra field 'num_predict'.*use max_output_tokens") as raised:
+            OllamaModel.build_request_options(OllamaConfig(max_output_tokens=99, extra={'num_predict': 10}))
+        assert raised.value.status == 'INVALID_ARGUMENT'
+        with pytest.raises(GenkitError, match="extra field 'stop'.*use stop_sequences"):
+            OllamaModel.build_request_options({'extra': {'stop': ['###']}})
 
     def test_think_and_keep_alive_excluded_from_options(self) -> None:
         """think/keep_alive are request kwargs, never sampler options."""

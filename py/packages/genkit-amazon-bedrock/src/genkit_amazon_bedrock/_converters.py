@@ -196,7 +196,7 @@ def normalize_config(config: Any) -> BedrockConfig | None:  # noqa: ANN401
 def _effective_max_tokens(config: BedrockConfig | None) -> int | None:
     if config is None or config.max_output_tokens is None or config.max_output_tokens <= 0:
         return None
-    return int(config.max_output_tokens)
+    return config.max_output_tokens
 
 
 def build_inference_config(config: BedrockConfig | None) -> dict[str, Any] | None:  # noqa: ANN401
