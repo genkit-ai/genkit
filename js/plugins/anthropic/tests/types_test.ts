@@ -86,4 +86,29 @@ describe('resolveBetaEnabled', () => {
     assert.strictEqual(resolveBetaEnabled(config, 'stable'), false);
     assert.strictEqual(resolveBetaEnabled(config, 'beta'), true);
   });
+
+  it('should return true when betas is set and no apiVersion is given', () => {
+    const config: z.infer<typeof AnthropicConfigSchema> = {
+      betas: ['token-efficient-tools-2025-02-19'],
+    };
+    assert.strictEqual(resolveBetaEnabled(config, undefined), true);
+    assert.strictEqual(resolveBetaEnabled(config, 'stable'), true);
+  });
+
+  it('should ignore an empty betas array', () => {
+    const config: z.infer<typeof AnthropicConfigSchema> = { betas: [] };
+    assert.strictEqual(resolveBetaEnabled(config, 'stable'), false);
+  });
+
+  it('should throw when betas is combined with apiVersion stable', () => {
+    const config: z.infer<typeof AnthropicConfigSchema> = {
+      apiVersion: 'stable',
+      betas: ['token-efficient-tools-2025-02-19'],
+    };
+    assert.throws(
+      () => resolveBetaEnabled(config, 'beta'),
+      (err: any) =>
+        err.status === 'INVALID_ARGUMENT' && /betas/.test(err.message)
+    );
+  });
 });
