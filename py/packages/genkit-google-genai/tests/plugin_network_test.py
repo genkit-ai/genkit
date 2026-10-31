@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""GoogleAI / VertexAI network arguments: headers, timeout, http_client."""
+"""GoogleAI / VertexAI network arguments: headers, timeout, http_client_factory."""
 
 import asyncio
 import math
@@ -62,7 +62,7 @@ class FakeGoogleApi:
         return httpx.Response(200, json=CANDIDATE)
 
     def client(self, **kwargs: Any) -> httpx.AsyncClient:  # noqa: ANN401
-        """Build a client over this fake; pass the bound method as ``http_client=``."""
+        """Build a client over this fake; pass the bound method as ``http_client_factory=``."""
         return httpx.AsyncClient(transport=httpx.MockTransport(self), **kwargs)
 
     def urls(self, method: str) -> list[str]:
@@ -130,9 +130,9 @@ def local_google_api() -> Iterator[tuple[FakeGoogleApi, str]]:
 
 @pytest.mark.asyncio
 async def test_google_ai_sends_requests_through_your_http_client() -> None:
-    """GoogleAI(http_client=...) lists models and generates through the client it returns."""
+    """GoogleAI(http_client_factory=...) lists models and generates through the client it returns."""
     api = FakeGoogleApi()
-    plugin = GoogleAI(api_key='k', http_client=api.client)
+    plugin = GoogleAI(api_key='k', http_client_factory=api.client)
     ai = Genkit(plugins=[plugin])
 
     await plugin.init()
@@ -145,9 +145,9 @@ async def test_google_ai_sends_requests_through_your_http_client() -> None:
 
 @pytest.mark.asyncio
 async def test_vertex_ai_sends_requests_through_your_http_client() -> None:
-    """VertexAI(http_client=...) lists models and generates through it, even when a call picks another location."""
+    """VertexAI(http_client_factory=...) lists and generates through it, even when a call picks another location."""
     api = FakeGoogleApi(VERTEX_MODEL_LIST)
-    plugin = vertex_ai(http_client=api.client)
+    plugin = vertex_ai(http_client_factory=api.client)
     ai = Genkit(plugins=[plugin])
 
     await plugin.init()
@@ -167,9 +167,9 @@ async def test_vertex_ai_sends_requests_through_your_http_client() -> None:
 
 @pytest.mark.asyncio
 async def test_http_client_still_used_when_a_call_overrides_base_url() -> None:
-    """A per-call base_url and api_version still go through your http_client."""
+    """A per-call base_url and api_version still go through your http_client_factory."""
     api = FakeGoogleApi()
-    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client_factory=api.client)])
 
     response = await ai.generate(
         model='googleai/gemini-2.5-flash',
@@ -183,9 +183,9 @@ async def test_http_client_still_used_when_a_call_overrides_base_url() -> None:
 
 @pytest.mark.asyncio
 async def test_antigravity_sends_requests_through_your_http_client() -> None:
-    """Antigravity, an Interactions model, also goes through GoogleAI(http_client=...)."""
+    """Antigravity, an Interactions model, also goes through GoogleAI(http_client_factory=...)."""
     api = FakeGoogleApi()
-    ai = Genkit(plugins=[GoogleAI(api_key='k', headers={'x-team': 'search'}, http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', headers={'x-team': 'search'}, http_client_factory=api.client)])
 
     response = await ai.generate(model='googleai/antigravity-preview-05-2026', prompt='Build a landing page.')
 
@@ -199,7 +199,9 @@ async def test_your_headers_are_sent_with_genkit_attribution_appended() -> None:
     """GoogleAI(headers=...) sends your headers as-is and appends Genkit's attribution to User-Agent."""
     api = FakeGoogleApi()
     ai = Genkit(
-        plugins=[GoogleAI(api_key='k', headers={'X-Team': 'search', 'User-Agent': 'acme'}, http_client=api.client)]
+        plugins=[
+            GoogleAI(api_key='k', headers={'X-Team': 'search', 'User-Agent': 'acme'}, http_client_factory=api.client)
+        ]
     )
 
     await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
@@ -215,7 +217,7 @@ async def test_your_headers_are_sent_with_genkit_attribution_appended() -> None:
 async def test_timeout_in_seconds_reaches_the_request() -> None:
     """GoogleAI(timeout=30) puts a 30 second timeout on Gemini and Interactions requests."""
     api = FakeGoogleApi()
-    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout=30, http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout=30, http_client_factory=api.client)])
 
     await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
     gemini_timeout = api.last_post().extensions['timeout']
@@ -230,7 +232,7 @@ async def test_timeout_in_seconds_reaches_the_request() -> None:
 async def test_timeout_set_on_your_http_client_is_not_used() -> None:
     """Without timeout, the 1 second timeout on your own client doesn't cut off model calls."""
     api = FakeGoogleApi()
-    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client=lambda: api.client(timeout=1.0))])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client_factory=lambda: api.client(timeout=1.0))])
 
     await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
     gemini_timeout = api.last_post().extensions['timeout']
@@ -243,7 +245,7 @@ async def test_timeout_set_on_your_http_client_is_not_used() -> None:
 
 @pytest.mark.asyncio
 async def test_one_http_client_factory_shared_by_two_plugins() -> None:
-    """GoogleAI and VertexAI can share one http_client factory; each sends only its own headers."""
+    """GoogleAI and VertexAI can share one http_client_factory; each sends only its own headers."""
     google_api = FakeGoogleApi()
     vertex_api = FakeGoogleApi(VERTEX_MODEL_LIST)
 
@@ -251,13 +253,13 @@ async def test_one_http_client_factory_shared_by_two_plugins() -> None:
         api = vertex_api if 'aiplatform' in request.url.host else google_api
         return api(request)
 
-    def http_client() -> httpx.AsyncClient:
+    def routed_client() -> httpx.AsyncClient:
         return httpx.AsyncClient(transport=httpx.MockTransport(route))
 
     ai = Genkit(
         plugins=[
-            GoogleAI(api_key='k', headers={'x-team': 'search'}, http_client=http_client),
-            vertex_ai(headers={'x-team': 'ads'}, http_client=http_client),
+            GoogleAI(api_key='k', headers={'x-team': 'search'}, http_client_factory=routed_client),
+            vertex_ai(headers={'x-team': 'ads'}, http_client_factory=routed_client),
         ]
     )
 
@@ -276,11 +278,11 @@ async def test_http_client_factory_called_once_per_event_loop() -> None:
     api = FakeGoogleApi()
     built: list[httpx.AsyncClient] = []
 
-    def http_client() -> httpx.AsyncClient:
+    def counting_client() -> httpx.AsyncClient:
         built.append(api.client())
         return built[-1]
 
-    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client=http_client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client_factory=counting_client)])
 
     await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
     await ai.generate(
@@ -297,11 +299,11 @@ def test_http_client_works_across_event_loops(local_google_api: tuple[FakeGoogle
     api, base_url = local_google_api
     built: list[httpx.AsyncClient] = []
 
-    def http_client() -> httpx.AsyncClient:
+    def pooled_client() -> httpx.AsyncClient:
         built.append(httpx.AsyncClient(transport=httpx.AsyncHTTPTransport()))
         return built[-1]
 
-    ai = Genkit(plugins=[GoogleAI(api_key='k', base_url=base_url, timeout=5, http_client=http_client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', base_url=base_url, timeout=5, http_client_factory=pooled_client)])
 
     async def order() -> tuple[str, str]:
         dish = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
@@ -359,19 +361,19 @@ def test_client_instance_raises_type_error_asking_for_a_factory(
     plugin_class: Any,  # noqa: ANN401
     client_class: type[httpx.AsyncClient | httpx.Client],
 ) -> None:
-    """http_client=httpx.AsyncClient() raises TypeError telling you to pass lambda: httpx.AsyncClient(...)."""
+    """http_client_factory=httpx.AsyncClient() raises TypeError telling you to pass lambda: httpx.AsyncClient(...)."""
     instance: Any = client_class()
-    with pytest.raises(TypeError, match=r'Pass http_client=lambda: httpx\.AsyncClient\(\.\.\.\)'):
-        plugin_class(api_key='k', http_client=instance)
+    with pytest.raises(TypeError, match=r'Pass http_client_factory=lambda: httpx\.AsyncClient\(\.\.\.\)'):
+        plugin_class(api_key='k', http_client_factory=instance)
 
 
 @pytest.mark.asyncio
 async def test_factory_returning_sync_client_fails_naming_async_client() -> None:
-    """http_client=httpx.Client builds a sync client, so the first model call fails naming httpx.AsyncClient."""
+    """http_client_factory=httpx.Client builds a sync client, so the first model call fails naming httpx.AsyncClient."""
     sync_factory: Any = httpx.Client
-    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client=sync_factory)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client_factory=sync_factory)])
 
-    with pytest.raises(TypeError, match=r'http_client must return an httpx\.AsyncClient, got Client'):
+    with pytest.raises(TypeError, match=r'http_client_factory must return an httpx\.AsyncClient, got Client'):
         await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
 
 
@@ -390,7 +392,7 @@ def test_timeout_not_positive_and_finite_raises_value_error(
 async def test_sub_millisecond_timeout_rounds_up_to_one_millisecond() -> None:
     """timeout=0.0001 sends a 1 ms timeout on Gemini and Interactions instead of none or zero."""
     api = FakeGoogleApi()
-    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout=0.0001, http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout=0.0001, http_client_factory=api.client)])
 
     await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
     gemini_timeout = api.last_post().extensions['timeout']
@@ -405,7 +407,7 @@ async def test_sub_millisecond_timeout_rounds_up_to_one_millisecond() -> None:
 async def test_max_retries_retries_an_overloaded_model_call() -> None:
     """GoogleAI(max_retries=1) retries a 503 on generate and returns the second attempt's answer."""
     api = FlakyGoogleApi(failures=1)
-    ai = Genkit(plugins=[GoogleAI(api_key='k', max_retries=1, http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', max_retries=1, http_client_factory=api.client)])
 
     response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
 
@@ -417,7 +419,7 @@ async def test_max_retries_retries_an_overloaded_model_call() -> None:
 async def test_max_retries_covers_embeddings() -> None:
     """max_retries also retries ai.embed, which genkit_middleware.Retry doesn't cover."""
     api = FlakyGoogleApi(failures=1)
-    ai = Genkit(plugins=[GoogleAI(api_key='k', max_retries=1, http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', max_retries=1, http_client_factory=api.client)])
 
     embeddings = await ai.embed(embedder='googleai/gemini-embedding-001', content='Smoked Salmon Tartine')
 
@@ -429,7 +431,7 @@ async def test_max_retries_covers_embeddings() -> None:
 async def test_no_max_retries_makes_one_attempt() -> None:
     """Without max_retries, a 503 fails after one request, as google-genai does by default."""
     api = FlakyGoogleApi(failures=1)
-    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', http_client_factory=api.client)])
 
     response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
 

@@ -48,7 +48,7 @@ class ClientOptions(BaseModel):
     timeout: float | None = None
     # Only the plugin sets this; a request config can't swap the connection.
     # A getter, called per request, so each event loop gets its own client.
-    http_client: Callable[[], httpx.AsyncClient] | None = Field(default=None, exclude=True)
+    http_client_factory: Callable[[], httpx.AsyncClient] | None = Field(default=None, exclude=True)
 
     def merge(self, overrides: ClientOptions | dict[str, Any] | None) -> Self:
         """Return a copy with non-null override fields applied."""

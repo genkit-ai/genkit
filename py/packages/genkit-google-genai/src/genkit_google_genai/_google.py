@@ -600,7 +600,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
-        http_client: Callable[[], httpx.AsyncClient] | None = None,
+        http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
         legacy_response_schema: bool = False,
     ) -> None:
         """Initializes the GoogleAI plugin.
@@ -620,7 +620,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 caller's ``x-goog-api-client`` and send only Genkit's.
             timeout: Per-request timeout in **seconds**, as a float. Must be
                 positive and finite. Defaults to no timeout. A timeout set on
-                the client from ``http_client`` is not used.
+                the client from ``http_client_factory`` is not used.
 
                 Seconds is the Python convention for an argument named
                 ``timeout``: the standard library (``asyncio.wait_for``,
@@ -652,7 +652,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 Migrating from ``http_options``: ``HttpRetryOptions`` counts
                 the first attempt, so ``HttpRetryOptions(attempts=5)``
                 becomes ``max_retries=4``.
-            http_client: A function with no arguments that returns an
+            http_client_factory: A function with no arguments that returns an
                 ``httpx.AsyncClient``, for proxies, mTLS, or a custom
                 transport. Genkit calls it once per event loop and reuses that
                 client for every model call on the loop. An ``AsyncClient``
@@ -663,7 +663,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 URLs in prompts don't use them.
 
                 ```python
-                GoogleAI(http_client=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
+                GoogleAI(http_client_factory=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
                 ```
             legacy_response_schema: Send JSON output schemas as Gemini's
                 ``responseSchema`` field instead of ``responseJsonSchema``,
@@ -698,7 +698,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 max_retries=max_retries,
             ),
         }
-        self._http_client = _loop_local_http_client(http_client)
+        self._http_client_factory = _loop_local_http_client(http_client_factory)
         self._base_url_pinned = bool(self._client_kwargs['http_options'].base_url)
         self._legacy_response_schema = legacy_response_schema
         self._list_actions_cache: list[Action | BackgroundAction[Any, Any]] | None = None
@@ -709,8 +709,8 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         return _plugin_client(self._loop_client_kwargs())
 
     def _loop_client_kwargs(self) -> dict[str, Any]:
-        """Client kwargs carrying this loop's ``http_client``, if one was given."""
-        return _with_loop_http_client(self._client_kwargs, self._http_client)
+        """Client kwargs carrying this loop's client from ``http_client_factory``, if one was given."""
+        return _with_loop_http_client(self._client_kwargs, self._http_client_factory)
 
     def _interactions_client_options(self) -> ClientOptions:
         """Plugin-level transport knobs for Interactions models.
@@ -728,7 +728,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             timeout=float(http_options.timeout) if http_options.timeout is not None else None,
             # The getter, not a client: Interactions calls it per request so
             # each event loop gets its own client.
-            http_client=self._http_client,
+            http_client_factory=self._http_client_factory,
         )
 
     def _plugin_api_key(self) -> str | None:
@@ -1072,7 +1072,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         headers: Mapping[str, str] | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
-        http_client: Callable[[], httpx.AsyncClient] | None = None,
+        http_client_factory: Callable[[], httpx.AsyncClient] | None = None,
         legacy_response_schema: bool = False,
     ) -> None:
         """Initializes the VertexAI plugin.
@@ -1095,7 +1095,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 its client attribution to ``x-goog-api-client`` and ``user-agent``.
             timeout: Per-request timeout in **seconds**, as a float. Must be
                 positive and finite. Defaults to no timeout. A timeout set on
-                the client from ``http_client`` is not used.
+                the client from ``http_client_factory`` is not used.
 
                 Seconds is the Python convention for an argument named
                 ``timeout``: the standard library (``asyncio.wait_for``,
@@ -1127,7 +1127,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 Migrating from ``http_options``: ``HttpRetryOptions`` counts
                 the first attempt, so ``HttpRetryOptions(attempts=5)``
                 becomes ``max_retries=4``.
-            http_client: A function with no arguments that returns an
+            http_client_factory: A function with no arguments that returns an
                 ``httpx.AsyncClient``, for proxies, mTLS, or a custom
                 transport. Genkit calls it once per event loop and reuses that
                 client for every model call on the loop. An ``AsyncClient``
@@ -1138,7 +1138,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 URLs in prompts don't use them.
 
                 ```python
-                VertexAI(http_client=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
+                VertexAI(http_client_factory=lambda: httpx.AsyncClient(proxy='http://proxy.internal:3128'))
                 ```
             legacy_response_schema: Send JSON output schemas as Gemini's
                 ``responseSchema`` field instead of ``responseJsonSchema``,
@@ -1162,7 +1162,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             timeout=timeout,
             max_retries=max_retries,
         )
-        self._http_client = _loop_local_http_client(http_client)
+        self._http_client_factory = _loop_local_http_client(http_client_factory)
         self._base_url_pinned = bool(opts.base_url)
         self._legacy_response_schema = legacy_response_schema
         multi_region = const.is_multi_regional_location(self._location)
@@ -1207,8 +1207,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         return _plugin_client(self._loop_client_kwargs())
 
     def _loop_client_kwargs(self) -> dict[str, Any]:
-        """Client kwargs carrying this loop's ``http_client``, if one was given."""
-        return _with_loop_http_client(self._client_kwargs, self._http_client)
+        """Client kwargs carrying this loop's client from ``http_client_factory``, if one was given."""
+        return _with_loop_http_client(self._client_kwargs, self._http_client_factory)
 
     async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
@@ -1466,31 +1466,31 @@ class VertexAI(GoogleFamilyRefs, Plugin):
 
 
 def _loop_local_http_client(
-    http_client: Callable[[], httpx.AsyncClient] | None,
+    http_client_factory: Callable[[], httpx.AsyncClient] | None,
 ) -> Callable[[], httpx.AsyncClient] | None:
-    """Wrap the caller's ``http_client`` factory so each event loop gets its own client.
+    """Wrap the caller's ``http_client_factory`` so each event loop gets its own client.
 
     An ``httpx.AsyncClient`` binds its connection pool to the loop that first
     uses it. Genkit runs actions on more than one loop (the Dev UI reflection
     server has its own thread and loop), so one shared client fails or hangs
     there, sometimes after the request already reached the server.
     """
-    if http_client is None:
+    if http_client_factory is None:
         return None
-    if isinstance(http_client, (httpx.AsyncClient, httpx.Client)) or not callable(http_client):
+    if isinstance(http_client_factory, (httpx.AsyncClient, httpx.Client)) or not callable(http_client_factory):
         raise TypeError(
-            'http_client takes a function that returns an httpx.AsyncClient, '
-            f'got {type(http_client).__name__}. Pass http_client=lambda: httpx.AsyncClient(...). '
+            'http_client_factory takes a function that returns an httpx.AsyncClient, '
+            f'got {type(http_client_factory).__name__}. Pass http_client_factory=lambda: httpx.AsyncClient(...). '
             'Genkit builds one client per event loop because an AsyncClient only works '
             'on the loop that first used it.'
         )
-    factory = http_client
+    factory = http_client_factory
 
     def _build() -> httpx.AsyncClient:
         client: object = factory()
         if not isinstance(client, httpx.AsyncClient):
             raise TypeError(
-                f'http_client must return an httpx.AsyncClient, got {type(client).__name__}. '
+                f'http_client_factory must return an httpx.AsyncClient, got {type(client).__name__}. '
                 'Genkit calls models asynchronously.'
             )
         return client
@@ -1500,18 +1500,18 @@ def _loop_local_http_client(
 
 def _with_loop_http_client(
     client_kwargs: dict[str, Any],
-    http_client: Callable[[], httpx.AsyncClient] | None,
+    http_client_factory: Callable[[], httpx.AsyncClient] | None,
 ) -> dict[str, Any]:
-    """Return ``client_kwargs`` with the running loop's ``http_client`` attached.
+    """Return ``client_kwargs`` with the running loop's httpx client attached.
 
     The plugin's own kwargs never hold a client. Every SDK client, including
     the temporary ones built for per-call overrides, gets this loop's httpx
     client here at call time.
     """
-    if http_client is None:
+    if http_client_factory is None:
         return client_kwargs
     opts: HttpOptions = client_kwargs['http_options']
-    return {**client_kwargs, 'http_options': opts.model_copy(update={'httpx_async_client': http_client()})}
+    return {**client_kwargs, 'http_options': opts.model_copy(update={'httpx_async_client': http_client_factory()})}
 
 
 def _plugin_http_options(
