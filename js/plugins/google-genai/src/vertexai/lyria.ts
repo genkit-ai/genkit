@@ -249,7 +249,7 @@ export function defineModel(
         const response = await lyriaPredict(
           extractVersion(ref),
           lyriaPredictRequest,
-          clientOpt
+          toInteractionsClientOptions(clientOpt)
         );
 
         if (!response.predictions || response.predictions.length == 0) {
