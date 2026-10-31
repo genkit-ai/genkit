@@ -528,7 +528,7 @@ async def dispatch_tool(
 
 
 async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> list[str]:
-    """Bind ``provider:tool/…`` selectors to ``/tool.v2/<name>`` catalog keys.
+    """Bind ``provider:tool/…`` selectors to ``/tool/<name>`` catalog keys.
 
     People write ``mcp:tool/echo`` or ``mcp:tool/*``. We resolve the ``tool``
     bucket, register each Action on ``registry`` (the generate child), and
@@ -566,7 +566,7 @@ async def expand_wildcard_tools(registry: Registry, tool_names: list[str]) -> li
             if action is None:
                 continue
             registry.register_action_from_instance(action)
-            expanded.append(create_action_key(ActionKind.TOOL, action.name))
+            expanded.append(create_action_key(action.kind, action.name))
 
     return expanded
 
@@ -604,9 +604,9 @@ async def register_tools(registry: Registry, tools: Sequence[str | Tool] | None)
         # If the same action is already reachable through the parent chain,
         # skip — re-registering would either no-op or trigger a duplicate.
         resolved = await registry.resolve_action(ActionKind.TOOL, t.name)
-        if resolved is t.action():
+        if resolved is t:
             continue
-        registry.register_action_from_instance(t.action())
+        registry.register_action_from_instance(t)
 
 
 CONTEXT_PREFACE = '\n\nUse the following information to complete your task:\n\n'
@@ -835,8 +835,7 @@ async def run_generate(
                         message=(f"tool '{name}' is contributed by middleware but already declared elsewhere"),
                         reason=RuntimeErrorReason.INVALID_INPUT,
                     )
-                # The child registry stores Actions; Tool is the handle authors return.
-                registry.register_action_from_instance(t.action())
+                registry.register_action_from_instance(t)
                 contributed_names.append(name)
             options = options.model_copy()
             options.tools = existing + contributed_names
@@ -2322,13 +2321,16 @@ def interrupt_request_part(trp: Part, intr: Interrupt) -> Part:
 async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
     """Resolve a tool already on the registry.
 
-    Catalog keys (``/tool.v2/name``) and bare registered names. DAP
-    selectors (``mcp:tool/echo``) are bound in expand, not here.
+    Catalog keys (``/tool/name``, ``/tool.v2/name``) and bare registered
+    names. A bare name prefers the ``tool`` action and falls back to
+    ``tool.v2``, like JS. DAP selectors (``mcp:tool/echo``) are bound in
+    expand, not here.
     """
     if isinstance(tool_ref, Tool):
-        return tool_ref.action()
+        return tool_ref
 
     name = tool_ref
+    kind: ActionKind | None = None
     if tool_ref.startswith('/'):
         try:
             kind, name = parse_action_key(tool_ref)
@@ -2338,7 +2340,7 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
                 message=f'Unable to resolve tool {tool_ref}',
                 reason=RuntimeErrorReason.TOOL_NOT_FOUND,
             ) from e
-        if kind != ActionKind.TOOL:
+        if kind not in (ActionKind.TOOL, ActionKind.TOOL_V2):
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Unable to resolve tool {tool_ref}',
@@ -2351,7 +2353,12 @@ async def resolve_tool(registry: Registry, tool_ref: str | Tool) -> Action:
             reason=RuntimeErrorReason.TOOL_NOT_FOUND,
         )
 
-    tool = await registry.resolve_action(kind=ActionKind.TOOL, name=name)
+    if kind is not None:
+        tool = await registry.resolve_action(kind=kind, name=name)
+    else:
+        tool = await registry.resolve_action(kind=ActionKind.TOOL, name=name)
+        if tool is None:
+            tool = await registry.resolve_action(kind=ActionKind.TOOL_V2, name=name)
     if tool is None:
         raise GenkitError(
             status='NOT_FOUND',
