@@ -900,6 +900,30 @@ describe('prompt', () => {
       'Manual AbortSignal should be an AbortSignal instance'
     );
   });
+
+  it('throws a clear error when a parts template produces multiple messages', async () => {
+    // Regression for #3762: string `prompt`/`system` values are rendered as
+    // parts and must expand to exactly one message.
+    const prompt = definePrompt(registry, {
+      name: 'multiMessagePartsPrompt',
+      model: 'echoModel',
+      prompt: '{{role "user"}}hello\n{{role "model"}}world',
+    });
+
+    await assert.rejects(
+      () => prompt.render({}),
+      (err: any) => {
+        assert.ok(err instanceof Error);
+        assert.match(
+          err.message,
+          /Prompt parts template must produce exactly one message, but produced 2/
+        );
+        assert.doesNotMatch(err.message, /tempate/);
+        assert.match(err.message, /Use `messages`/);
+        return true;
+      }
+    );
+  });
 });
 
 function stripUndefined(input: any) {
