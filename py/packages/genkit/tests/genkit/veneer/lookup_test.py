@@ -120,7 +120,7 @@ async def test_lookup_tool_returns_a_callable_tool_with_the_same_definition() ->
 
     assert isinstance(found, Tool)
     assert found.definition() == menu_price.definition()
-    assert (await found('ramen')).output == 14.5
+    assert await found('ramen') == 14.5
 
 
 @pytest.mark.asyncio
@@ -141,6 +141,27 @@ async def test_lookup_tool_finds_interrupts() -> None:
 
     assert found is not None
     assert found.name == 'confirm_order'
+
+
+@pytest.mark.asyncio
+async def test_lookup_tool_wraps_plain_tool_action_via_from_action() -> None:
+    """A hand-registered ``Action(kind=ActionKind.TOOL, ...)`` comes back from ``lookup_tool`` as a ``Tool``."""
+    ai = Genkit()
+
+    async def table_status(table_id: str) -> str:
+        return f'table {table_id}: seated'
+
+    raw_action = Action(kind=ActionKind.TOOL, name='table_status', fn=table_status, description='Check table status.')
+    ai._registry.register_action_from_instance(raw_action)
+
+    found = await ai.lookup_tool('table_status')
+
+    assert isinstance(found, Tool)
+    assert found.wire_action is None
+    assert found.metadata is raw_action.metadata
+    assert found.definition().output_schema == {'type': 'string'}
+    assert await found('T4') == 'table T4: seated'
+    assert Tool.from_action(found) is found
 
 
 def test_define_value_then_lookup_value_returns_it() -> None:
