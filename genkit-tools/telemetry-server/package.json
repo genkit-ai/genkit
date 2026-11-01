@@ -12,7 +12,7 @@
   "scripts": {
     "compile": "pnpm genversion && tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json",
     "build:clean": "rimraf ./lib",
-    "build": "npm-run-all build:clean compile",
+    "build": "pnpm run build:clean && pnpm run compile",
     "test": "node --import tsx --test tests/*_test.ts",
     "build:watch": "tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json --watch",
     "genversion": "genversion -esf src/utils/version.ts"
@@ -29,18 +29,10 @@
   ],
   "dependencies": {
     "@genkit-ai/tools-common": "workspace:*",
-    "@asteasolutions/zod-to-openapi": "^7.0.0",
-    "@google-cloud/firestore": "^7.6.0",
-    "@opentelemetry/api": "~1.9.0",
-    "@opentelemetry/context-async-hooks": "~1.25.0",
-    "@opentelemetry/core": "~1.25.0",
-    "@opentelemetry/sdk-metrics": "~1.25.0",
-    "@opentelemetry/sdk-node": "^0.52.0",
-    "@opentelemetry/sdk-trace-base": "~1.25.0",
     "async-mutex": "^0.5.0",
     "express": "^4.21.0",
     "lockfile": "^1.0.4",
-    "zod": "^3.22.4",
+    "zod": "^3.25.67",
     "cors": "^2.8.6"
   },
   "devDependencies": {
@@ -49,7 +41,6 @@
     "@types/lockfile": "^1.0.4",
     "@types/node": "^20.11.30",
     "get-port": "^7.1.0",
-    "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "genversion": "^3.2.0",
     "tsx": "^4.19.2",
