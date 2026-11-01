@@ -330,10 +330,10 @@ class OpenAIModel:
         return result
 
     def _needs_schema_in_prompt(self, request: ModelRequest) -> bool:
-        """Check whether the schema must be injected into the prompt.
+        """Check whether the adapter must inject a schema instruction.
 
-        Models without strict Structured Outputs never receive the schema via
-        ``response_format``. Include it in the system message instead.
+        Genkit core handles instructions for unconstrained catalog models.
+        DeepSeek's compatible-model path still needs an adapter instruction.
 
         Args:
             request: The model request with output_format and output_schema.
@@ -343,8 +343,7 @@ class OpenAIModel:
         """
         if request.output_format != 'json' or not request.output_schema:
             return False
-        # These models cannot receive a strict json_schema response format.
-        return self._model.startswith('deepseek') or self._model in _LEGACY_JSON_MODELS
+        return self._model.startswith('deepseek')
 
     def _get_response_format(self, request: ModelRequest) -> dict | None:
         """Determines the response format configuration based on the output settings.
@@ -457,7 +456,7 @@ class OpenAIModel:
         """
         messages = self._get_messages(request.messages)
 
-        # Models without strict schema support need the schema in the prompt.
+        # Core adds schema instructions for unconstrained catalog models.
         if self._needs_schema_in_prompt(request) and request.output_schema:
             schema_msg = self._build_schema_instruction(request.output_schema)
             messages = [schema_msg, *messages]

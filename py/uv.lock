@@ -32,6 +32,7 @@ members = [
     "genkit-flask",
     "genkit-google-cloud",
     "genkit-google-genai",
+    "genkit-mcp",
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
@@ -40,6 +41,7 @@ members = [
     "genkit-workspace",
     "google-genai-deep-research",
     "google-genai-media",
+    "mcp-hello",
     "middleware",
     "middleware-coding-agent",
     "multipart-tools",
@@ -1606,6 +1608,9 @@ google-cloud = [
 google-genai = [
     { name = "genkit-google-genai" },
 ]
+mcp = [
+    { name = "genkit-mcp" },
+]
 middleware = [
     { name = "genkit-middleware" },
 ]
@@ -1635,6 +1640,7 @@ requires-dist = [
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", marker = "extra == 'google-genai'", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", marker = "extra == 'mcp'", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
@@ -1653,7 +1659,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "otel", "ollama", "openai", "vertex-ai"]
+provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "otel", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-a2ui"
@@ -1837,6 +1843,27 @@ requires-dist = [
 ]
 
 [[package]]
+name = "genkit-mcp"
+version = "0.12.0"
+source = { editable = "packages/genkit-mcp" }
+dependencies = [
+    { name = "anyio" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "genkit" },
+    { name = "mcp" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.9.0" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'", specifier = ">=1.2.0" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
+    { name = "pydantic", specifier = ">=2.10.5" },
+]
+
+[[package]]
 name = "genkit-middleware"
 version = "0.12.0"
 source = { editable = "packages/genkit-middleware" }
@@ -1952,6 +1979,7 @@ dependencies = [
     { name = "genkit-flask" },
     { name = "genkit-google-cloud" },
     { name = "genkit-google-genai" },
+    { name = "genkit-mcp" },
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
@@ -1966,7 +1994,6 @@ dev = [
     { name = "ipython", version = "8.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jupyter" },
-    { name = "mcp" },
     { name = "nox" },
     { name = "nox-uv" },
     { name = "pip" },
@@ -2021,6 +2048,7 @@ requires-dist = [
     { name = "genkit-flask", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
@@ -2035,7 +2063,6 @@ dev = [
     { name = "ipython", marker = "python_full_version < '3.11'", specifier = "~=8.22" },
     { name = "ipython", marker = "python_full_version >= '3.11'", specifier = "~=9.0.2" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "mcp", specifier = ">=1.25.0" },
     { name = "nox", specifier = ">=2025.2.9" },
     { name = "nox-uv", specifier = ">=0.2.2" },
     { name = "pip", specifier = ">=25.0.1" },
@@ -3603,6 +3630,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fc/6d/62e76bbb8144d6ed86e202b5edd8a4cb631e7c8130f3f4893c3f90262b10/mcp-1.26.0.tar.gz", hash = "sha256:db6e2ef491eecc1a0d93711a76f28dec2e05999f93afd48795da1c1137142c66", size = 608005, upload-time = "2026-01-24T19:40:32.468Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/d9/eaa1f80170d2b7c5ba23f3b59f766f3a0bb41155fbc32a69adfa1adaaef9/mcp-1.26.0-py3-none-any.whl", hash = "sha256:904a21c33c25aa98ddbeb47273033c435e595bbacfdb177f4bd87f6dceebe1ca", size = 233615, upload-time = "2026-01-24T19:40:30.652Z" },
+]
+
+[[package]]
+name = "mcp-hello"
+version = "0.2.0"
+source = { editable = "samples/mcp-hello" }
+dependencies = [
+    { name = "genkit" },
+    { name = "genkit-google-genai" },
+    { name = "genkit-mcp" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", editable = "packages/genkit-mcp" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
 ]
 
 [[package]]

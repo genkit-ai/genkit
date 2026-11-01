@@ -42,7 +42,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from genkit._core._action import Action, BidiAction, input_from_json, parse_action_key
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import get_reflection_json
+from genkit._core._error import Interrupt, get_reflection_json, interrupt_escape_error
 from genkit._core._logger import get_logger
 from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import AgentInit, AgentInput, ModelRef
@@ -174,12 +174,14 @@ class ActionRunner:
             self.queue.put_nowait(json.dumps(payload))
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except (Exception, Interrupt) as e:
+            # A tool run on its own has no generate loop to pause, so its
+            # Interrupt is reported like any other failure.
             # Dev UI already shows the error + stack from the reflection response.
             # Dumping a full traceback here turns every playground failure into
             # terminal noise.
             logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
-            error = get_reflection_json(e, trace_id=self.trace_id)
+            error = get_reflection_json(interrupt_escape_error(e) or e, trace_id=self.trace_id)
             self.queue.put_nowait(json.dumps({'error': error.model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()

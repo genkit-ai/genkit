@@ -25,10 +25,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  GITHUB_PULL_REQUEST_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-  GITHUB_PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-
 jobs:
   changes:
     uses: ./.github/workflows/changes.yml
@@ -36,6 +32,7 @@ jobs:
       pull-requests: read
 
   build:
+    # Job name is pinned in main branch protection required_status_checks.
     name: Run Tests (just DevUI tests for now)
     needs: changes
     # Builds and tests genkit-tools/ only.
@@ -59,3 +56,5 @@ jobs:
       run: pnpm build:genkit-tools
     - name: Run tests
       run: pnpm test:genkit-tools
+    - name: Validate working directory is clean
+      run: .github/workflows/scripts/ensure-clean-working-tree.sh

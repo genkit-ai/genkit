@@ -16,6 +16,8 @@
 
 """Error classes and utilities for the Genkit framework."""
 
+import builtins
+import importlib
 import math
 import reprlib
 import time
@@ -349,15 +351,24 @@ class ErrorResponseMetadata(TypedDict, total=False):
     headers: dict[str, str]
 
 
-class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Error for style
-    """Pause a tool or generate so the caller can approve, reply, or restart.
+class Interrupt(BaseException):
+    """Pause a tool so the caller can approve, reply, or restart.
 
     Raise ``Interrupt(metadata)`` from a tool or from tool middleware.
-    Tracing treats this as control flow, not a failed span.
+    It is a control-flow signal like ``asyncio.CancelledError``, so it
+    subclasses ``BaseException``: an ``except Exception`` in tool code can't
+    swallow it and skip the approval. Catch ``Interrupt`` by name if a tool
+    needs to clean up, then re-raise. Raised anywhere else (a flow, an
+    agent turn body), the action fails with ``GenkitError`` INTERNAL.
+    Tracing treats it as control flow, not a failed span.
     """
 
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
-        super().__init__()
+        # Metadata goes in args so str(interrupt) and tracebacks show it.
+        if metadata is None:
+            super().__init__()
+        else:
+            super().__init__(metadata)
         self.metadata: dict[str, Any] = {} if metadata is None else metadata
 
 
@@ -460,7 +471,7 @@ class GenkitError(Exception):
             cause_text = str(cause) if cause is not None else ''
             cause_suffix = f': {cause_text}' if cause_text and cause_text not in message else ''
         super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
-        self.original_message: str = message
+        self.message: str = message
 
         if not details:
             details = {}
@@ -498,7 +509,7 @@ class GenkitError(Exception):
         """Served-flow wire body; same redaction as ``error_body``.
 
         Only a PublicError keeps its message and details. In-process code
-        that needs the real error reads ``original_message`` and ``details``.
+        that needs the real error reads ``message`` and ``details``.
         """
         body = error_body(self)
         return HttpErrorWireFormat(
@@ -516,7 +527,7 @@ class GenkitError(Exception):
         return ReflectionError(
             details=ReflectionErrorDetails(**self.details) if self.details else None,
             code=StatusCodes[self.status].value,
-            message=f'{self.original_message}: {repr(self.cause)}' if self.cause else self.original_message,
+            message=f'{self.message}: {repr(self.cause)}' if self.cause else self.message,
         )
 
 
@@ -602,6 +613,69 @@ def provider_error(
     result = GenkitError(status=status, message=text, cause=error, response_metadata=response_metadata)
     result.__cause__ = error
     return mark_provider_error(error=result)
+
+
+def interrupt_outside_tool_error(interrupt: Interrupt) -> GenkitError:
+    """The error an Interrupt becomes when it escapes something that isn't a tool.
+
+    Only generate's tool loop can turn an Interrupt into a pause. Anywhere
+    else it would escape ``except Exception`` handlers as a bare
+    BaseException, so the action boundary and the agent turn loop report it
+    as a failed run instead. ``cause`` keeps the metadata for debugging.
+    """
+    error = GenkitError(status='INTERNAL', message='Interrupt raised outside a tool', cause=interrupt)
+    error.__cause__ = interrupt
+    return error
+
+
+class _NoTaskGroupError(BaseException):
+    """Never raised; stands in when no task-group exception type exists."""
+
+
+def _task_group_error() -> type[BaseException]:
+    builtin = getattr(builtins, 'BaseExceptionGroup', None)  # 3.11+
+    if builtin is not None:
+        return builtin
+    # 3.10 has no asyncio.TaskGroup; anyio task groups raise the
+    # `exceptiongroup` backport, which anyio installs there.
+    try:
+        backport = importlib.import_module('exceptiongroup')
+    except ImportError:
+        return _NoTaskGroupError
+    return backport.BaseExceptionGroup
+
+
+# What asyncio.TaskGroup / anyio raise when a child task raises a
+# BaseException. An Interrupt in a child task arrives wrapped in one of these.
+TaskGroupError: type[BaseException] = _task_group_error()
+
+
+def _group_has_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, Interrupt):
+        return True
+    children = getattr(exc, 'exceptions', None) if isinstance(exc, TaskGroupError) else None
+    return any(_group_has_interrupt(child) for child in children or ())
+
+
+def interrupt_escape_error(exc: BaseException) -> GenkitError | None:
+    """The failure for an Interrupt that reached a boundary that can't pause on it.
+
+    Returns None when ``exc`` carries no Interrupt, so the caller re-raises it
+    as is. An Interrupt inside a task group can't pause generate: the group may
+    also hold other failures, and there's no single interrupt to answer. It
+    fails the run, as it did when Interrupt was an Exception.
+    """
+    if isinstance(exc, Interrupt):
+        return interrupt_outside_tool_error(exc)
+    if isinstance(exc, TaskGroupError) and _group_has_interrupt(exc):
+        error = GenkitError(
+            status='INTERNAL',
+            message='Interrupt raised inside a task group',
+            cause=exc,
+        )
+        error.__cause__ = exc
+        return error
+    return None
 
 
 class PublicError(GenkitError):
@@ -692,11 +766,11 @@ def _request_client_message(error: GenkitError) -> str:
     details = error.details if isinstance(error.details, dict) else {}
     errors = details.get('errors')
     if not isinstance(errors, list) or not errors:
-        return error.original_message
+        return error.message
     entries = [cast(dict[str, object], e) for e in cast(list[object], errors) if isinstance(e, dict)]
     problems = [_served_problem(e) for e in entries[:_MAX_PROBLEMS]]
     joined = _join_problems(problems, total=len(entries), max_errors=_MAX_PROBLEMS)
-    return f'{error.original_message}: {joined}' if joined else error.original_message
+    return f'{error.message}: {joined}' if joined else error.message
 
 
 _ANY_ADAPTER: TypeAdapter[Any] = TypeAdapter(Any)
@@ -778,7 +852,7 @@ def error_body(error: object) -> dict[str, Any]:
     facing = _client_facing_error(error)
     if facing is None:
         return dict(_INTERNAL_CLIENT_BODY)
-    message = facing.original_message if isinstance(facing, PublicError) else _request_client_message(facing)
+    message = facing.message if isinstance(facing, PublicError) else _request_client_message(facing)
     body: dict[str, Any] = {
         'message': message,
         'status': facing.status,
@@ -799,7 +873,7 @@ def get_error_stack(error: object) -> str | None:
     Returns:
         The stack trace string if available, None otherwise.
     """
-    if isinstance(error, Exception):
+    if isinstance(error, BaseException):
         # Stack traces are valuable for debugging; consider making this configurable
         # to enable them in development/staging and suppress in production.
         # For now, return an empty string to keep Dev UI clean as per requirements.

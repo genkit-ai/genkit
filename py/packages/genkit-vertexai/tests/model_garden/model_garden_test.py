@@ -37,7 +37,6 @@ from google.auth.exceptions import DefaultCredentialsError
 from openai.types.chat import ChatCompletion
 
 from genkit import Genkit, GenkitError, Message, Part, Role
-from genkit._ai._formats._builtin import built_in_formats
 from genkit.model import ModelContext, ModelRequest, OutputConfig
 from genkit.plugin_api import ActionKind
 
@@ -55,11 +54,13 @@ OPENAI_EXTRA_MISSING = (
 
 def test_catalog_output_names_are_known_formats() -> None:
     """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
-    known = {f.name for f in built_in_formats}
+    ai = Genkit()
     entries = {name: info.supports for name, info in SUPPORTED_OPENAI_COMPAT_MODELS.items()}
     entries['<default>'] = DEFAULT_SUPPORTS
     for name, supports in entries.items():
-        unknown = set((supports.output if supports else None) or []) - known
+        unknown = {
+            o for o in (supports.output if supports else None) or [] if ai.lookup_value(kind='format', name=o) is None
+        }
         assert not unknown, f'{name}: {sorted(unknown)}'
 
 
@@ -94,8 +95,6 @@ def _chat_completion(text: str) -> ChatCompletion:
             {
                 'name': 'ModelGarden - Meta - llama-3.1',
                 'supports': {
-                    'constrained': None,
-                    'content_type': None,
                     'long_running': False,
                     'multiturn': True,
                     'media': False,
@@ -105,7 +104,6 @@ def _chat_completion(text: str) -> ChatCompletion:
                         'json',
                         'text',
                     ],
-                    'tool_choice': None,
                 },
             },
         ),
@@ -114,9 +112,6 @@ def _chat_completion(text: str) -> ChatCompletion:
             {
                 'name': 'ModelGarden - meta/lazaro-model-pro-max',
                 'supports': {
-                    'constrained': None,
-                    'content_type': None,
-                    'long_running': None,
                     'multiturn': True,
                     'media': True,
                     'tools': True,
@@ -125,7 +120,6 @@ def _chat_completion(text: str) -> ChatCompletion:
                         'json',
                         'text',
                     ],
-                    'tool_choice': None,
                 },
             },
         ),
@@ -421,7 +415,7 @@ async def test_generate_model_garden_model_without_its_extra_raises_install_comm
         await ai.generate(model=model, prompt='hi')
 
     assert exc_info.value.status == 'FAILED_PRECONDITION'
-    assert exc_info.value.original_message == message
+    assert exc_info.value.message == message
 
 
 @pytest.mark.asyncio

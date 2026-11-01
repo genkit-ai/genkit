@@ -19,11 +19,22 @@
 
 from typing import Literal, TypeAlias
 
-from genkit.model import ModelInfo, ModelSupports
+from genkit.model import ConstrainedSupport, ModelInfo, ModelSupports
 
 # Supports.output is the caller-facing Genkit output contract; wire modes
-# are selected separately by the OpenAI model adapter.
+# are selected separately by the OpenAI adapter. constrained=ALL identifies
+# models that accept json_schema and do not need schema text in the prompt.
 MULTIMODAL_MODEL_SUPPORTS = ModelSupports(
+    multiturn=True,
+    media=True,
+    tools=True,
+    system_role=True,
+    output=['json', 'text'],
+    constrained=ConstrainedSupport.ALL,
+)
+
+# gpt-4-turbo predates structured outputs: json_object only.
+MULTIMODAL_LEGACY_MODEL_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,
@@ -31,7 +42,7 @@ MULTIMODAL_MODEL_SUPPORTS = ModelSupports(
     output=['json', 'text'],
 )
 
-# GPT-4 uses a prompt-only JSON fallback in the plugin.
+# GPT-4 uses a prompt-only JSON fallback and cannot accept json_schema.
 GPT_4_MODEL_SUPPORTS = ModelSupports(
     multiturn=True,
     media=False,
@@ -54,6 +65,7 @@ O_SERIES_MODEL_SUPPORTS = ModelSupports(
     tools=True,
     system_role=False,
     output=['json', 'text'],
+    constrained=ConstrainedSupport.ALL,
 )
 
 GPT_5_MODEL_SUPPORTS = ModelSupports(
@@ -62,6 +74,7 @@ GPT_5_MODEL_SUPPORTS = ModelSupports(
     tools=True,
     system_role=True,
     output=['json', 'text'],
+    constrained=ConstrainedSupport.ALL,
 )
 
 GPT_OSS_MODEL_SUPPORTS = ModelSupports(
@@ -118,18 +131,20 @@ KnownGpt: TypeAlias = Literal[
 SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
     # --- GPT-4o series ---
     'gpt-4o': ModelInfo(label='OpenAI - gpt-4o', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4o-2024-05-13': ModelInfo(label='OpenAI - gpt-4o-2024-05-13', supports=MULTIMODAL_MODEL_SUPPORTS),
+    'gpt-4o-2024-05-13': ModelInfo(label='OpenAI - gpt-4o-2024-05-13', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS),
     'gpt-4o-mini': ModelInfo(label='OpenAI - gpt-4o-mini', supports=MULTIMODAL_MODEL_SUPPORTS),
     'gpt-4o-mini-2024-07-18': ModelInfo(label='OpenAI - gpt-4o-mini-2024-07-18', supports=MULTIMODAL_MODEL_SUPPORTS),
     # --- GPT-4.x series ---
     'gpt-4.5-preview': ModelInfo(label='OpenAI - gpt-4.5-preview', supports=MULTIMODAL_MODEL_SUPPORTS),
     'gpt-4.1': ModelInfo(label='OpenAI - gpt-4.1', supports=MULTIMODAL_MODEL_SUPPORTS),
     'gpt-4.1-mini': ModelInfo(label='OpenAI - gpt-4.1-mini', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4-turbo': ModelInfo(label='OpenAI - gpt-4-turbo', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4-turbo-2024-04-09': ModelInfo(label='OpenAI - gpt-4-turbo-2024-04-09', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4-turbo-preview': ModelInfo(label='OpenAI - gpt-4-turbo-preview', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4-0125-preview': ModelInfo(label='OpenAI - gpt-4-0125-preview', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4-1106-preview': ModelInfo(label='OpenAI - gpt-4-1106-preview', supports=MULTIMODAL_MODEL_SUPPORTS),
+    'gpt-4-turbo': ModelInfo(label='OpenAI - gpt-4-turbo', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS),
+    'gpt-4-turbo-2024-04-09': ModelInfo(
+        label='OpenAI - gpt-4-turbo-2024-04-09', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS
+    ),
+    'gpt-4-turbo-preview': ModelInfo(label='OpenAI - gpt-4-turbo-preview', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS),
+    'gpt-4-0125-preview': ModelInfo(label='OpenAI - gpt-4-0125-preview', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS),
+    'gpt-4-1106-preview': ModelInfo(label='OpenAI - gpt-4-1106-preview', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS),
     'gpt-4': ModelInfo(label='OpenAI - gpt-4', supports=GPT_4_MODEL_SUPPORTS),
     'gpt-4-0613': ModelInfo(label='OpenAI - gpt-4-0613', supports=GPT_4_MODEL_SUPPORTS),
     # --- GPT-3.5 series ---
@@ -147,6 +162,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             tools=True,
             system_role=False,
             output=['json', 'text'],
+            constrained=ConstrainedSupport.ALL,
         ),
     ),
     'o4-mini': ModelInfo(label='OpenAI - o4-mini', supports=O_SERIES_MODEL_SUPPORTS),
@@ -177,6 +193,7 @@ SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
             tools=False,
             system_role=True,
             output=['json', 'text'],
+            constrained=ConstrainedSupport.ALL,
         ),
     ),
     # --- OSS models (hosted) ---

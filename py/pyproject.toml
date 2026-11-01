@@ -27,6 +27,7 @@ dependencies = [
   "genkit-flask",
   "genkit-google-cloud",
   "genkit-google-genai",
+  "genkit-mcp",
   "genkit-middleware",
   "genkit-otel",
   "genkit-a2ui",
@@ -46,7 +47,6 @@ dev = [
   "ipython~=8.22; python_version <= '3.10'",
   "ipython~=9.0.2; python_version >= '3.11'",
   "jupyter>=1.1.1",
-  "mcp>=1.25.0",
   "pytest-asyncio>=0.25.3",
   "pytest>=8.3.4",
   "pytest-cov>=6.0.0",
@@ -153,6 +153,7 @@ gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
 google-genai-deep-research = { workspace = true }
 google-genai-media   = { workspace = true }
+mcp-hello            = { workspace = true }
 middleware           = { workspace = true }
 middleware-coding-agent = { workspace = true }
 ollama-sample        = { workspace = true }
@@ -174,6 +175,7 @@ genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
 genkit-google-genai     = { workspace = true }
+genkit-mcp          = { workspace = true }
 genkit-middleware   = { workspace = true }
 genkit-otel         = { workspace = true }
 genkit-a2ui         = { workspace = true }
@@ -234,6 +236,7 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
+  "TD",    # flake8-todos (TODO comment formatting and issue links)
   "TID251", # banned-api (see flake8-tidy-imports.banned-api below)
 ]
 
@@ -391,6 +394,7 @@ root = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
   "packages/genkit-otel/src",
   "packages/genkit-a2ui/src",
@@ -428,6 +432,7 @@ extraPaths = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
   "packages/genkit-otel/src",
   "packages/genkit-a2ui/src",
@@ -458,6 +463,7 @@ project_excludes = [
 project_includes = [
   # Core package
   "packages/genkit/src/**/*.py",
+  "packages/genkit-mcp/src/**/*.py",
   # Typing contracts (see [tool.pyright])
   "packages/*/tests/typecheck/**/*.py",
 ]
@@ -476,6 +482,7 @@ search-path = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
   "packages/genkit-otel/src",
   "packages/genkit-a2ui/src",
