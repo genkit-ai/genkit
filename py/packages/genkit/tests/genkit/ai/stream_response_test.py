@@ -296,3 +296,37 @@ async def test_generate_stream_cancelling_shielded_waiter_does_not_cancel_run() 
         release.set()
         res = await stream.response
         assert res.text == 'Simmering done'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('buffered', [False, True])
+async def test_flow_stream_preserves_none_chunks(buffered: bool) -> None:
+    """A nullable chunk is data whether the reader is waiting or the run has finished."""
+    ai = Genkit()
+    release = asyncio.Event()
+
+    @ai.flow()
+    async def updates(ctx: FlowContext[str | None]) -> str:
+        await release.wait()
+        ctx.send_chunk(None)
+        ctx.send_chunk('after-null')
+        return 'done'
+
+    result = updates.stream()
+
+    async def consume() -> list[str | None]:
+        return [chunk async for chunk in result]
+
+    if buffered:
+        release.set()
+        assert await result.response == 'done'
+        chunks = await consume()
+    else:
+        reader = asyncio.create_task(consume())
+        await asyncio.sleep(0)
+        release.set()
+        chunks = await asyncio.wait_for(reader, timeout=2)
+
+    assert await result.response == 'done'
+    assert chunks == [None, 'after-null']
+    assert [chunk async for chunk in result] == []
