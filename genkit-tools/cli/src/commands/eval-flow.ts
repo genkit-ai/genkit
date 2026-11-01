@@ -66,6 +66,7 @@ enum SourceType {
 
 /** Command to run a flow and evaluate the output */
 export const evalFlow = new Command('eval:flow')
+  .allowExcessArguments(true)
   .usage('[options] <flowName> [data] [-- <command...>]')
   .description(
     'evaluate a flow against configured evaluators using provided data as input'

@@ -51,6 +51,7 @@ interface RunOptions {
 
 /** Command to run code in dev mode and/or the Dev UI. */
 export const start = new Command('start')
+  .allowExcessArguments(true)
   .usage('[options] [-- <command...>]')
   .description('runs a command in Genkit dev mode')
   .option('-n, --noui', 'do not start the Dev UI', false)

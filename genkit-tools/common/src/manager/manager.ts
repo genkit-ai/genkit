@@ -15,7 +15,7 @@
  */
 
 import axios, { type AxiosError } from 'axios';
-import chokidar from 'chokidar';
+import * as chokidar from 'chokidar';
 import EventEmitter from 'events';
 import * as fsSync from 'fs';
 import fs from 'fs/promises';

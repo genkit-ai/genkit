@@ -49,6 +49,7 @@ interface EvalRunCliOptions {
 
 /** Command to run evaluation on a dataset. */
 export const evalRun = new Command('eval:run')
+  .allowExcessArguments(true)
   .usage('[options] <dataset> [-- <command...>]')
   .description('evaluate provided dataset against configured evaluators')
   .argument(
