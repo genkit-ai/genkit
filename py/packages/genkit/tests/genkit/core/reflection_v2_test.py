@@ -999,7 +999,7 @@ async def test_reflection_v1_run_tool_that_interrupts_writes_error_payload() -> 
         raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
 
     runner = ActionRunner(
-        action=refund_order.action(),
+        action=refund_order,
         payload={'input': 'A-17'},
         stream=False,
         active_actions={},

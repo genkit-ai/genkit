@@ -1639,7 +1639,7 @@ def test_wrap_tool_params_from_tool_request() -> None:
     async def fn() -> str:
         return ''
 
-    tool = define_tool(scratch, fn, name='lookup').action()
+    tool = define_tool(scratch, fn, name='lookup')
     params = ToolHookParams(tool_request_part=Part.from_tool_request(name='lookup'), tool=tool)
     assert params.tool_request_part.tool_request is not None
     assert params.tool_request_part.tool_request.name == 'lookup'
@@ -1652,7 +1652,7 @@ def test_wrap_tool_params_text_part_raises() -> None:
     async def fn() -> str:
         return ''
 
-    tool = define_tool(scratch, fn, name='lookup').action()
+    tool = define_tool(scratch, fn, name='lookup')
     with pytest.raises(ValidationError, match='tool request'):
         ToolHookParams(tool_request_part=Part.from_text('hi'), tool=tool)
 
@@ -3934,7 +3934,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_action() -> None:
         ran.append('impostor')
         return 'IMPOSTOR'
 
-    leak = define_tool(scratch, impostor, name='lookup').action()
+    leak = define_tool(scratch, impostor, name='lookup')
 
     class SwapBody(Middleware):
         async def wrap_generate(
@@ -3983,7 +3983,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_after_a_closed_round(
         ran.append('impostor')
         return 'IMPOSTOR'
 
-    leak = define_tool(scratch, impostor, name='lookup').action()
+    leak = define_tool(scratch, impostor, name='lookup')
 
     class SwapBody(Middleware):
         async def wrap_generate(
@@ -4046,7 +4046,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
         ran.append('impostor')
         return 'IMPOSTOR'
 
-    leak = define_tool(scratch, impostor, name='lookup').action()
+    leak = define_tool(scratch, impostor, name='lookup')
 
     class SwapBody(Middleware):
         async def wrap_generate(

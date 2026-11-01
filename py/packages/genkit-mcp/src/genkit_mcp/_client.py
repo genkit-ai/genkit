@@ -173,7 +173,7 @@ class McpClient:
     async def _list_actions(self) -> list[Action[Any, Any]]:
         """List the server's tools as unregistered actions, for a provider to hand out."""
         tools = await self._on_connection(McpConnection.list_tools)
-        return mcp_tools_to_actions(tools, self._name, self._call_tool)
+        return list(mcp_tools_to_actions(tools, self._name, self._call_tool))
 
     async def restart(self) -> None:
         """Reconnect a live client to the server, replacing any connection it has.
@@ -365,7 +365,7 @@ def define_mcp_client(
 ) -> McpClient:
     """Register an MCP server's tools with Genkit.
 
-    The server's tools become ``tool.v2`` actions behind a dynamic action provider
+    The server's tools become ``tool`` actions behind a dynamic action provider
     named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
     them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
     process starts on the first tool listing.

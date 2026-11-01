@@ -184,8 +184,11 @@ class ActionKind(StrEnum):
     FLOW = 'flow'
     MODEL = 'model'
     PROMPT = 'prompt'
-    # Catalog key for tools. Action.run / Dev UI see the multipart envelope.
-    TOOL = 'tool.v2'
+    # A tool: run returns what the function returned. Generate runs this one.
+    TOOL = 'tool'
+    # The same tool returning the MultipartToolResponse envelope. The Dev UI
+    # lists and runs this one when both exist (same as JS and Go).
+    TOOL_V2 = 'tool.v2'
     UTIL = 'util'
 
 
@@ -373,7 +376,7 @@ class ActionParams:
 
 def _kind_label(kind: ActionKind) -> str:
     """The action kind as error messages say it: `flow`, `model`, `tool`, `background model`."""
-    # ActionKind.TOOL is 'tool.v2' (the catalog key); people call it a tool.
+    # ActionKind.TOOL_V2 is 'tool.v2'; people call it a tool.
     return str(kind).split('.')[0].replace('-', ' ')
 
 
@@ -398,7 +401,7 @@ def _public_context_name(kind: ActionKind) -> str:
     FlowContext for everything else. FlowContext is the public name of the
     run-context class, so it's correct for embedders, evaluators and the rest.
     """
-    if kind == ActionKind.TOOL:
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2):
         return 'ToolContext'
     if kind in _MODEL_CONTEXT_KINDS:
         return 'ModelContext'
@@ -458,7 +461,7 @@ def find_input_and_context(
     # A tool's input type is the schema the model sees, and a flow's is its
     # public API, so those need one. Other actions (models, embedders, ...)
     # get a fixed input from Genkit and may leave it unannotated.
-    if kind in (ActionKind.TOOL, ActionKind.FLOW) and input_param is not None:
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2, ActionKind.FLOW) and input_param is not None:
         if hints.get(input_param.name, input_param.annotation) is inspect.Parameter.empty:
             raise TypeError(
                 f"{owner} input '{input_param.name}' has no type annotation. "
@@ -680,7 +683,7 @@ def _is_context_annotation(annotation: object) -> bool:
 
 # Public names for the run-context classes. FlowContext, ModelContext, and
 # AgentContext are aliases over ActionRunContext; ToolContext is listed so a
-# string annotation matches even before genkit._ai._tools is imported.
+# string annotation matches even before genkit._core._tool is imported.
 _CONTEXT_ALIAS_NAMES = frozenset({'FlowContext', 'ToolContext', 'AgentContext', 'ModelContext'})
 
 
@@ -752,8 +755,8 @@ def parse_dap_qualified_name(name: str) -> DapQualifiedName | None:
     provider, inner_kind, inner_name = match.groups()
     if not provider or not inner_kind or not inner_name:
         return None
-    # Catalog kind, not a selector. People write provider:tool/name.
-    if inner_kind == ActionKind.TOOL:
+    # Envelope kind, not a selector. People write provider:tool/name.
+    if inner_kind == ActionKind.TOOL_V2:
         return None
     return DapQualifiedName(provider, inner_kind, inner_name)
 
@@ -935,6 +938,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         metadata: dict[str, object] | None = None,
         span_metadata: dict[str, SpanAttributeValue] | None = None,
         init_schema: type[BaseModel] | dict[str, object] | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
         _io_schemas: tuple[dict[str, object], dict[str, object]] | None = None,
@@ -945,13 +949,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # annotation. Other actions still treat a missing/None input as omitted
         # and leave the return unchecked.
         self._strict_io: bool = _strict_io
-        self._metadata: dict[str, object] = metadata if metadata else {}
+        self._metadata: dict[str, object] = metadata if metadata is not None else {}
         self._description: str | None = description
         # What config_schema= declared: a Pydantic class or a JSON-schema dict.
         # generate checks config against it. Not in metadata — that bag is
         # JSON for the Dev UI.
         self._config_schema: type[BaseModel] | dict[str, object] | None = config_schema
-        self._span_metadata: dict[str, SpanAttributeValue] = span_metadata or {}
+        self._span_metadata: dict[str, SpanAttributeValue] = span_metadata if span_metadata is not None else {}
 
         # All action handlers must be async
         if not inspect.iscoroutinefunction(fn):
@@ -960,10 +964,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # Genkit calls fn. With a metadata_fn, fn is a wrapper (the tool wrapper
         # is one) and metadata_fn is the user's function, whose signature
         # decides the input and context.
-        user_fn = metadata_fn if metadata_fn else fn
+        user_fn: Callable[..., object] = metadata_fn if metadata_fn else fn
         hints = resolve_type_hints(user_fn, known_annotation_names(kind))
         self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
         self._fn: Callable[..., Awaitable[OutputT]] = fn
+        self._user_fn: Callable[..., object] = user_fn
         self._fn_is_wrapper: bool = metadata_fn is not None
         # _io_schemas: the (input, output) JSON schemas to publish, from a
         # subclass whose kind always publishes the same ones (Model publishes
@@ -972,6 +977,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._initialize_io_schemas(hints, _io_schemas)
         self._config_schema = self._resolve_config_class(self._config_schema)
         self._initialize_init_schema(init_schema)
+        if input_schema is not None:
+            self._override_input_schema(input_schema)
 
     def _resolve_config_class(
         self, declared: type[BaseModel] | dict[str, object] | None
@@ -1059,13 +1066,19 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         self._metadata[ActionMetadataKey.INPUT_KEY] = value
 
     @property
-    def output_schema(self) -> dict[str, object]:
+    def output_schema(self) -> dict[str, object] | None:
         return self._output_schema
 
     @output_schema.setter
-    def output_schema(self, value: dict[str, object]) -> None:
+    def output_schema(self, value: dict[str, object] | None) -> None:
+        self._set_output_schema(value)
+
+    def _set_output_schema(self, value: dict[str, object] | None) -> None:
         self._output_schema = value
-        self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
+        if value is None:
+            self._metadata.pop(ActionMetadataKey.OUTPUT_KEY, None)
+        else:
+            self._metadata[ActionMetadataKey.OUTPUT_KEY] = value
 
     def _override_input_schema(
         self,
@@ -1414,7 +1427,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if on_trace_start:
                 await on_trace_start(trace_id, span_id)
 
-            tool_token = _inside_tool.set(True) if self._kind == ActionKind.TOOL else None
+            is_tool = self._kind in (ActionKind.TOOL, ActionKind.TOOL_V2)
+            tool_token = _inside_tool.set(True) if is_tool else None
             try:
                 if execute is not None:
                     output = await execute()
@@ -1429,7 +1443,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 # miss, so it becomes an error. Under a tool (a flow the tool
                 # calls) it stays raw, so the tool's own catch-all can't
                 # swallow the approval.
-                if self._kind != ActionKind.TOOL and not _inside_tool.get():
+                if not is_tool and not _inside_tool.get():
                     raise interrupt_outside_tool_error(e) from e
                 raise
             except TaskGroupError as e:
@@ -1607,14 +1621,8 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
             metadata={**(metadata or {}), 'bidi': True},
             span_metadata=span_metadata,
             init_schema=init_schema,
+            input_schema=input_schema,
         )
-        # The wrapper's input arg is a generic TypeVar, so the derived input
-        # schema is untyped. Declaring the per-turn input schema explicitly lets
-        # run() coerce a raw payload (e.g. a JSON body) into the real input type
-        # before it reaches the fn — the same way the input arrives typed over a
-        # live connection.
-        if input_schema is not None:
-            self._override_input_schema(input_schema)
 
     async def action_fn(self, input: InputT, ctx: ActionRunContext) -> OutputT:  # noqa: A002
         """Adapt the bidi fn to the plain Action fn shape.

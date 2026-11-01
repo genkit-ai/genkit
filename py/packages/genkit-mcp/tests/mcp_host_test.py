@@ -310,7 +310,7 @@ async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path)
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha', 'beta'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha', 'beta'))
 
 
 @pytest.mark.asyncio
@@ -400,8 +400,8 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
     finally:
         await host.close()
 
-    assert sorted(before) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
-    assert sorted(after) == sorted(f'/tool.v2/{name}' for name in hosted('alpha', 'beta'))
+    assert sorted(before) == sorted(f'/tool/{name}' for name in hosted('alpha'))
+    assert sorted(after) == sorted(f'/tool/{name}' for name in hosted('alpha', 'beta'))
 
 
 @pytest.mark.asyncio
@@ -472,7 +472,7 @@ async def test_connect_reports_a_server_which_cannot_be_started_and_keeps_the_ho
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -560,7 +560,7 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -586,7 +586,7 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -784,7 +784,7 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
 
 
 @pytest.mark.asyncio
@@ -899,7 +899,7 @@ async def test_a_disabled_server_is_never_started_or_listed(tmp_path: Path) -> N
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert not (tmp_path / 'beta.pid').exists()
 
 
@@ -965,7 +965,7 @@ async def test_connect_with_a_disabled_entry_removes_the_server_of_that_name(tmp
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert not (tmp_path / 'replacement.pid').exists()
 
 
