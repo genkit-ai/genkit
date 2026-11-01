@@ -1290,8 +1290,7 @@ def message_with_output_meta(*, message: Message, output: GenerateActionOutputCo
         generate_output['format'] = output.format
     existing_meta = dict(message.metadata) if isinstance(message.metadata, dict) else {}
     generate_meta = existing_meta.get('generate')
-    if not isinstance(generate_meta, dict):
-        generate_meta = {}
+    generate_meta = dict(generate_meta) if isinstance(generate_meta, dict) else {}
     generate_meta['output'] = generate_output
     existing_meta['generate'] = generate_meta
     return message.model_copy(update={'metadata': existing_meta})
