@@ -232,14 +232,15 @@ damage, _, err := genkit.GenerateData[Damage](ctx, g,
 Media is an extension to the protocol, and a server that does not know a field
 can drop it and answer as if nothing had been sent. A plugin therefore refuses
 media before the request is sent, kind by kind, unless its `Images`, `Audio`, or
-`Video` is `systemonex.MediaSupported`. `Ollama()` and `WorkersAI(accountID)`
-set `Images`, and so does a server of your own that takes images, such as
-Liquid's in [Any other server](#any-other-server). Then a model is sent that
-kind, and the server refuses it for a model that cannot read it, so a new model
-needs no setup. A model's `ModelSpec` overrides the plugin's setting, kind by
-kind, either way: Clef-omni on Workers AI also reads audio and video. Its zero
-value keeps the plugin's, so an entry that only sets a `Label` changes nothing
-else. How much media a request takes, and how large, is the server's to say.
+`Video` is `systemonex.MediaSupported`. `Nace()`, `Ollama()`, and
+`WorkersAI(accountID)` set `Images`, and so does a server of your own that takes
+images, such as Liquid's in [Any other server](#any-other-server). Then a model
+is sent that kind, and the server refuses it for a model that cannot read it, so
+a new model needs no setup. A model's `ModelSpec` overrides the plugin's
+setting, kind by kind, either way: Clef-omni on Workers AI also reads audio and
+video. Its zero value keeps the plugin's, so an entry that only sets a `Label`
+changes nothing else. How much media a request takes, and how large, is the
+server's to say.
 
 ## Prompt files
 
@@ -272,6 +273,7 @@ on the day it ships.
 | `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]`; text only |
 | `Ollama()`     | `ollama-decisions/clef`                 | none                 | `http://localhost:11434` unless `BaseURL` is set; images as raw base64; a request needs text |
 | `WorkersAI(accountID)` | `cloudflare-decisions/@cf/cloudflare/clef`, `cloudflare-decisions/@cf/cloudflare/clef-flash`, `cloudflare-decisions/@cf/cloudflare/clef-omni`, `cloudflare-decisions/typesafe/jev` | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty; Clef models read images, Clef-omni audio and video too; a long state is truncated; no versions to pin |
+| `Nace()`       | `nace/drex-max`, `nace/drex-v2.0`       | `NACE_API_KEY`       | lists models; Drex Max reads images, Drex 2.0 text only; `drex-latest` is an alias of Drex 2.0, not Drex Max; 60 s timeout, no cross-origin redirects |
 
 A gateway serves several vendors' models under one key, so one plugin reaches
 all of them. OpenRouter's is named `openrouter-decisions` because the plugin for
@@ -376,6 +378,43 @@ cf.BaseURL = "https://ai-proxy.example.com/cloudflare" // takes /ai/run/<model>
 
 Workers AI names one model per release, with no versions, so a threshold tuned
 against a model can move when Cloudflare updates it.
+
+### nace.ai
+
+nace.ai's Drex API serves the Drex decision models: Drex Max (`drex-max`,
+`drex-max-v1.1`), which reads text and images, and Drex 2.0 (`drex-v2.0`),
+which reads text only. A model is named by its pinned ID. `drex-latest` is an
+alias of `drex-v2.0`, not of Drex Max, and moves only on an announced date.
+The Dev UI lists the models the server lists. `Nace()` sets its own
+`HTTPClient`, with a 60-second timeout per attempt, since Drex waits up to 55
+seconds on its side, and a refusal to follow a redirect to another scheme, host, or
+port, so the API key stays on the API's origin.
+
+```go
+g := genkit.Init(ctx, genkit.WithPlugins(systemonex.Nace())) // NACE_API_KEY
+
+out, _, err := genkit.GenerateData[Triage](ctx, g,
+	ai.WithModelName("nace/drex-max"),
+	ai.WithPrompt(ticket))
+
+// Drex Max sees: the images go before the state, as Image 1, Image 2, and so
+// on in order, and the text refers to them by those words.
+damage, _, err := genkit.GenerateData[Damage](ctx, g,
+	ai.WithModelName("nace/drex-max"),
+	ai.WithMessages(ai.NewUserMessage(
+		ai.NewTextPart("Customer's note on Image 1: arrived like this."),
+		ai.NewMediaPart("image/jpeg", photoDataURL))))
+```
+
+A Drex request takes up to 512 questions, 255 options or levels a question,
+and, on a model that reads images, 8 images, PNG, JPEG, or WebP, inline within
+the 4 MiB request body. The token limits differ by model: `drex-max` takes up
+to 262,144 tokens for the state and for each question, image tokens included;
+`drex-max-v1.1` takes 262,144 for the whole request; `drex-v2.0` takes a state
+of up to 131,072 tokens, and 262,144 with its longest question. The plugin
+refuses an image sent to `drex-v2.0` or `drex-latest` before sending it, and
+the server refuses one sent to `drex-v1.5` with 422, and a criterion that is
+not a string, which a type's `Guidance()` puts on the wire.
 
 ### Several servers
 
