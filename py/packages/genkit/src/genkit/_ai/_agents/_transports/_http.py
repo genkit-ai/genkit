@@ -69,10 +69,11 @@ def parse_stream_line(line: str) -> dict[str, Any] | None:
     The protocol uses ``data: {...}`` (including errors as
     ``data: {"error": ...}``). The JS server currently emits failures with an
     ``error:`` prefix instead, so we accept that here too — but ``data:`` is
-    what clients should expect.
+    what clients should expect. SSE comment lines (including keep-alive
+    heartbeats) are ignored.
     """
     stripped = line.strip()
-    if not stripped:
+    if not stripped or stripped.startswith(':'):
         return None
     if stripped.startswith('data:'):
         stripped = stripped[5:].strip()
