@@ -1,7 +1,7 @@
 # Genkit MCP Client
 
 Connects Genkit to a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio and
-exposes that server's tools as Genkit `tool.v2` actions through a dynamic action provider.
+exposes that server's tools as Genkit `tool` actions through a dynamic action provider.
 
 Tracking issue: <https://github.com/genkit-ai/genkit/issues/6194>
 

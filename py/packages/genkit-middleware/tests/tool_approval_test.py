@@ -29,7 +29,7 @@ def _make_tool(name: str):
     async def fn() -> str:
         return ''
 
-    return Tool(fn, name=name).action()
+    return Tool(fn, name=name)
 
 
 @pytest.mark.asyncio

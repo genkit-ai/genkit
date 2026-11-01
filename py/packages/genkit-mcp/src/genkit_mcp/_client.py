@@ -365,7 +365,7 @@ def define_mcp_client(
 ) -> McpClient:
     """Register an MCP server's tools with Genkit.
 
-    The server's tools become ``tool.v2`` actions behind a dynamic action provider
+    The server's tools become ``tool`` actions behind a dynamic action provider
     named ``name``. Select them from ``generate`` as ``<name>:tool/*`` for all of
     them, or ``<name>:tool/<name>_<tool>`` for one. Connection is lazy: the child
     process starts on the first tool listing.
