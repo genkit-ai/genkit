@@ -787,6 +787,7 @@ function registerActionV2(
         message: 'Action type is missing for ' + resolvedAction.__action.name,
       });
     }
+    delete resolvedAction.__action.metadata?.dynamic;
     registry.registerAction(
       resolvedAction.__action.actionType,
       resolvedAction,
