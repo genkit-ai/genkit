@@ -109,19 +109,25 @@ class _ToolDecorator:
     # Same order as define_tool's overloads: context-only before input-only,
     # since a ``ctx`` function also fits ``[InputT]``.
     @overload
-    def __call__(self, func: Callable[[ToolContext, object], Awaitable[OutputT]]) -> Tool[Any, OutputT]: ...
+    def __call__(
+        self, func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]]
+    ) -> Tool[Any, OutputT, ChunkT]: ...
 
     @overload
-    def __call__(self, func: Callable[[InputT, ToolContext], Awaitable[OutputT]]) -> Tool[InputT, OutputT]: ...
+    def __call__(
+        self, func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]]
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
 
     @overload
-    def __call__(self, func: Callable[[ToolContext, InputT], Awaitable[OutputT]]) -> Tool[InputT, OutputT]: ...
+    def __call__(
+        self, func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]]
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Tool[Any, OutputT]: ...
 
     @overload
-    def __call__(self, func: Callable[[ToolContext], Awaitable[OutputT]]) -> Tool[Any, OutputT]: ...
+    def __call__(self, func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]]) -> Tool[Any, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Tool[InputT, OutputT]: ...
@@ -129,7 +135,7 @@ class _ToolDecorator:
     @overload
     def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Tool[None, OutputT]: ...
 
-    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Tool[Any, Any]:
+    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Tool[Any, Any, Any]:
         return define_tool(
             self._registry,
             func,

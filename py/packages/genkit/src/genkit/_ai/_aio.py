@@ -454,23 +454,23 @@ class Genkit:
     @overload
     def tool(
         self,
-        func: Callable[[ToolContext, object], Awaitable[OutputT]],
+        func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]],
         /,
-    ) -> Tool[Any, OutputT]: ...
+    ) -> Tool[Any, OutputT, ChunkT]: ...
 
     @overload
     def tool(
         self,
-        func: Callable[[InputT, ToolContext], Awaitable[OutputT]],
+        func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]],
         /,
-    ) -> Tool[InputT, OutputT]: ...
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
 
     @overload
     def tool(
         self,
-        func: Callable[[ToolContext, InputT], Awaitable[OutputT]],
+        func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]],
         /,
-    ) -> Tool[InputT, OutputT]: ...
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
 
     @overload
     def tool(
@@ -482,9 +482,9 @@ class Genkit:
     @overload
     def tool(
         self,
-        func: Callable[[ToolContext], Awaitable[OutputT]],
+        func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]],
         /,
-    ) -> Tool[Any, OutputT]: ...
+    ) -> Tool[Any, OutputT, ChunkT]: ...
 
     @overload
     def tool(
@@ -506,7 +506,7 @@ class Genkit:
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> _ToolDecorator | Tool[Any, Any]:
+    ) -> _ToolDecorator | Tool[Any, Any, Any]:
         """Decorator to register a function as a tool.
 
         Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
