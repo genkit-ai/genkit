@@ -273,7 +273,6 @@ class ToolContext(ActionRunContext[ChunkT]):
         super().__init__(
             context=ctx.context,
             streaming_callback=ctx.streaming_callback,
-            abort_signal=ctx.abort_signal,
         )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input
@@ -317,7 +316,6 @@ async def run_tool_request(
                 tool_req.input,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
-                abort_signal=ctx.abort_signal if ctx else None,
             )
         ).response
     finally:

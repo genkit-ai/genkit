@@ -6347,11 +6347,11 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     """Abort after a tool returns: the closed round stays, the next model call does not run."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
-    abort_signal = asyncio.Event()
+    caller_stopped = asyncio.Event()
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
-        abort_signal.set()
+        caller_stopped.set()
         return '72F'
 
     pm.responses = [
@@ -6366,7 +6366,7 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
             tools=['lookup'],
         ),
-        abort_signal=abort_signal,
+        caller_stopped=caller_stopped,
     )
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
@@ -6378,6 +6378,7 @@ async def test_abort_after_tool_turn_keeps_closed_rounds() -> None:
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_output(response.messages[2]) == '72F'
+    assert pm.request_count == 1
 
 
 @pytest.mark.asyncio
@@ -6385,14 +6386,14 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
     """Abort while the first tool is running: only the user message stays."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
-    abort_signal = asyncio.Event()
+    caller_stopped = asyncio.Event()
     started = asyncio.Event()
 
     @ai.tool(name='lookup')
     async def lookup() -> str:
         started.set()
-        await abort_signal.wait()
-        raise GenkitError(status='ABORTED', message='Task aborted')
+        await asyncio.Event().wait()
+        return '72F'
 
     pm.responses = [_model_calls_tool(name='lookup', ref='r1')]
 
@@ -6404,20 +6405,20 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
                 tools=['lookup'],
             ),
-            abort_signal=abort_signal,
+            caller_stopped=caller_stopped,
         )
 
     task = asyncio.create_task(run())
     await started.wait()
-    abort_signal.set()
+    caller_stopped.set()
+    task.cancel()
     response = await asyncio.wait_for(task, timeout=2.0)
     assert response.finish_reason == FinishReason.ABORTED
-    assert response.finish_message is not None
-    assert 'aborted' in response.finish_message.lower()
+    assert response.finish_message == 'Generation aborted.'
     assert response.error is not None
     assert response.error.status == 'CANCELLED'
     assert response.error.reason is None
-    assert response.error.details is not None
+    assert response.error.details is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
@@ -6428,8 +6429,8 @@ async def test_already_cancelled_generate_returns_prompt() -> None:
     """A generate cancelled before it starts returns the prompt and does not call the model."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
-    abort_signal = asyncio.Event()
-    abort_signal.set()
+    caller_stopped = asyncio.Event()
+    caller_stopped.set()
 
     response = await generate_action(
         CallScope(ai),
@@ -6437,7 +6438,7 @@ async def test_already_cancelled_generate_returns_prompt() -> None:
             model='scriptedModel',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
         ),
-        abort_signal=abort_signal,
+        caller_stopped=caller_stopped,
     )
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
@@ -6472,8 +6473,8 @@ async def test_already_cancelled_generate_returns_prior_messages() -> None:
     """A generate cancelled before it starts returns the messages they passed in."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
-    abort_signal = asyncio.Event()
-    abort_signal.set()
+    caller_stopped = asyncio.Event()
+    caller_stopped.set()
 
     response = await generate_action(
         CallScope(ai),
@@ -6485,7 +6486,7 @@ async def test_already_cancelled_generate_returns_prior_messages() -> None:
                 Message(role=Role.USER, content=[Part.from_text('again')]),
             ],
         ),
-        abort_signal=abort_signal,
+        caller_stopped=caller_stopped,
     )
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
@@ -6506,8 +6507,8 @@ async def test_already_cancelled_generate_returns_prior_messages() -> None:
 async def test_already_cancelled_unknown_model_returns() -> None:
     """Cancelled generate returns even when the model name would not resolve."""
     ai = Genkit()
-    abort_signal = asyncio.Event()
-    abort_signal.set()
+    caller_stopped = asyncio.Event()
+    caller_stopped.set()
 
     response = await generate_action(
         CallScope(ai),
@@ -6515,7 +6516,7 @@ async def test_already_cancelled_unknown_model_returns() -> None:
             model='nope/ghost',
             messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
         ),
-        abort_signal=abort_signal,
+        caller_stopped=caller_stopped,
     )
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
@@ -6533,13 +6534,13 @@ async def test_already_cancelled_unknown_model_returns() -> None:
 async def test_abort_during_first_model_call_returns_prompt() -> None:
     """Abort while the first model call is running: only the user message stays."""
     ai = Genkit(model='hangingModel')
-    abort_signal = asyncio.Event()
+    caller_stopped = asyncio.Event()
     started = asyncio.Event()
 
     async def hang(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         started.set()
-        await abort_signal.wait()
-        raise GenkitError(status='ABORTED', message='Generation aborted.')
+        await asyncio.Event().wait()
+        return ModelResponse()
 
     ai.define_model(name='hangingModel', fn=hang)
 
@@ -6550,12 +6551,13 @@ async def test_abort_during_first_model_call_returns_prompt() -> None:
                 model='hangingModel',
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
             ),
-            abort_signal=abort_signal,
+            caller_stopped=caller_stopped,
         )
 
     task = asyncio.create_task(run())
     await started.wait()
-    abort_signal.set()
+    caller_stopped.set()
+    task.cancel()
     response = await asyncio.wait_for(task, timeout=2.0)
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
@@ -6572,7 +6574,7 @@ async def test_abort_during_first_model_call_returns_prompt() -> None:
 async def test_abort_during_later_model_call_keeps_closed_round() -> None:
     """Abort while a later model call is running: the closed tool round stays."""
     ai = Genkit(model='hangAfterToolModel')
-    abort_signal = asyncio.Event()
+    caller_stopped = asyncio.Event()
     second_started = asyncio.Event()
     model_calls = 0
 
@@ -6586,8 +6588,8 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
         if model_calls == 1:
             return _model_calls_tool(name='lookup', ref='r1')
         second_started.set()
-        await abort_signal.wait()
-        raise GenkitError(status='ABORTED', message='Generation aborted.')
+        await asyncio.Event().wait()
+        return ModelResponse()
 
     ai.define_model(name='hangAfterToolModel', fn=hang_after_tool)
 
@@ -6599,12 +6601,13 @@ async def test_abort_during_later_model_call_keeps_closed_round() -> None:
                 messages=[Message(role=Role.USER, content=[Part.from_text('keep going')])],
                 tools=['lookup'],
             ),
-            abort_signal=abort_signal,
+            caller_stopped=caller_stopped,
         )
 
     task = asyncio.create_task(run())
     await second_started.wait()
-    abort_signal.set()
+    caller_stopped.set()
+    task.cancel()
     response = await asyncio.wait_for(task, timeout=2.0)
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'
@@ -6623,15 +6626,19 @@ async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -
     """A user's retry loop that calls next_fn again after a stop does not bill another model call."""
     ai = Genkit()
     calls: list[str] = []
+    caller_stopped = asyncio.Event()
 
-    async def flaky(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+    async def flaky(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         calls.append('flaky')
-        ctx.abort_signal.set()
+        caller_stopped.set()
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     ai.define_model(name='flaky', fn=flaky)
 
+    @ai.middleware
     class MyRetry(Middleware):
+        name = 'my_retry'
+
         async def wrap_model(
             self,
             params: ModelHookParams,
@@ -6647,7 +6654,15 @@ async def test_generate_user_retry_middleware_makes_no_model_call_after_stop() -
             assert last is not None
             raise last
 
-    response = await ai.generate(model='flaky', prompt='hi', use=[MyRetry()])
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='flaky',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+            use=[MiddlewareRef(name='my_retry')],
+        ),
+        caller_stopped=caller_stopped,
+    )
 
     assert response.finish_reason == FinishReason.ABORTED
     assert response.finish_message == 'Generation aborted.'

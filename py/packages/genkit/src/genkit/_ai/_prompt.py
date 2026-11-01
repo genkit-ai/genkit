@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -42,6 +43,7 @@ from genkit._ai._generate import (
     register_middleware,
     register_tools,
     resolve_tools_from_options,
+    start_generate_stream,
     to_tool_definition,
     tools_to_action_names,
 )
@@ -68,7 +70,6 @@ from genkit._core._action import (
     create_action_key,
     get_current_context,
 )
-from genkit._core._channel import start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import GenkitError, RuntimeErrorReason
 from genkit._core._logger import get_logger
@@ -450,6 +451,16 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
+        return await self._run(input=input, opts=opts, on_chunk=on_chunk, caller_stopped=None)
+
+    async def _run(
+        self,
+        *,
+        input: InputT | dict[str, Any] | None,
+        opts: PromptGenerateOptions,
+        on_chunk: ModelStreamingCallback | None,
+        caller_stopped: asyncio.Event | None,
+    ) -> ModelResponse[OutputT]:
         prepared = await prepare_prompt(prompt=self, input=input, opts=opts)
         result = await generate_action(
             prepared.scope,
@@ -457,6 +468,7 @@ class Prompt(Generic[InputT, OutputT]):
             on_chunk=on_chunk,
             # Same context the template already rendered, so {{@auth}} and tools agree.
             context=prepared.context,
+            caller_stopped=caller_stopped,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -483,30 +495,37 @@ class Prompt(Generic[InputT, OutputT]):
         Iterate the returned stream for chunks; there's no callback here so
         chunks only arrive one way.
         """
+        opts = PromptGenerateOptions(
+            model=model,
+            config=config,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            docs=docs,
+            use=use,
+            max_turns=max_turns,
+            context=context,
+            return_tool_requests=return_tool_requests,
+            resume_respond=resume_respond,
+            resume_restart=resume_restart,
+            resume_metadata=resume_metadata,
+        )
 
         # Same run path as __call__; only the chunk sink differs.
-        async def run(send_chunk: Callable[[ModelResponseChunk[OutputT]], None]) -> ModelResponse[OutputT]:
-            return await self(
-                input,
-                model=model,
-                config=config,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                docs=docs,
-                use=use,
-                max_turns=max_turns,
-                context=context,
-                return_tool_requests=return_tool_requests,
-                resume_respond=resume_respond,
-                resume_restart=resume_restart,
-                resume_metadata=resume_metadata,
+        async def run(
+            send_chunk: Callable[[ModelResponseChunk[OutputT]], None],
+            caller_stopped: asyncio.Event,
+        ) -> ModelResponse[OutputT]:
+            return await self._run(
+                input=input,
+                opts=opts,
                 on_chunk=lambda c: send_chunk(cast('ModelResponseChunk[OutputT]', c)),
+                caller_stopped=caller_stopped,
             )
 
-        channel, task = start_stream(run)
-
-        return ModelStreamResponse[OutputT](stream=channel, response=task)
+        initial_msgs = list(messages) if isinstance(messages, list) else []
+        stream, task = start_generate_stream(initial_messages=initial_msgs, run=run)
+        return ModelStreamResponse[OutputT](stream=stream, response=task)
 
     async def render(
         self,
