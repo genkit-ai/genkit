@@ -1876,3 +1876,65 @@ async def test_generate_classifies_a_stream_cut_mid_read(
     assert chunks == ['Grilled']
     assert exc_info.value.status == status
     assert exc_info.value.cause is drop
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_keeps_parallel_tool_calls_apart_without_an_index(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """Endpoints that omit `index` (Gemini) still yield one tool request per call."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {'id': 'call_a', 'type': 'function', 'function': {'name': 'get_weather', 'arguments': '{"city": '}}
+            ],
+        ),
+        _delta_chunk(make_chunk, tool_calls=[{'function': {'arguments': '"Paris"}'}}]),
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {'id': 'call_b', 'type': 'function', 'function': {'name': 'get_time', 'arguments': '{"tz": "UTC"}'}}
+            ],
+        ),
+    ])
+
+    model = OpenAIModel(model='gemini-2.5-flash', client=mock_client)
+
+    response = await model._generate_stream(sample_request, lambda chunk: None)
+
+    assert response.message is not None
+    requests = [p.tool_request for p in response.message.content if p.tool_request is not None]
+    assert [(r.ref, r.name, r.input) for r in requests] == [
+        ('call_a', 'get_weather', {'city': 'Paris'}),
+        ('call_b', 'get_time', {'tz': 'UTC'}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test__generate_stream_treats_a_repeated_id_without_an_index_as_the_same_call(
+    sample_request: ModelRequest, make_chunk: Callable[..., ChatCompletionChunk]
+) -> None:
+    """A fragment that repeats the current call's id continues it."""
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = _mock_stream([
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[
+                {'id': 'call_a', 'type': 'function', 'function': {'name': 'get_weather', 'arguments': '{"city": '}}
+            ],
+        ),
+        _delta_chunk(
+            make_chunk,
+            tool_calls=[{'id': 'call_a', 'type': 'function', 'function': {'arguments': '"Paris"}'}}],
+        ),
+    ])
+
+    model = OpenAIModel(model='gemini-2.5-flash', client=mock_client)
+
+    response = await model._generate_stream(sample_request, lambda chunk: None)
+
+    assert response.message is not None
+    requests = [p.tool_request for p in response.message.content if p.tool_request is not None]
+    assert [(r.ref, r.name, r.input) for r in requests] == [('call_a', 'get_weather', {'city': 'Paris'})]
