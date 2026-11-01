@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/ai/tool"
@@ -29,6 +30,8 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 )
+
+var registerMu sync.Mutex
 
 // GetActiveTools retrieves all tools available from the MCP server and, when g
 // is non-nil, registers them in g's action registry so prompts and LookupTool
@@ -50,6 +53,8 @@ func (c *GenkitMCPClient) GetActiveTools(ctx context.Context, g *genkit.Genkit) 
 		return nil, err
 	}
 	if g != nil {
+		registerMu.Lock()
+		defer registerMu.Unlock()
 		for i, t := range tools {
 			if existing := genkit.LookupTool(g, t.Name()); existing != nil {
 				tools[i] = existing

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
@@ -304,4 +305,22 @@ func TestGetActiveToolsRegistersTools(t *testing.T) {
 	if out == nil {
 		t.Fatal("expected non-nil tool output")
 	}
+
+	// Concurrent GetActiveTools calls against a fresh Genkit instance must not race or panic.
+	gConcurrent := genkit.Init(ctx)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := gc.GetActiveTools(ctx, gConcurrent)
+			if err != nil {
+				t.Errorf("concurrent GetActiveTools failed: %v", err)
+			}
+			if len(got) != 1 || got[0].Name() != "srv_ping" {
+				t.Errorf("concurrent GetActiveTools returned %v, want [srv_ping]", got)
+			}
+		}()
+	}
+	wg.Wait()
 }
