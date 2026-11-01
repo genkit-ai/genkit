@@ -32,6 +32,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/logger"
+	genkitinternal "github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/plugins/internal"
 	"github.com/firebase/genkit/go/plugins/internal/systemone"
 )
@@ -462,6 +463,26 @@ func sameOriginOnly(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// naceClient is the value of the X-Nace-Client header, genkit-go/<version>.
+// It tells Nace which integration sent a request, for usage attribution, and
+// carries no user data. The version is the Genkit module's, and the value is
+// limited to the characters the header allows, in 64 at most.
+func naceClient() string {
+	v := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == ' ', r == '.', r == '_', r == '@', r == '+', r == '-':
+			return r
+		}
+		return '-'
+	}, genkitinternal.Version)
+	v = "genkit-go/" + v
+	if len(v) > 64 {
+		v = v[:64]
+	}
+	return v
+}
+
 // Nace is nace.ai's Drex API, which serves the Drex decision models. Its
 // models are nace/<ID> by Drex's ID: nace/drex-max and nace/drex-max-v1.1,
 // which read text and images, and nace/drex-v2.0, which reads text only.
@@ -485,6 +506,7 @@ func Nace() *SystemOne {
 		ModelsPath: "/v1/models",
 		Images:     MediaSupported,
 		HTTPClient: &http.Client{Timeout: naceTimeout, CheckRedirect: sameOriginOnly},
+		Headers:    http.Header{"X-Nace-Client": {naceClient()}},
 		Models: map[string]ModelSpec{
 			"drex-max":      {},
 			"drex-max-v1.1": {},

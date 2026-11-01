@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -32,6 +33,7 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	genkitinternal "github.com/firebase/genkit/go/internal"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/systemone"
 	"github.com/firebase/genkit/go/plugins/internal/systemone/systemonetest"
@@ -953,5 +955,47 @@ func TestMedia(t *testing.T) {
 	}
 	if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("local/vision-model"), clip); err == nil || !strings.Contains(err.Error(), "audio/wav media") {
 		t.Errorf("audio to a vision model: error = %v, want it refused", err)
+	}
+}
+
+func TestNaceClientHeader(t *testing.T) {
+	got := naceClient()
+	if !regexp.MustCompile(`^genkit-go/[A-Za-z0-9 ._@+-]+$`).MatchString(got) || len(got) > 64 {
+		t.Errorf("naceClient() = %q, want genkit-go/<version> of at most 64 allowed characters", got)
+	}
+	if want := "genkit-go/" + genkitinternal.Version; got != want {
+		t.Errorf("naceClient() = %q, want %q for the plain Genkit version", got, want)
+	}
+
+	fake := &systemonetest.Server{}
+	srv := httptest.NewServer(fake)
+	t.Cleanup(srv.Close)
+	send := func(p *SystemOne, model string) *http.Request {
+		t.Helper()
+		p.APIKey = "test-key"
+		p.BaseURL = srv.URL
+		g := genkit.Init(t.Context(), genkit.WithPlugins(p))
+		if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName(model), ai.WithPrompt("hi")); err != nil {
+			t.Fatal(err)
+		}
+		req, _ := fake.Last(t)
+		return req
+	}
+
+	// Nace sends it on its requests.
+	if h := send(Nace(), "nace/drex-max").Header.Get("X-Nace-Client"); h != got {
+		t.Errorf("Nace sent X-Nace-Client %q, want %q", h, got)
+	}
+	// No other provider does.
+	for _, tc := range []struct {
+		p     *SystemOne
+		model string
+	}{
+		{TypeSafe(), "typesafe/d1"},
+		{&SystemOne{Provider: "custom"}, "custom/d1"},
+	} {
+		if h := send(tc.p, tc.model).Header.Get("X-Nace-Client"); h != "" {
+			t.Errorf("%s sent X-Nace-Client %q, want none", tc.p.Provider, h)
+		}
 	}
 }
