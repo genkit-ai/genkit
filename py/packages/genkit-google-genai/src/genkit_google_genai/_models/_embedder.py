@@ -33,8 +33,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from pydantic.alias_generators import to_camel
 
 from genkit import Document, Embedding, GenkitError, Part, get_logger
-from genkit._core._schema import to_json_schema
 from genkit.embedder import EmbedderInfo, EmbedderSupports, EmbedRequest, EmbedResponse
+from genkit.plugin_api import to_json_schema
 
 logger = get_logger(__name__)
 

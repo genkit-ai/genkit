@@ -241,6 +241,18 @@ select = [
 ]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Ruff groups every banned-api entry under one rule code (TID251), enforcing two
+# distinct boundaries across workspace packages and samples:
+#   1. Public SDK surface: plugins and samples cannot import `genkit._ai`,
+#      `genkit._core`, or `genkit.exp._api`. (`packages/genkit/ruff.toml` replaces
+#      this table inside core `genkit` so internal modules can import each other
+#      while keeping the logger ban in (2).)
+#   2. Dev UI log routing: code inside flows and plugins uses `genkit.get_logger`
+#      instead of `structlog.get_logger` or `logging.getLogger` so `ExportTee`
+#      streams log records to the Dev UI trace panel.
+"genkit._ai".msg = "genkit._ai is private; import from a public genkit module (genkit, genkit.model, genkit.plugin_api, ...)."
+"genkit._core".msg = "genkit._core is private; import from a public genkit module (genkit, genkit.model, genkit.plugin_api, ...)."
+"genkit.exp._api".msg = "genkit.exp._api is private; import from genkit.exp."
 "structlog.get_logger".msg = "Use genkit.get_logger; structlog.get_logger lines never reach the Dev UI trace panel."
 "logging.getLogger".msg = "Use genkit.get_logger; stdlib logger lines never reach the Dev UI trace panel."
 
@@ -265,14 +277,14 @@ select = [
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Samples are demo code and can use blocking I/O, prints, top-level execution
 "samples/**/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
-# get_logger is enforced only in shipped package code
-"!packages/*/src/**/*.py" = ["TID251"]
-# Defines get_logger and sets levels on third-party stdlib loggers
+# TID251 per-file ignores belong ONLY on core `genkit` files. Never add a plugin
+# path here: ignoring TID251 file-wide in a plugin would also disable the
+# `genkit._*` private-import ban, so legitimate plugin logger or whitebox-test
+# exceptions must use line-scoped `# noqa: TID251` instead.
+# Defines get_logger (wrapping structlog.get_logger) and quiets stdlib loggers
 "packages/genkit/src/genkit/_core/_logger.py" = ["TID251"]
-# Served-failure logs go to the host web server's stdlib logging config
-"packages/genkit-django/src/genkit_django/_handler.py" = ["TID251"]
-"packages/genkit-fastapi/src/genkit_fastapi/_handler.py" = ["TID251"]
-"packages/genkit-flask/src/genkit_flask/_handler.py" = ["TID251"]
+# Core unit tests directly exercise `genkit._*` internals and stdlib loggers
+"packages/genkit/tests/**" = ["TID251"]
 
 
 [tool.ruff.lint.isort]

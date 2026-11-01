@@ -49,10 +49,9 @@ from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 from google.genai import types as genai_types
 
 from genkit import Genkit, GenkitError, Message, Operation, Part, Role
-from genkit._core._schema import to_json_schema
 from genkit.evaluator import BaseDataPoint
 from genkit.model import BackgroundModel, ModelRequest
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action, ActionKind, to_json_schema
 
 
 def _custom_options(action: Action) -> object:

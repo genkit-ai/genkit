@@ -4,7 +4,12 @@
 # you may not use this file except in compliance with the License.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for several MCP servers behind one dynamic action provider."""
+"""Integration tests for several MCP servers behind one dynamic action provider.
+
+Includes whitebox unit checks calling ``genkit._ai._generate.expand_wildcard_tools``
+to verify ``server:tool/*`` dynamic action provider expansion before ``generate``
+runs, without exporting internal generate plumbing on the public surface.
+"""
 
 import asyncio
 import io
@@ -25,14 +30,14 @@ from genkit_mcp._config import McpServerEntry
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Tool
-from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import ActionKind
-from genkit._core._typing import (
-    FinishReason,
-    Role,
-    ToolRequest,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role, Tool
+
+# TID251: whitebox unit tests call `genkit._ai._generate.expand_wildcard_tools`
+# directly to assert `server:tool/*` dynamic action provider expansion before
+# `generate` runs, without exporting internal generate plumbing.
+from genkit._ai._generate import expand_wildcard_tools  # noqa: TID251
+from genkit.model import ToolRequest
+from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
 ALL_TOOLS = [
@@ -86,12 +91,22 @@ def missing_server(tmp_path: Path) -> McpServerEntry:
 
 
 def rendered_for_logs(error: BaseException) -> str:
-    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    """Render ``error``'s exception chain and frame locals into an isolated ``StringIO`` buffer.
+
+    Calls raw ``structlog.get_logger`` under a temporary ``PrintLoggerFactory``
+    instead of ``genkit.get_logger`` to isolate ``structlog``'s ``exc_info``
+    formatting in-memory without triggering ``genkit.get_logger``'s ``ExportTee``
+    Dev UI log exporter.
+    """
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        # TID251: raw structlog.get_logger under PrintLoggerFactory(output) isolates
+        # exc_info formatting into StringIO without firing ExportTee's Dev UI log sink.
+        structlog.get_logger('test').exception(  # noqa: TID251
+            'listing failed', exc_info=(type(error), error, error.__traceback__)
+        )
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)
@@ -302,7 +317,7 @@ async def test_a_host_closed_during_a_listing_fails_it_as_closed(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path) -> None:
-    """``<host>:tool/*`` reaches every server behind the one provider."""
+    """Whitebox check: ``<host>:tool/*`` expands across every hosted server via ``expand_wildcard_tools``."""
     ai = Genkit()
     host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:

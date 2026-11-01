@@ -178,12 +178,22 @@ async def hold_in_flight(connection: McpConnection) -> Blocker:
 
 
 def rendered_for_logs(error: BaseException) -> str:
-    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    """Render ``error``'s exception chain and frame locals into an isolated ``StringIO`` buffer.
+
+    Calls raw ``structlog.get_logger`` under a temporary ``PrintLoggerFactory``
+    instead of ``genkit.get_logger`` to isolate ``structlog``'s ``exc_info``
+    formatting in-memory without triggering ``genkit.get_logger``'s ``ExportTee``
+    Dev UI log exporter.
+    """
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        # TID251: raw structlog.get_logger under PrintLoggerFactory(output) isolates
+        # exc_info formatting into StringIO without firing ExportTee's Dev UI log sink.
+        structlog.get_logger('test').exception(  # noqa: TID251
+            'listing failed', exc_info=(type(error), error, error.__traceback__)
+        )
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)

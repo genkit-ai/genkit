@@ -55,17 +55,22 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Role,
+    ToolContext,
 )
-from genkit._ai._tools import run_tool_after_restart
-from genkit._core._action import Action
-from genkit._core._telemetry._http import DirectHttpInstrumentation
+
+# TID251: whitebox coexistence check. `is_instrumented_by(...)` is public on
+# `genkit.telemetry`, while `DirectHttpInstrumentation` (the Dev UI span poster)
+# is intentionally unexported; this verifies Cloud/Firebase telemetry setup does
+# not clobber the Dev UI span exporter when `GENKIT_TELEMETRY_SERVER` is set.
+from genkit._core._telemetry._http import DirectHttpInstrumentation  # noqa: TID251
 from genkit.model import GenerationUsage, ModelContext, ModelRequest
-from genkit.plugin_api import ActionKind
+from genkit.plugin_api import Action, ActionKind
 from genkit.telemetry import (
     configure_instrumentation,
     is_instrumented_by,
     reset_instrumentation,
 )
+from genkit.testing import define_scripted_model
 
 
 def _hex_id(value: str, length: int) -> bool:
@@ -361,7 +366,14 @@ def test_enable_when_process_tracer_cannot_attach_does_not_raise() -> None:
 async def test_enable_under_genkit_start_still_adds_the_ui_poster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """force_dev_export=True under genkit start turns GenAI spans on; Genkit() still adds the Traces tab poster."""
+    """force_dev_export=True under genkit start turns GenAI spans on without clobbering the Dev UI poster.
+
+    Whitebox coexistence test: ``is_instrumented_by(...)`` is public on ``genkit.telemetry``,
+    while ``DirectHttpInstrumentation`` is intentionally unexported. Importing the private
+    instrumentation class verifies ``enable_google_cloud_telemetry(force_dev_export=True)``
+    (and Firebase telemetry built on it) leaves the Dev UI span exporter installed when
+    ``GENKIT_TELEMETRY_SERVER`` is set.
+    """
     monkeypatch.setenv('GENKIT_ENV', 'dev')
     monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
 
@@ -931,15 +943,35 @@ async def test_resumed_tool_payload_is_redacted_in_cloud_trace() -> None:
     ai = Genkit()
 
     @ai.tool(name='approve')
-    async def approve(query: str) -> str:
+    async def approve(query: str, ctx: ToolContext) -> str:
         """Ask a human to approve."""
+        if not ctx.is_resumed():
+            raise Interrupt({'echo': query})
         return 'approved'
 
-    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='approve')
-    assert action is not None
-    restart = Part.from_tool_request(name='approve', ref='r1', input='q', metadata={'resumed': {'note': _PROMPT}})
+    define_scripted_model(
+        ai,
+        name=_MODEL,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part.from_tool_request(name='approve', input='q', ref='r1')],
+                ),
+            ),
+            _echo_response(),
+        ],
+    )
+    interrupted = await ai.generate(prompt='approve this', model=_MODEL, tools=['approve'])
+    paused = interrupted.interrupts[0]
     with _cloud_trace() as cloud:
-        await run_tool_after_restart(tool=action, restart_trp=restart)
+        await ai.generate(
+            messages=interrupted.messages,
+            model=_MODEL,
+            tools=['approve'],
+            resume_restart=paused.restart(resumed_metadata={'note': _PROMPT}),
+        )
         _force_flush()
 
     span = _one_span(cloud, 'approve')
