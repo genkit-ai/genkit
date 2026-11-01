@@ -43,7 +43,7 @@ from mcp.types import (
 from pydantic import AnyUrl
 from structlog.testing import capture_logs
 
-from genkit import Part
+from genkit import MultipartToolResponse, Part
 from genkit.plugin_api import Action
 
 
@@ -135,7 +135,7 @@ def test_call_result_to_multipart_drops_server_error_flags_from_a_success() -> N
 
 
 def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
-    """Media, resource links, and embedded resources use Genkit multipart parts."""
+    """Media and blob resources become media parts, text resources append to output, and resource links are skipped."""
     result = CallToolResult(
         content=[
             text('before'),
@@ -171,8 +171,22 @@ def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
         Part.from_media(url='data:image/png;base64,image-data', content_type='image/png'),
         Part.from_media(url='data:audio/mpeg;base64,audio-data', content_type='audio/mpeg'),
         Part.from_media(url='data:application/pdf;base64,blob-data', content_type='application/pdf'),
-        Part.model_validate({'resource': {'uri': 'https://example.test/docs'}}),
     ]
+
+
+def test_call_result_to_multipart_skips_resource_link() -> None:
+    """Resource links are skipped without emitting dead resource parts or breaking JSON text output."""
+    link = ResourceLink(
+        type='resource_link',
+        name='docs',
+        uri=AnyUrl('https://example.test/docs'),
+    )
+
+    standalone = call_result_to_multipart(CallToolResult(content=[link]))
+    assert standalone == MultipartToolResponse(output=None, content=None)
+
+    with_json = call_result_to_multipart(CallToolResult(content=[text('{"ok": true}'), link]))
+    assert with_json == MultipartToolResponse(output={'ok': True}, content=None)
 
 
 def test_call_result_to_multipart_labels_a_blob_without_a_mime_type_as_octet_stream() -> None:
