@@ -58,7 +58,10 @@ from genkit import (
     ToolContext,
 )
 
-# Private on purpose: the Dev UI poster is not public API, and this asserts it got installed.
+# TID251: whitebox coexistence check. `is_instrumented_by(...)` is public on
+# `genkit.telemetry`, while `DirectHttpInstrumentation` (the Dev UI span poster)
+# is intentionally unexported; this verifies Cloud/Firebase telemetry setup does
+# not clobber the Dev UI span exporter when `GENKIT_TELEMETRY_SERVER` is set.
 from genkit._core._telemetry._http import DirectHttpInstrumentation  # noqa: TID251
 from genkit.model import GenerationUsage, ModelContext, ModelRequest
 from genkit.plugin_api import Action, ActionKind
@@ -363,7 +366,14 @@ def test_enable_when_process_tracer_cannot_attach_does_not_raise() -> None:
 async def test_enable_under_genkit_start_still_adds_the_ui_poster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """force_dev_export=True under genkit start turns GenAI spans on; Genkit() still adds the Traces tab poster."""
+    """force_dev_export=True under genkit start turns GenAI spans on without clobbering the Dev UI poster.
+
+    Whitebox coexistence test: ``is_instrumented_by(...)`` is public on ``genkit.telemetry``,
+    while ``DirectHttpInstrumentation`` is intentionally unexported. Importing the private
+    instrumentation class verifies ``enable_google_cloud_telemetry(force_dev_export=True)``
+    (and Firebase telemetry built on it) leaves the Dev UI span exporter installed when
+    ``GENKIT_TELEMETRY_SERVER`` is set.
+    """
     monkeypatch.setenv('GENKIT_ENV', 'dev')
     monkeypatch.setenv('GENKIT_TELEMETRY_SERVER', 'http://127.0.0.1:4033')
 

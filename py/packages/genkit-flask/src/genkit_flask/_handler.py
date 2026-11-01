@@ -31,7 +31,14 @@ from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
 from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
 
-# Served-failure logs go to the host web server's stdlib logging config.
+# TID251 bans logging.getLogger so Genkit plugins use genkit.get_logger (which
+# tees structlog stdout lines to the Dev UI trace panel). HTTP route handlers
+# sit at the web-server boundary outside the flow span: genkit.get_logger uses
+# structlog's PrintLoggerFactory and bypasses Python's stdlib logging hierarchy,
+# so using it here would hide 4xx/5xx route failures from Gunicorn/WSGI
+# handlers, Sentry LoggingIntegration, and pytest caplog. Line-scoping
+# the TID251 `noqa` here (instead of a whole-file pyproject.toml ignore) keeps
+# TID251's genkit._* private-import ban active across the rest of _handler.py.
 logger = logging.getLogger(__name__)  # noqa: TID251
 
 # Compact JSON (no spaces) for smaller wire payload.
@@ -39,7 +46,13 @@ _JSON_SEPARATORS = (',', ':')
 
 
 def _log_failure(*, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
+    """Log a served-flow failure to the host web server's stdlib logger.
+
+    Intentionally emits to stdlib ``logging`` rather than ``genkit.get_logger``
+    because route failures happen at the HTTP boundary outside the flow span,
+    where WSGI/Gunicorn handlers, Sentry ``LoggingIntegration``, and ``pytest``
+    ``caplog`` listen. 5xx errors include the traceback.
+    """
     if error_status(error) >= 500:
         logger.exception('served flow %s failed', where)
     else:

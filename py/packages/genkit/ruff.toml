@@ -14,8 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Inherits the root config. genkit owns genkit._ai, genkit._core and
-# genkit.exp._api, so inside this package only the get_logger bans apply.
+# Inherits the workspace root config (`../../pyproject.toml`), where TID251
+# bans both `genkit._*` private imports and raw `get_logger` calls. Redefining
+# `[lint.flake8-tidy-imports.banned-api]` here replaces that table for core
+# `genkit` — which owns `genkit._ai`, `genkit._core`, and `genkit.exp._api` —
+# so internal imports are allowed while the `get_logger` Dev UI routing ban stays
+# enforced across `packages/genkit/src/`.
 extend = "../../pyproject.toml"
 
 [lint.flake8-tidy-imports.banned-api]

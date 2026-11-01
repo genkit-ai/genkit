@@ -7,6 +7,10 @@
 
 A .prompt file written for JS (`use: [{name: retry, config: {maxRetries: 0}}]`)
 has to configure the Python middleware the same way, not run on defaults.
+
+These whitebox tests import ``_MiddlewareMetadata`` directly to exercise ``.prompt``
+``use:`` camelCase config validation and Dev UI schema registration without keeping
+``_MiddlewareMetadata`` on the public ``genkit`` surface.
 """
 
 import pytest
@@ -16,8 +20,9 @@ from genkit_middleware._fallback import FallbackModelEntry
 
 from genkit import GenkitError
 
-# Private on purpose: drives the .prompt `use:` config path (key aliasing,
-# unknown-key errors, Dev UI schema) without a registry round trip.
+# TID251: whitebox check of `.prompt` `use:` camelCase config validation,
+# unknown-key error formatting, and Dev UI schema registration without keeping
+# `_MiddlewareMetadata` on the public `genkit` surface.
 from genkit._core._middleware import _MiddlewareMetadata  # noqa: TID251
 from genkit.middleware import Middleware
 from genkit.plugin_api import GenkitConfig
