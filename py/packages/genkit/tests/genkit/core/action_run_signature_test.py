@@ -83,22 +83,25 @@ def test_stream_rejects_public_abort_signal_kwarg() -> None:
 
 
 @pytest.mark.asyncio
-async def test_private_stream_abort_signal_reaches_the_action() -> None:
-    """`_stream(abort_signal=ev)` hands `ev` to the action as `ctx.abort_signal`, so setting it stops the run."""
+async def test_action_context_does_not_expose_abort_signal() -> None:
+    """`FlowContext` omits `abort_signal`, and `_run` / `_stream` reject `abort_signal=`."""
+    seen_has_attr: list[bool] = [hasattr(FlowContext(), 'abort_signal')]
 
     async def simmer(dish: str, ctx: FlowContext[str]) -> str:
-        ctx.send_chunk('simmering')
-        await ctx.abort_signal.wait()
-        return f'{dish} pulled off the heat'
+        seen_has_attr.append(hasattr(ctx, 'abort_signal'))
+        return f'{dish} served'
+
+    action = Action(ActionKind.CUSTOM, 'simmer', simmer)
+    result = await action._run('stock')
+    assert result.response == 'stock served'
+    assert seen_has_attr == [False, False]
 
     abort = asyncio.Event()
-    result = Action(ActionKind.CUSTOM, 'simmer', simmer)._stream('stock', abort_signal=abort)
+    with pytest.raises(TypeError, match='abort_signal'):
+        await action._run('stock', abort_signal=abort)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
 
-    first = await anext(aiter(result.stream))
-    abort.set()
-
-    assert first == 'simmering'
-    assert await asyncio.wait_for(result.response, timeout=1) == 'stock pulled off the heat'
+    with pytest.raises(TypeError, match='abort_signal'):
+        action._stream('stock', abort_signal=abort)  # pyright: ignore[reportCallIssue]  # ty: ignore[unknown-argument]  # pyrefly: ignore[unexpected-keyword]
 
 
 @pytest.mark.asyncio

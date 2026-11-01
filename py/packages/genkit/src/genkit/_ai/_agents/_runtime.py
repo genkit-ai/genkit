@@ -268,7 +268,7 @@ AgentContext = ActionRunContext[AgentStreamChunk]
 """Execution context passed to a custom agent function.
 
 An alias for :class:`~genkit.ActionRunContext[AgentStreamChunk]`. Provides access
-to streaming agent chunks, caller context data, and cancellation signals.
+to streaming agent chunks and caller context data.
 """
 
 # AgentFn — custom agent entrypoint; receives SessionRunner + AgentContext.
@@ -724,7 +724,7 @@ class AgentRuntime:
         self,
         *,
         snapshot_id: str,
-        abort_signal: asyncio.Event,
+        fn_task: asyncio.Task[Any],
         context: dict[str, Any] | None = None,
     ) -> None:
         if self.store is None or not isinstance(self.store, SnapshotSubscriber):
@@ -739,7 +739,7 @@ class AgentRuntime:
         # unsubscribes. Returning early would skip that teardown.
         async for status in statuses:
             if status == SnapshotStatus.ABORTED:
-                abort_signal.set()
+                fn_task.cancel()
 
     async def refresh_heartbeat(self, snapshot_id: str, *, context: dict[str, Any] | None = None) -> None:
         """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
@@ -789,7 +789,8 @@ class AgentRuntime:
         multi-tenant store still writes the terminal status under the request's
         tenant after the original call has returned.
         """
-        await fn_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await fn_task
         await forward_task
 
         # The turn has settled, so stop refreshing its heartbeat before we rewrite
@@ -850,11 +851,9 @@ class AgentRuntime:
              background finalizer rewrites snapshot when fn finishes
         """
         detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        abort_signal = asyncio.Event()
         action_ctx: AgentContext = ActionRunContext(
             context=get_current_context(),
             streaming_callback=self.send_chunk,
-            abort_signal=abort_signal,
         )
 
         # Forward task: BidiAction client_inputs -> runtime intake.
@@ -930,9 +929,10 @@ class AgentRuntime:
         # --- Detach path ---
         if detach_future.done():
             if self.store is None:
-                # Detach without a store is a config error; signal abort and raise.
-                abort_signal.set()
-                await fn_task
+                # Detach without a store is a config error; cancel the turn and raise.
+                fn_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fn_task
                 await forward_task
                 raise ValueError(
                     f"Agent '{self.name}' received a detach request, but cannot proceed because detach "
@@ -987,7 +987,7 @@ class AgentRuntime:
             t1 = asyncio.create_task(
                 self.watch_snapshot_abort(
                     snapshot_id=pending_snap.snapshot_id,
-                    abort_signal=abort_signal,
+                    fn_task=fn_task,
                     context=detach_context,
                 )
             )
@@ -1096,7 +1096,6 @@ async def generate_prompt_agent_turn(
         scope,
         options,
         on_chunk=on_chunk,
-        abort_signal=ctx.abort_signal,
         context=ctx.context,
     )
 

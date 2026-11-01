@@ -479,8 +479,8 @@ def _run_turns(*, turn_body: TurnBody) -> Callable[[SessionRunner, AgentContext]
     return agent_fn
 
 
-async def _blocking_turn(sr: SessionRunner, ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
-    await ctx.abort_signal.wait()
+async def _blocking_turn(sr: SessionRunner, _ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
+    await asyncio.Event().wait()
     await sr.add_messages([_model_text(text='unblocked')])
 
 

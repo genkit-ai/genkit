@@ -844,7 +844,7 @@ def input_from_json(value: object) -> object:
 
 
 class ActionRunContext(Generic[ChunkT]):
-    """What an action sees while it runs: request context, streaming, and an abort signal.
+    """What an action sees while it runs: request context and chunk streaming.
 
     Apps use it as ``genkit.FlowContext``; model and background-model plugins
     use ``genkit.model.ModelContext``. ``ChunkT`` is the type ``send_chunk`` accepts.
@@ -859,13 +859,11 @@ class ActionRunContext(Generic[ChunkT]):
         self,
         context: dict[str, Any] | None = None,
         streaming_callback: Callable[[ChunkT], None] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: object | None = None,
         input_stream: AsyncIterator[object] | None = None,
     ) -> None:
         self._context: dict[str, Any] = context if context is not None else {}
         self._streaming_callback = streaming_callback
-        self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
         # Bidi plumbing, read only by BidiAction: the session init value sent
         # on connection open, and the live stream of per-turn inputs.
         self._init: object | None = init
@@ -908,8 +906,8 @@ class ActionRunContext(Generic[ChunkT]):
 FlowContext = ActionRunContext
 """Execution context passed to a flow function.
 
-An alias for :class:`~genkit.ActionRunContext`. Provides access to streaming,
-caller context data, and cancellation signals.
+An alias for :class:`~genkit.ActionRunContext`. Provides access to streaming
+and caller context data.
 """
 
 # The context parameter passed to model and background-model functions.
@@ -919,7 +917,6 @@ ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
 - ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
 - ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
 - ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
-- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
 
 Use it in annotations only. It's a subscripted generic, so
 ``isinstance(ctx, ModelContext)`` raises TypeError; runtime checks should use
@@ -1131,7 +1128,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
@@ -1168,7 +1164,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         action_ctx = ActionRunContext(
             context=_action_context.get(None),
             streaming_callback=streaming_cb,
-            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
         )
@@ -1212,7 +1207,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
@@ -1236,7 +1230,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             input=input,
             context=context,
             telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
             stop_on_early_exit=True,
@@ -1248,7 +1241,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         input: InputT | None,
         context: dict[str, Any] | None,
         telemetry_labels: dict[str, object] | None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None,
         input_stream: AsyncIterator[InputT] | None,
         stop_on_early_exit: bool,
@@ -1263,7 +1255,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             on_chunk=send_chunk,
             context=context,
             telemetry_labels=telemetry_labels,
-            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
         )

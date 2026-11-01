@@ -30,7 +30,7 @@ import asyncio
 from genkit_google_genai import GoogleAI
 from pydantic import BaseModel
 
-from genkit import FinishReason, GenkitError, ToolContext
+from genkit import FinishReason
 from genkit.exp import Genkit
 from genkit.exp.agent import (
     AgentContext,
@@ -56,10 +56,8 @@ store = InMemorySessionStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolContext) -> dict:
+async def slow_work(_: dict) -> dict:
     for _i in range(10):
-        if ctx.abort_signal.is_set():
-            raise GenkitError(status='ABORTED', message='Task aborted')
         await asyncio.sleep(0.5)  # pretend each step is real work
     return {'done': True}
 
@@ -67,10 +65,8 @@ async def slow_work(_: dict, ctx: ToolContext) -> dict:
 async def long_task_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     # Define tool inside turn handler closure so it can mutate custom session state on each step:
     @ai.tool(name='slowWork', description='Simulate long background work.')
-    async def slow_work_closure(_: dict, tool_ctx: ToolContext) -> dict:
+    async def slow_work_closure(_: dict) -> dict:
         for i in range(1, 11):
-            if tool_ctx.abort_signal.is_set():
-                raise GenkitError(status='ABORTED', message='Task aborted')
             await asyncio.sleep(0.5)
             await sess.update_custom(lambda _, step=i: JobState(step=step, completed=(step == 10)))
         return {'done': True}

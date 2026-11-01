@@ -4,21 +4,35 @@
 """Stopping `ai.generate_stream` / `prompt.stream` early stops the model call."""
 
 import asyncio
+import contextlib
 import sys
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 import pytest
 
-from genkit import FinishReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import (
+    FinishReason,
+    FlowContext,
+    Genkit,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+    ToolContext,
+)
+from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest
+from genkit.exp.agent import AgentContext
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelContext, ToolRequest
 
 T = TypeVar('T')
 
 
 class SlowModel:
-    """Sends 'one ', then waits for `release` (ignoring the abort signal), then sends 'two '."""
+    """Sends 'one ', then waits for `release`, then sends 'two '."""
 
     def __init__(self, *, release: bool = False, fail_midway: bool = False) -> None:
         self.release = asyncio.Event()
@@ -26,16 +40,16 @@ class SlowModel:
             self.release.set()
         self.fail_midway = fail_midway
         self.cancelled = asyncio.Event()
-        self.abort_set_when_cancelled: bool | None = None
+        self.calls = 0
 
     async def __call__(self, request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        self.calls += 1
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('one ')]))
         if self.fail_midway:
             raise ValueError('model blew up')
         try:
             await self.release.wait()
         except asyncio.CancelledError:
-            self.abort_set_when_cancelled = ctx.abort_signal.is_set()
             self.cancelled.set()
             raise
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('two ')]))
@@ -59,6 +73,88 @@ def setup(**kwargs: bool) -> tuple[Genkit, SlowModel]:
 async def settle(aw: Awaitable[T]) -> T:
     # guards against a hang turning into a stuck test run; never the thing that passes a test.
     return await asyncio.wait_for(aw, timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_contexts_do_not_expose_abort_signal() -> None:
+    """Action, flow, tool, model, agent, and middleware contexts omit abort_signal."""
+    ai = Genkit()
+    action_ctx: ActionRunContext[str] = ActionRunContext()
+    flow_ctx: FlowContext[str] = FlowContext()
+    tool_ctx: ToolContext[str] = ToolContext(action_ctx)
+    agent_ctx: AgentContext = ActionRunContext()
+    mw_ctx = MiddlewareContext(ai=ai)
+
+    for ctx_obj in (action_ctx, flow_ctx, tool_ctx, agent_ctx, mw_ctx):
+        assert not hasattr(ctx_obj, 'abort_signal')
+
+    seen_has_attr: list[bool] = []
+
+    @ai.tool()
+    async def check_pantry(item: str, ctx: ToolContext) -> str:
+        seen_has_attr.append(hasattr(ctx, 'abort_signal'))
+        return f'stocked:{item}'
+
+    class InspectMiddleware(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            seen_has_attr.append(hasattr(ctx, 'abort_signal'))
+            return await next_fn(params, ctx)
+
+    turns = 0
+
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal turns
+        turns += 1
+        seen_has_attr.append(hasattr(ctx, 'abort_signal'))
+        if turns == 1:
+            return ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(tool_request=ToolRequest(name='check_pantry', ref='1', input='flour'))],
+                ),
+            )
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ready')]),
+        )
+
+    ai.define_model(name='inspector', fn=model_fn)
+
+    @ai.flow()
+    async def run_flow(prompt_text: str, ctx: FlowContext) -> str:
+        seen_has_attr.append(hasattr(ctx, 'abort_signal'))
+        resp = await ai.generate(
+            model='inspector',
+            prompt=prompt_text,
+            tools=['check_pantry'],
+            use=[InspectMiddleware()],
+        )
+        return resp.text
+
+    assert await run_flow('bake') == 'ready'
+    assert seen_has_attr == [False, False, False, False, False, False]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_immediate_aclose_before_iterating_returns_aborted_without_calling_model() -> None:
+    """Immediate `await stream.stream.aclose()` on tick 0 resolves `.response` to ABORTED with zero model calls."""
+    ai, model = setup(release=True)
+
+    stream = ai.generate_stream(model='slow', prompt='hi')
+    await settle(stream.stream.aclose())
+    response = await settle(stream.response)
+
+    assert model.calls == 0
+    assert response.finish_reason == FinishReason.ABORTED
+    assert [m.role for m in response.messages] == [Role.USER]
+    assert response.messages[0].text == 'hi'
+    assert response.text == ''
 
 
 @pytest.mark.asyncio
@@ -102,19 +198,6 @@ async def test_generate_stream_consumer_task_cancelled_cancels_model_and_respons
     assert response.finish_reason == FinishReason.ABORTED
     assert [m.role for m in response.messages] == [Role.USER]
     assert response.text == ''
-
-
-@pytest.mark.asyncio
-async def test_generate_stream_model_sees_abort_signal_set_when_caller_breaks() -> None:
-    """After a `break`, the model's `ctx.abort_signal` is already set when its await is cancelled."""
-    ai, model = setup()
-
-    stream = ai.generate_stream(model='slow', prompt='hi')
-    async for _ in stream:
-        break
-    await settle(stream.response)
-
-    assert model.abort_set_when_cancelled is True
 
 
 @pytest.mark.asyncio
@@ -194,7 +277,6 @@ async def test_prompt_stream_break_after_first_chunk_cancels_model_and_response_
 
     assert seen == ['one ']
     assert model.cancelled.is_set()
-    assert model.abort_set_when_cancelled is True
     assert response.finish_reason == FinishReason.ABORTED
     assert [m.role for m in response.messages] == [Role.USER]
     assert response.text == ''
@@ -254,22 +336,79 @@ async def test_generate_stream_timeout_cancels_model_and_response_is_aborted() -
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_break_during_tool_cancels_tool_and_response_is_aborted() -> None:
-    """`break` while a tool runs cancels the tool; `.response` is ABORTED and the caller task isn't left cancelling."""
+async def test_generate_stream_break_on_turn_two_cancels_model_and_keeps_closed_tool_round() -> None:
+    """Breaking on Turn 2 cancels the Turn 2 model call across hop() and preserves [USER, MODEL, TOOL]."""
     ai = Genkit()
-    tool_started = asyncio.Event()
-    tool_cancelled = asyncio.Event()
+    turn2_cancelled = asyncio.Event()
+    model_calls = 0
 
     @ai.tool()
     async def check_pantry(item: str) -> str:
-        """Blocks until cancelled; ignores the abort signal."""
+        return f'have {item}'
+
+    async def chef(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal model_calls
+        model_calls += 1
+        if model_calls == 1:
+            ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('checking ')]))
+            return ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(tool_request=ToolRequest(name='check_pantry', ref='1', input='flour'))],
+                ),
+            )
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('baking ')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            turn2_cancelled.set()
+            raise
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+
+    ai.define_model(name='chef', fn=chef)
+
+    stream = ai.generate_stream(model='chef', prompt='bake bread', tools=['check_pantry'])
+    seen_texts: list[str] = []
+    async for chunk in stream:
+        seen_texts.append(chunk.text)
+        if chunk.text == 'baking ':
+            break
+    response = await settle(stream.response)
+
+    assert 'baking ' in seen_texts
+    assert model_calls == 2
+    assert turn2_cancelled.is_set()
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.message is None
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_break_during_tool_cancels_tool_and_waits_for_finally_cleanup() -> None:
+    """`break` while a tool runs cancels the tool, waits for `finally:` cleanup on `aclose()`, and boxes ABORTED."""
+    ai = Genkit()
+    tool_started = asyncio.Event()
+    tool_cancelled = asyncio.Event()
+    cleanup_finished = False
+
+    @ai.tool()
+    async def check_pantry(item: str) -> str:
+        """Blocks until cancelled and performs async cleanup in finally."""
+        nonlocal cleanup_finished
         tool_started.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
             tool_cancelled.set()
             raise
-        return 'never'
+        finally:
+            await asyncio.sleep(0.02)
+            cleanup_finished = True
+        return f'never:{item}'
 
     async def chef(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, index=0, content=[Part.from_text('checking ')]))
@@ -284,13 +423,16 @@ async def test_generate_stream_break_during_tool_cancels_tool_and_response_is_ab
     ai.define_model(name='chef', fn=chef)
 
     stream = ai.generate_stream(model='chef', prompt='bake bread', tools=['check_pantry'])
-    async for _ in stream:
-        await settle(tool_started.wait())
-        break
-    response = await settle(stream.response)
+    async with contextlib.aclosing(stream.stream) as chunks:
+        async for _ in chunks:
+            await settle(tool_started.wait())
+            break
 
     assert tool_cancelled.is_set()
+    assert cleanup_finished is True
+    response = await settle(stream.response)
     assert response.finish_reason == FinishReason.ABORTED
+    assert [m.role for m in response.messages] == [Role.USER]
     current = asyncio.current_task()
     assert current is not None
     if sys.version_info >= (3, 11):
