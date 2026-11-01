@@ -14,12 +14,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Translation between MCP tools and Genkit ``tool.v2`` actions."""
+"""Translation between MCP tools and Genkit ``tool`` actions."""
 
 import json
 import re
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 from mcp.types import (
     AudioContent,
@@ -132,7 +132,7 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
         result: What ``ClientSession.call_tool`` returned.
 
     Returns:
-        The envelope ``generate`` expects from a ``tool.v2`` action.
+        The envelope ``generate`` expects from a ``tool`` action.
     """
     metadata = dict(result.meta) if result.meta is not None else None
     if result.isError:
@@ -197,7 +197,7 @@ def mcp_tool_to_action(
     prefix: str,
     call: McpToolCall,
 ) -> Action:
-    """Build a Genkit ``tool.v2`` action that invokes one MCP tool.
+    """Build a Genkit ``tool`` action that invokes one MCP tool.
 
     The returned action carries its own name under the ``name`` metadata key,
     which is what a dynamic action provider matches a wildcard selector against,
@@ -243,7 +243,7 @@ def mcp_tool_to_action(
         name=tool_name,
         description=tool.description or '',
         input_schema=tool.inputSchema,
-    ).action()
+    )
     action.metadata['name'] = action.name
     action.metadata['mcp'] = {'prefix': prefix, 'tool': tool.name, '_meta': mcp_meta}
     return action
@@ -254,7 +254,7 @@ def mcp_tools_to_actions(
     prefix: str,
     call: McpToolCall,
 ) -> list[Action]:
-    """Build one Genkit ``tool.v2`` action per tool in a server listing.
+    """Build one Genkit ``tool`` action per tool in a server listing.
 
     Args:
         tools: Tools as listed by the server.
@@ -303,7 +303,8 @@ def mcp_tools_to_handles(
         :func:`mcp_tools_to_actions` leaves out.
     """
     by_name = {mcp_tool_name(prefix, tool.name): tool for tool in tools}
-    return [
-        Tool._from_action(action, original_output_schema=by_name[action.name].outputSchema)
-        for action in mcp_tools_to_actions(tools, prefix, call)
-    ]
+    handles: list[Tool] = []
+    for action in mcp_tools_to_actions(tools, prefix, call):
+        action.output_schema = cast(dict[str, object] | None, by_name[action.name].outputSchema)
+        handles.append(action if isinstance(action, Tool) else Tool._from_action(action))
+    return handles

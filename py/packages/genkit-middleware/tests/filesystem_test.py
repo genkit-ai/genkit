@@ -204,7 +204,7 @@ async def test_wrap_tool_lets_interrupt_through_without_queueing_an_error(ctx) -
         write_file = next(t for t in fs.tools(ctx) if t.name == 'write_file')
         params = ToolHookParams(
             tool_request_part=Part(tool_request=ToolRequest(name='write_file', input={'path': 'menu.md'})),
-            tool=write_file.action(),
+            tool=write_file,
         )
 
         async def needs_approval(_params: ToolHookParams, _ctx: MiddlewareContext) -> MultipartToolResponse:

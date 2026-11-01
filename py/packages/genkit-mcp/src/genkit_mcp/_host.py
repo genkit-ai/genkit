@@ -392,7 +392,7 @@ def define_mcp_host(
 ) -> McpHost:
     """Register the tools of several MCP servers with Genkit, under one name.
 
-    Every server's tools become ``tool.v2`` actions behind a single dynamic
+    Every server's tools become ``tool`` actions behind a single dynamic
     action provider named ``name``. Select them from ``generate`` as
     ``<name>:tool/*`` for all of them, or ``<name>:tool/<server>_<tool>`` for
     one. Connection is lazy: a child process starts on the first tool listing.

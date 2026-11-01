@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from genkit import Genkit, Message, ModelResponse, Part
 from genkit._ai._generate import expand_wildcard_tools, resolve_tool
+from genkit._ai._tools import define_tool
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
 from genkit._core._error import GenkitError, RuntimeErrorReason
@@ -61,7 +62,7 @@ def _tool_call_response(tool_name: str, input: dict) -> ModelResponse:
 
 @pytest.mark.asyncio
 async def test_mcp_tool_star_includes_every_tool_from_that_provider() -> None:
-    """tools=['mcp:tool/*'] includes every tool from that provider as /tool.v2/<name>."""
+    """tools=['mcp:tool/*'] includes every tool from that provider as /tool/<name>."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -77,15 +78,15 @@ async def test_mcp_tool_star_includes_every_tool_from_that_provider() -> None:
 
     result = await expand_wildcard_tools(registry, ['mcp:tool/*'])
     assert sorted(result) == [
-        '/tool.v2/echo',
-        '/tool.v2/ping',
+        '/tool/echo',
+        '/tool/ping',
     ]
     assert set(registry._entries.get(ActionKind.TOOL, {})) == {'echo', 'ping'}
 
 
 @pytest.mark.asyncio
-async def test_mcp_tool_echo_becomes_tool_v2_echo() -> None:
-    """tools=['mcp:tool/echo'] becomes /tool.v2/echo on the registry generate handed us."""
+async def test_mcp_tool_echo_becomes_tool_echo() -> None:
+    """tools=['mcp:tool/echo'] becomes /tool/echo on the registry generate handed us."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -99,17 +100,17 @@ async def test_mcp_tool_echo_becomes_tool_v2_echo() -> None:
     define_dynamic_action_provider(registry, 'mcp', dap_fn)
 
     # The provider and its tools are catalog rows, but only under the DAP-qualified
-    # key: generate binds ``/tool.v2/echo`` on the child registry it passes in.
+    # key: generate binds ``/tool/echo`` on the child registry it passes in.
     before = await registry.list_actions()
     assert '/dynamic-action-provider/mcp' in before
     assert '/dynamic-action-provider/mcp:tool/echo' in before
-    assert '/tool.v2/echo' not in before
+    assert '/tool/echo' not in before
 
     expanded = await expand_wildcard_tools(registry, ['mcp:tool/echo'])
-    assert expanded == ['/tool.v2/echo']
+    assert expanded == ['/tool/echo']
     assert registry._entries.get(ActionKind.TOOL, {}).get('echo') is echo
     catalog = await registry.list_actions()
-    assert catalog['/tool.v2/echo'].name == 'echo'
+    assert catalog['/tool/echo'].name == 'echo'
     assert '/dynamic-action-provider/mcp:tool/echo' in catalog
     assert '/dynamic-action-provider/mcp' in catalog
 
@@ -133,8 +134,8 @@ async def test_dap_wildcard_registers_on_passed_registry() -> None:
 
     result = await expand_wildcard_tools(child, ['mcp:tool/*'])
     assert sorted(result) == [
-        '/tool.v2/echo',
-        '/tool.v2/ping',
+        '/tool/echo',
+        '/tool/ping',
     ]
     assert child._entries.get(ActionKind.TOOL, {}).get('echo') is echo
     assert child._entries.get(ActionKind.TOOL, {}).get('ping') is ping
@@ -143,8 +144,8 @@ async def test_dap_wildcard_registers_on_passed_registry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mcp_tool_echo_is_not_a_tool_v2_row_on_the_app_catalog() -> None:
-    """mcp:tool/echo is a DAP-qualified row. /tool.v2/echo lives on the generate child."""
+async def test_mcp_tool_echo_is_not_a_tool_row_on_the_app_catalog() -> None:
+    """mcp:tool/echo is a DAP-qualified row. /tool/echo lives on the generate child."""
     parent = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -159,17 +160,17 @@ async def test_mcp_tool_echo_is_not_a_tool_v2_row_on_the_app_catalog() -> None:
     child = parent.new_child()
 
     expanded = await expand_wildcard_tools(child, ['mcp:tool/echo'])
-    assert expanded == ['/tool.v2/echo']
+    assert expanded == ['/tool/echo']
     assert child._entries.get(ActionKind.TOOL, {}).get('echo') is echo
     assert 'echo' not in parent._entries.get(ActionKind.TOOL, {})
 
     parent_catalog = await parent.list_actions()
     assert '/dynamic-action-provider/mcp' in parent_catalog
     assert '/dynamic-action-provider/mcp:tool/echo' in parent_catalog
-    assert '/tool.v2/echo' not in parent_catalog
+    assert '/tool/echo' not in parent_catalog
 
     child_catalog = await child.list_actions()
-    assert child_catalog['/tool.v2/echo'].name == 'echo'
+    assert child_catalog['/tool/echo'].name == 'echo'
 
 
 @pytest.mark.asyncio
@@ -214,14 +215,14 @@ async def test_mcp_tool_prefix_star_includes_only_matching_names() -> None:
 
     result = await expand_wildcard_tools(registry, ['mcp:tool/get_*'])
     assert sorted(result) == [
-        '/tool.v2/get_time',
-        '/tool.v2/get_weather',
+        '/tool/get_time',
+        '/tool/get_weather',
     ]
 
 
 @pytest.mark.asyncio
 async def test_resolve_tool_catalog_key_and_bare_name() -> None:
-    """After a local register, both /tool.v2/name and the short name resolve."""
+    """After a local register, both /tool/name and the short name resolve."""
     registry = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -229,10 +230,26 @@ async def test_resolve_tool_catalog_key_and_bare_name() -> None:
 
     echo = registry.register_action(name='echo', kind=ActionKind.TOOL, fn=tool_fn, metadata={'name': 'echo'})
 
-    by_key = await resolve_tool(registry, '/tool.v2/echo')
+    by_key = await resolve_tool(registry, '/tool/echo')
     by_name = await resolve_tool(registry, 'echo')
     assert by_key is echo
     assert by_name is echo
+
+
+@pytest.mark.asyncio
+async def test_resolve_tool_prefers_tool_and_falls_back_to_tool_v2() -> None:
+    """A bare name resolves ``tool`` first, then ``tool.v2`` (JS order); a ``/tool.v2/`` key picks the envelope."""
+    registry = Registry()
+
+    async def tool_fn(x: str) -> str:
+        return x
+
+    echo = define_tool(registry, tool_fn, name='echo')
+    wire_only = registry.register_action(name='shot', kind=ActionKind.TOOL_V2, fn=tool_fn)
+
+    assert await resolve_tool(registry, 'echo') is echo
+    assert await resolve_tool(registry, '/tool.v2/echo') is echo.wire_action
+    assert await resolve_tool(registry, 'shot') is wire_only
 
 
 @pytest.mark.asyncio
@@ -263,8 +280,8 @@ async def test_resolve_tool_rejects_mcp_tool_echo() -> None:
 
 
 @pytest.mark.asyncio
-async def test_after_generate_echo_resolves_as_tool_v2_echo_not_mcp_tool_echo() -> None:
-    """After expand, echo resolves as /tool.v2/echo or echo, not as mcp:tool/echo."""
+async def test_after_generate_echo_resolves_as_tool_echo_not_mcp_tool_echo() -> None:
+    """After expand, echo resolves as /tool/echo or echo, not as mcp:tool/echo."""
     parent = Registry()
 
     async def tool_fn(x: str) -> str:
@@ -279,15 +296,15 @@ async def test_after_generate_echo_resolves_as_tool_v2_echo_not_mcp_tool_echo() 
     child = parent.new_child()
 
     expanded = await expand_wildcard_tools(child, ['mcp:tool/echo'])
-    assert expanded == ['/tool.v2/echo']
+    assert expanded == ['/tool/echo']
 
-    assert (await resolve_tool(child, '/tool.v2/echo')) is echo
+    assert (await resolve_tool(child, '/tool/echo')) is echo
     assert (await resolve_tool(child, 'echo')) is echo
 
     with pytest.raises(GenkitError, match='Unable to resolve tool mcp:tool/echo'):
         await resolve_tool(child, 'mcp:tool/echo')
-    with pytest.raises(GenkitError, match='Unable to resolve tool /tool.v2/echo'):
-        await resolve_tool(parent, '/tool.v2/echo')
+    with pytest.raises(GenkitError, match='Unable to resolve tool /tool/echo'):
+        await resolve_tool(parent, '/tool/echo')
 
 
 @pytest.mark.asyncio
@@ -357,12 +374,12 @@ async def test_generate_mcp_tool_echo_runs_the_dap_tool() -> None:
     root_catalog = await ai._registry.list_actions()
     assert '/dynamic-action-provider/mcp' in root_catalog
     assert '/dynamic-action-provider/mcp:tool/echo' in root_catalog
-    assert '/tool.v2/echo' not in root_catalog
+    assert '/tool/echo' not in root_catalog
 
 
 @pytest.mark.asyncio
 async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
-    """After generate(tools=['mcp:tool/echo']), the app catalog still has no /tool.v2/echo."""
+    """After generate(tools=['mcp:tool/echo']), the app catalog still has no /tool/echo."""
     ai = Genkit()
     pm, _ = define_scripted_model(ai)
 
@@ -394,7 +411,7 @@ async def test_generate_mcp_tool_does_not_leave_tool_v2_on_the_app() -> None:
     root_catalog = await ai._registry.list_actions()
     assert '/dynamic-action-provider/mcp' in root_catalog
     assert '/dynamic-action-provider/mcp:tool/dap_only_tool' in root_catalog
-    assert '/tool.v2/dap_only_tool' not in root_catalog
+    assert '/tool/dap_only_tool' not in root_catalog
 
 
 @pytest.mark.asyncio

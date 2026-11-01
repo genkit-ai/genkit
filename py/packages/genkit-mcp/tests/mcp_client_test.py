@@ -142,7 +142,7 @@ async def test_wildcard_selector_expands_to_every_tool(tmp_path: Path) -> None:
         await client.close()
 
     assert client.name == 'fake'
-    assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
+    assert sorted(expanded) == sorted(f'/tool/fake_{tool}' for tool in ALL_TOOLS)
 
 
 @pytest.mark.asyncio
@@ -250,7 +250,7 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
         # The listing outlives its TTL, so re-listing here is the invalidation,
         # and a process to list from is the replaced connection.
         expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
-        assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
+        assert sorted(expanded) == sorted(f'/tool/fake_{tool}' for tool in ALL_TOOLS)
         replaced = server_processes(tmp_path)
         assert len(replaced) == 1
         assert replaced[0].pid != killed[0].pid
@@ -771,7 +771,7 @@ async def test_get_active_tools_lists_what_the_selector_binds(tmp_path: Path) ->
 
     assert [tool.name for tool in tools] == [f'fake_{tool}' for tool in ALL_TOOLS]
     assert [tool.description for tool in tools][:2] == ['Echo input.', 'Another tool.']
-    assert sorted(expanded) == sorted(f'/tool.v2/{tool.name}' for tool in tools)
+    assert sorted(expanded) == sorted(f'/tool/{tool.name}' for tool in tools)
 
 
 @pytest.mark.asyncio

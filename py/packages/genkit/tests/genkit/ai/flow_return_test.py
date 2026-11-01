@@ -215,7 +215,7 @@ async def test_tool_returning_wrong_shape_is_not_checked() -> None:
         return 'x'  # type: ignore[return-value]
 
     result = await echo('ada')
-    assert result.output == 'x'
+    assert result == 'x'
 
 
 @pytest.mark.asyncio

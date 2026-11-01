@@ -157,9 +157,9 @@ async def test_dev_ui_action_span_attributes_unchanged(exporter) -> None:
     span = _by_name(exporter.get_finished_spans(), 'getWeather')
     attrs = dict(span.attributes or {})
     assert attrs['genkit:type'] == 'action'
-    assert attrs['genkit:metadata:subtype'] == 'tool.v2'
-    assert attrs['genkit:path'] == '/{getWeather,t:action,s:tool.v2}'
-    assert attrs['genkit:qualifiedPath'] == '/{getWeather,t:action,s:tool.v2}'
+    assert attrs['genkit:metadata:subtype'] == 'tool'
+    assert attrs['genkit:path'] == '/{getWeather,t:action,s:tool}'
+    assert attrs['genkit:qualifiedPath'] == '/{getWeather,t:action,s:tool}'
 
 
 @pytest.mark.asyncio
