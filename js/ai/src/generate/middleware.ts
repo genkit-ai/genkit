@@ -28,7 +28,7 @@ import {
   ToolResponsePart,
 } from '../model.js';
 import { type GenkitPluginV2 } from '../plugin.js';
-import { ToolAction } from '../tool.js';
+import { MultipartToolAction, ToolAction } from '../tool.js';
 
 /** Descriptor for a registered middleware, returned by reflection API. */
 export const MiddlewareDescSchema = z.object({
@@ -142,7 +142,7 @@ export interface GenerateMiddlewareDef {
   /**
    * Tools to statically inject into the generation request whenever this middleware is active.
    */
-  tools?: ToolAction[];
+  tools?: (ToolAction | MultipartToolAction)[];
 }
 
 /**
