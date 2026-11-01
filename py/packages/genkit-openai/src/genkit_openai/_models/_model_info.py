@@ -21,9 +21,9 @@ from typing import Literal, TypeAlias
 
 from genkit.model import ConstrainedSupport, ModelInfo, ModelSupports
 
-# 'json' in output means the endpoint accepts schema-less JSON mode.
-# constrained=ALL means it also accepts response_format json_schema, so Genkit
-# leaves the JSON format instructions out of the prompt. Models without it keep them.
+# Supports.output is the caller-facing Genkit output contract; wire modes
+# are selected separately by the OpenAI adapter. constrained=ALL identifies
+# models that accept json_schema and do not need schema text in the prompt.
 MULTIMODAL_MODEL_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
@@ -42,13 +42,13 @@ MULTIMODAL_LEGACY_MODEL_SUPPORTS = ModelSupports(
     output=['json', 'text'],
 )
 
-# gpt-4's endpoint rejects schema-less JSON mode, so output lists only 'text'.
+# GPT-4 uses a prompt-only JSON fallback and cannot accept json_schema.
 GPT_4_MODEL_SUPPORTS = ModelSupports(
     multiturn=True,
     media=False,
     tools=True,
     system_role=True,
-    output=['text'],
+    output=['json', 'text'],
 )
 
 GPT_35_MODEL_SUPPORTS = ModelSupports(
@@ -131,7 +131,7 @@ KnownGpt: TypeAlias = Literal[
 SUPPORTED_OPENAI_MODELS: dict[KnownGpt, ModelInfo] = {
     # --- GPT-4o series ---
     'gpt-4o': ModelInfo(label='OpenAI - gpt-4o', supports=MULTIMODAL_MODEL_SUPPORTS),
-    'gpt-4o-2024-05-13': ModelInfo(label='OpenAI - gpt-4o-2024-05-13', supports=MULTIMODAL_MODEL_SUPPORTS),
+    'gpt-4o-2024-05-13': ModelInfo(label='OpenAI - gpt-4o-2024-05-13', supports=MULTIMODAL_LEGACY_MODEL_SUPPORTS),
     'gpt-4o-mini': ModelInfo(label='OpenAI - gpt-4o-mini', supports=MULTIMODAL_MODEL_SUPPORTS),
     'gpt-4o-mini-2024-07-18': ModelInfo(label='OpenAI - gpt-4o-mini-2024-07-18', supports=MULTIMODAL_MODEL_SUPPORTS),
     # --- GPT-4.x series ---

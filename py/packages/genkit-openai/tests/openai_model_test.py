@@ -34,6 +34,10 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Operation, Part, Role
+from genkit._ai._formats._json import JsonFormat
+from genkit._ai._generate import apply_format
+from genkit._core._model import GenerateActionOptions
+from genkit._core._typing import GenerateActionOutputConfig
 from genkit.model import (
     GenerationUsage,
     ModelConfig,
@@ -66,14 +70,62 @@ def test_gpt_6_astra_json_mode_uses_json_object() -> None:
     assert model._get_response_format(request) == {'type': 'json_object'}
 
 
-def test_gpt_4_json_request_uses_text() -> None:
-    """gpt-4 does not list json output, so a schema-less JSON request sends text."""
+def _legacy_json_request(schema: dict[str, Any] | None) -> ModelRequest:
+    """Apply core's JSON instructions before checking the adapter wire request."""
+    options = GenerateActionOptions(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Answer the question')])],
+        output=GenerateActionOutputConfig(format='json', json_schema=schema),
+    )
+    formatted, _ = apply_format(options=options, format_def=JsonFormat(), model_supports_constrained=False)
+    assert formatted.output is not None
+    return ModelRequest(
+        messages=formatted.messages,
+        output=OutputConfig(format=formatted.output.format, json_schema=formatted.output.json_schema),
+    )
+
+
+def test_gpt_4_json_request_uses_prompt_only() -> None:
+    """gpt-4 advertises JSON while omitting an unsupported response_format."""
     model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('Hi')])],
         output=OutputConfig(format='json'),
     )
-    assert model._get_response_format(request) == {'type': 'text'}
+    assert model._get_response_format(request) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'schema', [None, {'title': 'Answer', 'type': 'object', 'properties': {'value': {'type': 'string'}}}]
+)
+async def test_gpt_4_json_uses_prompt_only_fallback(schema: dict[str, Any] | None) -> None:
+    """Core gives legacy GPT-4 one JSON instruction without a wire format."""
+    model = OpenAIModel(model='gpt-4', client=MagicMock(), supports=GPT_4_MODEL_SUPPORTS)
+    request = _legacy_json_request(schema)
+    config = await model._get_openai_request_config(request)
+    assert 'response_format' not in config
+    assert 'JSON' in str(config['messages'])
+    if schema is not None:
+        assert len(config['messages']) == 1
+        assert str(config['messages']).count('"value"') == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'schema', [None, {'title': 'Answer', 'type': 'object', 'properties': {'value': {'type': 'string'}}}]
+)
+async def test_gpt_4_turbo_json_uses_json_object_and_prompt(schema: dict[str, Any] | None) -> None:
+    """GPT-4 Turbo gets JSON mode and one instruction, never strict json_schema."""
+    model = OpenAIModel(
+        model='gpt-4-turbo', client=MagicMock(), supports=SUPPORTED_OPENAI_MODELS['gpt-4-turbo'].supports
+    )
+    request = _legacy_json_request(schema)
+    config = await model._get_openai_request_config(request)
+    assert config['response_format'] == {'type': 'json_object'}
+    assert 'JSON' in str(config['messages'])
+    if schema is not None:
+        assert len(config['messages']) == 1
+        assert str(config['messages']).count('"value"') == 1
 
 
 def test_openai_model_text_only_supports_json_request_sends_text() -> None:
