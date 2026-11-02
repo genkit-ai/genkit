@@ -9,6 +9,7 @@ import asyncio
 import contextvars
 import json
 import pathlib
+import sys
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar, cast
@@ -6172,16 +6173,15 @@ async def test_generate_with_400_middleware_cancelled_on_a_later_turn_raises_can
     """Cancelling generate while a later turn's model hangs raises CancelledError and stops there."""
     ai = Genkit(model='hangOnTurn2Model')
     started = asyncio.Event()
-    model_calls = 0
+    calls: list[int] = []
 
     @ai.tool(name='step')
     async def step() -> str:
         return 'ok'
 
     async def hang_on_turn_2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
-        nonlocal model_calls
-        model_calls += 1
-        if model_calls == 1:
+        calls.append(1)
+        if len(calls) == 1:
             return _model_calls_tool(name='step', ref='r1')
         started.set()
         await asyncio.Event().wait()
@@ -6198,11 +6198,17 @@ async def test_generate_with_400_middleware_cancelled_on_a_later_turn_raises_can
         ),
     )
     await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    previous_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(1000)
+    try:
+        assert repr(task)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        sys.setrecursionlimit(previous_limit)
 
-    assert model_calls == 2
+    assert len(calls) == 2
     await _assert_no_extra_tasks(before)
 
 
