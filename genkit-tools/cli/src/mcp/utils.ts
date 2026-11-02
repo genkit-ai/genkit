@@ -19,7 +19,18 @@ import {
   GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { z } from 'zod';
+import {
+  SUPPORTED_DOC_LANGUAGES,
+  detectProjectLanguage,
+  type SupportedDocLanguage,
+} from '../utils/docs';
 import { startDevProcessManager, startManager } from '../utils/manager-utils';
+
+export {
+  SUPPORTED_DOC_LANGUAGES,
+  detectProjectLanguage,
+  type SupportedDocLanguage,
+};
 
 export function formatMcpError(err: unknown): string {
   if (err instanceof GenkitToolsError) {
