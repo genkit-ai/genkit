@@ -27,58 +27,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { docsList, docsSearch } from '../../src/commands/docs';
-import type { Doc } from '../../src/utils/docs';
 import * as docsUtils from '../../src/utils/docs';
-
-const SAMPLE_DOCS: Record<string, Doc> = {
-  'js/flows.md': {
-    title: 'Defining Flows (JS)',
-    description: 'Define flows in JavaScript with defineFlow.',
-    text: '# JS Flows',
-    lang: 'js',
-    headers: 'defineFlow',
-  },
-  'go/flows.md': {
-    title: 'Defining Flows (Go)',
-    description: 'Define flows in Go with genkit.DefineFlow.',
-    text: '# Go Flows',
-    lang: 'go',
-    headers: 'DefineFlow',
-  },
-  'python/flows.md': {
-    title: 'Defining Flows (Python)',
-    description: 'Define flows in Python with @ai.flow.',
-    text: '# Python Flows',
-    lang: 'python',
-    headers: 'flow decorator',
-  },
-  'dart/flows.md': {
-    title: 'Defining Flows (Dart)',
-    description: 'Define flows in Dart with ai.defineFlow.',
-    text: '# Dart Flows',
-    lang: 'dart',
-    headers: 'defineFlow schemantic',
-  },
-};
-
-const WORKSPACE_MARKERS = [
-  { marker: 'go.mod', expectedLang: 'go', expectedPath: 'go/flows.md' },
-  {
-    marker: 'pyproject.toml',
-    expectedLang: 'python',
-    expectedPath: 'python/flows.md',
-  },
-  {
-    marker: 'pubspec.yaml',
-    expectedLang: 'dart',
-    expectedPath: 'dart/flows.md',
-  },
-  {
-    marker: 'package.json',
-    expectedLang: 'js',
-    expectedPath: 'js/flows.md',
-  },
-] as const;
+import { SAMPLE_DOCS, WORKSPACE_MARKERS } from '../utils/docs';
 
 describe('docs CLI commands', () => {
   let tmpDir: string;
