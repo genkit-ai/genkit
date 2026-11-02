@@ -47,7 +47,7 @@ from google import genai
 from google.auth.credentials import Credentials
 from google.auth.exceptions import DefaultCredentialsError, RefreshError
 from google.genai.errors import APIError
-from google.genai.types import HttpOptions
+from google.genai.types import HttpOptions, HttpOptionsDict
 from pydantic import ValidationError
 
 from genkit import Document, Genkit, GenkitError, Message, Part, Role
@@ -498,6 +498,32 @@ async def test_googleai_list_actions(googleai_plugin_instance: GoogleAI) -> None
                 'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
             },
         ),
+        (
+            {'headers': {'x-goog-api-client': GENKIT_USER_AGENT, 'user-agent': GENKIT_USER_AGENT}},
+            {
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
+            },
+        ),
+        (
+            HttpOptions(
+                headers={
+                    'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
+                    'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
+                }
+            ),
+            {
+                'X-Goog-Api-Client': f'custom-client {GENKIT_USER_AGENT}',
+                'User-Agent': f'custom-agent {GENKIT_USER_AGENT}',
+            },
+        ),
+        (
+            {'headers': {'x-goog-api-client': '', 'user-agent': ''}},
+            {
+                'x-goog-api-client': GENKIT_USER_AGENT,
+                'user-agent': GENKIT_USER_AGENT,
+            },
+        ),
     ],
 )
 def test_inject_attribution_headers(
@@ -507,6 +533,32 @@ def test_inject_attribution_headers(
     result = _inject_attribution_headers(input_options)  # type: ignore
     assert isinstance(result, HttpOptions)
     assert result.headers == expected_headers
+
+
+def test_inject_attribution_headers_is_idempotent() -> None:
+    """Repeated calls or chained outputs never duplicate GENKIT_USER_AGENT."""
+    expected = {
+        'X-Goog-Api-Client': f'order-service/1.0 {GENKIT_USER_AGENT}',
+        'User-Agent': f'order-service/1.0 {GENKIT_USER_AGENT}',
+    }
+
+    opts = HttpOptions(headers={'X-Goog-Api-Client': 'order-service/1.0', 'User-Agent': 'order-service/1.0'})
+    first = _inject_attribution_headers(opts)
+    second = _inject_attribution_headers(opts)
+    chained = _inject_attribution_headers(first)
+    assert first.headers == expected
+    assert second.headers == expected
+    assert chained.headers == expected
+
+    opts_dict: HttpOptionsDict = {
+        'headers': {'X-Goog-Api-Client': 'order-service/1.0', 'User-Agent': 'order-service/1.0'}
+    }
+    dict_first = _inject_attribution_headers(opts_dict)
+    dict_second = _inject_attribution_headers(opts_dict)
+    dict_chained = _inject_attribution_headers(dict_first)
+    assert dict_first.headers == expected
+    assert dict_second.headers == expected
+    assert dict_chained.headers == expected
 
 
 class TestVertexAIInit(unittest.TestCase):

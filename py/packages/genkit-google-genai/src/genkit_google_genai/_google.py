@@ -1369,9 +1369,9 @@ def _inject_attribution_headers(
     headers_lower = {k.lower(): k for k in opts.headers}
     for header_name in ('x-goog-api-client', 'user-agent'):
         key = headers_lower.get(header_name, header_name)
-        if key not in opts.headers:
+        if not opts.headers.get(key):
             opts.headers[key] = GENKIT_USER_AGENT
-        else:
+        elif GENKIT_USER_AGENT not in opts.headers[key]:
             opts.headers[key] += f' {GENKIT_USER_AGENT}'
 
     return opts
