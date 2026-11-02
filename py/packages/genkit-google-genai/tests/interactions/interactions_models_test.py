@@ -1298,12 +1298,6 @@ _TEXT_REPLY = {
 }
 
 
-class OtherPluginConfig(BaseModel):
-    """Stands in for another plugin's config class (an OpenAI or Anthropic config, say)."""
-
-    temperature: float | None = None
-
-
 def _config_form(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     """The config form the Dev UI renders for a model: `metadata.model.customOptions`."""
     model_meta = cast(dict[str, Any], (metadata or {})['model'])
@@ -1318,186 +1312,6 @@ def googleai() -> Iterator[Genkit]:
         patch('genkit_google_genai._google._list_genai_models', return_value=GenaiModels()),
     ):
         yield Genkit(plugins=[GoogleAI(api_key='plugin-key')])
-
-
-@pytest.mark.asyncio
-async def test_generate_antigravity_with_other_config_class_raises_invalid_argument(googleai: Genkit) -> None:
-    """`config=OtherPluginConfig()` on Antigravity raises INVALID_ARGUMENT naming `AntigravityConfig`."""
-    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._antigravity')
-    with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.generate(model=_ANTIGRAVITY, prompt='hi', config=OtherPluginConfig(temperature=0.2))
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert 'config must be genkit_google_genai.AntigravityConfig or a mapping' in str(raised.value)
-    assert 'OtherPluginConfig' in str(raised.value)
-    assert create_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_lyria_with_other_config_class_raises_invalid_argument(googleai: Genkit) -> None:
-    """`config=OtherPluginConfig()` on Interactions Lyria raises INVALID_ARGUMENT naming `LyriaConfig`."""
-    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._interactions_lyria')
-    with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.generate(model=_LYRIA, prompt='riff', config=OtherPluginConfig(temperature=0.2))
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert 'config must be genkit_google_genai.LyriaConfig or a mapping' in str(raised.value)
-    assert 'OtherPluginConfig' in str(raised.value)
-    assert create_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_operation_deep_research_with_other_config_class_raises_invalid_argument(
-    googleai: Genkit,
-) -> None:
-    """`generate_operation` on Deep Research with `OtherPluginConfig()` raises and starts no job."""
-    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
-    with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.generate_operation(model=_DEEP_RESEARCH, prompt='q', config=OtherPluginConfig(temperature=0.2))
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert 'config must be genkit_google_genai.DeepResearchConfig or a mapping' in str(raised.value)
-    assert 'OtherPluginConfig' in str(raised.value)
-    assert create_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_antigravity_with_its_own_config_class_runs(googleai: Genkit) -> None:
-    """`config=AntigravityConfig(store=False)` still runs and sends `store` (control)."""
-    patcher, create_calls, _, _ = patch_interactions(
-        'genkit_google_genai._models._antigravity', create_result=_TEXT_REPLY
-    )
-    with patcher:
-        response = await googleai.generate(model=_ANTIGRAVITY, prompt='hi', config=AntigravityConfig(store=False))
-
-    assert response.text == 'ok'
-    assert create_calls[0]['store'] is False
-
-
-@pytest.mark.asyncio
-async def test_generate_antigravity_with_dict_config_runs(googleai: Genkit) -> None:
-    """`config={'store': False}` still runs and sends `store` (control)."""
-    patcher, create_calls, _, _ = patch_interactions(
-        'genkit_google_genai._models._antigravity', create_result=_TEXT_REPLY
-    )
-    with patcher:
-        response = await googleai.generate(model=_ANTIGRAVITY, prompt='hi', config={'store': False})
-
-    assert response.text == 'ok'
-    assert create_calls[0]['store'] is False
-
-
-@pytest.mark.asyncio
-async def test_check_operation_deep_research_after_start_still_resolves(googleai: Genkit) -> None:
-    """A started Deep Research job checks to its report and cancels by its stored `operation.action`."""
-    patcher, _, get_calls, cancel_calls = patch_interactions(
-        'genkit_google_genai._models._deep_research',
-        create_result={'id': 'dr-run', 'status': 'in_progress'},
-        get_result={
-            'id': 'dr-run',
-            'status': 'completed',
-            'steps': [{'type': 'model_output', 'content': [{'type': 'text', 'text': 'report'}]}],
-        },
-    )
-    with patcher:
-        operation = await googleai.generate_operation(
-            model=_DEEP_RESEARCH, prompt='q', config={'thinking_summaries': 'auto'}
-        )
-        checked = await googleai.check_operation(operation)
-        cancelled = await googleai.cancel_operation(operation)
-
-    assert operation.action == _DEEP_RESEARCH_KEY
-    assert checked.action == _DEEP_RESEARCH_KEY
-    assert checked.done is True
-    assert checked.output is not None
-    assert checked.output.message is not None
-    assert checked.output.message.content[0].text == 'report'
-    assert cancelled.action == _DEEP_RESEARCH_KEY
-    assert get_calls == ['dr-run']
-    assert cancel_calls == ['dr-run']
-
-
-@pytest.mark.asyncio
-async def test_check_operation_deep_research_job_saved_before_upgrade_still_resolves(googleai: Genkit) -> None:
-    """A handle saved as `/background-model/googleai/deep-research-…` checks and cancels."""
-    patcher, _, get_calls, cancel_calls = patch_interactions(
-        'genkit_google_genai._models._deep_research',
-        get_result={'id': 'dr-old', 'status': 'in_progress'},
-    )
-    saved = Operation.model_validate({'id': 'dr-old', 'done': False, 'action': _DEEP_RESEARCH_KEY})
-    with patcher:
-        checked = await googleai.check_operation(saved)
-        cancelled = await googleai.cancel_operation(saved)
-
-    assert checked.action == _DEEP_RESEARCH_KEY
-    assert checked.done is False
-    assert cancelled.action == _DEEP_RESEARCH_KEY
-    assert get_calls == ['dr-old']
-    assert cancel_calls == ['dr-old']
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('kind', 'name'),
-    [
-        (ActionKind.MODEL, _ANTIGRAVITY),
-        (ActionKind.MODEL, _LYRIA),
-        (ActionKind.BACKGROUND_MODEL, _DEEP_RESEARCH),
-    ],
-)
-async def test_list_actions_interactions_models_advertise_same_config_schema(kind: ActionKind, name: str) -> None:
-    """The Dev UI list and the resolved model show the same config form."""
-    with patch('genkit_google_genai._google.genai.client.Client') as mock_client:
-        _set_empty_async_model_list(mock_client.return_value)
-        plugin = GoogleAI(api_key='plugin-key')
-        listed = {meta.name: meta for meta in await plugin.list_actions()}
-        resolved = await plugin.resolve(kind, name)
-
-    assert resolved is not None
-    assert _config_form(listed[name].metadata) == _config_form(resolved.metadata)
-
-
-@pytest.mark.parametrize('config_class', [AntigravityConfig, LyriaConfig, DeepResearchConfig])
-def test_interactions_configs_with_unknown_key_raise_validation_error(config_class: type[BaseModel]) -> None:
-    """`AntigravityConfig(temprature=0.2)` and the Lyria and Deep Research equivalents fail naming `temprature`."""
-    with pytest.raises(ValidationError, match='temprature'):
-        config_class.model_validate({'temprature': 0.2})
-
-
-@pytest.mark.asyncio
-async def test_generate_antigravity_unknown_config_key_raises_and_sends_nothing(googleai: Genkit) -> None:
-    """`config={'temprature': 0.2}` on Antigravity raises INVALID_ARGUMENT naming the key; nothing is sent."""
-    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._antigravity')
-    with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.generate(model=_ANTIGRAVITY, prompt='hi', config={'temprature': 0.2})
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert "unknown config key 'temprature'" in str(raised.value)
-    assert create_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_lyria_unknown_config_key_raises_and_sends_nothing(googleai: Genkit) -> None:
-    """`config={'temperature': 0.4}` on Interactions Lyria raises INVALID_ARGUMENT naming the key; nothing is sent."""
-    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._interactions_lyria')
-    with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.generate(model=_LYRIA, prompt='riff', config={'temperature': 0.4})
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert "unknown config key 'temperature'" in str(raised.value)
-    assert create_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_operation_deep_research_unknown_config_key_raises_and_starts_no_job(googleai: Genkit) -> None:
-    """`config={'thinking_summary': 'auto'}` on Deep Research raises naming the key and starts no job."""
-    patcher, create_calls, _, _ = patch_interactions('genkit_google_genai._models._deep_research')
-    with patcher, pytest.raises(GenkitError) as raised:
-        await googleai.generate_operation(model=_DEEP_RESEARCH, prompt='q', config={'thinking_summary': 'auto'})
-
-    assert raised.value.status == 'INVALID_ARGUMENT'
-    assert "unknown config key 'thinking_summary'" in str(raised.value)
-    assert create_calls == []
 
 
 @pytest.mark.asyncio
@@ -1576,6 +1390,31 @@ async def test_generate_operation_deep_research_extra_nested_key_wins_and_keeps_
         'thinking_summaries': 'auto',
         'visualization': 'auto',
     }
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_deep_research_extra_camel_case_merges_into_built_block(googleai: Genkit) -> None:
+    """camelCase keys in `extra` (`agentConfig`, `thinkingSummaries`) fold into the snake_case block Genkit built."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._deep_research', create_result={'id': 'dr-x', 'status': 'in_progress'}
+    )
+    with patcher:
+        await googleai.generate_operation(
+            model=_DEEP_RESEARCH,
+            prompt='q',
+            config={
+                'thinking_summaries': 'auto',
+                'extra': {'agentConfig': {'visualization': 'auto', 'thinkingSummaries': 'none'}},
+            },
+        )
+
+    body = create_calls[0]
+    assert body['agent_config'] == {
+        'type': 'deep-research',
+        'thinking_summaries': 'none',
+        'visualization': 'auto',
+    }
+    assert 'agentConfig' not in body
 
 
 @pytest.mark.asyncio

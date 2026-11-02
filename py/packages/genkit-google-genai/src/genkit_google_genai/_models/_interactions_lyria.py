@@ -63,9 +63,7 @@ class LyriaConfig(GenkitConfig):
     Unknown keys are rejected. An API field this class doesn't declare goes in
     ``extra``, which is deep-merged into the create body.
 
-    ``timeout`` is seconds, the Python convention (httpx, requests, the OpenAI
-    and Anthropic SDKs). It was milliseconds before, so ``timeout=30000``
-    becomes ``timeout=30``.
+    ``timeout`` is the HTTP timeout for this request, in seconds.
     """
 
     base_url: str | None = None

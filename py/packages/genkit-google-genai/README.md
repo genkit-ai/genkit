@@ -173,8 +173,8 @@ Setting any `google_search_*` option turns Google Search on;
 `google_search=False` next to an option raises. A nested key such as
 `thinkingConfig` raises and names the flat fields that replace it.
 
-`timeout` sets the HTTP timeout for one request, in seconds, over the
-plugin's: `GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise.
+`timeout` sets the HTTP timeout for one request, in seconds:
+`GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise.
 
 Function calling mode is controlled by `ai.generate(tool_choice=...)`, not config:
 `'auto'`, `'required'`, or `'none'`. In `'required'` mode, Gemini binds the request's

@@ -117,10 +117,8 @@ class DeepResearchConfig(GenkitConfig):
     ``url_context``, ``code_execution``, ``file_search_store_names``,
     ``mcp_servers``).
 
-    ``timeout`` is seconds, the Python convention (httpx, requests, the OpenAI
-    and Anthropic SDKs), here and in ``check_operation``/``cancel_operation``
-    ``config``. It was milliseconds before, so ``timeout=30000`` becomes
-    ``timeout=30``.
+    ``timeout`` is the HTTP timeout in seconds, here and in
+    ``check_operation``/``cancel_operation`` ``config``.
     """
 
     base_url: str | None = None

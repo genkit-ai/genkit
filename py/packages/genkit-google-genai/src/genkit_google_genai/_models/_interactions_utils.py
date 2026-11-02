@@ -55,8 +55,7 @@ EXTRA_DESCRIPTION = (
 )
 
 TIMEOUT_DESCRIPTION = (
-    'HTTP timeout for this request, in seconds (positive, finite). It applies to the HTTP call, not the '
-    'create body. Was milliseconds before: divide by 1000, so 30000 becomes 30.'
+    'HTTP timeout for this request, in seconds (positive, finite). Applies to the HTTP call, not the create body.'
 )
 
 

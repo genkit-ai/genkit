@@ -2472,9 +2472,17 @@ class GeminiModel:
             )
             if timeout is not None:
                 # google-genai layers a request's http_options over the client's
-                # field by field, so only the timeout changes.
+                # field by field, but populate_server_timeout_header caches
+                # X-Server-Timeout on the shared client and skips it if present,
+                # so set this call's X-Server-Timeout explicitly too.
+                ms = timeout_seconds_to_ms(timeout)
                 http_options = cfg.http_options.model_copy() if cfg.http_options else genai_types.HttpOptions()
-                http_options.timeout = timeout_seconds_to_ms(timeout)
+                http_options.timeout = ms
+                headers = {
+                    key: val for key, val in (http_options.headers or {}).items() if key.lower() != 'x-server-timeout'
+                }
+                headers['X-Server-Timeout'] = str(math.ceil(ms / 1000))
+                http_options.headers = headers
                 cfg.http_options = http_options
             return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
 
