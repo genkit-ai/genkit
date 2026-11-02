@@ -301,6 +301,27 @@ async def test_generate_openai_stt_sends_temperature(ai: Genkit, server: _OpenAI
     assert b'name="temperature"\r\n\r\n0' in request.content
 
 
+@pytest.mark.asyncio
+async def test_generate_openai_stt_sends_prompt_from_config_or_message(ai: Genkit, server: _OpenAIServer) -> None:
+    """Transcription sends `config={'prompt': ...}` in the multipart body and falls back to message text."""
+    await ai.generate(
+        model='openai/whisper-1',
+        prompt=[Part.from_media(_AUDIO, content_type='audio/mpeg')],
+        config={'prompt': 'Names: Genkit, Gemini'},
+    )
+    await ai.generate(
+        model='openai/whisper-1',
+        prompt=[
+            Part.from_text('Speaker: Alice'),
+            Part.from_media(_AUDIO, content_type='audio/mpeg'),
+        ],
+    )
+
+    [from_config, from_message] = server.requests
+    assert b'name="prompt"\r\n\r\nNames: Genkit, Gemini' in from_config.content
+    assert b'name="prompt"\r\n\r\nSpeaker: Alice' in from_message.content
+
+
 @pytest.mark.parametrize(
     'model,props',
     [

@@ -192,6 +192,42 @@ class TestToSTTParams:
         got = _to_stt_params('whisper-1', request)
         assert got.get('prompt') == 'Transcribe this meeting'
 
+    def test_with_config_prompt_override(self) -> None:
+        """Verify config prompt sets wire prompt and overrides message text."""
+        audio_data = base64.b64encode(b'fake audio').decode('ascii')
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part.from_text('Fallback text'),
+                        Part.from_media(f'data:audio/mpeg;base64,{audio_data}', content_type='audio/mpeg'),
+                    ],
+                ),
+            ],
+            config={'prompt': 'Names: Genkit, Gemini'},
+        )
+        got = _to_stt_params('whisper-1', request)
+        assert got.get('prompt') == 'Names: Genkit, Gemini'
+
+    def test_none_config_prompt_falls_back_to_message_text(self) -> None:
+        """Verify config prompt=None falls back to message text."""
+        audio_data = base64.b64encode(b'fake audio').decode('ascii')
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.USER,
+                    content=[
+                        Part.from_text('Names: Genkit'),
+                        Part.from_media(f'data:audio/mpeg;base64,{audio_data}', content_type='audio/mpeg'),
+                    ],
+                ),
+            ],
+            config={'prompt': None},
+        )
+        got = _to_stt_params('whisper-1', request)
+        assert got.get('prompt') == 'Names: Genkit'
+
 
 class TestToSTTResponse:
     """Tests for converting transcription result to ModelResponse."""

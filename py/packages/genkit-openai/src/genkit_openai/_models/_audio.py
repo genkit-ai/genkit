@@ -266,7 +266,7 @@ def _to_stt_params(
         'file': (f'input.{ext}', audio_bytes, content_type or 'audio/mpeg'),
     }
 
-    prompt_text = _find_text(request)
+    prompt_text = config.pop('prompt', None) or _find_text(request)
     if prompt_text:
         params['prompt'] = prompt_text
 
