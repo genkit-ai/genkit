@@ -32,6 +32,8 @@ async def main() -> None:
         tools = await client.get_active_tools()
         for tool in tools:
             print(tool.name, tool.description)
+            # The server's display title and behaviour hints, when it sent them.
+            print(tool.action().metadata['mcp'])
 
         # Every tool of this server, or just one.
         result = await ai.generate(prompt='Echo "hello".', tools=['everything:tool/*'])
