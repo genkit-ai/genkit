@@ -128,6 +128,12 @@ describe('docs utils', () => {
       expect(detectProjectLanguage(emptyDir)).toBe('js');
     });
 
+    it('falls back to "js" when projectRoot does not exist', () => {
+      expect(detectProjectLanguage(path.join(tmpDir, 'does-not-exist'))).toBe(
+        'js'
+      );
+    });
+
     it.each([
       { file: 'go.mod', expected: 'go' },
       { file: 'main.go', expected: 'go' },
