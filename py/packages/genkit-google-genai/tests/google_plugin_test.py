@@ -1016,7 +1016,7 @@ async def test_lazy_client_credential_failure_is_unauthenticated_in_action_body(
             await embedder_action.run(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is no_adc
+    assert raised.value.__cause__ is no_adc
 
 
 @pytest.mark.asyncio
@@ -1065,7 +1065,7 @@ async def test_googleai_init_rejected_key_is_unauthenticated(googleai_plugin_ins
         await googleai_plugin_instance.init()
 
     assert raised.value.status == 'UNAUTHENTICATED'
-    assert raised.value.cause is rejected
+    assert raised.value.__cause__ is rejected
 
 
 @pytest.mark.asyncio
@@ -1089,7 +1089,6 @@ async def test_vertexai_init_classifies_model_listing_failure(
         await vertexai_plugin_instance.init()
 
     assert raised.value.status == status
-    assert raised.value.cause is failure
     assert raised.value.__cause__ is failure
 
 
@@ -1127,4 +1126,4 @@ async def test_googleai_init_classifies_failure_while_paging_models(googleai_plu
         await googleai_plugin_instance.init()
 
     assert raised.value.status == 'PERMISSION_DENIED'
-    assert raised.value.cause is denied
+    assert raised.value.__cause__ is denied

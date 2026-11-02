@@ -42,7 +42,7 @@ from genkit._core._action import (
 )
 from genkit._core._background import BackgroundAction, background_base_id
 from genkit._core._dap import DapFn, DapMetadata, DynamicActionProvider
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     EmbedRequest,
@@ -211,7 +211,7 @@ class Registry:
                 raise GenkitError(
                     status='NOT_FOUND',
                     message=f"Schema '{name}' not found",
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             return schema
 

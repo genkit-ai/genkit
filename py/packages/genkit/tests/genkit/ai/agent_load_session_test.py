@@ -25,7 +25,7 @@ import pytest
 
 from genkit._ai._agents._runtime import AgentInitError, load_session
 from genkit._ai._agents._session import SessionStore
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import AgentInit, SessionSnapshot, SessionState
 from genkit._core._typing import (
     SnapshotStatus,
@@ -90,7 +90,7 @@ async def test_missing_snapshot_raises_with_snapshot_not_found() -> None:
     with pytest.raises(GenkitError) as exc:
         await load_session(init=AgentInit(snapshot_id='gone'), store=store, agent_name='a')
     assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_FOUND
+    assert exc.value.reason is ErrorReason.SNAPSHOT_NOT_FOUND
     assert 'gone' in exc.value.message
     assert 'SNAPSHOT_NOT_FOUND' not in exc.value.message
 
@@ -103,7 +103,7 @@ async def test_resume_by_snapshot_id_rejects_non_completed() -> None:
     with pytest.raises(GenkitError) as exc:
         await load_session(init=AgentInit(snapshot_id='snap-f'), store=store, agent_name='a')
     assert exc.value.status == INVALID_ARGUMENT
-    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert exc.value.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in exc.value.message
     assert 'SNAPSHOT_NOT_RESUMABLE' not in exc.value.message
 
@@ -117,7 +117,7 @@ async def test_resume_by_snapshot_id_rejects_pending() -> None:
     with pytest.raises(GenkitError) as exc:
         await load_session(init=AgentInit(snapshot_id='snap-p'), store=store, agent_name='a')
     assert exc.value.status == INVALID_ARGUMENT
-    assert exc.value.reason is RuntimeErrorReason.SNAPSHOT_NOT_RESUMABLE
+    assert exc.value.reason is ErrorReason.SNAPSHOT_NOT_RESUMABLE
     assert 'not resumable' in exc.value.message
     assert 'SNAPSHOT_NOT_RESUMABLE' not in exc.value.message
 
@@ -182,7 +182,7 @@ async def test_snapshot_id_with_mismatched_session_id_rejected() -> None:
             agent_name='a',
         )
     assert exc.value.status == INVALID_ARGUMENT
-    assert exc.value.reason is RuntimeErrorReason.INVALID_SESSION_ID
+    assert exc.value.reason is ErrorReason.INVALID_SESSION_ID
     assert 'does not belong to session' in exc.value.message
     assert 'INVALID_SESSION_ID' not in exc.value.message
     # The message is public, so it must not name the session that owns the snapshot.
