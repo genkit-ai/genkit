@@ -551,8 +551,8 @@ async def test_generate_both_spellings_typo_and_bad_value_all_in_one_error() -> 
 
 
 @pytest.mark.asyncio
-async def test_prompt_call_other_model_with_none_for_a_prompt_only_key_raises() -> None:
-    """`model='other', config={'thinkingConfig': None}` raises: None is a value, and other has no thinkingConfig."""
+async def test_prompt_call_other_model_clearing_prompt_key_with_none_runs() -> None:
+    """A Gemini prompt called with `model='other', config={'thinkingConfig': None}` runs and sends no thinkingConfig."""
     ai = Genkit()
     gem = _Model()
     other = _Model()
@@ -565,11 +565,87 @@ async def test_prompt_call_other_model_with_none_for_a_prompt_only_key_raises() 
         config={'thinkingConfig': {'thinkingBudget': 0}},
     )
 
-    with pytest.raises(GenkitError) as err:
-        await prompt(model='other', config={'thinkingConfig': None})
+    response = await prompt(model='other', config={'thinkingConfig': None})
 
-    _assert_rejected(err, other, "unknown config key 'thinkingConfig'")
+    assert response.text == 'ok'
+    assert other.requests
+    assert _config_value(other.requests[-1].config, 'thinkingConfig') is None
+    assert _config_value(other.requests[-1].config, 'thinking_config') is None
     assert gem.requests == []
+
+
+def _sent_as_none(config: Any, key: str) -> bool:  # noqa: ANN401
+    if isinstance(config, dict):
+        return key in config and config[key] is None
+    return isinstance(config, BaseModel) and key in config.model_fields_set and getattr(config, key) is None
+
+
+def _gem_prompt_and_other(
+    *,
+    prompt_model: str | ModelRef[GeminiLikeConfig] = 'gem',
+    prompt_config: dict[str, Any] | None = None,
+) -> tuple[Genkit, _Model, _Model]:
+    ai = Genkit()
+    gem = _Model()
+    other = _Model()
+    gem.define(ai, name='gem', config_schema=GeminiLikeConfig)
+    other.define(ai, name='other', config_schema=ModelConfig)
+    ai.define_prompt(
+        name='hop',
+        model=prompt_model,
+        prompt='hi',
+        config=prompt_config if prompt_config is not None else {'thinkingConfig': {'thinkingBudget': 0}},
+    )
+    return ai, gem, other
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_other_model_none_for_a_key_the_prompt_lacks_raises() -> None:
+    """`model='other', config={'temprature': None}` raises: the prompt has no temprature, so it's a typo."""
+    ai, gem, other = _gem_prompt_and_other()
+
+    with pytest.raises(GenkitError) as err:
+        await ai.prompt('hop')(model='other', config={'temprature': None})
+
+    _assert_rejected(err, other, "other: unknown config key 'temprature'")
+    assert gem.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_other_model_none_for_a_declared_key_is_a_value() -> None:
+    """`model='other', config={'temperature': None}` over the prompt's 0.5 sends temperature=None: other declares it."""
+    ai, gem, other = _gem_prompt_and_other(prompt_config={'temperature': 0.5})
+
+    response = await ai.prompt('hop')(model='other', config={'temperature': None})
+
+    assert response.text == 'ok'
+    assert _sent_as_none(other.requests[-1].config, 'temperature')
+    assert gem.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_same_model_none_for_prompt_key_is_a_value() -> None:
+    """`config={'thinkingConfig': None}` on the prompt's own model sends thinking_config=None, as before."""
+    ai, gem, other = _gem_prompt_and_other()
+
+    response = await ai.prompt('hop')(config={'thinkingConfig': None})
+
+    assert response.text == 'ok'
+    assert _sent_as_none(gem.requests[-1].config, 'thinking_config')
+    assert other.requests == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_on_model_ref_called_with_its_name_is_not_a_hop() -> None:
+    """A prompt on `ModelRef(name='gem')` called with `model='gem'` keeps None a value: same model, no hop."""
+    ref = ModelRef(name='gem', config_schema=GeminiLikeConfig)
+    ai, gem, _ = _gem_prompt_and_other(prompt_model=ref)
+    prompt = ai.define_prompt(name='typo', model=ref, prompt='hi', config={'temprature': 0.2})
+
+    with pytest.raises(GenkitError) as err:
+        await prompt(model='gem', config={'temprature': None})
+
+    _assert_rejected(err, gem, "gem: unknown config key 'temprature'")
 
 
 @pytest.mark.asyncio

@@ -34,6 +34,7 @@ from genkit._core._action import (
 )
 from genkit._core._config_check import (
     check_config_values,
+    config_field_names,
     config_values,
     fold_config_aliases as fold_config_aliases,
     layer_call_config,
@@ -262,11 +263,47 @@ def call_config_class(
     )
 
 
+def clear_on_hop(
+    *,
+    prompt_config: object,
+    call_config: object,
+    schema: type[BaseModel] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Prompt and call bags minus the keys a hop's call-level ``None`` clears.
+
+    A Gemini prompt called with ``model='other', config={'thinkingConfig': None}``
+    drops thinkingConfig from both bags, so ``other`` never sees a key its
+    class doesn't declare. A key is cleared only when the call sets it to
+    ``None``, ``schema`` doesn't declare it, and the prompt's config has it
+    (spellings fold through the prompt's typed class). A ``None`` for a key the
+    prompt doesn't have (``'temprature'``) stays and fails the unknown-key check.
+    """
+    prompt_bag = normalize_config(config=prompt_config)
+    call_bag = normalize_config(config=call_config)
+    if schema is None or not isinstance(call_config, Mapping):
+        return prompt_bag, call_bag
+    target = config_field_names(schema)
+    spelling = config_field_names(type(prompt_config)) if isinstance(prompt_config, BaseModel) else {}
+    prompt_keys = {spelling.get(key, key) for key in prompt_bag}
+    cleared = {
+        spelling.get(key, key)
+        for key, value in call_bag.items()
+        if value is None and key not in target and spelling.get(key, key) in prompt_keys
+    }
+    if not cleared:
+        return prompt_bag, call_bag
+    return (
+        {key: value for key, value in prompt_bag.items() if spelling.get(key, key) not in cleared},
+        {key: value for key, value in call_bag.items() if spelling.get(key, key) not in cleared},
+    )
+
+
 async def resolve_for_generate(
     *,
     model: object | None,
     config: object = None,
     prompt_config: object = None,
+    hopping: bool = False,
     registry: Registry,
     message: str = 'No model configured.',
 ) -> ResolvedModel:
@@ -275,7 +312,8 @@ async def resolve_for_generate(
     The model's definition-time class is the class this call checks. A
     ModelRef's config_schema must name it (see call_config_class), and the
     ref's layers fold aliases to it. When ``prompt_config`` is passed, ``config``
-    overlays it before overlaying the ref's layers.
+    overlays it before overlaying the ref's layers. ``hopping`` (the call
+    named a model other than the prompt's) runs clear_on_hop first.
     """
     arg = resolve_model_arg(model=model, registry=registry, message=message)
     name = arg.name if isinstance(arg, ModelRef) else arg
@@ -288,10 +326,11 @@ async def resolve_for_generate(
         action_schema=python_config_schema(action.config_schema) if action is not None else None,
     )
     if prompt_config is not None:
-        layers = [normalize_config(config=prompt_config)]
-        if config is not None:
-            layers.append(normalize_config(config=config))
-        config = overlay_config(layers=layers, schema=schema or ref_schema)
+        if hopping:
+            prompt_bag, call_bag = clear_on_hop(prompt_config=prompt_config, call_config=config, schema=schema)
+        else:
+            prompt_bag, call_bag = normalize_config(config=prompt_config), normalize_config(config=config)
+        config = overlay_config(layers=[prompt_bag, call_bag], schema=schema or ref_schema)
     resolved = resolve_call_model(model=arg, config=config, registry=registry, message=message, schema=schema)
     reject_config_api_key(resolved.config)
     return replace(resolved, config_schema=schema)

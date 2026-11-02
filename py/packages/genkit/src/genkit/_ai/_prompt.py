@@ -53,10 +53,12 @@ from genkit._ai._model import (
     ModelResponseChunk,
     assert_correct_config_class,
     check_call_config,
+    clear_on_hop,
     config_schema_at_define,
     normalize_config,
     resolve_call_model,
     resolve_for_generate,
+    resolve_model_name,
 )
 from genkit._core._action import (
     Action,
@@ -359,15 +361,29 @@ class Prompt(Generic[InputT, OutputT]):
         """
         override_config = opts.get('config')
         override_model = opts.get('model')
+        # A hop is a different model name: 'gem' and ModelRef(name='gem') are the same model.
+        hopping = (
+            override_model is not None
+            and self._defined_model_name is not None
+            and resolve_model_name(model=override_model, registry=self._ai._registry) != self._defined_model_name
+        )
         model = override_model if override_model is not None else self._def.model
         resolved = await resolve_for_generate(
             model=model,
             config=override_config,
             prompt_config=self._def.config,
+            hopping=hopping,
             registry=self._ai._registry,
         )
+        check_config = override_config
+        if hopping and isinstance(override_config, Mapping):
+            _, check_config = clear_on_hop(
+                prompt_config=self._def.config,
+                call_config=override_config,
+                schema=resolved.config_schema,
+            )
         check_call_config(
-            config=override_config,
+            config=check_config,
             schema=resolved.config_schema,
             model=resolved.name,
         )
