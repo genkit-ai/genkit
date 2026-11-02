@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
+import { logger } from '@genkit-ai/tools-common/utils';
 import {
   afterEach,
   beforeEach,
@@ -29,17 +29,6 @@ import * as path from 'path';
 import { docsList, docsSearch } from '../../src/commands/docs';
 import type { Doc } from '../../src/utils/docs';
 import * as docsUtils from '../../src/utils/docs';
-
-jest.mock('@genkit-ai/tools-common/utils', () => {
-  const actual = jest.requireActual('@genkit-ai/tools-common/utils') as Record<
-    string,
-    unknown
-  >;
-  return {
-    ...actual,
-    findProjectRoot: jest.fn(),
-  };
-});
 
 const SAMPLE_DOCS: Record<string, Doc> = {
   'js/flows.md': {
@@ -115,7 +104,7 @@ describe('docs:list and docs:search CLI commands', () => {
       const projDir = path.join(tmpDir, `cli-${marker}`);
       fs.mkdirSync(projDir, { recursive: true });
       fs.writeFileSync(path.join(projDir, marker), '');
-      (findProjectRoot as jest.Mock<any>).mockResolvedValue(projDir);
+      jest.spyOn(process, 'cwd').mockReturnValue(projDir);
 
       loggedLines = [];
       await docsList.parseAsync(['node', 'docs:list']);
@@ -136,7 +125,7 @@ describe('docs:list and docs:search CLI commands', () => {
     const goDir = path.join(tmpDir, 'cli-go-override');
     fs.mkdirSync(goDir, { recursive: true });
     fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
-    (findProjectRoot as jest.Mock<any>).mockResolvedValue(goDir);
+    jest.spyOn(process, 'cwd').mockReturnValue(goDir);
 
     loggedLines = [];
     await docsList.parseAsync(['node', 'docs:list', 'dart']);
