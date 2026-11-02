@@ -31,6 +31,7 @@ from genkit._core._tool import (
     ORIGINAL_OUTPUT_SCHEMA_KEY as ORIGINAL_OUTPUT_SCHEMA_KEY,
     Tool as _Tool,
     ToolContext as ToolContext,
+    _tool_generate_chunk_sender as _tool_generate_chunk_sender,
     _tool_original_input as _tool_original_input,
     _tool_resumed_metadata as _tool_resumed_metadata,
     as_multipart_tool_response as as_multipart_tool_response,
@@ -45,6 +46,7 @@ from genkit._core._typing import ToolResponse
 
 ToolInputT = TypeVar('ToolInputT')
 ToolOutputT = TypeVar('ToolOutputT')
+ToolChunkT = TypeVar('ToolChunkT')
 
 
 def normalize_pending_content(pending_content: object, *, tool_name: str) -> list[dict[str, Any]] | None:
@@ -118,11 +120,34 @@ def _resume_context_from_tool_request_part(
     return as_resumed(tool_request_part), meta.get('replacedInput')
 
 
+class _ScopedToolChunkSink:
+    """Callable chunk sink bound to a single ``run_tool_request`` lifetime."""
+
+    __slots__ = ('_tool_request_part', '_on_tool_chunk')
+
+    def __init__(
+        self,
+        tool_request_part: Part,
+        on_tool_chunk: Callable[[Part, object], None] | None,
+    ) -> None:
+        self._tool_request_part = tool_request_part
+        self._on_tool_chunk = on_tool_chunk
+
+    def __call__(self, chunk: object) -> None:
+        callback = self._on_tool_chunk
+        if callback is not None:
+            callback(self._tool_request_part, chunk)
+
+    def close(self) -> None:
+        self._on_tool_chunk = None
+
+
 async def run_tool_request(
     *,
     tool: Action,
     tool_request_part: Part,
     ctx: MiddlewareContext | None = None,
+    on_tool_chunk: Callable[[Part, object], None] | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
@@ -136,6 +161,8 @@ async def run_tool_request(
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
+    sink = _ScopedToolChunkSink(tool_request_part, on_tool_chunk) if on_tool_chunk is not None else None
+    token_sender = _tool_generate_chunk_sender.set(sink)
     run_context = dict(ctx.context) if ctx and ctx.context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
@@ -148,6 +175,9 @@ async def run_tool_request(
             )
         ).response
     finally:
+        if sink is not None:
+            sink.close()
+        _tool_generate_chunk_sender.reset(token_sender)
         _tool_resumed_metadata.reset(token_meta)
         _tool_original_input.reset(token_input)
 
@@ -185,6 +215,7 @@ async def run_tool_after_restart(
     tool: Action,
     restart_trp: Part,
     ctx: MiddlewareContext | None = None,
+    on_tool_chunk: Callable[[Part, object], None] | None = None,
 ) -> Part:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
@@ -192,7 +223,7 @@ async def run_tool_after_restart(
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
     try:
-        return await run_restarted_tool(tool=tool, restart_trp=restart_trp, ctx=ctx)
+        return await run_restarted_tool(tool=tool, restart_trp=restart_trp, ctx=ctx, on_tool_chunk=on_tool_chunk)
     except Interrupt as e:
         logger.debug(
             'restarted tool triggered an interrupt',
@@ -206,6 +237,7 @@ async def run_restarted_tool(
     tool: Action,
     restart_trp: Part,
     ctx: MiddlewareContext | None = None,
+    on_tool_chunk: Callable[[Part, object], None] | None = None,
 ) -> Part:
     """Like ``run_tool_after_restart``, but a second Interrupt propagates as is.
 
@@ -216,7 +248,7 @@ async def run_restarted_tool(
     tool_req = restart_trp.tool_request
     if tool_req is None:
         raise ValueError('run_tool_after_restart needs a tool request part')
-    raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+    raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx, on_tool_chunk=on_tool_chunk)
     envelope = as_multipart_tool_response(raw, tool_name=tool_req.name)
     return Part(
         tool_response=ToolResponse(
@@ -236,14 +268,14 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[Any, Any]:
+) -> _Tool[Any, Any, Any]:
     """Build a tool and register it (``/tool/<name>`` and its ``/tool.v2/<name>`` envelope).
 
     The return annotation is what the model binds. ``input_schema=`` is for
     cases like define_interrupt where the handler signature cannot express
     the input shape.
     """
-    built: _Tool[Any, Any] = _Tool(func, name=name, description=description, input_schema=input_schema)
+    built: _Tool[Any, Any, Any] = _Tool(func, name=name, description=description, input_schema=input_schema)
     registry.register_action_from_instance(built)
     return built
 
@@ -261,34 +293,34 @@ def _define_tool(
 @overload
 def define_tool(
     registry: Registry,
-    func: Callable[[ToolContext, object], Awaitable[ToolOutputT]],
+    func: Callable[[ToolContext[ToolChunkT], object], Awaitable[ToolOutputT]],
     name: str | None = None,
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[Any, ToolOutputT]: ...
+) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
 
 
 @overload
 def define_tool(
     registry: Registry,
-    func: Callable[[ToolInputT, ToolContext], Awaitable[ToolOutputT]],
+    func: Callable[[ToolInputT, ToolContext[ToolChunkT]], Awaitable[ToolOutputT]],
     name: str | None = None,
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[ToolInputT, ToolOutputT]: ...
+) -> _Tool[ToolInputT, ToolOutputT, ToolChunkT]: ...
 
 
 @overload
 def define_tool(
     registry: Registry,
-    func: Callable[[ToolContext, ToolInputT], Awaitable[ToolOutputT]],
+    func: Callable[[ToolContext[ToolChunkT], ToolInputT], Awaitable[ToolOutputT]],
     name: str | None = None,
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[ToolInputT, ToolOutputT]: ...
+) -> _Tool[ToolInputT, ToolOutputT, ToolChunkT]: ...
 
 
 @overload
@@ -305,12 +337,12 @@ def define_tool(
 @overload
 def define_tool(
     registry: Registry,
-    func: Callable[[ToolContext], Awaitable[ToolOutputT]],
+    func: Callable[[ToolContext[ToolChunkT]], Awaitable[ToolOutputT]],
     name: str | None = None,
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[Any, ToolOutputT]: ...
+) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
 
 
 @overload
@@ -342,7 +374,7 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[Any, Any]:
+) -> _Tool[Any, Any, Any]:
     """Register a function as a tool.
 
     The model sees the handler's return annotation as ``outputSchema``.
