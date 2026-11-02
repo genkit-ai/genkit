@@ -61,7 +61,26 @@ const SAMPLE_DOCS: Record<string, Doc> = {
   },
 };
 
-describe('docs:list and docs:search CLI commands', () => {
+const WORKSPACE_MARKERS = [
+  { marker: 'go.mod', expectedLang: 'go', expectedPath: 'go/flows.md' },
+  {
+    marker: 'pyproject.toml',
+    expectedLang: 'python',
+    expectedPath: 'python/flows.md',
+  },
+  {
+    marker: 'pubspec.yaml',
+    expectedLang: 'dart',
+    expectedPath: 'dart/flows.md',
+  },
+  {
+    marker: 'package.json',
+    expectedLang: 'js',
+    expectedPath: 'js/flows.md',
+  },
+] as const;
+
+describe('docs CLI commands', () => {
   let tmpDir: string;
   let loggedLines: string[];
 
@@ -81,61 +100,61 @@ describe('docs:list and docs:search CLI commands', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it.each([
-    { marker: 'go.mod', expectedLang: 'go', expectedPath: 'go/flows.md' },
-    {
-      marker: 'pyproject.toml',
-      expectedLang: 'python',
-      expectedPath: 'python/flows.md',
-    },
-    {
-      marker: 'pubspec.yaml',
-      expectedLang: 'dart',
-      expectedPath: 'dart/flows.md',
-    },
-    {
-      marker: 'package.json',
-      expectedLang: 'js',
-      expectedPath: 'js/flows.md',
-    },
-  ])(
-    'auto-detects $expectedLang in docs:list and docs:search when [language] is omitted ($marker)',
-    async ({ marker, expectedLang, expectedPath }) => {
-      const projDir = path.join(tmpDir, `cli-${marker}`);
-      fs.mkdirSync(projDir, { recursive: true });
-      fs.writeFileSync(path.join(projDir, marker), '');
-      jest.spyOn(process, 'cwd').mockReturnValue(projDir);
+  describe('docs:list', () => {
+    it.each(WORKSPACE_MARKERS)(
+      'auto-detects $expectedLang when [language] is omitted ($marker)',
+      async ({ marker, expectedLang, expectedPath }) => {
+        const projDir = path.join(tmpDir, `list-${marker}`);
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(path.join(projDir, marker), '');
+        jest.spyOn(process, 'cwd').mockReturnValue(projDir);
 
-      loggedLines = [];
-      await docsList.parseAsync(['node', 'docs:list']);
-      const listOutput = loggedLines.join('\n');
-      expect(listOutput).toContain(
-        `Genkit Documentation Index (${expectedLang}):`
-      );
-      expect(listOutput).toContain(`Path: ${expectedPath}`);
+        await docsList.parseAsync(['node', 'docs:list']);
+        const output = loggedLines.join('\n');
+        expect(output).toContain(
+          `Genkit Documentation Index (${expectedLang}):`
+        );
+        expect(output).toContain(`Path: ${expectedPath}`);
+      }
+    );
 
-      loggedLines = [];
-      await docsSearch.parseAsync(['node', 'docs:search', 'Flows']);
-      const searchOutput = loggedLines.join('\n');
-      expect(searchOutput).toContain(`Path: ${expectedPath}`);
-    }
-  );
+    it('respects an explicit [language] argument over the detected project language', async () => {
+      const goDir = path.join(tmpDir, 'list-go-override');
+      fs.mkdirSync(goDir, { recursive: true });
+      fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
+      jest.spyOn(process, 'cwd').mockReturnValue(goDir);
 
-  it('respects explicit [language] argument in docs:list and docs:search', async () => {
-    const goDir = path.join(tmpDir, 'cli-go-override');
-    fs.mkdirSync(goDir, { recursive: true });
-    fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
-    jest.spyOn(process, 'cwd').mockReturnValue(goDir);
+      await docsList.parseAsync(['node', 'docs:list', 'dart']);
+      const output = loggedLines.join('\n');
+      expect(output).toContain('Genkit Documentation Index (dart):');
+      expect(output).toContain('Path: dart/flows.md');
+    });
+  });
 
-    loggedLines = [];
-    await docsList.parseAsync(['node', 'docs:list', 'dart']);
-    const listOutput = loggedLines.join('\n');
-    expect(listOutput).toContain('Genkit Documentation Index (dart):');
-    expect(listOutput).toContain('Path: dart/flows.md');
+  describe('docs:search', () => {
+    it.each(WORKSPACE_MARKERS)(
+      'auto-detects $expectedLang when [language] is omitted ($marker)',
+      async ({ marker, expectedPath }) => {
+        const projDir = path.join(tmpDir, `search-${marker}`);
+        fs.mkdirSync(projDir, { recursive: true });
+        fs.writeFileSync(path.join(projDir, marker), '');
+        jest.spyOn(process, 'cwd').mockReturnValue(projDir);
 
-    loggedLines = [];
-    await docsSearch.parseAsync(['node', 'docs:search', 'Flows', 'python']);
-    const searchOutput = loggedLines.join('\n');
-    expect(searchOutput).toContain('Path: python/flows.md');
+        await docsSearch.parseAsync(['node', 'docs:search', 'Flows']);
+        const output = loggedLines.join('\n');
+        expect(output).toContain(`Path: ${expectedPath}`);
+      }
+    );
+
+    it('respects an explicit [language] argument over the detected project language', async () => {
+      const goDir = path.join(tmpDir, 'search-go-override');
+      fs.mkdirSync(goDir, { recursive: true });
+      fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
+      jest.spyOn(process, 'cwd').mockReturnValue(goDir);
+
+      await docsSearch.parseAsync(['node', 'docs:search', 'Flows', 'python']);
+      const output = loggedLines.join('\n');
+      expect(output).toContain('Path: python/flows.md');
+    });
   });
 });

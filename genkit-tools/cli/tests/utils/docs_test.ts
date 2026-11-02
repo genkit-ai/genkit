@@ -14,8 +14,18 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
-import { Doc, searchDocs } from '../../src/utils/docs';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { Doc, detectProjectLanguage, searchDocs } from '../../src/utils/docs';
 
 describe('docs utils', () => {
   describe('searchDocs', () => {
@@ -76,6 +86,72 @@ describe('docs utils', () => {
       const results = searchDocs(sampleDocs, 'minimal', 'js');
       expect(results).toHaveLength(1);
       expect(results[0].file).toBe('js/minimal.md');
+    });
+  });
+
+  describe('detectProjectLanguage', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-docs-lang-'))
+      );
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it.each([
+      { file: 'go.mod', expected: 'go' },
+      { file: 'main.go', expected: 'go' },
+      { file: 'pyproject.toml', expected: 'python' },
+      { file: 'requirements.txt', expected: 'python' },
+      { file: 'pubspec.yaml', expected: 'dart' },
+      { file: 'package.json', expected: 'js' },
+    ])(
+      'detects "$expected" when "$file" is present in projectRoot',
+      ({ file, expected }) => {
+        const dir = path.join(tmpDir, `proj-${file}`);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, file), '');
+
+        expect(detectProjectLanguage(dir)).toBe(expected);
+      }
+    );
+
+    it('falls back to "js" when no marker files exist', () => {
+      const emptyDir = path.join(tmpDir, 'empty');
+      fs.mkdirSync(emptyDir, { recursive: true });
+
+      expect(detectProjectLanguage(emptyDir)).toBe('js');
+    });
+
+    it.each([
+      { file: 'go.mod', expected: 'go' },
+      { file: 'main.go', expected: 'go' },
+      { file: 'pyproject.toml', expected: 'python' },
+      { file: 'pubspec.yaml', expected: 'dart' },
+    ])(
+      'prioritizes "$file" ($expected) when package.json is also present',
+      ({ file, expected }) => {
+        const dir = path.join(tmpDir, `with-pkg-${file}`);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, file), '');
+        fs.writeFileSync(path.join(dir, 'package.json'), '{}');
+
+        expect(detectProjectLanguage(dir)).toBe(expected);
+      }
+    );
+
+    it('uses process.cwd() when projectRoot is omitted', () => {
+      const pyDir = path.join(tmpDir, 'cwd-py');
+      fs.mkdirSync(pyDir, { recursive: true });
+      fs.writeFileSync(path.join(pyDir, 'pyproject.toml'), '[project]');
+
+      jest.spyOn(process, 'cwd').mockReturnValue(pyDir);
+      expect(detectProjectLanguage()).toBe('python');
     });
   });
 });
