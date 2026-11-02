@@ -53,6 +53,7 @@ from genkit_google_genai import (
     SearchType,
     ThinkingLevel,
     VeoConfig,
+    VertexAI,
     VideoCompressionQuality,
 )
 from pydantic import BaseModel, ValidationError
@@ -87,6 +88,7 @@ def test_gemini_config_flat_kwargs() -> None:
         base_url='https://kitchen.example',
         api_version='v1beta',
         location='us-central1',
+        timeout=30,
         temperature=0.7,
         top_p=0.9,
         top_k=40,
@@ -124,6 +126,7 @@ def test_gemini_config_flat_kwargs() -> None:
         'baseUrl': 'https://kitchen.example',
         'apiVersion': 'v1beta',
         'location': 'us-central1',
+        'timeout': 30.0,
         'temperature': 0.7,
         'topP': 0.9,
         'topK': 40,
@@ -258,7 +261,7 @@ def test_lyria_config_snake_case_kwargs() -> None:
     config = LyriaConfig(
         base_url='https://kitchen.example',
         api_version='v1beta',
-        timeout=30000,
+        timeout=30,
         custom_headers={'x-team': 'kitchen'},
         response_modalities=['audio'],
     )
@@ -266,7 +269,7 @@ def test_lyria_config_snake_case_kwargs() -> None:
     assert _wire(config) == {
         'baseUrl': 'https://kitchen.example',
         'apiVersion': 'v1beta',
-        'timeout': 30000,
+        'timeout': 30.0,
         'customHeaders': {'x-team': 'kitchen'},
         'responseModalities': ['audio'],
     }
@@ -277,7 +280,7 @@ def test_antigravity_config_snake_case_kwargs() -> None:
     config = AntigravityConfig(
         base_url='https://kitchen.example',
         api_version='v1beta',
-        timeout=30000,
+        timeout=30,
         custom_headers={'x-team': 'kitchen'},
         previous_interaction_id='int-1',
         store=True,
@@ -288,7 +291,7 @@ def test_antigravity_config_snake_case_kwargs() -> None:
     assert _wire(config) == {
         'baseUrl': 'https://kitchen.example',
         'apiVersion': 'v1beta',
-        'timeout': 30000,
+        'timeout': 30.0,
         'customHeaders': {'x-team': 'kitchen'},
         'previousInteractionId': 'int-1',
         'store': True,
@@ -539,3 +542,30 @@ async def test_deep_research_file_search_create_body(
             'tools': [tool],
         }
     ]
+
+
+def test_plugin_network_kwargs() -> None:
+    """GoogleAI and VertexAI accept typed network kwargs under pyright, pyrefly and ty."""
+    google = GoogleAI(
+        api_key='fake-key',
+        base_url='https://kitchen.example',
+        api_version='v1beta',
+        headers={'X-Team': 'kitchen'},
+        timeout=30,
+        max_retries=2,
+        http_client_factory=httpx.AsyncClient,
+    )
+    vertex = VertexAI(
+        project='kitchen-proj',
+        location='us-central1',
+        api_key='fake-key',
+        base_url='https://kitchen.example',
+        api_version='v1beta1',
+        headers={'X-Team': 'kitchen'},
+        timeout=30.5,
+        max_retries=0,
+        http_client_factory=lambda: httpx.AsyncClient(timeout=10.0),
+    )
+
+    assert google.name == 'googleai'
+    assert vertex.name == 'vertexai'

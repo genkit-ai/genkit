@@ -25,7 +25,16 @@ from typing import Any
 
 import httpx
 import pytest
-from genkit_google_genai import GeminiConfig, GoogleAI, VeoConfig, VertexAI, VirtualTryOnConfig
+from genkit_google_genai import (
+    AntigravityConfig,
+    DeepResearchConfig,
+    GeminiConfig,
+    GoogleAI,
+    LyriaConfig,
+    VeoConfig,
+    VertexAI,
+    VirtualTryOnConfig,
+)
 from genkit_google_genai._models._sdk_config import copy_http_options
 from google.genai import types as genai_types
 from google.oauth2.credentials import Credentials
@@ -68,6 +77,10 @@ class FakeGoogleApi:
         self.requests.append(request)
         if '/operations/' in request.url.path and request.method == 'GET':
             return httpx.Response(200, json=VEO_DONE)
+        if '/interactions/' in request.url.path and request.method == 'GET':
+            return httpx.Response(200, json={'id': 'dr-1', 'status': 'in_progress'})
+        if request.url.path.endswith('/cancel') and request.method == 'POST':
+            return httpx.Response(200, json={'id': 'dr-1', 'status': 'cancelled'})
         if request.method == 'GET':
             return httpx.Response(200, json=self.model_list)
         if ':predictLongRunning' in request.url.path:
@@ -75,6 +88,8 @@ class FakeGoogleApi:
         if ':predict' in request.url.path:
             return httpx.Response(200, json=VTO_PREDICTION)
         if request.url.path.endswith('/interactions'):
+            if b'"background":true' in request.content or b'"background": true' in request.content:
+                return httpx.Response(200, json={'id': 'dr-1', 'status': 'in_progress'})
             return httpx.Response(200, json=ANTIGRAVITY_DONE)
         if 'embedcontent' in request.url.path.lower():
             return httpx.Response(200, json=EMBEDDING)
@@ -397,29 +412,33 @@ async def test_factory_returning_sync_client_fails_naming_async_client() -> None
 
 
 @pytest.mark.parametrize('plugin_class', [GoogleAI, vertex_ai])
-@pytest.mark.parametrize('timeout', [0, -1, math.nan, math.inf])
+@pytest.mark.parametrize('timeout', [0, -1, math.nan, math.inf, 1e306, True, False, '5'])
 def test_timeout_not_positive_and_finite_raises_value_error(
     plugin_class: Any,  # noqa: ANN401
-    timeout: float,
+    timeout: Any,  # noqa: ANN401
 ) -> None:
-    """timeout=0, -1, nan or inf raises ValueError at construction."""
+    """timeout=0, -1, nan, inf, ms-overflow, bool or str raises ValueError at construction."""
     with pytest.raises(ValueError, match='timeout must be a positive, finite number of seconds'):
         plugin_class(api_key='k', timeout=timeout)
 
 
 @pytest.mark.asyncio
-async def test_sub_millisecond_timeout_rounds_up_to_one_millisecond() -> None:
-    """timeout=0.0001 sends a 1 ms timeout on Gemini and Interactions instead of none or zero."""
+@pytest.mark.parametrize(('seconds', 'expected_read'), [(0.0001, 0.001), (1e-10, 0.001), (2.007, 2.007)])
+async def test_timeout_converts_to_milliseconds_without_float_noise_or_zero(
+    seconds: float,
+    expected_read: float,
+) -> None:
+    """Sub-ms positive budgets round up to 1 ms (never 0), and 2.007 s stays 2007 ms instead of 2008."""
     api = FakeGoogleApi()
-    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout=0.0001, http_client_factory=api.client)])
+    ai = Genkit(plugins=[GoogleAI(api_key='k', timeout=seconds, http_client_factory=api.client)])
 
     await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
     gemini_timeout = api.last_post().extensions['timeout']
     await ai.generate(model='googleai/antigravity-preview-05-2026', prompt='Build a landing page.')
     interactions_timeout = api.last_post().extensions['timeout']
 
-    assert gemini_timeout['read'] == 0.001
-    assert interactions_timeout['read'] == 0.001
+    assert gemini_timeout['read'] == expected_read
+    assert interactions_timeout['read'] == expected_read
 
 
 @pytest.mark.asyncio
@@ -482,23 +501,30 @@ def test_max_retries_not_a_non_negative_int_raises_value_error(
 
 
 def test_copy_http_options_isolates_headers_and_scalars_while_sharing_client() -> None:
-    """copy_http_options copies scalars and headers so per-call edits never mutate plugin options."""
+    """copy_http_options preserves timeout and retry_options while isolating per-call edits from plugin options."""
     shared_client = httpx.AsyncClient()
+    retry = genai_types.HttpRetryOptions(attempts=3)
     orig = genai_types.HttpOptions(
         api_version='v1beta',
         base_url='https://generativelanguage.googleapis.com',
         headers={'x-team': 'search'},
+        timeout=30000,
+        retry_options=retry,
         httpx_async_client=shared_client,
     )
 
     copied = copy_http_options(orig)
+    assert copied.timeout == 30000
+    assert copied.retry_options == retry
     copied.api_version = 'v1alpha'
     copied.base_url = 'https://proxy.example.com'
+    copied.timeout = 15000
     assert copied.headers is not None
     copied.headers['x-extra'] = '1'
 
     assert orig.api_version == 'v1beta'
     assert orig.base_url == 'https://generativelanguage.googleapis.com'
+    assert orig.timeout == 30000
     assert orig.headers == {'x-team': 'search'}
     assert copied.httpx_async_client is shared_client
     assert copy_http_options(genai_types.HttpOptions()).headers is None
@@ -613,3 +639,98 @@ async def test_virtual_try_on_override_uses_http_client_factory(monkeypatch: pyt
             'ads',
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_per_request_timeout_overrides_plugin_timeout_keeping_headers_retries_and_client() -> None:
+    """GeminiConfig(timeout=...) overrides plugin timeout for one call while keeping headers, retries and client."""
+    api = FlakyGoogleApi(failures=0)
+    plugin = GoogleAI(
+        api_key='k',
+        headers={'x-team': 'search'},
+        timeout=60,
+        max_retries=1,
+        http_client_factory=api.client,
+    )
+    ai = Genkit(plugins=[plugin])
+
+    # 1. Baseline call uses the plugin's 60s timeout and caches X-Server-Timeout='60' on the shared client
+    await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
+
+    # 2. Per-request timeout=15 wins across both attempts of a 503 retry, keeping headers and http_client_factory
+    api.failures = 1
+    retried = await ai.generate(
+        model='googleai/gemini-2.5-flash',
+        prompt='Suggest a dish.',
+        config=GeminiConfig(timeout=15),
+    )
+    assert retried.text == 'Smoked Salmon Tartine'
+
+    # 3. Per-request timeout=20 combined with api_version='v1alpha' (rebuilt client) keeps plugin headers and client
+    await ai.generate(
+        model='googleai/gemini-2.5-flash',
+        prompt='Suggest a dish.',
+        config=GeminiConfig(api_version='v1alpha', timeout=20),
+    )
+
+    # 4. Subsequent call with no per-request timeout falls back to the plugin's 60s deadline
+    await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
+
+    posts = [r for r in api.requests if r.method == 'POST']
+    assert [
+        (r.url.path.split('/')[1], r.headers['x-team'], r.headers['x-server-timeout'], r.extensions['timeout']['read'])
+        for r in posts
+    ] == [
+        ('v1beta', 'search', '60', 60.0),
+        ('v1beta', 'search', '15', 15.0),
+        ('v1beta', 'search', '15', 15.0),
+        ('v1alpha', 'search', '20', 20.0),
+        ('v1beta', 'search', '60', 60.0),
+    ]
+    assert plugin._client_kwargs['http_options'].timeout == 60000
+
+
+@pytest.mark.asyncio
+async def test_interactions_per_request_timeout_overrides_plugin_timeout_keeping_headers_and_client() -> None:
+    """Antigravity, Lyria and Deep Research start/check/cancel override plugin timeout without losing headers."""
+    api = FakeGoogleApi()
+    plugin = GoogleAI(
+        api_key='k',
+        headers={'x-team': 'search'},
+        timeout=60,
+        http_client_factory=api.client,
+    )
+    ai = Genkit(plugins=[plugin])
+
+    await ai.generate(
+        model='googleai/antigravity-preview-05-2026',
+        prompt='Build a landing page.',
+        config=AntigravityConfig(timeout=15),
+    )
+    await ai.generate(
+        model='googleai/lyria-3-clip-preview',
+        prompt='Compose a warm acoustic intro.',
+        config=LyriaConfig(timeout=12),
+    )
+    op = await ai.generate_operation(
+        model='googleai/deep-research-pro-preview-12-2025',
+        prompt='Compare espresso grinders.',
+        config=DeepResearchConfig(timeout=25),
+    )
+    await ai.check_operation(op, config={'timeout': 8})
+    await ai.cancel_operation(op, config={'timeout': 5})
+    await ai.generate(model='googleai/antigravity-preview-05-2026', prompt='Build a landing page.')
+
+    assert [
+        (r.method, r.url.path, r.headers['x-team'], r.extensions['timeout']['read'])
+        for r in api.requests
+        if '/interactions' in r.url.path
+    ] == [
+        ('POST', '/v1beta/interactions', 'search', 15.0),
+        ('POST', '/v1beta/interactions', 'search', 12.0),
+        ('POST', '/v1beta/interactions', 'search', 25.0),
+        ('GET', '/v1beta/interactions/dr-1', 'search', 8.0),
+        ('POST', '/v1beta/interactions/dr-1/cancel', 'search', 5.0),
+        ('POST', '/v1beta/interactions', 'search', 60.0),
+    ]
+    assert plugin._client_kwargs['http_options'].timeout == 60000

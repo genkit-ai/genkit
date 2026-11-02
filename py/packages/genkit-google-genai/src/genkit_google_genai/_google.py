@@ -48,7 +48,6 @@ Example:
 
 from __future__ import annotations
 
-import math
 import os
 from collections.abc import Callable, Mapping
 from typing import Any, NoReturn
@@ -140,6 +139,7 @@ from genkit_google_genai._models._routing import (
     is_unsupported_image_model_name,
     strip_ref_prefixes,
 )
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
 from genkit_google_genai._models._veo import (
     KnownGoogleAIVeo,
     KnownVertexAIVeo,
@@ -619,7 +619,8 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 Interactions models (Deep Research, Antigravity, Lyria) drop a
                 caller's ``x-goog-api-client`` and send only Genkit's.
             timeout: Per-request timeout in **seconds**, as a float. Must be
-                positive and finite. Defaults to no timeout. A timeout set on
+                positive and finite. Defaults to no timeout. A model config's
+                ``timeout`` overrides it for a single call. A timeout set on
                 the client from ``http_client_factory`` is not used.
 
                 Seconds is the Python convention for an argument named
@@ -1092,7 +1093,8 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             headers: Extra HTTP headers sent on every request. Genkit appends
                 its client attribution to ``x-goog-api-client`` and ``user-agent``.
             timeout: Per-request timeout in **seconds**, as a float. Must be
-                positive and finite. Defaults to no timeout. A timeout set on
+                positive and finite. Defaults to no timeout. A model config's
+                ``timeout`` overrides it for a single call. A timeout set on
                 the client from ``http_client_factory`` is not used.
 
                 Seconds is the Python convention for an argument named
@@ -1527,16 +1529,14 @@ def _plugin_http_options(
     ``urllib.request.urlopen``), ``requests``, ``httpx``, ``aiohttp``, the
     OpenAI and Anthropic SDKs, grpc-python and Genkit's Ollama plugin all take
     float seconds. google-genai's ``HttpOptions.timeout`` (milliseconds) is the
-    outlier, so the conversion happens here, once.
+    outlier, so seconds convert to milliseconds through
+    ``timeout_seconds_to_ms``.
 
     ``max_retries`` follows the OpenAI and Anthropic SDKs (retries after the
     first attempt) and maps onto ``HttpRetryOptions.attempts``, which counts
     the first attempt. google-genai's backoff and status codes are kept.
     """
-    # 0 would mean no timeout to google-genai but an instant failure to the
-    # Interactions client, so only a positive, finite budget is accepted.
-    if timeout is not None and not (math.isfinite(timeout) and timeout > 0):
-        raise ValueError(f'timeout must be a positive, finite number of seconds, got {timeout!r}')
+    checked_timeout = check_timeout_seconds(timeout)
     if max_retries is not None and (
         isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0
     ):
@@ -1558,6 +1558,6 @@ def _plugin_http_options(
         base_url=base_url or None,
         api_version=api_version or None,
         headers=merged,
-        timeout=math.ceil(timeout * 1000) if timeout is not None else None,
+        timeout=timeout_seconds_to_ms(checked_timeout) if checked_timeout is not None else None,
         retry_options=HttpRetryOptions(attempts=max_retries + 1) if max_retries else None,
     )
