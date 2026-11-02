@@ -1237,6 +1237,9 @@ importers:
       '@types/node':
         specifier: ^20.11.16
         version: 20.19.37
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
         specifier: ^4.19.2
         version: 4.21.0
@@ -1308,6 +1311,9 @@ importers:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1428,6 +1434,9 @@ importers:
       cross-env:
         specifier: ^10.1.0
         version: 10.1.0
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
         specifier: ^4.19.2
         version: 4.20.3
@@ -1453,6 +1462,12 @@ importers:
       '@types/wav':
         specifier: ^1.0.4
         version: 1.0.4
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1463,14 +1478,11 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/compat-oai
       '@genkit-ai/express':
-        specifier: ^1.1.0
-        version: 1.29.0(express@5.2.1)(genkit@genkit)
+        specifier: workspace:*
+        version: link:../../plugins/express
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      tsx:
-        specifier: ^4.19.3
-        version: 4.20.3
       wav:
         specifier: ^1.0.2
         version: 1.0.2
@@ -1484,6 +1496,12 @@ importers:
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.19.3
+        version: 4.20.3
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1497,6 +1515,9 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -1606,10 +1627,10 @@ importers:
   testapps/durable-streaming:
     dependencies:
       '@genkit-ai/express':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../plugins/express
       '@genkit-ai/firebase':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../plugins/firebase
       express:
         specifier: ^5.1.0
@@ -1618,7 +1639,7 @@ importers:
         specifier: ^13.5.0
         version: 13.7.0(encoding@0.1.13)
       genkit:
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../genkit
     devDependencies:
       '@types/express':
@@ -1661,7 +1682,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/mcp
       '@genkit-ai/next':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../plugins/next
       '@genkit-ai/vertexai':
         specifier: workspace:*
@@ -1682,6 +1703,9 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/pinecone
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -1719,6 +1743,9 @@ importers:
         specifier: ^1.0.1
         version: 1.0.1
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -1760,7 +1787,7 @@ importers:
   testapps/flow-sample1:
     dependencies:
       genkit:
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../genkit
     devDependencies:
       rimraf:
@@ -1812,6 +1839,9 @@ importers:
       '@types/wav':
         specifier: ^1.0.4
         version: 1.0.4
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -1859,6 +1889,9 @@ importers:
         specifier: ^4.6.0
         version: 4.12.7
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
         specifier: ^4.20.3
         version: 4.20.3
@@ -1893,6 +1926,9 @@ importers:
       '@types/express':
         specifier: ^4.17.21
         version: 4.17.25
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -1915,9 +1951,15 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1934,6 +1976,9 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
         specifier: ^4.7.1
         version: 4.20.3
@@ -1943,6 +1988,9 @@ importers:
 
   testapps/model-tester:
     dependencies:
+      '@genkit-ai/compat-oai':
+        specifier: workspace:*
+        version: link:../../plugins/compat-oai
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -1958,13 +2006,16 @@ importers:
       genkitx-ollama:
         specifier: workspace:*
         version: link:../../plugins/ollama
-      genkitx-openai:
-        specifier: ^0.30.0
-        version: 0.30.0(genkit@genkit)(ws@8.20.1)(zod@3.25.76)
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1981,6 +2032,12 @@ importers:
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2021,6 +2078,9 @@ importers:
       '@types/pdf-parse':
         specifier: ^1.1.4
         version: 1.1.5
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -2065,6 +2125,12 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/ollama
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2084,6 +2150,12 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2146,6 +2218,9 @@ importers:
       '@types/pdf-parse':
         specifier: ^1.1.4
         version: 1.1.5
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -2162,6 +2237,9 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
@@ -2290,6 +2368,12 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2306,9 +2390,15 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2369,9 +2459,15 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -3795,12 +3891,6 @@ packages:
 
   '@genkit-ai/core@1.43.0':
     resolution: {integrity: sha512-QrdgF+J1kRA5tZXrL1WUHhJAOHYCaNlAX/u1CS5MmGF2clDntByFvPJKhK7FL7RU8UK3rbKzwZNYEohsrzf2Ug==}
-
-  '@genkit-ai/express@1.29.0':
-    resolution: {integrity: sha512-+Mf8e45RbAlvns3a3hvIDpUAjNyWTIu1cy7vV86+6NvpPqPhkEaPkptgIX7KIXsPBEwiwsEM4SXx80M/TRbmTg==}
-    peerDependencies:
-      express: ^4.21.1 || ^5
-      genkit: ^1.29.0
 
   '@genkit-ai/firebase@1.29.0':
     resolution: {integrity: sha512-yypycQpULLyT9zqJVnCnad0gDw5CRawDQeEq9JmnIii1tEpcfO2s2kIWbb8ofWCPbNhNJMKkLcAHHU27NG6w9g==}
@@ -9768,11 +9858,6 @@ packages:
 
   genkit@1.43.0:
     resolution: {integrity: sha512-iTSAShP42mhcirLia89qAE2+ui/1hMVlpiKUz7T4s/FUhcQbN2ej4VoCv63DPHMcpeIgtIANvh0QFRum9Xn85g==}
-
-  genkitx-openai@0.30.0:
-    resolution: {integrity: sha512-6Dt3o6f+cKrZ1njSzYj2rm0U8SE5nQDwpz5VbFuLjaloE5BBj2c9OSlPGegdcz4PN5wBocGKiNsaKn0t5PpJdA==}
-    peerDependencies:
-      genkit: ^0.9.0 || ^1.0.0
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -16066,15 +16151,6 @@ snapshots:
       - supports-color
       - utf-8-validate
     optional: true
-
-  '@genkit-ai/express@1.29.0(express@5.2.1)(genkit@genkit)':
-    dependencies:
-      body-parser: 1.20.4
-      cors: 2.8.6
-      express: 5.2.1
-      genkit: link:genkit
-    transitivePeerDependencies:
-      - supports-color
 
   '@genkit-ai/firebase@1.29.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
     dependencies:
@@ -23597,15 +23673,6 @@ snapshots:
       - supports-color
       - utf-8-validate
     optional: true
-
-  genkitx-openai@0.30.0(genkit@genkit)(ws@8.20.1)(zod@3.25.76):
-    dependencies:
-      genkit: link:genkit
-      openai: 4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)
-    transitivePeerDependencies:
-      - encoding
-      - ws
-      - zod
 
   gensync@1.0.0-beta.2: {}
 

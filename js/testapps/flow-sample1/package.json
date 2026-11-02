@@ -15,7 +15,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:^"
+    "genkit": "workspace:*"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",
