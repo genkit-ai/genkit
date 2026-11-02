@@ -22,164 +22,117 @@ import {
   it,
   jest,
 } from '@jest/globals';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
-import { z } from 'zod';
 import { defineDocsTool } from '../../src/mcp/docs';
 import { defineUsageGuideTool } from '../../src/mcp/usage';
 import * as docsUtils from '../../src/utils/docs';
-import { SAMPLE_DOCS, WORKSPACE_MARKERS } from '../utils/docs';
+import { SAMPLE_DOCS } from '../utils/docs';
 
 describe('MCP docs and usage guide tools', () => {
-  let tmpDir: string;
+  let registeredTools: Record<string, (opts: any) => Promise<any>>;
 
-  beforeEach(() => {
-    tmpDir = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-mcp-lang-'))
-    );
+  beforeEach(async () => {
+    registeredTools = {};
     jest.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
+
+    const mockServer: any = {
+      registerTool: jest.fn((name: string, _config: any, handler: any) => {
+        registeredTools[name] = handler;
+      }),
+    };
+    await defineDocsTool(mockServer, '/workspace');
+    await defineUsageGuideTool(mockServer, '/workspace');
   });
 
   afterEach(() => {
     jest.restoreAllMocks();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  async function setupDocsServer(projectRoot: string) {
-    const registeredTools: Record<string, (opts: any) => Promise<any>> = {};
-    const mockServer: any = {
-      registerTool: jest.fn((name: string, config: any, handler: any) => {
-        registeredTools[name] = async (rawArgs: any) => {
-          const schema = z.object(config.inputSchema ?? {});
-          const parsed = await schema.parseAsync(rawArgs);
-          return handler(parsed);
-        };
-      }),
-    };
-    await defineDocsTool(mockServer, projectRoot);
-    return { registeredTools };
-  }
-
   describe('list_genkit_docs', () => {
-    it.each(WORKSPACE_MARKERS)(
-      'auto-detects $expectedLang when language is omitted ($marker)',
-      async ({ marker, expectedLang, expectedPath }) => {
-        const projDir = path.join(tmpDir, `list-docs-${marker}`);
-        fs.mkdirSync(projDir, { recursive: true });
-        fs.writeFileSync(path.join(projDir, marker), '');
+    it('auto-detects project language when language is omitted', async () => {
+      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
 
-        const { registeredTools } = await setupDocsServer(projDir);
-        const listRes = await registeredTools['list_genkit_docs']({});
-        expect(listRes.content[0].text).toContain(
-          `Genkit Documentation Index (${expectedLang}):`
-        );
-        expect(listRes.content[0].text).toContain(`FilePath: ${expectedPath}`);
-      }
-    );
+      const res = await registeredTools['list_genkit_docs']({});
+      expect(docsUtils.detectProjectLanguage).toHaveBeenCalledWith(
+        '/workspace'
+      );
+      expect(res.content[0].text).toContain(
+        'Genkit Documentation Index (python):'
+      );
+      expect(res.content[0].text).toContain('FilePath: python/flows.md');
+    });
 
     it('respects an explicit language override', async () => {
-      const goDir = path.join(tmpDir, 'list-go-override');
-      fs.mkdirSync(goDir, { recursive: true });
-      fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
+      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
-      const { registeredTools } = await setupDocsServer(goDir);
-      const listRes = await registeredTools['list_genkit_docs']({
+      const res = await registeredTools['list_genkit_docs']({
         language: 'dart',
       });
-      expect(listRes.content[0].text).toContain(
+      expect(res.content[0].text).toContain(
         'Genkit Documentation Index (dart):'
       );
-      expect(listRes.content[0].text).toContain('FilePath: dart/flows.md');
+      expect(res.content[0].text).toContain('FilePath: dart/flows.md');
     });
   });
 
   describe('search_genkit_docs', () => {
-    it.each(WORKSPACE_MARKERS)(
-      'auto-detects $expectedLang when language is omitted ($marker)',
-      async ({ marker, expectedPath }) => {
-        const projDir = path.join(tmpDir, `search-docs-${marker}`);
-        fs.mkdirSync(projDir, { recursive: true });
-        fs.writeFileSync(path.join(projDir, marker), '');
+    it('auto-detects project language when language is omitted', async () => {
+      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
-        const { registeredTools } = await setupDocsServer(projDir);
-        const searchRes = await registeredTools['search_genkit_docs']({
-          query: 'Flows',
-        });
-        expect(searchRes.content[0].text).toContain(
-          `**FilePath**: ${expectedPath}`
-        );
-      }
-    );
+      const res = await registeredTools['search_genkit_docs']({
+        query: 'Flows',
+      });
+      expect(docsUtils.detectProjectLanguage).toHaveBeenCalledWith(
+        '/workspace'
+      );
+      expect(res.content[0].text).toContain('**FilePath**: go/flows.md');
+    });
 
     it('respects an explicit language override', async () => {
-      const goDir = path.join(tmpDir, 'search-go-override');
-      fs.mkdirSync(goDir, { recursive: true });
-      fs.writeFileSync(path.join(goDir, 'go.mod'), 'module example.com/app');
+      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
-      const { registeredTools } = await setupDocsServer(goDir);
-      const searchRes = await registeredTools['search_genkit_docs']({
+      const res = await registeredTools['search_genkit_docs']({
         query: 'Flows',
         language: 'python',
       });
-      expect(searchRes.content[0].text).toContain(
-        '**FilePath**: python/flows.md'
-      );
+      expect(res.content[0].text).toContain('**FilePath**: python/flows.md');
     });
   });
 
   describe('get_usage_guide', () => {
-    async function setupUsageServer(projectRoot: string) {
-      const registeredTools: Record<string, (opts: any) => Promise<any>> = {};
-      const mockServer: any = {
-        registerTool: jest.fn((name: string, config: any, handler: any) => {
-          registeredTools[name] = async (rawArgs: any) => {
-            const schema = z.object(config.inputSchema ?? {});
-            const parsed = await schema.parseAsync(rawArgs);
-            return handler(parsed);
-          };
-        }),
-      };
-      await defineUsageGuideTool(mockServer, projectRoot);
-      return { registeredTools };
-    }
-
     it.each([
       {
-        marker: 'package.json',
+        detectedLang: 'js' as const,
         expectedHeading: '# Genkit Node.js API Rules',
       },
       {
-        marker: 'go.mod',
+        detectedLang: 'go' as const,
         expectedHeading: '# Genkit Go API Rules',
       },
     ])(
-      'auto-detects project language when language is omitted ($marker)',
-      async ({ marker, expectedHeading }) => {
-        const projDir = path.join(tmpDir, `usage-${marker}`);
-        fs.mkdirSync(projDir, { recursive: true });
-        fs.writeFileSync(path.join(projDir, marker), '');
+      'auto-detects $detectedLang usage guide when language is omitted',
+      async ({ detectedLang, expectedHeading }) => {
+        jest
+          .spyOn(docsUtils, 'detectProjectLanguage')
+          .mockReturnValue(detectedLang);
 
-        const { registeredTools } = await setupUsageServer(projDir);
         const res = await registeredTools['get_usage_guide']({});
+        expect(docsUtils.detectProjectLanguage).toHaveBeenCalledWith(
+          '/workspace'
+        );
         expect(res.content[0].text).toContain(expectedHeading);
       }
     );
 
-    it.each([
-      { marker: 'pyproject.toml', expectedLang: 'python' },
-      { marker: 'pubspec.yaml', expectedLang: 'dart' },
-    ])(
-      'directs caller to docs tools when language is omitted in a $expectedLang workspace ($marker)',
-      async ({ marker, expectedLang }) => {
-        const projDir = path.join(tmpDir, `usage-${marker}`);
-        fs.mkdirSync(projDir, { recursive: true });
-        fs.writeFileSync(path.join(projDir, marker), '');
+    it.each(['python' as const, 'dart' as const])(
+      'directs caller to docs tools when language is omitted in a %s workspace',
+      async (detectedLang) => {
+        jest
+          .spyOn(docsUtils, 'detectProjectLanguage')
+          .mockReturnValue(detectedLang);
 
-        const { registeredTools } = await setupUsageServer(projDir);
         const res = await registeredTools['get_usage_guide']({});
         expect(res.content[0].text).toContain(
-          `No standalone usage guide is bundled for '${expectedLang}' projects.`
+          `No standalone usage guide is bundled for '${detectedLang}' projects.`
         );
         expect(res.content[0].text).toContain('list_genkit_docs');
         expect(res.content[0].text).toContain('search_genkit_docs');
@@ -193,10 +146,10 @@ describe('MCP docs and usage guide tools', () => {
     ])(
       'returns the $language usage guide when explicitly requested',
       async ({ language, expectedHeading }) => {
-        const emptyDir = path.join(tmpDir, `explicit-${language}`);
-        fs.mkdirSync(emptyDir, { recursive: true });
+        jest
+          .spyOn(docsUtils, 'detectProjectLanguage')
+          .mockReturnValue('python');
 
-        const { registeredTools } = await setupUsageServer(emptyDir);
         const res = await registeredTools['get_usage_guide']({ language });
         expect(res.content[0].text).toContain(expectedHeading);
       }

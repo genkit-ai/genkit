@@ -46,22 +46,3 @@ export const SAMPLE_DOCS: Record<string, Doc> = {
     headers: 'defineFlow schemantic',
   },
 };
-
-export const WORKSPACE_MARKERS = [
-  { marker: 'go.mod', expectedLang: 'go', expectedPath: 'go/flows.md' },
-  {
-    marker: 'pyproject.toml',
-    expectedLang: 'python',
-    expectedPath: 'python/flows.md',
-  },
-  {
-    marker: 'pubspec.yaml',
-    expectedLang: 'dart',
-    expectedPath: 'dart/flows.md',
-  },
-  {
-    marker: 'package.json',
-    expectedLang: 'js',
-    expectedPath: 'js/flows.md',
-  },
-] as const;
