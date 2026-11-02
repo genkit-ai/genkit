@@ -117,6 +117,18 @@ class TestToTTSParams:
         got = _to_tts_params('tts-1', request)
         assert got['voice'] == 'nova'
 
+    def test_none_voice_uses_the_default_voice(self) -> None:
+        """An explicit voice=None reaches the plugin now; it means the default voice, not no voice."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part.from_text('Your table is ready')]),
+            ],
+            config={'voice': None, 'speed': None},
+        )
+        got = _to_tts_params('tts-1', request)
+        assert got['voice'] == 'alloy'
+        assert 'speed' not in got
+
     @pytest.mark.parametrize(
         'key', ['temperature', 'max_output_tokens', 'maxOutputTokens', 'top_k', 'top_p', 'stop_sequences', 'version']
     )

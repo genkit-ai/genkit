@@ -17,6 +17,7 @@
 """Action module for defining and managing remotely callable functions."""
 
 import asyncio
+import functools
 import inspect
 import json
 import re
@@ -46,6 +47,14 @@ from typing_extensions import Self, TypeVar
 
 from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
+from genkit._core._config_check import (
+    check_config_json_schema,
+    check_config_values,
+    config_defaults,
+    normalize_config,
+    overlay_config,
+    validate_whole_config,
+)
 from genkit._core._error import (
     ErrorReason,
     GenkitError,
@@ -524,10 +533,10 @@ def with_request_annotation(
         return fn
     target = inputs[0].name
 
+    @functools.wraps(fn)
     async def forward(*args: Any, **kwargs: Any) -> _CallT:  # noqa: ANN401
         return await fn(*args, **kwargs)
 
-    forward.__doc__ = fn.__doc__
     forward.__annotations__ = {**hints, target: request_type}
     parameters = [p.replace(annotation=request_type) if p.name == target else p for p in sig.parameters.values()]
     setattr(forward, '__signature__', sig.replace(parameters=parameters))  # noqa: B010
@@ -955,6 +964,8 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # generate checks config against it. Not in metadata — that bag is
         # JSON for the Dev UI.
         self._config_schema: type[BaseModel] | dict[str, object] | None = config_schema
+        if isinstance(config_schema, dict):
+            check_config_json_schema(cast(dict[str, Any], config_schema), model=name)
         self._span_metadata: dict[str, SpanAttributeValue] = span_metadata if span_metadata is not None else {}
 
         # All action handlers must be async
@@ -987,12 +998,23 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
 
         Both must name the same class. With a subclass, a dict would validate
         into the annotated class and drop the other class's fields, so only
-        the identical class is accepted.
+        the identical class is accepted. A JSON-schema dict next to an
+        annotated class is rejected too: the class would win and the dict
+        would never be checked.
         """
         field = config_field(self._kind)
         annotated = declared_config_type(self._input_class) if field and self._input_class is not None else None
         if annotated is None:
             return declared
+        if isinstance(declared, dict):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{describe_action(self._kind, self._name)}: config_schema is a JSON schema, '
+                    f'but the function takes {field} as {config_type_path(annotated)}. '
+                    'Pass the class or the JSON schema, not both.'
+                ),
+            )
         if isinstance(declared, type) and declared is not annotated:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
@@ -1164,6 +1186,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             # including ones that never went through generate.
             if self._kind in (ActionKind.MODEL, ActionKind.BACKGROUND_MODEL):
                 reject_config_api_key(_request_config(input))
+            input = self._layer_config_defaults(input)
             input = self._validate_input(input)
         init = self._validate_init(init)
 
@@ -1331,6 +1354,83 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     reason=ErrorReason.INVALID_INPUT,
                 )
             ) from e
+
+    def _layer_config_defaults(self, input: InputT | None) -> InputT | None:
+        """Normalize the request's config against the definition-time class.
+
+        Every caller (ai.* by name or ref, the Dev UI, the CLI) reaches the fn
+        through here, so they all see the same values. Only actions with a
+        config class are touched, and defaults come only from that class.
+
+        - Typed fn: a missing config (``config=None``) becomes the class
+          built from its defaults, so the fn always gets an instance. A class
+          that can't build from defaults raises INVALID_ARGUMENT. Otherwise
+          request validation fills defaults and checks values.
+        - Untyped fn: non-None defaults < the request's config, folded to the
+          keys the class accepts and validated against the class, so a bad
+          value raises INVALID_ARGUMENT the same as through ai.*. The fn gets
+          the merged dict as written, not pydantic's coerced values:
+          ModelConfig declares ``temperature`` as a float, and an untyped
+          plugin should still send the caller's ``1``, not ``1.0``.
+
+        An explicit None in the config is a value: it wins over the default
+        and goes to validation.
+        """
+        field = config_field(self._kind)
+        schema = self._config_schema
+        if field is None or schema is None:
+            return input
+        if isinstance(input, Mapping):
+            current = cast(Mapping[str, Any], input).get(field)
+        elif isinstance(input, BaseModel):
+            current = getattr(input, field, None)
+        else:
+            return input
+        try:
+            value = self._normalized_config(current, schema=schema, field=field)
+        except GenkitError as e:
+            raise mark_request_error(error=e)  # noqa: B904 - same error, marked as the caller's
+        if value is current:
+            return input
+        if isinstance(input, Mapping):
+            return cast(InputT, {**cast(Mapping[str, Any], input), field: value})
+        return cast(InputT, cast(BaseModel, input).model_copy(update={field: value}))
+
+    def _normalized_config(self, current: object, *, schema: type[BaseModel] | dict[str, Any], field: str) -> object:
+        """The config value _layer_config_defaults puts on the request (``current`` when unchanged)."""
+        if isinstance(schema, dict):
+            # A JSON-schema dict has no defaults to layer; it is only checked.
+            validate_whole_config(config=current, schema=schema, model=self.name)
+            return current
+        if self._input_class is not None and declared_config_type(self._input_class) is not None:
+            if current is None:
+                return validate_whole_config(config={}, schema=schema, model=self.name)
+            if isinstance(current, Mapping) and not isinstance(current, BaseModel):
+                # The same check an untyped fn gets, so a typed fn reports
+                # problems in the same words; the fn gets the validated instance.
+                return validate_whole_config(
+                    config=dict(cast(Mapping[str, Any], current)), schema=schema, model=self.name
+                )
+            return current
+        if isinstance(current, BaseModel) and not isinstance(current, schema):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'{self.name}: {field} must be {config_type_path(schema)} or a mapping, '
+                    f'got {config_type_path(type(current))}'
+                ),
+                reason=ErrorReason.INVALID_INPUT,
+            )
+        if current is not None and not isinstance(current, (Mapping, BaseModel)):
+            return current  # request validation reports the wrong type
+        defaults = config_defaults(schema)
+        request_layer = normalize_config(config=current)
+        # Folding keeps whichever spelling of a setting came last, so the
+        # request's own dict is checked first: both spellings in it raise.
+        check_config_values(config=request_layer, schema=schema, model=self.name)
+        merged = overlay_config(layers=[defaults, request_layer], schema=schema)
+        validate_whole_config(config=merged, schema=schema, model=self.name)
+        return merged
 
     def _validate_input(self, input: InputT | None) -> InputT | None:
         """Validate caller input against the action schema when one is registered."""

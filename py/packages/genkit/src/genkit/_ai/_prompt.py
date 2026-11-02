@@ -53,9 +53,7 @@ from genkit._ai._model import (
     ModelResponseChunk,
     assert_correct_config_class,
     check_call_config,
-    config_class_for_generate,
     config_schema_at_define,
-    fold_config_aliases,
     normalize_config,
     resolve_call_model,
     resolve_for_generate,
@@ -362,27 +360,10 @@ class Prompt(Generic[InputT, OutputT]):
         override_config = opts.get('config')
         override_model = opts.get('model')
         model = override_model if override_model is not None else self._def.model
-        merged_config: Mapping[str, Any] | BaseModel | None
-        if override_config is not None:
-            # exclude_unset semantics via normalize_config: untouched fields are
-            # absent (cannot clobber defaults); an explicitly-set None survives
-            # the merge and clears the lower-precedence value downstream.
-            base = normalize_config(config=self._def.config)
-            override = normalize_config(config=override_config)
-            # `maxOutputTokens` in the prompt and `max_output_tokens` in the
-            # call are one setting: fold both to field names so the call wins.
-            # A model typed only by its ModelRequest[...] annotation folds too.
-            schema = await config_class_for_generate(model=model, registry=self._ai._registry)
-            if schema is not None:
-                base = fold_config_aliases(config=base, schema=schema)
-                override = fold_config_aliases(config=override, schema=schema)
-            merged_config = {**base, **override} if base or override else None
-        else:
-            merged_config = self._def.config
-
         resolved = await resolve_for_generate(
             model=model,
-            config=merged_config,
+            config=override_config,
+            prompt_config=self._def.config,
             registry=self._ai._registry,
         )
         check_call_config(
@@ -391,8 +372,8 @@ class Prompt(Generic[InputT, OutputT]):
             model=resolved.name,
         )
         # Re-check the stored typed config unless this call hops models.
-        # A None override clears that default, so the prompt's copy of the
-        # key is not checked against the model this call hits.
+        # A key the call sets to None replaces the prompt's value, so the
+        # prompt's copy of that key is not checked against the model this call hits.
         if self._defined_model_name is None or self._defined_model_name == resolved.name:
             assert_correct_config_class(
                 config=self._def.config,
@@ -400,7 +381,7 @@ class Prompt(Generic[InputT, OutputT]):
                 model=resolved.name,
             )
         check_config_values(
-            config=prompt_config_after_clears(
+            config=unoverridden_prompt_config(
                 stored=self._def.config,
                 override=override_config,
                 schema=resolved.config_schema,
@@ -596,24 +577,24 @@ async def prepare_prompt(
     return PreparedPrompt(scope=scope, options=options, context=context)
 
 
-def prompt_config_after_clears(
+def unoverridden_prompt_config(
     *,
     stored: Mapping[str, Any] | BaseModel | None,
     override: object,
     schema: type[BaseModel] | None,
 ) -> dict[str, Any]:
-    """The prompt's config minus keys this call set to None.
+    """The prompt's config minus keys this call sets.
 
-    None means "clear the default". The prompt still names the key, but
-    this call does not send it, so it must not fail the model's check.
+    The call's value (None included) replaces the prompt's, so the prompt's
+    copy is not sent and must not fail the model's check. The call's own
+    values are checked with the call config. A stored None is a value.
     """
     stored_bag = normalize_config(config=stored)
     if override is None:
-        return {key: value for key, value in stored_bag.items() if value is not None}
-    override_bag = normalize_config(config=override)
+        return stored_bag
     names = config_field_names(schema) if schema is not None else {}
-    cleared = {names.get(key, key) for key, value in override_bag.items() if value is None}
-    return {key: value for key, value in stored_bag.items() if value is not None and names.get(key, key) not in cleared}
+    replaced = {names.get(key, key) for key in normalize_config(config=override)}
+    return {key: value for key, value in stored_bag.items() if names.get(key, key) not in replaced}
 
 
 def _register_prompt_action_pair(
