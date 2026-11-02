@@ -1697,21 +1697,21 @@ async def test_generate_operation_deep_research_extra_empty_tools_with_built_too
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('mod', 'model', 'key'),
+    ('mod', 'model', 'key', 'expected_hint'),
     [
-        ('_antigravity', _ANTIGRAVITY, 'agent'),
-        ('_antigravity', _ANTIGRAVITY, 'Input'),
-        ('_antigravity', _ANTIGRAVITY, 'tools'),
-        ('_interactions_lyria', _LYRIA, 'model'),
-        ('_interactions_lyria', _LYRIA, 'input'),
-        ('_interactions_lyria', _LYRIA, 'systemInstruction'),
-        ('_interactions_lyria', _LYRIA, 'tools'),
+        ('_antigravity', _ANTIGRAVITY, 'agent', 'Pick the model with generate(model=...).'),
+        ('_antigravity', _ANTIGRAVITY, 'Input', 'Pass the prompt and messages to generate().'),
+        ('_antigravity', _ANTIGRAVITY, 'tools', 'not yet supported in this plugin'),
+        ('_interactions_lyria', _LYRIA, 'model', 'Pick the model with generate(model=...).'),
+        ('_interactions_lyria', _LYRIA, 'input', 'Pass the prompt and messages to generate().'),
+        ('_interactions_lyria', _LYRIA, 'systemInstruction', 'Pass a system message to generate().'),
+        ('_interactions_lyria', _LYRIA, 'tools', 'Lyria takes no tools.'),
     ],
 )
 async def test_generate_extra_cannot_set_fields_built_from_the_request(
-    googleai: Genkit, mod: str, model: str, key: str
+    googleai: Genkit, mod: str, model: str, key: str, expected_hint: str
 ) -> None:
-    """The model id, input, tools, and Lyria's system_instruction come from generate(); extra can't replace them."""
+    """The model id, input, tools, and Lyria's system_instruction are reserved; extra can't replace them."""
     patcher, create_calls, _, _ = patch_interactions(f'genkit_google_genai._models.{mod}', create_result=_TEXT_REPLY)
     with patcher:
         response = await googleai.generate(model=model, prompt='hi', config={'extra': {key: 'x'}})
@@ -1719,6 +1719,7 @@ async def test_generate_extra_cannot_set_fields_built_from_the_request(
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
     assert f"extra[{key!r}] can't be set in extra" in response.error.message
+    assert expected_hint in response.error.message
     assert create_calls == []
 
 
@@ -1736,9 +1737,17 @@ async def test_generate_operation_deep_research_extra_cannot_set_agent_or_input(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(('mod', 'model'), [('_antigravity', _ANTIGRAVITY), ('_interactions_lyria', _LYRIA)])
-async def test_generate_function_tools_raise_instead_of_being_dropped(googleai: Genkit, mod: str, model: str) -> None:
-    """generate(tools=[...]) on a model that takes none fails instead of silently sending nothing."""
+@pytest.mark.parametrize(
+    ('mod', 'model', 'expected_reason'),
+    [
+        ('_antigravity', _ANTIGRAVITY, 'not yet supported in this plugin'),
+        ('_interactions_lyria', _LYRIA, 'does not support function tools'),
+    ],
+)
+async def test_generate_function_tools_raise_instead_of_being_dropped(
+    googleai: Genkit, mod: str, model: str, expected_reason: str
+) -> None:
+    """generate(tools=[...]) on Antigravity (unwired in plugin) and Lyria (no tools) fails instead of dropping."""
 
     @googleai.tool(name='todays_specials')
     async def todays_specials() -> str:
@@ -1751,5 +1760,5 @@ async def test_generate_function_tools_raise_instead_of_being_dropped(googleai: 
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert 'does not support function tools' in response.error.message
+    assert expected_reason in response.error.message
     assert create_calls == []

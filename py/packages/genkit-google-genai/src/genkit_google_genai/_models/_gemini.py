@@ -505,7 +505,8 @@ class GeminiConfig(ModelConfig):
     timeout: float | None = Field(
         default=None,
         description=(
-            'HTTP timeout for this request, in seconds (positive, finite). Overrides the plugin timeout for this call.'
+            'HTTP timeout for this request, in seconds (positive, finite). Overrides the plugin timeout for this call. '
+            'The Gemini API rejects deadlines under 10s with HTTP 400; Vertex AI accepts shorter values.'
         ),
     )
 

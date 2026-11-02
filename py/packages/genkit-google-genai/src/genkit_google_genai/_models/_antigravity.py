@@ -96,11 +96,11 @@ class AntigravityConfig(GenkitConfig):
         return lowercase_choice_list(value)
 
 
-# Fields Genkit builds from the request; extra can't replace them.
+# Fields Genkit builds from the request (or reserves for tool wiring); extra can't replace them.
 ANTIGRAVITY_MANAGED_EXTRA = {
     'agent': MODEL_ID_HINT,
     'input': INPUT_HINT,
-    'tools': 'Antigravity takes no tools.',
+    'tools': 'Tool configuration on Antigravity is not yet supported in this plugin.',
 }
 
 
@@ -122,7 +122,11 @@ def create_antigravity_action(
 
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
         extra = pop_extra(dumped)
-        reject_function_tools(name, request)
+        reject_function_tools(
+            name,
+            request,
+            message=f'Function tools on {name} are not yet supported in this plugin.',
+        )
         reject_managed_extra(name, extra, ANTIGRAVITY_MANAGED_EXTRA)
         # GenkitConfig rejects undeclared keys, so nothing is left over.
         create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)

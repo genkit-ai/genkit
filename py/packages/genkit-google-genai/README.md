@@ -174,7 +174,9 @@ Setting any `google_search_*` option turns Google Search on;
 `thinkingConfig` raises and names the flat fields that replace it.
 
 `timeout` sets the HTTP timeout for one request, in seconds:
-`GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise.
+`GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise. On `GoogleAI`,
+the Gemini API rejects server deadlines under 10 seconds with HTTP 400
+(`VertexAI` accepts shorter values).
 
 Function calling mode is controlled by `ai.generate(tool_choice=...)`, not config:
 `'auto'`, `'required'`, or `'none'`. In `'required'` mode, Gemini binds the request's
@@ -234,8 +236,9 @@ ignoring case and underscores, the same way the Gemini merge aligns them. A
 the request raise in `extra`: the model id (`agent`, or `model` on Lyria),
 `input`, `tools`, and Lyria's `system_instruction`. Deep Research's tools are
 its declared settings (`google_search`, `url_context`, `code_execution`,
-`file_search_store_names`, `mcp_servers`); Antigravity and Lyria take none, and
-`generate(tools=...)` raises on them. Blocks with defaults, such as
+`file_search_store_names`, `mcp_servers`); Lyria takes no tools, and
+Antigravity tool configuration is not yet supported in this plugin
+(`generate(tools=...)` raises on both). Blocks with defaults, such as
 `agent_config` and `environment`, merge key by key.
 
 `timeout` on these three configs (and in Deep Research's `check_operation` /

@@ -182,12 +182,12 @@ def reject_managed_extra(action_name: str, extra: Mapping[str, Any], managed: Ma
             )
 
 
-def reject_function_tools(action_name: str, request: ModelRequest[Any]) -> None:
-    """Raise when ``generate(tools=...)`` targets a model that takes none, instead of dropping them."""
+def reject_function_tools(action_name: str, request: ModelRequest[Any], *, message: str | None = None) -> None:
+    """Raise when ``generate(tools=...)`` targets an action without function tool support, instead of dropping them."""
     if request.tools:
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=f'{action_name} does not support function tools.',
+            message=message or f'{action_name} does not support function tools.',
         )
 
 
