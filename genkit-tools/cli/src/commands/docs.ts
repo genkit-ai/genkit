@@ -14,22 +14,21 @@
  * limitations under the License.
  */
 
-import { logger } from '@genkit-ai/tools-common/utils';
+import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command } from 'commander';
-import { loadDocs, searchDocs } from '../utils/docs';
+import { detectProjectLanguage, loadDocs, searchDocs } from '../utils/docs';
 
 export const docsList = new Command('docs:list')
   .description('list available Genkit documentation files')
   .argument(
     '[language]',
-    'language to list docs for (js, go, python, dart)',
-    'js'
+    'language to list docs for (js, go, python, dart; defaults to auto-detected project language)'
   )
   .action(async (language) => {
     try {
       const documents = await loadDocs();
-      const lang = language || 'js';
+      const lang = language || detectProjectLanguage(await findProjectRoot());
       const fileList = Object.keys(documents)
         .filter((file) => file.startsWith(lang))
         .sort();
@@ -66,13 +65,12 @@ export const docsSearch = new Command('docs:search')
   )
   .argument(
     '[language]',
-    'language to search docs for (js, go, python, dart)',
-    'js'
+    'language to search docs for (js, go, python, dart; defaults to auto-detected project language)'
   )
   .action(async (query, language) => {
     try {
       const documents = await loadDocs();
-      const lang = language || 'js';
+      const lang = language || detectProjectLanguage(await findProjectRoot());
       const results = searchDocs(documents, query, lang).slice(0, 10);
 
       if (results.length === 0) {
