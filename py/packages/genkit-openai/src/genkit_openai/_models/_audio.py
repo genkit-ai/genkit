@@ -36,32 +36,50 @@ from genkit_openai._models._utils import (
     decode_data_uri_bytes,
     extract_config_dict,
     pop_extra_body,
+    reject_version,
     reraise_openai_error,
 )
 from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
+from pydantic import Field
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, ModelSupports
+from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports
+from genkit.plugin_api import GenkitConfig
+
+_AUDIO_EXTRA_DESCRIPTION = (
+    'Audio API fields this class does not declare, in API wire names, sent as the request body. '
+    'Fields Genkit builds from the request are rejected here. Not checked; do not put API keys here.'
+)
 
 
-class OpenAITtsConfig(ModelConfig):
+# The audio configs extend GenkitConfig, not ModelConfig: the speech and
+# transcription endpoints have no token cap, top_k/top_p, stop strings, or
+# version pin, so those keys raise instead of being accepted and dropped.
+# Transcription does take a temperature, so OpenAISttConfig declares its own.
+class OpenAITtsConfig(GenkitConfig):
     """Settings the speech endpoint reads from config."""
 
     voice: str | None = None
     speed: float | None = None
     response_format: str | None = None
     instructions: str | None = None
+    extra: dict[str, Any] | None = Field(default=None, description=_AUDIO_EXTRA_DESCRIPTION)
 
 
-class OpenAISttConfig(ModelConfig):
+class OpenAISttConfig(GenkitConfig):
     """Settings the transcription endpoint reads from config."""
 
+    temperature: float | None = Field(default=None, ge=0.0, le=1.0)
     language: str | None = None
     timestamp_granularities: list[str] | None = None
     response_format: str | None = None
     prompt: str | None = None
+    translate: bool | None = Field(
+        default=None, description='Translate the audio to English with the translations API. whisper-1 only.'
+    )
+    extra: dict[str, Any] | None = Field(default=None, description=_AUDIO_EXTRA_DESCRIPTION)
 
 
 # Maps audio response formats to their MIME types.
@@ -170,9 +188,10 @@ def _to_tts_params(
     text = _extract_text(request)
     config = extract_config_dict(request)
     extra_body = pop_extra_body(config, managed=('input', 'model'), label='openai tts')
+    reject_version(config, label='openai tts')
 
     params: dict[str, Any] = {
-        'model': config.pop('version', None) or model_name,
+        'model': model_name,
         'input': text,
         'voice': config.pop('voice', 'alloy'),
     }
@@ -181,10 +200,6 @@ def _to_tts_params(
     for key in ('speed', 'response_format', 'instructions'):
         if key in config:
             params[key] = config.pop(key)
-
-    # Strip standard GenAI config keys.
-    for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
-        config.pop(key, None)
 
     if extra_body:
         params['extra_body'] = extra_body
@@ -240,13 +255,14 @@ def _to_stt_params(
     media_url, content_type = _extract_media(request)
     config = extract_config_dict(request)
     extra_body = pop_extra_body(config, managed=('file', 'model'), label='openai stt')
+    reject_version(config, label='openai stt')
 
     audio_bytes = decode_data_uri_bytes(media_url)
 
     ext = _CONTENT_TYPE_TO_EXTENSION.get(content_type, 'mp3')
 
     params: dict[str, Any] = {
-        'model': config.pop('version', None) or model_name,
+        'model': model_name,
         'file': (f'input.{ext}', audio_bytes, content_type or 'audio/mpeg'),
     }
 
@@ -254,9 +270,10 @@ def _to_stt_params(
     if prompt_text:
         params['prompt'] = prompt_text
 
-    # Temperature if provided.
-    if temp := config.pop('temperature', None):
-        params['temperature'] = temp
+    # Temperature if provided; 0 is a real value.
+    temperature = config.pop('temperature', None)
+    if temperature is not None:
+        params['temperature'] = temperature
 
     # Optional STT-specific params.
     for key in ('language', 'timestamp_granularities'):
@@ -268,10 +285,6 @@ def _to_stt_params(
     if not response_format and request.output_format and request.output_format in ('json', 'text'):
         response_format = request.output_format
     params['response_format'] = response_format or 'text'
-
-    # Strip standard GenAI config keys.
-    for key in ('max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
-        config.pop(key, None)
 
     if extra_body:
         params['extra_body'] = extra_body

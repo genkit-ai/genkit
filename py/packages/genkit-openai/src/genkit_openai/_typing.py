@@ -128,15 +128,6 @@ class OpenAIConfig(ModelConfig):
         top_p: Nucleus sampling probability (0.0 to 1.0).
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
 
-        max_tokens: Maximum tokens to generate (deprecated, use max_completion_tokens).
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
-
-        max_completion_tokens: Upper bound for tokens including reasoning tokens.
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
-
-        stop: Up to 4 sequences where the API will stop generating.
-            See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop
-
         stream: Whether to stream the response.
             See: https://platform.openai.com/docs/api-reference/chat/create#chat-create-stream
 
@@ -210,17 +201,21 @@ class OpenAIConfig(ModelConfig):
 
         max_output_tokens: Genkit's cross-model reply cap (``maxOutputTokens``
             in the Dev UI). Sent as ``max_tokens``, or ``max_completion_tokens``
-            on reasoning models. ``max_tokens`` and ``max_completion_tokens``
-            win when set.
+            on reasoning models and when ``reasoning_effort`` is set.
+
+        stop_sequences: Genkit's cross-model stop strings. Sent as ``stop``.
 
         extra: Request body fields this class doesn't declare, such as a
             field a newer API version or an OpenAI-compatible server added.
             Sent as the OpenAI SDK's ``extra_body``, which replaces a
             top-level field of the same name, so ``extra={'temperature': 0.9}``
-            wins over ``temperature``. Nothing inside it is checked.
+            wins over ``temperature`` (and ``extra={'max_tokens': 256}`` or
+            ``extra={'max_completion_tokens': 256}`` overrides the reply-cap
+            field). Nothing inside it is checked except request-envelope keys.
 
-    Any other key raises, so a typo like ``temprature`` fails by name instead
-    of reaching OpenAI.
+    Any undeclared top-level key (including ``max_tokens``,
+    ``max_completion_tokens``, and ``stop``) raises, so a typo like
+    ``temprature`` fails by name instead of reaching OpenAI.
     """
 
     # Dev UI and reflection send camelCase. frequencyPenalty binds and goes
@@ -233,21 +228,11 @@ class OpenAIConfig(ModelConfig):
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-model
     model: str | None = None
 
+    # temperature and top_p come from ModelConfig; OpenAI's ranges are
+    # applied without re-declaring them.
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-temperature
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_tokens
-    # Deprecated: use max_completion_tokens instead
-    max_tokens: int | None = None
-
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-max_completion_tokens
-    max_completion_tokens: int | None = None
-
-    # https://platform.openai.com/docs/api-reference/chat/create#chat-create-stop
-    stop: str | list[str] | None = None
+    common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
 
     # https://platform.openai.com/docs/api-reference/chat/create#chat-create-stream
     stream: bool | None = None

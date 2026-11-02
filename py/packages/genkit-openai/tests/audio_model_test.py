@@ -26,6 +26,7 @@ from genkit_openai._models._audio import (
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
     OpenAISTTModel,
+    OpenAITtsConfig,
     OpenAITTSModel,
     _extract_media,
     _extract_text,
@@ -34,6 +35,7 @@ from genkit_openai._models._audio import (
     _to_tts_params,
     _to_tts_response,
 )
+from pydantic import ValidationError
 
 from genkit import GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
@@ -115,17 +117,13 @@ class TestToTTSParams:
         got = _to_tts_params('tts-1', request)
         assert got['voice'] == 'nova'
 
-    def test_strips_standard_config(self) -> None:
-        """Verify standard GenAI keys are stripped."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('test')]),
-            ],
-            config={'temperature': 0.5, 'top_k': 40},
-        )
-        got = _to_tts_params('tts-1', request)
-        assert 'temperature' not in got
-        assert 'top_k' not in got
+    @pytest.mark.parametrize(
+        'key', ['temperature', 'max_output_tokens', 'maxOutputTokens', 'top_k', 'top_p', 'stop_sequences', 'version']
+    )
+    def test_tts_config_rejects_generic_knob(self, key: str) -> None:
+        """The speech endpoint takes none of the text-generation knobs, so the config rejects them by name."""
+        with pytest.raises(ValidationError, match=key):
+            OpenAITtsConfig.model_validate({key: 1})
 
 
 class TestToTTSResponse:

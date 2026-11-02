@@ -96,14 +96,14 @@ class TestOllamaModelGenerate(unittest.IsolatedAsyncioTestCase):
         client.chat = AsyncMock()
         request = ModelRequest(
             messages=[Message(role=Role.USER, content=[Part.from_text('Suggest a dish.')])],
-            config={'numPredict': 'a lot'},
+            config={'numCtx': 'a lot'},
         )
 
         with self.assertRaises(GenkitError) as raised:
             await model.generate(request, client=client)
 
         self.assertEqual(raised.exception.status, 'INVALID_ARGUMENT')
-        self.assertIn('num_predict', str(raised.exception))
+        self.assertIn('num_ctx', str(raised.exception))
         client.chat.assert_not_called()
 
     async def test_generate_rejects_malformed_tool_schema_as_invalid_argument(self) -> None:
@@ -752,10 +752,23 @@ class TestBuildRequestOptions:
         validated = OllamaModel.build_request_options(OllamaConfig.model_validate({'extra': {'repeat_penalty': 1.2}}))
         assert validated['repeat_penalty'] == 1.2
 
-    def test_num_predict_wins_over_max_output_tokens(self) -> None:
-        """An explicit num_predict beats the inherited max_output_tokens."""
-        options = OllamaModel.build_request_options(OllamaConfig(num_predict=10, max_output_tokens=99))
+    def test_ollama_config_declares_no_native_name_for_a_common_field(self) -> None:
+        """num_predict and stop are set through max_output_tokens and stop_sequences."""
+        assert 'num_predict' not in OllamaConfig.model_fields
+        assert 'stop' not in OllamaConfig.model_fields
+
+    def test_native_name_rejected_as_unknown_field(self) -> None:
+        """`OllamaConfig` rejects `num_predict` and `stop` at the top level via extra='forbid'."""
+        with pytest.raises(ValidationError, match='num_predict'):
+            OllamaConfig.model_validate({'num_predict': 10})
+        with pytest.raises(ValidationError, match='stop'):
+            OllamaConfig.model_validate({'stop': ['###']})
+
+    def test_native_name_in_extra_passes_through_and_overrides(self) -> None:
+        """`extra` passes `num_predict` and `stop` through as-is and wins over built options."""
+        options = OllamaModel.build_request_options(OllamaConfig(max_output_tokens=99, extra={'num_predict': 10}))
         assert options['num_predict'] == 10
+        assert OllamaModel.build_request_options({'extra': {'stop': ['###']}})['stop'] == ['###']
 
     def test_think_and_keep_alive_excluded_from_options(self) -> None:
         """think/keep_alive are request kwargs, never sampler options."""

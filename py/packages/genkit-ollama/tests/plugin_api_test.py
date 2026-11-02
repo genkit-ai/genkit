@@ -126,6 +126,10 @@ async def test_create_model_action_custom_options_is_ollama_config() -> None:
     props = cast(dict[str, Any], model_meta['customOptions']['properties'])
     assert 'think' in props
     assert 'keepAlive' in props
+    # Set through maxOutputTokens / stopSequences instead.
+    assert 'maxOutputTokens' in props
+    assert 'stopSequences' in props
+    assert not {'numPredict', 'num_predict', 'stop'} & props.keys()
 
 
 # _define_ollama_model and _define_ollama_embedder methods no longer exist in new plugin architecture

@@ -221,8 +221,12 @@ class OllamaConfig(ModelConfig):
     installed ``ollama`` client knows, plus ``think`` and ``keep_alive``.
     Unknown keys raise, so a misspelled ``num_ctx`` fails instead of quietly
     running with the default context window. A sampler option this class
-    doesn't declare yet goes in ``extra``, which is merged into the request's
-    ``options`` as-is and wins over a declared value with the same name.
+    doesn't declare goes in ``extra``, which is merged into the request's
+    ``options`` as-is and wins over a built value with the same name.
+
+    ``num_predict`` and ``stop`` are not declared fields: set
+    ``max_output_tokens`` and ``stop_sequences``, which the plugin maps to
+    those Ollama ``options`` names.
     """
 
     think: bool | Literal['low', 'medium', 'high'] | None = None
@@ -246,7 +250,6 @@ class OllamaConfig(ModelConfig):
     num_thread: int | None = None
     num_keep: int | None = None
     seed: int | None = None
-    num_predict: int | None = None
     tfs_z: float | None = None
     typical_p: float | None = None
     repeat_last_n: int | None = None
@@ -257,7 +260,6 @@ class OllamaConfig(ModelConfig):
     mirostat_tau: float | None = None
     mirostat_eta: float | None = None
     penalize_newline: bool | None = None
-    stop: list[str] | None = None
 
 
 # Declared names, in either spelling. A generic snake-case pass turns
@@ -592,18 +594,16 @@ class OllamaModel:
 
         - ``think``/``keep_alive`` are stripped — they are top-level request
           kwargs, not sampler options (Ollama rejects them inside ``options``).
-        - Genkit's ``max_output_tokens`` maps to Ollama's ``num_predict``; an
-          explicit ``num_predict`` wins when both are present.
-        - ``stop_sequences`` maps to ``stop``; an explicit ``stop`` wins when
-          both are present. ``version`` (genkit bookkeeping) is dropped.
+        - Genkit's ``max_output_tokens`` is sent as Ollama's ``num_predict``
+          and ``stop_sequences`` as ``stop``. ``version`` (genkit
+          bookkeeping) is dropped.
         - camelCase keys are snake-cased onto the Ollama field. Declared
           names are looked up first so ``f16_kv`` is not rewritten.
         - ``extra`` (e.g. ``{'repeat_penalty': 1.1}``) is merged in last,
-          keys unchanged, so a colliding key wins over a declared field.
+          keys unchanged, so a colliding key wins over a built option.
 
-        Known knobs are routed through ``ollama_api.Options`` purely for type
-        coercion (genkit types ``max_output_tokens``/``top_k`` as floats, but
-        Ollama's ``num_predict``/``top_k`` are integers). The result is then
+        Known knobs are routed through ``ollama_api.Options`` to check their
+        types against the client's (a raw dict skips OllamaConfig). The result is then
         returned as a plain mapping — *not* an ``Options`` — and any knob the
         installed ``Options`` model doesn't yet field (e.g. ``min_p``) is merged
         back in, so newer sampler parameters still reach the server.
@@ -641,14 +641,14 @@ class OllamaModel:
         knobs.pop('version', None)
 
         stop_sequences = knobs.pop('stop_sequences', None)
-        if stop_sequences is not None and knobs.get('stop') is None:
+        if stop_sequences is not None:
             knobs['stop'] = stop_sequences
 
         max_tokens = knobs.pop('max_output_tokens', None)
-        if max_tokens is not None and knobs.get('num_predict') is None:
+        if max_tokens is not None:
             knobs['num_predict'] = max_tokens
 
-        # Coerce the knobs Options models (int num_predict/top_k, etc.), then
+        # Check the knobs Options models (int num_predict/top_k, etc.), then
         # merge back any it drops (e.g. min_p) so they still reach the server.
         try:
             options: dict[str, Any] = ollama_api.Options(**knobs).model_dump(exclude_none=True)

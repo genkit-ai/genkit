@@ -32,7 +32,7 @@ import pytest
 from genkit_google_genai import GeminiConfig, GeminiImageConfig, GeminiTtsConfig, GemmaConfig, VeoConfig, VertexAI
 from google.auth.credentials import AnonymousCredentials
 from google.genai import _api_client, types as genai_types
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from genkit import Genkit
 
@@ -152,3 +152,21 @@ async def test_generate_operation_veo_literal_fields_reach_request(sent_bodies: 
     parameters = sent_bodies[-1]['parameters']
     assert parameters['compressionQuality'] == 'LOSSLESS'
     assert parameters['resizeMode'] == 'PAD'
+
+
+@pytest.mark.parametrize(('key', 'value'), [('temperature', 2.5), ('top_p', 1.5)])
+def test_gemini_range_applies_to_inherited_field(key: str, value: float) -> None:
+    """Gemini's temperature [0, 2] and top_p [0, 1] apply to ModelConfig's fields, which it no longer re-declares."""
+    with pytest.raises(ValidationError, match=f'{key} must be between'):
+        GeminiConfig.model_validate({key: value})
+    assert 'temperature' not in GeminiConfig.__annotations__
+    props = GeminiConfig.model_json_schema(by_alias=True)['properties']
+    assert (props['temperature']['minimum'], props['temperature']['maximum']) == (0.0, 2.0)
+    assert (props['topP']['minimum'], props['topP']['maximum']) == (0.0, 1.0)
+
+
+def test_gemma_takes_any_temperature() -> None:
+    """Gemma drops Gemini's temperature range but keeps top_p's."""
+    assert GemmaConfig(temperature=3.0).temperature == 3.0
+    with pytest.raises(ValidationError, match='top_p must be between'):
+        GemmaConfig(top_p=1.5)
