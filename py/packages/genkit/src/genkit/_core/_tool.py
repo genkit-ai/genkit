@@ -467,13 +467,15 @@ class Tool(Action[InputT, OutputT, Any, None]):
         return _ActionTool(action)
 
     @property
-    def output_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the tool's output."""
-        return self._output_schema
+    def model_output_schema(self) -> dict[str, object] | None:
+        """JSON Schema the model binds as this tool's ``outputSchema``."""
+        if ORIGINAL_OUTPUT_SCHEMA_KEY in self.metadata:
+            original = self.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY]
+            return cast(dict[str, object], original) if isinstance(original, dict) else None
+        return self.output_schema
 
-    @output_schema.setter
-    def output_schema(self, value: dict[str, object] | None) -> None:
-        self._set_output_schema(value)
+    @model_output_schema.setter
+    def model_output_schema(self, value: dict[str, object] | None) -> None:
         self._metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = value
         if self._wire_action is not None:
             self._wire_action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = value
@@ -495,16 +497,11 @@ class Tool(Action[InputT, OutputT, Any, None]):
         ``-> MultipartToolResponse[T]``, ``None`` for a bare
         ``-> MultipartToolResponse``.
         """
-        if ORIGINAL_OUTPUT_SCHEMA_KEY in self.metadata:
-            original = self.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY]
-            output_schema = cast(dict[str, object], original) if isinstance(original, dict) else None
-        else:
-            output_schema = self.output_schema
         return ToolDefinition(
             name=self.name,
             description=self.description or '',
             input_schema=self.input_schema,
-            output_schema=output_schema,
+            output_schema=self.model_output_schema,
         )
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:

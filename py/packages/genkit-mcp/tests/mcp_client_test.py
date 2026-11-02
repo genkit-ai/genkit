@@ -215,14 +215,14 @@ async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
     assert tool_message.content[0].tool_response is not None
     assert tool_message.content[0].tool_response.output == 'hello'
     sent = next(tool for tool in pm.last_request.tools or [] if tool.name == 'fake_bad_output')
-    assert tools[0].output_schema is None
+    assert tools[0].definition().output_schema is None
     assert tools[-1].name == 'fake_bad_output'
-    assert tools[-1].output_schema == {
+    assert tools[-1].definition().output_schema == {
         'type': 'object',
         'properties': {'value': {'type': 'integer'}},
         'required': ['value'],
     }
-    assert sent.output_schema == tools[-1].output_schema
+    assert sent.output_schema == tools[-1].definition().output_schema
 
 
 @pytest.mark.asyncio
