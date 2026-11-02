@@ -844,18 +844,6 @@ class TestVeoConfigExtra:
         assert raised.value.status == 'INVALID_ARGUMENT'
         assert repr(field) in str(raised.value)
 
-    def test_extra_keeps_plugin_level_extra_body(self) -> None:
-        """A request's `extra` layers over the plugin's extra_body instead of replacing it."""
-        plugin_http = genai_types.HttpOptions(extra_body={'parameters': {'plug': 1}})
-        veo = VeoModel('veo-3.1-generate-001', MagicMock(), client_kwargs={'http_options': plugin_http})
-        request = _text_request(config=VeoConfig.model_validate({'extra': {'parameters': {'fooBar': 1}}}))
-
-        cfg = veo._get_config(request)
-
-        assert cfg is not None
-        assert cfg.http_options is not None
-        assert cfg.http_options.extra_body == {'parameters': {'plug': 1, 'fooBar': 1}}
-
 
 class TestVeoErrorClassification:
     """Credential failures get a status; unknown failures stay raw."""

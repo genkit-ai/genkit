@@ -41,8 +41,8 @@ from genkit_google_genai._models._sdk_config import (
     VIRTUAL_TRY_ON_MANAGED_BODY_FIELDS,
     attach_config_extra,
     attach_leftovers,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     sdk_config_error,
     split_sdk_fields,
 )
@@ -256,7 +256,6 @@ def _to_sdk_config(
     dumped: dict[str, Any] | None,
     *,
     action_name: str,
-    client_http_options: object,
 ) -> genai_types.RecontextImageConfig | None:
     """Map the dumped family config onto the typed SDK request config."""
     if not dumped:
@@ -276,10 +275,9 @@ def _to_sdk_config(
     except ValidationError as e:
         raise sdk_config_error(action_name=action_name, error=e) from e
     cfg = attach_leftovers(cfg, leftovers, nest='parameters')
-    cfg = attach_config_extra(
+    return attach_config_extra(
         cfg, extra, action_name=action_name, managed_body_fields=VIRTUAL_TRY_ON_MANAGED_BODY_FIELDS
     )
-    return keep_client_extra_body(cfg, client_http_options)
 
 
 def _media_part(image: genai_types.Image | None) -> Part | None:
@@ -397,7 +395,7 @@ class VirtualTryOnModel:
         # The model is Vertex-only; a request-scoped client stays on that backend.
         kwargs.setdefault('vertexai', True)
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
         if api_key is not None:
             # An express key goes to the global Vertex host: drop the plugin's
             # credentials, project and host and any location, keeping only a
@@ -454,7 +452,6 @@ class VirtualTryOnModel:
         config = _to_sdk_config(
             dumped,
             action_name=self._name,
-            client_http_options=(self._client_kwargs or {}).get('http_options'),
         )
         try:
             response = await client.aio.models.recontext_image(

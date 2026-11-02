@@ -26,6 +26,18 @@ from pydantic import BaseModel, ValidationError
 from genkit import GenkitError
 
 
+def copy_http_options(opts: genai_types.HttpOptions) -> genai_types.HttpOptions:
+    """Copy ``opts`` so per-request edits never reach the plugin's options.
+
+    ``headers`` is the only container the plugin sets, so it gets a fresh dict.
+    The loop's ``httpx_async_client`` stays shared: it holds locks and sockets
+    that can't be copied, and every request on that loop goes through it.
+    """
+    if opts.headers is None:
+        return opts.model_copy()
+    return opts.model_copy(update={'headers': dict(opts.headers)})
+
+
 def unexpected_config_error(*, action_name: str) -> GenkitError:
     """Fail when the dump leaf sees a config Action did not produce."""
     return GenkitError(
@@ -200,20 +212,6 @@ def attach_config_extra(
     return config
 
 
-def keep_client_extra_body(config: Any, client_http_options: object) -> Any:  # noqa: ANN401
-    """Layer a request's extra_body over the plugin's instead of replacing it.
-
-    google-genai swaps in a per-request ``extra_body`` wholesale, so without
-    this a request carrying ``extra`` would drop ``GoogleAI(http_options=
-    HttpOptions(extra_body=...))``. The request's keys win.
-    """
-    request_body = config.http_options.extra_body if config.http_options else None
-    client_body = getattr(client_http_options, 'extra_body', None)
-    if request_body and isinstance(client_body, dict):
-        config.http_options.extra_body = deep_merge(cast(dict[str, Any], client_body), request_body)
-    return config
-
-
 def sdk_config_error(*, action_name: str, error: ValidationError) -> GenkitError:
     """Name the action and the field the SDK rejected on a known typed field."""
     loc = ()
@@ -231,9 +229,10 @@ def sdk_config_error(*, action_name: str, error: ValidationError) -> GenkitError
 def check_timeout_seconds(value: object) -> float | None:
     """Return ``value`` as float seconds, or raise ``ValueError`` unless it is None or positive and finite.
 
-    0 would be an instant failure on the Interactions client, and inf, NaN, or a
-    value whose milliseconds overflow can't become a timeout. ``True`` is not
-    a number of seconds, so bool raises too.
+    0 would mean no timeout on Gemini and an instant failure on the
+    Interactions client, and inf, NaN, or a value whose milliseconds overflow
+    can't become a timeout. ``True`` is not a number of seconds, so bool raises
+    too.
     """
     if value is None:
         return None
@@ -254,6 +253,7 @@ def reject_bool_timeout(value: object) -> object:
 
 
 def timeout_seconds_to_ms(seconds: float) -> int:
-    """Validated seconds to google-genai's ``HttpOptions.timeout`` milliseconds, rounding up so 0.0001 is 1 ms."""
-    # round() first so 2.007 s is 2007 ms, not 2008 from float noise.
-    return math.ceil(round(seconds * 1000, 6))
+    """Validated seconds to ``HttpOptions.timeout`` milliseconds, rounding up so any positive value is >= 1 ms."""
+    # round() first so 2.007 s is 2007 ms, not 2008 from float noise; max(1, ...)
+    # keeps sub-nanosecond positive budgets at 1 ms instead of rounding to 0.
+    return max(1, math.ceil(round(seconds * 1000, 6)))
