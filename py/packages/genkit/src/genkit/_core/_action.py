@@ -423,13 +423,14 @@ def find_input_and_context(
     *,
     kind: ActionKind,
     name: str,
+    context_kind: ActionKind | None = None,
 ) -> ActionParams:
     """Find ``fn``'s input and run-context parameters, or raise a TypeError saying how to fix it.
 
     ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
     owner = describe_action(kind, name)
-    context_class = _public_context_name(kind)
+    context_class = _public_context_name(context_kind if context_kind is not None else kind)
 
     params = [
         p
@@ -478,25 +479,27 @@ def find_input_and_context(
     return ActionParams(input=input_param, context=context_param)
 
 
-def known_annotation_names(kind: ActionKind) -> dict[str, object]:
+def known_annotation_names(kind: ActionKind, *, context_kind: ActionKind | None = None) -> dict[str, object]:
     """Genkit types a handler of this kind always takes or returns, by name.
 
     A model gets a ModelRequest and ModelContext and returns a ModelResponse,
     an embedder gets an EmbedRequest and returns an EmbedResponse, and a
-    background model's start, check, and cancel deal in Operations and
-    ModelContext. When the handler imports these only under TYPE_CHECKING,
-    resolve_type_hints looks the missing names up here, so
-    ``ModelRequest[GardenConfig]`` keeps its config type and any other missing
-    name still raises.
+    background action's start, check, and cancel deal in Operations plus
+    ModelContext (background models) or FlowContext (other background actions).
+    When the handler imports these only under TYPE_CHECKING, resolve_type_hints
+    looks the missing names up here, so ``ModelRequest[GardenConfig]`` keeps
+    its config type and any other missing name still raises.
     """
+    effective_context_kind = context_kind if context_kind is not None else kind
     if kind == ActionKind.MODEL:
         return {'ModelRequest': ModelRequest, 'ModelResponse': ModelResponse, 'ModelContext': ModelContext}
     if kind == ActionKind.BACKGROUND_MODEL:
         return {'ModelRequest': ModelRequest, 'Operation': Operation, 'ModelContext': ModelContext}
     if kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
-        return {'Operation': Operation, 'ModelContext': ModelContext}
+        ctx_cls = ModelContext if effective_context_kind in _MODEL_CONTEXT_KINDS else FlowContext
+        return {'Operation': Operation, ctx_cls.__name__: ctx_cls}
     if kind == ActionKind.EMBEDDER:
-        return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse}
+        return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse, 'FlowContext': FlowContext}
     return {}
 
 
@@ -930,6 +933,19 @@ class ModelContext(ActionRunContext[ModelResponseChunk]):
     """
 
 
+def _context_cls_for_kind(kind: ActionKind) -> type[ActionRunContext[Any]]:
+    """The context class ``Action._run`` constructs before invoking ``self._fn``."""
+    if kind in _MODEL_CONTEXT_KINDS:
+        return ModelContext
+    # Tools and agents wrap or replace this base context in the AI layer:
+    # call_tool_fn wraps it into ToolContext (adding resumed_metadata and
+    # original_input) for both the tool and its tool.v2 envelope, and
+    # BidiAction hands init/stream to AgentRuntime.run, which builds AgentContext.
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2, ActionKind.AGENT):
+        return ActionRunContext
+    return FlowContext
+
+
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
     """A named, traced, remotely callable function."""
 
@@ -947,9 +963,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
         _io_schemas: tuple[dict[str, object], dict[str, object]] | None = None,
+        _context_kind: ActionKind | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
+        context_kind = _context_kind if _context_kind is not None else kind
+        self._context_cls: type[ActionRunContext[Any]] = _context_cls_for_kind(context_kind)
         # Flows treat None as a real value and check the return against the
         # annotation. Other actions still treat a missing/None input as omitted
         # and leave the return unchecked.
@@ -972,8 +991,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # is one) and metadata_fn is the user's function, whose signature
         # decides the input and context.
         user_fn: Callable[..., object] = metadata_fn if metadata_fn else fn
-        hints = resolve_type_hints(user_fn, known_annotation_names(kind))
-        self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
+        hints = resolve_type_hints(user_fn, known_annotation_names(kind, context_kind=context_kind))
+        self._params: ActionParams = find_input_and_context(
+            user_fn, hints, kind=kind, name=name, context_kind=context_kind
+        )
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._user_fn: Callable[..., object] = user_fn
         self._fn_is_wrapper: bool = metadata_fn is not None
@@ -1192,31 +1213,13 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         inside_token = _inside_action.set(True)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
-        ctx_data = _action_context.get(None)
-        if self._kind in _MODEL_CONTEXT_KINDS:
-            action_ctx: ActionRunContext[Any] = ModelContext(
-                context=ctx_data,
-                streaming_callback=streaming_cb,
-                abort_signal=abort_signal,
-                init=init,
-                input_stream=input_stream,
-            )
-        elif self._kind in (ActionKind.TOOL, ActionKind.AGENT):
-            action_ctx = ActionRunContext(
-                context=ctx_data,
-                streaming_callback=streaming_cb,
-                abort_signal=abort_signal,
-                init=init,
-                input_stream=input_stream,
-            )
-        else:
-            action_ctx = FlowContext(
-                context=ctx_data,
-                streaming_callback=streaming_cb,
-                abort_signal=abort_signal,
-                init=init,
-                input_stream=input_stream,
-            )
+        action_ctx: ActionRunContext[Any] = self._context_cls(
+            context=_action_context.get(None),
+            streaming_callback=streaming_cb,
+            abort_signal=abort_signal,
+            init=init,
+            input_stream=input_stream,
+        )
 
         try:
             return await self._run_with_telemetry(

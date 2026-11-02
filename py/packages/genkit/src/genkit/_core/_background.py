@@ -36,7 +36,6 @@ from genkit._core._action import (
     ActionKind,
     ActionRunContext,
     FlowContext,
-    ModelContext,
     get_current_context,
     set_action_name,
 )
@@ -55,14 +54,8 @@ OutT = TypeVar('OutT')
 # runtime, so CheckOpFn[X] can't be subscripted outside an annotation; spell
 # the Callable out when you need a runtime alias.
 StartOpFn = Callable[[InT, FlowContext], Awaitable[Operation]]
-CheckOpFn = (
-    Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
-    | Callable[[Operation[OutT], ModelContext], Awaitable[Operation]]
-)
-CancelOpFn = (
-    Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
-    | Callable[[Operation[OutT], ModelContext], Awaitable[Operation]]
-)
+CheckOpFn = Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
+CancelOpFn = Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:
@@ -518,6 +511,7 @@ def _operation_action(
         metadata=metadata,
         description=description,
         config_schema=config_schema,
+        _context_kind=start_kind,
     )
     return action
 

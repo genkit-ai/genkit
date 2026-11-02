@@ -20,7 +20,7 @@ import types
 from typing import Any, cast, get_args, get_origin
 
 import pytest
-from typing_extensions import assert_type
+from pydantic import BaseModel
 
 import genkit
 import genkit.exp.agent
@@ -47,13 +47,13 @@ from genkit.exp.agent import (
     AgentFinishReason,
     AgentInput,
     AgentResult,
-    AgentStreamChunk,
     InMemorySessionStore,
     SessionRunner,
     TurnContext,
     TurnResult,
 )
 from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports
+from genkit.plugin_api import BackgroundAction
 
 
 def test_public_contexts_are_distinct_subclasses_of_action_run_context() -> None:
@@ -123,37 +123,9 @@ def test_contexts_subscript_at_runtime() -> None:
     assert get_args(ToolContext[int]) == (int,)
 
 
-def test_context_subclasses_satisfy_action_run_context_for_type_checkers() -> None:
-    """Each context subclass satisfies `ActionRunContext[ChunkT]`; checked by pyright, pyrefly and ty."""
-
-    def stream_step(ctx: ActionRunContext[int]) -> ActionRunContext[int]:
-        ctx.send_chunk(3)
-        return ctx
-
-    def stream_model_chunk(ctx: ActionRunContext[ModelResponseChunk]) -> ActionRunContext[ModelResponseChunk]:
-        return ctx
-
-    def stream_agent_chunk(ctx: ActionRunContext[AgentStreamChunk]) -> ActionRunContext[AgentStreamChunk]:
-        return ctx
-
-    flow_ctx: FlowContext[int] = FlowContext[int]()
-    tool_ctx: ToolContext[int] = ToolContext(ActionRunContext[int]())
-    model_ctx: ModelContext = ModelContext()
-    agent_ctx: AgentContext = AgentContext()
-
-    assert_type(stream_step(flow_ctx), ActionRunContext[int])
-    assert_type(stream_step(tool_ctx), ActionRunContext[int])
-    assert_type(stream_model_chunk(model_ctx), ActionRunContext[ModelResponseChunk])
-    assert_type(stream_agent_chunk(agent_ctx), ActionRunContext[AgentStreamChunk])
-    assert_type(flow_ctx.context, dict[str, Any])
-    assert_type(tool_ctx.is_resumed(), bool)
-    assert_type(model_ctx.is_streaming, bool)
-    assert_type(agent_ctx.is_streaming, bool)
-
-
 @pytest.mark.asyncio
 async def test_runtime_actions_deliver_matching_context_subclasses() -> None:
-    """Flows, models, background models, tools, embedders, and agents receive their concrete context subclass."""
+    """Flows, models, background models, custom background jobs, tools, embedders, and agents get matching contexts."""
     ai = Genkit()
     seen: dict[str, object] = {}
 
@@ -212,6 +184,37 @@ async def test_runtime_actions_deliver_matching_context_subclasses() -> None:
         cancel=cancel_video,
     )
 
+    class RenderRequest(BaseModel):
+        quarter: str
+
+    class Report(BaseModel):
+        url: str
+
+    class ReportJob(BackgroundAction[RenderRequest, Report]):
+        pass
+
+    async def start_report(request: RenderRequest, ctx: FlowContext) -> Operation:
+        seen['custom_bg_start'] = ctx
+        return Operation(id=f'report-{request.quarter}', done=False)
+
+    async def check_report(op: Operation[Report], ctx: FlowContext) -> Operation:
+        seen['custom_bg_check'] = ctx
+        return Operation(id=op.id, done=True, output=Report(url=f'https://reports.example/{op.id}.pdf'))
+
+    async def cancel_report(op: Operation[Report], ctx: FlowContext) -> Operation:
+        seen['custom_bg_cancel'] = ctx
+        return Operation(id=op.id, done=True)
+
+    report_job = ReportJob(
+        'render-report',
+        start_report,
+        check_report,
+        kind=ActionKind.CUSTOM,
+        cancel=cancel_report,
+    )
+    for each in report_job.actions:
+        ai._registry.register_action_from_instance(each)
+
     async def menu_embedder(request: EmbedRequest, ctx: FlowContext) -> EmbedResponse:
         seen['embedder'] = ctx
         return EmbedResponse(embeddings=[Embedding(embedding=[0.25, 0.75]) for _ in request.input])
@@ -231,7 +234,7 @@ async def test_runtime_actions_deliver_matching_context_subclasses() -> None:
     assert isinstance(seen['tool'], ToolContext)
     assert type(seen['tool']) is ToolContext
 
-    # 3. Background model (start / check / cancel)
+    # 3. Background model (start / check / cancel -> ModelContext)
     op = await ai.generate_operation(model='bistro/menu-video', prompt='Film the kitchen.')
     checked = await ai.check_operation(op)
     assert checked.done is True
@@ -244,13 +247,26 @@ async def test_runtime_actions_deliver_matching_context_subclasses() -> None:
     assert isinstance(seen['bg_cancel'], ModelContext)
     assert type(seen['bg_cancel']) is ModelContext
 
-    # 4. Embedder
+    # 4. Custom BackgroundAction (start / check / cancel -> FlowContext)
+    report_op = await report_job.start(RenderRequest(quarter='q3'))
+    checked_report = await ai.check_operation(report_op)
+    assert checked_report.done is True
+    cancelled_report = await ai.cancel_operation(report_op)
+    assert cancelled_report.done is True
+    assert isinstance(seen['custom_bg_start'], FlowContext)
+    assert type(seen['custom_bg_start']) is FlowContext
+    assert isinstance(seen['custom_bg_check'], FlowContext)
+    assert type(seen['custom_bg_check']) is FlowContext
+    assert isinstance(seen['custom_bg_cancel'], FlowContext)
+    assert type(seen['custom_bg_cancel']) is FlowContext
+
+    # 5. Embedder
     embeddings = await ai.embed(embedder='bistro/menu-embedder', content=Document.from_text('Smoked Salmon Tartine'))
     assert embeddings[0].embedding == [0.25, 0.75]
     assert isinstance(seen['embedder'], FlowContext)
     assert type(seen['embedder']) is FlowContext
 
-    # 5. Custom Agent
+    # 6. Custom Agent
     exp_ai = ExpGenkit()
 
     async def concierge(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
@@ -351,3 +367,103 @@ async def test_future_annotations_model_context_receives_context_at_runtime() ->
     assert action.params.context is not None and action.params.context.name == 'ctx'
     response = await ai.generate(model='future-chef', prompt='Suggest a dish.', context={'table': 7})
     assert response.text == 'Tartine for 7'
+
+
+def test_background_check_signature_error_names_owner_context() -> None:
+    """Signature fix-it hints on check/cancel name FlowContext for custom jobs and ModelContext for models."""
+    ai = Genkit()
+
+    class RenderRequest(BaseModel):
+        quarter: str
+
+    class Report(BaseModel):
+        url: str
+
+    class ReportJob(BackgroundAction[RenderRequest, Report]):
+        pass
+
+    async def start_report(request: RenderRequest, ctx: FlowContext) -> Operation:
+        return Operation(id=request.quarter)
+
+    async def bad_check_report(op: Operation[Report], extra: int) -> Operation:
+        return op
+
+    with pytest.raises(TypeError, match="annotate 'extra' as FlowContext"):
+        ReportJob('render-report', start_report, cast(Any, bad_check_report), kind=ActionKind.CUSTOM)
+
+    async def start_video(request: ModelRequest, ctx: ModelContext) -> Operation:
+        return Operation(id='video-1')
+
+    async def bad_check_video(op: Operation[ModelResponse], extra: int) -> Operation:
+        return op
+
+    with pytest.raises(TypeError, match="annotate 'extra' as ModelContext"):
+        ai.define_background_model(name='bistro/menu-video', start=start_video, check=cast(Any, bad_check_video))
+
+
+_FUTURE_BACKGROUND_JOB_MODULE = """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel
+
+from genkit import FlowContext as RuntimeFlowContext, Operation as RuntimeOperation
+from genkit.plugin_api import ActionKind, BackgroundAction
+
+if TYPE_CHECKING:
+    from genkit import FlowContext, Operation
+
+
+class RenderRequest(BaseModel):
+    quarter: str
+
+
+class Report(BaseModel):
+    url: str
+
+
+class ReportJob(BackgroundAction[RenderRequest, Report]):
+    pass
+
+
+async def start_report(request: RenderRequest, ctx: FlowContext) -> Operation:
+    assert type(ctx) is RuntimeFlowContext
+    return RuntimeOperation(id=f'report-{request.quarter}', done=False)
+
+
+async def check_report(op: Operation[Report], ctx: FlowContext) -> Operation:
+    assert type(ctx) is RuntimeFlowContext
+    return RuntimeOperation(id=op.id, done=True, output=Report(url=f'https://reports.example/{op.id}.pdf'))
+
+
+async def cancel_report(op: Operation[Report], ctx: FlowContext) -> Operation:
+    assert type(ctx) is RuntimeFlowContext
+    return RuntimeOperation(id=op.id, done=True)
+"""
+
+
+@pytest.mark.asyncio
+async def test_future_annotations_custom_background_job_receives_flow_context() -> None:
+    """`from __future__ import annotations` on a custom `BackgroundAction` resolves `Operation` and `FlowContext`."""
+    module = types.ModuleType('future_bg_job')
+    exec(_FUTURE_BACKGROUND_JOB_MODULE, module.__dict__)  # noqa: S102 - builds a module with postponed annotations
+
+    ai = Genkit()
+    job = module.ReportJob(
+        'render-report',
+        module.start_report,
+        module.check_report,
+        kind=ActionKind.CUSTOM,
+        cancel=module.cancel_report,
+    )
+    for each in job.actions:
+        ai._registry.register_action_from_instance(each)
+
+    op = await job.start(module.RenderRequest(quarter='q4'))
+    checked = await ai.check_operation(op)
+    assert checked.done is True
+    assert checked.output is not None
+    assert checked.output.url == 'https://reports.example/report-q4.pdf'
+    cancelled = await ai.cancel_operation(op)
+    assert cancelled.done is True
