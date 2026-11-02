@@ -69,7 +69,15 @@ from genkit._core._action import (
 )
 from genkit._core._background import missing_operation_error, stamp_operation_action
 from genkit._core._compat import await_unchained
-from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError, PublicError, _StreamingCallbackError, attached_cause
+from genkit._core._error import (
+    BoxedFailure,
+    ErrorReason,
+    Failure,
+    GenkitError,
+    PublicError,
+    _StreamingCallbackError,
+    attached_cause,
+)
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     GenerateHookParams,
@@ -1177,6 +1185,7 @@ def box_dead_turn(
     out.finish_message = finish_message
     out.error = error
     out.message = None
+    out._failure = None
     if out.operation is not None and out.operation.error is None:
         # The ticket already started. The failure why lives on the
         # handle so check/cancel is not a clean start.

@@ -26,13 +26,17 @@ a generic ``Internal Error`` so server details stay in your logs. A
 goes into the flow's context.
 
 ``to_sse`` frames a streaming handle (``flow.stream()``,
-``ai.generate_stream()``, ``chat.send_stream()``) as the SSE lines every
-adapter sends: a ``message`` frame per chunk, then ``result``, or an
-``error`` frame instead. It's also how a hand-written route, say a FastAPI one
-with typed params and ``Depends(...)``, streams without writing frames itself.
-Non-streaming results are often Pydantic models, so serialize them with
-``pydantic_core.to_json``: compact JSON by alias, the same bytes the adapters
-send.
+``ai.generate_stream()``, ``prompt.stream()``, ``chat.send_stream()``) as the
+SSE lines every adapter sends: a ``message`` frame per chunk, then ``result``,
+or an ``error`` frame instead. It's also how a hand-written route, say a
+FastAPI one with typed params and ``Depends(...)``, streams without writing
+frames itself. ``to_sse`` sends the handle's result as returned, so
+``ai.generate_stream()``, ``prompt.stream()``, and flows returning a
+``ModelResponse`` put ``request`` (system prompt, tools, docs, history) on the
+wire; stream a flow returning ``response.text`` or ``response.output`` from a
+served route. Non-streaming results are often Pydantic models, so serialize
+them with ``pydantic_core.to_json``: compact JSON by alias, the same bytes the
+adapters send.
 
 Example:
     ```python

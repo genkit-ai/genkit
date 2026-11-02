@@ -4,8 +4,10 @@
 """`genkit.web.to_sse` frames flow streams, model streams and agent turns; these pin its frames."""
 
 import asyncio
+import copy
 import datetime
 import gc
+import json
 import logging
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -17,6 +19,8 @@ from pydantic import BaseModel
 import genkit.web._sse as _sse_mod
 from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
+from genkit._ai._generate import box_dead_turn, box_from_exc
+from genkit._core._error import BoxedFailure, GenkitRuntimeError
 from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk, ToolRequest
 from genkit._core._typing import AgentFinishReason, FinishReason, Role, TurnEnd
 from genkit.model import ModelContext, ModelRequest
@@ -387,3 +391,129 @@ async def test_to_sse_frames_escaping_interrupt_as_internal_error_and_propagates
 
     with pytest.raises(asyncio.CancelledError):
         await _lines(to_sse(_RawStreamHandle(asyncio.CancelledError())))
+
+
+@pytest.mark.asyncio
+async def test_prompt_stream_to_sse_frames_chunks_and_result() -> None:
+    """`to_sse(prompt.stream())` emits `message` frames per chunk and a final `result` frame."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Salmon')]),
+        ]
+    ]
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon')]),
+        )
+    ]
+    menu_prompt = ai.define_prompt(name='lunch_prompt', model='scriptedModel', prompt='Suggest lunch.')
+
+    lines = await _lines(to_sse(menu_prompt.stream()))
+
+    assert len(lines) == 3
+    frames = [json.loads(line.removeprefix('data: ').strip()) for line in lines]
+    assert frames[0]['message']['content'] == [{'text': 'Smoked '}]
+    assert frames[1]['message']['content'] == [{'text': 'Salmon'}]
+    assert frames[2]['result']['finishReason'] == 'stop'
+    assert frames[2]['result']['message']['content'] == [{'text': 'Smoked Salmon'}]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_public_error_details_and_source_keep_failure_immutable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """PublicError details and source survive SSE framing without mutating BoxedFailure."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def lookup_order(order_id: str) -> str:
+        """Look up an order by ID."""
+        err = PublicError(
+            'NOT_FOUND',
+            f'order {order_id} missing',
+            details={'order': Meta(source='crm'), 'stack': 'internal'},
+        )
+        err.source = 'orders'
+        raise err
+
+    define_scripted_model(
+        ai,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(tool_request=ToolRequest(name='lookup_order', input='A-1042'))],
+                ),
+            )
+        ],
+    )
+
+    handle = ai.generate_stream(model='scriptedModel', prompt='Where is A-1042?', tools=['lookup_order'])
+    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+        lines = await _lines(to_sse(handle))
+
+    result = await handle.response
+    assert lines == [
+        'data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND",'
+        '"details":{"order":{"source":"crm"}}}}\n\n'
+    ]
+    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('genkit.web', 'WARNING', 'served flow stream failed: orders: NOT_FOUND: order A-1042 missing', False),
+    ]
+    assert result._failure is not None
+    assert result._failure.details == {'order': {'source': 'crm'}}
+    assert result._failure == copy.deepcopy(result._failure)
+
+
+@pytest.mark.asyncio
+async def test_box_dead_turn_clears_stale_boxed_failure_from_copied_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dead turns (undeclared tool or caller abort) clear any stale `_failure` inherited via `model_copy()`."""
+    stale = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(tool_request=ToolRequest(name='internal_billing_tool', input={'acct': '42'}))],
+        ),
+    )
+    stale._failure = BoxedFailure.from_exc(PublicError('NOT_FOUND', 'stale public error'))
+
+    dead = box_dead_turn(
+        response=stale,
+        messages=[],
+        finish_reason=FinishReason.FAILED,
+        finish_message='Tool internal_billing_tool not found',
+        error=GenkitRuntimeError(status='NOT_FOUND', message='Tool internal_billing_tool not found'),
+    )
+    assert dead._failure is None
+
+    aborted = box_from_exc(
+        response=stale,
+        messages=[],
+        exc=RuntimeError('cancelled'),
+        caller_stopped=True,
+    )
+    assert aborted.finish_reason == FinishReason.ABORTED
+    assert aborted._failure is None
+
+    ai = Genkit()
+
+    async def model_returning_copied_stale_failure(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        return stale.model_copy()
+
+    ai.define_model(name='copied_stale', fn=model_returning_copied_stale_failure)
+
+    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+        lines = await _lines(to_sse(ai.generate_stream(model='copied_stale', prompt='Check billing.')))
+
+    assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
+    assert 'stale public error' not in lines[0]
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('ERROR', 'served flow stream failed', True),
+    ]

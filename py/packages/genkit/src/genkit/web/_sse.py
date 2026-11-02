@@ -81,9 +81,10 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
     ``Internal Error``. These are the frames ``serve_flow``,
     ``handle_genkit_request`` and ``serve_agent`` send.
 
-    The result goes out as the run returned it. A flow that returns a whole
-    ``ModelResponse`` sends its ``request`` too (system prompt, tools, docs), so
-    return ``response.text`` or ``response.output`` from a served flow.
+    The result goes out as the run returned it. ``ai.generate_stream()``,
+    ``prompt.stream()``, and flows returning a whole ``ModelResponse`` send its
+    ``request`` too (system prompt, tools, docs, history), so stream a flow
+    returning ``response.text`` or ``response.output`` from a served route.
 
     ``.response`` is read only after the stream drains, so a handle that fails
     or is never iterated doesn't leave an un-awaited result behind.

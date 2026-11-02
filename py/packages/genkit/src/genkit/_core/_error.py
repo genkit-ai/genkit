@@ -17,6 +17,7 @@
 """Error classes and utilities for the Genkit framework."""
 
 import builtins
+import copy
 import importlib
 import math
 import reprlib
@@ -820,8 +821,14 @@ class BoxedFailure:
     def to_exception(self) -> GenkitError:
         """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
         if self.is_public:
-            err: GenkitError = PublicError(self.status, self.message, details=self.details)
-            err.source = self.source
+            err: GenkitError = PublicError(
+                self.status,
+                self.message,
+                details=copy.deepcopy(self.details) if self.details is not None else None,
+            )
+            if self.source:
+                err.source = self.source
+                err.args = (f'{self.source}: {err.args[0]}',)
             return err
         return GenkitError(status=self.status, message=self.message, source=self.source)
 

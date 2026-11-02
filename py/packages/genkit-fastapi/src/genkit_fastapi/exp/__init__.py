@@ -20,6 +20,7 @@ Handlers here serve APIs that are still experimental in Genkit and may change
 between minor releases. Importing ``genkit_fastapi`` does not load this module.
 
 ```python
+from fastapi.responses import StreamingResponse
 from genkit.web import to_sse
 from genkit_fastapi.exp import serve_agent
 
