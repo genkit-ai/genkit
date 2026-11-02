@@ -6,7 +6,7 @@
     "build:clean": "rimraf ./lib",
     "build": "pnpm run build:clean && pnpm run compile",
     "test": "jest --verbose",
-    "build:watch": "tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json --watch",
+    "build:watch": "pnpm genversion && tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json --watch",
     "genversion": "genversion -esf --property name,version src/utils/version.ts"
   },
   "dependencies": {

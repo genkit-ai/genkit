@@ -6,7 +6,7 @@
     "outDir": "lib/esm",
     "esModuleInterop": true,
     "typeRoots": ["./node_modules/@types"],
-    "rootDirs": ["src"]
+    "rootDir": "src"
   },
   "include": ["src"]
 }
