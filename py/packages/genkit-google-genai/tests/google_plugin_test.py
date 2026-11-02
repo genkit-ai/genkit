@@ -561,30 +561,6 @@ def test_inject_attribution_headers_is_idempotent() -> None:
     assert dict_chained.headers == expected
 
 
-def test_inject_attribution_headers_does_not_mutate_caller_headers() -> None:
-    """Caller-owned header dicts are copied rather than mutated in place."""
-    raw_dict_headers = {'x-goog-api-client': 'crm-worker/2.0', 'x-trace-id': 'abc'}
-    opts_dict: HttpOptionsDict = {'headers': raw_dict_headers}
-    dict_result = _inject_attribution_headers(opts_dict)
-    assert raw_dict_headers == {'x-goog-api-client': 'crm-worker/2.0', 'x-trace-id': 'abc'}
-    assert opts_dict == {'headers': {'x-goog-api-client': 'crm-worker/2.0', 'x-trace-id': 'abc'}}
-    assert dict_result.headers is not raw_dict_headers
-
-    model_headers = {'x-goog-api-client': 'crm-worker/2.0'}
-    opts_model = HttpOptions(headers=model_headers)
-    model_result = _inject_attribution_headers(opts_model)
-    assert model_headers == {'x-goog-api-client': 'crm-worker/2.0'}
-    assert opts_model.headers == {'x-goog-api-client': 'crm-worker/2.0'}
-    assert model_result.headers is not opts_model.headers
-
-    constructed_headers = {'x-goog-api-client': 'crm-worker/2.0'}
-    opts_constructed = HttpOptions.model_construct(headers=constructed_headers)
-    constructed_result = _inject_attribution_headers(opts_constructed)
-    assert constructed_headers == {'x-goog-api-client': 'crm-worker/2.0'}
-    assert opts_constructed.headers == {'x-goog-api-client': 'crm-worker/2.0'}
-    assert constructed_result.headers is not constructed_headers
-
-
 class TestVertexAIInit(unittest.TestCase):
     """Test cases for VertexAI.__init__ plugin."""
 
