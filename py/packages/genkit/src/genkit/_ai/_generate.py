@@ -69,7 +69,7 @@ from genkit._core._action import (
 )
 from genkit._core._background import missing_operation_error, stamp_operation_action
 from genkit._core._compat import await_unchained
-from genkit._core._error import ErrorReason, Failure, GenkitError, PublicError, _StreamingCallbackError, attached_cause
+from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError, PublicError, _StreamingCallbackError, attached_cause
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     GenerateHookParams,
@@ -1205,8 +1205,8 @@ def public_error(exc: BaseException) -> PublicError | None:
 def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # The string on a returned response is what a flow can put in a 200.
     # PublicError is how a tool author publishes that sentence.
-    # The _provider_sourced and cause checks below keep upstream provider errors
-    # out of finish_message.
+    # The cause clause below keeps a plugin's wrapped provider error out of
+    # finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
             return exc.message or type(exc).__name__
@@ -1214,7 +1214,7 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     published = public_error(exc)
     if published is not None:
         return published.message or INTERNAL_FINISH_MESSAGE
-    if isinstance(exc, GenkitError) and not exc._provider_sourced:
+    if isinstance(exc, GenkitError):
         cause = attached_cause(exc)
         if cause is None or isinstance(cause, GenkitError) or exc.status != 'INTERNAL':
             return exc.message or INTERNAL_FINISH_MESSAGE
@@ -1274,7 +1274,7 @@ def box_from_exc(
         request=request,
     )
     if not caller_stopped:
-        out._failure = exc
+        out._failure = BoxedFailure.from_exc(exc)
     return out
 
 

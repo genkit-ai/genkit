@@ -22,6 +22,7 @@ import math
 import reprlib
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, cast, get_args
@@ -30,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_
 from pydantic.alias_generators import to_camel
 from pydantic_core import ErrorDetails
 from pydantic_core.core_schema import ErrorType
+from typing_extensions import Self
 
 from genkit._core._compat import StrEnum
 from genkit._core._typing import _RuntimeErrorWire
@@ -768,6 +770,60 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
         dumped.pop('stack', None)
         return dumped or None
     return dumped
+
+
+@dataclass(frozen=True)
+class BoxedFailure:
+    """Plain-data record of a boxed turn failure for SSE error framing.
+
+    Stores only strings and JSON-safe PublicError details—never a live
+    BaseException or traceback—so a failed ModelResponse retains no frame
+    locals and survives deepcopy and pickle round-trips.
+    """
+
+    status: StatusName
+    message: str
+    is_public: bool = False
+    details: Any = None  # noqa: ANN401
+    source: str | None = None
+
+    @classmethod
+    def from_exc(cls, exc: BaseException) -> Self:
+        """Capture plain-data failure metadata from an exception without holding it."""
+        if isinstance(exc, PublicError):
+            try:
+                details = _client_details(exc.details)
+            except Exception:
+                details = None
+            return cls(
+                status=exc.status,
+                message=exc.message,
+                is_public=True,
+                details=details,
+                source=exc.source,
+            )
+        if isinstance(exc, GenkitError):
+            prefix = f'{exc.source}: {exc.status}: ' if exc.source else f'{exc.status}: '
+            text = str(exc)
+            message = text[len(prefix) :] if text.startswith(prefix) else exc.message
+            return cls(
+                status=exc.status,
+                message=message,
+                source=exc.source,
+            )
+        text = str(exc)
+        return cls(
+            status='INTERNAL',
+            message=f'{type(exc).__name__}: {text}' if text else type(exc).__name__,
+        )
+
+    def to_exception(self) -> GenkitError:
+        """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
+        if self.is_public:
+            err: GenkitError = PublicError(self.status, self.message, details=self.details)
+            err.source = self.source
+            return err
+        return GenkitError(status=self.status, message=self.message, source=self.source)
 
 
 def error_status(error: object) -> int:

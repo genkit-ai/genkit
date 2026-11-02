@@ -7,10 +7,14 @@
 
 import asyncio
 import contextvars
+import copy
+import gc
 import json
 import pathlib
+import pickle  # noqa: S403
 import sys
 import time
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar, cast
 
@@ -8965,33 +8969,79 @@ async def test_generate_with_model_raising_wrapped_provider_500_returns_internal
 @pytest.mark.parametrize(
     ('http_status', 'expected_status', 'upstream_text'),
     [
-        (403, 'PERMISSION_DENIED', 'Permission denied on resource project secret-proj-123'),
-        (404, 'NOT_FOUND', 'Publisher Model projects/secret-proj-123/locations/us-central1/models/gemini-x not found'),
+        (403, 'PERMISSION_DENIED', 'Permission denied on resource project demo-proj-123'),
+        (404, 'NOT_FOUND', 'Publisher Model projects/demo-proj-123/locations/us-central1/models/gemini-x not found'),
+        (503, 'UNAVAILABLE', 'Ollama server unreachable; start it with ollama serve'),
     ],
 )
 @pytest.mark.asyncio
-async def test_generate_with_model_raising_provider_4xx_keeps_status_and_redacts_text(
+async def test_generate_with_model_raising_non_500_provider_error_keeps_provider_text_in_process(
     http_status: int,
     expected_status: str,
     upstream_text: str,
 ) -> None:
-    """Non-500 provider_error keeps its status in-process while redacting upstream text from finish_message."""
+    """Non-500 provider_error preserves provider finish_message and status for in-process callers."""
     ai = Genkit()
 
-    async def vertex_fail(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+    async def provider_fail(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise provider_error(RuntimeError(upstream_text), http_status=http_status)
 
-    ai.define_model(name='vertex_fail', fn=vertex_fail)
+    ai.define_model(name='provider_fail', fn=provider_fail)
 
-    response = await ai.generate(model='vertex_fail', prompt='hi')
+    response = await ai.generate(model='provider_fail', prompt='hi')
+    stream_response = await ai.generate_stream(model='provider_fail', prompt='hi').response
 
+    for res in (response, stream_response):
+        assert res.finish_reason == FinishReason.FAILED
+        assert res.finish_message == upstream_text
+        assert res.error is not None
+        assert res.error.status == expected_status
+        assert res.error.message == upstream_text
+
+
+class _FrameSentinel:
+    """Weakref-trackable object living in a failing model frame."""
+
+
+@pytest.mark.parametrize(
+    'make_exc',
+    [
+        lambda: provider_error(RuntimeError('upstream 403'), http_status=403),
+        lambda: GenkitError(status='UNAVAILABLE', message='ollama serve not running'),
+        lambda: PublicError('NOT_FOUND', 'order 42 missing', details={'order_id': '42'}),
+        lambda: RuntimeError('plain crash'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_model_response_releases_frame_locals_and_survives_deepcopy_and_pickle(
+    make_exc: Callable[[], Exception],
+) -> None:
+    """A failed ModelResponse retains no exception frame locals and survives deepcopy and pickle round-trips."""
+    ai = Genkit()
+    sentinel_refs: list[weakref.ReferenceType[_FrameSentinel]] = []
+
+    async def failing_model(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        local_resource = _FrameSentinel()
+        sentinel_refs.append(weakref.ref(local_resource))
+        raise make_exc()
+
+    ai.define_model(name='failing_model', fn=failing_model)
+
+    response = await ai.generate(model='failing_model', prompt='hi')
+    gc.collect()
+
+    assert len(sentinel_refs) == 1
+    assert sentinel_refs[0]() is None
     assert response.finish_reason == FinishReason.FAILED
-    assert response.finish_message == 'internal error'
-    assert response.error is not None
-    assert response.error.status == expected_status
-    assert response.error.message == 'internal error'
-    assert 'secret-proj-123' not in (response.finish_message or '')
-    assert 'secret-proj-123' not in response.error.message
+
+    deep_copied = copy.deepcopy(response)
+    unpickled = pickle.loads(pickle.dumps(response))  # noqa: S301
+
+    for clone in (deep_copied, unpickled):
+        assert clone.finish_reason == FinishReason.FAILED
+        assert clone.finish_message == response.finish_message
+        assert clone.error == response.error
+        assert clone._failure == response._failure
 
 
 @pytest.mark.asyncio

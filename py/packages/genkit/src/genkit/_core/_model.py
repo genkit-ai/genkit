@@ -50,7 +50,7 @@ from typing_extensions import Self, TypedDict, TypeVar
 from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitConfig, GenkitModel, dump_keeping_unknown
 from genkit._core._config_check import copy_containers
-from genkit._core._error import ErrorReason, Failure, GenkitError
+from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError
 from genkit._core._extract_json import extract_json, extract_partial_json
 from genkit._core._logger import get_logger
 from genkit._core._operation import Operation
@@ -1501,7 +1501,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     # when output format parsing or schema validation is needed.
     _message_parser: Callable[[Message], object] | None = PrivateAttr(None)
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
-    _failure: BaseException | None = PrivateAttr(None)
+    _failure: BoxedFailure | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
     error: Failure | None = None

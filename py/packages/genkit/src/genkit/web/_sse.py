@@ -123,9 +123,13 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
             and isinstance(result, ModelResponse)
             and result.finish_reason == FinishReason.FAILED
         ):
-            raise result._failure or GenkitError(
-                status='INTERNAL',
-                message=result.finish_message or 'Model generation failed',
+            raise (
+                result._failure.to_exception()
+                if result._failure is not None
+                else GenkitError(
+                    status='INTERNAL',
+                    message=result.finish_message or 'Model generation failed',
+                )
             )
         yield _frame('result', _frame_value(result))
     except (Exception, Interrupt, TaskGroupError) as exc:

@@ -101,7 +101,7 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
 async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Failed Vertex calls on ai.generate_stream() and prompt.stream() log 5xx and emit Internal Error, not result."""
+    """Failed Vertex calls keep provider text in-process, while to_sse() logs 5xx and emits Internal Error."""
     ai = Genkit()
 
     async def vertex_denied(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
@@ -115,6 +115,10 @@ async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_
 
     ai.define_model(name='vertex_denied', fn=vertex_denied)
     menu_prompt = ai.define_prompt(name='menu_prompt', model='vertex_denied', prompt='Suggest dinner.')
+
+    in_proc = await ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.').response
+    assert in_proc.finish_reason == FinishReason.FAILED
+    assert 'secret-proj-123' in (in_proc.finish_message or '')
 
     with caplog.at_level(logging.ERROR, logger='genkit.web'):
         gen_lines = await _lines(to_sse(ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.')))
@@ -168,6 +172,54 @@ async def test_generate_stream_to_sse_surfaces_tool_public_error_and_warns(
     assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
         ('genkit.web', 'WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_undeclared_tool_and_bare_failed_turn_redact_without_result(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FAILED turns with _failure=None (undeclared tool or bare FAILED) emit Internal Error, not result."""
+    ai = Genkit()
+    undeclared_turn = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(tool_request=ToolRequest(name='internal_billing_tool', input={'acct': '42'}))],
+        ),
+    )
+    define_scripted_model(
+        ai,
+        responses=[
+            undeclared_turn,
+            undeclared_turn,
+            ModelResponse(finish_reason=FinishReason.FAILED),
+        ],
+    )
+
+    in_proc = await ai.generate_stream(model='scriptedModel', prompt='Check billing.').response
+    assert in_proc.finish_reason == FinishReason.FAILED
+    assert in_proc._failure is None
+    assert in_proc.finish_message == 'Tool internal_billing_tool not found'
+
+    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+        missing_tool_lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.')))
+        bare_failed_lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.')))
+
+    expected = ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
+    assert missing_tool_lines == expected
+    assert bare_failed_lines == expected
+    assert 'internal_billing_tool' not in missing_tool_lines[0]
+    assert 'not found' not in missing_tool_lines[0]
+    assert 'result' not in missing_tool_lines[0]
+    assert 'result' not in bare_failed_lines[0]
+    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('genkit.web', 'ERROR', 'served flow stream failed', True),
+        ('genkit.web', 'ERROR', 'served flow stream failed', True),
+    ]
+    assert caplog.records[0].exc_info is not None
+    assert 'Tool internal_billing_tool not found' in str(caplog.records[0].exc_info[1])
+    assert caplog.records[1].exc_info is not None
+    assert 'Model generation failed' in str(caplog.records[1].exc_info[1])
 
 
 def _turn(
