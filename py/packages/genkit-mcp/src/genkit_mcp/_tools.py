@@ -289,7 +289,7 @@ def mcp_tools_to_handles(
     """Build one Genkit tool handle per tool in a server listing.
 
     A handle is what ``generate`` accepts in ``tools``, and what a caller can
-    invoke directly. Its ``output_schema`` is the one the server declared.
+    invoke directly. Its ``model_output_schema`` is the one the server declared.
 
     Args:
         tools: Tools as listed by the server.
@@ -304,5 +304,5 @@ def mcp_tools_to_handles(
     handles = mcp_tools_to_actions(tools, prefix, call)
     for handle in handles:
         output_schema = by_name[handle.name].outputSchema
-        handle.output_schema = dict(output_schema) if output_schema is not None else None
+        handle.model_output_schema = dict(output_schema) if output_schema is not None else None
     return handles

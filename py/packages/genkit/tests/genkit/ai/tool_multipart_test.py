@@ -167,10 +167,67 @@ def test_bare_envelope_annotation_has_no_inner_schema() -> None:
         return MultipartToolResponse(output={'ok': True})
 
     envelope = TypeAdapter(MultipartToolResponseData).json_schema()
+    assert shot.output_schema == TypeAdapter(MultipartToolResponse).json_schema()
+    assert shot.metadata['outputSchema'] == shot.output_schema
+    assert shot.model_output_schema is None
     assert _wire(shot).output_schema == envelope
     assert _wire(shot).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
     assert shot.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
     assert shot.definition().output_schema is None
+
+
+def test_model_output_schema_leaves_action_output_schema_intact() -> None:
+    """Setting ``model_output_schema`` updates model binding without altering ``output_schema``."""
+    ai = Genkit()
+
+    @ai.tool(name='typed_shot')
+    async def typed_shot() -> MultipartToolResponse[CamelOut]:
+        return MultipartToolResponse(
+            output=CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0)),
+        )
+
+    typed_envelope = TypeAdapter(MultipartToolResponse[CamelOut]).json_schema()
+    camel_schema = to_json_schema(CamelOut)
+    assert typed_shot.output_schema == typed_envelope
+    assert typed_shot.model_output_schema == camel_schema
+    assert typed_shot.definition().output_schema == camel_schema
+
+    @ai.tool(name='mcp_like')
+    async def mcp_like() -> MultipartToolResponse:
+        return MultipartToolResponse(output={'temperature_c': 21.5})
+
+    bare_envelope = TypeAdapter(MultipartToolResponse).json_schema()
+    declared: dict[str, object] = {
+        'type': 'object',
+        'properties': {'temperature_c': {'type': 'number'}},
+        'required': ['temperature_c'],
+    }
+    mcp_like.model_output_schema = declared
+    assert mcp_like.output_schema == bare_envelope
+    assert mcp_like.metadata['outputSchema'] == bare_envelope
+    assert mcp_like.model_output_schema == declared
+    assert mcp_like.definition().output_schema == declared
+    assert _wire(mcp_like).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == declared
+
+    # Clearing model_output_schema to None keeps the /tool/ action's outputSchema metadata intact.
+    mcp_like.model_output_schema = None
+    assert mcp_like.output_schema == bare_envelope
+    assert mcp_like.metadata['outputSchema'] == bare_envelope
+    assert mcp_like.model_output_schema is None
+    assert mcp_like.definition().output_schema is None
+    assert _wire(mcp_like).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+
+    async def echo_fn(x: str) -> str:
+        return x
+
+    raw_handle = Tool.from_action(Action(name='echo', kind=ActionKind.TOOL, fn=echo_fn))
+    assert raw_handle.output_schema == {'type': 'string'}
+    assert raw_handle.model_output_schema == {'type': 'string'}
+    raw_handle.model_output_schema = None
+    assert raw_handle.output_schema == {'type': 'string'}
+    assert raw_handle.metadata['outputSchema'] == {'type': 'string'}
+    assert raw_handle.model_output_schema is None
+    assert raw_handle.definition().output_schema is None
 
 
 def test_to_tool_definition_sends_original_schema_not_envelope() -> None:
