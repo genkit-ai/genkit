@@ -19,7 +19,7 @@
   "dependencies": {
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/mcp": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "express": "^5.1.0",
     "genkit": "workspace:*"
   },
