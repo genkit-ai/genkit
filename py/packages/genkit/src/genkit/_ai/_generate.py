@@ -68,6 +68,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
 )
 from genkit._core._background import missing_operation_error, stamp_operation_action
+from genkit._core._compat import await_unchained
 from genkit._core._error import GenkitError, GenkitRuntimeError, PublicError, RuntimeErrorReason
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
@@ -405,7 +406,8 @@ async def hop(*, body: Awaitable[T]) -> T:
     """Run ``body`` on a child task so a long use= list or tool loop can return.
 
     The child yields once before ``body`` so an eager task factory does not
-    keep stacking hops on this call.
+    keep stacking hops on this call. ``await_unchained`` awaits the child via
+    a leaf ``Future`` so ``Task._fut_waiter`` never chains across hops.
 
     asyncio re-raises KeyboardInterrupt and SystemExit out of the event loop
     instead of into the awaiting task. The child returns them as a value and
@@ -420,7 +422,7 @@ async def hop(*, body: Awaitable[T]) -> T:
         except (KeyboardInterrupt, SystemExit) as exc:
             return None, exc
 
-    result, exc = await asyncio.create_task(child())
+    result, exc = await await_unchained(asyncio.create_task(child()))
     if exc is not None:
         raise exc
     return cast(T, result)
