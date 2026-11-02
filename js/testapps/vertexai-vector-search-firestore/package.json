@@ -18,7 +18,7 @@
   "dependencies": {
     "@genkit-ai/vertexai": "workspace:*",
     "dotenv": "^16.4.5",
-    "firebase-admin": ">=12.2",
+    "firebase-admin": "^13.8.0",
     "genkit": "workspace:*"
   },
   "devDependencies": {

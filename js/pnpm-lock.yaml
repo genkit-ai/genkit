@@ -1235,13 +1235,13 @@ importers:
         specifier: ^4.17.21
         version: 4.17.25
       '@types/node':
-        specifier: ^20.11.16
+        specifier: ^20.17.19
         version: 20.19.37
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.19.2
+        specifier: ^4.21.0
         version: 4.21.0
       typescript:
         specifier: ^5.9.3
@@ -1272,8 +1272,8 @@ importers:
         version: 3.3.3
     devDependencies:
       typescript:
-        specifier: ~5.8.3
-        version: 5.8.3
+        specifier: ^5.9.3
+        version: 5.9.3
       vite:
         specifier: ^6.3.3
         version: 6.4.2(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.32.0)(sass@1.90.0)(tsx@4.21.0)(yaml@2.9.1)
@@ -1299,7 +1299,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/vertexai
       express:
-        specifier: ^4.20.0
+        specifier: ^4.21.1
         version: 4.22.1
       genkit:
         specifier: workspace:*
@@ -1324,10 +1324,10 @@ importers:
         specifier: workspace:*
         version: link:../../../genkit
       react:
-        specifier: ^19.1.0
+        specifier: ^19.2.4
         version: 19.2.4
       react-dom:
-        specifier: ^19.1.0
+        specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
       react-markdown:
         specifier: ^10.1.0
@@ -1340,17 +1340,17 @@ importers:
         version: 4.0.1
     devDependencies:
       '@types/react':
-        specifier: ^19.1.2
+        specifier: ^19.2.7
         version: 19.2.7
       '@types/react-dom':
-        specifier: ^19.1.2
+        specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.7)
       '@vitejs/plugin-react':
         specifier: ^4.4.1
         version: 4.7.0(vite@6.4.2(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.32.0)(sass@1.90.0)(tsx@4.21.0)(yaml@2.9.1))
       typescript:
-        specifier: ~5.8.3
-        version: 5.8.3
+        specifier: ^5.9.3
+        version: 5.9.3
       vite:
         specifier: ^6.3.3
         version: 6.4.2(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.32.0)(sass@1.90.0)(tsx@4.21.0)(yaml@2.9.1)
@@ -1419,7 +1419,7 @@ importers:
         specifier: ^20.17.19
         version: 20.19.37
       typescript:
-        specifier: ~5.9.2
+        specifier: ^5.9.3
         version: 5.9.3
 
   testapps/anthropic:
@@ -1438,8 +1438,8 @@ importers:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1491,8 +1491,8 @@ importers:
         specifier: ^1.0.4
         version: 1.0.4
       cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+        specifier: ^10.1.0
+        version: 10.1.0
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
@@ -1500,8 +1500,8 @@ importers:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.19.3
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1522,8 +1522,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1571,8 +1571,8 @@ importers:
         specifier: ^4.21.0
         version: 4.21.0
       typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
+        specifier: ^5.9.3
+        version: 5.9.3
 
   testapps/docs-menu-basic:
     dependencies:
@@ -1583,7 +1583,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/google-genai
       express:
-        specifier: ^4.21.0
+        specifier: ^4.21.1
         version: 4.22.1
       genkit:
         specifier: workspace:*
@@ -1636,14 +1636,14 @@ importers:
         specifier: ^5.1.0
         version: 5.2.1
       firebase-admin:
-        specifier: ^13.5.0
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
       '@types/express':
-        specifier: ^4
+        specifier: ^4.17.21
         version: 4.17.25
       rimraf:
         specifier: ^6.0.1
@@ -1710,8 +1710,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1750,8 +1750,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1765,7 +1765,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/google-genai
       express:
-        specifier: ^4.21.0
+        specifier: ^4.21.1
         version: 4.22.1
       genkit:
         specifier: workspace:*
@@ -1821,11 +1821,11 @@ importers:
         specifier: ~1.25.0
         version: 1.25.1(@opentelemetry/api@1.9.1)
       express:
-        specifier: ^4.21.0
+        specifier: ^4.21.1
         version: 4.22.1
       firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -1846,8 +1846,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1893,8 +1893,8 @@ importers:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.20.3
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1924,8 +1924,8 @@ importers:
         specifier: ^2025.3.28
         version: 2025.12.18(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@types/express':
-        specifier: ^4.17.21
-        version: 4.17.25
+        specifier: ^5.0.1
+        version: 5.0.6
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
@@ -1933,8 +1933,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1980,8 +1980,8 @@ importers:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.7.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2063,7 +2063,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/pinecone
       google-auth-library:
-        specifier: ^9.6.3
+        specifier: ^9.14.2
         version: 9.15.1(encoding@0.1.13)
       llm-chunk:
         specifier: ^0.0.1
@@ -2085,8 +2085,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2107,7 +2107,7 @@ importers:
         version: 16.3.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.90.0)
     devDependencies:
       '@types/react':
-        specifier: 19.2.7
+        specifier: ^19.2.7
         version: 19.2.7
       rimraf:
         specifier: ^6.0.1
@@ -2194,8 +2194,8 @@ importers:
         specifier: ^7.11.0
         version: 7.11.6(encoding@0.1.13)
       firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -2206,7 +2206,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/pinecone
       google-auth-library:
-        specifier: ^9.6.3
+        specifier: ^9.14.2
         version: 9.15.1(encoding@0.1.13)
       llm-chunk:
         specifier: ^0.0.1
@@ -2225,8 +2225,8 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2244,7 +2244,7 @@ importers:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
+        specifier: ^4.21.0
         version: 4.21.0
       typescript:
         specifier: ^5.9.3
@@ -2307,10 +2307,10 @@ importers:
         specifier: ^1.4.3
         version: 1.5.0(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react:
-        specifier: 19.2.4
+        specifier: ^19.2.4
         version: 19.2.4
       react-dom:
-        specifier: 19.2.4
+        specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
       shiki:
         specifier: ^4.1.0
@@ -2332,13 +2332,13 @@ importers:
         specifier: ^4
         version: 4.3.0
       '@types/node':
-        specifier: ^20
+        specifier: ^20.17.19
         version: 20.19.37
       '@types/react':
-        specifier: ^19
+        specifier: ^19.2.7
         version: 19.2.7
       '@types/react-dom':
-        specifier: ^19
+        specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.7)
       eslint:
         specifier: ^9
@@ -2353,7 +2353,7 @@ importers:
         specifier: ^4
         version: 4.3.0
       typescript:
-        specifier: ^5
+        specifier: ^5.9.3
         version: 5.9.3
 
   testapps/vertexai-modelgarden:
@@ -2453,8 +2453,8 @@ importers:
         specifier: ^16.4.5
         version: 16.6.1
       firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -13926,18 +13926,8 @@ packages:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  typescript@5.8.3:
-    resolution: {integrity: sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
-  typescript@6.0.3:
-    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -28850,11 +28840,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  typescript@5.8.3: {}
-
   typescript@5.9.3: {}
-
-  typescript@6.0.3: {}
 
   ua-parser-js@0.7.41:
     optional: true

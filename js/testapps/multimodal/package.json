@@ -22,7 +22,7 @@
     "genkit": "workspace:*",
     "genkitx-chromadb": "workspace:*",
     "genkitx-pinecone": "workspace:*",
-    "google-auth-library": "^9.6.3",
+    "google-auth-library": "^9.14.2",
     "llm-chunk": "^0.0.1",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1"
@@ -31,7 +31,7 @@
     "@types/pdf-parse": "^1.1.4",
     "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }
