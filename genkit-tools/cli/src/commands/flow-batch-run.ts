@@ -35,6 +35,7 @@ interface FlowBatchRunOptions {
 
 /** Command to run flows with batch input. */
 export const flowBatchRun = new Command('flow:batch-run')
+  .allowExcessArguments(true)
   .alias('flow:batchRun')
   .usage('[options] <flowName> <inputFileName> [-- <command...>]')
   .description(
