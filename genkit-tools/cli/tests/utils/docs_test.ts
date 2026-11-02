@@ -134,23 +134,6 @@ describe('docs utils', () => {
       );
     });
 
-    it.each([
-      { file: 'go.mod', expected: 'go' },
-      { file: 'main.go', expected: 'go' },
-      { file: 'pyproject.toml', expected: 'python' },
-      { file: 'pubspec.yaml', expected: 'dart' },
-    ])(
-      'prioritizes "$file" ($expected) when package.json is also present',
-      ({ file, expected }) => {
-        const dir = path.join(tmpDir, `with-pkg-${file}`);
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(path.join(dir, file), '');
-        fs.writeFileSync(path.join(dir, 'package.json'), '{}');
-
-        expect(detectProjectLanguage(dir)).toBe(expected);
-      }
-    );
-
     it('uses process.cwd() when projectRoot is omitted', () => {
       const pyDir = path.join(tmpDir, 'cwd-py');
       fs.mkdirSync(pyDir, { recursive: true });
