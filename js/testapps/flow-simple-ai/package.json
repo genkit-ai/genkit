@@ -23,18 +23,13 @@
     "@genkit-ai/middleware": "workspace:*",
     "@google/generative-ai": "^0.15.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
-    "body-parser": "^1.20.3",
-    "data-urls": "^5.0.0",
     "express": "^4.21.0",
     "firebase-admin": ">=12.2",
     "genkit": "workspace:*",
-    "node-fetch": "^3.3.2",
     "partial-json": "^0.1.7",
     "wav": "^1.0.2"
   },
   "devDependencies": {
-    "@types/data-urls": "^3.0.4",
-    "@types/node-fetch": "~2.6.11",
     "@types/wav": "^1.0.4",
     "rimraf": "^6.0.1",
     "tsx": "^4.19.2",

@@ -35,7 +35,6 @@
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
     "@genkit-ai/anthropic": "workspace:*",
     "genkit": "workspace:*"
   },

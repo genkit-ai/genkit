@@ -13,13 +13,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
-    "@mistralai/mistralai-gcp": "^1.3.4",
-    "express": "^4.21.0",
-    "genkit": "workspace:*",
-    "zod": "3.22.4"
+    "genkit": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.9.3"
