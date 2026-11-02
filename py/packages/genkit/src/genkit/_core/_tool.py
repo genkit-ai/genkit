@@ -36,7 +36,7 @@ from genkit._core._action import (
     get_func_description,
     resolve_type_hints,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import MultipartToolResponse, Part, as_part
 from genkit._core._schema import to_json_schema
 from genkit._core._telemetry._instrumentation import set_custom_metadata_attributes
@@ -110,7 +110,7 @@ def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content'
             status='INVALID_ARGUMENT',
             message=message,
             cause=e,
-            reason=RuntimeErrorReason.INVALID_PART,
+            reason=ErrorReason.INVALID_PART,
         ) from e
 
 
@@ -119,7 +119,7 @@ def live_payload_error(*, tool_name: str, where: str) -> GenkitError:
     return GenkitError(
         status='INVALID_ARGUMENT',
         message=f'Tool {tool_name!r} {where} includes a part with no live payload.',
-        reason=RuntimeErrorReason.INVALID_PART,
+        reason=ErrorReason.INVALID_PART,
     )
 
 
@@ -134,7 +134,7 @@ def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message='MultipartToolResponse content includes a part with no live payload.',
-        reason=RuntimeErrorReason.INVALID_PART,
+        reason=ErrorReason.INVALID_PART,
     )
 
 
@@ -154,7 +154,7 @@ def dump_tool_output(value: Any, *, tool_name: str | None = None, what: str = 'o
             status='INVALID_ARGUMENT',
             message=f'Tool {name!r} {what} is not JSON-serializable.',
             cause=e,
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -169,7 +169,7 @@ def dump_tool_metadata(value: dict[str, Any] | None, *, tool_name: str | None = 
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'Tool {name!r} metadata is not a JSON object.',
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 

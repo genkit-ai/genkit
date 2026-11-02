@@ -22,7 +22,7 @@ from typing import Any, NoReturn, TypeVar, cast, overload
 from pydantic import BaseModel, ValidationError
 
 from genkit._core._action import Action
-from genkit._core._error import GenkitError, Interrupt as Interrupt, ErrorReason
+from genkit._core._error import ErrorReason, GenkitError, Interrupt as Interrupt
 from genkit._core._logger import get_logger
 from genkit._core._middleware import MiddlewareContext
 from genkit._core._model import MultipartToolResponse as MultipartToolResponse, Part, as_part, as_resumed
