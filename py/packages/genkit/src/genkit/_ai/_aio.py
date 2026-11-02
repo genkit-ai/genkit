@@ -94,7 +94,7 @@ from genkit._core._background import missing_operation_error
 from genkit._core._channel import run_loop, start_stream
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._flow import Flow
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import Middleware
@@ -1943,7 +1943,7 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Embedder '{embedder_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+                reason=ErrorReason.ACTION_NOT_FOUND,
             )
 
         documents = [Document.from_text(content, metadata)] if isinstance(content, str) else [content]
@@ -1986,7 +1986,7 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Embedder '{embedder_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+                reason=ErrorReason.ACTION_NOT_FOUND,
             )
 
         response = (
@@ -2043,7 +2043,7 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Evaluator '{evaluator_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+                reason=ErrorReason.ACTION_NOT_FOUND,
             )
 
         if not eval_run_id:
@@ -2254,14 +2254,14 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Model '{resolved.name}' not found.",
-                reason=RuntimeErrorReason.MODEL_NOT_FOUND,
+                reason=ErrorReason.MODEL_NOT_FOUND,
             )
 
         if model_action.kind != ActionKind.BACKGROUND_MODEL:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",
-                reason=RuntimeErrorReason.UNSUPPORTED_BY_MODEL,
+                reason=ErrorReason.UNSUPPORTED_BY_MODEL,
             )
 
         # Call generate with already-resolved wire name + config.
@@ -2281,7 +2281,7 @@ class Genkit:
             # failed is not that ticket — while-not-done would poll it
             # as a live job.
             raise GenkitError(
-                status=cast(StatusName, response.error.status or 'INTERNAL'),
+                status=response.error.status or 'INTERNAL',
                 message=response.error.message,
                 details=response.error.details,
                 reason=response.error.reason,

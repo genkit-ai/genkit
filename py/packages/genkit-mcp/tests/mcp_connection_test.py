@@ -721,7 +721,6 @@ async def test_a_server_error_reply_reports_the_status_for_its_code(tmp_path: Pa
 
     assert isinstance(error, _ServerError)
     assert error.status == status
-    assert error.cause is reply
     assert error.__cause__ is reply
     assert f'failed with error {code}: refused' in str(error)
 

@@ -14,7 +14,7 @@ from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Par
 from genkit._ai._model import text_from_content
 from genkit._core import _typing as wire
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import ABNORMAL_FINISH_REASONS, OutputConfig, SessionState, chunk_for_stream
 from genkit._core._schema import InvalidOutputSchemaError, to_json_schema
 from genkit._core._typing import (
@@ -510,7 +510,7 @@ def test_schema_check_marks_error_when_output_does_not_conform() -> None:
     assert response.finish_reason == FinishReason.STOP
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.output is None
     assert response.text == '{"name": "John", "age": "30"}'
 
@@ -752,7 +752,7 @@ def test_schema_check_marks_invalid_output_when_json_format_no_schema_unparseabl
     assert response.output is None
     assert response.text == 'plain unparseable text'
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'not valid JSON' in response.error.message
 
 
@@ -773,7 +773,7 @@ def test_schema_check_marks_invalid_output_when_array_format_no_schema_unparseab
     assert response.output is None
     assert response.text == 'plain unparseable text'
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
 
 
 def test_schema_check_passes_when_json_format_no_schema_valid() -> None:

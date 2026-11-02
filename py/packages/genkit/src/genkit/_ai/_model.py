@@ -41,7 +41,7 @@ from genkit._core._config_check import (
     config_field_names,
     config_values,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     Message,
@@ -138,7 +138,7 @@ def normalize_config(*, config: object) -> dict[str, Any]:
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'config is {type(config).__name__}, expected Mapping or BaseModel.',
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 
@@ -164,7 +164,7 @@ def _registered_action_name(*, action: Action, kind: ActionKind, registry: Regis
                 f"model action '{action.name}' is not the one registered on this Genkit instance. "
                 'Pass the object this instance returned, or the model name.'
             ),
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     return action.name
 
@@ -175,7 +175,7 @@ def _model_action_name(*, model: object, registry: Registry) -> str | None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f"model is background model '{model.name}'. Pass it to generate_operation.",
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     if not isinstance(model, Action):
         return None
@@ -183,7 +183,7 @@ def _model_action_name(*, model: object, registry: Registry) -> str | None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f"model is {model.kind} action '{model.name}', expected a model.",
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     return _registered_action_name(action=model, kind=ActionKind.MODEL, registry=registry)
 
@@ -220,7 +220,7 @@ def resolve_model_arg(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(f'model is {type(model).__name__}, expected str, ModelRef, or a model action.'),
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     resolved = registry.lookup_value('defaultModel', 'defaultModel')
     default = _name_or_ref(resolved)
@@ -232,12 +232,12 @@ def resolve_model_arg(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=(f'defaultModel is {type(resolved).__name__}, expected str or ModelRef.'),
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=message,
-        reason=RuntimeErrorReason.MODEL_NOT_FOUND,
+        reason=ErrorReason.MODEL_NOT_FOUND,
     )
 
 
@@ -555,7 +555,7 @@ def assert_correct_config_class(
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'{model}: {body}' if model else body,
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 
@@ -629,7 +629,7 @@ class MiddlewareConfigCheck:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'{prefix} replaced request.config with {got}; change fields on request.config instead',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         cls = type(config)
         values: dict[str, Any] = vars(config)
@@ -641,7 +641,7 @@ class MiddlewareConfigCheck:
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f"{prefix} set unknown config {noun} {keys}; put provider-only settings in config['extra']",
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
         if dumped == self._checked:
             return
@@ -665,7 +665,7 @@ class MiddlewareConfigCheck:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'{prefix} set config {where}: {msg}',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
                 cause=e,
             ) from e
         # Writing ``__dict__`` directly keeps ``model_fields_set`` as the

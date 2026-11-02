@@ -47,9 +47,9 @@ from typing_extensions import Self, TypeVar
 from genkit._core._channel import CloseableQueue, mirror_result, start_stream
 from genkit._core._compat import StrEnum
 from genkit._core._error import (
+    ErrorReason,
     GenkitError,
     Interrupt,
-    RuntimeErrorReason,
     TaskGroupError,
     interrupt_escape_error,
     interrupt_outside_tool_error,
@@ -1307,7 +1307,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     GenkitError(
                         message=(f"{self._kind_label.capitalize()} '{self.name}' requires init but none was provided."),
                         status='INVALID_ARGUMENT',
-                        reason=RuntimeErrorReason.INVALID_INPUT,
+                        reason=ErrorReason.INVALID_INPUT,
                     )
                 ) from e
             raise _request_error(
@@ -1315,7 +1315,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     message=f"Invalid init for {self._kind_label} '{self.name}'",
                     status='INVALID_ARGUMENT',
                     cause=e,
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             ) from e
 
@@ -1351,7 +1351,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                                 f'got {config_type_path(type(config))}'
                             ),
                             status='INVALID_ARGUMENT',
-                            reason=RuntimeErrorReason.INVALID_INPUT,
+                            reason=ErrorReason.INVALID_INPUT,
                         )
                     ) from None
                 payload = input.model_dump(mode='python')
@@ -1370,7 +1370,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                     status='INVALID_ARGUMENT',
                     # Nothing was passed, so Pydantic's "got None" would only mislead.
                     cause=None if omitted else e,
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             ) from e
 
@@ -1483,7 +1483,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
                 message=f"Flow '{self.name}' returned a value that doesn't match its return annotation",
                 status='INTERNAL',
                 cause=e,
-                reason=RuntimeErrorReason.INVALID_OUTPUT,
+                reason=ErrorReason.INVALID_OUTPUT,
             ) from e
 
     async def _invoke(self, input: object | None, ctx: ActionRunContext) -> OutputT:
@@ -1549,7 +1549,7 @@ class BidiConnection(Generic[StreamInT, StreamOutT_co, BidiOutT_co]):
                     'is called.'
                 ),
                 status='FAILED_PRECONDITION',
-                reason=RuntimeErrorReason.CONNECTION_CLOSED,
+                reason=ErrorReason.CONNECTION_CLOSED,
             )
         await self._in_queue.put(item)
 

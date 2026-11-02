@@ -308,7 +308,7 @@ async def test_405_non_post_returns_valid_json(urlconf: None) -> None:  # noqa: 
 
 @pytest.mark.asyncio
 async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
-    """500 (flow exception) must return valid JSON in HttpErrorWireFormat shape."""
+    """500 (flow exception) must return valid JSON in the `{status, message, details}` shape."""
     client = AsyncClient()
     code_snippet = 'query = f"SELECT * FROM users WHERE id={user_input}"'
     response = await client.post(

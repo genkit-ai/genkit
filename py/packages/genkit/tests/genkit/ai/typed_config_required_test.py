@@ -124,7 +124,7 @@ class Tts:
         try:
             result = await self.call(**kwargs)
         except GenkitError as e:
-            return 'raised', e.status, f'{e} {e.details} {e.cause}'
+            return 'raised', e.status, f'{e} {e.details} {e.__cause__}'
         error = getattr(result, 'error', None)
         if error is not None:
             assert getattr(result, 'finish_reason', None) == FinishReason.FAILED

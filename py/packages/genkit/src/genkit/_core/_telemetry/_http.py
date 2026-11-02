@@ -36,7 +36,7 @@ from typing import Literal, TypeVar
 from urllib.parse import urljoin, urlparse
 
 from .._environment import is_dev_environment
-from .._error import GenkitError, Interrupt
+from .._error import GenkitError, Interrupt, _StreamingCallbackError
 from .._logger import get_logger
 from .._reflection_config import reflection_enabled
 from ._attrs import Attr, State, metadata_key
@@ -279,12 +279,13 @@ class DirectHttpInstrumentation:
                 raise
             except (asyncio.CancelledError, KeyboardInterrupt):
                 raise
-            except Exception as e:
+            except (Exception, _StreamingCallbackError) as e:
+                actual = e.__cause__ if isinstance(e, _StreamingCallbackError) and e.__cause__ is not None else e
                 span.attributes[Attr.STATE] = State.ERROR
-                err_text = e.message if isinstance(e, GenkitError) else str(e)
+                err_text = actual.message if isinstance(actual, GenkitError) else str(actual)
                 span.attributes[Attr.ERROR] = err_text
                 span.status_code = 2
-                span.status_message = str(e)
+                span.status_message = str(actual)
                 raise
         finally:
             span.end_time_unix_nano = now_unix_nano()

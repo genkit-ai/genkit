@@ -53,7 +53,7 @@ from google.cloud.firestore import (
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from genkit import GenkitError, GenkitRuntimeError, RuntimeErrorReason, get_logger
+from genkit import ErrorReason, Failure, GenkitError, get_logger
 from genkit.exp.agent import (
     TERMINAL_STATUSES,
     AgentFinishReason,
@@ -192,7 +192,7 @@ class _SnapshotDoc(BaseModel):
     status: SnapshotStatus | None = None
     heartbeat_at: str | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     kind: Literal['diff', 'checkpoint']
     checkpoint_id: str
     checkpoint_shard_count: int = Field(ge=1)
@@ -391,11 +391,11 @@ async def _translate_txn_errors(
         raise _to_genkit_error(e) from e
 
 
-def _illegal_doc_id_reason(name: str) -> RuntimeErrorReason | None:
+def _illegal_doc_id_reason(name: str) -> ErrorReason | None:
     if name == 'session_id':
-        return RuntimeErrorReason.INVALID_SESSION_ID
+        return ErrorReason.INVALID_SESSION_ID
     if name == 'snapshot_id':
-        return RuntimeErrorReason.INVALID_SNAPSHOT_ID
+        return ErrorReason.INVALID_SNAPSHOT_ID
     return None
 
 
@@ -434,7 +434,7 @@ def _validate_doc_id(value: str | None, name: str) -> None:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message="FirestoreSessionStore requires 'sessionId' on the snapshot.",
-                reason=RuntimeErrorReason.SESSION_ID_REQUIRED,
+                reason=ErrorReason.SESSION_ID_REQUIRED,
             )
 
     if _is_invalid_firestore_id(value):
@@ -1004,7 +1004,7 @@ class FirestoreSessionStore(SessionStore[StateT], SnapshotSubscriber, Generic[St
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message="FirestoreSessionStore requires 'sessionId' on the snapshot.",
-                    reason=RuntimeErrorReason.SESSION_ID_REQUIRED,
+                    reason=ErrorReason.SESSION_ID_REQUIRED,
                 )
             if next_snapshot.session_id is None:
                 _validate_doc_id(session_id, 'session_id')
