@@ -48,6 +48,17 @@ def extract_partial_json(text: str) -> Any:  # noqa: ANN401
     return scan_json(text, throw_on_bad_json=False, allow_partial=True)
 
 
+def is_complete_json(text: str) -> bool:
+    """Return True when ``text`` contains a complete JSON value without repair."""
+    if not text.strip():
+        return False
+    try:
+        scan_json(text, throw_on_bad_json=True, allow_partial=False)
+    except ValueError:
+        return False
+    return True
+
+
 def scan_json(text: str, *, throw_on_bad_json: bool, allow_partial: bool) -> Any:  # noqa: ANN401
     """Scan ``text`` for a JSON value. Used by extract_json and extract_partial_json."""
     if not text.strip():

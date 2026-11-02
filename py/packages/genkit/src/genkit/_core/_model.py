@@ -51,7 +51,7 @@ from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitConfig, GenkitModel, dump_keeping_unknown
 from genkit._core._config_check import copy_containers
 from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError
-from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._extract_json import extract_json, extract_partial_json, is_complete_json
 from genkit._core._logger import get_logger
 from genkit._core._operation import Operation
 from genkit._core._partial import construct_partial
@@ -1822,11 +1822,13 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     def output(self) -> OutputT | None:
         """The reply so far, parsed as far as it goes. Never raises.
 
-        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
-        fields that haven't arrived are ``None`` even when typed ``str``,
-        values may be cut short (``'Fluffy Panc'``), and nothing is
-        validated. Guard each field you read. ``(await stream.response).output``
-        is the only validated ``Recipe``.
+        With ``output_schema=Recipe``, this is a ``Recipe`` filled as far as
+        the JSON goes: optional fields start at their defaults, missing
+        required fields are ``None``, finished fields and list items are
+        validated, open ``str`` fields stream as prefixes, and open
+        ``Enum``/``datetime``/``Literal``/union fields stay at ``None`` (or
+        their default) until finished. ``(await stream.response).output`` is
+        the only fully validated ``Recipe``.
 
         With no schema class, this is the JSON value so far (dict, list,
         or scalar). It's ``None`` before an object starts or while the text
@@ -1843,7 +1845,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
             ):
                 return cast(
                     'OutputT | None',
-                    construct_partial(schema_type=self._schema_type, data=parsed),
+                    construct_partial(
+                        schema_type=self._schema_type,
+                        data=parsed,
+                        closed=is_complete_json(self.accumulated_text),
+                    ),
                 )
             return cast('OutputT | None', parsed)
         except Exception:
