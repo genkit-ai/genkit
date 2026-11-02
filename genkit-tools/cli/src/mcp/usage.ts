@@ -37,7 +37,7 @@ export async function defineUsageGuideTool(
         language: z
           .enum(['js', 'go'])
           .describe(
-            'which language this usage guide is for (js, go; defaults to auto-detected project language); type: string'
+            'Which language this usage guide is for (js, go). Defaults to the auto-detected project language; type: string.'
           )
           .optional(),
       },

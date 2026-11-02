@@ -17,13 +17,18 @@
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command } from 'commander';
-import { detectProjectLanguage, loadDocs, searchDocs } from '../utils/docs';
+import {
+  SUPPORTED_DOC_LANGUAGES,
+  detectProjectLanguage,
+  loadDocs,
+  searchDocs,
+} from '../utils/docs';
 
 export const docsList = new Command('docs:list')
   .description('list available Genkit documentation files')
   .argument(
     '[language]',
-    'language to list docs for (js, go, python, dart; defaults to auto-detected project language)'
+    `language to list docs for (${SUPPORTED_DOC_LANGUAGES.join(', ')}). Defaults to the auto-detected project language`
   )
   .action(async (language) => {
     try {
@@ -65,7 +70,7 @@ export const docsSearch = new Command('docs:search')
   )
   .argument(
     '[language]',
-    'language to search docs for (js, go, python, dart; defaults to auto-detected project language)'
+    `language to search docs for (${SUPPORTED_DOC_LANGUAGES.join(', ')}). Defaults to the auto-detected project language`
   )
   .action(async (query, language) => {
     try {

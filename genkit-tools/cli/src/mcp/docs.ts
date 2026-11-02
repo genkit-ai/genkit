@@ -35,7 +35,7 @@ export async function defineDocsTool(server: McpServer, projectRoot?: string) {
         language: z
           .enum(SUPPORTED_DOC_LANGUAGES)
           .describe(
-            'Which language to list docs for (js, go, python, dart; defaults to auto-detected project language); type: string.'
+            `Which language to list docs for (${SUPPORTED_DOC_LANGUAGES.join(', ')}). Defaults to the auto-detected project language; type: string.`
           )
           .optional(),
       },
@@ -81,7 +81,7 @@ export async function defineDocsTool(server: McpServer, projectRoot?: string) {
         language: z
           .enum(SUPPORTED_DOC_LANGUAGES)
           .describe(
-            'Which language to search docs for (js, go, python, dart; defaults to auto-detected project language); type: string.'
+            `Which language to search docs for (${SUPPORTED_DOC_LANGUAGES.join(', ')}). Defaults to the auto-detected project language; type: string.`
           )
           .optional(),
       },
