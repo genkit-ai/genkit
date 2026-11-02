@@ -18,15 +18,16 @@
 """Tests for the FastAPI plugin."""
 
 import asyncio
+import datetime
 import json
 import logging
 from typing import Any, cast
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
-from genkit_fastapi import genkit_fastapi_handler, serve_flow
+from genkit_fastapi import genkit_fastapi_handler, handle_genkit_request, serve_flow
 from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -662,8 +663,8 @@ def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pyt
     assert records[0].exc_info is None
 
 
-def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
-    """A streamed flow whose model call fails with a provider 401 ends with Internal Error."""
+def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.LogCaptureFixture) -> None:
+    """A streamed flow whose model call fails with a provider 401 ends with Internal Error and logs on genkit.web."""
     ai = Genkit()
 
     @ai.flow()
@@ -672,14 +673,16 @@ def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
 
     app = FastAPI()
     app.include_router(serve_flow(ask, base_path='/ask'))
-    response = TestClient(app).post(
-        '/ask',
-        json={'data': 'hi'},
-        headers={'Accept': 'text/event-stream'},
-    )
+    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+        response = TestClient(app).post(
+            '/ask',
+            json={'data': 'hi'},
+            headers={'Accept': 'text/event-stream'},
+        )
 
     assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'API key not valid' not in response.text
+    assert [(r.name, r.getMessage()) for r in caplog.records] == [('genkit.web', 'served flow stream failed')]
 
 
 def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event() -> None:
@@ -1029,13 +1032,47 @@ def test_to_sse_keeps_user_model_raw_field() -> None:
     ]
 
 
+class Visit(BaseModel):
+    """A booking with a datetime field that bare json.dumps rejects."""
+
+    guest: str
+    at: datetime.datetime
+
+
+def test_served_flow_streams_models_with_datetimes_and_lists_over_sse() -> None:
+    """serve_flow and handle_genkit_request encode datetimes and list[BaseModel] over SSE via to_sse."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def bookings(guest: str, ctx: FlowContext[Visit]) -> list[Visit]:
+        visit = Visit(guest=guest, at=datetime.datetime(2026, 3, 1, 19, 30))
+        ctx.send_chunk(visit)
+        return [visit]
+
+    app = FastAPI()
+    app.include_router(serve_flow(bookings, base_path='/bookings'))
+
+    @app.post('/custom_bookings', response_model=None)
+    async def custom_bookings(request: Request) -> object:
+        return await handle_genkit_request(request, action=bookings)
+
+    client = TestClient(app)
+    expected = (
+        'data: {"message":{"guest":"Ada","at":"2026-03-01T19:30:00"}}\n\n'
+        'data: {"result":[{"guest":"Ada","at":"2026-03-01T19:30:00"}]}\n\n'
+    )
+
+    assert client.post('/bookings?stream=true', json={'data': 'Ada'}).text == expected
+    assert client.post('/custom_bookings?stream=true', json={'data': 'Ada'}).text == expected
+
+
 def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> None:
-    """The error frame is logged on the genkit.web._sse stdlib logger, 5xx with the traceback."""
-    with caplog.at_level(logging.ERROR, logger='genkit.web._sse'):
+    """The error frame is logged on the genkit.web stdlib logger, 5xx with the traceback."""
+    with caplog.at_level(logging.ERROR, logger='genkit.web'):
         _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
 
     assert [(r.name, r.getMessage()) for r in caplog.records] == [
-        ('genkit.web._sse', 'served flow stream failed'),
+        ('genkit.web', 'served flow stream failed'),
     ]
     assert caplog.records[0].exc_info is not None
 

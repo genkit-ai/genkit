@@ -1029,6 +1029,7 @@ def as_model_response(*, raw: object, name: str) -> ModelResponse:
     )
     walked._message_parser = raw._message_parser
     walked._schema_type = raw._schema_type
+    walked._failure = raw._failure
     return walked
 
 
@@ -1204,8 +1205,8 @@ def public_error(exc: BaseException) -> PublicError | None:
 def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     # The string on a returned response is what a flow can put in a 200.
     # PublicError is how a tool author publishes that sentence.
-    # The cause clause below keeps a plugin's wrapped provider error out of
-    # finish_message.
+    # The _provider_sourced and cause checks below keep upstream provider errors
+    # out of finish_message.
     if pipe_failed:
         if isinstance(exc, GenkitError):
             return exc.message or type(exc).__name__
@@ -1213,7 +1214,7 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     published = public_error(exc)
     if published is not None:
         return published.message or INTERNAL_FINISH_MESSAGE
-    if isinstance(exc, GenkitError):
+    if isinstance(exc, GenkitError) and not exc._provider_sourced:
         cause = attached_cause(exc)
         if cause is None or isinstance(cause, GenkitError) or exc.status != 'INTERNAL':
             return exc.message or INTERNAL_FINISH_MESSAGE
@@ -1264,7 +1265,7 @@ def box_from_exc(
         details['reason'] = reason.value
     # Failure.details is a JSON object (Go's map[string]any); drop an empty one.
     failure_details = dict(cast(Mapping[str, Any], details)) if isinstance(details, Mapping) and details else None
-    return box_dead_turn(
+    out = box_dead_turn(
         response=response,
         messages=messages,
         finish_reason=FinishReason.ABORTED if caller_stopped else FinishReason.FAILED,
@@ -1272,6 +1273,9 @@ def box_from_exc(
         error=Failure(status=status, message=finish_message, details=failure_details),
         request=request,
     )
+    if not caller_stopped:
+        out._failure = exc
+    return out
 
 
 def box_if_hook_dropped_ticket(

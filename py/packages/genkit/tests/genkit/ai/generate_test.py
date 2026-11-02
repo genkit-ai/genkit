@@ -8962,6 +8962,38 @@ async def test_generate_with_model_raising_wrapped_provider_500_returns_internal
     assert 'password' not in (response.finish_message or '')
 
 
+@pytest.mark.parametrize(
+    ('http_status', 'expected_status', 'upstream_text'),
+    [
+        (403, 'PERMISSION_DENIED', 'Permission denied on resource project secret-proj-123'),
+        (404, 'NOT_FOUND', 'Publisher Model projects/secret-proj-123/locations/us-central1/models/gemini-x not found'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_with_model_raising_provider_4xx_keeps_status_and_redacts_text(
+    http_status: int,
+    expected_status: str,
+    upstream_text: str,
+) -> None:
+    """Non-500 provider_error keeps its status in-process while redacting upstream text from finish_message."""
+    ai = Genkit()
+
+    async def vertex_fail(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        raise provider_error(RuntimeError(upstream_text), http_status=http_status)
+
+    ai.define_model(name='vertex_fail', fn=vertex_fail)
+
+    response = await ai.generate(model='vertex_fail', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == expected_status
+    assert response.error.message == 'internal error'
+    assert 'secret-proj-123' not in (response.finish_message or '')
+    assert 'secret-proj-123' not in response.error.message
+
+
 @pytest.mark.asyncio
 async def test_generate_with_genkit_error_wrapping_public_error_uses_outer_message() -> None:
     """A hand-built GenkitError(cause=PublicError) uses the outer message, not the inner one."""

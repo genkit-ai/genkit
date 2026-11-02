@@ -24,14 +24,18 @@ from typing import Protocol
 from pydantic_core import to_jsonable_python
 
 from genkit._ai._agents._client import AgentChunk, AgentResponse
-from genkit._core._error import Interrupt, TaskGroupError, error_body, error_status, interrupt_escape_error
+from genkit._ai._prompt import ModelStreamResponse
+from genkit._core._error import GenkitError, Interrupt, TaskGroupError, error_body, error_status, interrupt_escape_error
+from genkit._core._model import ModelResponse
+from genkit._core._typing import FinishReason
 
 # Compact JSON, the same bytes the FastAPI, Flask and Django adapters send.
 _JSON_SEPARATORS = (',', ':')
 
-# Stdlib logging, like the fastapi/flask/django handlers: served failures go to the
-# host web server's logging config (TID251 exemption in pyproject.toml).
-_logger = logging.getLogger(__name__)
+# Stdlib logging on the public package name, like the fastapi/flask/django
+# handlers: served failures go to the host web server's logging config
+# without exposing the private `_sse` module (TID251 exemption in pyproject.toml).
+_logger = logging.getLogger('genkit.web')
 
 
 class StreamHandle(Protocol):
@@ -71,7 +75,7 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
 
     Yields ``data: {"message": ...}`` for each chunk, then ``data: {"result": ...}``.
     If the run fails, it yields one ``data: {"error": ...}`` instead of the rest
-    and logs the failure on the ``genkit.web._sse`` stdlib logger: 5xx with a
+    and logs the failure on the ``genkit.web`` stdlib logger: 5xx with a
     traceback, 4xx as a warning. Only a
     ``PublicError``'s text reaches the client; anything else goes out as
     ``Internal Error``. These are the frames ``serve_flow``,
@@ -112,6 +116,17 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
         async for chunk in handle.stream:
             yield _frame('message', _frame_value(chunk))
         result = await handle.response
+        # ModelStreamResponse boxes turn failures onto .response instead of raising
+        # from .stream; re-raise here so SSE callers get the error frame and log.
+        if (
+            isinstance(handle, ModelStreamResponse)
+            and isinstance(result, ModelResponse)
+            and result.finish_reason == FinishReason.FAILED
+        ):
+            raise result._failure or GenkitError(
+                status='INTERNAL',
+                message=result.finish_message or 'Model generation failed',
+            )
         yield _frame('result', _frame_value(result))
     except (Exception, Interrupt, TaskGroupError) as exc:
         failure = interrupt_escape_error(exc)

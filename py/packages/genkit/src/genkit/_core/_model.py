@@ -1501,6 +1501,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     # when output format parsing or schema validation is needed.
     _message_parser: Callable[[Message], object] | None = PrivateAttr(None)
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
+    _failure: BaseException | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
     error: Failure | None = None

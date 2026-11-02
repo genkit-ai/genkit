@@ -8,16 +8,20 @@ import datetime
 import gc
 import logging
 import warnings
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
 
-from genkit import FlowContext, Genkit, Interrupt, Message, Part, PublicError
+import genkit.web._sse as _sse_mod
+from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
-from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk
-from genkit._core._typing import AgentFinishReason, Role, TurnEnd
+from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk, ToolRequest
+from genkit._core._typing import AgentFinishReason, FinishReason, Role, TurnEnd
+from genkit.model import ModelContext, ModelRequest
+from genkit.plugin_api import provider_error
+from genkit.testing import define_scripted_model
 from genkit.web import to_sse
 
 
@@ -84,12 +88,85 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
     async def track_order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'order {order_id} missing')
 
-    with caplog.at_level(logging.WARNING, logger='genkit.web._sse'):
+    with caplog.at_level(logging.WARNING, logger='genkit.web'):
         lines = await _lines(to_sse(track_order.stream('A-1042')))
 
     assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
     assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
         ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing'),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Failed Vertex calls on ai.generate_stream() and prompt.stream() log 5xx and emit Internal Error, not result."""
+    ai = Genkit()
+
+    async def vertex_denied(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        raise provider_error(
+            RuntimeError(
+                'Permission denied on resource project secret-proj-123 '
+                'for projects/secret-proj-123/locations/us-central1/publishers/google/models/gemini-2.5-flash'
+            ),
+            http_status=403,
+        )
+
+    ai.define_model(name='vertex_denied', fn=vertex_denied)
+    menu_prompt = ai.define_prompt(name='menu_prompt', model='vertex_denied', prompt='Suggest dinner.')
+
+    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+        gen_lines = await _lines(to_sse(ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.')))
+        prompt_lines = await _lines(to_sse(menu_prompt.stream()))
+
+    expected = ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
+    assert gen_lines == expected
+    assert prompt_lines == expected
+    assert 'secret-proj-123' not in gen_lines[0]
+    assert 'projects/' not in gen_lines[0]
+    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('genkit.web', 'ERROR', 'served flow stream failed', True),
+        ('genkit.web', 'ERROR', 'served flow stream failed', True),
+    ]
+    for record in caplog.records:
+        assert record.exc_info is not None
+        assert 'secret-proj-123' in str(record.exc_info[1])
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_surfaces_tool_public_error_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A tool raising PublicError inside ai.generate_stream() emits a 4xx error frame and logs a warning."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def lookup_order(order_id: str) -> str:
+        """Look up an order by ID."""
+        raise PublicError('NOT_FOUND', f'order {order_id} missing')
+
+    define_scripted_model(
+        ai,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(tool_request=ToolRequest(name='lookup_order', input='A-1042'))],
+                ),
+            )
+        ],
+    )
+
+    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+        lines = await _lines(
+            to_sse(ai.generate_stream(model='scriptedModel', prompt='Where is A-1042?', tools=['lookup_order']))
+        )
+
+    assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
+    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('genkit.web', 'WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
 
 
@@ -135,26 +212,91 @@ def _unawaited_coroutine_warnings(caught: list[warnings.WarningMessage]) -> list
     return [str(w.message) for w in caught if 'was never awaited' in str(w.message)]
 
 
+class _SpyTurn(AgentTurn[Any]):
+    """AgentTurn recording every `.response` access."""
+
+    def __init__(self, *, stream: AsyncIterator[AgentChunk[Any]], output: asyncio.Future[AgentResponse[Any]]) -> None:
+        super().__init__(stream=stream, output=output)
+        self.response_reads = 0
+
+    @property
+    def response(self) -> Any:
+        self.response_reads += 1
+        return super().response
+
+
 @pytest.mark.asyncio
-async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains() -> None:
-    """A failed or never-iterated `to_sse()` doesn't leave an un-awaited `.response` coroutine."""
+async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed, abandoned, or never-iterated `to_sse()` never reads `.response` or leaks a coroutine."""
     loop = asyncio.get_running_loop()
+    wire_chunk = AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Hi')]))
+    wire_output = AgentOutput(
+        snapshot_id='snap-1',
+        message=Message(role=Role.MODEL, content=[Part.from_text('Hi')]),
+        finish_reason=AgentFinishReason.STOP,
+    )
+
+    def spy_turn(
+        chunks: list[AgentChunk[Any]],
+        output: asyncio.Future[AgentResponse[Any]],
+        *,
+        fail: bool = False,
+    ) -> _SpyTurn:
+        async def stream() -> AsyncIterator[AgentChunk[Any]]:
+            for chunk in chunks:
+                yield chunk
+            if fail:
+                raise PublicError('UNAVAILABLE', 'agent offline')
+
+        return _SpyTurn(stream=stream(), output=output)
+
+    # Disable _sse._logger so pytest's root LogCaptureHandlers don't pin the
+    # exception traceback (and to_sse's locals) past gc.collect().
+    monkeypatch.setattr(_sse_mod._logger, 'disabled', True)
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter('always')
 
-        failed_output: asyncio.Future[AgentResponse[Any]] = loop.create_future()
-        failed = _turn([], failed_output, fail=True)
+        failed = spy_turn([], loop.create_future(), fail=True)
         lines = await _lines(to_sse(failed))
+        failed_reads = failed.response_reads
 
-        unread = _turn([], loop.create_future())
-        _ = to_sse(unread)
+        abandoned = spy_turn([AgentChunk(text='Hi', raw=wire_chunk)], loop.create_future())
+        agen = cast(AsyncGenerator[str, None], to_sse(abandoned))
+        first = await agen.__anext__()
+        mid_stream_reads = abandoned.response_reads
+        await agen.aclose()
+        abandoned_reads = abandoned.response_reads
 
-        del failed, unread, _
+        unread = spy_turn([], loop.create_future())
+        unused = to_sse(unread)
+        unread_reads = unread.response_reads
+
+        settled: asyncio.Future[AgentResponse[Any]] = loop.create_future()
+        settled.set_result(AgentResponse(raw=wire_output, messages=[]))
+        drained = spy_turn([AgentChunk(text='Hi', raw=wire_chunk)], settled)
+        drained_gen = to_sse(drained)
+        _ = await drained_gen.__anext__()
+        before_drain_reads = drained.response_reads
+        _ = await _lines(drained_gen)
+        after_drain_reads = drained.response_reads
+
+        del failed, abandoned, agen, unread, unused, drained, drained_gen
         gc.collect()
 
-    assert lines == ['data: {"error":{"message":"agent offline","status":"UNAVAILABLE"}}\n\n']
     assert _unawaited_coroutine_warnings(caught) == []
+    assert (failed_reads, mid_stream_reads, abandoned_reads, unread_reads, before_drain_reads, after_drain_reads) == (
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+    )
+    assert first == 'data: {"message":{"modelChunk":{"role":"model","content":[{"text":"Hi"}]}}}\n\n'
+    assert lines == ['data: {"error":{"message":"agent offline","status":"UNAVAILABLE"}}\n\n']
 
 
 class _RawStreamHandle:
@@ -182,7 +324,7 @@ async def test_to_sse_frames_escaping_interrupt_as_internal_error_and_propagates
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An escaping ``Interrupt`` (a ``BaseException``) frames as 500 Internal Error; ``CancelledError`` propagates."""
-    with caplog.at_level(logging.ERROR, logger='genkit.web._sse'):
+    with caplog.at_level(logging.ERROR, logger='genkit.web'):
         lines = await _lines(to_sse(_RawStreamHandle(Interrupt({'secret_order': 'A-17'}))))
 
     assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
