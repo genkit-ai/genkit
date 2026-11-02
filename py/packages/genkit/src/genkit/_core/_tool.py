@@ -58,10 +58,6 @@ ORIGINAL_OUTPUT_SCHEMA_KEY = 'originalOutputSchema'
 _tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
 # Stashed copy of tool_request.input when restart replaces input (JSON; shape is per tool).
 _tool_original_input: ContextVar[Any | None] = ContextVar('tool_original_input', default=None)  # noqa: ANN401
-# Generate-only sink: wraps send_chunk values as a partial tool-response stream chunk.
-_tool_generate_chunk_sender: ContextVar[Callable[[Any], None] | None] = ContextVar(
-    'tool_generate_chunk_sender', default=None
-)
 
 
 def _usable_locator(value: object) -> bool:
@@ -268,10 +264,9 @@ class ToolContext(ActionRunContext[ChunkT]):
             resumed_metadata: Metadata from previous interrupt (if resumed)
             original_input: Original tool input before replacement (if resumed)
         """
-        sender = _tool_generate_chunk_sender.get()
         super().__init__(
             context=ctx.context,
-            streaming_callback=sender if sender is not None else ctx.streaming_callback,
+            streaming_callback=ctx.streaming_callback,
             abort_signal=ctx.abort_signal,
         )
         self.resumed_metadata = resumed_metadata
@@ -297,15 +292,8 @@ async def call_tool_fn(
     if resumed_meta:
         # Record resumed metadata on the current span for observability.
         set_custom_metadata_attributes({'resumed': resumed_meta})
-    # The ToolContext claims the generate-scoped stream sender; clear the
-    # ContextVar while the function runs so a nested direct tool call inside
-    # it doesn't inherit this call's (name, ref) stream sink.
     tool_ctx = ToolContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
-    token_inner = _tool_generate_chunk_sender.set(None)
-    try:
-        return await tool.params.call(func, raw_input, tool_ctx)
-    finally:
-        _tool_generate_chunk_sender.reset(token_inner)
+    return await tool.params.call(func, raw_input, tool_ctx)
 
 
 class Tool(Action[InputT, OutputT, ChunkT, None]):

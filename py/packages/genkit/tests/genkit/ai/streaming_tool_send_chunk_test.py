@@ -1326,3 +1326,38 @@ def test_streamed_message_accumulator_skips_partial_parts_without_flushing() -> 
     assert msgs[1].content[0].is_partial is False
     assert msgs[1].content[0].tool_response is not None
     assert msgs[1].content[0].tool_response.output == 'done'
+
+
+@pytest.mark.asyncio
+async def test_tool_from_action_and_wrap_tool_preserves_send_chunk() -> None:
+    """Tool.from_action and wrap_tool middleware preserve send_chunk capabilities."""
+
+    class PreservingMiddleware(Middleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Any,
+        ) -> object:
+            # Pass on_chunk through to the inner function
+            return await next_fn(params, ctx)
+
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    from genkit._core._action import Action, ActionRunContext
+
+    async def inner_deploy(_req: dict[str, Any], ctx: ActionRunContext[str]) -> str:
+        ctx.send_chunk('live_from_action')
+        return 'done'
+
+    action = Action(kind='tool', name='inner_deploy', fn=inner_deploy)
+    deploy = Tool.from_action(action)
+    ai._registry.register_action_from_instance(deploy)
+
+    pm.responses = [_model_calls(('inner_deploy', 'r1')), _model_says('ok')]
+    chunks, response = await _collect_stream(ai, prompt='go', tools=[deploy], use=[PreservingMiddleware()])
+
+    assert [p.tool_response.output for p in _partial_parts(chunks) if p.tool_response] == ['live_from_action']
+    assert [p.tool_response.output for p in _final_parts(chunks) if p.tool_response] == ['done']
+    assert _tool_outputs(response.messages) == ['done']

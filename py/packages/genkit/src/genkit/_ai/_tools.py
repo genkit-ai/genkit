@@ -31,7 +31,6 @@ from genkit._core._tool import (
     ORIGINAL_OUTPUT_SCHEMA_KEY as ORIGINAL_OUTPUT_SCHEMA_KEY,
     Tool as _Tool,
     ToolContext as ToolContext,
-    _tool_generate_chunk_sender as _tool_generate_chunk_sender,
     _tool_original_input as _tool_original_input,
     _tool_resumed_metadata as _tool_resumed_metadata,
     as_multipart_tool_response as as_multipart_tool_response,
@@ -162,13 +161,13 @@ async def run_tool_request(
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
     sink = _ScopedToolChunkSink(tool_request_part, on_tool_chunk) if on_tool_chunk is not None else None
-    token_sender = _tool_generate_chunk_sender.set(sink)
     run_context = dict(ctx.context) if ctx and ctx.context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
         return (
             await tool._run(
                 tool_req.input,
+                on_chunk=sink,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
                 abort_signal=ctx.abort_signal if ctx else None,
@@ -177,7 +176,6 @@ async def run_tool_request(
     finally:
         if sink is not None:
             sink.close()
-        _tool_generate_chunk_sender.reset(token_sender)
         _tool_resumed_metadata.reset(token_meta)
         _tool_original_input.reset(token_input)
 
