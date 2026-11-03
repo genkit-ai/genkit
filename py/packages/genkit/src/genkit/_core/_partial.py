@@ -27,7 +27,7 @@ optional fields get their defaults, and missing required fields are ``None``.
 from __future__ import annotations
 
 import sys
-from collections.abc import Mapping, MutableMapping, MutableSequence, Sequence
+from collections.abc import Hashable, Mapping, MutableMapping, MutableSequence, Sequence
 from contextlib import suppress
 from enum import Enum
 from functools import lru_cache
@@ -55,7 +55,9 @@ def is_model(annotation: Any) -> TypeGuard[type[BaseModel]]:  # noqa: ANN401
 def unwrap_annotated(*, annotation: Any) -> Any:  # noqa: ANN401
     while get_origin(annotation) is Annotated:
         args = get_args(annotation)
-        annotation = args[0] if args else annotation
+        if not args:
+            break
+        annotation = args[0]
     return annotation
 
 
@@ -65,11 +67,13 @@ def extract_discriminator(*, annotation: Any, info: FieldInfo | None = None) -> 
     cur = annotation
     while get_origin(cur) is Annotated:
         args = get_args(cur)
+        if not args:
+            break
         for meta in args[1:]:
             disc = getattr(meta, 'discriminator', None)
             if isinstance(disc, str):
                 return disc
-        cur = args[0] if args else cur
+        cur = args[0]
     if get_origin(cur) in UNION_ORIGINS:
         for arg in get_args(cur):
             found = extract_discriminator(annotation=arg)
@@ -213,7 +217,8 @@ def pick_discriminated_model(
     open_key = None if closed or not data else next(reversed(data))
     for candidate, fname, finfo, tags in entries:
         raw_tag, matched_key = lookup(data=data, name=fname, info=finfo)
-        if matched_key is None or raw_tag not in tags:
+        # A dict or list tag can't match a Literal; treat it as not yet known.
+        if matched_key is None or not isinstance(raw_tag, Hashable) or raw_tag not in tags:
             continue
         if (
             matched_key == open_key

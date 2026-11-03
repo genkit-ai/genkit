@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit._core import _partial
 from genkit._core._action import ActionRunContext
 from genkit._core._model import chunk_for_stream
 from genkit._core._typing import Role
@@ -931,6 +932,33 @@ class TestDefaultsAndClosedSubtreeValidation:
         assert isinstance(closed_tag, Tank)
         assert isinstance(closed_tag.animal, CatPet)
         assert closed_tag.animal.meows == 2
+
+    def test_discriminated_union_dict_tag_reads_as_unknown(self) -> None:
+        class Household(BaseModel):
+            owner: str
+            pet: PetUnion
+            all_pets: list[PetUnion] = []
+
+        # A dict tag can't match a Literal, so pet stays None instead of raising.
+        out = _chunk('{"owner": "Ada", "pet": {"type": {"name": "dog"}', schema_type=Household).output
+        assert isinstance(out, Household)
+        assert out.owner == 'Ada'
+        assert out.pet is None
+
+        # Same inside a list: the item with a list tag is dropped, valid siblings stay.
+        listed = _chunk(
+            '{"owner": "Ada", "all_pets": [{"type": "dog", "barks": 1}, {"type": ["cat"]',
+            schema_type=Household,
+        ).output
+        assert isinstance(listed, Household)
+        assert listed.all_pets == [DogPet(type='dog', barks=1)]
+
+    def test_annotated_with_no_args_does_not_hang(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # get_args() returning () used to spin the Annotated unwrap loops forever.
+        monkeypatch.setattr(_partial, 'get_args', lambda _tp: ())
+        tp = Annotated[int, 'meta']
+        assert _partial.unwrap_annotated(annotation=tp) is tp
+        assert _partial.extract_discriminator(annotation=tp) is None
 
 
 @pytest.mark.asyncio
