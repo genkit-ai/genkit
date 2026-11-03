@@ -424,8 +424,9 @@ root = [
 [tool.pyright]
 # Typing contracts live in packages/*/tests/typecheck/: snake_case kwargs and
 # typed values that pyright, pyrefly and ty must all accept with no
-# suppressions. pyrefly project_includes and the ty override below list the
-# same directory, so a new contract file is checked by all three.
+# suppressions. The only ignores are on lines that assert a type error.
+# pyrefly project_includes and the ty override below list the same
+# directory, so a new contract file is checked by all three.
 include = ["packages/**/src", "packages/**/tests/typecheck"]
 exclude = [
   "**/__pycache__",
@@ -481,6 +482,7 @@ project_includes = [
   # Core package
   "packages/genkit/src/**/*.py",
   "packages/genkit-mcp/src/**/*.py",
+  "packages/genkit-otel/src/**/*.py",
   # Typing contracts (see [tool.pyright])
   "packages/*/tests/typecheck/**/*.py",
 ]
@@ -514,6 +516,15 @@ python_version = "3.10"
 deprecated     = "error"
 redundant-cast = "error"
 
+# Contract files that assert a type error keep a `pyrefly: ignore` on that
+# line; an unused one means the error went away, so it fails.
+[[tool.pyrefly.sub-config]]
+matches = "packages/*/tests/typecheck/**"
+[tool.pyrefly.sub-config.errors]
+deprecated     = "error"
+redundant-cast = "error"
+unused-ignore  = "error"
+
 # Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
 [tool.ty.rules]
 unused-type-ignore-comment = "ignore"
@@ -528,11 +539,14 @@ no-matching-overload = "ignore"
 # tests/typecheck/ also matches **/tests/** above, which mutes these two rules.
 # Contract files exist to fail on them, so turn them back on. ty applies
 # overrides in order, so this block must stay after the tests/** one.
+# A contract that asserts a type error keeps a `ty: ignore` on that line; an
+# unused one means the error went away, so it fails too.
 [[tool.ty.overrides]]
 include = ["**/tests/typecheck/**"]
 [tool.ty.overrides.rules]
 invalid-argument-type = "error"
 no-matching-overload = "error"
+unused-ignore-comment = "error"
 
 # genkit._ai._formats._schema: dict.get with str keys from JSON schema traversal.
 [[tool.ty.overrides]]

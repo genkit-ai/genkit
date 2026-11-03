@@ -269,6 +269,7 @@ class ToolContext(ActionRunContext[ChunkT]):
     def __init__(
         self,
         ctx: ActionRunContext[ChunkT],
+        *,
         resumed_metadata: dict[str, Any] | None = None,
         original_input: Any = None,  # noqa: ANN401 - prior tool_request.input when replacing on restart
     ) -> None:

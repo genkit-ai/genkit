@@ -868,6 +868,7 @@ class ActionRunContext(Generic[ChunkT]):
 
     def __init__(
         self,
+        *,
         context: dict[str, Any] | None = None,
         streaming_callback: Callable[[ChunkT], None] | None = None,
         abort_signal: asyncio.Event | None = None,
@@ -977,6 +978,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         kind: ActionKind,
         name: str,
         fn: Callable[..., Awaitable[OutputT]],
+        *,
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -1744,6 +1746,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         kind: ActionKind,
         name: str,
         bidi_fn: BidiFn[InitT, InputT, ChunkT, OutputT],
+        *,
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,

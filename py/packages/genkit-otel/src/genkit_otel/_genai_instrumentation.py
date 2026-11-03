@@ -16,14 +16,14 @@
 
 """Instrumentation that emits OpenTelemetry GenAI spans and metrics."""
 
+import importlib
 import json
 import os
 import time
-from collections.abc import Mapping
-from typing import ClassVar, TypeVar
+from collections.abc import Callable, Mapping
+from typing import ClassVar, Protocol, TypeVar
 
 from opentelemetry import metrics as metrics_api, trace as trace_api
-from opentelemetry._logs import Logger, get_logger
 from opentelemetry.metrics import Meter
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.util.types import AttributeValue
@@ -62,6 +62,30 @@ logger = get_genkit_logger(__name__)
 T = TypeVar('T')
 
 
+class OtelEventLogger(Protocol):
+    """Structural contract for emitting OpenTelemetry GenAI operation events."""
+
+    def emit(
+        self,
+        *,
+        event_name: str,
+        attributes: Mapping[str, AttributeValue],
+    ) -> None:
+        """Emit a named event with span-scoped attributes."""
+        ...
+
+
+def _get_otel_logger(scope_name: str) -> OtelEventLogger:
+    """Resolve an OTel event logger, preferring ``opentelemetry.logs`` over ``opentelemetry._logs``."""
+    try:
+        logs_api = importlib.import_module('opentelemetry.logs')
+        get_logger: Callable[[str], OtelEventLogger] = logs_api.get_logger
+    except (ImportError, AttributeError):
+        from opentelemetry._logs import get_logger
+
+    return get_logger(scope_name)
+
+
 class GenAiInstrumentation(Instrumentation):
     """Emit ``gen_ai.*`` spans and metrics for Genkit model calls.
 
@@ -94,7 +118,7 @@ class GenAiInstrumentation(Instrumentation):
         scope_name: str = 'genkit-genai',
         tracer: Tracer | None = None,
         meter: Meter | None = None,
-        otel_logger: Logger | None = None,
+        otel_logger: OtelEventLogger | None = None,
     ) -> None:
         # an explicit NO_CONTENT is the app's PII opt-out, so only an
         # omitted mode falls back to the env var.
@@ -117,7 +141,7 @@ class GenAiInstrumentation(Instrumentation):
         self._injected_logger = otel_logger
         self._cached_tracer: Tracer | None = None
         self._cached_metrics: GenAiMetrics | None = None
-        self._cached_logger: Logger | None = None
+        self._cached_logger: OtelEventLogger | None = None
         self._warned_not_initialized = False
 
     @property
@@ -142,11 +166,11 @@ class GenAiInstrumentation(Instrumentation):
         return self._cached_metrics
 
     @property
-    def _otel_logger(self) -> Logger:
+    def _otel_logger(self) -> OtelEventLogger:
         if self._injected_logger is not None:
             return self._injected_logger
         if self._cached_logger is None:
-            self._cached_logger = get_logger(self.scope_name)
+            self._cached_logger = _get_otel_logger(self.scope_name)
         return self._cached_logger
 
     async def run_in_new_span(
@@ -511,5 +535,5 @@ def _set_json_attribute(span: Span, key: str, value: object) -> None:
     span.set_attribute(key, encoded)
 
 
-def _emit_operation_details(otel_logger: Logger, attributes: Mapping[str, AttributeValue]) -> None:
+def _emit_operation_details(otel_logger: OtelEventLogger, attributes: Mapping[str, AttributeValue]) -> None:
     otel_logger.emit(event_name=GEN_AI_OPERATION_DETAILS_EVENT, attributes=attributes)

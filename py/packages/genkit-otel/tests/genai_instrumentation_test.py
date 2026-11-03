@@ -15,6 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import subprocess  # noqa: S404
+import sys
+import types
 from collections.abc import Mapping
 from typing import get_args
 
@@ -865,3 +868,135 @@ async def test_every_attribute_holding_content_is_in_content_attributes(harness)
         if secret in str(value)
     }
     assert holding == GenAiInstrumentation.CONTENT_ATTRIBUTES
+
+
+def test_import_and_default_runs_succeed_when_private_otel_logs_is_blocked() -> None:
+    """Importing genkit_otel and running NO_CONTENT / SPAN_ONLY spans never imports opentelemetry._logs."""
+    script = (
+        'import asyncio, sys\n'
+        "sys.modules['opentelemetry._logs'] = None\n"
+        'from opentelemetry import trace\n'
+        'from opentelemetry.sdk.trace import TracerProvider\n'
+        'trace.set_tracer_provider(TracerProvider())\n'
+        'from genkit_otel import GenAiInstrumentation\n'
+        'from genkit import FinishReason, Message, ModelResponse, Part, Role\n'
+        'from genkit.model import ModelRequest\n'
+        'from genkit.telemetry import SpanMetadata\n'
+        'async def main() -> None:\n'
+        "    req = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('menu')])])\n"
+        '    res = ModelResponse(\n'
+        '        finish_reason=FinishReason.STOP,\n'
+        "        message=Message(role=Role.MODEL, content=[Part.from_text('soup')]),\n"
+        '    )\n'
+        "    for mode in (None, 'SPAN_ONLY'):\n"
+        '        instr = GenAiInstrumentation(content_capturing_mode=mode, emit_tool_spans=True)\n'
+        '        async def call_model(_s=None):\n'
+        '            return res\n'
+        '        async def call_tool(_s=None):\n'
+        "            return 'available'\n"
+        '        await instr.run_in_new_span(\n'
+        "            SpanMetadata(name='googleai/gemini-flash-latest', action_type='model', input=req),\n"
+        '            call_model,\n'
+        '        )\n'
+        '        await instr.run_in_new_span(\n'
+        "            SpanMetadata(name='check_stock', action_type='tool', input={'dish': 'soup'}),\n"
+        '            call_tool,\n'
+        '        )\n'
+        'asyncio.run(main())\n'
+        "assert sys.modules['opentelemetry._logs'] is None\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, check=False)  # noqa: S603
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_no_content_in_process_does_not_import_private_otel_logs(
+    harness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default NO_CONTENT mode without injected otel_logger never touches opentelemetry._logs."""
+    monkeypatch.setitem(sys.modules, 'opentelemetry._logs', None)
+    instr = GenAiInstrumentation(
+        tracer=harness.tracer_provider.get_tracer('test'),
+        meter=harness.meter_provider.get_meter('test'),
+        emit_tool_spans=True,
+    )
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('table 4')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    assert harness.span_named('chat gemini-flash-latest') is not None
+
+
+@pytest.mark.asyncio
+async def test_otel_logger_prefers_graduated_opentelemetry_logs_module(
+    harness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When opentelemetry.logs exists, _otel_logger uses it without importing opentelemetry._logs."""
+    emitted: list[tuple[str, dict[str, object]]] = []
+    requested_scopes: list[str] = []
+
+    class _GraduatedLogger:
+        def emit(self, *, event_name: str, attributes: Mapping[str, object]) -> None:
+            emitted.append((event_name, dict(attributes)))
+
+    graduated_logger = _GraduatedLogger()
+    graduated_mod = types.ModuleType('opentelemetry.logs')
+
+    def fake_get_logger(scope_name: str) -> _GraduatedLogger:
+        requested_scopes.append(scope_name)
+        return graduated_logger
+
+    graduated_mod.get_logger = fake_get_logger  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, 'opentelemetry.logs', graduated_mod)
+    monkeypatch.setitem(sys.modules, 'opentelemetry._logs', None)
+
+    instr = GenAiInstrumentation(
+        content_capturing_mode='EVENT_ONLY',
+        scope_name='dining-genai',
+        tracer=harness.tracer_provider.get_tracer('test'),
+        meter=harness.meter_provider.get_meter('test'),
+    )
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('halibut')])]),
+        lambda span=None: _awaitable(_model_response()),
+    )
+    assert instr._otel_logger is graduated_logger
+    assert requested_scopes == ['dining-genai']
+    assert len(emitted) == 1
+    assert emitted[0][0] == GEN_AI_OPERATION_DETAILS_EVENT
+    assert 'halibut' in str(emitted[0][1][GenAiAttr.INPUT_MESSAGES])
+
+
+def test_otel_logger_falls_back_to_private_opentelemetry_logs_when_ungraduated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without opentelemetry.logs, _otel_logger falls back to opentelemetry._logs.get_logger and caches it."""
+    import opentelemetry._logs as private_logs
+
+    requested_scopes: list[str] = []
+
+    class _FallbackLogger:
+        def emit(self, *, event_name: str, attributes: Mapping[str, object]) -> None:
+            _ = (event_name, attributes)
+
+    fallback_logger = _FallbackLogger()
+
+    def fake_private_get_logger(scope_name: str) -> _FallbackLogger:
+        requested_scopes.append(scope_name)
+        return fallback_logger
+
+    monkeypatch.delitem(sys.modules, 'opentelemetry.logs', raising=False)
+    monkeypatch.setattr(private_logs, 'get_logger', fake_private_get_logger)
+
+    instr = GenAiInstrumentation(content_capturing_mode='EVENT_ONLY', scope_name='dining-fallback')
+    assert instr._otel_logger is fallback_logger
+    assert instr._otel_logger is fallback_logger
+    assert requested_scopes == ['dining-fallback']

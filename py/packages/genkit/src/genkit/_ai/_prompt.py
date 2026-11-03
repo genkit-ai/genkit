@@ -254,6 +254,7 @@ class Prompt(Generic[InputT, OutputT]):
     def __init__(
         self,
         ai: _aio.Genkit,
+        *,
         variant: str | None = None,
         model: ModelArg | Action | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
