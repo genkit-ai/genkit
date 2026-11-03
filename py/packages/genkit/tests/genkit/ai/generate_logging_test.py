@@ -9,13 +9,13 @@ import pytest
 import structlog
 from structlog.testing import capture_logs
 
-from genkit import ErrorReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit import ErrorReason, Genkit, Message, ModelResponse, ModelResponseChunk, Part, PublicError
 from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._model import resolve_model_arg
 from genkit._ai._tools import Interrupt
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import GENKIT_LOG, get_logger
-from genkit._core._model import GenerateActionOptions, Resume
+from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._registry import Registry
 from genkit._core._typing import (
     FinishReason,
@@ -23,6 +23,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.model import ModelContext
 from genkit.testing import define_scripted_model
 
 BLOB = 'A' * 1_000_000
@@ -516,3 +517,152 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
     assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
+
+
+def _errors(entries: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [e for e in entries if e['log_level'] == 'error']
+
+
+def _tool_turn(name: str) -> ModelResponse:
+    return ModelResponse(
+        message=Message(role=Role.MODEL, content=[Part(tool_request=ToolRequest(name=name, input={}, ref='1'))]),
+        finish_reason=FinishReason.STOP,
+    )
+
+
+@pytest.mark.asyncio
+async def test_crashing_model_logs_the_hidden_cause_once() -> None:
+    """A model that raises returns 'internal error'; the cause is logged once at ERROR."""
+    structlog.reset_defaults()
+    ai = Genkit()
+
+    async def crashing(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise RuntimeError('model backend exploded')
+
+    ai.define_model(name='crash', fn=crashing)
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='crash', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'internal error'
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['event'] == "model 'crash' raised, returning finish_reason=failed"
+    assert errors[0]['model'] == 'crash'
+    assert isinstance(errors[0]['exc_info'], RuntimeError)
+    assert str(errors[0]['exc_info']) == 'model backend exploded'
+
+
+@pytest.mark.asyncio
+async def test_crashing_tool_is_named_and_logged_once() -> None:
+    """The tool site names the tool; the generate-level box does not log it again."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens(_: dict) -> str:  # noqa: ARG001
+        raise RuntimeError('allergen db down')
+
+    pm.responses = [_tool_turn('check_allergens')]
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='scriptedModel', prompt='hi', tools=['check_allergens'])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'internal error'
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['tool'] == 'check_allergens'
+    assert str(errors[0]['exc_info']) == 'allergen db down'
+
+
+@pytest.mark.asyncio
+async def test_crashing_restarted_tool_is_logged_once() -> None:
+    """A tool that raises on restart is named once, not again by the outer box."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    calls: list[int] = []
+
+    @ai.tool(name='hold')
+    async def hold(_: dict) -> str:  # noqa: ARG001
+        calls.append(1)
+        if len(calls) == 1:
+            raise Interrupt({'hold': True})
+        raise RuntimeError('kitchen printer jammed')
+
+    pm.responses = [_tool_turn('hold')]
+    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['hold'])
+
+    with capture_logs() as entries:
+        response = await generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=list(first.messages),
+                tools=['hold'],
+                resume=Resume(restart=[first.interrupts[0].restart()]),
+            ),
+        )
+
+    assert response.finish_reason == FinishReason.FAILED
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['tool'] == 'hold'
+    assert str(errors[0]['exc_info']) == 'kitchen printer jammed'
+
+
+@pytest.mark.asyncio
+async def test_published_tool_error_is_not_logged() -> None:
+    """A PublicError message is already on response.error, so nothing is logged."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens(_: dict) -> str:  # noqa: ARG001
+        raise PublicError('INVALID_ARGUMENT', 'we do not serve peanuts')
+
+    pm.responses = [_tool_turn('check_allergens')]
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='scriptedModel', prompt='hi', tools=['check_allergens'])
+
+    assert response.error is not None
+    assert response.error.message == 'we do not serve peanuts'
+    assert _errors(entries) == []
+
+
+@pytest.mark.asyncio
+async def test_readonly_exception_still_boxes_and_logs() -> None:
+    """An exception whose __setattr__ raises AttributeError still boxes and logs cleanly."""
+    structlog.reset_defaults()
+    ai = Genkit()
+
+    class ReadOnlyError(RuntimeError):
+        def __setattr__(self, name: str, value: object) -> None:
+            if hasattr(BaseException, name):
+                super().__setattr__(name, value)
+                return
+            raise AttributeError(name)
+
+    async def crashing(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise ReadOnlyError('immutable provider failure')
+
+    ai.define_model(name='crash', fn=crashing)
+
+    with capture_logs() as entries:
+        response = await ai.generate(model='crash', prompt='hi')
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'internal error'
+    errors = _errors(entries)
+    assert len(errors) == 1
+    assert isinstance(errors[0]['exc_info'], ReadOnlyError)
+    assert str(errors[0]['exc_info']) == 'immutable provider failure'
+    assert not hasattr(errors[0]['exc_info'], '_genkit_failure_logged')

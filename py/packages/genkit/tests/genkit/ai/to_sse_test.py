@@ -18,7 +18,17 @@ import pytest
 from pydantic import BaseModel
 
 import genkit.web._sse as _sse_mod
-from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError, ToolContext
+from genkit import (
+    FlowContext,
+    Genkit,
+    Interrupt,
+    Message,
+    ModelResponse,
+    Part,
+    PublicError,
+    StreamResponse,
+    ToolContext,
+)
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._ai._generate import box_dead_turn, box_from_exc
 from genkit._core._error import BoxedFailure, Failure, GenkitError
@@ -54,6 +64,26 @@ async def _lines(stream: AsyncIterator[str]) -> list[str]:
     return [line async for line in stream]
 
 
+class _RawStreamHandle:
+    """Custom StreamHandle raising an arbitrary BaseException from ``.stream``."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    @property
+    def stream(self) -> AsyncIterator[object]:
+        async def _gen() -> AsyncIterator[object]:
+            if False:
+                yield None
+            raise self._exc
+
+        return _gen()
+
+    @property
+    async def response(self) -> object:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_flow_to_sse_keeps_user_model_raw_field() -> None:
     """A user model with a `raw` field serializes whole, in chunks and in the result."""
@@ -86,19 +116,53 @@ async def test_flow_to_sse_encodes_lists_of_models_and_datetimes() -> None:
 
 @pytest.mark.asyncio
 async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """The error frame is logged like the adapters log it: 4xx as a warning, without a traceback."""
+    """Named action streams log 'served action %r stream failed'; unnamed handles log 'served stream failed'."""
     ai = Genkit()
 
     @ai.flow()
     async def track_order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'order {order_id} missing')
 
-    with caplog.at_level(logging.WARNING):
-        lines = await _lines(to_sse(track_order.stream('A-1042')))
+    @ai.flow()
+    async def charge_card(_order_id: str) -> str:
+        raise RuntimeError('gateway timeout')
 
-    assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
-    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
-        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing'),
+    @ai.tool()
+    async def lookup_allergens(dish: str) -> str:
+        """Look up allergens for a dish."""
+        raise PublicError('INVALID_ARGUMENT', f'unknown dish {dish}')
+
+    unnamed_custom = _RawStreamHandle(PublicError('NOT_FOUND', 'order A-1042 missing'))
+    raw_for_sr = _RawStreamHandle(PublicError('NOT_FOUND', 'order A-1042 missing'))
+    settled_response: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+    settled_response.set_result(None)
+    unnamed_sr = StreamResponse(stream=raw_for_sr.stream, response=settled_response)
+
+    with caplog.at_level(logging.WARNING):
+        not_found_lines = await _lines(to_sse(track_order.stream('A-1042')))
+        internal_lines = await _lines(to_sse(charge_card.stream('A-1042')))
+        tool_lines = await _lines(to_sse(lookup_allergens.stream('pad-thai')))
+        custom_lines = await _lines(to_sse(unnamed_custom))
+        sr_lines = await _lines(to_sse(unnamed_sr))
+
+    assert not_found_lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
+    assert internal_lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
+    assert tool_lines == ['data: {"error":{"message":"unknown dish pad-thai","status":"INVALID_ARGUMENT"}}\n\n']
+    assert custom_lines == not_found_lines
+    assert sr_lines == not_found_lines
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('WARNING', "served action 'track_order' stream failed: NOT_FOUND: order A-1042 missing", False),
+        ('ERROR', "served action 'charge_card' stream failed", True),
+        ('WARNING', "served action 'lookup_allergens' stream failed: INVALID_ARGUMENT: unknown dish pad-thai", False),
+        ('WARNING', 'served stream failed: NOT_FOUND: order A-1042 missing', False),
+        ('WARNING', 'served stream failed: NOT_FOUND: order A-1042 missing', False),
+    ]
+    assert [getattr(r, 'genkit_action', None) for r in caplog.records] == [
+        'track_order',
+        'charge_card',
+        'lookup_allergens',
+        None,
+        None,
     ]
 
 
@@ -135,8 +199,8 @@ async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_
     assert 'secret-proj-123' not in gen_lines[0]
     assert 'projects/' not in gen_lines[0]
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('ERROR', 'served flow stream failed', True),
-        ('ERROR', 'served flow stream failed', True),
+        ('ERROR', 'served stream failed', True),
+        ('ERROR', 'served stream failed', True),
     ]
     for record in caplog.records:
         assert record.exc_info is not None
@@ -175,7 +239,7 @@ async def test_generate_stream_to_sse_surfaces_tool_public_error_and_warns(
 
     assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
+        ('WARNING', 'served stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
 
 
@@ -268,8 +332,8 @@ async def test_generate_stream_to_sse_undeclared_tool_and_bare_failed_turn_redac
     assert 'result' not in missing_tool_lines[0]
     assert 'result' not in bare_failed_lines[0]
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('ERROR', 'served flow stream failed', True),
-        ('ERROR', 'served flow stream failed', True),
+        ('ERROR', 'served stream failed', True),
+        ('ERROR', 'served stream failed', True),
     ]
     assert caplog.records[0].exc_info is not None
     assert 'Tool internal_billing_tool not found' in str(caplog.records[0].exc_info[1])
@@ -406,26 +470,6 @@ async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains(
     assert lines == ['data: {"error":{"message":"agent offline","status":"UNAVAILABLE"}}\n\n']
 
 
-class _RawStreamHandle:
-    """Custom StreamHandle raising an arbitrary BaseException from ``.stream``."""
-
-    def __init__(self, exc: BaseException) -> None:
-        self._exc = exc
-
-    @property
-    def stream(self) -> AsyncIterator[object]:
-        async def _gen() -> AsyncIterator[object]:
-            if False:
-                yield None
-            raise self._exc
-
-        return _gen()
-
-    @property
-    async def response(self) -> object:
-        return None
-
-
 @pytest.mark.asyncio
 async def test_to_sse_frames_escaping_interrupt_as_internal_error_and_propagates_cancel(
     caplog: pytest.LogCaptureFixture,
@@ -437,7 +481,7 @@ async def test_to_sse_frames_escaping_interrupt_as_internal_error_and_propagates
     assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
     assert 'A-17' not in lines[0]
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('ERROR', 'served flow stream failed', True),
+        ('ERROR', 'served stream failed', True),
     ]
 
     with pytest.raises(asyncio.CancelledError):
@@ -512,7 +556,7 @@ async def test_generate_stream_to_sse_public_error_details_keep_failure_immutabl
         '"details":{"order":{"source":"crm"}}}}\n\n'
     ]
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
+        ('WARNING', 'served stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
     assert result._failure is not None
     assert result._failure.details == {'order': {'source': 'crm'}}
@@ -564,7 +608,7 @@ async def test_box_dead_turn_clears_stale_boxed_failure_from_copied_response(
     assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
     assert 'stale public error' not in lines[0]
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('ERROR', 'served flow stream failed', True),
+        ('ERROR', 'served stream failed', True),
     ]
 
 

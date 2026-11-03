@@ -16,16 +16,17 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@genkit-ai/express": "^1.1.0",
-    "genkit": "workspace:*",
     "@genkit-ai/compat-oai": "workspace:*",
-    "tsx": "^4.19.3",
+    "@genkit-ai/express": "workspace:*",
+    "genkit": "workspace:*",
     "wav": "^1.0.2"
   },
   "devDependencies": {
     "@types/wav": "^1.0.4",
-    "cross-env": "^7.0.3",
+    "cross-env": "^10.1.0",
     "dotenv": "^16.4.5",
+    "genkit-cli": "link:../../../genkit-tools/cli",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

@@ -18,6 +18,7 @@
 """Tests for the Django plugin."""
 
 import json
+import logging
 import sys
 import types
 from collections.abc import Iterator
@@ -503,3 +504,23 @@ async def test_context_provider_reads_raw_django_request(urlconf: None) -> None:
 
     assert response.status_code == 200
     assert json.loads(response.content) == {'result': 'table T7'}
+
+
+@pytest.mark.asyncio
+async def test_django_failure_logs_name_the_flow(
+    urlconf: None,  # noqa: ARG001
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Failure lines say which flow failed: 5xx with traceback, 4xx without."""
+    client = AsyncClient()
+    with caplog.at_level(logging.DEBUG, logger='genkit_django._handler'):
+        await client.post('/error_flow', data=json.dumps({'data': 'x'}), content_type='application/json')
+        await client.post('/public_flow', data=json.dumps({'data': '99'}), content_type='application/json')
+
+    records = [r for r in caplog.records if r.name == 'genkit_django._handler']
+    assert [r.getMessage() for r in records] == [
+        "served action 'raise_error' run failed",
+        "served action 'raise_public' run failed: NOT_FOUND: no order 99",
+    ]
+    assert records[0].exc_info is not None
+    assert records[1].exc_info is None

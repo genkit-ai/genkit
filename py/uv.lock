@@ -1602,6 +1602,9 @@ otel = [
 vertex-ai = [
     { name = "genkit-vertexai", extra = ["anthropic", "openai"] },
 ]
+vertexai = [
+    { name = "genkit-vertexai", extra = ["anthropic", "openai"] },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1621,6 +1624,7 @@ requires-dist = [
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-otel", marker = "extra == 'otel'", editable = "packages/genkit-otel" },
     { name = "genkit-vertexai", extras = ["anthropic", "openai"], marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
+    { name = "genkit-vertexai", extras = ["anthropic", "openai"], marker = "extra == 'vertexai'", editable = "packages/genkit-vertexai" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "json5", specifier = ">=0.10.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
@@ -1634,7 +1638,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "otel", "ollama", "openai", "vertex-ai"]
+provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "otel", "ollama", "openai", "vertex-ai", "vertexai"]
 
 [[package]]
 name = "genkit-a2ui"
@@ -1879,7 +1883,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
-    { name = "openai" },
+    { name = "openai", specifier = ">=1.60.0,<3" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
 ]
 

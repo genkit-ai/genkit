@@ -196,7 +196,7 @@ importers:
         version: 4.1.1
       '@genkit-ai/firebase':
         specifier: ^1.16.1
-        version: 1.29.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+        version: 1.29.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
 
   doc-snippets:
     dependencies:
@@ -1235,10 +1235,13 @@ importers:
         specifier: ^4.17.21
         version: 4.17.25
       '@types/node':
-        specifier: ^20.11.16
+        specifier: ^20.17.19
         version: 20.19.37
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.19.2
+        specifier: ^4.21.0
         version: 4.21.0
       typescript:
         specifier: ^5.9.3
@@ -1269,8 +1272,8 @@ importers:
         version: 3.3.3
     devDependencies:
       typescript:
-        specifier: ~5.8.3
-        version: 5.8.3
+        specifier: ^5.9.3
+        version: 5.9.3
       vite:
         specifier: ^6.3.3
         version: 6.4.2(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.32.0)(sass@1.90.0)(tsx@4.21.0)(yaml@2.9.1)
@@ -1296,7 +1299,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/vertexai
       express:
-        specifier: ^4.20.0
+        specifier: ^4.21.1
         version: 4.22.1
       genkit:
         specifier: workspace:*
@@ -1308,6 +1311,9 @@ importers:
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1318,10 +1324,10 @@ importers:
         specifier: workspace:*
         version: link:../../../genkit
       react:
-        specifier: ^19.1.0
+        specifier: ^19.2.4
         version: 19.2.4
       react-dom:
-        specifier: ^19.1.0
+        specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
       react-markdown:
         specifier: ^10.1.0
@@ -1334,17 +1340,17 @@ importers:
         version: 4.0.1
     devDependencies:
       '@types/react':
-        specifier: ^19.1.2
+        specifier: ^19.2.7
         version: 19.2.7
       '@types/react-dom':
-        specifier: ^19.1.2
+        specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.7)
       '@vitejs/plugin-react':
         specifier: ^4.4.1
         version: 4.7.0(vite@6.4.2(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.32.0)(sass@1.90.0)(tsx@4.21.0)(yaml@2.9.1))
       typescript:
-        specifier: ~5.8.3
-        version: 5.8.3
+        specifier: ^5.9.3
+        version: 5.9.3
       vite:
         specifier: ^6.3.3
         version: 6.4.2(@types/node@22.15.32)(jiti@2.7.0)(lightningcss@1.32.0)(sass@1.90.0)(tsx@4.21.0)(yaml@2.9.1)
@@ -1413,14 +1419,11 @@ importers:
         specifier: ^20.17.19
         version: 20.19.37
       typescript:
-        specifier: ~5.9.2
+        specifier: ^5.9.3
         version: 5.9.3
 
   testapps/anthropic:
     dependencies:
-      '@anthropic-ai/sdk':
-        specifier: ^0.71.2
-        version: 0.71.2(zod@4.1.13)
       '@genkit-ai/anthropic':
         specifier: workspace:*
         version: link:../../plugins/anthropic
@@ -1431,46 +1434,40 @@ importers:
       cross-env:
         specifier: ^10.1.0
         version: 10.1.0
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
 
   testapps/basic-gemini:
     dependencies:
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
-      '@genkit-ai/google-cloud':
-        specifier: workspace:*
-        version: link:../../plugins/google-cloud
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       '@google/genai':
         specifier: ^1.30.0
         version: 1.44.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.1.13))
-      express:
-        specifier: ^4.20.0
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      node-fetch:
-        specifier: 3.3.2
-        version: 3.3.2
       wav:
         specifier: ^1.0.2
         version: 1.0.2
-      zod-to-json-schema:
-        specifier: ^3.24.5
-        version: 3.25.1(zod@4.1.13)
     devDependencies:
       '@types/wav':
         specifier: ^1.0.4
         version: 1.0.4
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1481,14 +1478,11 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/compat-oai
       '@genkit-ai/express':
-        specifier: ^1.1.0
-        version: 1.29.0(express@5.2.1)(genkit@genkit)
+        specifier: workspace:*
+        version: link:../../plugins/express
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      tsx:
-        specifier: ^4.19.3
-        version: 4.20.3
       wav:
         specifier: ^1.0.2
         version: 1.0.2
@@ -1497,11 +1491,17 @@ importers:
         specifier: ^1.0.4
         version: 1.0.4
       cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+        specifier: ^10.1.0
+        version: 10.1.0
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1514,19 +1514,16 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      path:
-        specifier: ^0.12.7
-        version: 0.12.7
     devDependencies:
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1539,9 +1536,6 @@ importers:
       '@genkit-ai/evaluator':
         specifier: workspace:*
         version: link:../../plugins/evaluators
-      '@genkit-ai/google-cloud':
-        specifier: workspace:*
-        version: link:../../plugins/google-cloud
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -1551,9 +1545,6 @@ importers:
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
-      firebase-admin:
-        specifier: ^13.8.0
-        version: 13.8.0(encoding@0.1.13)
       firebase-functions:
         specifier: ^7.2.5
         version: 7.2.5(firebase-admin@13.8.0(encoding@0.1.13))(graphql@16.14.0)
@@ -1570,9 +1561,6 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/pinecone
     devDependencies:
-      cross-env:
-        specifier: ^10.1.0
-        version: 10.1.0
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli
@@ -1583,22 +1571,19 @@ importers:
         specifier: ^4.21.0
         version: 4.21.0
       typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
+        specifier: ^5.9.3
+        version: 5.9.3
 
   testapps/docs-menu-basic:
     dependencies:
       '@genkit-ai/express':
         specifier: workspace:*
         version: link:../../plugins/express
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       express:
-        specifier: ^4.21.0
+        specifier: ^4.21.1
         version: 4.22.1
       genkit:
         specifier: workspace:*
@@ -1616,9 +1601,6 @@ importers:
       '@genkit-ai/dev-local-vectorstore':
         specifier: workspace:*
         version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -1645,23 +1627,23 @@ importers:
   testapps/durable-streaming:
     dependencies:
       '@genkit-ai/express':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../plugins/express
       '@genkit-ai/firebase':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../plugins/firebase
       express:
         specifier: ^5.1.0
         version: 5.2.1
       firebase-admin:
-        specifier: ^13.5.0
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../genkit
     devDependencies:
       '@types/express':
-        specifier: ^4
+        specifier: ^4.17.21
         version: 4.17.25
       rimraf:
         specifier: ^6.0.1
@@ -1700,14 +1682,11 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/mcp
       '@genkit-ai/next':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../plugins/next
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
-      firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -1723,22 +1702,16 @@ importers:
       genkitx-pinecone:
         specifier: workspace:*
         version: link:../../plugins/pinecone
-      google-auth-library:
-        specifier: ^9.6.3
-        version: 9.15.1(encoding@0.1.13)
     devDependencies:
-      '@types/pdf-parse':
-        specifier: ^1.1.4
-        version: 1.1.5
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1754,9 +1727,6 @@ importers:
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
-      '@genkit-ai/vertexai':
-        specifier: workspace:*
-        version: link:../../plugins/vertexai
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -1766,9 +1736,6 @@ importers:
       llm-chunk:
         specifier: ^0.0.1
         version: 0.0.1
-      pdf-parse:
-        specifier: ^1.1.1
-        version: 1.1.4
       pdfjs-dist:
         specifier: ^4.0.379
         version: 4.10.38
@@ -1776,15 +1743,15 @@ importers:
         specifier: ^1.0.1
         version: 1.0.1
     devDependencies:
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1794,14 +1761,11 @@ importers:
       '@genkit-ai/express':
         specifier: workspace:*
         version: link:../../plugins/express
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       express:
-        specifier: ^4.21.0
+        specifier: ^4.21.1
         version: 4.22.1
       genkit:
         specifier: workspace:*
@@ -1822,11 +1786,8 @@ importers:
 
   testapps/flow-sample1:
     dependencies:
-      '@genkit-ai/firebase':
-        specifier: workspace:^
-        version: link:../../plugins/firebase
       genkit:
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../genkit
     devDependencies:
       rimraf:
@@ -1859,24 +1820,15 @@ importers:
       '@opentelemetry/sdk-trace-base':
         specifier: ~1.25.0
         version: 1.25.1(@opentelemetry/api@1.9.1)
-      body-parser:
-        specifier: ^1.20.3
-        version: 1.20.4
-      data-urls:
-        specifier: ^5.0.0
-        version: 5.0.0
       express:
-        specifier: ^4.21.0
+        specifier: ^4.21.1
         version: 4.22.1
       firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      node-fetch:
-        specifier: ^3.3.2
-        version: 3.3.2
       partial-json:
         specifier: ^0.1.7
         version: 0.1.7
@@ -1884,21 +1836,18 @@ importers:
         specifier: ^1.0.2
         version: 1.0.2
     devDependencies:
-      '@types/data-urls':
-        specifier: ^3.0.4
-        version: 3.0.5
-      '@types/node-fetch':
-        specifier: ~2.6.11
-        version: 2.6.13
       '@types/wav':
         specifier: ^1.0.4
         version: 1.0.4
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1911,9 +1860,6 @@ importers:
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
-      '@opentelemetry/sdk-trace-base':
-        specifier: ~1.25.0
-        version: 1.25.1(@opentelemetry/api@1.9.1)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -1921,9 +1867,6 @@ importers:
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
-      tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1946,73 +1889,52 @@ importers:
         specifier: ^4.6.0
         version: 4.12.7
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.20.3
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
 
   testapps/mcp:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       '@genkit-ai/mcp':
         specifier: workspace:*
         version: link:../../plugins/mcp
-      '@genkit-ai/vertexai':
-        specifier: workspace:*
-        version: link:../../plugins/vertexai
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
-        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.1.13)
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       express:
         specifier: ^5.1.0
         version: 5.2.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-langchain:
-        specifier: workspace:*
-        version: link:../../plugins/langchain
-      llm-chunk:
-        specifier: ^0.0.1
-        version: 0.0.1
-      pdf-parse:
-        specifier: ^1.1.1
-        version: 1.1.4
-      pdfjs-dist:
-        specifier: ^4.0.379
-        version: 4.10.38
-      pdfjs-dist-legacy:
-        specifier: ^1.0.1
-        version: 1.0.1
     devDependencies:
       '@modelcontextprotocol/server-everything':
         specifier: ^2025.5.12
         version: 2025.12.18(@cfworker/json-schema@4.1.1)
       '@modelcontextprotocol/server-filesystem':
         specifier: ^2025.3.28
-        version: 2025.12.18(@cfworker/json-schema@4.1.1)(zod@4.1.13)
+        version: 2025.12.18(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@types/express':
-        specifier: ^4.17.21
-        version: 4.17.25
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+        specifier: ^5.0.1
+        version: 5.0.6
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2022,12 +1944,6 @@ importers:
       '@genkit-ai/dev-local-vectorstore':
         specifier: workspace:*
         version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -2035,9 +1951,15 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2053,28 +1975,28 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      zod:
-        specifier: ^3.22.4
-        version: 3.25.76
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       tsx:
-        specifier: ^4.7.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
 
   testapps/model-tester:
     dependencies:
+      '@genkit-ai/compat-oai':
+        specifier: workspace:*
+        version: link:../../plugins/compat-oai
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
-      '@google/generative-ai':
-        specifier: ^0.15.0
-        version: 0.15.0
       colorette:
         specifier: ^2.0.20
         version: 2.0.20
@@ -2084,47 +2006,38 @@ importers:
       genkitx-ollama:
         specifier: workspace:*
         version: link:../../plugins/ollama
-      genkitx-openai:
-        specifier: ^0.30.0
-        version: 0.30.0(genkit@genkit)(ws@8.20.1)(zod@3.25.76)
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
 
   testapps/multiagents-demo:
     dependencies:
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
-      '@genkit-ai/google-cloud':
-        specifier: workspace:*
-        version: link:../../plugins/google-cloud
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
-      express:
-        specifier: ^4.20.0
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      node-fetch:
-        specifier: 3.3.2
-        version: 3.3.2
-      wav:
-        specifier: ^1.0.2
-        version: 1.0.2
     devDependencies:
-      '@types/wav':
-        specifier: ^1.0.4
-        version: 1.0.4
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2134,15 +2047,6 @@ importers:
       '@genkit-ai/dev-local-vectorstore':
         specifier: workspace:*
         version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
-      '@genkit-ai/express':
-        specifier: workspace:*
-        version: link:../../plugins/express
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -2155,14 +2059,11 @@ importers:
       genkitx-chromadb:
         specifier: workspace:*
         version: link:../../plugins/chroma
-      genkitx-langchain:
-        specifier: workspace:*
-        version: link:../../plugins/langchain
       genkitx-pinecone:
         specifier: workspace:*
         version: link:../../plugins/pinecone
       google-auth-library:
-        specifier: ^9.6.3
+        specifier: ^9.14.2
         version: 9.15.1(encoding@0.1.13)
       llm-chunk:
         specifier: ^0.0.1
@@ -2177,15 +2078,15 @@ importers:
       '@types/pdf-parse':
         specifier: ^1.1.4
         version: 1.1.5
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2204,12 +2105,9 @@ importers:
       next:
         specifier: ^16.3.3
         version: 16.3.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@types/node@20.19.37)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.90.0)
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
     devDependencies:
       '@types/react':
-        specifier: 19.2.7
+        specifier: ^19.2.7
         version: 19.2.7
       rimraf:
         specifier: ^6.0.1
@@ -2227,9 +2125,12 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/ollama
     devDependencies:
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2249,6 +2150,12 @@ importers:
         specifier: workspace:*
         version: link:../../genkit
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2287,8 +2194,8 @@ importers:
         specifier: ^7.11.0
         version: 7.11.6(encoding@0.1.13)
       firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
@@ -2299,7 +2206,7 @@ importers:
         specifier: workspace:*
         version: link:../../plugins/pinecone
       google-auth-library:
-        specifier: ^9.6.3
+        specifier: ^9.14.2
         version: 9.15.1(encoding@0.1.13)
       llm-chunk:
         specifier: ^0.0.1
@@ -2311,15 +2218,15 @@ importers:
       '@types/pdf-parse':
         specifier: ^1.1.4
         version: 1.1.5
-      cross-env:
-        specifier: ^7.0.3
-        version: 7.0.3
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.1
-        version: 4.20.3
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2329,15 +2236,15 @@ importers:
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      zod:
-        specifier: ^4.1.12
-        version: 4.1.13
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
       tsx:
-        specifier: ^4.19.2
+        specifier: ^4.21.0
         version: 4.21.0
       typescript:
         specifier: ^5.9.3
@@ -2350,7 +2257,7 @@ importers:
     dependencies:
       '@ai-sdk/react':
         specifier: ^3.0.0
-        version: 3.0.194(react@19.2.4)(zod@4.1.13)
+        version: 3.0.194(react@19.2.4)(zod@3.25.76)
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
@@ -2374,7 +2281,7 @@ importers:
         version: 1.0.2(react@19.2.4)
       ai:
         specifier: ^6.0.192
-        version: 6.0.192(zod@4.1.13)
+        version: 6.0.192(zod@3.25.76)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2400,10 +2307,10 @@ importers:
         specifier: ^1.4.3
         version: 1.5.0(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       react:
-        specifier: 19.2.4
+        specifier: ^19.2.4
         version: 19.2.4
       react-dom:
-        specifier: 19.2.4
+        specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
       shiki:
         specifier: ^4.1.0
@@ -2425,13 +2332,13 @@ importers:
         specifier: ^4
         version: 4.3.0
       '@types/node':
-        specifier: ^20
+        specifier: ^20.17.19
         version: 20.19.37
       '@types/react':
-        specifier: ^19
+        specifier: ^19.2.7
         version: 19.2.7
       '@types/react-dom':
-        specifier: ^19
+        specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.7)
       eslint:
         specifier: ^9
@@ -2446,85 +2353,58 @@ importers:
         specifier: ^4
         version: 4.3.0
       typescript:
-        specifier: ^5
+        specifier: ^5.9.3
         version: 5.9.3
 
   testapps/vertexai-modelgarden:
     dependencies:
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
-      '@mistralai/mistralai-gcp':
-        specifier: ^1.3.4
-        version: 1.7.0(encoding@0.1.13)
-      express:
-        specifier: ^4.21.0
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      zod:
-        specifier: 3.22.4
-        version: 3.22.4
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
 
   testapps/vertexai-reranker:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
-      express:
-        specifier: ^4.21.0
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      google-auth-library:
-        specifier: ^9.11.0
-        version: 9.15.1(encoding@0.1.13)
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
 
   testapps/vertexai-vector-search-bigquery:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
-      '@genkit-ai/google-genai':
-        specifier: workspace:*
-        version: link:../../plugins/google-genai
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
@@ -2534,24 +2414,9 @@ importers:
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
-      express:
-        specifier: ^4.21.0
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
-      genkitx-langchain:
-        specifier: workspace:*
-        version: link:../../plugins/langchain
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
-      google-auth-library:
-        specifier: ^9.11.0
-        version: 9.15.1(encoding@0.1.13)
     devDependencies:
       rimraf:
         specifier: ^6.0.1
@@ -2562,45 +2427,15 @@ importers:
 
   testapps/vertexai-vector-search-custom:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
-      '@genkit-ai/google-genai':
-        specifier: workspace:*
-        version: link:../../plugins/google-genai
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
-      '@google-cloud/bigquery':
-        specifier: ^7.8.0
-        version: 7.9.4(encoding@0.1.13)
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
-      express:
-        specifier: ^4.21.0
-        version: 4.22.1
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
-      genkitx-langchain:
-        specifier: workspace:*
-        version: link:../../plugins/langchain
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
-      google-auth-library:
-        specifier: ^9.11.0
-        version: 9.15.1(encoding@0.1.13)
     devDependencies:
       rimraf:
         specifier: ^6.0.1
@@ -2611,49 +2446,28 @@ importers:
 
   testapps/vertexai-vector-search-firestore:
     dependencies:
-      '@genkit-ai/dev-local-vectorstore':
-        specifier: workspace:*
-        version: link:../../plugins/dev-local-vectorstore
-      '@genkit-ai/evaluator':
-        specifier: workspace:*
-        version: link:../../plugins/evaluators
-      '@genkit-ai/firebase':
-        specifier: workspace:*
-        version: link:../../plugins/firebase
-      '@genkit-ai/google-genai':
-        specifier: workspace:*
-        version: link:../../plugins/google-genai
       '@genkit-ai/vertexai':
         specifier: workspace:*
         version: link:../../plugins/vertexai
       dotenv:
         specifier: ^16.4.5
         version: 16.6.1
-      express:
-        specifier: ^4.21.0
-        version: 4.22.1
       firebase-admin:
-        specifier: '>=12.2'
-        version: 13.7.0(encoding@0.1.13)
+        specifier: ^13.8.0
+        version: 13.8.0(encoding@0.1.13)
       genkit:
         specifier: workspace:*
         version: link:../../genkit
-      genkitx-chromadb:
-        specifier: workspace:*
-        version: link:../../plugins/chroma
-      genkitx-langchain:
-        specifier: workspace:*
-        version: link:../../plugins/langchain
-      genkitx-pinecone:
-        specifier: workspace:*
-        version: link:../../plugins/pinecone
-      google-auth-library:
-        specifier: ^9.11.0
-        version: 9.15.1(encoding@0.1.13)
     devDependencies:
+      genkit-cli:
+        specifier: link:../../../genkit-tools/cli
+        version: link:../../../genkit-tools/cli
       rimraf:
         specifier: ^6.0.1
         version: 6.1.3
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2917,15 +2731,6 @@ packages:
 
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
-
-  '@anthropic-ai/sdk@0.71.2':
-    resolution: {integrity: sha512-TGNDEUuEstk/DKu0/TflXAEt+p+p/WhTlFzEnoosvbaDU2LTjm42igSdlL0VijrKpWejtOKxX0b8A7uc+XiSAQ==}
-    hasBin: true
-    peerDependencies:
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      zod:
-        optional: true
 
   '@anthropic-ai/sdk@0.9.1':
     resolution: {integrity: sha512-wa1meQ2WSfoY8Uor3EdrJq0jTiZJoKoSii2ZVWRY1oN4Tlr5s59pADg9T79FTbPe1/se5c3pBeZgJL63wmuoBA==}
@@ -4081,17 +3886,11 @@ packages:
     resolution: {integrity: sha512-Lm/ZLhDZcBECta3TmCQSngiQykFdfw+QtI1/GYMsZd4l3nG+P8WLB16XuS7WaBGLQ+9E+cOcWQsth9cayuGt8g==}
     engines: {node: ^20.17.0 || >=22.9.0}
 
-  '@genkit-ai/ai@1.42.0':
-    resolution: {integrity: sha512-FV1bMjOnGX7RRPT/T4ZVoV83VTaxQ9ZYTKQSPXI8wvOCtJXoW30ODQI6V+fFuykD5pVKrfjRb73pe0n43J+/Kw==}
+  '@genkit-ai/ai@1.43.0':
+    resolution: {integrity: sha512-TrMweJnEBs+x/KAyBPMgQck7gKTgG7M03HX2nBHCeoOe+4BNiqhapO7AahOJJMXDcStVJ+mCD4/CtDZUlFeIyg==}
 
-  '@genkit-ai/core@1.42.0':
-    resolution: {integrity: sha512-UYTty6exDYUtDWMUxbSijvyZ8tn7Bf+e0CnTFEo2qUO7IpOPgPFaXyUsLWD+EvsxhXWkLhVW2V/e/st60p792g==}
-
-  '@genkit-ai/express@1.29.0':
-    resolution: {integrity: sha512-+Mf8e45RbAlvns3a3hvIDpUAjNyWTIu1cy7vV86+6NvpPqPhkEaPkptgIX7KIXsPBEwiwsEM4SXx80M/TRbmTg==}
-    peerDependencies:
-      express: ^4.21.1 || ^5
-      genkit: ^1.29.0
+  '@genkit-ai/core@1.43.0':
+    resolution: {integrity: sha512-QrdgF+J1kRA5tZXrL1WUHhJAOHYCaNlAX/u1CS5MmGF2clDntByFvPJKhK7FL7RU8UK3rbKzwZNYEohsrzf2Ug==}
 
   '@genkit-ai/firebase@1.29.0':
     resolution: {integrity: sha512-yypycQpULLyT9zqJVnCnad0gDw5CRawDQeEq9JmnIii1tEpcfO2s2kIWbb8ofWCPbNhNJMKkLcAHHU27NG6w9g==}
@@ -5144,74 +4943,74 @@ packages:
     resolution: {integrity: sha512-VVPPgHyQ6ShqnrmDWuxjmUIsO9gWyOZFmuOfLd9LfBGQJwZfy0gvv9pbHSJuoFNIYC7ZDX9aoFwowjcdSC4E8w==}
     engines: {node: '>=18'}
 
-  '@napi-rs/canvas-android-arm64@0.1.96':
-    resolution: {integrity: sha512-ew1sPrN3dGdZ3L4FoohPfnjq0f9/Jk7o+wP7HkQZokcXgIUD6FIyICEWGhMYzv53j63wUcPvZeAwgewX58/egg==}
+  '@napi-rs/canvas-android-arm64@0.1.100':
+    resolution: {integrity: sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [android]
 
-  '@napi-rs/canvas-darwin-arm64@0.1.96':
-    resolution: {integrity: sha512-Q/wOXZ5PzTqpdmA5eUOcegCf4Go/zz3aZ5DlzSeDpOjFmfwMKh8EzLAoweQ+mJVagcHQyzoJhaTEnrO68TNyNg==}
+  '@napi-rs/canvas-darwin-arm64@0.1.100':
+    resolution: {integrity: sha512-2PcswRaC7Ly645DGt88///zuFDhJxJYdKAs1uU3mfk1atYkXufgcgLfBpk6Tm12nCQBaNt1wpybuPZ4qOhTo8A==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [darwin]
 
-  '@napi-rs/canvas-darwin-x64@0.1.96':
-    resolution: {integrity: sha512-UrXiQz28tQEvGM1qvyptewOAfmUrrd5+wvi6Rzjj2VprZI8iZ2KIvBD2lTTG1bVF95AbeDeG7PJA0D9sLKaOFA==}
+  '@napi-rs/canvas-darwin-x64@0.1.100':
+    resolution: {integrity: sha512-ePNZtj7pNIva/siZMg+HmbeozkIjqUIYdoymH8HaA3qK7LfzFN4WMBM8G6HQ9ZC+H3+Dnn5pqtiXpgLykaPOhw==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [darwin]
 
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.96':
-    resolution: {integrity: sha512-I90ODxweD8aEP6XKU/NU+biso95MwCtQ2F46dUvhec1HesFi0tq/tAJkYic/1aBSiO/1kGKmSeD1B0duOHhEHQ==}
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.100':
+    resolution: {integrity: sha512-d5cDB48oWFGU8/XPhUOFAlySgb/VAu7D+s8fi55K1Pcfg8aPplHWqMgibhVLU8ky7Pyg/fuiVLz4Nf3JrSTuUA==}
     engines: {node: '>= 10'}
     cpu: [arm]
     os: [linux]
 
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.96':
-    resolution: {integrity: sha512-Dx/0+RFV++w3PcRy+4xNXkghhXjA5d0Mw1bs95emn5Llinp1vihMaA6WJt3oYv2LAHc36+gnrhIBsPhUyI2SGw==}
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.100':
+    resolution: {integrity: sha512-rDxgxRu69RvDlX/bh9o22DxLsGr8EqsNgotL9+RwQE1S0b0cqeatqsw6aW45mukm0B42DIAaAacKaYQ8cqS1nw==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-arm64-musl@0.1.96':
-    resolution: {integrity: sha512-UvOi7fii3IE2KDfEfhh8m+LpzSRvhGK7o1eho99M2M0HTik11k3GX+2qgVx9EtujN3/bhFFS1kSO3+vPMaJ0Mg==}
+  '@napi-rs/canvas-linux-arm64-musl@0.1.100':
+    resolution: {integrity: sha512-K3mDW66N+xT2/V439u1alFANiBUjdEx2gLiNYnCmUsva5jZMxWTjafBYwTzYK+EMFMHrUoabuU+T1BIP5CgbYQ==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.96':
-    resolution: {integrity: sha512-MBSukhGCQ5nRtf9NbFYWOU080yqkZU1PbuH4o1ROvB4CbPl12fchDR35tU83Wz8gWIM9JTn99lBn9DenPIv7Ig==}
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.100':
+    resolution: {integrity: sha512-mooqUBTIsccZpnoQC4NgrC1v6C1vof39etLNMnBwCY+p0gajWJvAHLGQ6g/gGyS5YrpDW+GefSN4+Cvcr08UWw==}
     engines: {node: '>= 10'}
     cpu: [riscv64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-x64-gnu@0.1.96':
-    resolution: {integrity: sha512-I/ccu2SstyKiV3HIeVzyBIWfrJo8cN7+MSQZPnabewWV6hfJ2nY7Df2WqOHmobBRUw84uGR6zfQHsUEio/m5Vg==}
+  '@napi-rs/canvas-linux-x64-gnu@0.1.100':
+    resolution: {integrity: sha512-1eCvkDCazm7FFhsT7DfGOdSaHgZVK3bt/dSBl5EWHOWmnz+I7j8tPseJqqD81NF+MH21jKUK4wQSDjN0mdhnTg==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
 
-  '@napi-rs/canvas-linux-x64-musl@0.1.96':
-    resolution: {integrity: sha512-H3uov7qnTl73GDT4h52lAqpJPsl1tIUyNPWJyhQ6gHakohNqqRq3uf80+NEpzcytKGEOENP1wX3yGwZxhjiWEQ==}
+  '@napi-rs/canvas-linux-x64-musl@0.1.100':
+    resolution: {integrity: sha512-20arT6lnI19S68qNlii73TSEDbECNgzMz2EpldC1V3mZFuRkeujXkcebRk0LRJe9SEUAooYiLokfMViY8IX7yA==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [linux]
 
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.96':
-    resolution: {integrity: sha512-ATp6Y+djOjYtkfV/VRH7CZ8I1MEtkUQBmKUbuWw5zWEHHqfL0cEcInE4Cxgx7zkNAhEdBbnH8HMVrqNp+/gwxA==}
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.100':
+    resolution: {integrity: sha512-DZFFT1wIAg37LJw37yhMRFfjATd3vTQzjZ1Yki8u2vhO6Hi5VE6BVaGQ1aaDu7xb4iMErz+9EOwjpS7xcxFeBw==}
     engines: {node: '>= 10'}
     cpu: [arm64]
     os: [win32]
 
-  '@napi-rs/canvas-win32-x64-msvc@0.1.96':
-    resolution: {integrity: sha512-UYGdTltVd+Z8mcIuoqGmAXXUvwH5CLf2M6mIB5B0/JmX5J041jETjqtSYl7gN+aj3k1by/SG6sS0hAwCqyK7zw==}
+  '@napi-rs/canvas-win32-x64-msvc@0.1.100':
+    resolution: {integrity: sha512-MyT1j3mHC2+Lu4pBi9mKyMJhtP6U7k7EldY7sj/uS5gJA65gTXt8MefJQXLJo5d/vZbuWmfxzkEUNc/urV3pHA==}
     engines: {node: '>= 10'}
     cpu: [x64]
     os: [win32]
 
-  '@napi-rs/canvas@0.1.96':
-    resolution: {integrity: sha512-6NNmNxvoJKeucVjxaaRUt3La2i5jShgiAbaY3G/72s1Vp3U06XPrAIxkAjBxpDcamEn/t+WJ4OOlGmvILo4/Ew==}
+  '@napi-rs/canvas@0.1.100':
+    resolution: {integrity: sha512-xglYA6q3XO5P3BNJYxVZ1IV7DLVjp1Py6nwag88YntrS+3vKHyYcMqXVS4ZztJmwz2uGvz1FWhI/4LgbR5uQDA==}
     engines: {node: '>= 10'}
 
   '@napi-rs/nice-android-arm-eabi@1.1.1':
@@ -10057,13 +9856,8 @@ packages:
     resolution: {integrity: sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg==}
     engines: {node: '>=18'}
 
-  genkit@1.42.0:
-    resolution: {integrity: sha512-yGdsoIo0UQtkNUrKWGQdRihGzbGf2njxYqcpDbkWdQPzMG7/s5caS0ovM+WDdkWPKwMBwxAD+8f9uQmDI7ZOCQ==}
-
-  genkitx-openai@0.30.0:
-    resolution: {integrity: sha512-6Dt3o6f+cKrZ1njSzYj2rm0U8SE5nQDwpz5VbFuLjaloE5BBj2c9OSlPGegdcz4PN5wBocGKiNsaKn0t5PpJdA==}
-    peerDependencies:
-      genkit: ^0.9.0 || ^1.0.0
+  genkit@1.43.0:
+    resolution: {integrity: sha512-iTSAShP42mhcirLia89qAE2+ui/1hMVlpiKUz7T4s/FUhcQbN2ej4VoCv63DPHMcpeIgtIANvh0QFRum9Xn85g==}
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -10466,9 +10260,6 @@ packages:
   inflight@1.0.6:
     resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
     deprecated: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
-
-  inherits@2.0.3:
-    resolution: {integrity: sha512-x00IRNXNy63jwGkJmzPigoySHbaqpNuzKbBOmzK+g2OdZpQ9w+sxCN+VSB3ja7IAge2OP2qpfxTjeNcyjmW1uw==}
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
@@ -12606,9 +12397,6 @@ packages:
     resolution: {integrity: sha512-T2ZUsdZFHgA3u4e5PfPbjd7HDDpxPnQb5jN0SrDsjNSuVXHJqtwTnWqG0B1jZrgmJ/7lj1EmVIByWt1gxGkWvg==}
     engines: {node: '>=4'}
 
-  path@0.12.7:
-    resolution: {integrity: sha512-aXXC6s+1w7otVF9UletFkFcDsJeO7lSZBPUQhtb5O0xJe8LtYhj/GxldoL09bBj9+ZmE2hNoHqQSFMN5fikh4Q==}
-
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
 
@@ -14138,18 +13926,8 @@ packages:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  typescript@5.8.3:
-    resolution: {integrity: sha512-p1diW6TqL9L07nNxvRMM7hMMw4c5XOo/1ibL4aAIGmSAt9slTE1Xgw5KWuof2uTOvCg9BY7ZRi+GaF+7sfgPeQ==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
-  typescript@6.0.3:
-    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -14298,9 +14076,6 @@ packages:
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
-
-  util@0.10.4:
-    resolution: {integrity: sha512-0Pm9hTQ3se5ll1XihRic3FDIku70C+iHUdT/W926rSgHV5QgXsYbKZN8MSC3tJtSkhuROzvsQjAaFENRXr+19A==}
 
   utils-merge@1.0.1:
     resolution: {integrity: sha512-pMZTvIkT1d+TFGvDOqodOclx0QWkkgi6Tdoa8gC8ffGAAqz9pzPTZWAybbsHHoED/ztMtkv/VoYTYyShUn81hA==}
@@ -14764,9 +14539,6 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  zod@3.22.4:
-    resolution: {integrity: sha512-iC+8Io04lddc+mVqQ9AZ7OQ2MrUKGN+oIQyq1vemgt46jwCwLfhq7/pwnBnNXXXZb8VTVLKwp9EDkx+ryxIWmg==}
-
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
@@ -14807,12 +14579,26 @@ snapshots:
       zod: 3.25.76
       zod-to-json-schema: 3.25.2(zod@3.25.76)
 
+  '@ai-sdk/gateway@3.0.121(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.10
+      '@ai-sdk/provider-utils': 4.0.27(zod@3.25.76)
+      '@vercel/oidc': 3.2.0
+      zod: 3.25.76
+
   '@ai-sdk/gateway@3.0.121(zod@4.1.13)':
     dependencies:
       '@ai-sdk/provider': 3.0.10
       '@ai-sdk/provider-utils': 4.0.27(zod@4.1.13)
       '@vercel/oidc': 3.2.0
       zod: 4.1.13
+
+  '@ai-sdk/provider-utils@4.0.27(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.10
+      '@standard-schema/spec': 1.1.0
+      eventsource-parser: 3.1.0
+      zod: 3.25.76
 
   '@ai-sdk/provider-utils@4.0.27(zod@4.1.13)':
     dependencies:
@@ -14824,6 +14610,16 @@ snapshots:
   '@ai-sdk/provider@3.0.10':
     dependencies:
       json-schema: 0.4.0
+
+  '@ai-sdk/react@3.0.194(react@19.2.4)(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider-utils': 4.0.27(zod@3.25.76)
+      ai: 6.0.192(zod@3.25.76)
+      react: 19.2.4
+      swr: 2.4.1(react@19.2.4)
+      throttleit: 2.1.0
+    transitivePeerDependencies:
+      - zod
 
   '@ai-sdk/react@3.0.194(react@19.2.4)(zod@4.1.13)':
     dependencies:
@@ -15114,12 +14910,6 @@ snapshots:
     dependencies:
       package-manager-detector: 1.6.0
       tinyexec: 1.2.2
-
-  '@anthropic-ai/sdk@0.71.2(zod@4.1.13)':
-    dependencies:
-      json-schema-to-ts: 3.1.1
-    optionalDependencies:
-      zod: 4.1.13
 
   '@anthropic-ai/sdk@0.9.1(encoding@0.1.13)':
     dependencies:
@@ -16292,9 +16082,9 @@ snapshots:
     dependencies:
       retry: 0.13.1
 
-  '@genkit-ai/ai@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
+  '@genkit-ai/ai@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
     dependencies:
-      '@genkit-ai/core': 1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+      '@genkit-ai/core': 1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
       '@opentelemetry/api': 1.9.1
       '@types/node': 20.19.37
       colorette: 2.0.20
@@ -16316,7 +16106,7 @@ snapshots:
       - utf-8-validate
     optional: true
 
-  '@genkit-ai/core@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
+  '@genkit-ai/core@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/api-logs': 0.52.1
@@ -16340,7 +16130,7 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@3.25.76)
     optionalDependencies:
       '@cfworker/json-schema': 4.1.1
-      '@genkit-ai/firebase': 1.30.1(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+      '@genkit-ai/firebase': 1.30.1(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
     transitivePeerDependencies:
       - '@google-cloud/firestore'
       - bufferutil
@@ -16352,21 +16142,12 @@ snapshots:
       - utf-8-validate
     optional: true
 
-  '@genkit-ai/express@1.29.0(express@5.2.1)(genkit@genkit)':
+  '@genkit-ai/firebase@1.29.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
     dependencies:
-      body-parser: 1.20.4
-      cors: 2.8.6
-      express: 5.2.1
-      genkit: link:genkit
-    transitivePeerDependencies:
-      - supports-color
-
-  '@genkit-ai/firebase@1.29.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
-    dependencies:
-      '@genkit-ai/google-cloud': 1.30.1(encoding@0.1.13)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+      '@genkit-ai/google-cloud': 1.30.1(encoding@0.1.13)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
       '@google-cloud/firestore': 7.11.6(encoding@0.1.13)
       firebase-admin: 13.8.0(encoding@0.1.13)
-      genkit: 1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)
+      genkit: 1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)
     optionalDependencies:
       firebase: 11.10.0
     transitivePeerDependencies:
@@ -16374,12 +16155,12 @@ snapshots:
       - supports-color
     optional: true
 
-  '@genkit-ai/firebase@1.30.1(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
+  '@genkit-ai/firebase@1.30.1(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
     dependencies:
-      '@genkit-ai/google-cloud': 1.30.1(encoding@0.1.13)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+      '@genkit-ai/google-cloud': 1.30.1(encoding@0.1.13)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
       '@google-cloud/firestore': 7.11.6(encoding@0.1.13)
       firebase-admin: 13.8.0(encoding@0.1.13)
-      genkit: 1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)
+      genkit: 1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)
     optionalDependencies:
       firebase: 11.10.0
     transitivePeerDependencies:
@@ -16387,7 +16168,7 @@ snapshots:
       - supports-color
     optional: true
 
-  '@genkit-ai/google-cloud@1.30.1(encoding@0.1.13)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
+  '@genkit-ai/google-cloud@1.30.1(encoding@0.1.13)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))':
     dependencies:
       '@google-cloud/logging-winston': 6.0.1(encoding@0.1.13)(winston@3.19.0)
       '@google-cloud/modelarmor': 0.4.1
@@ -16404,7 +16185,7 @@ snapshots:
       '@opentelemetry/sdk-metrics': 1.25.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-node': 0.52.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/sdk-trace-base': 1.25.1(@opentelemetry/api@1.9.1)
-      genkit: 1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)
+      genkit: 1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)
       google-auth-library: 9.15.1(encoding@0.1.13)
       node-fetch: 3.3.2
       winston: 3.19.0
@@ -17449,13 +17230,13 @@ snapshots:
       - '@cfworker/json-schema'
       - supports-color
 
-  '@modelcontextprotocol/server-filesystem@2025.12.18(@cfworker/json-schema@4.1.1)(zod@4.1.13)':
+  '@modelcontextprotocol/server-filesystem@2025.12.18(@cfworker/json-schema@4.1.1)(zod@3.25.76)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.1.13)
+      '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       diff: 5.2.2
       glob: 10.5.0
       minimatch: 10.2.4
-      zod-to-json-schema: 3.25.1(zod@4.1.13)
+      zod-to-json-schema: 3.25.1(zod@3.25.76)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - supports-color
@@ -17488,52 +17269,52 @@ snapshots:
       outvariant: 1.4.3
       strict-event-emitter: 0.5.1
 
-  '@napi-rs/canvas-android-arm64@0.1.96':
+  '@napi-rs/canvas-android-arm64@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-darwin-arm64@0.1.96':
+  '@napi-rs/canvas-darwin-arm64@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-darwin-x64@0.1.96':
+  '@napi-rs/canvas-darwin-x64@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.96':
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.96':
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-linux-arm64-musl@0.1.96':
+  '@napi-rs/canvas-linux-arm64-musl@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.96':
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-linux-x64-gnu@0.1.96':
+  '@napi-rs/canvas-linux-x64-gnu@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-linux-x64-musl@0.1.96':
+  '@napi-rs/canvas-linux-x64-musl@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.96':
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.100':
     optional: true
 
-  '@napi-rs/canvas-win32-x64-msvc@0.1.96':
+  '@napi-rs/canvas-win32-x64-msvc@0.1.100':
     optional: true
 
-  '@napi-rs/canvas@0.1.96':
+  '@napi-rs/canvas@0.1.100':
     optionalDependencies:
-      '@napi-rs/canvas-android-arm64': 0.1.96
-      '@napi-rs/canvas-darwin-arm64': 0.1.96
-      '@napi-rs/canvas-darwin-x64': 0.1.96
-      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.96
-      '@napi-rs/canvas-linux-arm64-gnu': 0.1.96
-      '@napi-rs/canvas-linux-arm64-musl': 0.1.96
-      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.96
-      '@napi-rs/canvas-linux-x64-gnu': 0.1.96
-      '@napi-rs/canvas-linux-x64-musl': 0.1.96
-      '@napi-rs/canvas-win32-arm64-msvc': 0.1.96
-      '@napi-rs/canvas-win32-x64-msvc': 0.1.96
+      '@napi-rs/canvas-android-arm64': 0.1.100
+      '@napi-rs/canvas-darwin-arm64': 0.1.100
+      '@napi-rs/canvas-darwin-x64': 0.1.100
+      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.100
+      '@napi-rs/canvas-linux-arm64-gnu': 0.1.100
+      '@napi-rs/canvas-linux-arm64-musl': 0.1.100
+      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.100
+      '@napi-rs/canvas-linux-x64-gnu': 0.1.100
+      '@napi-rs/canvas-linux-x64-musl': 0.1.100
+      '@napi-rs/canvas-win32-arm64-msvc': 0.1.100
+      '@napi-rs/canvas-win32-x64-msvc': 0.1.100
     optional: true
 
   '@napi-rs/nice-android-arm-eabi@1.1.1':
@@ -21295,6 +21076,14 @@ snapshots:
     dependencies:
       humanize-ms: 1.2.1
 
+  ai@6.0.192(zod@3.25.76):
+    dependencies:
+      '@ai-sdk/gateway': 3.0.121(zod@3.25.76)
+      '@ai-sdk/provider': 3.0.10
+      '@ai-sdk/provider-utils': 4.0.27(zod@3.25.76)
+      '@opentelemetry/api': 1.9.1
+      zod: 3.25.76
+
   ai@6.0.192(zod@4.1.13):
     dependencies:
       '@ai-sdk/gateway': 3.0.121(zod@4.1.13)
@@ -22961,7 +22750,7 @@ snapshots:
       eslint: 9.39.4(jiti@2.7.0)
       eslint-import-resolver-node: 0.3.10
       eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-react: 7.37.5(eslint@9.39.4(jiti@2.7.0))
       eslint-plugin-react-hooks: 7.1.1(eslint@9.39.4(jiti@2.7.0))
@@ -22994,7 +22783,7 @@ snapshots:
       tinyglobby: 0.2.15
       unrs-resolver: 1.12.2
     optionalDependencies:
-      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.7.0))
+      eslint-plugin-import: 2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0))
     transitivePeerDependencies:
       - supports-color
 
@@ -23009,7 +22798,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.39.4(jiti@2.7.0)):
+  eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.32.0(@typescript-eslint/parser@8.60.0(eslint@9.39.4(jiti@2.7.0))(typescript@5.9.3))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)))(eslint@9.39.4(jiti@2.7.0)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.9
@@ -23860,10 +23649,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0):
+  genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0):
     dependencies:
-      '@genkit-ai/ai': 1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
-      '@genkit-ai/core': 1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.42.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+      '@genkit-ai/ai': 1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
+      '@genkit-ai/core': 1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.43.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
       uuid: 10.0.0
     transitivePeerDependencies:
       - '@google-cloud/firestore'
@@ -23874,15 +23663,6 @@ snapshots:
       - supports-color
       - utf-8-validate
     optional: true
-
-  genkitx-openai@0.30.0(genkit@genkit)(ws@8.20.1)(zod@3.25.76):
-    dependencies:
-      genkit: link:genkit
-      openai: 4.104.0(encoding@0.1.13)(ws@8.20.1)(zod@3.25.76)
-    transitivePeerDependencies:
-      - encoding
-      - ws
-      - zod
 
   gensync@1.0.0-beta.2: {}
 
@@ -24433,8 +24213,6 @@ snapshots:
     dependencies:
       once: 1.4.0
       wrappy: 1.0.2
-
-  inherits@2.0.3: {}
 
   inherits@2.0.4: {}
 
@@ -27050,11 +26828,6 @@ snapshots:
     dependencies:
       pify: 3.0.0
 
-  path@0.12.7:
-    dependencies:
-      process: 0.11.10
-      util: 0.10.4
-
   pathe@2.0.3: {}
 
   pathval@2.0.1: {}
@@ -27077,7 +26850,7 @@ snapshots:
 
   pdfjs-dist@4.10.38:
     optionalDependencies:
-      '@napi-rs/canvas': 0.1.96
+      '@napi-rs/canvas': 0.1.100
 
   pg-cloudflare@1.3.0:
     optional: true
@@ -29067,11 +28840,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  typescript@5.8.3: {}
-
   typescript@5.9.3: {}
-
-  typescript@6.0.3: {}
 
   ua-parser-js@0.7.41:
     optional: true
@@ -29257,10 +29026,6 @@ snapshots:
       react: 19.2.4
 
   util-deprecate@1.0.2: {}
-
-  util@0.10.4:
-    dependencies:
-      inherits: 2.0.3
 
   utils-merge@1.0.1: {}
 
@@ -29777,8 +29542,6 @@ snapshots:
   zod-validation-error@4.0.2(zod@3.25.76):
     dependencies:
       zod: 3.25.76
-
-  zod@3.22.4: {}
 
   zod@3.25.76: {}
 

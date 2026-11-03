@@ -51,7 +51,7 @@ from genkit._core import _typing as typing_mod
 from genkit._core._base import GenkitConfig, GenkitModel, dump_keeping_unknown
 from genkit._core._config_check import copy_containers
 from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError
-from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._extract_json import extract_json, extract_partial_json, is_complete_json
 from genkit._core._logger import get_logger
 from genkit._core._operation import Operation
 from genkit._core._partial import construct_partial
@@ -1109,7 +1109,7 @@ def check_options_value(cls: type, value: object) -> object:
 
 
 def _untyped_options_schema(schema: JsonDict, cls: type) -> None:
-    """Bare options validate to a dict, so the schema says object instead of any."""
+    """Untyped options validate to a dict, so ``EmbedRequest[Any]`` emits object instead of any."""
     if declared_config_type(cls) is None:
         properties = cast(dict[str, Any], schema['properties'])
         properties['options'] = {'additionalProperties': True, 'title': 'Options', 'type': 'object'}
@@ -1822,11 +1822,22 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     def output(self) -> OutputT | None:
         """The reply so far, parsed as far as it goes. Never raises.
 
-        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
-        fields that haven't arrived are ``None`` even when typed ``str``,
-        values may be cut short (``'Fluffy Panc'``), and nothing is
-        validated. Guard each field you read. ``(await stream.response).output``
-        is the only validated ``Recipe``.
+        With ``output_schema=Recipe``, this is a ``Recipe`` filled as far as
+        the JSON goes:
+        - Optional fields populate from their default or ``default_factory``
+          (called fresh per chunk, so non-deterministic factories like ``uuid4``
+          or ``datetime.now`` change per chunk until final validation), and
+          missing required fields are ``None``.
+        - Closed fields and list items run field validation (``@field_validator``
+          and field constraints, while ``@model_validator`` waits until the
+          object closes); closed values that fail validation pass through raw.
+        - Open ``str`` fields stream as prefixes, while open ``str`` values for
+          ``Enum``/``datetime``/``Literal`` and unresolved discriminated unions
+          stay at ``None`` (or their default) until closed. Open numbers still
+          pass through raw for ``datetime`` fields and for numeric ``Literal``
+          values that already match a member (even if more digits may follow).
+
+        ``(await stream.response).output`` is the only fully validated ``Recipe``.
 
         With no schema class, this is the JSON value so far (dict, list,
         or scalar). It's ``None`` before an object starts or while the text
@@ -1835,7 +1846,8 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         if self.role is not None and self.role != Role.MODEL:
             return None
         try:
-            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(self.accumulated_text)
+            text = self.accumulated_text
+            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(text)
             if (
                 self._schema_type is not None
                 and isinstance(parsed, dict)
@@ -1843,7 +1855,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
             ):
                 return cast(
                     'OutputT | None',
-                    construct_partial(schema_type=self._schema_type, data=parsed),
+                    construct_partial(
+                        schema_type=self._schema_type,
+                        data=parsed,
+                        closed=is_complete_json(text),
+                    ),
                 )
             return cast('OutputT | None', parsed)
         except Exception:

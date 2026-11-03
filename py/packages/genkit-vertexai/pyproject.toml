@@ -44,7 +44,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit",
+  "genkit>=0.12.0,<2",
   "google-auth[requests]>=2.14.1",
 ]
 description = "Vertex AI and Model Garden on Genkit"
