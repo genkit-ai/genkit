@@ -16,6 +16,7 @@
 
 import * as assert from 'assert';
 import { z } from 'genkit';
+import { logger } from 'genkit/logging';
 import { GenerateRequest, ModelReference } from 'genkit/model';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -481,6 +482,107 @@ describe('Vertex AI Gemini', () => {
         assert.deepStrictEqual(apiRequest.labels, myLabels);
       });
 
+      // The platform's generateContent has no `store` field and never stores
+      // anything, so only `store: true` warns. The warning is logged once per
+      // model and field, so each test uses its own unlisted image model name
+      // (image models stay on generateContent) per client.
+      it('warns once that store: true is ignored on generateContent models, and not for store: false', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel(
+          `gemini-store-config-${clientOptions.kind}-image`,
+          clientOptions
+        );
+        const storeWarnings = () =>
+          warnStub
+            .getCalls()
+            .filter((c) =>
+              String(c.args[0]).includes('store is not supported')
+            );
+
+        mockFetchResponse(defaultApiResponse);
+        await model.run({ ...minimalRequest, config: { store: false } });
+        assert.strictEqual(storeWarnings().length, 0);
+
+        for (let i = 0; i < 2; i++) {
+          mockFetchResponse(defaultApiResponse);
+          await model.run({ ...minimalRequest, config: { store: true } });
+          const apiRequest: GenerateContentRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.strictEqual('store' in apiRequest, false);
+        }
+        assert.strictEqual(storeWarnings().length, 1);
+      });
+
+      it('warns that the plugin store: true option is ignored on generateContent models', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel(
+          `gemini-store-plugin-${clientOptions.kind}-image`,
+          clientOptions,
+          { store: true }
+        );
+        mockFetchResponse(defaultApiResponse);
+        await model.run(minimalRequest);
+
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual('store' in apiRequest, false);
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('store is not supported')),
+          'plugin store: true should warn'
+        );
+      });
+
+      it('does not warn for a plugin store: false, or when the request overrides store: true with false', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const pluginFalse = defineModel(
+          `gemini-store-plugin-false-${clientOptions.kind}-image`,
+          clientOptions,
+          { store: false }
+        );
+        mockFetchResponse(defaultApiResponse);
+        await pluginFalse.run(minimalRequest);
+
+        const overridden = defineModel(
+          `gemini-store-overridden-${clientOptions.kind}-image`,
+          clientOptions,
+          { store: true }
+        );
+        mockFetchResponse(defaultApiResponse);
+        await overridden.run({ ...minimalRequest, config: { store: false } });
+
+        assert.ok(
+          !warnStub
+            .getCalls()
+            .some((c) => String(c.args[0]).includes('store is not supported')),
+          'store: false should not warn'
+        );
+      });
+
+      it('warns that previousInteractionId is ignored on generateContent models', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: { previousInteractionId: 'v1_abc123' },
+        });
+
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) =>
+              String(c.args[0]).includes(
+                'previousInteractionId is not supported'
+              )
+            ),
+          'previousInteractionId should warn'
+        );
+      });
+
       it('handles retrievalConfig', async () => {
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
@@ -664,6 +766,41 @@ describe('Vertex AI Gemini', () => {
           apiRequest.generationConfig?.responseMimeType,
           'application/json'
         );
+      });
+
+      it('sends config responseMimeType as is to generateContent models', async () => {
+        mockFetchResponse(defaultApiResponse);
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        await model.run({
+          ...minimalRequest,
+          config: { responseMimeType: 'text/x.enum' },
+        });
+        const apiRequest: GenerateContentRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(
+          apiRequest.generationConfig?.responseMimeType,
+          'text/x.enum'
+        );
+      });
+
+      it('maps tool-use tokens to custom.toolUseTokens on generateContent models (same key as Interactions)', async () => {
+        mockFetchResponse({
+          ...defaultApiResponse,
+          usageMetadata: {
+            promptTokenCount: 10,
+            candidatesTokenCount: 5,
+            totalTokenCount: 115,
+            toolUsePromptTokenCount: 100,
+          },
+        });
+        const model = defineModel('gemini-2.5-flash', clientOptions);
+        const result = await model.run(minimalRequest);
+
+        assert.strictEqual(result.result.usage?.inputTokens, 10);
+        assert.deepStrictEqual(result.result.usage?.custom, {
+          toolUseTokens: 100,
+        });
       });
 
       it('throws if no candidates are returned', async () => {
@@ -1069,6 +1206,65 @@ describe('Vertex AI Gemini', () => {
         });
       });
 
+      it('sends an empty schema for JSON output without a schema', async () => {
+        // Without a schema the server answers in prose (seen live on the
+        // Gemini API).
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        await model.run({ ...minimalRequest, output: { format: 'json' } });
+        const body = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.deepStrictEqual(body.response_format, {
+          type: 'text',
+          mime_type: 'application/json',
+          schema: {},
+        });
+      });
+
+      it("treats config responseMimeType 'application/json' as JSON output, and drops other values with a warning", async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        await model.run({
+          ...minimalRequest,
+          config: { responseMimeType: 'application/json' },
+        });
+        const jsonBody = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.deepStrictEqual(jsonBody.response_format, {
+          type: 'text',
+          mime_type: 'application/json',
+          schema: {},
+        });
+        assert.strictEqual(
+          'response_mime_type' in jsonBody.generation_config,
+          false
+        );
+
+        // Its own model name: the warning is logged once per model and field.
+        mockFetchResponse(interactionResponse);
+        const otherModel = defineModel(
+          `gemini-response-mime-type-${clientOptions.kind}`,
+          clientOptions
+        );
+        await otherModel.run({
+          ...minimalRequest,
+          config: { responseMimeType: 'text/plain' },
+        });
+        const otherBody = JSON.parse(fetchStub.lastCall.args[1].body);
+        assert.strictEqual(
+          'response_mime_type' in otherBody.generation_config,
+          false
+        );
+        assert.strictEqual(otherBody.response_format, undefined);
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) =>
+              String(c.args[0]).includes('responseMimeType is not supported')
+            ),
+          'expected a warning about responseMimeType'
+        );
+      });
+
       it('sends safety settings and labels', async () => {
         mockFetchResponse(interactionResponse);
         const model = defineModel(interactionsModel, clientOptions);
@@ -1089,6 +1285,18 @@ describe('Vertex AI Gemini', () => {
           { type: 'hate_speech', threshold: 'block_low_and_above' },
         ]);
         assert.deepStrictEqual(body.labels, { team: 'genkit' });
+      });
+
+      it('does not send topK (the platform rejects top_k with a 400)', async () => {
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        await model.run({
+          ...minimalRequest,
+          config: { topK: 40, temperature: 0.5 },
+        });
+        assert.deepStrictEqual(lastRequestBody().generation_config, {
+          temperature: 0.5,
+        });
       });
 
       it('maps vertexRetrieval to a retrieval tool', async () => {
@@ -1117,6 +1325,78 @@ describe('Vertex AI Gemini', () => {
             },
           },
         ]);
+      });
+
+      it('resends only code execution steps of the server-side tools, and warns once', async () => {
+        // The platform rejects resent Google Search, URL context and Google
+        // Maps steps with a 501 (seen live, Oct 2026); file search and MCP
+        // steps weren't seen working, so they're not resent either. Code
+        // execution steps are accepted, so they're kept.
+        TEST_ONLY.resetDroppedResentStepsWarning();
+        const warnStub = sinon.stub(logger, 'warn');
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        const request = {
+          messages: [
+            { role: 'user' as const, content: [{ text: 'Research this.' }] },
+            {
+              role: 'model' as const,
+              content: [
+                {
+                  custom: { googleSearchCall: { id: 's1' } },
+                },
+                { custom: { googleSearchResult: { callId: 's1' } } },
+                { custom: { urlContextCall: { id: 'u1' } } },
+                { custom: { urlContextResult: { callId: 'u1' } } },
+                { custom: { googleMapsCall: { id: 'm1' } } },
+                { custom: { googleMapsResult: { callId: 'm1' } } },
+                { custom: { fileSearchCall: { id: 'f1' } } },
+                { custom: { fileSearchResult: { callId: 'f1' } } },
+                { custom: { mcpServerToolCall: { id: 'p1' } } },
+                { custom: { mcpServerToolResult: { callId: 'p1' } } },
+                {
+                  custom: {
+                    executableCode: { code: 'print(1)', language: 'PYTHON' },
+                  },
+                  metadata: { callId: 'c1' },
+                },
+                {
+                  custom: {
+                    codeExecutionResult: {
+                      output: '1\n',
+                      outcome: 'OUTCOME_OK',
+                    },
+                  },
+                  metadata: { callId: 'c1' },
+                },
+                { text: 'Done.' },
+              ],
+            },
+            { role: 'user' as const, content: [{ text: 'And then?' }] },
+          ],
+        };
+        await model.run(request);
+
+        const sentTypes = lastRequestBody().input.map(
+          (step: { type: string }) => step.type
+        );
+        assert.deepStrictEqual(sentTypes, [
+          'user_input',
+          'code_execution_call',
+          'code_execution_result',
+          'model_output',
+          'user_input',
+        ]);
+        const droppedWarnings = () =>
+          warnStub
+            .getCalls()
+            .filter((c) => String(c.args[0]).includes('store: true'));
+        assert.strictEqual(droppedWarnings().length, 1);
+
+        // Warned once, not on every request.
+        mockFetchResponse(interactionResponse);
+        await model.run(request);
+        assert.strictEqual(droppedWarnings().length, 1);
       });
 
       it('continues a stored interaction', async () => {
@@ -1169,6 +1449,40 @@ describe('Vertex AI Gemini', () => {
         assert.deepStrictEqual(body.input, [
           { type: 'user_input', content: [{ type: 'text', text: 'Again' }] },
         ]);
+      });
+
+      it('lets a request store: false override the plugin-level store: true', async () => {
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions, {
+          store: true,
+        });
+        await model.run({
+          messages: [
+            { role: 'user', content: [{ text: 'Hi' }] },
+            {
+              role: 'model',
+              content: [{ text: 'Hello' }],
+              metadata: { interactionId: 'ChAabc123' },
+            },
+            { role: 'user', content: [{ text: 'Again' }] },
+          ],
+          config: { store: false },
+        });
+
+        const body = lastRequestBody();
+        // Stateless: no continuation, the whole history is sent.
+        assert.strictEqual(body.store, false);
+        assert.strictEqual(body.previous_interaction_id, undefined);
+        assert.strictEqual(body.input.length, 3);
+      });
+
+      it('lets a request store: true override the plugin-level store: false', async () => {
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions, {
+          store: false,
+        });
+        await model.run({ ...minimalRequest, config: { store: true } });
+        assert.strictEqual(lastRequestBody().store, true);
       });
 
       it('rejects previousInteractionId without store', async () => {
@@ -1247,6 +1561,74 @@ describe('Vertex AI Gemini', () => {
           'Hi there'
         );
       });
+
+      it('streams a function call as a tool request chunk', async () => {
+        // The event shapes seen live (gemini-3.8-flash): the call's
+        // arguments arrive in one arguments_delta.
+        const events = [
+          {
+            event_type: 'step.start',
+            index: 0,
+            step: {
+              id: 'call_7227796',
+              type: 'function_call',
+              name: 'getWeather',
+              arguments: {},
+            },
+          },
+          {
+            event_type: 'step.delta',
+            index: 0,
+            delta: {
+              type: 'arguments_delta',
+              arguments: '{"location":"Paris, France"}',
+            },
+          },
+          {
+            event_type: 'step.stop',
+            index: 0,
+            usage: { total_tokens: 210 },
+          },
+          {
+            event_type: 'interaction.completed',
+            interaction: { id: '', status: 'requires_action' },
+          },
+        ];
+        const encoder = new TextEncoder();
+        fetchStub.resolves(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (const event of events) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`
+                    )
+                  );
+                }
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+          )
+        );
+
+        const chunkParts: unknown[] = [];
+        const model = defineModel(interactionsModel, clientOptions);
+        const result = await model.run(minimalRequest, {
+          onChunk: (chunk) => chunkParts.push(...chunk.content),
+        });
+
+        const toolRequest = {
+          toolRequest: {
+            name: 'getWeather',
+            ref: 'call_7227796',
+            input: { location: 'Paris, France' },
+          },
+        };
+        assert.deepStrictEqual(chunkParts, [toolRequest]);
+        assert.deepStrictEqual(result.result.message?.content, [toolRequest]);
+      });
     });
   }
 
@@ -1300,17 +1682,18 @@ describe('Vertex AI Gemini', () => {
         // be checked too. Dropped with a warning on the Interactions path.
         'audioFormat',
         'speechConfig',
-        // Sent as `response_format` (video models).
+        // Sent as `response_format` entries.
         'videoFormat',
+        'imageConfig',
+        // Dropped with a warning: the platform rejects `top_k` with a 400.
+        'topK',
       ];
       // Accepted in `generation_config` (checked live on the Gemini API).
       const acceptedByApi = [
         'temperature',
         'topP',
-        'topK',
         'maxOutputTokens',
         'stopSequences',
-        'imageConfig',
       ];
       // A `generation_config` field in the Omni guide (video models); not
       // yet verified live on the platform.

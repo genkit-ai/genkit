@@ -22,7 +22,7 @@ from fastapi import FastAPI, Header
 from genkit_fastapi import serve_flow
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, Genkit
+from genkit import FlowContext, Genkit
 
 ai = Genkit()
 
@@ -47,8 +47,8 @@ async def welcome(name: str) -> str:
     return await ai.run(name='draft', fn=draft)
 
 
-@ai.flow(chunk_type=StatusChunk)
-async def status(count: int, ctx: ActionRunContext) -> str:
+@ai.flow()
+async def status(count: int, ctx: FlowContext[StatusChunk]) -> str:
     # send_chunk is what Dev UI and the HTTP stream paint as progress.
     for i in range(count):
         await asyncio.sleep(0.1)
@@ -57,7 +57,7 @@ async def status(count: int, ctx: ActionRunContext) -> str:
 
 
 @ai.flow()
-async def whoami(name: str, ctx: ActionRunContext) -> str:
+async def whoami(name: str, ctx: FlowContext) -> str:
     # Request context (auth, tenant) lands here, not as extra args.
     return f'{name} as {ctx.context}'
 

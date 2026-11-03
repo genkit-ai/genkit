@@ -77,7 +77,7 @@ describe('Lyria 3', () => {
   };
 
   describe('defineModel', () => {
-    it('passes default responseModalities to the API', async () => {
+    it('asks for audio and text by default, as response_format entries', async () => {
       const model = defineModel('lyria-3-clip-preview', defaultPluginOptions);
       mockFetchResponse(mockInteractionResponse);
 
@@ -88,7 +88,11 @@ describe('Lyria 3', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['audio', 'text']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'audio' },
+        { type: 'text' },
+      ]);
+      assert.strictEqual(body.response_modalities, undefined);
       assert.strictEqual(body.model, 'lyria-3-clip-preview');
     });
 
@@ -103,10 +107,13 @@ describe('Lyria 3', () => {
       assert.ok(String(url).endsWith('/interactions'), String(url));
       const body = JSON.parse(options.body);
       assert.strictEqual(body.model, 'lyria-3.5');
-      assert.deepStrictEqual(body.response_modalities, ['audio', 'text']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'audio' },
+        { type: 'text' },
+      ]);
     });
 
-    it('passes explicit responseModalities to the API', async () => {
+    it('sends explicit responseModalities as response_format entries', async () => {
       const model = defineModel('lyria-3-clip-preview', defaultPluginOptions);
       mockFetchResponse(mockInteractionResponse);
 
@@ -124,7 +131,7 @@ describe('Lyria 3', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['audio']);
+      assert.deepStrictEqual(body.response_format, { type: 'audio' });
     });
 
     it('maps usage statistics correctly', async () => {
@@ -148,15 +155,27 @@ describe('Lyria 3', () => {
 
       const response = await model(minimalRequest, {} as any);
 
+      // Token counts from the API; character and media-part counts from the
+      // request and response, as on generateContent models.
       assert.deepStrictEqual(response.usage, {
+        inputCharacters: 'Create an acoustic folk song'.length,
+        inputImages: 0,
+        inputVideos: 0,
+        inputAudioFiles: 0,
+        outputCharacters: 'Here are the lyrics...'.length,
+        outputImages: 0,
+        outputVideos: 0,
+        outputAudioFiles: 1,
         inputTokens: 15,
         outputTokens: 500,
         totalTokens: 515,
         cachedContentTokens: 0,
         thoughtsTokens: 0,
-        inputCharacters: 15,
-        outputCharacters: 100,
-        outputAudioFiles: 400,
+        custom: {
+          inputTextTokens: 15,
+          outputTextTokens: 100,
+          outputAudioTokens: 400,
+        },
       });
     });
 

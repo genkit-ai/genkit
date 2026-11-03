@@ -1192,6 +1192,77 @@ ai.defineFlow('lyria-3-music-generation', async () => {
   return response;
 });
 
+// Polls a background operation (Deep Research) until it's done. Research
+// takes several minutes, so this polls every 20 s.
+async function waitForResearch(
+  operation?: Operation,
+  sendChunk?: StreamingCallback<any>
+) {
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+  while (!operation.done) {
+    sendChunk?.('check status of operation ' + operation.id);
+    await new Promise((resolve) => setTimeout(resolve, 20000));
+    operation = await ai.checkOperation(operation);
+  }
+  if (operation.error) {
+    throw new Error('Deep Research failed: ' + operation.error.message);
+  }
+  return operation;
+}
+
+// Deep Research is a background model: ai.generate() returns an operation to
+// poll with ai.checkOperation(). It runs on the global location.
+ai.defineFlow('deep-research', async (_, { sendChunk }) => {
+  const { operation } = await ai.generate({
+    model: vertexAI.model('deep-research-preview-04-2026'),
+    prompt:
+      'Compare TCP and UDP in a short markdown table (reliability, connection type, speed).',
+    config: { thinkingSummaries: 'AUTO' },
+  });
+  const done = await waitForResearch(operation, sendChunk);
+  return done.output?.message?.content;
+});
+
+// Enterprise Web Search instead of Google Search (web data with additional
+// compliance controls). Any tool given replaces the default tools.
+ai.defineFlow('deep-research-enterprise-search', async (_, { sendChunk }) => {
+  const { operation } = await ai.generate({
+    model: vertexAI.model('deep-research-preview-04-2026'),
+    prompt:
+      "Summarize this week's most important AI announcements in 5 bullets.",
+    config: {
+      tools: [{ googleSearch: { searchTypes: ['enterpriseWebSearch'] } }],
+    },
+  });
+  const done = await waitForResearch(operation, sendChunk);
+  return done.output?.message?.content;
+});
+
+// Cancelling a running Deep Research task with ai.cancelOperation(). The
+// returned operation is done, with finishReason 'aborted'.
+ai.defineFlow('deep-research-cancel', async (_, { sendChunk }) => {
+  const { operation } = await ai.generate({
+    model: vertexAI.model('deep-research-preview-04-2026'),
+    prompt: 'Write a detailed history of the TCP protocol.',
+  });
+  if (!operation) {
+    throw new Error('Expected the model to return an operation');
+  }
+  sendChunk('Started operation: ' + operation.id);
+  // Give the task a moment to start before cancelling it.
+  await new Promise((resolve) => setTimeout(resolve, 5000));
+
+  const cancelled = await ai.cancelOperation(operation);
+  return {
+    id: cancelled.id,
+    done: cancelled.done,
+    finishReason: cancelled.output?.finishReason,
+    error: cancelled.error,
+  };
+});
+
 // Tuned model. Replace the 12345 with your ENDPOINT ID
 // from Google Cloud console -> Vertex AI -> Deploy and Use -> Endpoints
 ai.defineFlow(

@@ -9,23 +9,20 @@
     "build": "pnpm build:clean && pnpm compile",
     "build:clean": "rimraf ./lib",
     "build:watch": "tsc --watch",
-    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
-    "@genkit-ai/dev-local-vectorstore": "workspace:*",
-    "@genkit-ai/evaluator": "workspace:*",
-    "@genkit-ai/firebase": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "dotenv": "^16.4.5",
-    "express": "^4.21.0",
-    "google-auth-library": "^9.11.0"
+    "genkit": "workspace:*"
   },
   "devDependencies": {
+    "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

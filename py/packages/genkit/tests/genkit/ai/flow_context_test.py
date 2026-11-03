@@ -10,7 +10,7 @@ from collections.abc import Sequence
 
 import pytest
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message, ModelResponse, Part, Role
+from genkit import FinishReason, FlowContext, Genkit, Message, ModelResponse, Part, Role
 from genkit._core._telemetry._http import ActiveSpan
 from genkit._core._typing import ToolRequest
 from genkit.testing import define_scripted_model
@@ -24,7 +24,7 @@ class CardDeclinedError(Exception):
 
 def _define_allergy_check(ai: Genkit):  # noqa: ANN202
     @ai.flow()
-    async def allergy_check(dish: str, ctx: ActionRunContext) -> dict[str, object]:
+    async def allergy_check(dish: str, ctx: FlowContext) -> dict[str, object]:
         return dict(ctx.context)
 
     return allergy_check

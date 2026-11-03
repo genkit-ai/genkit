@@ -28,7 +28,7 @@ from typing import Literal, TypeAlias, get_args
 
 from genkit_google_genai._models._interactions_utils import extract_version
 
-from genkit.model import ModelInfo, Supports
+from genkit.model import ModelInfo, ModelSupports
 
 
 def model_info(
@@ -49,7 +49,7 @@ def model_info(
 
 LYRIA_INFO = ModelInfo(
     label='Google AI - Lyria',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=False,
         media=True,
         tools=False,
@@ -61,7 +61,7 @@ LYRIA_INFO = ModelInfo(
 
 
 # Quote autocomplete needs a Literal, so this alias is the Lyria catalog.
-# ``lyria_model`` takes ``KnownLyria | str`` so unlisted ids still work.
+# ``lyria`` takes ``KnownLyria | str`` so unlisted ids still work.
 KnownLyria: TypeAlias = Literal[
     'lyria-3-clip-preview',
     'lyria-3-pro-preview',
@@ -91,7 +91,7 @@ def list_known_lyria_models() -> list[str]:
 
 ANTIGRAVITY_INFO = ModelInfo(
     label='Google AI - Antigravity',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=False,
@@ -127,7 +127,7 @@ def list_known_antigravity_models() -> list[str]:
 
 DEEP_RESEARCH_INFO = ModelInfo(
     label='Google AI - Deep Research',
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=False,
         tools=False,
@@ -139,7 +139,7 @@ DEEP_RESEARCH_INFO = ModelInfo(
 )
 
 ADVANCED_DEEP_RESEARCH_INFO = ModelInfo(
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=False,

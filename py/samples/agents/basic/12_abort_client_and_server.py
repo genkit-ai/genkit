@@ -31,7 +31,7 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import GenkitError, ToolRunContext
+from genkit import GenkitError, ToolContext
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore, SnapshotStatus
 
@@ -41,13 +41,13 @@ store = InMemorySessionStore()
 # No store: state lives on the client, so turn.abort() is a purely local detach.
 chatty = ai.define_agent(
     name='chattyAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='You are a helpful assistant. When asked to write something long, write many paragraphs.',
 )
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+async def slow_work(_: dict, ctx: ToolContext) -> dict:
     for _i in range(30):
         if ctx.abort_signal.is_set():  # chat.abort() reaches the tool here so it can bail out
             raise GenkitError(status='ABORTED', message='Task aborted')
@@ -58,7 +58,7 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
 # Store-backed: chat.abort() cancels a server-side snapshot, so it needs a store.
 worker = ai.define_agent(
     name='workerAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='When asked for a long task, call slowWork.',
     tools=[slow_work],
     store=store,

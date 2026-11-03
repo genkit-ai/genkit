@@ -44,9 +44,8 @@ from genkit._ai._agents._client import TERMINAL_SNAPSHOT_STATUSES
 from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._types import TurnContext, TurnResult
-from genkit._ai._tools import Interrupt, ToolRunContext
-from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError, GenkitRuntimeError
+from genkit._ai._tools import Interrupt, ToolContext
+from genkit._core._error import Failure, GenkitError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -63,7 +62,8 @@ from genkit._core._typing import (
     Role,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import Agent
+from genkit.exp.agent import Agent, AgentContext
+from genkit.plugin_api import StatusName
 from genkit.testing import ScriptedModel, define_scripted_model
 
 DEFAULT_STEP_TIMEOUT_S = 5.0
@@ -332,9 +332,9 @@ def assert_contains_subsequence(*, actual: list[Any], expected: list[Any], path:
 def dump(*, model: BaseModel) -> dict[str, Any]:
     """Serialize a wire model to its camelCase JSON form for spec comparison.
 
-    Unset fields stay off the object. A field that was set to null stays null,
-    so a spec can tell "not present" from an explicit ``~``. Wire models
-    default to dropping nulls, so this has to opt out.
+    Unset fields stay off the object. On spec step models a field that was set
+    to null stays null, so a spec can tell "not present" from an explicit
+    ``~``. Genkit wire types never send null, so there it drops either way.
     """
     return model.model_dump(by_alias=True, exclude_unset=True, exclude_none=False, mode='json')
 
@@ -414,7 +414,7 @@ PROMPT_AGENTS = (
     PromptAgentDef(name='promptAgentWithRestartTool', tools=('restartTool',), store=True),
 )
 
-TurnBody = Callable[[SessionRunner, ActionRunContext, AgentInput, TurnContext], Awaitable[None]]
+TurnBody = Callable[[SessionRunner, AgentContext, AgentInput, TurnContext], Awaitable[None]]
 
 
 @dataclass
@@ -449,7 +449,7 @@ def _register_tools(*, ai: Genkit) -> None:
     # restartTool interrupts on first call, succeeds when restarted with
     # resumed metadata.
     @ai.tool(name='restartTool', description='A tool that requires confirmation before executing')
-    async def restart_tool(input: RestartInput, ctx: ToolRunContext) -> RestartOutput:  # noqa: A002
+    async def restart_tool(input: RestartInput, ctx: ToolContext) -> RestartOutput:  # noqa: A002
         if not ctx.is_resumed():
             raise Interrupt({'requiresConfirmation': True})
         return RestartOutput(result=f'confirmed: {input.action}')
@@ -466,10 +466,10 @@ def _register_prompt_agents(*, ai: Genkit, agents: dict[str, Agent]) -> None:
         )
 
 
-def _run_turns(*, turn_body: TurnBody) -> Callable[[SessionRunner, ActionRunContext], Awaitable[AgentResult]]:
+def _run_turns(*, turn_body: TurnBody) -> Callable[[SessionRunner, AgentContext], Awaitable[AgentResult]]:
     """Wrap a per-turn body into the canonical custom AgentFn shape."""
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
             await turn_body(session_runner, ctx, inp, turn_ctx)
             return TurnResult(finish_reason=AgentFinishReason.STOP)
@@ -480,26 +480,26 @@ def _run_turns(*, turn_body: TurnBody) -> Callable[[SessionRunner, ActionRunCont
     return agent_fn
 
 
-async def _blocking_turn(sr: SessionRunner, ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+async def _blocking_turn(sr: SessionRunner, ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
     await ctx.abort_signal.wait()
     await sr.add_messages([_model_text(text='unblocked')])
 
 
-async def _artifacts_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+async def _artifacts_turn(sr: SessionRunner, _ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
     await sr.add_artifacts([Artifact(name='doc1', parts=[Part.from_text('v1')])])
     await sr.add_artifacts([Artifact(name='doc1', parts=[Part.from_text('v2')])])
     await sr.add_artifacts([Artifact(name='doc2', parts=[Part.from_text('other')])])
     await sr.add_messages([_model_text(text='done')])
 
 
-async def _counter_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+async def _counter_turn(sr: SessionRunner, _ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
     prev = await sr.get_custom() or {}
     counter = (prev.get('counter') or 0) + 1
     await sr.update_custom(lambda _prev: {'counter': counter})
     await sr.add_messages([_model_text(text='done')])
 
 
-async def _multi_custom_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+async def _multi_custom_turn(sr: SessionRunner, _ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
     # First patch is a whole-doc replace; later ones are incremental diffs.
     await sr.update_custom(lambda _prev: {'counter': 1, 'status': 'working'})
     await sr.update_custom(lambda prev: {**(prev or {}), 'counter': 2})
@@ -507,7 +507,7 @@ async def _multi_custom_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: Ag
     await sr.add_messages([_model_text(text='done')])
 
 
-async def _artifacts_store_turn(sr: SessionRunner, _ctx: ActionRunContext, _inp: AgentInput, _tc: TurnContext) -> None:
+async def _artifacts_store_turn(sr: SessionRunner, _ctx: AgentContext, _inp: AgentInput, _tc: TurnContext) -> None:
     existing = await sr.get_artifacts()
     count = len(existing) + 1
     await sr.add_artifacts([Artifact(name=f'doc{count}', parts=[Part.from_text(f'content{count}')])])
@@ -534,7 +534,7 @@ def _register_custom_agents(*, ai: Genkit, agents: dict[str, Agent]) -> None:
 
     # Raise inside the turn so run() records last_turn_error, then return
     # result() so an attached caller gets a graceful failed output.
-    async def failing_agent_fn(session_runner: SessionRunner, _ctx: ActionRunContext) -> AgentResult:
+    async def failing_agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
         async def handle_turn(_inp: AgentInput, _tc: TurnContext) -> TurnResult | None:
             raise RuntimeError('intentional failure')
 
@@ -694,7 +694,7 @@ async def _close_quietly(*, conn: Any) -> None:  # noqa: ANN401
 def _thrown_message(*, thrown: BaseException) -> str:
     """``STATUS: text`` for a GenkitError — the status prefix, not a cause suffix."""
     if isinstance(thrown, GenkitError):
-        return f'{thrown.status}: {thrown.original_message}'
+        return f'{thrown.status}: {thrown.message}'
     return str(thrown)
 
 
@@ -989,11 +989,10 @@ def test_has_id_false_means_absent() -> None:
         assert_has_id(actual='snap-1', want=False, path='output.snapshotId')
 
 
-def test_dump_keeps_explicit_null_and_drops_unset() -> None:
+def test_dump_of_snapshot_with_explicit_null_finish_reason_omits_it_like_the_wire() -> None:
+    """A Genkit wire type never sends null, so an explicit None compares like unset."""
     pinned = SessionSnapshotSchema(snapshot_id='s', created_at='t', finish_reason=None)
-    dumped = dump(model=pinned)
-    assert 'finishReason' in dumped
-    assert dumped['finishReason'] is None
+    assert 'finishReason' not in dump(model=pinned)
     omitted = SessionSnapshotSchema(snapshot_id='s', created_at='t')
     assert 'finishReason' not in dump(model=omitted)
 
@@ -1001,11 +1000,11 @@ def test_dump_keeps_explicit_null_and_drops_unset() -> None:
 def test_snapshot_error_contains_is_exact_message() -> None:
     """Snapshot errorContains uses subset matching; a string field is exact."""
 
-    def snap(*, message: str, status: str | None = None) -> SessionSnapshotSchema:
+    def snap(*, message: str, status: StatusName | None = None) -> SessionSnapshotSchema:
         return SessionSnapshotSchema(
             snapshot_id='s',
             created_at='t',
-            error=GenkitRuntimeError(status=status, message=message),
+            error=Failure(status=status, message=message),
         )
 
     wrapped = snap(message='background: intentional failure (wrapped)')

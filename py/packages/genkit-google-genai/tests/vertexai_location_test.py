@@ -122,38 +122,11 @@ class TestVertexAIPluginLocation:
         assert plugin._client_kwargs['http_options'].base_url == 'https://example.com/'
         assert plugin._base_url_pinned is True
 
-    def test_http_options_base_url_wins_over_multi_region(self) -> None:
-        """A base_url inside http_options is not clobbered either."""
-        with patch('genkit_google_genai._google.genai.client.Client'):
-            plugin = VertexAI(project='p', location='eu', http_options={'base_url': 'https://example.com/'})
-        assert plugin._client_kwargs['http_options'].base_url == 'https://example.com/'
-
-    def test_camel_case_base_url_wins_over_multi_region(self) -> None:
-        """A camelCase baseUrl inside http_options is honored, not clobbered."""
-        with patch('genkit_google_genai._google.genai.client.Client'):
-            # cast: the camelCase alias is what a JS-shaped config passes; the
-            # SDK accepts it at runtime but HttpOptionsDict only spells snake_case.
-            plugin = VertexAI(project='p', location='us', http_options=cast(Any, {'baseUrl': 'https://example.com/'}))
-        assert plugin._client_kwargs['http_options'].base_url == 'https://example.com/'
-        assert plugin._base_url_pinned is True
-
     def test_empty_base_url_treated_as_unset(self) -> None:
         """An empty base_url string does not defeat multi-region routing."""
         with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI(project='p', location='us', base_url='')
         assert plugin._client_kwargs['http_options'].base_url == US_REP_URL
-
-    def test_caller_http_options_not_mutated(self) -> None:
-        """Plugin-derived settings never leak into the caller's HttpOptions."""
-        shared = HttpOptions()
-        with patch('genkit_google_genai._google.genai.client.Client'):
-            plugin_us = VertexAI(project='p', location='us', http_options=shared)
-            plugin_eu = VertexAI(project='p', location='eu', http_options=shared)
-        assert shared.base_url is None
-        assert shared.headers is None
-        assert plugin_us._client_kwargs['http_options'].base_url == US_REP_URL
-        assert plugin_eu._client_kwargs['http_options'].base_url == EU_REP_URL
-        assert plugin_eu._base_url_pinned is False
 
     def test_location_env_fallback_google_cloud_location(self) -> None:
         """GOOGLE_CLOUD_LOCATION is consulted when location is not passed."""

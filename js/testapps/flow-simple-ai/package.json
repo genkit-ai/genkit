@@ -4,7 +4,7 @@
   "description": "",
   "main": "lib/index.js",
   "scripts": {
-    "start": "pnpm exec genkit start -- pnpm exec tsx --watch src/index.ts",
+    "start": "genkit start -- tsx --watch src/index.ts",
     "compile": "tsc",
     "build": "pnpm build:clean && pnpm compile",
     "build:clean": "rimraf ./lib",
@@ -23,21 +23,17 @@
     "@genkit-ai/middleware": "workspace:*",
     "@google/generative-ai": "^0.15.0",
     "@opentelemetry/sdk-trace-base": "~1.25.0",
-    "body-parser": "^1.20.3",
-    "data-urls": "^5.0.0",
-    "express": "^4.21.0",
-    "firebase-admin": ">=12.2",
+    "express": "^4.21.1",
+    "firebase-admin": "^13.8.0",
     "genkit": "workspace:*",
-    "node-fetch": "^3.3.2",
     "partial-json": "^0.1.7",
     "wav": "^1.0.2"
   },
   "devDependencies": {
-    "@types/data-urls": "^3.0.4",
-    "@types/node-fetch": "~2.6.11",
     "@types/wav": "^1.0.4",
+    "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

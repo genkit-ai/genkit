@@ -15,15 +15,18 @@
  */
 
 import { record } from '@genkit-ai/tools-common/utils';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
-import { ContentBlock } from '@modelcontextprotocol/sdk/types';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import z from 'zod';
-import { McpRunToolEvent } from './analytics.js';
+import { GENKIT_CONTEXT as GoContext } from '../commands/init-ai-tools/context/go';
+import { GENKIT_CONTEXT as JsContext } from '../commands/init-ai-tools/context/nodejs';
+import { McpRunToolEvent } from './analytics';
+import { detectProjectLanguage } from './utils';
 
-import { GENKIT_CONTEXT as GoContext } from '../commands/init-ai-tools/context/go.js';
-import { GENKIT_CONTEXT as JsContext } from '../commands/init-ai-tools/context/nodejs.js';
-
-export async function defineUsageGuideTool(server: McpServer) {
+export async function defineUsageGuideTool(
+  server: McpServer,
+  projectRoot?: string
+) {
   server.registerTool(
     'get_usage_guide',
     {
@@ -33,8 +36,9 @@ export async function defineUsageGuideTool(server: McpServer) {
       inputSchema: {
         language: z
           .enum(['js', 'go'])
-          .describe('which language this usage guide is for; type: string')
-          .default('js')
+          .describe(
+            'Which language this usage guide is for (js, go). Defaults to the auto-detected project language; type: string.'
+          )
           .optional(),
       },
     },
@@ -42,16 +46,18 @@ export async function defineUsageGuideTool(server: McpServer) {
       await record(new McpRunToolEvent('get_usage_guide'));
 
       const content = [] as ContentBlock[];
-      if (!language) {
-        language = 'js';
+      const targetLanguage = language ?? detectProjectLanguage(projectRoot);
+      if (targetLanguage !== 'js' && targetLanguage !== 'go') {
+        content.push({
+          type: 'text',
+          text: `No standalone usage guide is bundled for '${targetLanguage}' projects. Use 'list_genkit_docs' and 'search_genkit_docs' (which default to '${targetLanguage}' in this workspace) followed by 'read_genkit_docs' to look up Genkit ${targetLanguage} documentation and setup instructions.`,
+        });
+        return { content };
       }
-      let text = JsContext;
-      if (language === 'go') {
-        text = GoContext;
-      }
+
       content.push({
         type: 'text',
-        text,
+        text: targetLanguage === 'go' ? GoContext : JsContext,
       });
 
       return { content };

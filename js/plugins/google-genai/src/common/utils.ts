@@ -33,6 +33,7 @@ import {
   GeminiInteraction,
   InteractionSseEvent,
   InteractionStreamResult,
+  Step,
   TextContent,
 } from './interaction-types.js';
 import {
@@ -736,126 +737,147 @@ async function getInteractionResponsePromise(
         }
       } else if (value.event_type === 'interaction.status_update') {
         interaction.status = value.status;
-      } else if (value.event_type === 'step.start') {
+      } else if (
+        value.event_type === 'step.start' ||
+        value.event_type === 'step.delta' ||
+        value.event_type === 'step.stop'
+      ) {
         if (!interaction.steps) interaction.steps = [];
-        interaction.steps[value.index] = value.step;
-      } else if (value.event_type === 'step.delta') {
-        if (!interaction.steps) interaction.steps = [];
-        const step = interaction.steps[value.index];
-        if (step) {
-          if (
-            step.type === 'model_output' ||
-            step.type === 'user_input' ||
-            step.type === 'thought'
-          ) {
-            const contentArray =
-              step.type === 'thought' ? step.summary : step.content;
-            if (!contentArray) {
-              if (step.type === 'thought') step.summary = [];
-              else step.content = [];
-            }
-            const arr = (
-              step.type === 'thought' ? step.summary : step.content
-            )!;
-
-            if (value.delta.type === 'text') {
-              // Append to the previous text block so a streamed answer becomes
-              // a single block, matching the non-streamed response. This also
-              // keeps annotation start/end indices meaningful.
-              const last = arr[arr.length - 1];
-              if (last?.type === 'text') {
-                last.text = (last.text ?? '') + value.delta.text;
-              } else {
-                arr.push({ type: 'text', text: value.delta.text });
-              }
-            } else if (
-              value.delta.type === 'image' ||
-              value.delta.type === 'audio' ||
-              value.delta.type === 'video' ||
-              value.delta.type === 'document'
-            ) {
-              // Media deltas have the same shape as the matching content block.
-              arr.push({ ...value.delta });
-            } else if (value.delta.type === 'text_annotation_delta') {
-              if (value.delta.annotations?.length) {
-                let target = [...arr]
-                  .reverse()
-                  .find((c): c is TextContent => c.type === 'text');
-                if (!target) {
-                  target = { type: 'text', text: '' };
-                  arr.push(target);
-                }
-                target.annotations = [
-                  ...(target.annotations ?? []),
-                  ...value.delta.annotations,
-                ];
-              }
-            } else if (
-              value.delta.type === 'thought_summary' &&
-              value.delta.content
-            ) {
-              arr.push(value.delta.content);
-            } else if (value.delta.type === 'thought_signature') {
-              if (step.type === 'thought') {
-                step.signature = value.delta.signature;
-              }
-            } else if (value.delta.type === 'function_call') {
-              // A function call that is part of the content array
-              arr.push({
-                type: 'function_call',
-                name: value.delta.name,
-                id: value.delta.id,
-                arguments: value.delta.arguments,
-              });
-            }
-          } else if (
-            step.type === 'function_call' &&
-            value.delta.type === 'arguments_delta'
-          ) {
-            const existing = partialArgumentsMap.get(value.index) || '';
-            partialArgumentsMap.set(
-              value.index,
-              existing + (value.delta.arguments || '')
-            );
-          } else if (value.delta.type === step.type) {
-            // Built-in tool steps (google_search_call/result,
-            // code_execution_call/result, url_context_*, file_search_*,
-            // google_maps_*, mcp_server_tool_*, function_result, ...): step.start
-            // carries only ids and an empty signature; the arguments, result
-            // and real signature arrive in a delta of the same type. Copy those
-            // fields onto the step.
-            const { type: _type, ...fields } = value.delta;
-            Object.assign(
-              step,
-              Object.fromEntries(
-                Object.entries(fields).filter(([, v]) => v !== undefined)
-              )
-            );
-          }
-        }
-      } else if (value.event_type === 'step.stop') {
-        // If we had partial arguments for this step, parse them and update the function call arguments
-        if (partialArgumentsMap.has(value.index)) {
-          const step = interaction.steps?.[value.index];
-          if (step && step.type === 'function_call') {
-            try {
-              const argStr = partialArgumentsMap.get(value.index);
-              if (argStr) {
-                step.arguments = JSON.parse(argStr);
-              }
-            } catch (e) {
-              logger.warn(
-                'Failed to parse partial arguments JSON for function call:',
-                e
-              );
-            }
-          }
-          partialArgumentsMap.delete(value.index);
-        }
+        applyInteractionStepEvent(
+          interaction.steps,
+          partialArgumentsMap,
+          value
+        );
       }
     }
   } finally {
     reader.releaseLock();
+  }
+}
+
+/**
+ * Applies a `step.start`, `step.delta` or `step.stop` event to the steps
+ * assembled so far (other events are ignored). Used for the final response
+ * and for stream chunks (`createInteractionChunkConverter`), so both see the
+ * same steps.
+ *
+ * @param steps The steps so far, by index; updated in place.
+ * @param partialArguments Function call arguments received so far, by step
+ *   index; parsed when the step stops.
+ * @param event The stream event.
+ */
+export function applyInteractionStepEvent(
+  steps: Step[],
+  partialArguments: Map<number, string>,
+  event: InteractionSseEvent
+): void {
+  if (event.event_type === 'step.start') {
+    // A copy: both readers of the stream get the same event objects, and each
+    // assembles its own steps.
+    steps[event.index] = structuredClone(event.step);
+  } else if (event.event_type === 'step.delta') {
+    const step = steps[event.index];
+    if (step) {
+      if (
+        step.type === 'model_output' ||
+        step.type === 'user_input' ||
+        step.type === 'thought'
+      ) {
+        const contentArray =
+          step.type === 'thought' ? step.summary : step.content;
+        if (!contentArray) {
+          if (step.type === 'thought') step.summary = [];
+          else step.content = [];
+        }
+        const arr = (step.type === 'thought' ? step.summary : step.content)!;
+
+        if (event.delta.type === 'text') {
+          // Append to the previous text block so a streamed answer becomes
+          // a single block, matching the non-streamed response. This also
+          // keeps annotation start/end indices meaningful.
+          const last = arr[arr.length - 1];
+          if (last?.type === 'text') {
+            last.text = (last.text ?? '') + event.delta.text;
+          } else {
+            arr.push({ type: 'text', text: event.delta.text });
+          }
+        } else if (
+          event.delta.type === 'image' ||
+          event.delta.type === 'audio' ||
+          event.delta.type === 'video' ||
+          event.delta.type === 'document'
+        ) {
+          // Media deltas have the same shape as the matching content block.
+          arr.push({ ...event.delta });
+        } else if (event.delta.type === 'text_annotation_delta') {
+          if (event.delta.annotations?.length) {
+            let target = [...arr]
+              .reverse()
+              .find((c): c is TextContent => c.type === 'text');
+            if (!target) {
+              target = { type: 'text', text: '' };
+              arr.push(target);
+            }
+            target.annotations = [
+              ...(target.annotations ?? []),
+              ...event.delta.annotations,
+            ];
+          }
+        } else if (
+          event.delta.type === 'thought_summary' &&
+          event.delta.content
+        ) {
+          // A copy, like the step itself (see step.start).
+          arr.push({ ...event.delta.content });
+        } else if (event.delta.type === 'thought_signature') {
+          if (step.type === 'thought') {
+            step.signature = event.delta.signature;
+          }
+        }
+      } else if (
+        step.type === 'function_call' &&
+        event.delta.type === 'arguments_delta'
+      ) {
+        const existing = partialArguments.get(event.index) || '';
+        partialArguments.set(
+          event.index,
+          existing + (event.delta.arguments || '')
+        );
+      } else if (event.delta.type === step.type) {
+        // Built-in tool steps (google_search_call/result,
+        // code_execution_call/result, url_context_*, file_search_*,
+        // google_maps_*, mcp_server_tool_*, function_result, ...): step.start
+        // carries only ids and an empty signature; the arguments, result
+        // and real signature arrive in a delta of the same type. Copy those
+        // fields onto the step.
+        const { type: _type, ...fields } = event.delta;
+        Object.assign(
+          step,
+          Object.fromEntries(
+            Object.entries(fields).filter(([, v]) => v !== undefined)
+          )
+        );
+      }
+    }
+  } else if (event.event_type === 'step.stop') {
+    // If we had partial arguments for this step, parse them and update the function call arguments
+    if (partialArguments.has(event.index)) {
+      const step = steps[event.index];
+      if (step && step.type === 'function_call') {
+        try {
+          const argStr = partialArguments.get(event.index);
+          if (argStr) {
+            step.arguments = JSON.parse(argStr);
+          }
+        } catch (e) {
+          logger.warn(
+            'Failed to parse partial arguments JSON for function call:',
+            e
+          );
+        }
+      }
+      partialArguments.delete(event.index);
+    }
   }
 }
 
@@ -1379,6 +1401,15 @@ export function parseRetryAfterMs(value: string): number | undefined {
  */
 export function camelToSnakeCase(str: string): string {
   return str.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+/**
+ * Converts a string in snake_case to camelCase.
+ */
+export function snakeToCamelCase(str: string): string {
+  return str.replace(/_([a-z0-9])/g, (_match, letter: string) =>
+    letter.toUpperCase()
+  );
 }
 
 export function convertObjectKeysToSnakeCase(obj: Array<unknown>): unknown[];

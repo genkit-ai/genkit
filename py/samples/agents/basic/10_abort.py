@@ -28,7 +28,7 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import GenkitError, ToolRunContext
+from genkit import GenkitError, ToolContext
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore
 
@@ -37,7 +37,7 @@ store = InMemorySessionStore()
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+async def slow_work(_: dict, ctx: ToolContext) -> dict:
     for _i in range(30):
         if ctx.abort_signal.is_set():  # the abort propagates here so we can bail out cleanly
             raise GenkitError(status='ABORTED', message='Task aborted')
@@ -47,7 +47,7 @@ async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
 
 agent = ai.define_agent(
     name='longTaskAgent',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='When asked for a long task, call slowWork.',
     tools=[slow_work],
     store=store,

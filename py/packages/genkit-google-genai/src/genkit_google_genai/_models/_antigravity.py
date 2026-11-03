@@ -25,22 +25,28 @@ from genkit_google_genai._interactions._converters import from_interaction_sync
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._interactions_registry import antigravity_model_info
 from genkit_google_genai._models._interactions_utils import (
+    EXTRA_DESCRIPTION,
+    INPUT_HINT,
+    MODEL_ID_HINT,
+    TIMEOUT_DESCRIPTION,
     api_key_for_context,
     client_overrides_from_config,
     extract_version,
     lowercase_choice_list,
     partition_keys,
+    pop_extra,
+    reject_function_tools,
+    reject_managed_extra,
     remove_client_option_overrides,
     steps_with_folded_system_instruction,
 )
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, deep_merge, reject_bool_timeout
 from genkit_google_genai._models._secrets import reject_request_config_api_key
-from pydantic import BaseModel, ConfigDict, field_validator
-from pydantic.alias_generators import to_camel
-from typing_extensions import Never
+from pydantic import Field, field_validator
 
-from genkit import ActionRunContext, ModelResponse
-from genkit.model import ModelRequest, model_action_metadata
-from genkit.plugin_api import Action, ActionKind
+from genkit import ModelResponse
+from genkit.model import Model, ModelContext, ModelRequest
+from genkit.plugin_api import GenkitConfig
 
 DEFAULT_ENVIRONMENT: dict[str, str] = {'type': 'remote'}
 
@@ -52,19 +58,36 @@ CREATE_OPTION_KEYS = (
 )
 
 
-class AntigravityConfig(BaseModel):
-    """Antigravity model configuration."""
+class AntigravityConfig(GenkitConfig):
+    """Antigravity model configuration.
 
-    model_config = ConfigDict(extra='allow', populate_by_name=True, alias_generator=to_camel)
+    Unknown keys are rejected. An API field this class doesn't declare goes in
+    ``extra``, which is deep-merged into the create body.
+
+    ``timeout`` is the HTTP timeout for this request, in seconds.
+    """
+
     base_url: str | None = None
     api_version: str | None = None
-    # Milliseconds — applied to the HTTP call, not the create body.
-    timeout: float | None = None
+    timeout: float | None = Field(default=None, description=TIMEOUT_DESCRIPTION)
     custom_headers: dict[str, str] | None = None
     previous_interaction_id: str | None = None
     store: bool | None = None
     environment: str | dict[str, Any] | None = None
     response_modalities: list[Literal['text', 'image']] | None = None
+    extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
+
+    @field_validator('timeout')
+    @classmethod
+    def check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
 
     @field_validator('response_modalities', mode='before')
     @classmethod
@@ -73,44 +96,54 @@ class AntigravityConfig(BaseModel):
         return lowercase_choice_list(value)
 
 
+# Fields Genkit builds from the request (or reserves for tool wiring); extra can't replace them.
+ANTIGRAVITY_MANAGED_EXTRA = {
+    'agent': MODEL_ID_HINT,
+    'input': INPUT_HINT,
+    'tools': 'Tool configuration on Antigravity is not yet supported in this plugin.',
+}
+
+
 def create_antigravity_action(
     name: str,
     *,
     plugin_api_key: str | None,
     client_options: ClientOptions,
-) -> Action[ModelRequest[AntigravityConfig], ModelResponse, Never]:
+) -> Model:
     """Build a foreground model action for Antigravity."""
     version = extract_version(name)
     info = antigravity_model_info(version)
 
-    async def run(request: ModelRequest[AntigravityConfig], ctx: ActionRunContext) -> ModelResponse:
+    async def run(request: ModelRequest[AntigravityConfig], ctx: ModelContext) -> ModelResponse:
         reject_request_config_api_key(request.config)
         config = request.config or AntigravityConfig()
         api_key = api_key_for_context(ctx.context, plugin_api_key)
         merged_options = client_options.merge(client_overrides_from_config(config))
 
-        # Known create kwargs vs undocumented passthrough — non-mutating split.
         dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
-        create_options, passthrough = partition_keys(dumped, CREATE_OPTION_KEYS)
+        extra = pop_extra(dumped)
+        reject_function_tools(
+            name,
+            request,
+            message=f'Function tools on {name} are not yet supported in this plugin.',
+        )
+        reject_managed_extra(name, extra, ANTIGRAVITY_MANAGED_EXTRA)
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
         create_kwargs: dict[str, Any] = {
             'agent': version,
             'input': steps_with_folded_system_instruction(request.messages),
             **create_options,
-            **passthrough,
         }
         # Default missing environment to remote; the API rejects unsupported values.
         create_kwargs.setdefault('environment', DEFAULT_ENVIRONMENT)
 
-        created = await create_interaction(api_key, create_kwargs, merged_options)
+        created = await create_interaction(api_key, deep_merge(create_kwargs, extra), merged_options)
         return from_interaction_sync(created)
 
-    return Action(
-        kind=ActionKind.MODEL,
-        name=name,
-        fn=run,
-        metadata=model_action_metadata(
-            name=name,
-            info=info.model_dump(by_alias=True),
-            config_schema=AntigravityConfig,
-        ).metadata,
+    return Model(
+        name,
+        run,
+        info=info,
+        config_schema=AntigravityConfig,
     )

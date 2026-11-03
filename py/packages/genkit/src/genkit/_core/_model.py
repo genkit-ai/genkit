@@ -27,26 +27,33 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Generic, Literal, TypeGuard, cast, get_args
+from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, cast, get_args
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    GetJsonSchemaHandler,
     PrivateAttr,
     RootModel,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 from pydantic.alias_generators import to_camel
+from pydantic.config import JsonDict
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema, PydanticCustomError
 from typing_extensions import Self, TypedDict, TypeVar
 
 from genkit._core import _typing as typing_mod
-from genkit._core._base import GenkitModel, dump_keeping_unknown
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
-from genkit._core._extract_json import extract_json, extract_partial_json
+from genkit._core._base import GenkitConfig, GenkitModel, dump_keeping_unknown
+from genkit._core._config_check import copy_containers
+from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError
+from genkit._core._extract_json import extract_json, extract_partial_json, is_complete_json
 from genkit._core._logger import get_logger
+from genkit._core._operation import Operation
 from genkit._core._partial import construct_partial
 from genkit._core._schema import parse_schema
 from genkit._core._typing import (
@@ -55,14 +62,12 @@ from genkit._core._typing import (
     DocumentData,
     FinishReason,
     GenerateActionOutputConfig,
-    GenerationCommonConfig,
     GenerationUsage,
     JsonPatch,
     Media,
     MessageData,
     MiddlewareRef,
     ModelInfo,
-    Operation,
     OutputConfig as OutputConfigData,
     PartData,
     Resource,
@@ -78,7 +83,17 @@ from genkit._core._typing import (
 
 # ModelConfigDict is the hand-copied autocomplete list for this class — keep
 # the keys matching so a new knob shows up in the IDE the same day it becomes legal.
-class ModelConfig(GenerationCommonConfig):
+#
+# The common fields are declared here rather than inherited from the generated
+# GenerationCommonConfig, which types token counts as float (JSON Schema has
+# one number type). The names match it field for field; a test pins that.
+# As a GenkitConfig, model_dump() returns field names for provider SDKs and
+# by_alias=True gives the wire shape.
+#
+# A plugin config extends this class and never re-declares or aliases these
+# fields: tighter provider bounds go in a validator, and a provider's own name
+# for one of these settings is the plugin's to map, not a second field.
+class ModelConfig(GenkitConfig):
     """Settings every model understands, plus ``extra`` for provider-only ones.
 
     Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
@@ -87,7 +102,94 @@ class ModelConfig(GenerationCommonConfig):
     here.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid')
+    version: str | None = Field(default=None, description='Model version to call, for providers that pin one.')
+    """Model version to call, for providers that pin one per request."""
+
+    temperature: float | None = Field(default=None, description='Sampling temperature. Higher is more random.')
+    """Sampling temperature. Higher is more random."""
+
+    max_output_tokens: int | None = Field(default=None, description='Maximum number of tokens to generate.')
+    """Upper bound on tokens in the reply."""
+
+    top_k: int | None = Field(default=None, description='The maximum number of tokens to consider when sampling.')
+    """Sample only from the k most likely tokens."""
+
+    top_p: float | None = Field(
+        default=None, description='The maximum cumulative probability of tokens to consider when sampling.'
+    )
+    """Sample from the smallest token set whose probability reaches p."""
+
+    stop_sequences: list[str] | None = Field(default=None, description='Strings that end the reply when generated.')
+    """Strings that end the reply when the model emits one."""
+
+    common_field_bounds: ClassVar[Mapping[str, tuple[float, float]]] = {}
+    """Inclusive ``(min, max)`` a provider allows for a numeric common field.
+
+    A plugin narrows a common field here instead of re-declaring it. Values
+    outside the range fail validation, and the Dev UI schema advertises the
+    range as ``minimum``/``maximum``.
+
+    Example:
+        ```python
+        class OpenAIConfig(ModelConfig):
+            common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
+
+
+        OpenAIConfig(temperature=3.0)
+        # => ValidationError: temperature must be between 0.0 and 2.0, got 3.0
+        ```
+    """
+
+    _NUMERIC_COMMON_FIELDS: ClassVar[frozenset[str]] = frozenset({
+        'temperature',
+        'max_output_tokens',
+        'top_k',
+        'top_p',
+    })
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
+        """Reject ``common_field_bounds`` entries that name unknown fields or invert ``(min, max)``."""
+        super().__pydantic_init_subclass__(**kwargs)
+        for name, (low, high) in cls.common_field_bounds.items():
+            if name not in cls._NUMERIC_COMMON_FIELDS:
+                raise ValueError(
+                    f'{cls.__name__}.common_field_bounds key {name!r} must be one of '
+                    f'{sorted(cls._NUMERIC_COMMON_FIELDS)}'
+                )
+            if low > high:
+                raise ValueError(f'{cls.__name__}.common_field_bounds[{name!r}] min {low} > max {high}')
+
+    @field_validator('temperature', 'max_output_tokens', 'top_k', 'top_p')
+    @classmethod
+    def _check_common_field_bounds(cls, value: float | None, info: ValidationInfo) -> float | None:
+        bounds = cls.common_field_bounds.get(info.field_name or '')
+        if value is not None and bounds is not None and not bounds[0] <= value <= bounds[1]:
+            # A custom error type keeps pydantic's 'Value error, ' prefix off the message.
+            raise PydanticCustomError(
+                'common_field_bounds',
+                '{field} must be between {low} and {high}, got {value}',
+                {'field': info.field_name, 'low': bounds[0], 'high': bounds[1], 'value': value},
+            )
+        return value
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        """Advertise ``common_field_bounds`` on the matching schema properties."""
+        json_schema = handler(core_schema)
+        resolved = handler.resolve_ref_schema(json_schema)
+        properties = resolved.get('properties')
+        if isinstance(properties, dict):
+            for name, (low, high) in cls.common_field_bounds.items():
+                field = cls.model_fields.get(name)
+                if field is None:
+                    continue
+                alias = field.alias
+                prop = properties.get(alias) if alias in properties else properties.get(name)
+                if isinstance(prop, dict):
+                    prop['minimum'] = low
+                    prop['maximum'] = high
+        return json_schema
 
     extra: dict[str, Any] | None = None
     """Provider settings the model's config class doesn't declare, sent as-is.
@@ -97,7 +199,8 @@ class ModelConfig(GenerationCommonConfig):
     builds from the request (messages, tools) are rejected rather than
     overwritten. Where the map lands depends on the provider: the request
     body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
-    ``additionalModelRequestFields`` for Bedrock.
+    ``additionalModelRequestFields`` for Bedrock chat models (the InvokeModel
+    body for Bedrock image models).
 
     Keys aren't validated, except that an API key here raises like one at the
     top level: config travels with the request into traces. Don't put other
@@ -105,10 +208,9 @@ class ModelConfig(GenerationCommonConfig):
     """
 
 
-ModelUsage = GenerationUsage  # public name for GenerationUsage
-
 # what callers pass as tool_choice; they type the string, not an enum.
 ToolChoice = Literal['auto', 'required', 'none']
+"""Whether the model may call tools (`auto`), must call one (`required`), or must not (`none`)."""
 
 # A termination known to carry no conforming output. Every path that would
 # parse a response against its output schema consults this first: a schema
@@ -120,14 +222,12 @@ ToolChoice = Literal['auto', 'required', 'none']
 # to it, so treating it as abnormal would silently drop validation for
 # responses the model may well have completed.
 #
-# Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go).
-ABNORMAL_FINISH_REASONS = frozenset({
-    FinishReason.BLOCKED,
-    FinishReason.ABORTED,
-    FinishReason.FAILED,
-    FinishReason.INTERRUPTED,
-    FinishReason.OTHER,
-})
+# Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go). Derived from
+# FinishReason.is_abnormal so the two can't drift.
+ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset(
+    reason for reason in FinishReason if reason.is_abnormal()
+)
+"""Finish reasons that skip output-schema validation because the response carries no conforming output."""
 
 logger = get_logger(__name__)
 
@@ -145,8 +245,8 @@ class ModelConfigDict(TypedDict, extra_items=Any, total=False):
 
     version: str | None
     temperature: float | None
-    max_output_tokens: float | None
-    top_k: float | None
+    max_output_tokens: int | None
+    top_k: int | None
     top_p: float | None
     stop_sequences: Sequence[str] | None
     extra: dict[str, Any] | None
@@ -161,7 +261,7 @@ def misplaced_api_key_error() -> GenkitError:
     return GenkitError(
         status='INVALID_ARGUMENT',
         message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 
@@ -214,16 +314,26 @@ ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
 # Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
 # Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
 ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
-# ModelRequest[X] takes a pydantic model class; __class_getitem__ rejects the
-# rest. Not bound to BaseModel: type checkers would then reject the common
-# bare ModelRequest(config={...}), where the config is solved as a dict.
-# Invariant: config is writable, so ModelRequest[GeminiConfig] is not a
-# ModelRequest[ModelConfig] you can assign a ModelConfig into.
-ModelRequestConfigT = TypeVar('ModelRequestConfigT')
+# ModelRequest[X], EmbedRequest[X] and the evaluator requests take a pydantic
+# model class; __class_getitem__ rejects the rest. Not bound to BaseModel: type
+# checkers would then reject the common bare ModelRequest(config={...}), where
+# the config is solved as a dict. Invariant: config is writable, so
+# ModelRequest[GeminiConfig] is not a ModelRequest[ModelConfig] you can assign
+# a ModelConfig into. Defaults to Any so bare ModelRequest means
+# ModelRequest[Any], and Callable[[ModelRequest], ...] accepts a fn typed
+# ModelRequest[GeminiConfig].
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', default=Any)
+# Bare EmbedRequest / evaluator request options are always a dict at runtime, so the
+# default says so. Fn aliases take EmbedRequest[Any] / EvaluatorRequest[Any] so a fn
+# typed EmbedRequest[CrmEmbedConfig] still fits them.
+RequestOptionsT = TypeVar('RequestOptionsT', default=dict[str, Any])
 
 
 def declared_config_type(cls: type) -> type[BaseModel] | None:
-    """The config class on ``ModelRequest[ThatClass]``, or None if unparametrized or ``Any``."""
+    """The config class on ``ModelRequest[ThatClass]`` (or the embed / evaluator requests), else None.
+
+    None when unparametrized or ``Any``.
+    """
     meta = getattr(cls, '__pydantic_generic_metadata__', None)
     if not meta:
         return None
@@ -232,6 +342,48 @@ def declared_config_type(cls: type) -> type[BaseModel] | None:
         return None
     arg = args[0]
     return arg if _is_model_class(arg) else None
+
+
+def check_config_type_arg(*, request: str, field: str, typevar_values: object) -> None:
+    """Reject ``ModelRequest[X]`` / ``EmbedRequest[X]`` / evaluator requests unless X is a model class.
+
+    Runs where the annotation is evaluated, so a TypedDict or dict config
+    fails when the fn is defined, with the same error on every Python version.
+    """
+    arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
+    if arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg):
+        return
+    label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
+    example = ', e.g. a ModelConfig subclass' if field == 'config' else ''
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f'{request}[{label}]: the {field} type must be a pydantic BaseModel subclass{example}. '
+            f'Use bare {request} to take {field} as a dict.'
+        ),
+    )
+
+
+def check_config_value(cls: type, value: object, *, field: str) -> object:
+    """The before-validator for ``config`` / ``options`` on the request types.
+
+    A mapping is the bag the declared class coerces. A Pydantic instance is
+    only legal if it is that class: OpenAIConfig on a Gemini request is a
+    caller mistake, so pass a mapping instead. None and an untyped request
+    are left to the caller (see EmbedRequest for the options dict).
+    """
+    if value is None:
+        return value
+    if isinstance(value, Mapping) and not isinstance(value, BaseModel):
+        return value
+    if isinstance(value, BaseModel):
+        expected = declared_config_type(cls)
+        if expected is not None and not isinstance(value, expected):
+            raise ValueError(
+                f'{field} must be {config_type_path(expected)} or a mapping, got {config_type_path(type(value))}'
+            )
+        return value
+    raise ValueError(f'{field} must be a BaseModel or mapping, got {type(value).__name__}')
 
 
 def _is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
@@ -270,6 +422,60 @@ def config_type_path(cls: type) -> str:
     return impl
 
 
+def check_ref_config(*, name: str, schema: object, config: object, schema_required: bool) -> object:
+    """Check a ref's config against its config_schema and return a copy.
+
+    Shared by ModelRef and EmbedderRef. With a schema, config must be an
+    instance of it. Without one (EmbedderRef only), config is a plain
+    mapping. The copy keeps later mutations of the caller's object from
+    changing the ref's layer.
+    """
+    if schema is not None or schema_required:
+        if not _is_model_class(schema):
+            got = (
+                f'{schema.__module__}.{schema.__name__}'
+                if isinstance(schema, type)
+                else f'{type(schema).__module__}.{type(schema).__name__}'
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config_schema must be a BaseModel subclass, got {got}',
+            )
+        if config is not None and not isinstance(config, schema):
+            expected = config_type_path(schema)
+            actual = config_type_path(type(config))
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config must be an instance of {expected}, got {actual}',
+            )
+    elif config is not None and (isinstance(config, BaseModel) or not isinstance(config, Mapping)):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'{name}: config must be a mapping when config_schema is not set, got {type(config).__name__}. '
+                'Pass config_schema= to use a config class.'
+            ),
+        )
+    if isinstance(config, BaseModel):
+        return config.model_copy(deep=True)
+    if isinstance(config, Mapping):
+        return copy_containers(dict(cast(Mapping[str, Any], config)))
+    return config
+
+
+def check_ref_info(*, name: str, info: object, info_type: type[BaseModel]) -> object:
+    """Check a ref's info is ``info_type`` and return a deep copy."""
+    if info is None:
+        return None
+    if not isinstance(info, info_type):
+        actual = f'{type(info).__module__}.{type(info).__name__}'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{name}: info must be an instance of {info_type.__module__}.{info_type.__name__}, got {actual}',
+        )
+    return info.model_copy(deep=True)
+
+
 @dataclass(frozen=True, kw_only=True)
 class ModelRef(Generic[ModelRefConfigT]):
     """Handle for a model tied to a config schema.
@@ -290,38 +496,12 @@ class ModelRef(Generic[ModelRefConfigT]):
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        # If config_schema is not a BaseModel subclass, raise an error.
-        schema = self.config_schema
-        if not isinstance(schema, type) or not issubclass(schema, BaseModel):
-            got = (
-                f'{schema.__module__}.{schema.__name__}'
-                if isinstance(schema, type)
-                else f'{type(schema).__module__}.{type(schema).__name__}'
-            )
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{self.name}: config_schema must be a BaseModel subclass, got {got}',
-            )
-        if self.config is not None and not isinstance(self.config, schema):
-            expected = config_type_path(schema)
-            actual = config_type_path(type(self.config))
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=f'{self.name}: config must be an instance of {expected}, got {actual}',
-            )
-        # If info is present, validate that it is a ModelInfo and raise an error if not.
-        if self.info is not None and not isinstance(self.info, ModelInfo):
-            actual = f'{type(self.info).__module__}.{type(self.info).__name__}'
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(f'{self.name}: info must be an instance of {ModelInfo.__module__}.ModelInfo, got {actual}'),
-            )
-        # Callers often keep the config/info they passed in. Copy so later
-        # mutations of those objects don't change the ref's defaults.
-        if self.config is not None:
-            object.__setattr__(self, 'config', self.config.model_copy(deep=True))
-        if self.info is not None:
-            object.__setattr__(self, 'info', self.info.model_copy(deep=True))
+        # Callers often keep the config/info they passed in. The checks copy
+        # them so later mutations of those objects don't change the ref's defaults.
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=True)
+        object.__setattr__(self, 'config', config)
+        info = check_ref_info(name=self.name, info=self.info, info_type=ModelInfo)
+        object.__setattr__(self, 'info', info)
 
 
 # Exclusive kinds. camelCase and snake_case are the same kind so a merged
@@ -389,7 +569,8 @@ class Part(GenkitModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         alias_generator=to_camel,
         extra='forbid',
-        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
         validate_assignment=True,
     )
 
@@ -436,13 +617,18 @@ class Part(GenkitModel):
             return self
         raise ValueError(EXACTLY_ONE_KIND)
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401
-        dumped = super().model_dump(**kwargs)
-        # Default dump drops nulls. Keep data: null so replay still sees a
-        # data part instead of an empty one.
-        if 'data' in self.model_fields_set and self.data is None:
-            dumped['data'] = None
-        return dumped
+    def _drop_none_fields(self, dumped: dict[str, Any]) -> dict[str, Any]:
+        kept = super()._drop_none_fields(dumped)
+        # Keep data: null when it's the part's only payload so replay still
+        # sees a data part instead of an empty one.
+        if self._is_null_data_part():
+            kept['data'] = None
+        return kept
+
+    def _is_null_data_part(self) -> bool:
+        if 'data' not in self.model_fields_set or self.custom is not None:
+            return False
+        return all(getattr(self, name) is None for name in PART_KIND_FIELDS)
 
     @classmethod
     def from_text(cls, text: str, metadata: dict[str, Any] | None = None) -> Part:
@@ -538,6 +724,11 @@ class Part(GenkitModel):
             ref=tool_req.ref,
             metadata={'interruptResponse': interrupt_metadata},
         )
+
+    @property
+    def is_partial(self) -> bool:
+        """Whether this part is a partial tool response streamed during tool execution."""
+        return self.tool_response is not None and bool(self.metadata and self.metadata.get('partial') is True)
 
 
 def as_part(value: object) -> Part:
@@ -775,35 +966,6 @@ class Message(GenkitModel):
         return [p for p in self.tool_requests if p.metadata and p.metadata.get('interrupt')]
 
 
-class Candidate(GenkitModel):
-    """One sampled reply from a generate call."""
-
-    index: float
-    message: Message
-    usage: GenerationUsage | None = None
-    finish_reason: FinishReason
-    finish_message: str | None = None
-    custom: Any | None = Field(default=None)
-
-    @field_validator('message', mode='before')
-    @classmethod
-    def _wrap_message(cls, v: object) -> object:
-        return as_message(v)
-
-
-def as_candidate(value: object) -> Candidate:
-    if isinstance(value, Candidate):
-        return Candidate(
-            index=value.index,
-            message=value.message,
-            usage=value.usage,
-            finish_reason=value.finish_reason,
-            finish_message=value.finish_message,
-            custom=value.custom,
-        )
-    return Candidate.model_validate(value)
-
-
 class GenerateActionOptions(GenkitModel):
     """Generate options with messages as list[Message] for type-safe use with ai.generate()."""
 
@@ -910,11 +1072,65 @@ class Artifact(GenkitModel):
         return parts_from_inbound(v)
 
 
-class EmbedRequest(GenkitModel):
-    """Embed request whose documents are the public Document type."""
+def options_dict(value: object) -> dict[str, Any]:
+    """The options dict an untyped embedder receives.
 
+    ``None`` is ``{}``. A mapping is copied. A BaseModel is dumped with only
+    the fields the caller set, the same as an untyped model fn's config, so a
+    ref's value survives a field the call left unset. Fields marked
+    ``exclude=True`` that were set are copied back so a client-only setting
+    still arrives. Anything else raises ValueError.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, BaseModel):
+        dumped = value.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
+        for name in value.model_fields_set:
+            if name not in dumped:
+                dumped[name] = getattr(value, name)
+        return dumped
+    if isinstance(value, Mapping):
+        return dict(cast(Mapping[str, Any], value))
+    raise ValueError(f'options must be a mapping or BaseModel, got {type(value).__name__}')
+
+
+def check_options_value(cls: type, value: object) -> object:
+    """The before-validator for ``options`` on EmbedRequest.
+
+    Untyped, options is always a dict (see options_dict). Typed, it follows
+    ModelRequest's config rule, and ``None`` is ``{}`` so the fn gets the
+    class with its defaults rather than None.
+    """
+    if declared_config_type(cls) is None:
+        return options_dict(value)
+    if value is None:
+        return {}
+    return check_config_value(cls, value, field='options')
+
+
+def _untyped_options_schema(schema: JsonDict, cls: type) -> None:
+    """Bare options validate to a dict, so the schema says object instead of any."""
+    if declared_config_type(cls) is None:
+        properties = cast(dict[str, Any], schema['properties'])
+        properties['options'] = {'additionalProperties': True, 'title': 'Options', 'type': 'object'}
+
+
+class EmbedRequest(GenkitModel, Generic[RequestOptionsT]):
+    """Embed request whose documents are the public Document type.
+
+    Bare ``EmbedRequest`` gives the fn ``options`` as a dict.
+    ``EmbedRequest[CrmEmbedConfig]`` gives it a validated ``CrmEmbedConfig``.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
     input: list[Document]
-    options: Any | None = Field(default=None)
+    # validate_default so EmbedRequest[Cfg]() builds Cfg() instead of keeping {}.
+    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
+
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``EmbedRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
+        check_config_type_arg(request='EmbedRequest', field='options', typevar_values=typevar_values)
+        return super().__class_getitem__(typevar_values)
 
     @field_validator('input', mode='before')
     @classmethod
@@ -922,6 +1138,52 @@ class EmbedRequest(GenkitModel):
         if not isinstance(v, list):
             return v
         return [as_document(d) for d in v]
+
+    @field_validator('options', mode='before')
+    @classmethod
+    def _check_options_type(cls, v: object) -> object:
+        return check_options_value(cls, v)
+
+
+def count_message_usage(messages: Sequence[Message], response: Message) -> dict[str, int]:
+    """Character and media counts behind ``GenerationUsage.from_messages``."""
+
+    def count_parts(parts: Sequence[Part]) -> tuple[int, int, int, int]:
+        characters = 0
+        images = 0
+        videos = 0
+        audio = 0
+
+        for part in parts:
+            if part.text:
+                characters += len(part.text)
+
+            media = part.media
+            if media:
+                content_type = media.content_type or ''
+                url = media.url or ''
+
+                if content_type.startswith('image') or url.startswith('data:image'):
+                    images += 1
+                elif content_type.startswith('video') or url.startswith('data:video'):
+                    videos += 1
+                elif content_type.startswith('audio') or url.startswith('data:audio'):
+                    audio += 1
+
+        return characters, images, videos, audio
+
+    in_chars, in_imgs, in_vids, in_audio = count_parts([part for msg in messages for part in msg.content])
+    out_chars, out_imgs, out_vids, out_audio = count_parts(response.content)
+    return {
+        'input_characters': in_chars,
+        'input_images': in_imgs,
+        'input_videos': in_vids,
+        'input_audio_files': in_audio,
+        'output_characters': out_chars,
+        'output_images': out_imgs,
+        'output_videos': out_vids,
+        'output_audio_files': out_audio,
+    }
 
 
 class SessionState(GenkitModel):
@@ -971,7 +1233,7 @@ class SessionSnapshot(GenkitModel):
     heartbeat_at: str | None = None
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     state: SessionState | None = None
 
     @field_validator('state', mode='before')
@@ -1028,7 +1290,7 @@ class AgentOutput(GenkitModel):
     message: Message | None = None
     artifacts: list[Artifact] | None = None
     finish_reason: AgentFinishReason | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     usage: GenerationUsage | None = None
 
     @field_validator('message', mode='before')
@@ -1083,7 +1345,7 @@ class OutputConfig(GenkitModel):
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
-        alias_generator=to_camel, extra='forbid', populate_by_name=True, protected_namespaces=()
+        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True, protected_namespaces=()
     )
     format: str | None = None
     json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
@@ -1119,7 +1381,9 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         so passing them there leaves output unset.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
+    )
     messages: list[Message]
     docs: list[Document] | None = None
     config: ModelRequestConfigT | None = None
@@ -1135,16 +1399,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         dict config fails when the model function is defined, with the same
         error on every Python version.
         """
-        arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
-        if not (arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg)):
-            label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message=(
-                    f'ModelRequest[{label}]: the config type must be a pydantic '
-                    'BaseModel subclass, e.g. a ModelConfig subclass. Use bare ModelRequest to take config as a dict.'
-                ),
-            )
+        check_config_type_arg(request='ModelRequest', field='config', typevar_values=typevar_values)
         return super().__class_getitem__(typevar_values)
 
     @field_validator('config', mode='before')
@@ -1155,18 +1410,7 @@ class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
         A Pydantic instance is only legal if it is that schema. OpenAIConfig
         on a Gemini request is a caller mistake — pass a mapping instead.
         """
-        if v is None:
-            return v
-        if isinstance(v, Mapping) and not isinstance(v, BaseModel):
-            return v
-        if isinstance(v, BaseModel):
-            expected = declared_config_type(cls)
-            if expected is not None and not isinstance(v, expected):
-                raise ValueError(
-                    f'config must be {config_type_path(expected)} or a mapping, got {config_type_path(type(v))}'
-                )
-            return v
-        raise ValueError(f'config must be a BaseModel or mapping, got {type(v).__name__}')
+        return check_config_value(cls, v, field='config')
 
     @field_validator('messages', mode='before')
     @classmethod
@@ -1257,9 +1501,10 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     # when output format parsing or schema validation is needed.
     _message_parser: Callable[[Message], object] | None = PrivateAttr(None)
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
+    _failure: BoxedFailure | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
-    error: GenkitRuntimeError | None = None
+    error: Failure | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
@@ -1269,7 +1514,37 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     raw: dict[str, Any] | None = None
     request: ModelRequest | None = None
     operation: Operation | None = None
-    candidates: list[Candidate] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _drop_candidates(cls, data: object) -> object:
+        # JS responses, stored traces, session snapshots and older plugins may
+        # still carry the deprecated `candidates` list. Drop it instead of
+        # failing on extra='forbid'. When the top-level reply is missing, fill
+        # it from candidate 0, as JS GenerateResponse does.
+        if not isinstance(data, dict) or 'candidates' not in data:
+            return data
+        raw = cast(dict[str, Any], data)
+        fields = {k: v for k, v in raw.items() if k != 'candidates'}
+        candidates: object = raw['candidates']
+        if fields.get('message') is not None or not isinstance(candidates, list) or not candidates:
+            return fields
+        candidate_list = cast(list[Any], candidates)
+        first: object = next(
+            (c for c in candidate_list if isinstance(c, Mapping) and cast(Mapping[str, Any], c).get('index', 0) == 0),
+            candidate_list[0],
+        )
+        if isinstance(first, BaseModel):
+            first = first.model_dump(by_alias=True, exclude_none=True)
+        if not isinstance(first, Mapping):
+            return fields
+        candidate = cast(Mapping[str, Any], first)
+        fields['message'] = candidate.get('message')
+        for camel, snake in (('finishReason', 'finish_reason'), ('finishMessage', 'finish_message')):
+            value = candidate.get(camel, candidate.get(snake))
+            if value is not None and fields.get(camel) is None and fields.get(snake) is None:
+                fields[camel] = value
+        return fields
 
     @field_validator('message', mode='before')
     @classmethod
@@ -1285,13 +1560,6 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             return v
         return as_model_request(v)
 
-    @field_validator('candidates', mode='before')
-    @classmethod
-    def _wrap_candidates(cls, v: object) -> object:
-        if not isinstance(v, list):
-            return v
-        return [as_candidate(c) for c in v]
-
     def model_post_init(self, __context: object) -> None:
         """Initialize default usage and custom dict if not provided."""
         if self.usage is None:
@@ -1300,10 +1568,10 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             self.custom = {}
 
     def _mark_invalid_output(self, message: str) -> None:
-        self.error = GenkitRuntimeError(
+        self.error = Failure(
             status='INTERNAL',
             message=message,
-            details={'reason': RuntimeErrorReason.INVALID_OUTPUT.value},
+            details={'reason': ErrorReason.INVALID_OUTPUT.value},
         )
 
     @property
@@ -1341,7 +1609,7 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         try:
             parsed = self._raw_parsed_output()
         except Exception as exc:
-            if isinstance(exc, GenkitError) and (exc.original_message or '').startswith('Invalid output_schema'):
+            if isinstance(exc, GenkitError) and (exc.message or '').startswith('Invalid output_schema'):
                 raise
             preview = (self.text or '')[:200]
             if cut_off:
@@ -1369,9 +1637,9 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             try:
                 parse_schema(data=parsed, json_schema=schema)
             except GenkitError as error:
-                if error.original_message.startswith('Invalid output_schema'):
+                if error.message.startswith('Invalid output_schema'):
                     raise
-                self._mark_invalid_output(error.original_message)
+                self._mark_invalid_output(error.message)
                 return
 
         # A custom format's parser can return a scalar (e.g. enum string).
@@ -1540,22 +1808,46 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
             prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
         return prior + self.text
 
+    @property
+    def tool_requests(self) -> list[Part]:
+        """All tool request parts in this chunk."""
+        return [p for p in self.content if p.tool_request is not None]
+
+    @property
+    def tool_responses(self) -> list[Part]:
+        """All tool response parts in this chunk."""
+        return [p for p in self.content if p.tool_response is not None]
+
     @cached_property
     def output(self) -> OutputT | None:
         """The reply so far, parsed as far as it goes. Never raises.
 
-        With ``output_schema=Recipe``, this is a partly built ``Recipe``:
-        fields that haven't arrived are ``None`` even when typed ``str``,
-        values may be cut short (``'Fluffy Panc'``), and nothing is
-        validated. Guard each field you read. ``(await stream.response).output``
-        is the only validated ``Recipe``.
+        With ``output_schema=Recipe``, this is a ``Recipe`` filled as far as
+        the JSON goes:
+        - Optional fields populate from their default or ``default_factory``
+          (called fresh per chunk, so non-deterministic factories like ``uuid4``
+          or ``datetime.now`` change per chunk until final validation), and
+          missing required fields are ``None``.
+        - Closed fields and list items run field validation (``@field_validator``
+          and field constraints, while ``@model_validator`` waits until the
+          object closes); closed values that fail validation pass through raw.
+        - Open ``str`` fields stream as prefixes, while open ``str`` values for
+          ``Enum``/``datetime``/``Literal`` and unresolved discriminated unions
+          stay at ``None`` (or their default) until closed. Open numbers still
+          pass through raw for ``datetime`` fields and for numeric ``Literal``
+          values that already match a member (even if more digits may follow).
+
+        ``(await stream.response).output`` is the only fully validated ``Recipe``.
 
         With no schema class, this is the JSON value so far (dict, list,
         or scalar). It's ``None`` before an object starts or while the text
         can't be parsed.
         """
+        if self.role is not None and self.role != Role.MODEL:
+            return None
         try:
-            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(self.accumulated_text)
+            text = self.accumulated_text
+            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(text)
             if (
                 self._schema_type is not None
                 and isinstance(parsed, dict)
@@ -1563,7 +1855,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
             ):
                 return cast(
                     'OutputT | None',
-                    construct_partial(schema_type=self._schema_type, data=parsed),
+                    construct_partial(
+                        schema_type=self._schema_type,
+                        data=parsed,
+                        closed=is_complete_json(text),
+                    ),
                 )
             return cast('OutputT | None', parsed)
         except Exception:
@@ -1643,7 +1939,6 @@ AgentInit.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentInput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentOutput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentResult.model_rebuild(force=True, _types_namespace=_VENEER_NS)
-Candidate.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 ModelResponse.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 ModelResponseChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
 AgentStreamChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
@@ -1678,7 +1973,7 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'MultipartToolResponse content must be a list of Parts, got {type(v).__name__}.',
-                reason=RuntimeErrorReason.INVALID_PART,
+                reason=ErrorReason.INVALID_PART,
             )
         out: list[Part] = []
         for item in v:
@@ -1690,7 +1985,7 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
                     message=(
                         f'MultipartToolResponse content must be a list of Parts, got {type(item).__name__} in the list.'
                     ),
-                    reason=RuntimeErrorReason.INVALID_PART,
+                    reason=ErrorReason.INVALID_PART,
                 ) from e
         return out
 
@@ -1701,7 +1996,7 @@ class MultipartToolResponse(GenkitModel, Generic[OutputT]):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'MultipartToolResponse metadata must be a dict, got {type(v).__name__}.',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         return v
 
@@ -1722,54 +2017,6 @@ def text_from_content(content: Sequence[Part]) -> str:
         if p.text is not None:
             texts.append(str(p.text))
     return ''.join(texts)
-
-
-def get_basic_usage_stats(input_: list[Message], response: Message) -> GenerationUsage:
-    """Calculate usage stats (characters, media counts) from messages."""
-    request_parts: list[Part] = []
-    for msg in input_:
-        request_parts.extend(msg.content)
-
-    response_parts = response.content
-
-    def count_parts(parts: list[Part]) -> tuple[int, int, int, int]:
-        """Count characters, images, videos, audio in parts."""
-        characters = 0
-        images = 0
-        videos = 0
-        audio = 0
-
-        for part in parts:
-            if part.text:
-                characters += len(part.text)
-
-            media = part.media
-            if media:
-                content_type = media.content_type or ''
-                url = media.url or ''
-
-                if content_type.startswith('image') or url.startswith('data:image'):
-                    images += 1
-                elif content_type.startswith('video') or url.startswith('data:video'):
-                    videos += 1
-                elif content_type.startswith('audio') or url.startswith('data:audio'):
-                    audio += 1
-
-        return characters, images, videos, audio
-
-    in_chars, in_imgs, in_vids, in_audio = count_parts(request_parts)
-    out_chars, out_imgs, out_vids, out_audio = count_parts(response_parts)
-
-    return GenerationUsage(
-        input_characters=in_chars,
-        input_images=in_imgs,
-        input_videos=in_vids,
-        input_audio_files=in_audio,
-        output_characters=out_chars,
-        output_images=out_imgs,
-        output_videos=out_vids,
-        output_audio_files=out_audio,
-    )
 
 
 # Rebuild schema after all types (including Message) are fully defined.

@@ -35,6 +35,7 @@ interface FlowRunOptions {
 
 /** Command to run a flow. */
 export const flowRun = new Command('flow:run')
+  .allowExcessArguments(true)
   .usage('[options] <flowName> [data] [-- <command...>]')
   .description('run a flow using provided data as input')
   .argument('<flowName>', 'name of the flow to run')

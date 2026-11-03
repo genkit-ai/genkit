@@ -24,7 +24,7 @@ from genkit_middleware import Skills
 
 from genkit import ModelResponse
 from genkit._core._model import GenerateActionOptions
-from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
+from genkit.middleware import GenerateHookParams, MiddlewareContext
 
 
 def _make_params() -> GenerateHookParams:
@@ -35,7 +35,7 @@ def _make_params() -> GenerateHookParams:
 
 
 @pytest.mark.asyncio
-async def test_skills_no_paths(ctx: GenerateMiddlewareContext) -> None:
+async def test_skills_no_paths(ctx: MiddlewareContext) -> None:
     """Test that middleware works with no skill paths."""
     skills = Skills(skill_paths=[])
 
@@ -47,7 +47,7 @@ async def test_skills_no_paths(ctx: GenerateMiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skills_nonexistent_path(ctx: GenerateMiddlewareContext) -> None:
+async def test_skills_nonexistent_path(ctx: MiddlewareContext) -> None:
     """Test that nonexistent paths are silently skipped."""
     skills = Skills(skill_paths=['/nonexistent/path'])
 
@@ -59,7 +59,7 @@ async def test_skills_nonexistent_path(ctx: GenerateMiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_skills_scan_with_skill(ctx: GenerateMiddlewareContext) -> None:
+async def test_skills_scan_with_skill(ctx: MiddlewareContext) -> None:
     """Test that skills are scanned and injected into system message."""
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = Path(tmpdir) / 'test-skill'
@@ -156,7 +156,7 @@ Skill body.
         assert 'No description provided' not in prompt
 
 
-def test_use_skill_description_is_nonempty(ctx: GenerateMiddlewareContext) -> None:
+def test_use_skill_description_is_nonempty(ctx: MiddlewareContext) -> None:
     """The skill tool the model sees has a non-empty description."""
     with tempfile.TemporaryDirectory() as tmpdir:
         skill_dir = Path(tmpdir) / 'test-skill'

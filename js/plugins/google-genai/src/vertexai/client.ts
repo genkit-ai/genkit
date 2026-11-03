@@ -131,11 +131,17 @@ export async function listModels(
 /**
  * Resource path of the Interactions API. Express mode has no project, but
  * still needs the location: `v1beta1/locations/global/interactions`.
+ * `subPath` is appended for a single interaction (e.g. `<id>/cancel`).
  */
-function getInteractionsResourcePath(clientOptions: ClientOptions): string {
-  return clientOptions.kind == 'express'
-    ? 'locations/global/interactions'
-    : 'interactions';
+function getInteractionsResourcePath(
+  clientOptions: ClientOptions,
+  subPath?: string
+): string {
+  const base =
+    clientOptions.kind == 'express'
+      ? 'locations/global/interactions'
+      : 'interactions';
+  return subPath ? `${base}/${subPath}` : base;
 }
 
 export async function createInteraction(
@@ -185,6 +191,59 @@ export async function createInteractionStream(
     processFn: async (response) => {
       return interactionProcessStream(response);
     },
+  });
+}
+
+/**
+ * Gets an interaction by ID (used to poll background interactions, e.g.
+ * Deep Research).
+ */
+export async function getInteraction(
+  interactionId: string,
+  clientOptions: ClientOptions
+): Promise<GeminiInteraction> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: getInteractionsResourcePath(clientOptions, interactionId),
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'GET',
+    clientOptions,
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    clientOptions,
+  });
+}
+
+/**
+ * Cancels a background interaction that is still in progress. The platform
+ * returns the interaction with `status: 'cancelled'`.
+ */
+export async function cancelInteraction(
+  interactionId: string,
+  clientOptions: ClientOptions
+): Promise<GeminiInteraction> {
+  const url = getVertexAIUrl({
+    includeProjectAndLocation: true,
+    resourcePath: getInteractionsResourcePath(
+      clientOptions,
+      `${interactionId}/cancel`
+    ),
+    clientOptions,
+  });
+
+  const fetchOptions = await getFetchOptions({
+    method: 'POST',
+    clientOptions,
+    isInteraction: true,
+  });
+
+  return maybeTraceRequest<GeminiInteraction>(url, fetchOptions, {
+    clientOptions,
   });
 }
 

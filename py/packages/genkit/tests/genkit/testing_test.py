@@ -18,7 +18,7 @@
 
 import pytest
 
-from genkit import ActionRunContext, Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
 from genkit._ai._testing import (
     GablorkenInput,
     SkipTestError,
@@ -26,7 +26,7 @@ from genkit._ai._testing import (
     test_models as run_model_tests,
 )
 from genkit._core._typing import FinishReason, Role
-from genkit.model import ModelConfig, ModelRequest
+from genkit.model import ModelConfig, ModelContext, ModelRequest
 from genkit.testing import (
     EchoModel,
     ScriptedModel,
@@ -37,7 +37,7 @@ from genkit.testing import (
 )
 
 
-class MockActionRunContext(ActionRunContext):
+class MockModelContext(ModelContext):
     """Mock context for testing model functions directly."""
 
     def __init__(self) -> None:
@@ -45,7 +45,7 @@ class MockActionRunContext(ActionRunContext):
         super().__init__()
         self.chunks: list[ModelResponseChunk] = []
 
-    def send_chunk(self, chunk: object) -> None:
+    def send_chunk(self, chunk: ModelResponseChunk) -> None:
         """Append a chunk to the chunks list."""
         assert isinstance(chunk, ModelResponseChunk)
         self.chunks.append(chunk)
@@ -64,7 +64,7 @@ class TestEchoModel:
     async def test_echo_model_basic(self) -> None:
         """Test basic echo functionality."""
         echo = EchoModel()
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -75,7 +75,6 @@ class TestEchoModel:
             ],
         )
 
-        # pyright: ignore[reportArgumentType] - MockActionRunContext is compatible
         response = await echo.model_fn(request, ctx)
 
         assert response.message is not None
@@ -89,7 +88,7 @@ class TestEchoModel:
     async def test_echo_model_with_config(self) -> None:
         """Test that echo includes config in response."""
         echo = EchoModel()
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -112,7 +111,7 @@ class TestEchoModel:
     async def test_echo_model_stream_countdown(self) -> None:
         """Test stream countdown functionality."""
         echo = EchoModel(stream_countdown=True)
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -136,7 +135,7 @@ class TestEchoModel:
     async def test_echo_model_stores_request(self) -> None:
         """Test that echo stores the last request."""
         echo = EchoModel()
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -178,7 +177,7 @@ class TestScriptedModel:
                 ),
             ),
         ]
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -213,7 +212,7 @@ class TestScriptedModel:
                 ),
             ),
         ]
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -251,7 +250,7 @@ class TestScriptedModel:
                 ModelResponseChunk(content=[Part.from_text('Chunk 2')]),
             ],
         ]
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -281,7 +280,7 @@ class TestScriptedModel:
                 ),
             ),
         ]
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -315,7 +314,7 @@ class TestScriptedModel:
                 ),
             ),
         ]
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -369,7 +368,7 @@ class TestStaticResponseModel:
                 'content': [{'text': 'Static response'}],
             }
         )
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[
@@ -394,7 +393,7 @@ class TestStaticResponseModel:
                 'content': [{'text': 'Static'}],
             }
         )
-        ctx = MockActionRunContext()
+        ctx = MockModelContext()
 
         request = ModelRequest(
             messages=[

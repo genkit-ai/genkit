@@ -26,11 +26,13 @@ import {
 import { getGenkitClientHeader } from '../../src/common/utils.js';
 import {
   TEST_ONLY,
+  cancelInteraction,
   createInteraction,
   embedContent,
   embedPredict,
   generateContent,
   generateContentStream,
+  getInteraction,
   getVertexAIUrl,
   imagenPredict,
   listModels,
@@ -961,6 +963,36 @@ describe('Vertex AI Client', () => {
               );
             });
           }
+
+          it('should get and cancel an interaction by ID', async () => {
+            const interactionsPath = isExpress
+              ? 'locations/global/interactions'
+              : `projects/${projectId}/locations/${location}/interactions`;
+
+            mockFetchResponse({ id: 'v1_abc123', status: 'in_progress' });
+            await getInteraction('v1_abc123', currentOptions);
+            assert.strictEqual(
+              fetchSpy.lastCall.args[0],
+              getBaseUrl(`${interactionsPath}/v1_abc123`)
+            );
+            assert.strictEqual(fetchSpy.lastCall.args[1].method, 'GET');
+            assert.strictEqual(
+              fetchSpy.lastCall.args[1].headers['Api-Revision'],
+              '2026-05-20'
+            );
+
+            mockFetchResponse({ id: 'v1_abc123', status: 'cancelled' });
+            const cancelled = await cancelInteraction(
+              'v1_abc123',
+              currentOptions
+            );
+            assert.strictEqual(
+              fetchSpy.lastCall.args[0],
+              getBaseUrl(`${interactionsPath}/v1_abc123/cancel`)
+            );
+            assert.strictEqual(fetchSpy.lastCall.args[1].method, 'POST');
+            assert.strictEqual(cancelled.status, 'cancelled');
+          });
 
           it('should prefer the Interactions error code over the HTTP status', async () => {
             mockFetchResponse(

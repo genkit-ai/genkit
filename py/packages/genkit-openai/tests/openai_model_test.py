@@ -33,9 +33,16 @@ from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
-from genkit import ActionRunContext, FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
-from genkit._core._typing import GenerationUsage, Operation
-from genkit.model import ModelConfig, ModelRequest, OutputConfig, Supports, ToolRequest
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Operation, Part, Role
+from genkit.model import (
+    GenerationUsage,
+    ModelConfig,
+    ModelContext,
+    ModelRequest,
+    ModelSupports,
+    OutputConfig,
+    ToolRequest,
+)
 
 
 def test_unknown_chat_id_json_mode_uses_json_object() -> None:
@@ -74,7 +81,7 @@ def test_openai_model_text_only_supports_json_request_sends_text() -> None:
     model = OpenAIModel(
         model='some-text-only-compat',
         client=MagicMock(),
-        supports=Supports(output=['text']),
+        supports=ModelSupports(output=['text']),
     )
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('give me json')])],
@@ -168,58 +175,32 @@ async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models
     model = OpenAIModel(model=model_name, client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, reasoning_effort=reasoning_effort),
+        config=OpenAIConfig(max_output_tokens=32, reasoning_effort=reasoning_effort),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_completion_tokens'] == 32
     assert 'max_tokens' not in body
+    assert 'max_output_tokens' not in body
 
 
 @pytest.mark.asyncio
 async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
-    """Legacy OpenAI-compatible models continue to receive max_tokens."""
+    """Legacy OpenAI-compatible models receive max_output_tokens as max_tokens."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32),
+        config=OpenAIConfig(max_output_tokens=32, stop_sequences=['###']),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_tokens'] == 32
+    assert body['stop'] == ['###']
     assert 'max_completion_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
-    """An explicit modern token limit wins when both fields are configured."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_completion_tokens=64),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_completion_tokens'] == 64
-    assert 'max_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_max_tokens_wins_over_max_output_tokens() -> None:
-    """`max_tokens=32` with `max_output_tokens=128` sends a cap of 32."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_output_tokens=128),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_tokens'] == 32
     assert 'max_output_tokens' not in body
+    assert 'stop_sequences' not in body
 
 
 @pytest.mark.asyncio
@@ -882,7 +863,7 @@ async def test__generate_stream_refusal_wins_over_a_failure_message(sample_reque
 @pytest.mark.asyncio
 async def test_generate_classifies_an_unreadable_message(sample_request: ModelRequest) -> None:
     """A message with nothing to read at all is still INTERNAL, so retry runs."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
     model = OpenAIModel(model='gpt-4', client=_mock_completion(_completion(content=None)))
 
@@ -901,7 +882,7 @@ async def test_generate_classifies_an_unreadable_message(sample_request: ModelRe
 @pytest.mark.asyncio
 async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
     """Tests for generate."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=stream)
 
     mock_response = ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('mocked')]))
@@ -924,7 +905,7 @@ async def test_generate(stream: bool, sample_request: ModelRequest) -> None:
 @pytest.mark.asyncio
 async def test_generate_classifies_bad_config_type() -> None:
     """A config type we cannot send is INVALID_ARGUMENT so retry skips it."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
     model = OpenAIModel(model='gpt-4', client=MagicMock())
 
@@ -944,7 +925,7 @@ async def test_generate_classifies_bad_config_type() -> None:
 @pytest.mark.asyncio
 async def test_generate_no_choices_reaches_the_caller(sample_request: ModelRequest) -> None:
     """generate()'s error handling lets the no-choices error through unchanged."""
-    ctx_mock = MagicMock(spec=ActionRunContext)
+    ctx_mock = MagicMock(spec=ModelContext)
     type(ctx_mock).is_streaming = PropertyMock(return_value=False)
 
     mock_response = MagicMock()
@@ -1762,7 +1743,7 @@ async def _stream_through_sdk(sse_body: str, sample_request: ModelRequest) -> tu
     client = AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0)
     model = OpenAIModel(model='gpt-4o', client=client)
     chunks: list[str] = []
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=True)
     ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
 
@@ -1799,8 +1780,8 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
     assert chunks == ['Grilled']
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
-    assert error.original_message == 'Rate limit reached for gpt-4o'
-    assert type(error.cause) is APIError
+    assert error.message == 'Rate limit reached for gpt-4o'
+    assert type(error.__cause__) is APIError
 
 
 @pytest.mark.asyncio
@@ -1814,8 +1795,8 @@ async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_
     assert chunks == ['Grilled']
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
-    assert error.original_message == 'Upstream reset'
-    assert type(error.cause) is APIError
+    assert error.message == 'Upstream reset'
+    assert type(error.__cause__) is APIError
 
 
 class _DroppingStream(httpx.AsyncByteStream):
@@ -1858,7 +1839,7 @@ async def test_generate_classifies_a_stream_cut_mid_read(
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     model = OpenAIModel(model='gpt-4o', client=AsyncOpenAI(api_key='test-key', http_client=http_client, max_retries=0))
     chunks: list[str] = []
-    ctx = MagicMock(spec=ActionRunContext)
+    ctx = MagicMock(spec=ModelContext)
     type(ctx).is_streaming = PropertyMock(return_value=True)
     ctx.send_chunk.side_effect = lambda chunk: chunks.append(chunk.text)
 
@@ -1868,4 +1849,4 @@ async def test_generate_classifies_a_stream_cut_mid_read(
 
     assert chunks == ['Grilled']
     assert exc_info.value.status == status
-    assert exc_info.value.cause is drop
+    assert exc_info.value.__cause__ is drop

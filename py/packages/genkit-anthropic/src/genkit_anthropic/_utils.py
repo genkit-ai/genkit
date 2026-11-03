@@ -27,12 +27,10 @@ See:
 import re
 from typing import Any
 
-import structlog
+from genkit import Part, get_logger
+from genkit.model import GenerationUsage, ModelRequest
 
-from genkit import Part
-from genkit.model import ModelRequest, ModelUsage
-
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # PDF MIME type for document handling.
 PDF_MIME_TYPE = 'application/pdf'
@@ -257,11 +255,11 @@ def to_anthropic_media(media_part: Part) -> dict[str, Any]:
 def build_cache_usage(
     input_tokens: int,
     output_tokens: int,
-    basic_usage: ModelUsage,
+    basic_usage: GenerationUsage,
     cache_creation_input_tokens: int = 0,
     cache_read_input_tokens: int = 0,
-) -> ModelUsage:
-    """Build ModelUsage with cache-aware token counts.
+) -> GenerationUsage:
+    """Build GenerationUsage with cache-aware token counts.
 
     Args:
         input_tokens: Number of input tokens from the API response.
@@ -271,7 +269,7 @@ def build_cache_usage(
         cache_read_input_tokens: Tokens read from existing cache entries.
 
     Returns:
-        ModelUsage with token, character, and cache counts.
+        GenerationUsage with token, character, and cache counts.
     """
     custom: dict[str, float] = {}
     if cache_creation_input_tokens:
@@ -279,7 +277,7 @@ def build_cache_usage(
     if cache_read_input_tokens:
         custom['cache_read_input_tokens'] = cache_read_input_tokens
 
-    return ModelUsage(
+    return GenerationUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,

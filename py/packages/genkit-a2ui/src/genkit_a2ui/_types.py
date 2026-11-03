@@ -16,17 +16,17 @@
 
 """A2UI protocol constants and shared shapes."""
 
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
-A2UI_MIME_TYPE = 'application/a2ui+json'
-A2UI_CATALOG_VALUE_TYPE = 'a2ui-catalog'
-DEFAULT_CATALOG_ID = 'basic'
-DEFAULT_VERSION = 'v0.9'
 SupportedVersion = Literal['v0.9', 'v0.9.1']
-BASIC_CATALOG_ID = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'
-SURFACE_ID_PLACEHOLDER = 'SURFACE_ID'
-
 ValidateMode = Literal['strict', 'warn', 'off']
 Envelope = dict[str, Any]
 
-SURFACE_KEYS = ('createSurface', 'updateComponents', 'updateDataModel', 'deleteSurface')
+A2UI_MIME_TYPE: Final[str] = 'application/a2ui+json'
+A2UI_CATALOG_VALUE_TYPE: Final[str] = 'a2ui-catalog'
+DEFAULT_CATALOG_ID: Final[str] = 'basic'
+DEFAULT_VERSION: Final[SupportedVersion] = 'v0.9'
+BASIC_CATALOG_ID: Final[str] = 'https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json'
+SURFACE_ID_PLACEHOLDER: Final[str] = 'SURFACE_ID'
+
+SURFACE_KEYS: Final[tuple[str, ...]] = ('createSurface', 'updateComponents', 'updateDataModel', 'deleteSurface')
