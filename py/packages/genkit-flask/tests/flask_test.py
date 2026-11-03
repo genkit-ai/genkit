@@ -442,3 +442,34 @@ def test_flask_context_provider_abort_keeps_its_status() -> None:
     response = app.test_client().post('/chat', json={'data': 'x'})
 
     assert response.status_code == 401
+
+
+def test_two_handlers_in_one_app_get_their_own_endpoints() -> None:
+    """Each route registers under its flow's name, so a second route doesn't collide."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/menu')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def suggest_dish(cuisine: str) -> str:
+        return f'{cuisine} tasting menu'
+
+    @app.post('/allergens')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def check_allergens(dish: str) -> str:
+        return f'{dish}: contains peanuts'
+
+    @app.post('/specials')
+    @genkit_flask_handler(ai)
+    @ai.flow(name='menu.specials')
+    async def specials(_: str) -> str:
+        return 'smoked salmon tartine'
+
+    client = app.test_client()
+    assert client.post('/menu', json={'data': 'thai'}).json == {'result': 'thai tasting menu'}
+    assert client.post('/allergens', json={'data': 'pad thai'}).json == {'result': 'pad thai: contains peanuts'}
+    assert client.post('/specials', json={'data': ''}).json == {'result': 'smoked salmon tartine'}
+    assert {'suggest_dish', 'check_allergens', 'menu_specials'} <= set(app.view_functions)
