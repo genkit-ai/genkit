@@ -157,10 +157,10 @@ class TestHappyPaths:
         ref = GoogleAI.gemini('gemini-2.5-flash', config=config)
         assert ref.config == config
 
-    def test_unknown_id_allowed_on_gemini_and_embedding(self) -> None:
+    def test_unknown_id_allowed_on_gemini_and_embedder(self) -> None:
         """A brand-new release must work before this plugin learns its name."""
         assert GoogleAI.gemini('totally-new-model').name == 'googleai/totally-new-model'
-        assert GoogleAI.embedding('totally-new-embedder').name == 'googleai/totally-new-embedder'
+        assert GoogleAI.embedder('totally-new-embedder').name == 'googleai/totally-new-embedder'
 
         with pytest.raises(GenkitError):
             GoogleAI.gemma('totally-new-model')
@@ -192,12 +192,12 @@ class TestStripThenPrefix:
         assert 'model name is required' in str(exc_info.value)
 
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.embedding('googleai/')
+            GoogleAI.embedder('googleai/')
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'embedder name is required' in str(exc_info.value)
 
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.embedding('')
+            GoogleAI.embedder('')
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'embedder name is required' in str(exc_info.value)
 
@@ -209,7 +209,7 @@ class TestStripThenPrefix:
         assert 'must be a string' in str(exc_info.value)
 
         with pytest.raises(GenkitError) as exc_info:
-            GoogleAI.embedding(123)  # type: ignore[arg-type]
+            GoogleAI.embedder(123)  # type: ignore[arg-type]
         assert exc_info.value.status == 'INVALID_ARGUMENT'
         assert 'must be a string' in str(exc_info.value)
 
@@ -247,7 +247,7 @@ class TestClosedRejectSet:
             GoogleAI.gemini('gemini-2.5-flash-preview-tts')
         with pytest.raises(GenkitError, match=r'VertexAI\.gemini\('):
             VertexAI.gemma('gemini-2.5-flash')
-        with pytest.raises(GenkitError, match=r'embedding'):
+        with pytest.raises(GenkitError, match=r'GoogleAI\.embedder\('):
             GoogleAI.gemini('gemini-embedding-001')
         with pytest.raises(GenkitError, match=r'veo\('):
             GoogleAI.gemini('veo-3.1-generate-preview')
@@ -290,28 +290,31 @@ class TestClosedRejectSet:
             GoogleAI.deep_research(None)  # type: ignore[arg-type]
 
 
-class TestEmbeddingConstructor:
-    """embedding() returns a typed EmbedderRef[EmbeddingConfig] matching gemini()."""
+class TestEmbedderConstructor:
+    """embedder() returns a typed EmbedderRef[EmbeddingConfig] matching gemini()."""
 
-    def test_embedding_ref(self) -> None:
-        """embedding() returns an EmbedderRef[EmbeddingConfig] under each plugin namespace."""
-        google_ref = GoogleAI.embedding('gemini-embedding-001')
+    def test_embedder_ref(self) -> None:
+        """embedder() returns an EmbedderRef[EmbeddingConfig] on classes and instances."""
+        google_ref = GoogleAI.embedder('gemini-embedding-001')
         assert isinstance(google_ref, EmbedderRef)
         assert not isinstance(google_ref, ModelRef)
         assert google_ref.name == 'googleai/gemini-embedding-001'
         assert google_ref.config_schema is EmbeddingConfig
         assert google_ref.config is None
 
-        vertex_ref = VertexAI.embedding('text-embedding-005')
+        instance_ref = GoogleAI(api_key='test-key').embedder('gemini-embedding-001')
+        assert instance_ref == google_ref
+
+        vertex_ref = VertexAI.embedder('text-embedding-005')
         assert isinstance(vertex_ref, EmbedderRef)
         assert vertex_ref.name == 'vertexai/text-embedding-005'
         assert vertex_ref.config_schema is EmbeddingConfig
         assert vertex_ref.config is None
 
-    def test_embedding_stores_deep_copied_typed_config_and_preserves_explicit_none(self) -> None:
+    def test_embedder_stores_deep_copied_typed_config_and_preserves_explicit_none(self) -> None:
         """A typed EmbeddingConfig stays an EmbeddingConfig copy, including explicit None fields."""
         config = EmbeddingConfig(task_type=None, output_dimensionality=256, version='gemini-embedding-2')
-        ref = GoogleAI.embedding('gemini-embedding-001', config=config)
+        ref = GoogleAI.embedder('gemini-embedding-001', config=config)
 
         assert isinstance(ref.config, EmbeddingConfig)
         assert ref.config is not config
@@ -319,10 +322,10 @@ class TestEmbeddingConstructor:
         assert ref.config.model_fields_set == {'task_type', 'output_dimensionality', 'version'}
         assert ref.config.version == 'gemini-embedding-2'
 
-    def test_embedding_rejects_raw_dict_and_wrong_config_class(self) -> None:
-        """Typed embedding() constructors reject raw dicts and foreign config models."""
+    def test_embedder_rejects_raw_dict_and_wrong_config_class(self) -> None:
+        """Typed embedder() constructors reject raw dicts and foreign config models."""
         with pytest.raises(GenkitError) as dict_exc:
-            GoogleAI.embedding(
+            GoogleAI.embedder(
                 'gemini-embedding-001',
                 config={'task_type': 'RETRIEVAL_QUERY'},  # type: ignore[arg-type]
             )
@@ -330,24 +333,24 @@ class TestEmbeddingConstructor:
         assert 'EmbeddingConfig' in dict_exc.value.message
 
         with pytest.raises(GenkitError) as model_exc:
-            VertexAI.embedding(
+            VertexAI.embedder(
                 'text-embedding-005',
                 config=GeminiConfig(temperature=0.5),  # type: ignore[arg-type]
             )
         assert model_exc.value.status == 'INVALID_ARGUMENT'
         assert 'EmbeddingConfig' in model_exc.value.message
 
-    def test_embedding_has_no_version_kwarg(self) -> None:
-        """version lives on EmbeddingConfig(version=...), not as a kwarg on embedding()."""
+    def test_embedder_has_no_version_kwarg(self) -> None:
+        """version lives on EmbeddingConfig(version=...), not as a kwarg on embedder()."""
         with pytest.raises(TypeError, match='version'):
-            GoogleAI.embedding(
+            GoogleAI.embedder(
                 'gemini-embedding-001',
                 version='gemini-embedding-2',  # type: ignore[call-arg]
             )
 
-    def test_embedding_strips_and_prefixes(self) -> None:
+    def test_embedder_strips_and_prefixes(self) -> None:
         """Pasted embedder prefixes are stripped before namespacing."""
-        ref = VertexAI.embedding(
+        ref = VertexAI.embedder(
             'embedders/googleai/text-embedding-004',
             config=EmbeddingConfig(version='text-embedding-005'),
         )
@@ -355,12 +358,12 @@ class TestEmbeddingConstructor:
         assert isinstance(ref.config, EmbeddingConfig)
         assert ref.config.version == 'text-embedding-005'
 
-    def test_embedding_rejects_generate_models(self) -> None:
+    def test_embedder_rejects_generate_models(self) -> None:
         """Generate-model ids cannot mint an EmbedderRef."""
         with pytest.raises(GenkitError, match=r'gemini\('):
-            GoogleAI.embedding('gemini-2.5-flash')
+            GoogleAI.embedder('gemini-2.5-flash')
         with pytest.raises(GenkitError):
-            VertexAI.embedding('imagen-3.0-generate-002')
+            VertexAI.embedder('imagen-3.0-generate-002')
 
 
 def _registered(is_family: Callable[[str], bool]) -> set[str]:
@@ -508,7 +511,7 @@ class TestNoImagenSurface:
             with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image\(\)'):
                 getattr(plugin, method)('imagen-4.0-generate-001')
         with pytest.raises(GenkitError, match=r'for image generation use \w+\.gemini_image\(\)'):
-            plugin.embedding('imagen-4.0-generate-001')
+            plugin.embedder('imagen-4.0-generate-001')
 
     @pytest.mark.parametrize('plugin', [GoogleAI, VertexAI])
     def test_gemini_image_does_not_suggest_itself(self, plugin: type[GoogleAI] | type[VertexAI]) -> None:

@@ -247,19 +247,10 @@ async def test_plugin_init_slash_names_keep_full_path() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plugin_model_helper_returns_action_named_with_plugin_prefix() -> None:
-    """`await plugin.model('fast-model')` is named `myplug/fast-model`."""
-    plugin = RecordingPlugin(serves={'fast-model'})
-
-    action = await plugin.model('fast-model')
-
-    assert action is not None
-    assert action.name == 'myplug/fast-model'
-
-
-@pytest.mark.asyncio
-async def test_plugin_embedder_helper_returns_action_named_with_plugin_prefix() -> None:
-    """`await plugin.embedder('embed-1')` is named `myplug/embed-1`."""
+async def test_embed_plugin_resolve_strips_one_plugin_prefix_and_names_action() -> None:
+    """`ai.embed` strips one leading `{plugin.name}/` before `resolve` and registers under `{plugin.name}/{rest}`."""
+    seen: list[tuple[ActionKind, str]] = []
+    created: list[Embedder] = []
 
     class EmbedPlugin(Plugin):
         name = 'myplug'
@@ -268,44 +259,32 @@ async def test_plugin_embedder_helper_returns_action_named_with_plugin_prefix() 
             return []
 
         async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
-            if action_type != ActionKind.EMBEDDER or name != 'embed-1':
+            seen.append((action_type, name))
+            if action_type != ActionKind.EMBEDDER or name not in {'embed-1', 'myplug/embed-1'}:
                 return None
 
             async def fn(request: EmbedRequest) -> EmbedResponse:
                 return EmbedResponse(embeddings=[])
 
-            return Embedder(name, fn)
+            embedder = Embedder(name, fn)
+            created.append(embedder)
+            return embedder
 
         async def list_actions(self) -> list[Action]:
             return []
 
-    action = await EmbedPlugin().embedder('embed-1')
+    ai = Genkit(plugins=[EmbedPlugin()])
+    await ai.embed(embedder='myplug/embed-1', content='hi')
+    await ai.embed(embedder='myplug/myplug/embed-1', content='hi')
 
-    assert action is not None
-    assert action.name == 'myplug/embed-1'
-
-
-@pytest.mark.asyncio
-async def test_plugin_model_helper_passes_bare_id() -> None:
-    """`await plugin.model('myplug/fast-model')` calls `resolve` with `fast-model`."""
-    plugin = RecordingPlugin(serves={'fast-model'})
-
-    with_prefix = await plugin.model('myplug/fast-model')
-    without_prefix = await plugin.model('fast-model')
-
-    assert with_prefix is not None
-    assert without_prefix is not None
-    assert plugin.seen == [(ActionKind.MODEL, 'fast-model'), (ActionKind.MODEL, 'fast-model')]
+    assert seen == [(ActionKind.EMBEDDER, 'embed-1'), (ActionKind.EMBEDDER, 'myplug/embed-1')]
+    assert [e.name for e in created] == ['myplug/embed-1', 'myplug/myplug/embed-1']
 
 
-@pytest.mark.asyncio
-async def test_plugin_embedder_helper_passes_bare_id() -> None:
-    """`await plugin.embedder('myplug/embed-1')` calls `resolve` with `embed-1`."""
-    plugin = RecordingPlugin(serves=set())
-
-    await plugin.embedder('myplug/embed-1')
-
-    assert plugin.seen == [(ActionKind.EMBEDDER, 'embed-1')]
+def test_plugin_base_class_leaves_model_and_embedder_names_free_for_ref_constructors() -> None:
+    """`Plugin` has no `.model` or `.embedder` methods that collide with `@classmethod` ref constructors."""
+    assert not hasattr(Plugin, 'model')
+    assert not hasattr(Plugin, 'embedder')
 
 
 @pytest.mark.asyncio

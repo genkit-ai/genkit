@@ -1973,7 +1973,7 @@ class Genkit:
             from genkit_google_genai import GoogleAI
 
             embeddings = await ai.embed(
-                embedder=GoogleAI.embedding('gemini-embedding-001'),
+                embedder=GoogleAI.embedder('gemini-embedding-001'),
                 content='Hello world',
             )
             vector = embeddings[0].embedding

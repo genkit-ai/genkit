@@ -52,8 +52,8 @@ EmbeddingTaskType: TypeAlias = Literal[
 class EmbeddingConfig(GenkitConfig):
     """Settings an embedder accepts across Google AI and Vertex AI.
 
-    Pass an instance to ``GoogleAI.embedding(config=...)``,
-    ``VertexAI.embedding(config=...)``, or ``ai.embed(config=...)``;
+    Pass an instance to ``GoogleAI.embedder(config=...)``,
+    ``VertexAI.embedder(config=...)``, or ``ai.embed(config=...)``;
     ``ai.embed(config=...)`` also accepts a dict in snake_case or camelCase.
     Unknown keys and duplicate spellings in a single dict raise
     ``GenkitError(INVALID_ARGUMENT)``.
