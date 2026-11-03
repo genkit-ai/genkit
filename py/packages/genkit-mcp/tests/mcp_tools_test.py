@@ -44,7 +44,6 @@ from pydantic import AnyUrl
 from structlog.testing import capture_logs
 
 from genkit import Part
-from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 
 
@@ -172,7 +171,7 @@ def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
         Part.from_media(url='data:image/png;base64,image-data', content_type='image/png'),
         Part.from_media(url='data:audio/mpeg;base64,audio-data', content_type='audio/mpeg'),
         Part.from_media(url='data:application/pdf;base64,blob-data', content_type='application/pdf'),
-        Part(resource=Resource(uri='https://example.test/docs')),
+        Part.model_validate({'resource': {'uri': 'https://example.test/docs'}}),
     ]
 
 

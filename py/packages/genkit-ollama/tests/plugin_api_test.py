@@ -32,7 +32,10 @@ from genkit_ollama._models import OllamaConfig, OllamaModel, _ResolvedModel
 from pydantic import BaseModel
 
 from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
-from genkit._core._schema import custom_options_schema
+
+# TID251: whitebox check that the advertised `customOptions` matches core's
+# null-default-stripping schema helper, which has no public export.
+from genkit._core._schema import custom_options_schema  # noqa: TID251
 from genkit.embedder import EmbedRequest
 from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import ActionKind, to_json_schema
