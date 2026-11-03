@@ -773,6 +773,20 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
+def _split_rendered(error: GenkitError) -> tuple[str | None, str]:
+    """Split ``str(error)`` (``[source: ]STATUS: message[: cause]``) into source and message-with-cause.
+
+    GenkitError keeps ``source`` only as a prefix on its string form, so read
+    it back from there. The first ``STATUS: message`` is the anchor; a cause
+    suffix can repeat it but always comes after.
+    """
+    text = str(error)
+    at = text.find(f'{error.status}: {error.message}')
+    if at < 0:
+        return None, error.message
+    return text[:at].removesuffix(': ') or None, text[at + len(error.status) + 2 :]
+
+
 @dataclass(frozen=True)
 class BoxedFailure:
     """Plain-data record of a boxed turn failure for SSE error framing.
@@ -796,22 +810,10 @@ class BoxedFailure:
                 details = _client_details(exc.details)
             except Exception:
                 details = None
-            return cls(
-                status=exc.status,
-                message=exc.message,
-                is_public=True,
-                details=details,
-                source=exc.source,
-            )
+            return cls(status=exc.status, message=exc.message, is_public=True, details=details)
         if isinstance(exc, GenkitError):
-            prefix = f'{exc.source}: {exc.status}: ' if exc.source else f'{exc.status}: '
-            text = str(exc)
-            message = text[len(prefix) :] if text.startswith(prefix) else exc.message
-            return cls(
-                status=exc.status,
-                message=message,
-                source=exc.source,
-            )
+            source, message = _split_rendered(exc)
+            return cls(status=exc.status, message=message, source=source)
         text = str(exc)
         return cls(
             status='INTERNAL',
@@ -821,15 +823,11 @@ class BoxedFailure:
     def to_exception(self) -> GenkitError:
         """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
         if self.is_public:
-            err: GenkitError = PublicError(
+            return PublicError(
                 self.status,
                 self.message,
                 details=copy.deepcopy(self.details) if self.details is not None else None,
             )
-            if self.source:
-                err.source = self.source
-                err.args = (f'{self.source}: {err.args[0]}',)
-            return err
         return GenkitError(status=self.status, message=self.message, source=self.source)
 
 

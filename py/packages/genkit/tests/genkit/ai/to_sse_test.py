@@ -9,6 +9,7 @@ import datetime
 import gc
 import json
 import logging
+import pickle  # noqa: S403
 import warnings
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, cast
@@ -20,7 +21,7 @@ import genkit.web._sse as _sse_mod
 from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._ai._generate import box_dead_turn, box_from_exc
-from genkit._core._error import BoxedFailure, GenkitRuntimeError
+from genkit._core._error import BoxedFailure, Failure, GenkitError
 from genkit._core._model import AgentOutput, AgentStreamChunk, ModelResponseChunk, ToolRequest
 from genkit._core._typing import AgentFinishReason, FinishReason, Role, TurnEnd
 from genkit.model import ModelContext, ModelRequest
@@ -423,22 +424,20 @@ async def test_prompt_stream_to_sse_frames_chunks_and_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_stream_to_sse_public_error_details_and_source_keep_failure_immutable(
+async def test_generate_stream_to_sse_public_error_details_keep_failure_immutable(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """PublicError details and source survive SSE framing without mutating BoxedFailure."""
+    """PublicError details survive SSE framing without mutating BoxedFailure."""
     ai = Genkit()
 
     @ai.tool()
     async def lookup_order(order_id: str) -> str:
         """Look up an order by ID."""
-        err = PublicError(
+        raise PublicError(
             'NOT_FOUND',
             f'order {order_id} missing',
             details={'order': Meta(source='crm'), 'stack': 'internal'},
         )
-        err.source = 'orders'
-        raise err
 
     define_scripted_model(
         ai,
@@ -463,7 +462,7 @@ async def test_generate_stream_to_sse_public_error_details_and_source_keep_failu
         '"details":{"order":{"source":"crm"}}}}\n\n'
     ]
     assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('genkit.web', 'WARNING', 'served flow stream failed: orders: NOT_FOUND: order A-1042 missing', False),
+        ('genkit.web', 'WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
     assert result._failure is not None
     assert result._failure.details == {'order': {'source': 'crm'}}
@@ -489,7 +488,7 @@ async def test_box_dead_turn_clears_stale_boxed_failure_from_copied_response(
         messages=[],
         finish_reason=FinishReason.FAILED,
         finish_message='Tool internal_billing_tool not found',
-        error=GenkitRuntimeError(status='NOT_FOUND', message='Tool internal_billing_tool not found'),
+        error=Failure(status='NOT_FOUND', message='Tool internal_billing_tool not found'),
     )
     assert dead._failure is None
 
@@ -517,3 +516,31 @@ async def test_box_dead_turn_clears_stale_boxed_failure_from_copied_response(
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
         ('ERROR', 'served flow stream failed', True),
     ]
+
+
+def test_boxed_failure_round_trips_source_and_cause_without_holding_the_exception() -> None:
+    """GenkitError's source prefix and cause text survive BoxedFailure; nothing live is kept."""
+
+    cause = GenkitError(status='NOT_FOUND', message='order A-17')
+    err = GenkitError(status='INTERNAL', message='refund failed', source='billing', cause=cause)
+    boxed = BoxedFailure.from_exc(err)
+
+    assert boxed == BoxedFailure(
+        status='INTERNAL',
+        message='refund failed: NOT_FOUND: order A-17',
+        source='billing',
+    )
+    assert str(boxed.to_exception()) == str(err) == 'billing: INTERNAL: refund failed: NOT_FOUND: order A-17'
+    assert pickle.loads(pickle.dumps(boxed)) == boxed == copy.deepcopy(boxed)  # noqa: S301
+
+    plain = BoxedFailure.from_exc(GenkitError(status='UNAVAILABLE', message='kitchen offline'))
+    assert (plain.source, str(plain.to_exception())) == (None, 'UNAVAILABLE: kitchen offline')
+
+    public = BoxedFailure.from_exc(PublicError('NOT_FOUND', 'no table 12', details={'table': 12}))
+    rebuilt = public.to_exception()
+    assert (type(rebuilt), rebuilt.status, rebuilt.message, rebuilt.details) == (
+        PublicError,
+        'NOT_FOUND',
+        'no table 12',
+        {'table': 12},
+    )
