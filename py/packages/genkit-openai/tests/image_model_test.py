@@ -25,12 +25,15 @@ import pytest
 from genkit_openai import OpenAI
 from genkit_openai._models._image import (
     SUPPORTED_IMAGE_MODELS,
+    OpenAIDalleConfig,
+    OpenAIGptImageConfig,
     OpenAIImageModel,
     _extract_prompt_text,
     _to_generate_response,
     _to_image_generate_params,
 )
 from genkit_openai._openai_plugin import _ModelType
+from pydantic import BaseModel, ValidationError
 
 from genkit import Genkit, GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
@@ -108,20 +111,6 @@ class TestToImageGenerateParams:
 
         assert 'response_format' not in got
 
-    def test_gpt_image_version_override_omits_response_format(self) -> None:
-        """Verify the version override is also classified as a GPT Image model."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('a cat')]),
-            ],
-            config={'version': 'gpt-image-1-mini'},
-        )
-
-        got = _to_image_generate_params('gpt-image-1', request)
-
-        assert got['model'] == 'gpt-image-1-mini'
-        assert 'response_format' not in got
-
     def test_gpt_image_config_passthrough(self) -> None:
         """Verify GPT Image-specific options are forwarded unchanged."""
         request = ModelRequest(
@@ -160,29 +149,14 @@ class TestToImageGenerateParams:
         assert got.get('quality') == 'hd'
         assert got.get('n') == 2
 
-    def test_strips_standard_genai_config(self) -> None:
-        """Verify standard GenAI keys are stripped from params."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('test')]),
-            ],
-            config={'temperature': 0.5, 'top_k': 40, 'top_p': 0.9},
-        )
-        got = _to_image_generate_params('dall-e-3', request)
-        assert 'temperature' not in got
-        assert 'top_k' not in got
-        assert 'top_p' not in got
-
-    def test_version_override(self) -> None:
-        """Verify model version override via config."""
-        request = ModelRequest(
-            messages=[
-                Message(role=Role.USER, content=[Part.from_text('test')]),
-            ],
-            config={'version': 'dall-e-3-custom'},
-        )
-        got = _to_image_generate_params('dall-e-3', request)
-        assert got['model'] == 'dall-e-3-custom'
+    @pytest.mark.parametrize('config_cls', [OpenAIDalleConfig, OpenAIGptImageConfig])
+    @pytest.mark.parametrize(
+        'key', ['temperature', 'max_output_tokens', 'maxOutputTokens', 'top_k', 'top_p', 'stop_sequences', 'version']
+    )
+    def test_image_config_rejects_generic_knob(self, config_cls: type[BaseModel], key: str) -> None:
+        """The Images API takes none of the text-generation knobs, so the config rejects them by name."""
+        with pytest.raises(ValidationError, match=key):
+            config_cls.model_validate({key: 1})
 
 
 class TestToModelResponse:

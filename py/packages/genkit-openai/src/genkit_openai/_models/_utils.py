@@ -20,7 +20,7 @@
 import base64
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, NoReturn
 
 import httpx
@@ -238,8 +238,13 @@ def decode_data_uri_bytes(url: str) -> bytes:
 _CLIENT_SETTING_FIELDS = ('timeout', 'extra_headers', 'extra_query', 'extra_body')
 
 
-def check_extra_body(extra: dict[str, Any], *, managed: tuple[str, ...], label: str) -> dict[str, Any]:
-    """Return ``extra`` as an ``extra_body``, or raise when it names a field Genkit builds or a client setting."""
+def check_extra_body(
+    extra: dict[str, Any], *, managed: tuple[str, ...], label: str, hints: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """Return ``extra`` as an ``extra_body``, or raise when it names a field Genkit builds or a client setting.
+
+    ``hints`` maps a managed field to how to set it instead, appended to the error.
+    """
     for field in _CLIENT_SETTING_FIELDS:
         if field in extra:
             raise GenkitError(
@@ -251,7 +256,7 @@ def check_extra_body(extra: dict[str, Any], *, managed: tuple[str, ...], label: 
             )
     for field in managed:
         if field in extra:
-            hint = '; pin a model with version' if field == 'model' else ''
+            hint = f'; {hints[field]}' if hints and field in hints else ''
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(
@@ -277,6 +282,20 @@ def pop_extra_body(config: dict[str, Any], *, managed: tuple[str, ...], label: s
     if not extra:
         return None
     return check_extra_body(extra, managed=managed, label=label)
+
+
+def reject_version(config: dict[str, Any], *, label: str) -> None:
+    """Raise when the config carries ``version``; image and audio endpoints have no version pin.
+
+    Core lets ``version`` through a config class that doesn't declare it,
+    since ``ModelRef.version`` adds it, so the endpoint checks it here instead
+    of sending it as a request field.
+    """
+    if config.pop('version', None) is not None:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f"{label}: version is not a setting for this model; name the model in generate(model='openai/...')",
+        )
 
 
 def extract_config_dict(request: ModelRequest) -> dict[str, Any]:
