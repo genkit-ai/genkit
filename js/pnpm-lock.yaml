@@ -1805,24 +1805,15 @@ importers:
       '@genkit-ai/firebase':
         specifier: workspace:*
         version: link:../../plugins/firebase
-      '@genkit-ai/google-cloud':
-        specifier: workspace:*
-        version: link:../../plugins/google-cloud
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
       '@genkit-ai/middleware':
         specifier: workspace:*
         version: link:../../plugins/middleware
-      '@google/generative-ai':
-        specifier: ^0.15.0
-        version: 0.15.0
-      '@opentelemetry/sdk-trace-base':
-        specifier: ~1.25.0
-        version: 1.25.1(@opentelemetry/api@1.9.1)
-      express:
-        specifier: ^4.21.1
-        version: 4.22.1
+      '@google/genai':
+        specifier: ^1.30.0
+        version: 1.44.0(@modelcontextprotocol/sdk@1.32.2(@cfworker/json-schema@4.1.1)(zod@4.6.7))
       firebase-admin:
         specifier: ^13.8.0
         version: 13.8.0(encoding@0.1.13)
@@ -4019,10 +4010,6 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
-
-  '@google/generative-ai@0.15.0':
-    resolution: {integrity: sha512-zs37judcTYFJf1U7tnuqnh7gdzF6dcWj9pNRxjA5JTONRoiQ0htrRdbefRFiewOIfXwhun5t9hbd2ray7812eQ==}
-    engines: {node: '>=18.0.0'}
 
   '@googleapis/checks@4.2.0':
     resolution: {integrity: sha512-D1pHc/Pb3xv+BCzvRRbz+rnRixX2CHwTrOQbj8af80yLgboT5PWnt/hnXOB9QWRd9g3vVWlUrpbacN36pCLpGg==}
@@ -16520,8 +16507,6 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@google/generative-ai@0.15.0': {}
-
   '@googleapis/checks@4.2.0(encoding@0.1.13)':
     dependencies:
       googleapis-common: 7.2.0(encoding@0.1.13)
@@ -17795,6 +17780,7 @@ snapshots:
     dependencies:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/semantic-conventions': 1.25.1
+    optional: true
 
   '@opentelemetry/core@1.30.1(@opentelemetry/api@1.9.0)':
     dependencies:
@@ -18941,6 +18927,7 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       '@opentelemetry/core': 1.25.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.25.1
+    optional: true
 
   '@opentelemetry/resources@2.11.0(@opentelemetry/api@1.9.1)':
     dependencies:
@@ -19077,6 +19064,7 @@ snapshots:
       '@opentelemetry/core': 1.25.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/resources': 1.25.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/semantic-conventions': 1.25.1
+    optional: true
 
   '@opentelemetry/sdk-trace-base@2.11.0(@opentelemetry/api@1.9.1)':
     dependencies:
