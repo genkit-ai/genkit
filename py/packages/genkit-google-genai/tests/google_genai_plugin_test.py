@@ -49,11 +49,14 @@ from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 from google.genai import types as genai_types
 
 from genkit import Document, Genkit, GenkitError, Message, Operation, Part, Role
-from genkit._core._schema import custom_options_schema, to_json_schema
+
+# TID251: whitebox check that the advertised `customOptions` matches core's
+# null-default-stripping schema helper, which has no public export.
+from genkit._core._schema import custom_options_schema  # noqa: TID251
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.evaluator import BaseDataPoint
 from genkit.model import BackgroundModel, ModelRequest
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action, ActionKind, to_json_schema
 
 
 def _custom_options(action: Action) -> object:

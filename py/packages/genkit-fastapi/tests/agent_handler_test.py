@@ -26,7 +26,9 @@ from genkit import (
     Part,
     Role,
 )
-from genkit._ai._agents._client import error_from_http
+
+# error_from_http is private: this test pins the client-side HTTP error mapping.
+from genkit._ai._agents._client import error_from_http  # noqa: TID251
 from genkit.exp import Genkit
 from genkit.exp.agent import AgentInit, InMemorySessionStore
 from genkit.testing import define_scripted_model

@@ -33,6 +33,7 @@ from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import (
+    FinishReason,
     FlowContext,
     Genkit,
     GenkitError,
@@ -42,8 +43,8 @@ from genkit import (
     ModelResponseChunk,
     Part,
     PublicError,
+    Role,
 )
-from genkit._core._typing import FinishReason, Role
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
 from genkit.web import RequestData, to_sse

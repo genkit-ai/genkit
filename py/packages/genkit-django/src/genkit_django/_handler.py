@@ -31,14 +31,21 @@ from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
 from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # noqa: TID251
 
 # Compact JSON (no spaces) for smaller wire payload.
 _JSON_SEPARATORS = (',', ':')
 
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
-    """Log a served-action failure, naming the action; 5xx includes the traceback."""
+    """Log a served-action failure to the host web server's stdlib logger, naming the action.
+
+    Intentionally emits to stdlib ``logging`` rather than ``genkit.get_logger``
+    because route failures happen at the HTTP boundary outside the flow span,
+    where Django ``LOGGING`` handlers, Uvicorn/Gunicorn, Sentry
+    ``LoggingIntegration``, and ``pytest`` ``caplog`` listen. 5xx errors include
+    the traceback.
+    """
     extra = {'genkit_action': flow}
     if error_status(error) >= 500:
         logger.exception('served action %r %s failed', flow, where, extra=extra)

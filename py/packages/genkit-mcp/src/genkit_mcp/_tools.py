@@ -34,7 +34,6 @@ from mcp.types import (
 )
 
 from genkit import MultipartToolResponse, Part, Tool, ToolContext, get_logger
-from genkit._core._typing import Resource
 from genkit_mcp._errors import _ToolResultError
 
 McpToolCall = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[CallToolResult]]
@@ -148,7 +147,7 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
         elif isinstance(block, (ImageContent, AudioContent)):
             content.append(_media_part(block.mimeType, block.data))
         elif isinstance(block, ResourceLink):
-            content.append(Part(resource=Resource(uri=str(block.uri))))
+            content.append(Part.model_validate({'resource': {'uri': str(block.uri)}}))
         elif isinstance(block, EmbeddedResource):
             resource = block.resource
             if isinstance(resource, TextResourceContents):
