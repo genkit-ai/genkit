@@ -120,7 +120,7 @@ EMBEDDER_INFO: dict[str, EmbedderInfo] = {
 }
 
 
-# Autocomplete for Bedrock.embedding(). Same set as EMBEDDER_INFO (a test pins
+# Autocomplete for Bedrock.embedder(). Same set as EMBEDDER_INFO (a test pins
 # that); any other embedding ID is still accepted.
 KnownBedrockEmbedder: TypeAlias = Literal[
     'amazon.titan-embed-text-v1',

@@ -123,7 +123,7 @@ print(response.text)
 The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,
 served over Converse, including models that take image or document input),
 `Bedrock.stability` (IMAGE, the Stability text-to-image models), and
-`Bedrock.embedding` (EMBEDDING, an `EmbedderRef` for `ai.embed()`). Each takes a bare ID or a `bedrock/`-prefixed one, and
+`Bedrock.embedder` (EMBEDDING, an `EmbedderRef` for `ai.embed()`). Each takes a bare ID or a `bedrock/`-prefixed one, and
 returns `bedrock/<id>`. They route the ID the same way the plugin does at runtime,
 inference-profile prefixes (`us.`, `eu.`, ...) and model ARNs included, and an
 ID from another family raises `INVALID_ARGUMENT` naming the right constructor

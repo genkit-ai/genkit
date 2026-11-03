@@ -138,7 +138,7 @@ def test_profiles_and_arns_route_like_resolve(constructor: RefConstructor, model
     ('constructor', 'model_id', 'needle'),
     [
         (Bedrock.text, 'stability.sd3-5-large-v1:0', 'use Bedrock.stability()'),
-        (Bedrock.embedding, 'us.stability.stable-image-core-v1:1', 'use Bedrock.stability()'),
+        (Bedrock.embedder, 'us.stability.stable-image-core-v1:1', 'use Bedrock.stability()'),
         # Retired on Bedrock and untyped: the hint names the raw ID and extra.
         (Bedrock.text, 'amazon.nova-canvas-v1:0', "pass 'bedrock/amazon.nova-canvas-v1:0'"),
         (Bedrock.stability, 'amazon.titan-image-generator-v2:0', "config['extra']"),
@@ -146,17 +146,17 @@ def test_profiles_and_arns_route_like_resolve(constructor: RefConstructor, model
         (Bedrock.text, 'stability.stable-image-inpaint-v1:0', 'image editing/upscale service'),
         (Bedrock.stability, 'stability.stable-image-inpaint-v1:0', 'image editing/upscale service'),
         (Bedrock.stability, 'us.stability.stable-outpaint-v1:0', 'image editing/upscale service'),
-        (Bedrock.embedding, 'stability.stable-creative-upscale-v1:0', 'image editing/upscale service'),
+        (Bedrock.embedder, 'stability.stable-creative-upscale-v1:0', 'image editing/upscale service'),
         (
             Bedrock.text,
             'arn:aws:bedrock:us-west-2::foundation-model/stability.stable-style-transfer-v1:0',
             'image editing/upscale service',
         ),
-        (Bedrock.text, 'amazon.titan-embed-text-v2:0', 'use Bedrock.embedding()'),
-        (Bedrock.stability, 'cohere.embed-english-v3', 'use Bedrock.embedding()'),
-        (Bedrock.embedding, 'amazon.nova-lite-v1:0', 'use Bedrock.text()'),
-        (Bedrock.embedding, 'amazon.nova-canvas-v1:0', 'retired Amazon image model'),
-        (Bedrock.embedding, 'cohere.rerank-v3-5:0', 'no rerank action'),
+        (Bedrock.text, 'amazon.titan-embed-text-v2:0', 'use Bedrock.embedder()'),
+        (Bedrock.stability, 'cohere.embed-english-v3', 'use Bedrock.embedder()'),
+        (Bedrock.embedder, 'amazon.nova-lite-v1:0', 'use Bedrock.text()'),
+        (Bedrock.embedder, 'amazon.nova-canvas-v1:0', 'retired Amazon image model'),
+        (Bedrock.embedder, 'cohere.rerank-v3-5:0', 'no rerank action'),
         (Bedrock.stability, 'cohere.rerank-v3-5:0', 'no rerank action'),
         (
             Bedrock.stability,
@@ -220,25 +220,26 @@ def test_known_embedder_ids_match_the_catalog() -> None:
         ('us.cohere.embed-v4:0', 'bedrock/us.cohere.embed-v4:0'),
     ],
 )
-def test_embedding_returns_an_embedder_ref(model_id: str, expected_name: str) -> None:
+def test_embedder_returns_an_embedder_ref(model_id: str, expected_name: str) -> None:
     # An EmbedderRef, never a ModelRef: an embedding ID can't reach generate().
-    ref = Bedrock.embedding(model_id)
+    ref = Bedrock.embedder(model_id)
 
     assert isinstance(ref, EmbedderRef)
     assert ref.name == expected_name
     assert ref.config is None
+    assert Bedrock(region='us-east-1').embedder(model_id) == ref
 
 
 def test_every_known_embedder_is_accepted() -> None:
     for model_id in get_args(KnownBedrockEmbedder):
-        assert Bedrock.embedding(model_id).name == f'bedrock/{model_id}'
+        assert Bedrock.embedder(model_id).name == f'bedrock/{model_id}'
 
 
 @pytest.mark.asyncio
-async def test_embed_with_an_embedding_ref_reaches_invoke_model() -> None:
+async def test_embed_with_an_embedder_ref_reaches_invoke_model() -> None:
     ai, transport = bedrock_app()
 
-    embeddings = await ai.embed(embedder=Bedrock.embedding('amazon.titan-embed-text-v2:0'), content='Smoked salmon')
+    embeddings = await ai.embed(embedder=Bedrock.embedder('amazon.titan-embed-text-v2:0'), content='Smoked salmon')
 
     assert embeddings[0].embedding == [0.1, 0.2, 0.3]
     assert transport.invoke_calls[0]['modelId'] == 'amazon.titan-embed-text-v2:0'

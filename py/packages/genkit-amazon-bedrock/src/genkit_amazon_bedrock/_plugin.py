@@ -104,7 +104,7 @@ _REF_PREFIX = f'{BEDROCK_PLUGIN_NAME}/'
 # Each family's constructor, and how an error names the family.
 _REF_CONSTRUCTOR: dict[RefFamily, tuple[str, str]] = {
     'text': ('text', 'a text'),
-    'embedding': ('embedding', 'an embedding'),
+    'embedding': ('embedder', 'an embedding'),
     'stability': ('stability', 'a Stability'),
 }
 
@@ -250,8 +250,8 @@ class Bedrock(Plugin):
         return _model_ref(name, family='stability', config_schema=StabilityImageConfig, config=config)
 
     @classmethod
-    def embedding(cls, name: KnownBedrockEmbedder | str) -> EmbedderRef:
-        """EmbedderRef for ``ai.embed()``, e.g. ``Bedrock.embedding('amazon.titan-embed-text-v2:0')``.
+    def embedder(cls, name: KnownBedrockEmbedder | str) -> EmbedderRef:
+        """EmbedderRef for ``ai.embed()``, e.g. ``Bedrock.embedder('amazon.titan-embed-text-v2:0')``.
 
         Returns an EmbedderRef, not a ModelRef: an embedding ID must never
         reach ``generate(model=...)``, and the text and image constructors
@@ -263,7 +263,7 @@ class Bedrock(Plugin):
             from genkit_amazon_bedrock import Bedrock
 
             # 1. Typed embedder ref
-            titan = Bedrock.embedding('amazon.titan-embed-text-v2:0')
+            titan = Bedrock.embedder('amazon.titan-embed-text-v2:0')
 
             # 2. Embed a menu item
             embeddings = await ai.embed(embedder=titan, content='Smoked salmon tartine')
