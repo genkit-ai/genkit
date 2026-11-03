@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -278,6 +279,27 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
     err = error_from_http(status_code=response.status_code, body=response.text)
     assert err.status == 'FAILED_PRECONDITION'
     assert err.reason is reason
+
+
+def test_serve_agent_stream_failure_log_names_the_agent(caplog: pytest.LogCaptureFixture) -> None:
+    """A streamed agent failure logs the agent's action name via to_sse."""
+    with caplog.at_level(logging.WARNING):
+        response = client(build_agent('orderAgent', server_managed=True)).post(
+            '/api/chat?stream=true',
+            json={
+                'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}},
+                'init': {'state': {'custom': {'table': 4}}},
+            },
+        )
+
+    msg = (
+        "Cannot send 'state' to agent 'orderAgent': this agent uses a server-managed store. "
+        "Send 'snapshotId' or 'sessionId' instead."
+    )
+    assert sse_events(response.text) == [{'error': {'message': msg, 'status': 'FAILED_PRECONDITION'}}]
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('WARNING', f"served action 'orderAgent' stream failed: FAILED_PRECONDITION: {msg}", False),
+    ]
 
 
 _UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
