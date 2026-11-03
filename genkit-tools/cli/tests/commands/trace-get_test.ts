@@ -48,6 +48,14 @@ const mockedRunWithManager = runWithManager as MockedFunction<
   typeof runWithManager
 >;
 
+const {
+  stackTraceSpans: actualStackTraceSpans,
+  parseAndSanitizeJson: actualParseAndSanitizeJson,
+  sanitizeBase64DataUrls: actualSanitizeBase64DataUrls,
+} = await vi.importActual<typeof import('@genkit-ai/tools-common/utils')>(
+  '@genkit-ai/tools-common/utils'
+);
+
 describe('trace:get', () => {
   const createCommand = () =>
     traceGet.exitOverride().configureOutput({
@@ -57,15 +65,8 @@ describe('trace:get', () => {
 
   const mockProjectRoot = '/mock/project/root';
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.clearAllMocks();
-    const {
-      stackTraceSpans: actualStackTraceSpans,
-      parseAndSanitizeJson: actualParseAndSanitizeJson,
-      sanitizeBase64DataUrls: actualSanitizeBase64DataUrls,
-    } = await vi.importActual<typeof import('@genkit-ai/tools-common/utils')>(
-      '@genkit-ai/tools-common/utils'
-    );
     mockedFindProjectRoot.mockResolvedValue(mockProjectRoot);
     mockedForceStderr.mockImplementation(() => {});
     (stackTraceSpans as MockedFunction<any>).mockImplementation(
