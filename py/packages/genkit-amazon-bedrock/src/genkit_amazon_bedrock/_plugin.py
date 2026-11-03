@@ -58,6 +58,7 @@ from genkit_amazon_bedrock._model_info import (
     KnownStabilityImage,
     get_model_info,
     is_rerank_model,
+    strip_inference_profile_prefix,
 )
 from genkit_amazon_bedrock._models import BedrockModel
 from genkit_amazon_bedrock._transport import BedrockTransport
@@ -116,13 +117,18 @@ def _strip_ref_prefix(name: str) -> str:
     return local
 
 
-def _ref_route(local: str) -> RefFamily | Literal['rerank', 'amazon_image']:
-    """Routes a ref ID in ``resolve``'s order: embedder, rerank, image family, then text."""
+def _ref_route(local: str) -> RefFamily | Literal['rerank', 'amazon_image', 'stability_service']:
+    """Routes a ref ID in ``resolve``'s order: embedder, rerank, image family, other Stability IDs, then text."""
     if looks_like_embedding_model(local):
         return 'embedding'
     if is_rerank_model(local):
         return 'rerank'
-    return image_family(local) or 'text'
+    family = image_family(local)
+    if family is not None:
+        return family
+    if strip_inference_profile_prefix(local).startswith('stability.'):
+        return 'stability_service'
+    return 'text'
 
 
 def _ref_local_id(name: object, *, family: RefFamily) -> str:
@@ -149,15 +155,15 @@ def _ref_local_id(name: object, *, family: RefFamily) -> str:
             f"'{local}' is a retired Amazon image model with no typed ref; "
             f"pass 'bedrock/{local}' and send body fields in config['extra']."
         )
+    elif actual == 'stability_service':
+        hint = (
+            f"'{local}' is an unsupported Stability image editing/upscale service; "
+            'the plugin supports text-to-image only.'
+        )
     elif actual == 'text' and family != 'embedding':
-        if 'stable-image-' in local and 'core' not in local and 'ultra' not in local:
-            hint = f"'{local}' is an image editing service; the plugin supports text-to-image only."
-        else:
-            # Unknown IDs land here too: they route to Converse, so text() is
-            # the only constructor that fits.
-            hint = (
-                f"'{local}' is not {_REF_CONSTRUCTOR[family][1]} text-to-image model; text models take Bedrock.text()."
-            )
+        # Unknown IDs land here too: they route to Converse, so text() is
+        # the only constructor that fits.
+        hint = f"'{local}' is not {_REF_CONSTRUCTOR[family][1]} text-to-image model; text models take Bedrock.text()."
     else:
         constructor, label = _REF_CONSTRUCTOR[actual]
         hint = f"'{local}' is {label} model; use Bedrock.{constructor}()."
@@ -221,8 +227,8 @@ class Bedrock(Plugin):
         """Typed ref for Stable Diffusion 3.5, Stable Image Core or Stable Image Ultra.
 
         Takes any ID that routes to the Stability text-to-image family. The
-        Stability editing services (inpaint, erase, ...) are not text-to-image
-        and raise, as do IDs of other families.
+        Stability editing and upscale services (inpaint, outpaint, ...) are not
+        text-to-image and raise, as do IDs of other families.
 
         Example:
             ```python

@@ -306,6 +306,7 @@ async def test_an_unknown_key_is_rejected_before_any_call(model_id: str, config:
         (SD3, {'aspect_ratio': '4:3'}),
         (SD3, {'output_format': 'gif'}),
         (SD3, {'seed': -1}),
+        (STABLE_CORE, {'seed': 4294967296}),
     ],
 )
 @pytest.mark.asyncio
@@ -325,6 +326,15 @@ async def test_stability_sends_the_documented_defaults() -> None:
 
     # Exact equality: the legacy text_prompts array must not be sent.
     assert transport.bodies() == [{'prompt': 'a reef', 'output_format': 'png'}]
+
+
+@pytest.mark.asyncio
+async def test_stability_accepts_core_and_ultra_max_seed() -> None:
+    # Core and Ultra allow up to 4294967295 (SD 3.5 caps one lower at 4294967294).
+    transport = FakeInvokeTransport(stability_response('modern-image', finish_reasons=['SUCCESS']))
+    await generate(STABLE_CORE, transport, image_request('a reef', config=StabilityImageConfig(seed=4294967295)))
+
+    assert transport.bodies() == [{'prompt': 'a reef', 'output_format': 'png', 'seed': 4294967295}]
 
 
 @pytest.mark.parametrize(

@@ -102,7 +102,13 @@ class StabilityImageConfig(GenkitConfig):
 
     aspect_ratio: StabilityAspectRatio | None = Field(default=None, description='Output aspect ratio. Default 1:1.')
     seed: int | None = Field(
-        default=None, ge=0, le=4294967294, description='Randomness seed; 0 or unset picks a random one.'
+        default=None,
+        ge=0,
+        le=4294967295,
+        description=(
+            'Randomness seed; 0 or unset picks a random one. '
+            'Stable Image Core and Ultra accept up to 4294967295; Stable Diffusion 3.5 caps at 4294967294.'
+        ),
     )
     negative_prompt: str | None = Field(default=None, max_length=10000, description='What to keep out of the image.')
     output_format: Literal['png', 'jpeg', 'webp'] | None = Field(
