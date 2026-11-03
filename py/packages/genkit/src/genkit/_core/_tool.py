@@ -32,7 +32,6 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
-    ChunkT,
     get_func_description,
     resolve_type_hints,
 )
@@ -44,10 +43,12 @@ from genkit._core._typing import MultipartToolResponse as MultipartToolResponseD
 
 InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
+ChunkT = TypeVar('ChunkT', default=Any)
 
 # Solved per call by the ``Tool(...)`` overloads below.
 _I = TypeVar('_I')
 _O = TypeVar('_O')
+_C = TypeVar('_C')
 
 # Metadata key for the schema the model binds as the tool's ``outputSchema``.
 # For ``-> MultipartToolResponse[T]`` that's ``T``; for ``-> T`` it's ``T``.
@@ -296,7 +297,7 @@ async def call_tool_fn(
     return await tool.params.call(func, raw_input, tool_ctx)
 
 
-class Tool(Action[InputT, OutputT, Any, None]):
+class Tool(Action[InputT, OutputT, ChunkT, None]):
     """A tool the model can call: an :class:`~genkit._core._action.Action` of kind ``tool``.
 
     ``await tool(x)`` is ``(await tool.run(x)).response``: what the function
@@ -308,14 +309,14 @@ class Tool(Action[InputT, OutputT, Any, None]):
     Go; the Dev UI lists and runs the ``tool.v2`` one.
     """
 
-    _wire_action: Action[InputT, MultipartToolResponse[Any], Any, None] | None
+    _wire_action: Action[InputT, MultipartToolResponse[Any], ChunkT, None] | None
 
     # One overload per handler shape, same as ``ai.tool`` / ``define_tool``, so
-    # ``Tool(place_order)`` infers ``Tool[Order, Receipt]`` from the function.
+    # ``Tool(place_order)`` infers ``Tool[Order, Receipt, Step]`` from the function.
     @overload
     def __init__(
-        self: Tool[Any, _O],
-        func: Callable[[ToolContext, object], Awaitable[_O]],
+        self: Tool[Any, _O, _C],
+        func: Callable[[ToolContext[_C], object], Awaitable[_O]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -324,8 +325,8 @@ class Tool(Action[InputT, OutputT, Any, None]):
 
     @overload
     def __init__(
-        self: Tool[_I, _O],
-        func: Callable[[_I, ToolContext], Awaitable[_O]],
+        self: Tool[_I, _O, _C],
+        func: Callable[[_I, ToolContext[_C]], Awaitable[_O]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -334,8 +335,8 @@ class Tool(Action[InputT, OutputT, Any, None]):
 
     @overload
     def __init__(
-        self: Tool[_I, _O],
-        func: Callable[[ToolContext, _I], Awaitable[_O]],
+        self: Tool[_I, _O, _C],
+        func: Callable[[ToolContext[_C], _I], Awaitable[_O]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -344,7 +345,7 @@ class Tool(Action[InputT, OutputT, Any, None]):
 
     @overload
     def __init__(
-        self: Tool[Any, _O],
+        self: Tool[Any, _O, Any],
         func: Callable[[object], Awaitable[_O]],
         *,
         name: str | None = None,
@@ -354,8 +355,8 @@ class Tool(Action[InputT, OutputT, Any, None]):
 
     @overload
     def __init__(
-        self: Tool[Any, _O],
-        func: Callable[[ToolContext], Awaitable[_O]],
+        self: Tool[Any, _O, _C],
+        func: Callable[[ToolContext[_C]], Awaitable[_O]],
         *,
         name: str | None = None,
         description: str | None = None,
@@ -364,7 +365,7 @@ class Tool(Action[InputT, OutputT, Any, None]):
 
     @overload
     def __init__(
-        self: Tool[_I, _O],
+        self: Tool[_I, _O, Any],
         func: Callable[[_I], Awaitable[_O]],
         *,
         name: str | None = None,
@@ -374,7 +375,7 @@ class Tool(Action[InputT, OutputT, Any, None]):
 
     @overload
     def __init__(
-        self: Tool[None, _O],
+        self: Tool[None, _O, Any],
         func: Callable[[], Awaitable[_O]],
         *,
         name: str | None = None,
@@ -444,7 +445,7 @@ class Tool(Action[InputT, OutputT, Any, None]):
             raw = await call_tool_fn(self, typed_func, raw_input, ctx)
             return as_multipart_tool_response(raw, tool_name=self.name)
 
-        wire: Action[InputT, MultipartToolResponse[Any], Any, None] = Action(
+        wire: Action[InputT, MultipartToolResponse[Any], ChunkT, None] = Action(
             kind=ActionKind.TOOL_V2,
             name=tool_name,
             fn=wire_fn,
@@ -457,7 +458,7 @@ class Tool(Action[InputT, OutputT, Any, None]):
         self._wire_action = wire
 
     @classmethod
-    def from_action(cls, action: Action[InputT, OutputT, Any, Any]) -> Tool[InputT, OutputT]:
+    def from_action(cls, action: Action[InputT, OutputT, ChunkT, Any]) -> Tool[InputT, OutputT, ChunkT]:
         """View a tool ``Action`` that wasn't built as a ``Tool`` (plugin, DAP, hand-registered) as one.
 
         Shares the action's function and metadata; there is no ``tool.v2`` companion.
@@ -481,7 +482,7 @@ class Tool(Action[InputT, OutputT, Any, None]):
             self._wire_action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = value
 
     @property
-    def wire_action(self) -> Action[InputT, MultipartToolResponse[Any], Any, None] | None:
+    def wire_action(self) -> Action[InputT, MultipartToolResponse[Any], ChunkT, None] | None:
         """The ``tool.v2`` action: same function, returns the ``MultipartToolResponse`` envelope.
 
         The registry stores it next to the tool under ``/tool.v2/<name>``; the
@@ -516,10 +517,10 @@ class Tool(Action[InputT, OutputT, Any, None]):
         return output
 
 
-class _ActionTool(Tool[InputT, OutputT]):
+class _ActionTool(Tool[InputT, OutputT, ChunkT]):
     """A ``Tool`` view over a plain ``Action`` with no ``tool.v2`` companion."""
 
-    def __init__(self, action: Action[InputT, OutputT, Any, Any]) -> None:
+    def __init__(self, action: Action[InputT, OutputT, ChunkT, Any]) -> None:
         self._wire_action = None
         Action.__init__(
             self,
