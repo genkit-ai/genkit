@@ -664,7 +664,7 @@ def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pyt
 
 
 def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.LogCaptureFixture) -> None:
-    """A streamed flow whose model call fails with a provider 401 ends with Internal Error and logs on genkit.web."""
+    """A streamed flow whose model call fails with a provider 401 ends with Internal Error and logs the failure."""
     ai = Genkit()
 
     @ai.flow()
@@ -673,7 +673,7 @@ def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.Log
 
     app = FastAPI()
     app.include_router(serve_flow(ask, base_path='/ask'))
-    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+    with caplog.at_level(logging.ERROR):
         response = TestClient(app).post(
             '/ask',
             json={'data': 'hi'},
@@ -682,7 +682,7 @@ def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.Log
 
     assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'API key not valid' not in response.text
-    assert [(r.name, r.getMessage()) for r in caplog.records] == [('genkit.web', 'served flow stream failed')]
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [('ERROR', 'served flow stream failed')]
 
 
 def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event() -> None:
@@ -1067,12 +1067,12 @@ def test_served_flow_streams_models_with_datetimes_and_lists_over_sse() -> None:
 
 
 def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> None:
-    """The error frame is logged on the genkit.web stdlib logger, 5xx with the traceback."""
-    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+    """The error frame's failure is logged, 5xx with the traceback."""
+    with caplog.at_level(logging.ERROR):
         _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
 
-    assert [(r.name, r.getMessage()) for r in caplog.records] == [
-        ('genkit.web', 'served flow stream failed'),
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+        ('ERROR', 'served flow stream failed'),
     ]
     assert caplog.records[0].exc_info is not None
 

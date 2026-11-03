@@ -80,7 +80,7 @@ def _adapter_logs(caplog: pytest.LogCaptureFixture) -> tuple[tuple[str, str, boo
     return tuple(
         (r.levelname, r.getMessage(), r.exc_info is not None)
         for r in caplog.records
-        # genkit.web: FastAPI streams through genkit.web.to_sse, which logs there.
+        # genkit.web._sse: FastAPI streams through genkit.web.to_sse.
         if r.name.startswith(('genkit.web', 'genkit_django', 'genkit_flask', 'genkit_fastapi'))
     )
 

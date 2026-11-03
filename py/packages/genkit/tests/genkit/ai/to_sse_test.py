@@ -93,7 +93,7 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
     async def track_order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'order {order_id} missing')
 
-    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+    with caplog.at_level(logging.WARNING):
         lines = await _lines(to_sse(track_order.stream('A-1042')))
 
     assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
@@ -125,7 +125,7 @@ async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_
     assert in_proc.finish_reason == FinishReason.FAILED
     assert 'secret-proj-123' in (in_proc.finish_message or '')
 
-    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+    with caplog.at_level(logging.ERROR):
         gen_lines = await _lines(to_sse(ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.')))
         prompt_lines = await _lines(to_sse(menu_prompt.stream()))
 
@@ -134,9 +134,9 @@ async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_
     assert prompt_lines == expected
     assert 'secret-proj-123' not in gen_lines[0]
     assert 'projects/' not in gen_lines[0]
-    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('genkit.web', 'ERROR', 'served flow stream failed', True),
-        ('genkit.web', 'ERROR', 'served flow stream failed', True),
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('ERROR', 'served flow stream failed', True),
+        ('ERROR', 'served flow stream failed', True),
     ]
     for record in caplog.records:
         assert record.exc_info is not None
@@ -168,14 +168,14 @@ async def test_generate_stream_to_sse_surfaces_tool_public_error_and_warns(
         ],
     )
 
-    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+    with caplog.at_level(logging.WARNING):
         lines = await _lines(
             to_sse(ai.generate_stream(model='scriptedModel', prompt='Where is A-1042?', tools=['lookup_order']))
         )
 
     assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
-    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('genkit.web', 'WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
 
 
@@ -256,7 +256,7 @@ async def test_generate_stream_to_sse_undeclared_tool_and_bare_failed_turn_redac
     assert in_proc._failure is None
     assert in_proc.finish_message == 'Tool internal_billing_tool not found'
 
-    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+    with caplog.at_level(logging.ERROR):
         missing_tool_lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.')))
         bare_failed_lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.')))
 
@@ -267,9 +267,9 @@ async def test_generate_stream_to_sse_undeclared_tool_and_bare_failed_turn_redac
     assert 'not found' not in missing_tool_lines[0]
     assert 'result' not in missing_tool_lines[0]
     assert 'result' not in bare_failed_lines[0]
-    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('genkit.web', 'ERROR', 'served flow stream failed', True),
-        ('genkit.web', 'ERROR', 'served flow stream failed', True),
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('ERROR', 'served flow stream failed', True),
+        ('ERROR', 'served flow stream failed', True),
     ]
     assert caplog.records[0].exc_info is not None
     assert 'Tool internal_billing_tool not found' in str(caplog.records[0].exc_info[1])
@@ -431,7 +431,7 @@ async def test_to_sse_frames_escaping_interrupt_as_internal_error_and_propagates
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """An escaping ``Interrupt`` (a ``BaseException``) frames as 500 Internal Error; ``CancelledError`` propagates."""
-    with caplog.at_level(logging.ERROR, logger='genkit.web'):
+    with caplog.at_level(logging.ERROR):
         lines = await _lines(to_sse(_RawStreamHandle(Interrupt({'secret_order': 'A-17'}))))
 
     assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
@@ -503,7 +503,7 @@ async def test_generate_stream_to_sse_public_error_details_keep_failure_immutabl
     )
 
     handle = ai.generate_stream(model='scriptedModel', prompt='Where is A-1042?', tools=['lookup_order'])
-    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+    with caplog.at_level(logging.WARNING):
         lines = await _lines(to_sse(handle))
 
     result = await handle.response
@@ -511,8 +511,8 @@ async def test_generate_stream_to_sse_public_error_details_keep_failure_immutabl
         'data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND",'
         '"details":{"order":{"source":"crm"}}}}\n\n'
     ]
-    assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('genkit.web', 'WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
     assert result._failure is not None
     assert result._failure.details == {'order': {'source': 'crm'}}
@@ -558,7 +558,7 @@ async def test_box_dead_turn_clears_stale_boxed_failure_from_copied_response(
 
     ai.define_model(name='copied_stale', fn=model_returning_copied_stale_failure)
 
-    with caplog.at_level(logging.WARNING, logger='genkit.web'):
+    with caplog.at_level(logging.WARNING):
         lines = await _lines(to_sse(ai.generate_stream(model='copied_stale', prompt='Check billing.')))
 
     assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']

@@ -32,10 +32,7 @@ from genkit._core._typing import FinishReason
 # Compact JSON, the same bytes the FastAPI, Flask and Django adapters send.
 _JSON_SEPARATORS = (',', ':')
 
-# Stdlib logging on the public package name, like the fastapi/flask/django
-# handlers: served failures go to the host web server's logging config
-# without exposing the private `_sse` module (TID251 exemption in pyproject.toml).
-_logger = logging.getLogger('genkit.web')
+_logger = logging.getLogger(__name__)
 
 
 class StreamHandle(Protocol):
@@ -75,9 +72,8 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
 
     Yields ``data: {"message": ...}`` for each chunk, then ``data: {"result": ...}``.
     If the run fails, it yields one ``data: {"error": ...}`` instead of the rest
-    and logs the failure on the ``genkit.web`` stdlib logger: 5xx with a
-    traceback, 4xx as a warning. Only a
-    ``PublicError``'s text reaches the client; anything else goes out as
+    and logs the failure with Python's logging module (5xx with a traceback,
+    4xx as a warning). Only a ``PublicError``'s text reaches the client; anything else goes out as
     ``Internal Error``. These are the frames ``serve_flow``,
     ``handle_genkit_request`` and ``serve_agent`` send.
 
