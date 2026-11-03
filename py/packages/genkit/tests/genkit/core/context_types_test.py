@@ -105,6 +105,37 @@ def test_isinstance_works_and_distinguishes_each_context_class() -> None:
                 assert not isinstance(ctx, other_cls)
 
 
+@pytest.mark.asyncio
+async def test_flow_and_tool_contexts_pass_shared_isinstance_check() -> None:
+    """A shared helper narrows with `isinstance(ctx, (FlowContext, ToolContext))` on both contexts."""
+    ai = Genkit()
+    seen: list[object] = []
+
+    def user_id(ctx: FlowContext | ToolContext) -> str:
+        seen.append(ctx)
+        return ctx.context['auth']['uid']
+
+    @ai.flow()
+    async def reorder_last(dish: str, ctx: FlowContext) -> str:
+        return f'{dish} for {user_id(ctx)}'
+
+    @ai.tool()
+    async def check_allergies(dish: str, ctx: ToolContext) -> str:
+        return f'{dish}: nut-free for {user_id(ctx)}'
+
+    auth = {'auth': {'uid': 'diner-42'}}
+    assert await reorder_last('tartine', context=auth) == 'tartine for diner-42'
+    assert await check_allergies('tartine', context=auth) == 'tartine: nut-free for diner-42'
+
+    flow_ctx, tool_ctx = seen
+    assert type(flow_ctx) is FlowContext
+    assert type(tool_ctx) is ToolContext
+    for ctx in (flow_ctx, tool_ctx):
+        assert isinstance(ctx, (FlowContext, ToolContext))
+    assert not isinstance(ModelContext(), (FlowContext, ToolContext))
+    assert not isinstance(AgentContext(), (FlowContext, ToolContext))
+
+
 def test_action_run_context_is_not_publicly_exported() -> None:
     """`ActionRunContext` stays internal; public packages export only concrete subclasses."""
     assert 'ActionRunContext' not in genkit.__all__

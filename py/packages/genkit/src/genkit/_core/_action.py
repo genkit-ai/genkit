@@ -920,6 +920,28 @@ class FlowContext(ActionRunContext[ChunkT]):
     Provides ``ctx.send_chunk(chunk)`` for streaming ``ChunkT`` chunks,
     ``ctx.context`` for caller context data, and ``ctx.abort_signal`` for
     cancellation.
+
+    ``FlowContext`` and ``ToolContext`` are siblings, so neither annotation
+    accepts the other. A helper shared by a flow and a tool takes the union:
+
+        # 1. Read the caller's uid from either context
+        def user_id(ctx: FlowContext | ToolContext) -> str:
+            return ctx.context['auth']['uid']
+
+        # 2. Call it from a flow and from a tool
+        @ai.flow()
+        async def reorder_last(dish: str, ctx: FlowContext) -> str:
+            return f'{dish} for {user_id(ctx)}'
+
+        @ai.tool()
+        async def check_allergies(dish: str, ctx: ToolContext) -> str:
+            return f'{dish}: nut-free for {user_id(ctx)}'
+
+        # 3. Both see the same request context
+        await reorder_last('tartine', context={'auth': {'uid': 'diner-42'}})
+        # => 'tartine for diner-42'
+        await check_allergies('tartine', context={'auth': {'uid': 'diner-42'}})
+        # => 'tartine: nut-free for diner-42'
     """
 
 

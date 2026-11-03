@@ -249,6 +249,21 @@ class ToolContext(ActionRunContext[ChunkT]):
         @ai.tool()
         async def check_allergens(dish: str, ctx: ToolContext) -> str:
             return 'resumed' if ctx.is_resumed() else ctx.context.get('user', 'guest')
+
+    ``ToolContext`` is not a ``FlowContext``. A helper shared by a tool and a
+    flow takes the union:
+
+        # 1. Read the caller's uid from either context
+        def user_id(ctx: FlowContext | ToolContext) -> str:
+            return ctx.context['auth']['uid']
+
+        # 2. Call it from the tool
+        @ai.tool()
+        async def list_allergies(guest: str, ctx: ToolContext) -> str:
+            return f'{guest} ({user_id(ctx)}): shellfish'
+
+        await list_allergies('Ana', context={'auth': {'uid': 'diner-42'}})
+        # => 'Ana (diner-42): shellfish'
     """
 
     def __init__(
@@ -292,7 +307,9 @@ async def call_tool_fn(
     if resumed_meta:
         # Record resumed metadata on the current span for observability.
         set_custom_metadata_attributes({'resumed': resumed_meta})
-    # A ctx annotated FlowContext gets the ToolContext too.
+    # The ctx parameter always receives this ToolContext, whatever context
+    # class it is annotated with; only ToolContext (or a union containing it)
+    # types it correctly.
     tool_ctx = ToolContext(ctx, resumed_metadata=resumed_meta, original_input=_tool_original_input.get())
     return await tool.params.call(func, raw_input, tool_ctx)
 

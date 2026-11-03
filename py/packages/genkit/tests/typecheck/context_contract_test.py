@@ -227,3 +227,31 @@ async def test_shared_flow_and_tool_helper_union_typechecks() -> None:
 
     assert await serve_order('tartine', context={'table': 7}) == 'tartine@7'
     assert await check_table('tartine', context={'table': 9}) == 'tartine@9'
+
+
+@pytest.mark.asyncio
+async def test_user_id_helper_accepts_flow_and_tool_contexts() -> None:
+    """``def user_id(ctx: FlowContext | ToolContext)`` accepts both contexts; ``ActionRunContext`` stays private."""
+    ai = Genkit()
+
+    def user_id(ctx: FlowContext | ToolContext) -> str:
+        return ctx.context['auth']['uid']
+
+    flow_ctx: FlowContext = FlowContext(context={'auth': {'uid': 'diner-42'}})
+    tool_ctx: ToolContext = ToolContext(ActionRunContext(context={'auth': {'uid': 'diner-7'}}))
+    assert_type(user_id(flow_ctx), str)
+    assert_type(user_id(tool_ctx), str)
+    assert user_id(flow_ctx) == 'diner-42'
+    assert user_id(tool_ctx) == 'diner-7'
+
+    @ai.flow
+    async def reorder_last(dish: str, ctx: FlowContext) -> str:
+        return f'{dish} for {user_id(ctx)}'
+
+    @ai.tool
+    async def check_allergies(dish: str, ctx: ToolContext) -> str:
+        return f'{dish}: nut-free for {user_id(ctx)}'
+
+    auth = {'auth': {'uid': 'diner-42'}}
+    assert await reorder_last('tartine', context=auth) == 'tartine for diner-42'
+    assert await check_allergies('tartine', context=auth) == 'tartine: nut-free for diner-42'
