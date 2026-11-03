@@ -186,7 +186,7 @@ export const imagen3 = modelRef({
   name: 'vertexai/imagen3',
   info: {
     label: 'Vertex AI - Imagen3',
-    versions: ['imagen-3.0-generate-001'],
+    versions: ['imagen-3.0-generate-002, imagen-3.0-generate-001'],
     supports: {
       media: true,
       multiturn: false,
@@ -195,7 +195,7 @@ export const imagen3 = modelRef({
       output: ['media'],
     },
   },
-  version: 'imagen-3.0-generate-001',
+  version: 'imagen-3.0-generate-002',
   configSchema: ImagenConfigSchema,
 });
 
