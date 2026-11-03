@@ -16,11 +16,14 @@ from structlog.testing import capture_logs
 
 from genkit._core._logger import (
     GENKIT_LOG,
-    QUIET_LOGGERS,
+    REFLECTION_LOGGERS,
+    REFLECTION_THREAD_NAME,
+    ReflectionLogFilter,
     configure_logging,
     configure_structlog_level,
     get_logger,
     is_debug_enabled,
+    quiet_reflection_logs,
     resolve_level,
     unrecognized_level,
 )
@@ -53,76 +56,54 @@ def test_resolve_level() -> None:
         assert resolve_level() == logging.INFO
 
 
-def test_quiet_loggers_are_shared_tty_access_noise() -> None:
-    """Dev UI mutes reflection polls and httpx INFO hops, not provider SDKs."""
-    assert QUIET_LOGGERS == (
-        'uvicorn.access',
-        'uvicorn.error',
-        'httpx',
-        'httpcore',
-    )
-    assert 'google_genai.models' not in QUIET_LOGGERS
-    assert 'opentelemetry.exporter' not in QUIET_LOGGERS
+def _record(level: int, thread_name: str) -> logging.LogRecord:
+    record = logging.LogRecord('uvicorn.access', level, __file__, 1, 'GET /api/__health', None, None)
+    record.threadName = thread_name
+    return record
 
 
-def test_configure_logging_mutes_quiet_loggers() -> None:
-    """Test that configure_logging sets QUIET_LOGGERS to WARNING in dev environment."""
-    with (
-        mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
-        mock.patch('logging.getLogger') as mock_get_logger,
-    ):
-        mock_get_logger.return_value.level = logging.NOTSET
-        configure_logging(shared_tty=True)
-        for name in QUIET_LOGGERS:
-            mock_get_logger.assert_any_call(name)
-        expected_calls = [mock.call(logging.WARNING)] * len(QUIET_LOGGERS)
-        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
+@pytest.mark.parametrize(
+    ('genkit_log', 'level', 'passes'),
+    [
+        ('info', logging.INFO, False),
+        ('info', logging.WARNING, True),
+        ('debug', logging.INFO, True),
+        ('error', logging.WARNING, False),
+        ('error', logging.ERROR, True),
+    ],
+)
+def test_reflection_filter_quiets_only_the_reflection_thread(genkit_log: str, level: int, passes: bool) -> None:
+    """Reflection records follow max(WARNING, GENKIT_LOG); debug lets them all through."""
+    with mock.patch.dict(os.environ, {GENKIT_LOG: genkit_log}):
+        assert ReflectionLogFilter().filter(_record(level, REFLECTION_THREAD_NAME)) is passes
+        assert ReflectionLogFilter().filter(_record(level, 'MainThread')) is True
 
 
-def test_configure_logging_allows_debug() -> None:
-    """Test that GENKIT_LOG=debug sets QUIET_LOGGERS to DEBUG."""
-    with (
-        mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}),
-        mock.patch('logging.getLogger') as mock_get_logger,
-    ):
-        mock_get_logger.return_value.level = logging.NOTSET
-        configure_logging(shared_tty=True)
-        for name in QUIET_LOGGERS:
-            mock_get_logger.assert_any_call(name)
-        expected_calls = [mock.call(logging.DEBUG)] * len(QUIET_LOGGERS)
-        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
+def test_quiet_reflection_logs_adds_one_filter_and_keeps_levels() -> None:
+    """Repeat calls attach the filter once and never touch levels or handlers."""
+    loggers = [logging.getLogger(name) for name in REFLECTION_LOGGERS]
+    saved = [(lg, lg.level, list(lg.handlers), list(lg.filters)) for lg in loggers]
+    try:
+        for lg in loggers:
+            lg.setLevel(logging.INFO)
+        quiet_reflection_logs()
+        quiet_reflection_logs()
+        for lg, _, handlers, _ in saved:
+            assert sum(isinstance(f, ReflectionLogFilter) for f in lg.filters) == 1
+            assert lg.level == logging.INFO
+            assert lg.handlers == handlers
+    finally:
+        for lg, level, handlers, filters in saved:
+            lg.setLevel(level)
+            lg.handlers = handlers
+            lg.filters = filters
 
 
-def test_configure_logging_respects_higher_levels() -> None:
-    """Test that GENKIT_LOG=error sets QUIET_LOGGERS to ERROR."""
-    with (
-        mock.patch.dict(os.environ, {'GENKIT_LOG': 'error'}),
-        mock.patch('logging.getLogger') as mock_get_logger,
-    ):
-        mock_get_logger.return_value.level = logging.NOTSET
-        configure_logging(shared_tty=True)
-        for name in QUIET_LOGGERS:
-            mock_get_logger.assert_any_call(name)
-        expected_calls = [mock.call(logging.ERROR)] * len(QUIET_LOGGERS)
-        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
-
-
-def test_configure_logging_leaves_loggers_alone_in_prod() -> None:
-    """Test that configure_logging does not alter logger levels in non-dev env."""
+def test_configure_logging_leaves_stdlib_loggers_alone() -> None:
+    """configure_logging only sets the structlog level; stdlib loggers are the app's."""
     with mock.patch('logging.getLogger') as mock_get_logger:
-        configure_logging(shared_tty=False)
+        configure_logging()
         mock_get_logger.assert_not_called()
-
-
-def test_configure_logging_respects_user_configured_levels() -> None:
-    """Test that configure_logging does not overwrite explicitly set logger levels."""
-    with (
-        mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
-        mock.patch('logging.getLogger') as mock_get_logger,
-    ):
-        mock_get_logger.return_value.level = logging.DEBUG
-        configure_logging(shared_tty=True)
-        mock_get_logger.return_value.setLevel.assert_not_called()
 
 
 @pytest.fixture
@@ -249,10 +230,10 @@ def test_level_survives_a_later_processors_only_configure() -> None:
 
 @pytest.mark.usefixtures('_restore_structlog')
 def test_configure_logging_sets_the_structlog_level_outside_dev() -> None:
-    """Muting is dev-only, but the structlog level applies in every environment."""
+    """The structlog level applies in every environment."""
     structlog.reset_defaults()
     with mock.patch.dict(os.environ, clear=True):
-        configure_logging(shared_tty=False)
+        configure_logging()
 
     assert is_debug_enabled(get_logger('test')) is False
 

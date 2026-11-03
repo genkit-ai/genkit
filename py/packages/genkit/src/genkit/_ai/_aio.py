@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import signal
 import socket
 import sys
@@ -99,7 +98,7 @@ from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._flow import Flow
-from genkit._core._logger import configure_logging, get_logger, resolve_level
+from genkit._core._logger import REFLECTION_THREAD_NAME, configure_logging, get_logger, quiet_reflection_logs
 from genkit._core._middleware import Middleware
 from genkit._core._model import (
     Document,
@@ -1218,6 +1217,7 @@ class Genkit:
             # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
             host, port = sock.getsockname()[:2]
             self._reflection_server_spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
+            quiet_reflection_logs()
 
         async def _run_server() -> None:
             if config.mode == 'v2':
@@ -1242,25 +1242,18 @@ class Genkit:
                 )
 
             app = create_reflection_asgi_app(registry=self._registry, secret=config.secret)
-            level = resolve_level()
-            is_debug = level <= logging.DEBUG
-            if level <= logging.DEBUG:
-                log_level = 'debug'
-            elif level <= logging.WARNING:
-                log_level = 'warning'
-            elif level <= logging.ERROR:
-                log_level = 'error'
-            else:
-                log_level = 'critical'
-
-            # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
+            # uvicorn.Config applies log_config, log_level and access_log=False
+            # to the process-wide uvicorn.* loggers, which the app's own uvicorn
+            # server shares. Leave all three at their no-op values; the
+            # reflection server's own records are dropped by the thread-scoped
+            # filter from quiet_reflection_logs().
             uvicorn_config = uvicorn.Config(
                 app,
                 host=spec.host,
                 port=spec.port,
                 loop='asyncio',
-                access_log=is_debug,
-                log_level=log_level,
+                log_config=None,
+                log_level=None,
             )
             server = ReflectionServer(uvicorn_config, ready=self._reflection_ready)
             # Dev only: the runtime file exists so a local CLI watching the
@@ -1297,7 +1290,7 @@ class Genkit:
         threading.Thread(
             target=_thread_main,
             daemon=True,
-            name='genkit-reflection-server',
+            name=REFLECTION_THREAD_NAME,
         ).start()
 
     def _initialize_registry(self, model: ModelArg | None, plugins: list[Plugin] | None) -> None:

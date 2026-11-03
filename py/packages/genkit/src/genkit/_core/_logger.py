@@ -31,15 +31,17 @@ _LOG_LEVELS = {
     'fatal': logging.CRITICAL,
 }
 
-# Shared genkit start TTY. Uvicorn is our reflection health polls. httpx logs
-# INFO on every hop (Gemini generateContent, the app's own clients). Collector
-# POSTs use urllib, so they never hit this logger. GENKIT_LOG=debug turns these
-# back on.
-QUIET_LOGGERS = (
+# The reflection server runs uvicorn on this thread. uvicorn hard-codes its
+# logger names, so the reflection server's startup and health-poll access lines
+# share `uvicorn.error` / `uvicorn.access` with the app's own uvicorn server.
+REFLECTION_THREAD_NAME = 'genkit-reflection-server'
+
+# Loggers the reflection server writes to. Genkit only adds a filter that drops
+# records from REFLECTION_THREAD_NAME; levels, handlers and propagation stay as
+# the app configured them.
+REFLECTION_LOGGERS = (
     'uvicorn.access',
     'uvicorn.error',
-    'httpx',
-    'httpcore',
 )
 
 
@@ -94,8 +96,8 @@ def configure_structlog_level() -> bool:
     return True
 
 
-def configure_logging(*, shared_tty: bool | None = None) -> None:
-    """Configure genkit console logging and mute reflection access logs on a shared TTY.
+def configure_logging() -> None:
+    """Configure genkit console logging.
 
     Safe to call more than once. Default console level is ``info``; override
     with ``GENKIT_LOG=debug|info|warn|error``. In ``GENKIT_ENV=dev``, debug
@@ -104,19 +106,35 @@ def configure_logging(*, shared_tty: bool | None = None) -> None:
     configure_structlog_level()
     _maybe_enable_log_export()
 
-    if shared_tty is None:
-        shared_tty = is_dev_environment()
 
-    if not shared_tty:
-        return
+class ReflectionLogFilter(logging.Filter):
+    """Drop the reflection server's own uvicorn records below the quiet level.
 
-    level = resolve_level()
-    quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
+    Records from any other thread pass untouched, so the app's uvicorn startup
+    and access lines keep the level and handlers the app configured. The quiet
+    level is WARNING, or ``GENKIT_LOG`` when it is stricter.
+    ``GENKIT_LOG=debug`` lets every reflection record through.
+    """
 
-    for name in QUIET_LOGGERS:
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return ``False`` for quiet records from the reflection thread."""
+        if record.threadName != REFLECTION_THREAD_NAME:
+            return True
+        level = resolve_level()
+        quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
+        return record.levelno >= quiet_level
+
+
+def quiet_reflection_logs() -> None:
+    """Attach :class:`ReflectionLogFilter` to the reflection server's loggers.
+
+    Safe to call more than once. Levels, handlers and propagation on those
+    loggers are left alone.
+    """
+    for name in REFLECTION_LOGGERS:
         logger = logging.getLogger(name)
-        if logger.level == logging.NOTSET:
-            logger.setLevel(quiet_level)
+        if not any(isinstance(f, ReflectionLogFilter) for f in logger.filters):
+            logger.addFilter(ReflectionLogFilter())
 
 
 def _maybe_enable_log_export() -> None:
