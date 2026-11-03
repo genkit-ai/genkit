@@ -281,9 +281,11 @@ from genkit_amazon_bedrock import Bedrock
 ai = Genkit(plugins=[Bedrock(embedders=['amazon.titan-embed-text-v2:0'])])
 
 embeddings = await ai.embed(
-    embedder='bedrock/amazon.titan-embed-text-v2:0',
-    content='Bedrock hosts models from several providers.',
+    embedder=Bedrock.embedder('amazon.titan-embed-text-v2:0'),
+    content='Smoked salmon tartine',
 )
+print(len(embeddings[0].embedding))
+# => 1024
 ```
 
 Listing an embedder is optional: any routable ID resolves on demand,
