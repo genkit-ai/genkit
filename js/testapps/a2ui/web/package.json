@@ -9,9 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@a2ui/lit": "^0.10.2",
-    "@a2ui/markdown-it": "^0.1.0",
-    "@a2ui/web_core": "^0.10.5",
+    "@a2ui/lit": "^0.11.0",
+    "@a2ui/markdown-it": "^0.1.2",
+    "@a2ui/web_core": "^0.11.0",
     "@genkit-ai/a2ui": "workspace:*",
     "@lit/context": "^1.1.6",
     "genkit": "workspace:*",
