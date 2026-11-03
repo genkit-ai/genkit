@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import math
 import os
 from collections.abc import Mapping
 from typing import Any, cast
@@ -30,7 +29,7 @@ from genkit_google_genai._interactions._converters import (
 )
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._routing import strip_ref_prefixes
-from genkit_google_genai._models._sdk_config import check_timeout_seconds
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
 from genkit_google_genai._models._secrets import context_api_key
 
 from genkit import GenkitError, Message
@@ -91,11 +90,10 @@ def remove_client_option_overrides(config: dict[str, Any]) -> dict[str, Any]:
 def timeout_ms(seconds: object) -> float | None:
     """Config seconds to ``ClientOptions.timeout`` milliseconds, rounding up so 0.0001 sends 1 ms.
 
-    ``ClientOptions`` stays in milliseconds because the plugin-level options
-    (``HttpOptions.timeout`` today) share it; this is the one place a request
-    config's seconds cross into it. A numeric string such as ``'5'`` is read
-    as a number, as ``ClientOptions`` did before; anything else raises
-    ``INVALID_ARGUMENT``.
+    ``ClientOptions`` stays in milliseconds alongside ``HttpOptions.timeout``;
+    ``GoogleAI(timeout=...)`` converts at construction and per-request configs
+    convert here. A numeric string such as ``'5'`` is read as a number, as
+    ``ClientOptions`` did before; anything else raises ``INVALID_ARGUMENT``.
     """
     if isinstance(seconds, str):
         try:
@@ -106,8 +104,7 @@ def timeout_ms(seconds: object) -> float | None:
         checked = check_timeout_seconds(seconds)
     except ValueError as err:
         raise GenkitError(status='INVALID_ARGUMENT', message=str(err)) from err
-    # round() first so 2.007 s is 2007 ms, not 2008 from float noise.
-    return float(math.ceil(round(checked * 1000, 6))) if checked is not None else None
+    return float(timeout_seconds_to_ms(checked)) if checked is not None else None
 
 
 def client_overrides_from_config(

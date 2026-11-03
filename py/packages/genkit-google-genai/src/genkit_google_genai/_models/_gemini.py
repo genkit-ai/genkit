@@ -35,8 +35,8 @@ from genkit_google_genai._models._sdk_config import (
     attach_config_extra,
     attach_leftovers,
     check_timeout_seconds,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     reject_bool_timeout,
     sdk_config_error,
     split_sdk_fields,
@@ -2016,7 +2016,7 @@ class GeminiModel:
         # plugin's credentials, endpoint, headers, and timeouts.
         kwargs = dict(self._client_kwargs)
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
 
         if api_version:
             opts.api_version = api_version
@@ -2443,7 +2443,7 @@ class GeminiModel:
                 headers['X-Server-Timeout'] = str(math.ceil(ms / 1000))
                 http_options.headers = headers
                 cfg.http_options = http_options
-            return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
+            return cfg
 
         return None
 

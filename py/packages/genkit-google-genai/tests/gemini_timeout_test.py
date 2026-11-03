@@ -116,7 +116,7 @@ async def test_generate_and_stream_apply_per_request_timeout_and_server_deadline
         plugins=[
             GoogleAI(
                 api_key='test-key',
-                http_options=genai_types.HttpOptions(timeout=10_000),
+                timeout=10,
             )
         ]
     )
