@@ -431,7 +431,6 @@ def _emit_model(
             '    # Store Pydantic type for runtime validation (excluded from JSON)',
             '    schema_type: Any = Field(default=None, exclude=True)',
         ])
-<<<<<<< HEAD
     if name == 'GenerationUsage':
         # One GenerationUsage class: a hand-written subclass would leave wire
         # instances (SessionState.usage, AgentOutput.usage) rejected by the
@@ -445,29 +444,6 @@ def _emit_model(
             '',
             '        return cls.model_validate(count_message_usage(messages, response))',
         ])
-    if name in ('EvalFnResponse', 'EvaluatorResponse'):
-        lines.extend([
-            '',
-            "    @field_validator('evaluation', mode='before')",
-            '    @classmethod',
-            '    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401',
-            '        # saved runs may store one score object. wrap that dict;',
-            '        # a Score built in code must already be a list.',
-            '        return [value] if isinstance(value, dict) else value',
-        ])
-||||||| parent of b0f793f0 (refactor(py): stop generating eval wire types)
-    if name in ('EvalFnResponse', 'EvaluatorResponse'):
-        lines.extend([
-            '',
-            "    @field_validator('evaluation', mode='before')",
-            '    @classmethod',
-            '    def _wrap_single_score_object(cls, value: Any) -> Any:  # noqa: ANN401',
-            '        # saved runs may store one score object. wrap that dict;',
-            '        # a Score built in code must already be a list.',
-            '        return [value] if isinstance(value, dict) else value',
-        ])
-=======
->>>>>>> b0f793f0 (refactor(py): stop generating eval wire types)
     return lines + ['']
 
 
