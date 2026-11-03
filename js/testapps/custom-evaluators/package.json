@@ -20,8 +20,9 @@
     "genkit": "workspace:*"
   },
   "devDependencies": {
-    "tsx": "^4.19.2",
+    "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
     "typescript": "^5.9.3"
   }
 }
