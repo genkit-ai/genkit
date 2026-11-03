@@ -16,7 +16,7 @@
 
 """Model Context Protocol client for Genkit.
 
-Exposes the tools of one or more stdio MCP servers as Genkit ``tool.v2`` actions.
+Exposes the tools of one or more stdio MCP servers as Genkit ``tool`` actions.
 """
 
 from genkit_mcp._client import McpClient, define_mcp_client

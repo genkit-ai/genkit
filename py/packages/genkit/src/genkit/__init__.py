@@ -39,10 +39,6 @@ from genkit._ai._prompt import (
     ModelStreamResponse,
     Prompt,
 )
-from genkit._ai._tools import (
-    MultipartToolResponse,
-    ToolContext,
-)
 from genkit._core._action import FlowContext, StreamResponse
 from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
 from genkit._core._flow import Flow
@@ -52,11 +48,12 @@ from genkit._core._model import (
     Message,
     ModelResponse,
     ModelResponseChunk,
+    MultipartToolResponse,
     Part,
     ToolChoice,
 )
 from genkit._core._operation import Operation
-from genkit._core._tool import Tool
+from genkit._core._tool import Tool, ToolContext
 from genkit._core._typing import Embedding, FinishReason, Media, Role
 
 __all__ = [

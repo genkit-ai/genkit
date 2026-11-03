@@ -320,14 +320,15 @@ async def test_tool_span_skipped_when_disabled(harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_span_emitted_for_tool_v2_when_enabled(harness) -> None:
-    """A tool.v2 action with emit_tool_spans=True mints execute_tool <name>."""
+@pytest.mark.parametrize('kind', ['tool', 'tool.v2'])
+async def test_tool_span_emitted_for_tool_v2_when_enabled(harness, kind: str) -> None:
+    """A tool (generate) or tool.v2 (Dev UI) action with emit_tool_spans=True mints execute_tool <name>."""
     on = harness.instrumentation(emit_tool_spans=True)
 
     async def sunny(span=None):
         return 'sunny'
 
-    await on.run_in_new_span(SpanMetadata(name='weather', action_type='tool.v2'), sunny)
+    await on.run_in_new_span(SpanMetadata(name='weather', action_type=kind), sunny)
     span = harness.span_named('execute_tool weather')
     assert span is not None
     assert harness.attr(span, GenAiAttr.OPERATION_NAME) == 'execute_tool'
