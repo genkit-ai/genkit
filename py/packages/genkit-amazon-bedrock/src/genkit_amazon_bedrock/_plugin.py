@@ -38,9 +38,7 @@ from genkit_amazon_bedrock._config import (
     DEFAULT_TOTAL_TIMEOUT,
     BedrockConfig,
     ImageConfig,
-    NovaCanvasConfig,
     StabilityImageConfig,
-    TitanImageConfig,
 )
 from genkit_amazon_bedrock._embedders import (
     BedrockEmbedder,
@@ -51,16 +49,13 @@ from genkit_amazon_bedrock._embedders import (
 )
 from genkit_amazon_bedrock._image import (
     BedrockImageModel,
-    ImageFamily,
     image_config_class,
     image_family,
     is_image_model,
 )
 from genkit_amazon_bedrock._model_info import (
     KnownBedrockText,
-    KnownNovaCanvas,
     KnownStabilityImage,
-    KnownTitanImage,
     get_model_info,
     is_rerank_model,
 )
@@ -83,7 +78,7 @@ def _model_type(model_id: str) -> Literal['chat', 'image']:
     """Routes a model ID: image families to InvokeModel, the rest to Converse.
 
     Resolve is lazy, so an ID assumed to be chat would send
-    ``amazon.nova-canvas-v1:0`` down the Converse path and fail only at call
+    ``stability.sd3-5-large-v1:0`` down the Converse path and fail only at call
     time. Embedders classify by ID the same way.
     """
     return 'image' if is_image_model(model_id) else 'chat'
@@ -92,16 +87,16 @@ def _model_type(model_id: str) -> Literal['chat', 'image']:
 def _config_schema(model_id: str) -> type[BedrockConfig] | type[ImageConfig]:
     """The config class for a model; resolve and list both read it so the Dev UI matches the action.
 
-    Image models get their family's class (Titan Image, Nova Canvas,
-    Stability), everything else ``BedrockConfig``.
+    Stability models get ``StabilityImageConfig``, the retired Titan Image and
+    Nova Canvas an ``extra``-only class, everything else ``BedrockConfig``.
     """
     return image_config_class(model_id) or BedrockConfig
 
 
 ConfigT = TypeVar('ConfigT', bound=BaseModel)
 
-RefFamily = Literal['text', 'embedding'] | ImageFamily
-"""What a ref constructor serves, in AWS output-modality terms: text (Converse), one image family, or embedding."""
+RefFamily = Literal['text', 'embedding', 'stability']
+"""What a ref constructor serves, in AWS output-modality terms: text (Converse), Stability image, or embedding."""
 
 _REF_PREFIX = f'{BEDROCK_PLUGIN_NAME}/'
 
@@ -109,8 +104,6 @@ _REF_PREFIX = f'{BEDROCK_PLUGIN_NAME}/'
 _REF_CONSTRUCTOR: dict[RefFamily, tuple[str, str]] = {
     'text': ('text', 'a text'),
     'embedding': ('embedding', 'an embedding'),
-    'titan_image': ('titan_image', 'a Titan Image'),
-    'nova_canvas': ('nova_canvas', 'a Nova Canvas'),
     'stability': ('stability', 'a Stability'),
 }
 
@@ -123,7 +116,7 @@ def _strip_ref_prefix(name: str) -> str:
     return local
 
 
-def _ref_route(local: str) -> RefFamily | Literal['rerank']:
+def _ref_route(local: str) -> RefFamily | Literal['rerank', 'amazon_image']:
     """Routes a ref ID in ``resolve``'s order: embedder, rerank, image family, then text."""
     if looks_like_embedding_model(local):
         return 'embedding'
@@ -151,6 +144,11 @@ def _ref_local_id(name: object, *, family: RefFamily) -> str:
         return local
     if actual == 'rerank':
         hint = f"'{local}' is a rerank model; this plugin has no rerank action."
+    elif actual == 'amazon_image':
+        hint = (
+            f"'{local}' is a retired Amazon image model with no typed ref; "
+            f"pass 'bedrock/{local}' and send body fields in config['extra']."
+        )
     elif actual == 'text' and family != 'embedding':
         if 'stable-image-' in local and 'core' not in local and 'ultra' not in local:
             hint = f"'{local}' is an image editing service; the plugin supports text-to-image only."
@@ -215,63 +213,6 @@ class Bedrock(Plugin):
             ```
         """
         return _model_ref(name, family='text', config_schema=BedrockConfig, config=config)
-
-    @classmethod
-    def nova_canvas(
-        cls, name: KnownNovaCanvas | str, *, config: NovaCanvasConfig | None = None
-    ) -> ModelRef[NovaCanvasConfig]:
-        """Typed ref for Amazon Nova Canvas, e.g. ``Bedrock.nova_canvas('amazon.nova-canvas-v1:0')``.
-
-        Takes any ID that routes to Nova Canvas, including ``us.`` profiles and
-        ARNs ending in a Nova Canvas model ID. Other IDs raise
-        INVALID_ARGUMENT naming the constructor to use.
-
-        Example:
-            ```python
-            from genkit_amazon_bedrock import Bedrock, NovaCanvasConfig
-
-            # 1. Typed ref; config is checked against NovaCanvasConfig
-            canvas = Bedrock.nova_canvas('amazon.nova-canvas-v1:0')
-
-            # 2. Generate
-            response = await ai.generate(
-                model=canvas,
-                prompt='A dim sum spread on a marble table.',
-                config=NovaCanvasConfig(width=512, height=512, quality='premium'),
-            )
-            print(response.media[0].content_type)
-            # => image/png
-            ```
-        """
-        return _model_ref(name, family='nova_canvas', config_schema=NovaCanvasConfig, config=config)
-
-    @classmethod
-    def titan_image(
-        cls, name: KnownTitanImage | str, *, config: TitanImageConfig | None = None
-    ) -> ModelRef[TitanImageConfig]:
-        """Typed ref for Amazon Titan Image Generator (v1, v2).
-
-        Takes any ID that routes to Titan Image. Other IDs raise
-        INVALID_ARGUMENT naming the constructor to use.
-
-        Example:
-            ```python
-            from genkit_amazon_bedrock import Bedrock, TitanImageConfig
-
-            # 1. Ref with a default seed for reproducible menus
-            titan = Bedrock.titan_image('amazon.titan-image-generator-v2:0', config=TitanImageConfig(seed=7))
-
-            # 2. Generate two images
-            response = await ai.generate(
-                model=titan,
-                prompt='A bowl of ramen on a cedar counter.',
-                config={'number_of_images': 2},
-            )
-            print(len(response.media))
-            # => 2
-            ```
-        """
-        return _model_ref(name, family='titan_image', config_schema=TitanImageConfig, config=config)
 
     @classmethod
     def stability(

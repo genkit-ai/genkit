@@ -22,7 +22,8 @@ from typing import Any, cast
 
 import boto3.session
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig, NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, StabilityImageConfig
+from genkit_amazon_bedrock._config import AmazonImageConfig
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -103,15 +104,15 @@ async def test_resolve_ignores_non_model_kinds() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_returns_an_image_action_for_a_listed_image_model() -> None:
-    plugin = Bedrock(region='us-east-1', models=['amazon.titan-image-generator-v1'])
-    action = await plugin.resolve(ActionKind.MODEL, 'amazon.titan-image-generator-v1')
+    plugin = Bedrock(region='us-west-2', models=['stability.sd3-5-large-v1:0'])
+    action = await plugin.resolve(ActionKind.MODEL, 'stability.sd3-5-large-v1:0')
 
     assert action is not None
     assert action.metadata is not None
     model_metadata = cast(dict[str, Any], action.metadata['model'])
-    # Titan's own schema: its wire fields as camelCase properties, unknown keys rejected.
+    # Stability's own schema: its wire fields as camelCase properties, unknown keys rejected.
     properties = model_metadata['customOptions']['properties']
-    assert {'numberOfImages', 'height', 'width', 'cfgScale', 'seed', 'quality', 'extra'} <= set(properties)
+    assert {'aspectRatio', 'seed', 'negativePrompt', 'outputFormat', 'extra'} <= set(properties)
     assert 'toolChoice' not in properties
     assert model_metadata['customOptions'].get('additionalProperties') is False
 
@@ -127,34 +128,35 @@ async def test_resolve_classifies_an_undeclared_image_model_id() -> None:
     assert action.metadata is not None
     model_metadata = cast(dict[str, Any], action.metadata['model'])
     assert model_metadata['supports']['output'] == ['media']
-    assert model_metadata['customOptions']['properties']['quality']['anyOf'][0]['enum'] == ['standard', 'premium']
+    # Retired on Bedrock and untyped: the form offers extra only.
+    assert set(model_metadata['customOptions']['properties']) == {'extra'}
 
 
 @pytest.mark.asyncio
 async def test_list_actions_lists_configured_chat_and_image_models() -> None:
     plugin = Bedrock(
         region='us-east-1',
-        models=['amazon.nova-lite-v1:0', 'amazon.titan-image-generator-v1'],
+        models=['amazon.nova-lite-v1:0', 'stability.stable-image-core-v1:1'],
     )
     actions = await plugin.list_actions()
 
     assert [a.name for a in actions] == [
         'bedrock/amazon.nova-lite-v1:0',
-        'bedrock/amazon.titan-image-generator-v1',
+        'bedrock/stability.stable-image-core-v1:1',
     ]
     assert [a.kind for a in actions] == [ActionKind.MODEL, ActionKind.MODEL]
     assert actions[1].metadata is not None
     image_metadata = cast(dict[str, Any], actions[1].metadata['model'])
     assert image_metadata['supports']['output'] == ['media']
-    assert 'numberOfImages' in image_metadata['customOptions']['properties']
+    assert 'aspectRatio' in image_metadata['customOptions']['properties']
 
 
 @pytest.mark.parametrize(
     ('model_id', 'config_class'),
     [
-        ('amazon.titan-image-generator-v1', TitanImageConfig),
-        ('amazon.titan-image-generator-v2:0', TitanImageConfig),
-        ('us.amazon.nova-canvas-v1:0', NovaCanvasConfig),
+        ('amazon.titan-image-generator-v1', AmazonImageConfig),
+        ('amazon.titan-image-generator-v2:0', AmazonImageConfig),
+        ('us.amazon.nova-canvas-v1:0', AmazonImageConfig),
         ('stability.sd3-5-large-v1:0', StabilityImageConfig),
         ('stability.stable-image-core-v1:1', StabilityImageConfig),
         ('us.stability.stable-image-ultra-v1:1', StabilityImageConfig),
@@ -164,7 +166,7 @@ async def test_list_actions_lists_configured_chat_and_image_models() -> None:
 @pytest.mark.asyncio
 async def test_each_model_registers_its_family_config_class(model_id: str, config_class: type) -> None:
     # The registered class drives both the Dev UI form and generate()'s
-    # isinstance check, so a NovaCanvasConfig sent to Titan is caught.
+    # isinstance check, so a StabilityImageConfig sent to Titan is caught.
     plugin = Bedrock(region='us-east-1')
     action = await plugin.resolve(ActionKind.MODEL, model_id)
 

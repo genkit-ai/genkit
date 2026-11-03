@@ -20,7 +20,7 @@ import json
 from typing import Any, cast
 
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig, NovaCanvasConfig, StabilityImageConfig, TitanImageConfig
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, StabilityImageConfig
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -28,6 +28,7 @@ from genkit import Genkit, GenkitError
 
 CHAT_MODEL = 'bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0'
 IMAGE_MODEL = 'bedrock/stability.sd3-5-large-v1:0'
+# Retired on Bedrock and not typed; the raw IDs still route and take extra.
 NOVA_CANVAS = 'bedrock/amazon.nova-canvas-v1:0'
 TITAN_IMAGE = 'bedrock/amazon.titan-image-generator-v2:0'
 THINKING = {'thinking': {'type': 'enabled', 'budget_tokens': 2048}}
@@ -129,7 +130,7 @@ async def test_generate_bedrock_image_extra_key_overrides_built_field() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_bedrock_image_extra_deep_merges_nested_object() -> None:
-    """`extra={'imageGenerationConfig': {'seed': 7}}` sets `seed` and keeps the other defaults."""
+    """`extra={'imageGenerationConfig': {'seed': 7}}` on a retired Nova Canvas ID lands next to the prompt fields."""
     ai, transport = bedrock_app()
 
     await ai.generate(
@@ -139,15 +140,11 @@ async def test_generate_bedrock_image_extra_deep_merges_nested_object() -> None:
     )
 
     body = json.loads(transport.invoke_calls[0]['body'])
-    assert body['imageGenerationConfig'] == {
-        'numberOfImages': 1,
-        'height': 1024,
-        'width': 1024,
-        'cfgScale': 8.0,
-        'seed': 7,
-        'quality': 'standard',
+    assert body == {
+        'taskType': 'TEXT_IMAGE',
+        'textToImageParams': {'text': 'a reef'},
+        'imageGenerationConfig': {'seed': 7},
     }
-    assert body['taskType'] == 'TEXT_IMAGE'
 
 
 @pytest.mark.asyncio
@@ -210,28 +207,12 @@ async def test_generate_bedrock_image_extra_not_a_mapping_fails_invalid_argument
     ('model', 'config', 'expected'),
     [
         (
-            NOVA_CANVAS,
-            NovaCanvasConfig(seed=7, width=512, height=512, quality='premium', number_of_images=2, cfg_scale=6.5),
-            {
-                'taskType': 'TEXT_IMAGE',
-                'textToImageParams': {'text': 'a reef'},
-                'imageGenerationConfig': {
-                    'numberOfImages': 2,
-                    'height': 512,
-                    'width': 512,
-                    'cfgScale': 6.5,
-                    'seed': 7,
-                    'quality': 'premium',
-                },
-            },
-        ),
-        (
             TITAN_IMAGE,
-            {'seed': 7, 'width': 512, 'height': 512},
+            {'extra': {'imageGenerationConfig': {'numberOfImages': 2, 'width': 512, 'height': 512}}},
             {
                 'taskType': 'TEXT_IMAGE',
                 'textToImageParams': {'text': 'a reef'},
-                'imageGenerationConfig': {'numberOfImages': 1, 'height': 512, 'width': 512, 'cfgScale': 8.0, 'seed': 7},
+                'imageGenerationConfig': {'numberOfImages': 2, 'width': 512, 'height': 512},
             },
         ),
         (
@@ -246,12 +227,12 @@ async def test_generate_bedrock_image_extra_not_a_mapping_fails_invalid_argument
             },
         ),
     ],
-    ids=['nova_typed', 'titan_dict', 'stability_typed'],
+    ids=['titan_extra', 'stability_typed'],
 )
 async def test_generate_bedrock_image_config_reaches_the_wire(
     model: str, config: Any, expected: dict[str, Any]
 ) -> None:  # noqa: ANN401
-    """Typed and dict configs map to each family's wire body."""
+    """A typed Stability config and a raw extra on a retired Amazon ID each map to their wire body."""
     ai, transport = bedrock_app()
 
     response = await ai.generate(model=model, prompt='a reef', config=config)
@@ -265,12 +246,20 @@ async def test_generate_bedrock_image_config_reaches_the_wire(
     ('model', 'config', 'needle'),
     [
         (IMAGE_MODEL, {'aspect_ratio': '16:9', 'style_preset': 'photographic'}, "'style_preset'"),
-        (NOVA_CANVAS, {'imageGenerationConfg': {'seed': 7}}, "'imageGenerationConfg'"),
-        (TITAN_IMAGE, {'number_of_image': 2}, "'number_of_image'"),
         (IMAGE_MODEL, {'aspect_ratio': '16:9', 'temperature': 0.4}, "'temperature'"),
+        # The retired Amazon models declare only extra, so even the old nested
+        # object and the formerly typed fields point there.
+        (NOVA_CANVAS, {'imageGenerationConfig': {'seed': 7}}, "'imageGenerationConfig'"),
+        (TITAN_IMAGE, {'number_of_images': 2}, "'number_of_images'"),
         (NOVA_CANVAS, {'maxOutputTokens': 10}, "'maxOutputTokens'"),
     ],
-    ids=['stability_unlisted_field', 'nova_typo', 'titan_typo', 'stability_temperature', 'nova_max_output_tokens'],
+    ids=[
+        'stability_unlisted_field',
+        'stability_temperature',
+        'nova_nested_object',
+        'titan_former_field',
+        'nova_max_output_tokens',
+    ],
 )
 async def test_generate_bedrock_image_unknown_key_fails_and_points_to_extra(
     model: str, config: dict[str, Any], needle: str
@@ -288,38 +277,16 @@ async def test_generate_bedrock_image_unknown_key_fails_and_points_to_extra(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('old_name', ['imageGenerationConfig', 'image_generation_config'])
-@pytest.mark.parametrize('model', [NOVA_CANVAS, TITAN_IMAGE])
-async def test_generate_bedrock_image_old_nested_config_raises_and_names_flat_fields(model: str, old_name: str) -> None:
-    """The old nested `imageGenerationConfig`, in either spelling, raises INVALID_ARGUMENT naming the flat fields."""
+async def test_generate_bedrock_image_stability_config_on_a_retired_amazon_id_fails() -> None:
+    """`StabilityImageConfig` on a Titan Image ID is rejected; that ID takes only `extra`."""
     ai, transport = bedrock_app()
 
     with pytest.raises(GenkitError) as exc_info:
-        await ai.generate(model=model, prompt='a reef', config={old_name: {'seed': 7}})
+        await ai.generate(model=TITAN_IMAGE, prompt='a reef', config=StabilityImageConfig(seed=7))
 
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert f'{old_name} was flattened' in str(exc_info.value)
-    assert 'number_of_images=' in str(exc_info.value)
+    assert 'AmazonImageConfig' in str(exc_info.value)
     assert transport.invoke_calls == []
-
-
-@pytest.mark.asyncio
-async def test_generate_bedrock_image_config_class_of_another_family_fails() -> None:
-    """`NovaCanvasConfig` on a Titan model is rejected; each family registers its own class."""
-    ai, transport = bedrock_app()
-
-    with pytest.raises(GenkitError) as exc_info:
-        await ai.generate(model=TITAN_IMAGE, prompt='a reef', config=NovaCanvasConfig(seed=7))
-
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'TitanImageConfig' in str(exc_info.value)
-    assert transport.invoke_calls == []
-
-
-def test_titan_image_config_rejects_the_old_nested_key_at_construction() -> None:
-    """`TitanImageConfig(imageGenerationConfig=...)` raises the same INVALID_ARGUMENT as the dict form."""
-    with pytest.raises(GenkitError, match='imageGenerationConfig was flattened'):
-        TitanImageConfig.model_validate({'imageGenerationConfig': {'seed': 7}})
 
 
 @pytest.mark.asyncio
@@ -329,18 +296,7 @@ def test_titan_image_config_rejects_the_old_nested_key_at_construction() -> None
         (IMAGE_MODEL, {'prompt': 'a reef', 'output_format': 'png'}),
         (
             NOVA_CANVAS,
-            {
-                'taskType': 'TEXT_IMAGE',
-                'textToImageParams': {'text': 'a reef'},
-                'imageGenerationConfig': {
-                    'numberOfImages': 1,
-                    'height': 1024,
-                    'width': 1024,
-                    'cfgScale': 8.0,
-                    'seed': 0,
-                    'quality': 'standard',
-                },
-            },
+            {'taskType': 'TEXT_IMAGE', 'textToImageParams': {'text': 'a reef'}},
         ),
     ],
     ids=['stability', 'nova_canvas'],

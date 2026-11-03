@@ -38,10 +38,8 @@ Example:
 
 from genkit_amazon_bedrock._config import (
     BedrockConfig,
-    NovaCanvasConfig,
     StabilityAspectRatio,
     StabilityImageConfig,
-    TitanImageConfig,
 )
 from genkit_amazon_bedrock._converters import cache_point_part
 from genkit_amazon_bedrock._plugin import Bedrock
@@ -49,9 +47,7 @@ from genkit_amazon_bedrock._plugin import Bedrock
 __all__ = [
     'Bedrock',
     'BedrockConfig',
-    'NovaCanvasConfig',
     'StabilityAspectRatio',
     'StabilityImageConfig',
-    'TitanImageConfig',
     'cache_point_part',
 ]

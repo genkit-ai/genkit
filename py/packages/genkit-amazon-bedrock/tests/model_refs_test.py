@@ -21,20 +21,12 @@ from collections.abc import Callable
 from typing import Any, cast, get_args
 
 import pytest
-from genkit_amazon_bedrock import (
-    Bedrock,
-    BedrockConfig,
-    NovaCanvasConfig,
-    StabilityImageConfig,
-    TitanImageConfig,
-)
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, StabilityImageConfig
 from genkit_amazon_bedrock._embedders import EMBEDDER_INFO, KnownBedrockEmbedder
 from genkit_amazon_bedrock._model_info import (
     MODEL_CAPABILITIES,
     KnownBedrockText,
-    KnownNovaCanvas,
     KnownStabilityImage,
-    KnownTitanImage,
 )
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import BaseModel
@@ -48,8 +40,6 @@ RefConstructor = Callable[..., ModelRef[Any]]
 
 CONSTRUCTORS: list[tuple[str, RefConstructor, str, type[BaseModel]]] = [
     ('text', Bedrock.text, 'amazon.nova-lite-v1:0', BedrockConfig),
-    ('nova_canvas', Bedrock.nova_canvas, 'amazon.nova-canvas-v1:0', NovaCanvasConfig),
-    ('titan_image', Bedrock.titan_image, 'amazon.titan-image-generator-v2:0', TitanImageConfig),
     ('stability', Bedrock.stability, 'stability.sd3-5-large-v1:0', StabilityImageConfig),
 ]
 IDS = [c[0] for c in CONSTRUCTORS]
@@ -118,7 +108,6 @@ def test_a_config_passed_at_construction_rides_on_the_ref(
 @pytest.mark.parametrize(
     ('constructor', 'model_id', 'expected_name'),
     [
-        (Bedrock.nova_canvas, 'us.amazon.nova-canvas-v1:0', 'bedrock/us.amazon.nova-canvas-v1:0'),
         (Bedrock.stability, 'us.stability.stable-image-ultra-v1:1', 'bedrock/us.stability.stable-image-ultra-v1:1'),
         (
             Bedrock.text,
@@ -126,9 +115,9 @@ def test_a_config_passed_at_construction_rides_on_the_ref(
             'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
         ),
         (
-            Bedrock.nova_canvas,
-            'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-canvas-v1:0',
-            'bedrock/arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-canvas-v1:0',
+            Bedrock.stability,
+            'arn:aws:bedrock:us-west-2::foundation-model/stability.sd3-5-large-v1:0',
+            'bedrock/arn:aws:bedrock:us-west-2::foundation-model/stability.sd3-5-large-v1:0',
         ),
         # An opaque application inference profile carries no model ID, so it
         # routes to Converse at runtime, and only text() takes it.
@@ -148,20 +137,21 @@ def test_profiles_and_arns_route_like_resolve(constructor: RefConstructor, model
 @pytest.mark.parametrize(
     ('constructor', 'model_id', 'needle'),
     [
-        (Bedrock.nova_canvas, 'stability.sd3-5-large-v1:0', 'use Bedrock.stability()'),
-        (Bedrock.text, 'amazon.nova-canvas-v1:0', 'use Bedrock.nova_canvas()'),
-        (Bedrock.text, 'amazon.titan-image-generator-v1', 'use Bedrock.titan_image()'),
-        (Bedrock.titan_image, 'amazon.nova-canvas-v1:0', 'use Bedrock.nova_canvas()'),
+        (Bedrock.text, 'stability.sd3-5-large-v1:0', 'use Bedrock.stability()'),
+        (Bedrock.embedding, 'us.stability.stable-image-core-v1:1', 'use Bedrock.stability()'),
+        # Retired on Bedrock and untyped: the hint names the raw ID and extra.
+        (Bedrock.text, 'amazon.nova-canvas-v1:0', "pass 'bedrock/amazon.nova-canvas-v1:0'"),
+        (Bedrock.stability, 'amazon.titan-image-generator-v2:0', "config['extra']"),
         (Bedrock.stability, 'amazon.nova-lite-v1:0', 'text models take Bedrock.text()'),
         (Bedrock.stability, 'stability.stable-image-inpaint-v1:0', 'image editing service'),
         (Bedrock.text, 'amazon.titan-embed-text-v2:0', 'use Bedrock.embedding()'),
         (Bedrock.stability, 'cohere.embed-english-v3', 'use Bedrock.embedding()'),
         (Bedrock.embedding, 'amazon.nova-lite-v1:0', 'use Bedrock.text()'),
-        (Bedrock.embedding, 'amazon.nova-canvas-v1:0', 'use Bedrock.nova_canvas()'),
+        (Bedrock.embedding, 'amazon.nova-canvas-v1:0', 'retired Amazon image model'),
         (Bedrock.embedding, 'cohere.rerank-v3-5:0', 'no rerank action'),
-        (Bedrock.nova_canvas, 'cohere.rerank-v3-5:0', 'no rerank action'),
+        (Bedrock.stability, 'cohere.rerank-v3-5:0', 'no rerank action'),
         (
-            Bedrock.titan_image,
+            Bedrock.stability,
             'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc',
             'Bedrock.text()',
         ),
@@ -178,7 +168,7 @@ def test_an_id_from_another_family_is_refused(constructor: RefConstructor, model
 @pytest.mark.parametrize('name', [None, 123, '', 'bedrock/'])
 def test_a_missing_or_non_string_name_is_refused(name: object) -> None:
     with pytest.raises(GenkitError) as exc_info:
-        Bedrock.nova_canvas(name)  # type: ignore[arg-type]
+        Bedrock.stability(name)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
@@ -198,8 +188,6 @@ async def test_a_ref_agrees_with_the_registered_action(
     ('literal', 'constructor'),
     [
         (KnownBedrockText, Bedrock.text),
-        (KnownNovaCanvas, Bedrock.nova_canvas),
-        (KnownTitanImage, Bedrock.titan_image),
         (KnownStabilityImage, Bedrock.stability),
     ],
 )
@@ -250,13 +238,14 @@ async def test_embed_with_an_embedding_ref_reaches_invoke_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_with_a_nova_canvas_ref_sends_the_typed_body() -> None:
+async def test_generate_with_a_retired_amazon_id_sends_extra_on_invoke_model() -> None:
+    # No typed ref; the raw ID still routes to InvokeModel and extra is the body.
     ai, transport = bedrock_app()
 
     response = await ai.generate(
-        model=Bedrock.nova_canvas('amazon.nova-canvas-v1:0'),
+        model='bedrock/amazon.nova-canvas-v1:0',
         prompt='A dim sum spread on a marble table.',
-        config=NovaCanvasConfig(width=512, height=512, quality='premium', seed=7),
+        config={'extra': {'imageGenerationConfig': {'width': 512, 'height': 512}}},
     )
 
     assert response.error is None
@@ -265,14 +254,7 @@ async def test_generate_with_a_nova_canvas_ref_sends_the_typed_body() -> None:
         {
             'taskType': 'TEXT_IMAGE',
             'textToImageParams': {'text': 'A dim sum spread on a marble table.'},
-            'imageGenerationConfig': {
-                'numberOfImages': 1,
-                'height': 512,
-                'width': 512,
-                'cfgScale': 8.0,
-                'seed': 7,
-                'quality': 'premium',
-            },
+            'imageGenerationConfig': {'width': 512, 'height': 512},
         }
     ]
 
@@ -296,11 +278,11 @@ async def test_a_refs_config_is_applied_under_the_call_config() -> None:
 async def test_a_wrong_family_config_on_a_ref_fails_before_the_call() -> None:
     ai, transport = bedrock_app()
     # Type checkers already reject this call; Any checks the runtime guard too.
-    wrong_family: Any = NovaCanvasConfig(seed=7)
+    wrong_family: Any = BedrockConfig(max_output_tokens=64)
 
     with pytest.raises(GenkitError) as exc_info:
         await ai.generate(
-            model=Bedrock.titan_image('amazon.titan-image-generator-v2:0'),
+            model=Bedrock.stability('stability.sd3-5-large-v1:0'),
             prompt='A bowl of ramen.',
             config=wrong_family,
         )

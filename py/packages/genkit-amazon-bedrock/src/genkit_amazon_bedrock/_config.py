@@ -16,12 +16,10 @@
 
 """Configuration types for the Amazon Bedrock plugin."""
 
-from collections.abc import Mapping
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
-from genkit import GenkitError
 from genkit.model import ModelConfig
 from genkit.plugin_api import GenkitConfig
 
@@ -41,10 +39,8 @@ DEFAULT_MAX_POOL_CONNECTIONS = 50
 class BedrockConfig(ModelConfig):
     """Per-call configuration for Bedrock text models (the Converse API).
 
-    Image models take their own family's class instead: ``NovaCanvasConfig``,
-    ``TitanImageConfig`` or ``StabilityImageConfig``. ``Bedrock.text()`` and
-    the image ref constructors (``Bedrock.nova_canvas()``, ...) bind the
-    right one.
+    Stability image models take ``StabilityImageConfig`` instead, which
+    ``Bedrock.stability()`` binds.
 
     Unknown keys are rejected: only the declared fields reach the Converse
     API, so a tolerated typo (``maxTokens`` for ``maxOutputTokens``) would run
@@ -57,124 +53,24 @@ class BedrockConfig(ModelConfig):
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""
 
 
-# The nested object Titan Image and Nova Canvas used to take from config,
-# before its fields moved to the top level. Both spellings were read.
-_NESTED_IMAGE_KEYS = ('imageGenerationConfig', 'image_generation_config')
-
-
 _EXTRA_DESCRIPTION = (
     'Bedrock body fields this class does not declare, in wire names, deep-merged into the InvokeModel body after '
-    "everything else (for example {'textToImageParams': {'negativeText': 'blurry'}}). Nested objects merge key by "
-    'key. Fields built from the prompt are rejected. Not checked otherwise; do not put secrets here.'
+    "everything else (for example {'mode': 'text-to-image'}). Nested objects merge key by key. Fields built from "
+    'the prompt are rejected. Not checked otherwise; do not put secrets here.'
 )
 
 
-class _AmazonImageConfig(GenkitConfig):
-    """Fields Titan Image and Nova Canvas share; the plugin nests them under ``imageGenerationConfig``.
+class AmazonImageConfig(GenkitConfig):
+    """Config for Titan Image and Nova Canvas, which Bedrock retired; not exported.
 
-    The camelCase aliases are the Bedrock wire names, so ``number_of_images``
-    is sent as ``imageGenerationConfig.numberOfImages``.
-
-    Extends ``GenkitConfig``, like ``VeoConfig``, not ``ModelConfig``: the
-    image APIs take none of Genkit's generic knobs, so ``temperature`` or
-    ``top_p`` raise as unknown keys instead of being dropped.
+    Bedrock retired Titan Image (v2 on 2026-06-30) and Nova Canvas (on
+    2026-09-30), so these models get no typed fields. The raw model ID still
+    routes to InvokeModel, and ``extra`` carries every body field the caller
+    wants beyond the prompt, e.g. ``{'imageGenerationConfig': {'seed': 7}}``.
+    Any other key raises as unknown, and Genkit's message names ``extra``.
     """
 
-    number_of_images: int | None = Field(default=None, ge=1, le=5, description='Images to generate. Default 1.')
-    cfg_scale: float | None = Field(
-        default=None,
-        ge=1.1,
-        le=10.0,
-        description='How strictly the image follows the prompt; lower is more random. Default 8.0.',
-    )
-    seed: int | None = Field(default=None, ge=0, le=2147483646, description='Initial noise seed. Default 0.')
-    quality: Literal['standard', 'premium'] | None = Field(default=None, description='Image quality tier.')
     extra: dict[str, Any] | None = Field(default=None, description=_EXTRA_DESCRIPTION)
-
-    @model_validator(mode='before')
-    @classmethod
-    def _reject_nested_image_generation_config(cls, data: Any) -> Any:  # noqa: ANN401
-        """Name the flat fields when a caller passes the old nested object."""
-        if not isinstance(data, Mapping):
-            return data
-        for key in _NESTED_IMAGE_KEYS:
-            if key in cast(Mapping[str, Any], data):
-                raise GenkitError(
-                    status='INVALID_ARGUMENT',
-                    message=(
-                        f'bedrock image: {key} was flattened; set number_of_images=, height=, width=, '
-                        "cfg_scale=, seed= and quality= on the config, or send raw body fields in config['extra']"
-                    ),
-                )
-        return data
-
-
-class TitanImageConfig(_AmazonImageConfig):
-    """Per-call configuration for Amazon Titan Image Generator (v1, v2).
-
-    Example:
-        ```python
-        from genkit_amazon_bedrock import TitanImageConfig
-
-        # 1. Two 512x512 images, pinned seed
-        response = await ai.generate(
-            model='bedrock/amazon.titan-image-generator-v2:0',
-            prompt='A bowl of ramen on a cedar counter.',
-            config=TitanImageConfig(number_of_images=2, width=512, height=512, seed=7),
-        )
-
-        # 2. One media part per image
-        print(len(response.media))
-        # => 2
-        ```
-
-    ``quality`` is not sent unless set. Titan accepts only fixed width and
-    height pairs (1024x1024, 768x1152, 1280x768, ...); Bedrock rejects any
-    other pair with a ``ValidationException``.
-    """
-
-    height: int | None = Field(default=None, gt=0, description='Image height in pixels. Default 1024.')
-    width: int | None = Field(default=None, gt=0, description='Image width in pixels. Default 1024.')
-
-
-class NovaCanvasConfig(_AmazonImageConfig):
-    """Per-call configuration for Amazon Nova Canvas.
-
-    Example:
-        ```python
-        from genkit_amazon_bedrock import NovaCanvasConfig
-
-        # 1. Premium quality, negativeText through extra
-        response = await ai.generate(
-            model='bedrock/amazon.nova-canvas-v1:0',
-            prompt='A dim sum spread on a marble table.',
-            config=NovaCanvasConfig(
-                quality='premium',
-                cfg_scale=6.5,
-                extra={'textToImageParams': {'negativeText': 'blurry'}},
-            ),
-        )
-
-        # 2. Nova Canvas always returns PNG
-        print(response.media[0].content_type)
-        # => image/png
-        ```
-    """
-
-    height: int | None = Field(
-        default=None,
-        ge=320,
-        le=4096,
-        multiple_of=16,
-        description='Image height in pixels, 320-4096 and divisible by 16. Default 1024.',
-    )
-    width: int | None = Field(
-        default=None,
-        ge=320,
-        le=4096,
-        multiple_of=16,
-        description='Image width in pixels, 320-4096 and divisible by 16. Default 1024.',
-    )
 
 
 StabilityAspectRatio = Literal['16:9', '1:1', '21:9', '2:3', '3:2', '4:5', '5:4', '9:16', '9:21']
@@ -215,5 +111,5 @@ class StabilityImageConfig(GenkitConfig):
     extra: dict[str, Any] | None = Field(default=None, description=_EXTRA_DESCRIPTION)
 
 
-ImageConfig = TitanImageConfig | NovaCanvasConfig | StabilityImageConfig
+ImageConfig = StabilityImageConfig | AmazonImageConfig
 """Any of the per-family image config classes."""

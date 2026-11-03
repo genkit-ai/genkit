@@ -174,10 +174,8 @@ KnownBedrockText: TypeAlias = Literal[
     'twelvelabs.pegasus-1-2-v1:0',
 ]
 
-# Autocomplete for the image ref constructors. Inference-profile and ARN forms
-# of these route the same way.
-KnownNovaCanvas: TypeAlias = Literal['amazon.nova-canvas-v1:0']
-KnownTitanImage: TypeAlias = Literal['amazon.titan-image-generator-v1', 'amazon.titan-image-generator-v2:0']
+# Autocomplete for Bedrock.stability(). Inference-profile and ARN forms of these
+# route the same way.
 KnownStabilityImage: TypeAlias = Literal[
     'stability.sd3-5-large-v1:0',
     'stability.stable-image-core-v1:1',
