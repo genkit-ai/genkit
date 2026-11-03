@@ -71,6 +71,7 @@ def inject_instructions(messages: list[Message], instructions: str) -> list[Mess
 
     m = Message(
         role=messages[target_index].role,
+        metadata=messages[target_index].metadata,
         # Create a copy of the content
         content=messages[target_index].content[:],
     )
