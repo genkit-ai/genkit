@@ -19,6 +19,7 @@
 
 import asyncio
 import datetime
+import functools
 import json
 import logging
 from typing import Any, cast
@@ -714,20 +715,32 @@ def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event
     }
 
 
-def test_fastapi_malformed_json_body_returns_400_valid_json_message() -> None:
-    """A FastAPI POST that is not JSON is 400 request body must be valid JSON."""
+def test_fastapi_malformed_json_body_returns_400_valid_json_message(caplog: pytest.LogCaptureFixture) -> None:
+    """A FastAPI POST that is not JSON is 400 request body must be valid JSON and logs the flow name."""
     client = TestClient(create_app())
-    response = client.post(
-        '/chat',
-        content=b'{bad',
-        headers={'content-type': 'application/json'},
-    )
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi._handler'):
+        response = client.post(
+            '/chat',
+            content=b'{bad',
+            headers={'content-type': 'application/json'},
+        )
 
     assert response.status_code == 400
     assert response.json() == {
         'message': 'request body must be valid JSON',
         'status': 'INVALID_ARGUMENT',
     }
+    records = [r for r in caplog.records if r.name == 'genkit_fastapi._handler']
+    assert [
+        (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
+    ] == [
+        (
+            logging.WARNING,
+            "served flow 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
+            False,
+            'say_hi',
+        )
+    ]
 
 
 def test_fastapi_context_provider_route_malformed_json_returns_400() -> None:
@@ -800,6 +813,40 @@ def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_erro
 
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_handler_wrapper_failure_logs_wrapper_name_or_unknown(caplog: pytest.LogCaptureFixture) -> None:
+    """A failing route wrapper logs its __name__, or '<unknown>' when the callable has none."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @app.post('/named', response_model=None)
+    @genkit_fastapi_handler(ai)
+    async def wrapped_route() -> Any:
+        raise RuntimeError('db pool closed')
+
+    async def load_route(_name: str) -> Any:
+        raise RuntimeError('db pool closed')
+
+    app.post('/partial', response_model=None)(genkit_fastapi_handler(ai)(functools.partial(load_route, 'orders')))
+
+    client = TestClient(app)
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi._handler'):
+        named_resp = client.post('/named', json={'data': 'x'})
+        partial_resp = client.post('/partial', json={'data': 'x'})
+
+    assert named_resp.status_code == 500
+    assert partial_resp.status_code == 500
+    assert named_resp.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert partial_resp.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    records = [r for r in caplog.records if r.name == 'genkit_fastapi._handler']
+    assert [
+        (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
+    ] == [
+        (logging.ERROR, "served flow 'wrapped_route' handler failed", True, 'wrapped_route'),
+        (logging.ERROR, "served flow '<unknown>' handler failed", True, '<unknown>'),
+    ]
 
 
 def test_fastapi_context_provider_http_exception_keeps_its_status() -> None:

@@ -303,23 +303,35 @@ def test_streamed_flow_failure_ends_with_same_error_frame() -> None:
     assert chunks[-1] == b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n'
 
 
-def test_flask_malformed_json_body_returns_400_valid_json_message() -> None:
-    """A Flask POST that is not JSON is 400 request body must be valid JSON."""
-    response = (
-        create_app()
-        .test_client()
-        .post(
-            '/chat',
-            data='{bad',
-            content_type='application/json',
+def test_flask_malformed_json_body_returns_400_valid_json_message(caplog: pytest.LogCaptureFixture) -> None:
+    """A Flask POST that is not JSON is 400 request body must be valid JSON and logs the flow name."""
+    with caplog.at_level(logging.DEBUG, logger='genkit_flask._handler'):
+        response = (
+            create_app()
+            .test_client()
+            .post(
+                '/chat',
+                data='{bad',
+                content_type='application/json',
+            )
         )
-    )
 
     assert response.status_code == 400
     assert json.loads(response.data) == {
         'message': 'request body must be valid JSON',
         'status': 'INVALID_ARGUMENT',
     }
+    records = [r for r in caplog.records if r.name == 'genkit_flask._handler']
+    assert [
+        (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
+    ] == [
+        (
+            logging.WARNING,
+            "served flow 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
+            False,
+            'say_hi',
+        )
+    ]
 
 
 def test_flask_provider_401_returns_500_internal_error() -> None:

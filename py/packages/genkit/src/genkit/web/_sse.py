@@ -139,10 +139,11 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
             raise
         action_name = getattr(handle, '_action_name', None)
         if isinstance(action_name, str) and action_name:
+            extra = {'genkit_action': action_name}
             if error_status(e) >= 500:
-                _logger.exception('served flow %r stream failed', action_name)
+                _logger.exception('served flow %r stream failed', action_name, extra=extra)
             else:
-                _logger.warning('served flow %r stream failed: %s', action_name, e)
+                _logger.warning('served flow %r stream failed: %s', action_name, e, extra=extra)
         elif error_status(e) >= 500:
             _logger.exception('served flow stream failed')
         else:

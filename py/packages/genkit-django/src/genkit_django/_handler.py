@@ -39,10 +39,11 @@ _JSON_SEPARATORS = (',', ':')
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
     """Log a served-flow failure, naming the flow; 5xx includes the traceback."""
+    extra = {'genkit_action': flow}
     if error_status(error) >= 500:
-        logger.exception('served flow %r %s failed', flow, where)
+        logger.exception('served flow %r %s failed', flow, where, extra=extra)
     else:
-        logger.warning('served flow %r %s failed: %s', flow, where, error)
+        logger.warning('served flow %r %s failed: %s', flow, where, error, extra=extra)
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401

@@ -132,7 +132,6 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
     settled_response: asyncio.Future[object] = asyncio.get_running_loop().create_future()
     settled_response.set_result(None)
     unnamed_sr = StreamResponse(stream=raw_for_sr.stream, response=settled_response)
-    assert unnamed_sr._action_name is None
 
     with caplog.at_level(logging.WARNING):
         not_found_lines = await _lines(to_sse(track_order.stream('A-1042')))
@@ -149,6 +148,12 @@ async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -
         ('ERROR', "served flow 'charge_card' stream failed", True),
         ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
         ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
+    ]
+    assert [getattr(r, 'genkit_action', None) for r in caplog.records] == [
+        'track_order',
+        'charge_card',
+        None,
+        None,
     ]
 
 

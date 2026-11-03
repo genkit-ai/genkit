@@ -81,10 +81,11 @@ async def _read_json_request_body(*, request: Request) -> object:
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
     """Log a served-flow failure, naming the flow; 5xx includes the traceback."""
+    extra = {'genkit_action': flow}
     if error_status(error) >= 500:
-        logger.exception('served flow %r %s failed', flow, where)
+        logger.exception('served flow %r %s failed', flow, where, extra=extra)
     else:
-        logger.warning('served flow %r %s failed: %s', flow, where, error)
+        logger.warning('served flow %r %s failed: %s', flow, where, error, extra=extra)
 
 
 def format_stream_error(error: Exception) -> str:
@@ -249,7 +250,7 @@ def genkit_fastapi_handler(
                 # The wrapper's own HTTP response (e.g. 503 while the action isn't ready).
                 raise
             except Exception as e:
-                flow_name = fn.name if isinstance(fn, Action) else getattr(fn, '__name__', '<unknown>')
+                flow_name = getattr(fn, '__name__', '<unknown>')
                 _log_failure(error=e, flow=flow_name, where='handler')
                 return json_error_response(e)
 
