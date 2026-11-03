@@ -968,11 +968,12 @@ def make_tool_chunk_streamer(
                 role=Role.TOOL,
                 ctx=ctx,
             )
-        except Exception as e:
+        except (Exception, _StreamingCallbackError) as e:
+            cause = e.__cause__ if isinstance(e, _StreamingCallbackError) and e.__cause__ is not None else e
             logger.debug(
                 'tool send_chunk callback failed; dropping update',
                 tool=tool_req.name,
-                error=str(e),
+                error=str(cause),
             )
 
     return stream_tool_chunk

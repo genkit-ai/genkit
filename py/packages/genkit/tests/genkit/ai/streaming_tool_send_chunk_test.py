@@ -44,6 +44,7 @@ from genkit import (
 from genkit._ai._agents._client import StreamedMessageAccumulator
 from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._tools import define_tool
+from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._registry import Registry
 from genkit.exp import Genkit as ExpGenkit
 from genkit.exp.agent import AgentStreamChunk
@@ -779,19 +780,24 @@ async def test_generate_stream_drops_late_send_chunk_after_tool_interrupts() -> 
 
 @pytest.mark.asyncio
 async def test_generate_stream_nested_tool_call_does_not_inherit_outer_chunk_sender() -> None:
-    """A nested direct tool call inside an active tool does not inherit _tool_generate_chunk_sender."""
+    """A nested direct or streamed tool call inside an active tool does not leak into generate_stream."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
+    captured_inner_stream: list[str] = []
 
     @ai.tool(name='inner_helper')
     async def inner_helper(_req: dict[str, Any], ctx: ToolContext[str]) -> str:
-        ctx.send_chunk('leaked-from-inner')
+        ctx.send_chunk('inner-progress')
         return 'inner-done'
 
     @ai.tool(name='outer_deploy')
     async def outer_deploy(_req: dict[str, Any], ctx: ToolContext[str]) -> str:
         ctx.send_chunk('outer-before')
         inner_res = await inner_helper({})
+        inner_stream = inner_helper.stream({})
+        async for item in inner_stream:
+            captured_inner_stream.append(item)
+        await inner_stream.response
         ctx.send_chunk(f'outer-after:{inner_res}')
         return 'outer-done'
 
@@ -805,6 +811,7 @@ async def test_generate_stream_nested_tool_call_does_not_inherit_outer_chunk_sen
         ('outer_deploy', 'outer-1', 'outer-before'),
         ('outer_deploy', 'outer-1', 'outer-after:inner-done'),
     ]
+    assert captured_inner_stream == ['inner-progress']
     assert _tool_outputs(response.messages) == ['outer-done']
 
 
@@ -1326,3 +1333,96 @@ def test_streamed_message_accumulator_skips_partial_parts_without_flushing() -> 
     assert msgs[1].content[0].is_partial is False
     assert msgs[1].content[0].tool_response is not None
     assert msgs[1].content[0].tool_response.output == 'done'
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_raw_action_and_tool_from_action_emit_partial_chunks() -> None:
+    """Tool.from_action and plain Action(kind=TOOL) stream partial chunks via on_chunk."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    async def scan_fridge(_req: dict[str, Any], ctx: ActionRunContext[Step]) -> str:
+        ctx.send_chunk(Step(stage='top_shelf', percent=50))
+        return 'stocked'
+
+    async def check_grill(_req: dict[str, Any], ctx: ActionRunContext[str]) -> str:
+        ctx.send_chunk('heating')
+        return 'hot'
+
+    wrapped_tool = Tool.from_action(Action(kind=ActionKind.TOOL, name='scan_fridge', fn=scan_fridge))
+    raw_action = Action(kind=ActionKind.TOOL, name='check_grill', fn=check_grill)
+    ai._registry.register_action_from_instance(raw_action)
+
+    pm.responses = [
+        _model_calls(('scan_fridge', 'ref-1'), ('check_grill', 'ref-2')),
+        _model_says('kitchen ready'),
+    ]
+    chunks, response = await _collect_stream(ai, prompt='check kitchen', tools=[wrapped_tool, 'check_grill'])
+
+    partials = _partial_parts(chunks)
+    assert [
+        (p.tool_response.name, p.tool_response.ref, p.tool_response.output)
+        for p in partials
+        if p.tool_response is not None
+    ] == [
+        ('scan_fridge', 'ref-1', {'stage': 'top_shelf', 'percent': 50}),
+        ('check_grill', 'ref-2', 'heating'),
+    ]
+    assert _tool_outputs(response.messages) == ['stocked', 'hot']
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_wrap_tool_middleware_preserves_send_chunk() -> None:
+    """Middleware.wrap_tool preserves send_chunk across both @ai.tool and Tool.from_action."""
+
+    class AuditToolMiddleware(Middleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Any,
+        ) -> MultipartToolResponse[Any]:
+            tr = params.tool_request_part.tool_request
+            assert tr is not None
+            patched_part = Part(
+                tool_request=ToolRequest(name=tr.name, ref=tr.ref, input={'dish': 'salmon'}),
+                metadata=params.tool_request_part.metadata,
+            )
+            res = await next_fn(ToolHookParams(tool_request_part=patched_part, tool=params.tool), ctx)
+            return MultipartToolResponse(output=f'audited:{res.output}', content=res.content, metadata=res.metadata)
+
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='sear_station')
+    async def sear_station(req: dict[str, Any], ctx: ToolContext[Step]) -> str:
+        ctx.send_chunk(Step(stage=f'searing:{req["dish"]}', percent=60))
+        return f'seared:{req["dish"]}'
+
+    async def plate_station(req: dict[str, Any], ctx: ActionRunContext[Step]) -> str:
+        ctx.send_chunk(Step(stage=f'plating:{req["dish"]}', percent=95))
+        return f'plated:{req["dish"]}'
+
+    from_action_plate = Tool.from_action(Action(kind=ActionKind.TOOL, name='plate_station', fn=plate_station))
+
+    pm.responses = [
+        _model_calls(('sear_station', 's1'), ('plate_station', 'p1')),
+        _model_says('order up'),
+    ]
+    chunks, response = await _collect_stream(
+        ai,
+        prompt='fire table 4',
+        tools=[sear_station, from_action_plate],
+        use=[AuditToolMiddleware()],
+    )
+
+    partials = _partial_parts(chunks)
+    assert [
+        (p.tool_response.name, p.tool_response.ref, p.tool_response.output)
+        for p in partials
+        if p.tool_response is not None
+    ] == [
+        ('sear_station', 's1', {'stage': 'searing:salmon', 'percent': 60}),
+        ('plate_station', 'p1', {'stage': 'plating:salmon', 'percent': 95}),
+    ]
+    assert _tool_outputs(response.messages) == ['audited:seared:salmon', 'audited:plated:salmon']
