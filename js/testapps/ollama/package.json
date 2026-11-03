@@ -19,7 +19,6 @@
     "genkitx-ollama": "workspace:*"
   },
   "devDependencies": {
-    "cross-env": "^7.0.3",
     "typescript": "^5.9.3"
   }
 }

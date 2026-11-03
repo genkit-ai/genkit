@@ -15,15 +15,9 @@
   "license": "ISC",
   "dependencies": {
     "genkit": "workspace:*",
-    "@genkit-ai/firebase": "workspace:*",
-    "@genkit-ai/google-cloud": "workspace:*",
-    "@genkit-ai/google-genai": "workspace:*",
-    "express": "^4.20.0",
-    "node-fetch": "3.3.2",
-    "wav": "^1.0.2"
+    "@genkit-ai/google-genai": "workspace:*"
   },
   "devDependencies": {
-    "@types/wav": "^1.0.4",
     "dotenv": "^16.4.5",
     "typescript": "^5.9.3"
   }

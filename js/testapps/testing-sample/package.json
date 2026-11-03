@@ -18,8 +18,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
-    "zod": "^4.1.12"
+    "genkit": "workspace:*"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",

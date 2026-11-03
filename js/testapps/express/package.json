@@ -17,7 +17,6 @@
   "dependencies": {
     "genkit": "workspace:*",
     "@genkit-ai/express": "workspace:*",
-    "@genkit-ai/firebase": "workspace:*",
     "genkitx-ollama": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "express": "^4.21.0"
