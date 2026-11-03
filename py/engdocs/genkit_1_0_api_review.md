@@ -672,43 +672,34 @@ except GenkitError as e:
     print(e.status, e.message)
 ```
 
-### Parallel Tool Failure & Partial Preservation
+### Parallel Tool Failure
 
-When multiple tools execute in parallel during a single turn and one tool fails, completed sibling tool calls are preserved rather than lost.
-
-The model turn is marked as failed (`finish_reason == FinishReason.FAILED`). Completed tool outputs are staged with `pendingOutput` on `response.message` (`call.pending_message`), while `response.messages` retains the committed conversation history up to the user turn. This ensures non-idempotent completed side effects (like charging a credit card) are preserved and never repeated when resuming or retrying.
+When one tool in a parallel round fails, the whole round is dropped: `response.message` is `None`, `response.tool_requests` is `[]`, and `response.messages` ends at the last completed round. Go does the same (`Message = nil` on a failed turn).
 
 ```python
-# 1. Multi-tool turn where charge_card succeeds but reserve_table fails
+# 1. One round calls both tools; charge_card succeeds, reserve_table fails
 response = await ai.generate(
     prompt='Charge $100 and reserve table 7.',
     tools=[charge_card, reserve_table],
 )
 
-# 2. Inspect partial completion on failed turn
-if response.finish_reason == FinishReason.FAILED:
-    # 3. Completed sibling output is preserved on response.message
-    for part in response.message.content:
-        if part.tool_request and 'pendingOutput' in (part.tool_request.metadata or {}):
-            print(f'Committed tool: {part.tool_request.name}')
-            # => Committed tool: charge_card
+# 2. The failed round leaves no unfinished message behind
+print(response.finish_reason, response.message, response.tool_requests)
+# => FinishReason.FAILED None []
 
-    # 4. Resume or restart without re-executing completed tools
-    response = await ai.generate(
-        messages=[*response.messages, response.message],
-        tools=[charge_card, reserve_table],
-        resume_respond=[response.message.content[1].respond('table-11')],
-    )
-    print(response.text)
-    # => Reservation confirmed for table-11. Card already charged $100.
+# 3. History stops before the failed round
+print([m.role for m in response.messages])
+# => ['user']
 ```
+
+A caller that retries by resending `response.messages` runs the finished tools again, so `charge_card` charges twice unless it's idempotent. Keeping finished tools so a retry skips them is tracked in #7030.
 
 ### Cancellation & Timeouts (asyncio-native)
 
 Genkit relies entirely on Python standard library `asyncio` concurrency primitives. There is no Genkit-specific `abort_signal` parameter on `ai.generate()` or `action.run()`.
 
 - **Ambient Timeouts**: Bounding generation with `async with asyncio.timeout(...)` or cancelling via `task.cancel()` cancels in-flight provider HTTP connections and tool execution.
-- **Side-Effect Preservation on Cancel**: If cancelled mid-tool-turn, the raised `asyncio.CancelledError` attaches `.message` (the partial turn with completed sibling tool `pendingOutput`) and `.messages` (committed dialogue history). Callers can catch `CancelledError` and access `.message` / `.messages` to persist state or resume later.
+- **History on Cancel**: If cancelled mid-tool-turn, Genkit stamps `.messages` on the `asyncio.CancelledError`: the history up to the last completed round. The interrupted round is dropped, same as a failed one. On 3.11+, read `exc.messages` directly. On 3.10, asyncio raises a fresh `CancelledError` from the task, so the stamped one is `exc.__context__`.
 
 ```python
 import asyncio
@@ -727,7 +718,7 @@ try:
 except TimeoutError:
     print('Generation exceeded 10s deadline')
 
-# 3. Task cancellation mid-turn preserves completed side effects
+# 3. Cancel a task while its tools are running
 task = asyncio.create_task(ai.generate(prompt='Book flights and hotel.', tools=[book_flight, book_hotel]))
 # ... caller cancels task mid-flight ...
 task.cancel()
@@ -735,14 +726,12 @@ task.cancel()
 try:
     await task
 except asyncio.CancelledError as exc:
-    # 4. History and completed tools are attached to the exception
-    saved_history = getattr(exc, 'messages', [])
-    saved_partial = getattr(exc, 'message', None)
+    # 4. 3.11+: exc carries .messages. 3.10: the stamped error is exc.__context__
+    stamped = exc if hasattr(exc, 'messages') else exc.__context__
+    saved_history = getattr(stamped, 'messages', [])
     print([m.role for m in saved_history])
     # => ['user']
-    if saved_partial:
-        print(f'Preserved completed tool: {saved_partial.content[0].tool_request.name}')
-        # => Preserved completed tool: book_flight
+    raise
 ```
 
 ### Handling Interrupt in Tools
