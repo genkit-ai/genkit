@@ -298,7 +298,7 @@ def test_serve_agent_stream_failure_log_names_the_agent(caplog: pytest.LogCaptur
     )
     assert sse_events(response.text) == [{'error': {'message': msg, 'status': 'FAILED_PRECONDITION'}}]
     assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('WARNING', f"served flow 'orderAgent' stream failed: FAILED_PRECONDITION: {msg}", False),
+        ('WARNING', f"served action 'orderAgent' stream failed: FAILED_PRECONDITION: {msg}", False),
     ]
 
 

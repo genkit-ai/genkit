@@ -519,8 +519,8 @@ async def test_django_failure_logs_name_the_flow(
 
     records = [r for r in caplog.records if r.name == 'genkit_django._handler']
     assert [r.getMessage() for r in records] == [
-        "served flow 'raise_error' run failed",
-        "served flow 'raise_public' run failed: NOT_FOUND: no order 99",
+        "served action 'raise_error' run failed",
+        "served action 'raise_public' run failed: NOT_FOUND: no order 99",
     ]
     assert records[0].exc_info is not None
     assert records[1].exc_info is None

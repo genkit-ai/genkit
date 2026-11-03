@@ -327,7 +327,7 @@ def test_flask_malformed_json_body_returns_400_valid_json_message(caplog: pytest
     ] == [
         (
             logging.WARNING,
-            "served flow 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
+            "served action 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
             False,
             'say_hi',
         )
@@ -475,7 +475,7 @@ def test_flask_failure_logs_name_the_flow(caplog: pytest.LogCaptureFixture) -> N
         assert client.post('/order', json={'data': 'soup'}).status_code == 500
 
     records = [r for r in caplog.records if r.name == 'genkit_flask._handler']
-    assert [r.getMessage() for r in records] == ["served flow 'place_order' run failed"]
+    assert [r.getMessage() for r in records] == ["served action 'place_order' run failed"]
     assert records[0].exc_info is not None
 
 
@@ -496,6 +496,6 @@ def test_flask_client_error_log_names_the_flow(caplog: pytest.LogCaptureFixture)
 
     records = [r for r in caplog.records if r.name == 'genkit_flask._handler']
     assert [r.getMessage() for r in records] == [
-        "served flow 'check_allergens' run failed: INVALID_ARGUMENT: we do not serve peanuts"
+        "served action 'check_allergens' run failed: INVALID_ARGUMENT: we do not serve peanuts"
     ]
     assert records[0].exc_info is None

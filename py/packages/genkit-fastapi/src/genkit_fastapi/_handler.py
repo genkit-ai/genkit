@@ -80,12 +80,12 @@ async def _read_json_request_body(*, request: Request) -> object:
 
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
-    """Log a served-flow failure, naming the flow; 5xx includes the traceback."""
+    """Log a served-action failure, naming the action; 5xx includes the traceback."""
     extra = {'genkit_action': flow}
     if error_status(error) >= 500:
-        logger.exception('served flow %r %s failed', flow, where, extra=extra)
+        logger.exception('served action %r %s failed', flow, where, extra=extra)
     else:
-        logger.warning('served flow %r %s failed: %s', flow, where, error, extra=extra)
+        logger.warning('served action %r %s failed: %s', flow, where, error, extra=extra)
 
 
 def format_stream_error(error: Exception) -> str:

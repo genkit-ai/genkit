@@ -643,7 +643,7 @@ def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFi
 
     assert response.status_code == 500
     assert any(record.exc_info for record in caplog.records)
-    assert [r.getMessage() for r in caplog.records if r.exc_info] == ["served flow 'ask' run failed"]
+    assert [r.getMessage() for r in caplog.records if r.exc_info] == ["served action 'ask' run failed"]
 
 
 def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pytest.LogCaptureFixture) -> None:
@@ -663,7 +663,7 @@ def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pyt
     assert response.status_code == 404
     assert [record.levelno for record in records] == [logging.WARNING]
     assert records[0].exc_info is None
-    assert records[0].getMessage() == "served flow 'lookup_order' run failed: NOT_FOUND: order not found"
+    assert records[0].getMessage() == "served action 'lookup_order' run failed: NOT_FOUND: order not found"
 
 
 def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.LogCaptureFixture) -> None:
@@ -685,7 +685,7 @@ def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.Log
 
     assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'API key not valid' not in response.text
-    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [('ERROR', "served flow 'ask' stream failed")]
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [('ERROR', "served action 'ask' stream failed")]
 
 
 def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event() -> None:
@@ -736,7 +736,7 @@ def test_fastapi_malformed_json_body_returns_400_valid_json_message(caplog: pyte
     ] == [
         (
             logging.WARNING,
-            "served flow 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
+            "served action 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
             False,
             'say_hi',
         )
@@ -844,8 +844,8 @@ def test_fastapi_handler_wrapper_failure_logs_wrapper_name_or_unknown(caplog: py
     assert [
         (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
     ] == [
-        (logging.ERROR, "served flow 'wrapped_route' handler failed", True, 'wrapped_route'),
-        (logging.ERROR, "served flow '<unknown>' handler failed", True, '<unknown>'),
+        (logging.ERROR, "served action 'wrapped_route' handler failed", True, 'wrapped_route'),
+        (logging.ERROR, "served action '<unknown>' handler failed", True, '<unknown>'),
     ]
 
 
@@ -1121,7 +1121,7 @@ def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> Non
         _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
 
     assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
-        ('ERROR', 'served flow stream failed'),
+        ('ERROR', 'served stream failed'),
     ]
     assert caplog.records[0].exc_info is not None
 

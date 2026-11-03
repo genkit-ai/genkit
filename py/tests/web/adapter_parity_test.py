@@ -177,14 +177,14 @@ CASES = [
         _missing_order,
         {},
         None,
-        Served(404, NOT_FOUND, (('WARNING', "served flow 'order' run failed: NOT_FOUND: no order 99", False),)),
+        Served(404, NOT_FOUND, (('WARNING', "served action 'order' run failed: NOT_FOUND: no order 99", False),)),
         id='public-error',
     ),
     pytest.param(
         _card_declined,
         {},
         None,
-        Served(500, INTERNAL, (('ERROR', "served flow 'order' run failed", True),)),
+        Served(500, INTERNAL, (('ERROR', "served action 'order' run failed", True),)),
         id='internal-error',
     ),
     pytest.param(
@@ -194,7 +194,7 @@ CASES = [
         Served(
             200,
             b'data: {"message":{"course":"starter"}}\n\n' + b'data: {"error":' + NOT_FOUND + b'}\n\n',
-            (('WARNING', "served flow 'order' stream failed: NOT_FOUND: no order 99", False),),
+            (('WARNING', "served action 'order' stream failed: NOT_FOUND: no order 99", False),),
         ),
         id='stream-public-error',
     ),
@@ -205,7 +205,7 @@ CASES = [
         Served(
             200,
             b'data: {"message":{"course":"starter"}}\n\n' + b'data: {"error":' + INTERNAL + b'}\n\n',
-            (('ERROR', "served flow 'order' stream failed", True),),
+            (('ERROR', "served action 'order' stream failed", True),),
         ),
         id='stream-internal-error',
     ),
@@ -216,7 +216,7 @@ CASES = [
         Served(
             401,
             UNAUTHENTICATED,
-            (('WARNING', "served flow 'order' context provider failed: UNAUTHENTICATED: not signed in", False),),
+            (('WARNING', "served action 'order' context provider failed: UNAUTHENTICATED: not signed in", False),),
         ),
         id='context-provider-public-error',
     ),
@@ -224,7 +224,7 @@ CASES = [
         _ok,
         {},
         _crash_auth_lookup,
-        Served(500, INTERNAL, (('ERROR', "served flow 'order' context provider failed", True),)),
+        Served(500, INTERNAL, (('ERROR', "served action 'order' context provider failed", True),)),
         id='context-provider-internal-error',
     ),
 ]
