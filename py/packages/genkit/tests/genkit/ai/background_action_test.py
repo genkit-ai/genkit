@@ -21,9 +21,9 @@ from typing import Any, cast
 import pytest
 from pydantic import BaseModel
 
-from genkit import Genkit, Message, ModelResponse, Operation, Part
+from genkit import FlowContext, Genkit, Message, ModelResponse, Operation, Part
 from genkit._ai._background_model import lookup_background_model
-from genkit._core._action import Action, ActionRunContext
+from genkit._core._action import Action
 from genkit._core._error import GenkitError
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import Role
@@ -59,10 +59,12 @@ def _reply(text: str) -> ModelResponse:
 
 
 def _register_report_job(ai: Genkit) -> ReportJob:
-    async def start(request: RenderRequest, ctx: ActionRunContext) -> Operation:
+    async def start(request: RenderRequest, ctx: FlowContext) -> Operation:
+        assert isinstance(ctx, FlowContext)
         return Operation(id=f'render-{request.quarter}', done=False)
 
-    async def check(op: Operation[Report], ctx: ActionRunContext) -> Operation:
+    async def check(op: Operation[Report], ctx: FlowContext) -> Operation:
+        assert isinstance(ctx, FlowContext)
         return Operation(id=op.id, done=True, output={'url': f'https://reports.example/{op.id}.pdf', 'pages': 12})
 
     job = ReportJob('render-report', start, check, kind=ActionKind.CUSTOM)
@@ -157,11 +159,11 @@ def test_check_and_cancel_carry_start_metadata() -> None:
         assert each.metadata['team'] == 'finance'
 
 
-async def _noop_start(request: RenderRequest, ctx: ActionRunContext) -> Operation:
+async def _noop_start(request: RenderRequest, ctx: FlowContext) -> Operation:
     return Operation(id='noop')
 
 
-async def _noop_check(op: Operation, ctx: ActionRunContext) -> Operation:
+async def _noop_check(op: Operation, ctx: FlowContext) -> Operation:
     return op
 
 

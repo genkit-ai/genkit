@@ -4,7 +4,7 @@
     "build": "tsc",
     "build:watch": "tsc --watch",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "genkit:dev": "genkit start -- npx tsx --watch src/index.ts"
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
   },
   "name": "anthropic-models",
   "version": "1.0.0",
@@ -13,15 +13,13 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@genkit-ai/firebase": "workspace:*",
-    "@genkit-ai/vertexai": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
-    "@mistralai/mistralai-gcp": "^1.3.4",
-    "express": "^4.21.0",
-    "genkit": "workspace:*",
-    "zod": "3.22.4"
+    "@genkit-ai/vertexai": "workspace:*",
+    "genkit": "workspace:*"
   },
   "devDependencies": {
+    "genkit-cli": "link:../../../genkit-tools/cli",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

@@ -43,7 +43,7 @@ classifiers = [
   "Typing :: Typed",
   "License :: OSI Approved :: Apache Software License",
 ]
-dependencies = ["genkit", "openai", "strenum>=0.4.15; python_version < '3.11'"]
+dependencies = ["genkit>=0.12.0,<2", "openai>=1.60.0,<3", "strenum>=0.4.15; python_version < '3.11'"]
 description = "OpenAI-compatible models on Genkit"
 keywords = [
   "genkit",

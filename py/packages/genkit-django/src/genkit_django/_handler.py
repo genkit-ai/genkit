@@ -37,12 +37,13 @@ logger = logging.getLogger(__name__)
 _JSON_SEPARATORS = (',', ':')
 
 
-def _log_failure(*, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
+def _log_failure(*, error: Exception, flow: str, where: str) -> None:
+    """Log a served-action failure, naming the action; 5xx includes the traceback."""
+    extra = {'genkit_action': flow}
     if error_status(error) >= 500:
-        logger.exception('served flow %s failed', where)
+        logger.exception('served action %r %s failed', flow, where, extra=extra)
     else:
-        logger.warning('served flow %s failed: %s', where, error)
+        logger.warning('served action %r %s failed: %s', flow, where, error, extra=extra)
 
 
 def _to_dict(obj: Any) -> Any:  # noqa: ANN401
@@ -172,7 +173,7 @@ def genkit_django_handler(
                     # Django's own denial; re-raise so it stays 403/404/400.
                     raise
                 except Exception as e:
-                    _log_failure(error=e, where='context provider')
+                    _log_failure(error=e, flow=flow.name, where='context provider')
                     return _error_response(e)
 
             init = body.get('init')
@@ -189,7 +190,7 @@ def genkit_django_handler(
                         result = await stream_response.response
                         yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        _log_failure(error=e, where='stream')
+                        _log_failure(error=e, flow=flow.name, where='stream')
                         yield f'data: {json.dumps({"error": error_body(e)}, separators=_JSON_SEPARATORS)}\n\n'
 
                 return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
@@ -198,7 +199,7 @@ def genkit_django_handler(
                 response = await flow.run(input=action_input, context=action_context, init=init)
                 return JsonResponse({'result': _to_dict(response.response)})
             except Exception as e:
-                _log_failure(error=e, where='run')
+                _log_failure(error=e, flow=flow.name, where='run')
                 return _error_response(e)
 
         return handler

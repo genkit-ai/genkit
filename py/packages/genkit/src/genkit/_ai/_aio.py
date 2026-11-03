@@ -91,7 +91,7 @@ from genkit._ai._prompt import (
     to_generate_options,
 )
 from genkit._ai._tools import define_interrupt
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
+from genkit._core._action import Action, ActionKind, FlowContext, get_current_context
 from genkit._core._background import missing_operation_error
 from genkit._core._channel import run_loop, start_stream
 from genkit._core._config_check import layer_call_config
@@ -314,21 +314,21 @@ class Genkit:
     @overload
     def flow(
         self,
-        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT], object], Awaitable[OutputT]],
         /,
     ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        func: Callable[[InputT, FlowContext[ChunkT]], Awaitable[OutputT]],
         /,
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT], InputT], Awaitable[OutputT]],
         /,
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
@@ -342,7 +342,7 @@ class Genkit:
     @overload
     def flow(
         self,
-        func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT]], Awaitable[OutputT]],
         /,
     ) -> Flow[None, OutputT, ChunkT]: ...
 

@@ -69,7 +69,15 @@ from genkit._core._action import (
 )
 from genkit._core._background import missing_operation_error, stamp_operation_action
 from genkit._core._compat import await_unchained
-from genkit._core._error import ErrorReason, Failure, GenkitError, PublicError, _StreamingCallbackError, attached_cause
+from genkit._core._error import (
+    BoxedFailure,
+    ErrorReason,
+    Failure,
+    GenkitError,
+    PublicError,
+    _StreamingCallbackError,
+    attached_cause,
+)
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     GenerateHookParams,
@@ -99,7 +107,7 @@ from genkit._core._model import (
 from genkit._core._operation import Operation
 from genkit._core._registry import Registry
 from genkit._core._schema import check_output_schema
-from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span, set_span_state
+from genkit._core._telemetry._instrumentation import SpanContext, current_span, run_in_new_span, set_span_state
 from genkit._core._tool import Tool
 from genkit._core._typing import (
     ConstrainedSupport,
@@ -1029,6 +1037,7 @@ def as_model_response(*, raw: object, name: str) -> ModelResponse:
     )
     walked._message_parser = raw._message_parser
     walked._schema_type = raw._schema_type
+    walked._failure = raw._failure
     return walked
 
 
@@ -1176,6 +1185,7 @@ def box_dead_turn(
     out.finish_message = finish_message
     out.error = error
     out.message = None
+    out._failure = None
     if out.operation is not None and out.operation.error is None:
         # The ticket already started. The failure why lives on the
         # handle so check/cancel is not a clean start.
@@ -1220,6 +1230,47 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
     return INTERNAL_FINISH_MESSAGE
 
 
+# Set on an exception once log_dropped_failure has logged it, so the tool site
+# and the generate-level box never log the same failure twice.
+_LOGGED_ATTR = '_genkit_failure_logged'
+
+
+def log_dropped_failure(exc: BaseException, *, model: str | None = None, tool: str | None = None) -> None:
+    """Log a failure whose cause boxing hides behind ``internal error``.
+
+    The caller only gets ``finish_reason=failed`` with ``internal error``, so
+    without this line the cause lives only in an exported trace. Failures that
+    keep their own message (``PublicError``, a ``GenkitError`` without a
+    foreign cause) are already on ``response.error`` and are not logged.
+
+    Args:
+        exc: The exception about to be boxed.
+        model: Model the turn was calling, when known.
+        tool: Tool that raised, when known. Named over ``model``.
+    """
+    if getattr(exc, _LOGGED_ATTR, False):
+        return
+    if boxed_finish_message(exc=exc, pipe_failed=False) != INTERNAL_FINISH_MESSAGE:
+        return
+    with contextlib.suppress(AttributeError, TypeError):
+        setattr(exc, _LOGGED_ATTR, True)
+    fields: dict[str, object] = {}
+    if model:
+        fields['model'] = model
+    if tool:
+        fields['tool'] = tool
+    span = current_span.get()
+    if span is not None and span.trace_id:
+        fields['trace_id'] = span.trace_id
+    if tool:
+        culprit = f'tool {tool!r}'
+    elif model:
+        culprit = f'model {model!r}'
+    else:
+        culprit = 'generate'
+    logger.error('%s raised, returning finish_reason=failed', culprit, exc_info=exc, **fields)
+
+
 def raise_if_foreign_cancel(*, exc: BaseException, abort_signal: asyncio.Event) -> None:
     # abort_signal is our own stop. A wait_for / task.cancel() has to
     # surface as CancelledError so the deadline still works.
@@ -1235,6 +1286,7 @@ def box_from_exc(
     caller_stopped: bool,
     reason: ErrorReason | None = None,
     request: ModelRequest | None = None,
+    model: str | None = None,
 ) -> ModelResponse:
     """Box a failure after generate has entered: closed history, unanswered turn dropped."""
     callback_cause = streaming_callback_cause(exc=exc)
@@ -1245,6 +1297,8 @@ def box_from_exc(
         exc = callback_cause
         reason = ErrorReason.STREAM_CALLBACK_FAILED
         pipe_failed = True
+    elif not caller_stopped:
+        log_dropped_failure(exc, model=model)
     finish_message = boxed_finish_message(exc=exc, pipe_failed=pipe_failed)
     if caller_stopped:
         finish_message = 'Generation aborted.'
@@ -1264,7 +1318,7 @@ def box_from_exc(
         details['reason'] = reason.value
     # Failure.details is a JSON object (Go's map[string]any); drop an empty one.
     failure_details = dict(cast(Mapping[str, Any], details)) if isinstance(details, Mapping) and details else None
-    return box_dead_turn(
+    out = box_dead_turn(
         response=response,
         messages=messages,
         finish_reason=FinishReason.ABORTED if caller_stopped else FinishReason.FAILED,
@@ -1272,6 +1326,9 @@ def box_from_exc(
         error=Failure(status=status, message=finish_message, details=failure_details),
         request=request,
     )
+    if not caller_stopped:
+        out._failure = BoxedFailure.from_exc(exc)
+    return out
 
 
 def box_if_hook_dropped_ticket(
@@ -1462,6 +1519,7 @@ async def run_wrap_generate(
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
             request=failed_request,
+            model=resolved.model.name,
         )
     dropped = (
         box_if_hook_dropped_ticket(
@@ -1544,6 +1602,7 @@ async def generate_turn(
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
             request=call.request,
+            model=resolved.model.name,
         )
     dropped = (
         box_if_hook_dropped_ticket(
@@ -1827,6 +1886,7 @@ async def run_tools_or_stop(
             exc=exc,
             caller_stopped=ctx.abort_signal.is_set(),
             reason=ErrorReason.TOOL_FAILED,
+            model=resolved.model.name,
         )
 
     if revised_model_msg:
@@ -2218,6 +2278,7 @@ async def resolve_tool_requests(
             # failures and propagate to ``asyncio.gather``.
             intr = interrupt_from_exc(e)
             if intr is None:
+                log_dropped_failure(e, tool=trp.tool_request.name)
                 raise
             logger.debug('tool triggered an interrupt', tool=trp.tool_request.name)
             return (None, interrupt_request_part(trp, intr))
@@ -2605,6 +2666,7 @@ async def resolve_resumed_tool(
             intr = interrupt_from_exc(e)
             if intr is not None:
                 return (interrupt_request_part(tool_req_root, intr), None)
+            log_dropped_failure(e, tool=tool_req.name)
             raise
         metadata = dict(tool_req_root.metadata) if tool_req_root.metadata else {}
         interrupt = metadata.get('interrupt')

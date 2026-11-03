@@ -7,19 +7,23 @@
 
 Covers:
 - ModelResponseChunk.output constructing the output schema from extracted JSON
-  with missing fields set to None
+  with optional defaults filled, closed subtrees validated, and missing required
+  fields set to None
 - ActionRunContext genericity over the chunk type
 - End-to-end generate_stream with output_schema producing typed chunks
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, TypeVar, overload
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Annotated, Any, Literal, TypeVar, overload
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, RootModel, Tag, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
+from genkit._core import _partial
 from genkit._core._action import ActionRunContext
 from genkit._core._model import chunk_for_stream
 from genkit._core._typing import Role
@@ -110,9 +114,8 @@ class TestChunkPartialOutput:
         assert out.title == 'Chocolate Cake'
         assert out.steps == ['mi']
 
-    def test_complete_json_is_still_unvalidated(self) -> None:
-        # A complete-looking chunk is still constructed, not validated.
-        # Only ModelResponse.output runs the real model.
+    def test_complete_json_chunk_returns_validated_instance(self) -> None:
+        # Once the root JSON object closes, chunk.output validates into Recipe.
         out = _chunk('{"title": "Cake", "steps": ["mix", "bake"]}', schema_type=Recipe).output
         assert isinstance(out, Recipe)
         assert out.steps == ['mix', 'bake']
@@ -141,9 +144,8 @@ class TestChunkPartialOutput:
         assert _chunk('[1, 2, 3]', schema_type=Recipe).output == [1, 2, 3]
 
     def test_wrong_typed_value_does_not_raise(self) -> None:
-        # Chunks skip validation, so a wrong-typed field is stored as-is
-        # instead of crashing the caller's loop. The final response is
-        # where the real ValidationError surfaces.
+        # Failed validation falls back to the raw value instead of crashing
+        # the caller's loop; the final response surfaces the ValidationError.
         out = _chunk('{"title": 123}', schema_type=Recipe).output
         assert isinstance(out, Recipe)
         assert out.title == 123
@@ -177,9 +179,9 @@ class TestChunkPartialOutput:
 
 
 class TestNestedAndConstrainedOutput:
-    """Nested models and dropped constraints on a streaming chunk."""
+    """Nested models and constraint fallbacks on a streaming chunk."""
 
-    def test_constraints_and_validators_are_skipped(self) -> None:
+    def test_failed_constraints_and_validators_fall_back_to_raw(self) -> None:
         class Strict(BaseModel):
             servings: int = Field(gt=0)
             rating: Annotated[int, Field(ge=1, le=5)]
@@ -303,7 +305,7 @@ class TestNestedAndConstrainedOutput:
         assert out.posts[0].author is None
 
     def test_half_arrived_nested_author_fills_name_prefix(self) -> None:
-        """A nested object cut mid-string is an Author; the prefix is name, missing fields are None."""
+        """A nested object cut mid-string is an Author; missing optional fields get defaults."""
         out = _chunk(
             '{"posts": [{"author": {"name": "Jo',
             schema_type=Author,
@@ -314,7 +316,7 @@ class TestNestedAndConstrainedOutput:
         assert out.posts[0].title is None
         assert isinstance(out.posts[0].author, Author)
         assert out.posts[0].author.name == 'Jo'
-        assert out.posts[0].author.posts is None
+        assert out.posts[0].author.posts == []
 
     def test_half_arrived_empty_nested_post_has_holes(self) -> None:
         """A nested object that has only opened is a Post with every field None."""
@@ -341,7 +343,7 @@ class TestNestedAndConstrainedOutput:
         assert out.posts[0].author is None
 
     def test_half_arrived_deep_child_name_is_prefix(self) -> None:
-        """A deeply nested object cut mid-string is a NodeTree; the prefix is name, missing fields are None."""
+        """A deeply nested object cut mid-string is a NodeTree; missing optional fields get defaults."""
         out = _chunk(
             '{"children": [{"children": [{"name": "lea',
             schema_type=NodeTree,
@@ -352,7 +354,7 @@ class TestNestedAndConstrainedOutput:
         assert out.children[0].name is None
         assert isinstance(out.children[0].children[0], NodeTree)
         assert out.children[0].children[0].name == 'lea'
-        assert out.children[0].children[0].children is None
+        assert out.children[0].children[0].children == []
 
     def test_dict_quoted_post_yields_post_instances(self) -> None:
         """dict[str, 'QuotedItem'] values are QuotedItem, with holes as None."""
@@ -734,3 +736,401 @@ async def test_stream_cut_off_final_output_is_none() -> None:
     assert outputs[0].steps == ['mi']
     assert response.output is None
     assert response.error is not None
+
+
+class OrderStatus(str, Enum):
+    PENDING = 'pending'
+    SHIPPED = 'shipped'
+
+
+class Ingredient(BaseModel):
+    name: str
+    grams: int
+
+    @field_validator('name')
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
+        return v.strip()
+
+
+class FullRecipe(BaseModel):
+    title: str
+    servings: int = 2
+    status: OrderStatus
+    tags: list[str] = []
+    notes: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+    ingredients: list[Ingredient]
+
+    @field_validator('title')
+    @classmethod
+    def _strip_title(cls, v: str) -> str:
+        return v.strip()
+
+
+class CatPet(BaseModel):
+    type: Literal['cat']
+    meows: int
+
+
+class DogPet(BaseModel):
+    type: Literal['dog']
+    barks: int
+
+
+class CatfishPet(BaseModel):
+    type: Literal['catfish']
+    whiskers: int
+
+
+PetUnion = Annotated[CatPet | DogPet, Field(discriminator='type')]
+
+
+class TestDefaultsAndClosedSubtreeValidation:
+    """Optional defaults, closed-subtree validation, and discriminated unions."""
+
+    def test_optional_defaults_populate_and_do_not_share_mutable_state(self) -> None:
+        first = _chunk('{"title": "Panc', schema_type=FullRecipe).output
+        second = _chunk('{"title": "Pancakes', schema_type=FullRecipe).output
+
+        assert isinstance(first, FullRecipe)
+        assert isinstance(second, FullRecipe)
+        assert first.servings == 2
+        assert first.tags == []
+        assert first.notes == []
+        assert first.status is None
+        assert first.ingredients is None
+
+        first.tags.append('breakfast')
+        first.notes.append('hot')
+        assert second.tags == []
+        assert second.notes == []
+
+    def test_closed_enum_datetime_and_field_validator_run_mid_stream(self) -> None:
+        # While status / created_at are trailing open keys, half-sent non-str scalars stay None.
+        open_out = _chunk('{"title": "  Pancakes  ", "status": "pend', schema_type=FullRecipe).output
+        assert isinstance(open_out, FullRecipe)
+        assert open_out.title == 'Pancakes'
+        assert open_out.status is None
+
+        half_dt = _chunk(
+            '{"title": "  Pancakes  ", "status": "pending", "created_at": "2026-04-',
+            schema_type=FullRecipe,
+        ).output
+        assert isinstance(half_dt, FullRecipe)
+        assert half_dt.status is OrderStatus.PENDING
+        assert half_dt.created_at is None
+
+        # Once ingredients starts, created_at is closed and becomes a real datetime.
+        next_out = _chunk(
+            '{"title": "  Pancakes  ", "status": "pending", "created_at": "2026-04-20T12:00:00Z", "ingredients": [',
+            schema_type=FullRecipe,
+        ).output
+        assert isinstance(next_out, FullRecipe)
+        assert next_out.status is OrderStatus.PENDING
+        assert next_out.created_at == datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+
+        class ModeOrder(BaseModel):
+            mode: Literal['express', 'standard']
+
+        open_mode = _chunk('{"mode": "exp', schema_type=ModeOrder).output
+        assert isinstance(open_mode, ModeOrder)
+        assert open_mode.mode is None
+        closed_mode = _chunk('{"mode": "express"', schema_type=ModeOrder).output
+        assert isinstance(closed_mode, ModeOrder)
+        assert closed_mode.mode == 'express'
+
+    def test_closed_earlier_list_items_validate_while_last_item_stays_partial(self) -> None:
+        out = _chunk(
+            '{"title": "Pancakes", "status": "pending", '
+            '"ingredients": [{"name": "  flour  ", "grams": 200}, {"name": "  mi',
+            schema_type=FullRecipe,
+        ).output
+        assert isinstance(out, FullRecipe)
+        assert len(out.ingredients) == 2
+        assert out.ingredients[0] == Ingredient(name='flour', grams=200)
+        assert isinstance(out.ingredients[1], Ingredient)
+        assert out.ingredients[1].name == '  mi'
+        assert out.ingredients[1].grams is None
+
+    def test_out_of_order_json_keys_track_wire_arrival_order(self) -> None:
+        # 'ingredients' arrives before 'status', opposite of class field order.
+        out = _chunk(
+            '{"ingredients": [{"name": "  flour  ", "grams": 200}], "status": "pend',
+            schema_type=FullRecipe,
+        ).output
+        assert isinstance(out, FullRecipe)
+        assert out.ingredients == [Ingredient(name='flour', grams=200)]
+        assert out.status is None
+        assert out.title is None
+        assert out.servings == 2
+
+    def test_invalid_closed_field_falls_back_without_dropping_valid_siblings(self) -> None:
+        class ConstrainedOrder(BaseModel):
+            qty: int = Field(gt=0)
+            status: OrderStatus
+            note: str
+
+        out = _chunk(
+            '{"qty": -3, "status": "shipped", "note": "frag',
+            schema_type=ConstrainedOrder,
+        ).output
+        assert isinstance(out, ConstrainedOrder)
+        assert out.qty == -3
+        assert out.status is OrderStatus.SHIPPED
+        assert out.note == 'frag'
+
+    def test_discriminated_union_waits_until_tag_matches(self) -> None:
+        class Household(BaseModel):
+            owner: str
+            pet: PetUnion
+            backup: PetUnion | None = None
+            all_pets: list[PetUnion] = []
+
+        # Half-typed tag 'do' -> None instead of guessing CatPet.
+        c1 = _chunk('{"owner": "Ada", "pet": {"type": "do', schema_type=Household).output
+        assert isinstance(c1, Household)
+        assert c1.pet is None
+
+        # Matched tag 'dog' with missing required barks -> DogPet(type='dog', barks=None).
+        c2 = _chunk('{"owner": "Ada", "pet": {"type": "dog"', schema_type=Household).output
+        assert isinstance(c2, Household)
+        assert isinstance(c2.pet, DogPet)
+        assert c2.pet.type == 'dog'
+        assert c2.pet.barks is None
+
+        # Optional discriminated union with half-typed tag stays None.
+        c3 = _chunk(
+            '{"owner": "Ada", "pet": {"type": "dog", "barks": 3}, "backup": {"type": "ca',
+            schema_type=Household,
+        ).output
+        assert isinstance(c3, Household)
+        assert c3.pet == DogPet(type='dog', barks=3)
+        assert c3.backup is None
+
+        # List of discriminated unions omits the trailing unresolved tag until it matches.
+        c4 = _chunk(
+            '{"owner": "Ada", "pet": {"type": "dog", "barks": 3}, '
+            '"all_pets": [{"type": "dog", "barks": 1}, {"type": "ca',
+            schema_type=Household,
+        ).output
+        assert isinstance(c4, Household)
+        assert c4.all_pets == [DogPet(type='dog', barks=1)]
+
+    def test_discriminated_union_waits_when_open_tag_is_prefix_of_another_tag(self) -> None:
+        class Tank(BaseModel):
+            animal: Annotated[CatPet | CatfishPet, Field(discriminator='type')]
+
+        # While "type": "cat is open, 'cat' is still a prefix of 'catfish'.
+        open_cat = _chunk('{"animal": {"type": "cat', schema_type=Tank).output
+        assert isinstance(open_cat, Tank)
+        assert open_cat.animal is None
+
+        # Once the next key starts, 'cat' is closed and unambiguously CatPet.
+        closed_tag = _chunk('{"animal": {"type": "cat", "meows": 2', schema_type=Tank).output
+        assert isinstance(closed_tag, Tank)
+        assert isinstance(closed_tag.animal, CatPet)
+        assert closed_tag.animal.meows == 2
+
+    def test_discriminated_union_dict_tag_reads_as_unknown(self) -> None:
+        class Household(BaseModel):
+            owner: str
+            pet: PetUnion
+            all_pets: list[PetUnion] = []
+
+        # A dict tag can't match a Literal, so pet stays None instead of raising.
+        out = _chunk('{"owner": "Ada", "pet": {"type": {"name": "dog"}', schema_type=Household).output
+        assert isinstance(out, Household)
+        assert out.owner == 'Ada'
+        assert out.pet is None
+
+        # Same inside a list: the item with a list tag is dropped, valid siblings stay.
+        listed = _chunk(
+            '{"owner": "Ada", "all_pets": [{"type": "dog", "barks": 1}, {"type": ["cat"]',
+            schema_type=Household,
+        ).output
+        assert isinstance(listed, Household)
+        assert listed.all_pets == [DogPet(type='dog', barks=1)]
+
+    def test_annotated_with_no_args_does_not_hang(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # get_args() returning () used to spin the Annotated unwrap loops forever.
+        monkeypatch.setattr(_partial, 'get_args', lambda _tp: ())
+        tp = Annotated[int, 'meta']
+        assert _partial.unwrap_annotated(annotation=tp) is tp
+        assert _partial.extract_discriminator(annotation=tp) is None
+
+    def test_callable_discriminator_with_tag_waits_until_closed(self) -> None:
+        def pet_kind(v: Any) -> str | None:  # noqa: ANN401
+            return v.get('kind') if isinstance(v, dict) else getattr(v, 'kind', None)
+
+        class Cat(BaseModel):
+            kind: Literal['cat']
+            name: str
+            lives: int = 9
+
+        class Dog(BaseModel):
+            kind: Literal['dog']
+            name: str
+            good: bool = True
+
+        CallablePetUnion = Annotated[  # noqa: N806
+            Annotated[Cat, Tag('cat')] | Annotated[Dog, Tag('dog')],
+            Discriminator(pet_kind),
+        ]
+
+        class Owner(BaseModel):
+            pet: CallablePetUnion
+            pets: list[CallablePetUnion] = []
+            owner_name: str = 'Ada'
+
+        # Open chunks must stay None rather than guessing Cat by key overlap.
+        c1 = _chunk('{"pet": {"kind": "dog", ', schema_type=Owner).output
+        assert isinstance(c1, Owner)
+        assert c1.pet is None
+
+        c2 = _chunk('{"pet": {"kind": "dog", "name": "Rex"', schema_type=Owner).output
+        assert isinstance(c2, Owner)
+        assert c2.pet is None
+
+        # Once a sibling key closes "pet" mid-stream, Pydantic resolves Dog via Discriminator(pet_kind).
+        c3 = _chunk(
+            '{"pet": {"kind": "dog", "name": "Rex", "good": false}, "owner_name": "Al',
+            schema_type=Owner,
+        ).output
+        assert isinstance(c3, Owner)
+        assert c3.pet == Dog(kind='dog', name='Rex', good=False)
+        assert c3.owner_name == 'Al'
+
+        # Once the root object closes, Owner validates cleanly into Dog.
+        c4 = _chunk('{"pet": {"kind": "dog", "name": "Rex", "good": false}}', schema_type=Owner).output
+        assert isinstance(c4, Owner)
+        assert c4.pet == Dog(kind='dog', name='Rex', good=False)
+
+        # In a list, closed items resolve via Discriminator(pet_kind) while the trailing open item waits.
+        c5 = _chunk(
+            '{"pet": {"kind": "dog", "name": "Rex"}, '
+            '"pets": [{"kind": "dog", "name": "Buddy"}, {"kind": "cat", "name": "Mi',
+            schema_type=Owner,
+        ).output
+        assert isinstance(c5, Owner)
+        assert c5.pets == [Dog(kind='dog', name='Buddy', good=True)]
+
+    def test_field_validators_run_mid_stream_without_firing_model_validators(self) -> None:
+        before_calls = 0
+        after_calls = 0
+
+        class Booking(BaseModel):
+            guest: str
+            nights: int
+            total: float
+
+            @field_validator('guest')
+            @classmethod
+            def _upper_guest(cls, v: str) -> str:
+                return v.upper()
+
+            @model_validator(mode='before')
+            @classmethod
+            def _before_check(cls, data: Any) -> Any:  # noqa: ANN401
+                nonlocal before_calls
+                before_calls += 1
+                return data
+
+            @model_validator(mode='after')
+            def _after_check(self) -> 'Booking':
+                nonlocal after_calls
+                after_calls += 1
+                if self.total != self.nights * 100:
+                    raise ValueError('total must equal nights * 100')
+                return self
+
+        # On chunk 1, 'guest' is still the last parsed key in data, so it streams raw;
+        # once 'nights' arrives on chunk 2, 'guest' is closed and uppercased to 'ANN'.
+        b1 = _chunk('{"guest": "ann", ', schema_type=Booking).output
+        assert isinstance(b1, Booking)
+        assert b1.guest == 'ann'
+        assert b1.nights is None
+        assert b1.total is None
+        assert (before_calls, after_calls) == (0, 0)
+
+        b2 = _chunk('{"guest": "ann", "nights": 2, ', schema_type=Booking).output
+        assert isinstance(b2, Booking)
+        assert b2.guest == 'ANN'
+        assert b2.nights == 2
+        assert b2.total is None
+        assert (before_calls, after_calls) == (0, 0)
+
+        b3 = _chunk('{"guest": "ann", "nights": 2, "total": 20', schema_type=Booking).output
+        assert isinstance(b3, Booking)
+        assert b3.guest == 'ANN'
+        assert b3.nights == 2
+        assert b3.total == 20
+        assert (before_calls, after_calls) == (0, 0)
+
+        b4 = _chunk('{"guest": "ann", "nights": 2, "total": 200.0}', schema_type=Booking).output
+        assert (before_calls, after_calls) == (1, 1)
+        assert b4 == Booking(guest='ANN', nights=2, total=200.0)
+
+        # If the closed root violates @model_validator, fallback still preserves @field_validator outputs.
+        b_invalid = _chunk('{"guest": "ann", "nights": 2, "total": 999.0}', schema_type=Booking).output
+        assert isinstance(b_invalid, Booking)
+        assert b_invalid.guest == 'ANN'
+        assert b_invalid.nights == 2
+        assert b_invalid.total == 999.0
+
+    def test_open_numbers_and_invalid_closed_enum_match_documented_edge_cases(self) -> None:
+        class EventPayload(BaseModel):
+            at: datetime | None = None
+            code: Literal[1, 12] | None = None
+            c: OrderStatus | None = None
+            n: int | None = None
+
+        open_dt = _chunk('{"at": 17000', schema_type=EventPayload).output
+        assert isinstance(open_dt, EventPayload)
+        assert open_dt.at == 17000
+
+        open_num_lit = _chunk('{"code": 1', schema_type=EventPayload).output
+        assert isinstance(open_num_lit, EventPayload)
+        assert open_num_lit.code == 1
+
+        invalid_closed_enum = _chunk('{"c": "blue", "n": 1', schema_type=EventPayload).output
+        assert isinstance(invalid_closed_enum, EventPayload)
+        assert invalid_closed_enum.c == 'blue'
+        assert invalid_closed_enum.n == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_progressively_validates_closed_subtrees() -> None:
+    outputs, response = await _stream_outputs(
+        [
+            '{"title": "Pancakes", "status": "p',
+            'ending", "ingredients": [{"name": "f',
+            'lour", "grams": 200}, {"name": "milk", "grams": ',
+            '150}]}',
+        ],
+        '{"title": "Pancakes", "status": "pending", '
+        '"ingredients": [{"name": "flour", "grams": 200}, {"name": "milk", "grams": 150}]}',
+        output_schema=FullRecipe,
+    )
+
+    assert outputs[0].title == 'Pancakes'
+    assert outputs[0].servings == 2
+    assert outputs[0].tags == []
+    assert outputs[0].status is None
+    assert outputs[0].ingredients is None
+
+    assert outputs[1].status is OrderStatus.PENDING
+    assert len(outputs[1].ingredients) == 1
+    assert outputs[1].ingredients[0].name == 'f'
+    assert outputs[1].ingredients[0].grams is None
+
+    assert outputs[2].ingredients[0] == Ingredient(name='flour', grams=200)
+    assert outputs[2].ingredients[1].name == 'milk'
+    assert outputs[2].ingredients[1].grams is None
+
+    assert outputs[3] == response.output
+    assert outputs[3].status is OrderStatus.PENDING
+    assert outputs[3].ingredients == [
+        Ingredient(name='flour', grams=200),
+        Ingredient(name='milk', grams=150),
+    ]

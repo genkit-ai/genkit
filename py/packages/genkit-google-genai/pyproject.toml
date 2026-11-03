@@ -44,7 +44,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit",
+  "genkit>=0.12.0,<2",
   "google-genai>=2.14.0,<3",
   "httpx>=0.28.1",
   "pydantic>=2.11",
