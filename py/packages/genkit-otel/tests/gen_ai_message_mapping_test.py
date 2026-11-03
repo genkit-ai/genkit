@@ -26,7 +26,6 @@ from genkit_otel._gen_ai_message_mapping import (
 )
 
 from genkit import FinishReason, Message, ModelResponse, Part, Role
-from genkit.model import Candidate
 
 
 def test_map_role_remaps_model_to_assistant() -> None:
@@ -99,23 +98,6 @@ def test_resolve_prefers_top_level_message() -> None:
     message = resolve_response_message(response)
     assert message is not None
     assert map_message(message)['parts'] == [{'type': 'text', 'content': 'top'}]
-
-
-def test_resolve_falls_back_to_candidates() -> None:
-    response = ModelResponse(
-        finish_reason=FinishReason.STOP,
-        candidates=[
-            Candidate(
-                index=0,
-                finish_reason=FinishReason.STOP,
-                message=Message(role=Role.MODEL, content=[Part.from_text('from candidate')]),
-            )
-        ],
-    )
-    assert response.message is None
-    message = resolve_response_message(response)
-    assert message is not None
-    assert map_message(message)['parts'] == [{'type': 'text', 'content': 'from candidate'}]
 
 
 def test_resolve_returns_none_when_neither_present() -> None:

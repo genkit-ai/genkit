@@ -81,6 +81,12 @@ Anything the chain does not cover goes through `session=`, which takes a
 pre-configured `boto3.session.Session`. Region resolution is separate from
 credentials and is described under [Usage](#usage).
 
+Every call runs on these credentials. A per-request key in
+`context={'secrets': {'api_key': ...}}` is ignored, so a flow that carries
+another provider's key can still call Bedrock models. Reading that key as a
+per-request Bedrock API key is tracked in
+[#6976](https://github.com/genkit-ai/genkit/issues/6976).
+
 ## Usage
 
 ```python
@@ -164,10 +170,10 @@ any model ID resolves on demand either way.
 `BedrockConfig` inherits the core `ModelConfig` fields, so the Dev UI offers
 `topK` and `version`. Converse has no equivalent parameters and both values
 are dropped. Models that support a top-k knob take it
-through `additionalModelRequestFields` instead:
+through `extra` instead, which is sent as Converse `additionalModelRequestFields`:
 
 ```python
-BedrockConfig(additional_model_request_fields={'top_k': 40})
+BedrockConfig(extra={'top_k': 40})
 ```
 
 ### Inference profiles
@@ -310,8 +316,9 @@ The two families take incompatible bodies, so the request is built from the
 model ID.
 
 Amazon (IDs containing `titan-image` or `nova-canvas`) nests its options under
-`imageGenerationConfig`, and that is the only config key read: any other
-top-level key is dropped. Your entries are merged key by key over these
+`imageGenerationConfig`, and that is the only top-level config key read; other
+top-level keys are dropped. To set any other body field, use `extra` (see
+below). Your `imageGenerationConfig` entries are merged key by key over these
 defaults:
 
 ```python
@@ -347,7 +354,34 @@ here. Pass image options as a plain dict.
 
 Genkit's generic generation options (`temperature`, `topP`, `maxOutputTokens`,
 and the rest of the common config) are not forwarded to image models, since
-Bedrock's image APIs do not accept them.
+Bedrock's image APIs do not accept them. `extra` is the exception.
+
+### `extra` on image models
+
+`extra` is deep-merged into the finished `InvokeModel` body, using Bedrock's
+wire names. Nested objects merge key by key, and a colliding leaf takes your
+value:
+
+```python
+# 1. Nova Canvas: add negativeText next to the prompt, override one default
+response = await ai.generate(
+    model='bedrock/amazon.nova-canvas-v1:0',
+    prompt='a coral reef',
+    config={'extra': {'textToImageParams': {'negativeText': 'blurry'}, 'imageGenerationConfig': {'seed': 7}}},
+)
+# => textToImageParams: {'text': 'a coral reef', 'negativeText': 'blurry'}
+#    imageGenerationConfig: the defaults above, with seed 7
+```
+
+Fields Genkit builds from the prompt fail with `INVALID_ARGUMENT` instead of
+being overwritten, and nothing is sent:
+
+- Stability: `prompt`
+- Titan Image and Nova Canvas: `taskType`, `textToImageParams.text`, or a
+  `textToImageParams` that isn't a mapping
+
+`extra` itself must be a mapping; anything else also fails with
+`INVALID_ARGUMENT`.
 
 Text-to-image and image-editing models are not interchangeable: a model
 offered in a region may only inpaint or upscale. Check the Bedrock

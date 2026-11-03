@@ -299,6 +299,33 @@ def test_get_logger_tees_debug_when_console_is_info() -> None:
     assert structlog_ok in {True, False}
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_reset_export', '_dev_env')
+async def test_get_logger_tees_async_fatal_and_try_unbind() -> None:
+    """Every structlog call get_logger promises reaches the Dev UI exactly once."""
+    enable_log_export(url='http://127.0.0.1:9')
+    logger = get_logger('tee-async-test')
+    queued: list[dict[str, object]] = []
+    assert log_exporter._exporter is not None
+    original = log_exporter._exporter.enqueue
+
+    def capture(*, record: dict[str, object]) -> None:
+        queued.append(record)
+
+    log_exporter._exporter.enqueue = capture  # type: ignore[method-assign]
+    try:
+        await logger.ainfo('order placed', table=4)
+        await logger.adebug('kitchen ticket %s', 'T-9')
+        await logger.alog(logging.WARNING, 'oven hot')
+        logger.fatal('walk-in freezer down')
+        logger.bind(table=4).try_unbind('table', 'missing').info('table cleared')
+    finally:
+        log_exporter._exporter.enqueue = original  # type: ignore[method-assign]
+
+    events = [r['body']['stringValue'] for r in queued]  # type: ignore[index]
+    assert events == ['order placed', 'kitchen ticket T-9', 'oven hot', 'walk-in freezer down', 'table cleared']
+
+
 @pytest.mark.usefixtures('_reset_export', '_dev_env')
 def test_worker_stops_when_client_construction_fails() -> None:
     """Client() raising must flip stopped so debug branches stop building records."""

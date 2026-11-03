@@ -44,7 +44,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcess
 from opentelemetry.sdk.trace.sampling import Sampler
 from opentelemetry.trace import ProxyTracerProvider, get_current_span, span as trace_span
 
-from genkit import GenkitError
+from genkit import GenkitError, get_logger
 from genkit.plugin_api import is_dev_environment
 from genkit.telemetry import configure_instrumentation, is_instrumented_by
 
@@ -58,7 +58,7 @@ from ._exporters import handle_logging_error, handle_metric_error, handle_tracin
 from ._metrics_exporter import GenkitMetricExporter
 from ._trace_exporter import GcpAdjustingTraceExporter, GenkitGCPExporter
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 def _nothing_registered(provider: object) -> bool:
@@ -380,7 +380,8 @@ class GcpTelemetry:
             })
 
             # Suppress detector warnings during GCP resource detection
-            detector_logger = logging.getLogger('opentelemetry.resourcedetector.gcp_resource_detector')
+            # Third-party stdlib logger; only its level changes here.
+            detector_logger = logging.getLogger('opentelemetry.resourcedetector.gcp_resource_detector')  # noqa: TID251
             original_level = detector_logger.level
             detector_logger.setLevel(logging.ERROR)
 

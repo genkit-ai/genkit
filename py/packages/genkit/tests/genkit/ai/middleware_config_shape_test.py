@@ -17,7 +17,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from genkit import Genkit, GenkitError, Message, ModelResponse, Part
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._middleware import Middleware
 from genkit._core._model import ModelRequest
 from genkit._core._typing import FinishReason, Role
 from genkit.model import ModelConfig, ModelContext
@@ -57,10 +57,10 @@ class _Model:
         return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
 
 
-def _middleware(name: str, seen: list[object], change: Callable[[Any], None] | None = None) -> BaseMiddleware:
+def _middleware(name: str, seen: list[object], change: Callable[[Any], None] | None = None) -> Middleware:
     """A wrap_model middleware named `name` that records the config it got, then applies `change`."""
 
-    class _Mw(BaseMiddleware):
+    class _Mw(Middleware):
         async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
             seen.append(params.request.config)
             if change is not None:
@@ -335,10 +335,10 @@ async def test_middleware_changed_field_is_validated_once() -> None:
     assert configs[0].version == 'models/v2'
 
 
-def _retry_once(fix: Callable[[Any], None] | None = None) -> BaseMiddleware:
+def _retry_once(fix: Callable[[Any], None] | None = None) -> Middleware:
     """A middleware that calls next again when it raises, like a broad user retry, after applying `fix`."""
 
-    class Retry(BaseMiddleware):
+    class Retry(Middleware):
         async def wrap_model(self, params: Any, ctx: Any, next_fn: Any) -> Any:  # noqa: ANN401
             try:
                 return await next_fn(params, ctx)

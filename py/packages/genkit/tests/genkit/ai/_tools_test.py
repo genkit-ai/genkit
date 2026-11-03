@@ -14,8 +14,8 @@ from genkit._ai._tools import (
     restart_interrupt_error,
     run_tool_after_restart,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._middleware import MiddlewareContext
 from genkit.plugin_api import ActionKind
 
 
@@ -157,10 +157,10 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_RESUME
-    assert 'interrupted again' in ei.value.original_message.lower()
-    assert 'INVALID_RESUME' not in ei.value.original_message
-    assert isinstance(ei.value.cause, Interrupt)
+    assert ei.value.reason is ErrorReason.INVALID_RESUME
+    assert 'interrupted again' in ei.value.message.lower()
+    assert 'INVALID_RESUME' not in ei.value.message
+    assert isinstance(ei.value.__cause__, Interrupt)
 
 
 def test_restart_interrupt_error_accepts_string_metadata() -> None:
@@ -168,9 +168,9 @@ def test_restart_interrupt_error_accepts_string_metadata() -> None:
     intr = Interrupt('plain string reason')  # type: ignore[arg-type]
     err = restart_interrupt_error(intr)
     assert err.status == 'FAILED_PRECONDITION'
-    assert err.reason is RuntimeErrorReason.INVALID_RESUME
-    assert err.original_message == 'Tool interrupted again during restart: plain string reason'
-    assert 'INVALID_RESUME' not in err.original_message
+    assert err.reason is ErrorReason.INVALID_RESUME
+    assert err.message == 'Tool interrupted again during restart: plain string reason'
+    assert 'INVALID_RESUME' not in err.message
 
 
 @pytest.mark.asyncio
@@ -189,10 +189,10 @@ async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert ei.value.reason is RuntimeErrorReason.INVALID_RESUME
-    assert ei.value.original_message == ('Tool interrupted again during restart: Tool not in approved list: t3')
-    assert 'INVALID_RESUME' not in ei.value.original_message
-    assert isinstance(ei.value.cause, Interrupt)
+    assert ei.value.reason is ErrorReason.INVALID_RESUME
+    assert ei.value.message == ('Tool interrupted again during restart: Tool not in approved list: t3')
+    assert 'INVALID_RESUME' not in ei.value.message
+    assert isinstance(ei.value.__cause__, Interrupt)
 
 
 def test_respond_wire_format_basic() -> None:
@@ -327,7 +327,7 @@ async def test_run_tool_after_restart_pipes_generate_context() -> None:
     assert action is not None
 
     restart_trp = Part.from_tool_request(name='ctx_restart_tool', ref='r1', input={}, metadata={'resumed': True})
-    mw_ctx = GenerateMiddlewareContext(ai, custom_context={'auth_role': 'admin'})
+    mw_ctx = MiddlewareContext(ai, context={'auth_role': 'admin'})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]

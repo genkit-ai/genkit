@@ -27,9 +27,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-import structlog
-
-from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Part, Role, get_logger
 from genkit.model import ModelContext, ModelRequest, ToolDefinition, ToolRequest
 from genkit_amazon_bedrock._converters import (
     bedrock_reasoning_part,
@@ -39,7 +37,7 @@ from genkit_amazon_bedrock._converters import (
     usage_log_fields,
 )
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass

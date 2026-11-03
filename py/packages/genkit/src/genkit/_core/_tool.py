@@ -18,26 +18,77 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
+
+from pydantic import BaseModel
 
 from genkit._core._action import Action
 from genkit._core._model import MultipartToolResponse
-from genkit._core._typing import ToolDefinition
+from genkit._core._typing import ActionMetadata, ToolDefinition
 
 
 class Tool:
-    """A registered tool: a callable handle backed by an :class:`~genkit._core._action.Action`."""
+    """A registered or ephemeral tool: a callable handle backed by an :class:`~genkit._core._action.Action`."""
+
+    _action: Action
+    _original_output_schema: dict[str, object] | None
 
     def __init__(
         self,
+        func: Callable[..., Any],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> None:
+        """Define an ephemeral tool for a single ``generate`` call.
+
+        Unlike ``@ai.tool()``, this does not register the tool on the app, so it
+        cannot be referenced by name later. Use for dynamic tools that exist only
+        for one call.
+
+        Args:
+            func: Async tool implementation (same one-input rule as :func:`define_tool`).
+            name: Tool name for the model. Defaults to ``func.__name__``.
+            description: Sent to the model. Defaults to the function docstring.
+            input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
+
+        Raises:
+            TypeError: If ``func`` is not a coroutine function, takes more than one input,
+                or its input has no annotation or no JSON schema.
+            ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
+
+        Example:
+            from genkit import Tool
+
+            async def lookup_price(sku: str) -> str:
+                return '12.00'
+
+            ephemeral = Tool(lookup_price, name='lookup_price')
+            res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
+        """
+        from genkit._ai._tools import _define_tool  # noqa: PLC0415
+        from genkit._core._registry import Registry  # noqa: PLC0415
+
+        built = _define_tool(Registry(), func, name, description, input_schema=input_schema)
+        self._action = built._action
+        self._original_output_schema = built._original_output_schema
+
+    @classmethod
+    def _from_action(
+        cls,
         action: Action,
         *,
         original_output_schema: dict[str, object] | None = None,
-    ) -> None:
-        self._action = action
+    ) -> Tool:
+        """Wrap an already-registered tool ``Action`` without re-running ``_define_tool``."""
+        instance = cls.__new__(cls)
+        instance._action = action
         # What the model should expect as ``output``. ``action.output_schema`` is
         # the envelope ``run`` actually returns (output plus optional media).
-        self._original_output_schema = original_output_schema
+        instance._original_output_schema = original_output_schema
+        return instance
 
     @property
     def name(self) -> str:
@@ -76,6 +127,10 @@ class Tool:
     def action(self) -> Action:
         """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
         return self._action
+
+    def _action_metadata(self) -> ActionMetadata:
+        """Return reflection metadata for the underlying tool :class:`~genkit._core._action.Action`."""
+        return self._action._action_metadata()
 
     async def __call__(self, *args: Any, **kwargs: Any) -> MultipartToolResponse:  # noqa: ANN401
         """Run the tool and return the envelope (structured output plus optional media)."""

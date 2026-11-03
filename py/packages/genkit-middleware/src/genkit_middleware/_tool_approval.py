@@ -20,28 +20,31 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from genkit import Interrupt, MultipartToolResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ToolHookParams
-from genkit.plugin_api import ActionKind
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
+from genkit.plugin_api import ActionKind, GenkitConfig
 from genkit.telemetry import SpanContext, run_in_new_span
 
 
-class ToolApprovalConfig(BaseModel):
+class ToolApprovalConfig(GenkitConfig):
     """Tools that may run without an approval interrupt."""
 
     allowed_tools: list[str] = Field(default_factory=list)
 
 
-class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
+class ToolApproval(Middleware[ToolApprovalConfig]):
     """Tool approval middleware that interrupts execution for non-allowed tools."""
+
+    name = 'tool_approval'
+    description = 'Requires approval before executing tools'
 
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Intercept tool execution and require approval if not in allowed list."""
         tool_name = params.tool.name

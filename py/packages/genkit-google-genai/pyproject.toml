@@ -47,8 +47,7 @@ dependencies = [
   "genkit",
   "google-genai>=2.14.0,<3",
   "httpx>=0.28.1",
-  "pydantic>=2.10.5",
-  "structlog>=25.2.0",
+  "pydantic>=2.11",
   "typing_extensions>=4.2",
 ]
 description = "Gemini and Veo on Genkit"

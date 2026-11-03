@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import subprocess  # noqa: S404
 import sys
+from typing import Any, cast
 
 import pytest
 from genkit_middleware import Middleware
@@ -33,9 +34,9 @@ from genkit_middleware.exp import Artifacts
 from genkit import GenkitError, Message, ModelResponse, Part
 from genkit._ai._agents._session import Session, run_with_session
 from genkit._core._model import Artifact, GenerateActionOptions, SessionState
-from genkit._core._typing import FinishReason, Role
+from genkit._core._typing import FinishReason, MiddlewareRef, Role
 from genkit.exp import Genkit
-from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext, MiddlewareRef
+from genkit.middleware import GenerateHookParams, MiddlewareContext
 from genkit.model import ToolRequest
 from genkit.testing import define_scripted_model
 
@@ -72,7 +73,7 @@ def test_extract_artifact_text() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContext) -> None:
+async def test_write_artifact_uses_current_session(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(SessionState())
 
@@ -92,7 +93,7 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
 
 
 @pytest.mark.asyncio
-async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
+async def test_read_artifact_returns_found(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(SessionState())
     await session.add_artifacts([Artifact(name='notes.txt', parts=[Part.from_text('hello')])])
@@ -109,7 +110,7 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
 
 
 @pytest.mark.asyncio
-async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> None:
+async def test_read_artifact_without_session(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
     result = await read.action().run(input={'name': 'missing.txt'})
@@ -119,14 +120,14 @@ async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> 
 
 
 @pytest.mark.asyncio
-async def test_readonly_excludes_write_tool(ctx: GenerateMiddlewareContext) -> None:
+async def test_readonly_excludes_write_tool(ctx: MiddlewareContext) -> None:
     mw = Artifacts(readonly=True)
     names = {t.name for t in mw.tools(ctx)}
     assert names == {'read_artifact'}
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_injects_listing(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(
         SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part.from_text('abc')])]),
@@ -157,7 +158,7 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_refreshes_listing(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     session = Session(SessionState())
     envelope = GenerateActionOptions(messages=[])
@@ -183,7 +184,7 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_does_not_mutate_envelope(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
     session = Session(
@@ -257,7 +258,7 @@ async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raise
     ]
 
     with pytest.raises(GenkitError) as err:
-        await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='artifacts')])
+        await ai.generate(model='scriptedModel', prompt='hi', use=cast(Any, [MiddlewareRef(name='artifacts')]))
 
     assert err.value.status == 'NOT_FOUND'
     assert '"artifacts"' in str(err.value)
@@ -275,7 +276,7 @@ async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() ->
         )
     ]
 
-    res = await ai.generate(model='scriptedModel', prompt='hi', use=[MiddlewareRef(name='retry')])
+    res = await ai.generate(model='scriptedModel', prompt='hi', use=cast(Any, [MiddlewareRef(name='retry')]))
 
     assert res.text == 'ok'
 

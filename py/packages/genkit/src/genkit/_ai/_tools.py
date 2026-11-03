@@ -26,9 +26,9 @@ from typing import Any, Union, cast, get_args, get_origin
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from genkit._core._action import Action, ActionKind, ActionRunContext, ChunkT, resolve_type_hints
-from genkit._core._error import GenkitError, Interrupt, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError, Interrupt
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._middleware import MiddlewareContext
 from genkit._core._model import MultipartToolResponse, Part, as_part, as_resumed
 from genkit._core._registry import Registry
 from genkit._core._schema import to_json_schema
@@ -59,7 +59,7 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
             message=(
                 f'Tool {tool_name!r} pendingContent must be a list of parts, got {type(pending_content).__name__}.'
             ),
-            reason=RuntimeErrorReason.INVALID_PART,
+            reason=ErrorReason.INVALID_PART,
         )
     out: list[dict[str, Any]] = []
     for i, item in enumerate(pending_content):
@@ -74,14 +74,14 @@ def normalize_pending_content(pending_content: object, *, tool_name: str) -> lis
                     status='INVALID_ARGUMENT',
                     message=f'Tool {tool_name!r} pendingContent[{i}]: {detail}',
                     cause=e,
-                    reason=RuntimeErrorReason.INVALID_PART,
+                    reason=ErrorReason.INVALID_PART,
                 ) from e
             except (ValueError, TypeError) as e:
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
                     cause=e,
-                    reason=RuntimeErrorReason.INVALID_PART,
+                    reason=ErrorReason.INVALID_PART,
                 ) from e
         dumped = dump_part(part, tool_name=tool_name, what=f'pendingContent[{i}]')
         if not wire_part_is_live(dumped):
@@ -162,7 +162,7 @@ def dump_part(part: Part, *, tool_name: str | None = None, what: str = 'content'
             status='INVALID_ARGUMENT',
             message=message,
             cause=e,
-            reason=RuntimeErrorReason.INVALID_PART,
+            reason=ErrorReason.INVALID_PART,
         ) from e
 
 
@@ -170,7 +170,7 @@ def live_payload_error(*, tool_name: str, where: str) -> GenkitError:
     return GenkitError(
         status='INVALID_ARGUMENT',
         message=f'Tool {tool_name!r} {where} includes a part with no live payload.',
-        reason=RuntimeErrorReason.INVALID_PART,
+        reason=ErrorReason.INVALID_PART,
     )
 
 
@@ -184,7 +184,7 @@ def require_live_part(part: Part, *, tool_name: str | None = None, where: str = 
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message='MultipartToolResponse content includes a part with no live payload.',
-        reason=RuntimeErrorReason.INVALID_PART,
+        reason=ErrorReason.INVALID_PART,
     )
 
 
@@ -204,7 +204,7 @@ def dump_tool_output(value: Any, *, tool_name: str | None = None, what: str = 'o
             status='INVALID_ARGUMENT',
             message=f'Tool {name!r} {what} is not JSON-serializable.',
             cause=e,
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -219,7 +219,7 @@ def dump_tool_metadata(value: dict[str, Any] | None, *, tool_name: str | None = 
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message=f'Tool {name!r} metadata is not a JSON object.',
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )
 
 
@@ -295,11 +295,11 @@ async def run_tool_request(
     *,
     tool: Action,
     tool_request_part: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
-    Pipes ``GenerateMiddlewareContext.custom_context`` and ``telemetry_labels``
+    Pipes ``MiddlewareContext.context`` and ``telemetry_labels``
     into ``tool.run``, and sets resume ContextVars from ``tool_request_part``
     metadata so ``ToolContext`` reflects ``resumed`` / ``replacedInput``.
     """
@@ -309,11 +309,11 @@ async def run_tool_request(
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
-    run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
+    run_context = dict(ctx.context) if ctx and ctx.context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
         return (
-            await tool.run(
+            await tool._run(
                 tool_req.input,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
@@ -349,7 +349,7 @@ def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
         status='FAILED_PRECONDITION',
         message=message,
         cause=interrupt,
-        reason=RuntimeErrorReason.INVALID_RESUME,
+        reason=ErrorReason.INVALID_RESUME,
     )
 
 
@@ -357,25 +357,39 @@ async def run_tool_after_restart(
     *,
     tool: Action,
     restart_trp: Part,
-    ctx: GenerateMiddlewareContext | None = None,
+    ctx: MiddlewareContext | None = None,
 ) -> Part:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
     Sets the same context variables as the tool wrapper so ToolContext reflects
     a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
-    tool_req = restart_trp.tool_request
-    if tool_req is None:
-        raise ValueError('run_tool_after_restart needs a tool request part')
     try:
-        raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
+        return await run_restarted_tool(tool=tool, restart_trp=restart_trp, ctx=ctx)
     except Interrupt as e:
         logger.debug(
             'restarted tool triggered an interrupt',
-            tool=tool_req.name,
+            tool=restart_trp.tool_request.name if restart_trp.tool_request else tool.name,
         )
         raise restart_interrupt_error(e) from e
 
+
+async def run_restarted_tool(
+    *,
+    tool: Action,
+    restart_trp: Part,
+    ctx: MiddlewareContext | None = None,
+) -> Part:
+    """Like ``run_tool_after_restart``, but a second Interrupt propagates as is.
+
+    run_restart calls this inside the wrap_tool chain. Converting the Interrupt
+    there would hand middleware an Exception its catch-all could swallow,
+    skipping the approval the restart is asking for.
+    """
+    tool_req = restart_trp.tool_request
+    if tool_req is None:
+        raise ValueError('run_tool_after_restart needs a tool request part')
+    raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
     envelope = as_multipart_tool_response(raw, tool_name=tool_req.name)
     return Part(
         tool_response=ToolResponse(
@@ -498,7 +512,7 @@ def _define_tool(
     action.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] = original_output_schema
     action.output_schema = TypeAdapter(MultipartToolResponseData).json_schema()
 
-    return _Tool(action, original_output_schema=original_output_schema)
+    return _Tool._from_action(action, original_output_schema=original_output_schema)
 
 
 def define_tool(
@@ -531,42 +545,6 @@ def define_tool(
             one ``ToolContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
-
-
-def tool(
-    func: Callable[..., Any],
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool:
-    """Define an ephemeral tool for a single ``generate`` call.
-
-    Unlike ``@ai.tool()``, this does not register the tool on the app, so it
-    cannot be referenced by name later. Use for dynamic tools that exist only
-    for one call.
-
-    Args:
-        func: Async tool implementation (same one-input rule as :func:`define_tool`).
-        name: Tool name for the model. Defaults to ``func.__name__``.
-        description: Sent to the model. Defaults to the function docstring.
-        input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
-
-    Raises:
-        TypeError: If ``func`` is not a coroutine function, takes more than one input,
-            or its input has no annotation or no JSON schema.
-        ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
-
-    Example:
-        from genkit import tool
-
-        async def lookup_price(sku: str) -> str:
-            return '12.00'
-
-        ephemeral = tool(lookup_price, name='lookup_price')
-        res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
-    """
-    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
 
 def define_interrupt(

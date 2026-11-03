@@ -9,6 +9,7 @@ import pytest
 from pydantic import BaseModel
 
 from genkit import (
+    ErrorReason,
     FinishReason,
     Genkit,
     GenkitError,
@@ -17,7 +18,6 @@ from genkit import (
     MultipartToolResponse,
     Part,
     Role,
-    RuntimeErrorReason,
     Tool,
 )
 from genkit._core._action import Action
@@ -92,7 +92,7 @@ async def test_await_tool_from_raw_action_returns_multipart_envelope() -> None:
     async def raw_shot() -> MultipartToolResponse[ShotOut]:
         return MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[_png()], metadata={'src': 'cam'})
 
-    handle = Tool(Action(name='shot', kind=ActionKind.TOOL, fn=raw_shot))
+    handle = Tool._from_action(Action(name='shot', kind=ActionKind.TOOL, fn=raw_shot))
     out = await handle()
     assert isinstance(out, MultipartToolResponse)
     assert out.output == SHOT
@@ -468,8 +468,8 @@ async def test_tool_response_with_non_dict_metadata_raises_invalid_argument_nami
     with pytest.raises(GenkitError) as raised:
         MultipartToolResponse(output=ShotOut(ok=True, label='lab'), metadata='nope')  # type: ignore[arg-type]
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert raised.value.original_message == 'MultipartToolResponse metadata must be a dict, got str.'
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
+    assert raised.value.message == 'MultipartToolResponse metadata must be a dict, got str.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
@@ -490,11 +490,8 @@ async def test_tool_response_with_non_part_in_parts_raises_invalid_part_naming_t
     with pytest.raises(GenkitError) as raised:
         MultipartToolResponse(output=ShotOut(ok=True, label='lab'), content=[object()])  # type: ignore[list-item]
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_PART
-    assert (
-        raised.value.original_message
-        == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
-    )
+    assert raised.value.reason is ErrorReason.INVALID_PART
+    assert raised.value.message == 'MultipartToolResponse content must be a list of Parts, got object in the list.'
 
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)

@@ -41,7 +41,7 @@ from genkit import (
     Part,
     Role,
 )
-from genkit.model import Constrained, ModelContext, ModelRequest
+from genkit.model import ConstrainedSupport, ModelContext, ModelRequest
 
 PNG_BYTES = b'\x89PNG\r\n\x1a\n-person'
 PNG_B64 = base64.b64encode(PNG_BYTES).decode('ascii')
@@ -772,4 +772,4 @@ def test_model_info_does_not_claim_text_inputs() -> None:
     supports = virtual_try_on_model_info('virtual-try-on-001').supports
     assert supports is not None
     assert supports.system_role is False
-    assert supports.constrained == Constrained.NONE
+    assert supports.constrained == ConstrainedSupport.NONE

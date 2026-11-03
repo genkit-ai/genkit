@@ -24,7 +24,7 @@ from genkit import FlowContext, Genkit
 
 ai = Genkit(
     plugins=[GoogleAI()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 app = Flask(__name__)
 

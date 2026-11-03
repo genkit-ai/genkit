@@ -5,6 +5,8 @@
 
 """What a plugin handler sees after ai.generate: typed config, extras, errors, output."""
 
+from typing import Any, cast
+
 import pytest
 from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
@@ -141,49 +143,53 @@ async def test_unknown_keys_reach_plugin_via_model_extra(ai_and_seen: tuple[Genk
 
 
 @pytest.mark.asyncio
-async def test_invalid_config_value_raises_before_the_turn(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """A bad value on a declared field raises INVALID_ARGUMENT; the model never runs."""
+async def test_invalid_config_value_raises_before_the_model_runs(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ModelRequest[Cfg] alone sets the model's config class, so generate checks the call config."""
     ai, seen = ai_and_seen
-    with pytest.raises(GenkitError) as exc_info:
+    with pytest.raises(GenkitError, match=r"conforming: config 'temperature'") as excinfo:
         await ai.generate(model='conforming', prompt='hi', config={'temperature': 'high'})
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert "config 'temperature'" in str(exc_info.value)
+    assert excinfo.value.status == 'INVALID_ARGUMENT'
     assert 'config' not in seen
 
 
 @pytest.mark.asyncio
-async def test_invalid_config_with_docs_raises_before_the_turn(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """ai.generate(docs=..., config={'temperature': 'high'}) raises INVALID_ARGUMENT, not AttributeError."""
-    ai, seen = ai_and_seen
-    with pytest.raises(GenkitError) as exc_info:
+async def test_invalid_config_with_docs_raises_before_the_model_runs(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(docs=..., config={'temperature': 'high'}) is the same call-time error."""
+    ai, _ = ai_and_seen
+    with pytest.raises(GenkitError, match=r"conforming: config 'temperature'"):
         await ai.generate(
             model='conforming',
             prompt='hi',
             docs=[Document.from_text('ctx')],
             config={'temperature': 'high'},
         )
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert 'config' not in seen
 
 
 @pytest.mark.asyncio
-async def test_strict_config_rejects_unknown_keys_before_the_turn(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """extra='forbid' rejects unknown keys with INVALID_ARGUMENT — the plugin opted in."""
-    ai, seen = ai_and_seen
-    with pytest.raises(GenkitError) as exc_info:
+async def test_strict_config_rejects_unknown_keys_at_call_time(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """extra='forbid' on the annotated class rejects unknown keys before the model runs."""
+    ai, _ = ai_and_seen
+    with pytest.raises(GenkitError, match=r"strict: unknown config key 'thinking'"):
         await ai.generate(model='strict', prompt='hi', config={'thinking': True})
-    assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert "unknown config key 'thinking'" in str(exc_info.value)
-    assert 'config' not in seen
 
 
 @pytest.mark.asyncio
-async def test_foreign_config_class_normalizes_to_conforming(ai_and_seen: tuple[Genkit, dict]) -> None:
-    """ai.generate(config=OpenAIConfig(...)) normalizes through veneer to the target plugin's config."""
+async def test_invalid_config_from_a_raw_run_raises_at_the_boundary(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """A Dev UI-shaped run skips generate's check; the action boundary still names the model."""
+    ai, _ = ai_and_seen
+    action = await ai._registry.resolve_model('strict')
+    assert action is not None
+    with pytest.raises(GenkitError, match="Invalid input for model 'strict'"):
+        await action.run(cast(Any, {'messages': [], 'config': {'thinking': True}}))
+
+
+@pytest.mark.asyncio
+async def test_foreign_config_class_raises(ai_and_seen: tuple[Genkit, dict]) -> None:
+    """ai.generate(config=OpenAIConfig(...)) on a ModelRequest[ConformingCfg] model is a caller mistake."""
     ai, seen = ai_and_seen
-    await ai.generate(model='conforming', prompt='hi', config=OpenAIConfig(temperature=0.7))
-    assert type(seen['config']) is ConformingCfg
-    assert seen['config'].temperature == 0.7
+    with pytest.raises(GenkitError, match=r'config must be .*ConformingCfg or a mapping, got .*OpenAIConfig'):
+        await ai.generate(model='conforming', prompt='hi', config=OpenAIConfig(temperature=0.7))
+    assert 'config' not in seen
 
 
 @pytest.mark.asyncio

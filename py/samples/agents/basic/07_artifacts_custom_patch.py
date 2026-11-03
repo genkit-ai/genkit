@@ -108,7 +108,7 @@ async def research_agent_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResu
         messages = history or None
 
         stream_resp = ai.generate_stream(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             system=(
                 'You are a Senior Research Analyst. Provide concise, clear, '
                 'and structured research insights for the user prompt.'

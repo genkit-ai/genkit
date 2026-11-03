@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from genkit import FlowContext, Genkit, GenkitError, Message, ModelResponse, Part, ToolContext, tool
+from genkit import FlowContext, Genkit, GenkitError, Message, ModelResponse, Part, Tool, ToolContext
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import FinishReason, Role, ToolRequest
 from genkit.testing import ScriptedModel, define_scripted_model
@@ -284,13 +284,13 @@ async def test_tool_with_postponed_annotations_finds_tool_context() -> None:
 
 
 def test_ephemeral_tool_with_two_plain_parameters_raises_type_error() -> None:
-    """`genkit.tool(fn)` follows the same one-input rule as `@ai.tool()`."""
+    """`genkit.Tool(fn)` follows the same one-input rule as `@ai.tool()`."""
 
     async def weather(city: str, unit: str) -> str:
         return f'{city} {unit}'
 
     with pytest.raises(TypeError, match="tool 'weather' takes one input, but 'unit' is a second parameter"):
-        tool(weather)
+        Tool(weather)
 
 
 def test_tool_with_unannotated_input_raises_type_error_at_definition() -> None:
@@ -306,13 +306,13 @@ def test_tool_with_unannotated_input_raises_type_error_at_definition() -> None:
 
 
 def test_ephemeral_tool_with_unannotated_input_raises_type_error() -> None:
-    """`genkit.tool(search)` with an unannotated input raises the same TypeError as `@ai.tool()`."""
+    """`genkit.Tool(search)` with an unannotated input raises the same TypeError as `@ai.tool()`."""
 
     async def search(query) -> str:  # noqa: ANN001
         return str(query)
 
     with pytest.raises(TypeError, match="tool 'search' input 'query' has no type annotation"):
-        tool(search)
+        Tool(search)
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,7 @@ from typing import Any
 
 from genkit_a2ui import A2UI_MIME_TYPE
 
-from genkit import Genkit, Message, ModelResponse, Part
-from genkit._core._error import RuntimeErrorReason
+from genkit import ErrorReason, Genkit, Message, ModelResponse, Part
 from genkit._core._typing import FinishReason, Role
 from genkit.testing import ScriptedModel, define_scripted_model
 
@@ -150,7 +149,7 @@ def assert_no_fence_in_text(content: list[Part]) -> None:
 def assert_dead_turn(
     response: ModelResponse,
     *,
-    reason: RuntimeErrorReason,
+    reason: ErrorReason,
     match: str,
     status: str = 'INTERNAL',
 ) -> None:

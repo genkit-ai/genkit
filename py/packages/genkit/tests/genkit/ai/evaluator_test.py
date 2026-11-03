@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plugin authors build evaluators with Evaluator / BatchEvaluator and return them from init, resolve, list_actions."""
+"""Plugin authors build evaluators with Evaluator / BatchEvaluator and list them in list_actions()."""
 
 from typing import Any, cast
 
@@ -30,7 +30,7 @@ from genkit.evaluator import (
     EvaluatorResponse,
     Score,
 )
-from genkit.plugin_api import Action, ActionKind, ActionMetadata, Plugin
+from genkit.plugin_api import Action, ActionKind, Plugin
 
 
 class ThresholdOptions(BaseModel):
@@ -52,7 +52,7 @@ def _two_rows() -> list[BaseDataPoint]:
 
 
 class ExactMatchPlugin(Plugin):
-    """Plugin that hands Genkit an evaluator built with Evaluator(...) on resolve and list_actions."""
+    """Plugin that hands Genkit an evaluator built with Evaluator(...) on resolve."""
 
     name = 'p'
 
@@ -155,12 +155,8 @@ def test_evaluator_and_metadata_agree_for_same_args(config_schema: type[BaseMode
 
 @pytest.mark.asyncio
 async def test_plugin_returning_evaluator_registers_it_on_app() -> None:
-    """A plugin whose resolve() and list_actions() return Evaluator(...) lists and runs 'p/e'."""
+    """A plugin whose resolve() returns Evaluator(...) makes ai.evaluate(evaluator='p/e', ...) score every row."""
     ai = Genkit(plugins=[ExactMatchPlugin()])
-
-    catalog = await ai._registry.list_actions()
-    assert '/evaluator/p/e' in catalog
-    assert catalog['/evaluator/p/e'].name == 'p/e'
 
     results = await ai.evaluate(evaluator='p/e', dataset=_two_rows())
 
@@ -186,7 +182,7 @@ class ExactMatchBatchPlugin(Plugin):
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
 

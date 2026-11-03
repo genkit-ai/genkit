@@ -38,7 +38,6 @@ import {
   type ModelMiddleware,
 } from 'genkit/model';
 import type { PluginProvider } from 'genkit/plugin';
-import { Readable } from 'node:stream';
 import { Allow, parse } from 'partial-json';
 import wav from 'wav';
 
@@ -1149,6 +1148,8 @@ ai.defineFlow('googleai-image', async (thing) => {
   return message;
 });
 
+// Video generation with Gemini Omni (it replaced the Veo models on the Gemini
+// API). It returns the video directly (an inline MP4), not an operation.
 ai.defineFlow('meme-of-the-day', async () => {
   const { text: script } = await ai.generate({
     model: googleAI.model('gemini-flash-latest'),
@@ -1157,53 +1158,32 @@ ai.defineFlow('meme-of-the-day', async () => {
       'A Silly DIY FAIL situation like a: broken tools, or bad weather or crooked assembly, etc. Be creative. The FAIL should be very obvious. ' +
       'Always include some text for the meme, very short 2-3 words, but relevant to the meme. ' +
       'Describe how things should look, camera angles, lighting, mood. Who is in the shot and what they do.' +
-      'Output should be a prompt for in a Veo 2 video generator model. Return only the prompt, NOTHING else. No preamble, no post-production instructions, etc.',
+      'Output should be a prompt for a video generator model. Return only the prompt, NOTHING else. No preamble, no post-production instructions, etc.',
   });
 
   console.log(script);
 
-  let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-generate-preview'),
+  const { media } = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
     prompt: script,
-    config: {
-      durationSeconds: 8,
-      aspectRatio: '16:9',
-      personGeneration: 'allow_adult',
-    },
+    config: { videoFormat: { aspectRatio: '16:9' } },
   });
-
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
-  }
-
-  while (!operation.done) {
-    console.log('check status', operation.id);
-    operation = await ai.checkOperation(operation);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  if (operation.error) {
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  // operation done, download generated video to disk
-  const video = operation.output?.message?.content.find((p) => !!p.media);
-  if (!video) {
+  if (!media) {
     throw new Error('Failed to find the generated video');
   }
-  await downloadVideo(video, 'meme-of-the-day.mp4');
+  saveInlineVideo(media, 'meme-of-the-day.mp4');
 
-  return operation;
+  return media;
 });
 
-ai.defineFlow('photo-move-veo', async () => {
+ai.defineFlow('photo-move', async () => {
   const startingImage = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
-  let { operation } = await ai.generate({
-    model: googleAI.model('veo-3.1-generate-preview'),
+  const { media } = await ai.generate({
+    model: googleAI.model('gemini-omni-1.1-flash'),
     prompt: [
       {
-        text: 'make it move',
+        text: 'Use this image as the starting frame and make it move.',
       },
       {
         media: {
@@ -1212,52 +1192,22 @@ ai.defineFlow('photo-move-veo', async () => {
         },
       },
     ],
-    config: {
-      durationSeconds: 5,
-      aspectRatio: '9:16',
-      personGeneration: 'allow_adult',
-    },
+    config: { videoFormat: { aspectRatio: '9:16' } },
   });
-
-  if (!operation) {
-    throw new Error('Expected the model to return an operation');
-  }
-
-  while (!operation.done) {
-    console.log('check status', operation.id);
-    operation = await ai.checkOperation(operation);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-  }
-
-  if (operation.error) {
-    throw new Error('failed to generate video: ' + operation.error.message);
-  }
-
-  // operation done, download generated video to disk
-  const video = operation.output?.message?.content.find((p) => !!p.media);
-  if (!video) {
+  if (!media) {
     throw new Error('Failed to find the generated video');
   }
+  saveInlineVideo(media, 'photo.mp4');
 
-  await downloadVideo(video, 'photo.mp4');
-
-  return operation;
+  return media;
 });
 
-async function downloadVideo(video: MediaPart, path: string) {
-  const fetch = (await import('node-fetch')).default;
-  const videoDownloadResponse = await fetch(
-    `${video.media!.url}&key=${process.env.GEMINI_API_KEY}`
+/** Writes an inline (data URL) video to a file. */
+function saveInlineVideo(media: MediaPart['media'], path: string) {
+  fs.writeFileSync(
+    path,
+    Buffer.from(media.url.substring(media.url.indexOf(',') + 1), 'base64')
   );
-  if (
-    !videoDownloadResponse ||
-    videoDownloadResponse.status !== 200 ||
-    !videoDownloadResponse.body
-  ) {
-    throw new Error('Failed to fetch video');
-  }
-
-  Readable.from(videoDownloadResponse.body).pipe(fs.createWriteStream(path));
 }
 
 ai.defineResource(

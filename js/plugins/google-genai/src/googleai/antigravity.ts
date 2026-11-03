@@ -24,6 +24,7 @@ import {
   toInteractionResponseFormat,
   toInteractionSteps,
   toInteractionTool,
+  withBasicUsageStats,
 } from '../common/interaction-converters.js';
 import { InteractionTool } from '../common/interaction-types.js';
 import { isKnownKey } from '../common/utils.js';
@@ -310,7 +311,10 @@ export function defineModel(
 
       const response = await createInteraction(apiKey, req, clientOpt);
 
-      return fromInteractionSync(response);
+      return withBasicUsageStats(
+        fromInteractionSync(response),
+        request.messages
+      );
     }
   );
 }

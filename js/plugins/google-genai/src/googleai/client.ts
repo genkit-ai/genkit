@@ -44,8 +44,6 @@ import {
   GenerateContentStreamResult,
   ListModelsResponse,
   Model,
-  VeoOperation,
-  VeoPredictRequest,
 } from './types.js';
 
 export const tracingHooks = { runInNewSpan };
@@ -318,52 +316,6 @@ export async function embedContent(
   return maybeTraceRequest<EmbedContentResponse>(url, fetchOptions, {
     model: model,
     request: embedContentRequest,
-    clientOptions,
-  });
-}
-
-export async function veoPredict(
-  apiKey: string | undefined,
-  model: string,
-  veoPredictRequest: VeoPredictRequest,
-  clientOptions?: ClientOptions
-): Promise<VeoOperation> {
-  const url = getGoogleAIUrl({
-    resourcePath: `models/${model}`,
-    resourceMethod: 'predictLongRunning',
-    clientOptions,
-  });
-
-  const fetchOptions = getFetchOptions({
-    method: 'POST',
-    apiKey,
-    clientOptions,
-    body: JSON.stringify(veoPredictRequest),
-  });
-
-  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
-    model: model,
-    request: veoPredictRequest,
-    clientOptions,
-  });
-}
-
-export async function veoCheckOperation(
-  apiKey: string | undefined,
-  operation: string,
-  clientOptions?: ClientOptions
-): Promise<VeoOperation> {
-  const url = getGoogleAIUrl({
-    resourcePath: operation,
-    clientOptions,
-  });
-  const fetchOptions = getFetchOptions({
-    method: 'GET',
-    apiKey,
-    clientOptions,
-  });
-
-  return maybeTraceRequest<VeoOperation>(url, fetchOptions, {
     clientOptions,
   });
 }

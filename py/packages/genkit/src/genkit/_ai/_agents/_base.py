@@ -68,8 +68,8 @@ from genkit._ai._prompt import (
     register_prompt_actions,
 )
 from genkit._core._action import Action, ActionKind, BidiAction, BidiFn, get_current_context
-from genkit._core._error import GenkitError, RuntimeErrorReason
-from genkit._core._middleware import BaseMiddleware
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._middleware import Middleware
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -92,7 +92,6 @@ from genkit._core._typing import (
     AgentAbortResponse,
     AgentFinishReason,
     GetSnapshotRequest,
-    MiddlewareRef,
     Role,
     SnapshotStatus,
     ToolRequest,
@@ -315,7 +314,7 @@ def register_snapshot_actions(*, registry: Registry, name: str, agent: Agent) ->
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Snapshot {target!r} not found for agent {name!r}.',
-                reason=RuntimeErrorReason.SNAPSHOT_NOT_FOUND,
+                reason=ErrorReason.SNAPSHOT_NOT_FOUND,
             )
         return snap
 
@@ -348,7 +347,7 @@ def define_agent(
     model: ModelRef[ModelRefConfigT] | Action | str | None = None,
     system: str | list[Part] | None = None,
     tools: Sequence[str | Tool] | None = None,
-    use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+    use: Sequence[Middleware] | None = None,
     config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
     max_turns: int | None = None,
     description: str | None = None,

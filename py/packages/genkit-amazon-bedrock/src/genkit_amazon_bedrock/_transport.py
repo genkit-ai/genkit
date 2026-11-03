@@ -30,9 +30,7 @@ import threading
 from collections.abc import AsyncGenerator, Awaitable
 from typing import TYPE_CHECKING, Any
 
-import structlog
-
-from genkit import GenkitError
+from genkit import GenkitError, get_logger
 from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._config import (
     DEFAULT_CONNECT_TIMEOUT,
@@ -45,7 +43,7 @@ from genkit_amazon_bedrock._config import (
 if TYPE_CHECKING:
     import boto3.session
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 NO_REGION_MESSAGE = (
     'bedrock: no AWS region resolved; set Bedrock(region=...), AWS_REGION, '

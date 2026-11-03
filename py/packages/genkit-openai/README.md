@@ -28,7 +28,7 @@ from genkit_openai import OpenAI
 ai = Genkit(plugins=[OpenAI()])
 
 res = await ai.generate(
-    model=OpenAI.gpt_model('gpt-5.2'),
+    model=OpenAI.gpt('gpt-5.2'),
     prompt='Suggest 2 catchy names for an AI newsletter.',
 )
 print(res.text)

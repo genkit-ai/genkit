@@ -18,7 +18,7 @@ from jsonschema.exceptions import SchemaError, best_match
 from jsonschema.validators import validator_for
 from pydantic import AliasChoices, BaseModel, ValidationError
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 
 
 def config_field_names(schema: type[BaseModel]) -> dict[str, str]:
@@ -135,7 +135,7 @@ def _raise_config_problems(
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'{model}: {"; ".join(described)}',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         return
     try:
@@ -151,7 +151,7 @@ def _raise_config_problems(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'{model}: {_describe_config_problems(problems, values=values, schema=schema)}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
             cause=e,
         ) from e
 

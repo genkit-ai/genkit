@@ -20,7 +20,6 @@ from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from typing import Any, Protocol
 
-import structlog
 from botocore.exceptions import (
     BotoCoreError,
     ClientError,
@@ -43,13 +42,13 @@ from botocore.exceptions import (
     UnauthorizedSSOTokenError,
 )
 
-from genkit import GenkitError, ModelResponse
+from genkit import GenkitError, ModelResponse, get_logger
 from genkit.model import ModelContext, ModelRequest
 from genkit.plugin_api import StatusName, provider_error
 from genkit_amazon_bedrock._converters import build_converse_request, to_model_response, usage_log_fields
 from genkit_amazon_bedrock._stream import consume_converse_stream
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ConverseTransport(Protocol):

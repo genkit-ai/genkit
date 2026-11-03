@@ -58,10 +58,10 @@ from genkit import (
 )
 from genkit._ai._tools import run_tool_after_restart
 from genkit._core._action import Action
-from genkit.model import ModelContext, ModelRequest, ModelUsage
+from genkit._core._telemetry._http import DirectHttpInstrumentation
+from genkit.model import GenerationUsage, ModelContext, ModelRequest
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
-    DirectHttpInstrumentation,
     configure_instrumentation,
     is_instrumented_by,
     reset_instrumentation,
@@ -189,7 +189,7 @@ def _echo_response() -> ModelResponse:
     return ModelResponse(
         finish_reason=FinishReason.STOP,
         message=Message(role=Role.MODEL, content=[Part.from_text(_REPLY)]),
-        usage=ModelUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+        usage=GenerationUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
     )
 
 
@@ -782,7 +782,7 @@ async def test_generate_with_tool_spans_and_span_only_env_shows_redacted_tool_ar
                 role=Role.MODEL,
                 content=[Part.from_tool_request(name='lookup', input=_PROMPT, ref='r1')],
             ),
-            usage=ModelUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
+            usage=GenerationUsage(input_tokens=_INPUT_TOKENS, output_tokens=_OUTPUT_TOKENS),
         )
 
     ai.define_model(_MODEL, tool_model)

@@ -32,6 +32,7 @@ members = [
     "genkit-flask",
     "genkit-google-cloud",
     "genkit-google-genai",
+    "genkit-mcp",
     "genkit-middleware",
     "genkit-ollama",
     "genkit-openai",
@@ -40,6 +41,7 @@ members = [
     "genkit-workspace",
     "google-genai-deep-research",
     "google-genai-media",
+    "mcp-hello",
     "middleware",
     "middleware-coding-agent",
     "multipart-tools",
@@ -76,7 +78,7 @@ requires-dist = [
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 
@@ -120,7 +122,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-amazon-bedrock", editable = "packages/genkit-amazon-bedrock" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "structlog", specifier = ">=25.2.0" },
 ]
 
@@ -185,7 +187,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-anthropic", editable = "packages/genkit-anthropic" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "structlog", specifier = ">=25.2.0" },
 ]
 
@@ -1382,7 +1384,7 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -1606,6 +1608,9 @@ google-cloud = [
 google-genai = [
     { name = "genkit-google-genai" },
 ]
+mcp = [
+    { name = "genkit-mcp" },
+]
 middleware = [
     { name = "genkit-middleware" },
 ]
@@ -1635,6 +1640,7 @@ requires-dist = [
     { name = "genkit-flask", marker = "extra == 'flask'", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", marker = "extra == 'google-cloud'", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", marker = "extra == 'google-genai'", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", marker = "extra == 'mcp'", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", marker = "extra == 'middleware'", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", marker = "extra == 'ollama'", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
@@ -1644,7 +1650,7 @@ requires-dist = [
     { name = "json5", specifier = ">=0.10.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
     { name = "partial-json-parser", specifier = ">=0.2.1.1.post5" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "starlette", specifier = ">=0.46.1" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
     { name = "structlog", specifier = ">=25.2.0" },
@@ -1653,7 +1659,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "middleware", "otel", "ollama", "openai", "vertex-ai"]
+provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "otel", "ollama", "openai", "vertex-ai"]
 
 [[package]]
 name = "genkit-a2ui"
@@ -1675,7 +1681,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.2" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
@@ -1691,7 +1697,6 @@ dependencies = [
     { name = "boto3" },
     { name = "botocore" },
     { name = "genkit" },
-    { name = "structlog" },
 ]
 
 [package.metadata]
@@ -1699,7 +1704,6 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.37.24" },
     { name = "botocore", specifier = ">=1.37.24" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]
@@ -1732,7 +1736,7 @@ dependencies = [
 requires-dist = [
     { name = "django", specifier = ">=4.2" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -1764,7 +1768,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -1781,7 +1785,7 @@ dependencies = [
 requires-dist = [
     { name = "flask", specifier = ">=3.1.3" },
     { name = "genkit", editable = "packages/genkit" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -1826,7 +1830,6 @@ dependencies = [
     { name = "google-genai" },
     { name = "httpx" },
     { name = "pydantic" },
-    { name = "structlog" },
     { name = "typing-extensions" },
 ]
 
@@ -1835,9 +1838,29 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "google-genai", specifier = ">=2.14.0,<3" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pydantic", specifier = ">=2.10.5" },
-    { name = "structlog", specifier = ">=25.2.0" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "typing-extensions", specifier = ">=4.2" },
+]
+
+[[package]]
+name = "genkit-mcp"
+version = "0.12.0"
+source = { editable = "packages/genkit-mcp" }
+dependencies = [
+    { name = "anyio" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'" },
+    { name = "genkit" },
+    { name = "mcp" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.9.0" },
+    { name = "exceptiongroup", marker = "python_full_version < '3.11'", specifier = ">=1.2.0" },
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
+    { name = "pydantic", specifier = ">=2.10.5" },
 ]
 
 [[package]]
@@ -1875,14 +1898,12 @@ source = { editable = "packages/genkit-ollama" }
 dependencies = [
     { name = "genkit" },
     { name = "ollama" },
-    { name = "structlog" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "ollama", specifier = ">=0.5.3,<1.0" },
-    { name = "structlog", specifier = ">=25.2.0" },
 ]
 
 [[package]]
@@ -1958,6 +1979,7 @@ dependencies = [
     { name = "genkit-flask" },
     { name = "genkit-google-cloud" },
     { name = "genkit-google-genai" },
+    { name = "genkit-mcp" },
     { name = "genkit-middleware" },
     { name = "genkit-ollama" },
     { name = "genkit-openai" },
@@ -1972,7 +1994,6 @@ dev = [
     { name = "ipython", version = "8.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jupyter" },
-    { name = "mcp" },
     { name = "nox" },
     { name = "nox-uv" },
     { name = "pip" },
@@ -2027,6 +2048,7 @@ requires-dist = [
     { name = "genkit-flask", editable = "packages/genkit-flask" },
     { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
     { name = "genkit-openai", editable = "packages/genkit-openai" },
@@ -2041,7 +2063,6 @@ dev = [
     { name = "ipython", marker = "python_full_version < '3.11'", specifier = "~=8.22" },
     { name = "ipython", marker = "python_full_version >= '3.11'", specifier = "~=9.0.2" },
     { name = "jupyter", specifier = ">=1.1.1" },
-    { name = "mcp", specifier = ">=1.25.0" },
     { name = "nox", specifier = ">=2025.2.9" },
     { name = "nox-uv", specifier = ">=0.2.2" },
     { name = "pip", specifier = ">=25.0.1" },
@@ -3612,6 +3633,25 @@ wheels = [
 ]
 
 [[package]]
+name = "mcp-hello"
+version = "0.2.0"
+source = { editable = "samples/mcp-hello" }
+dependencies = [
+    { name = "genkit" },
+    { name = "genkit-google-genai" },
+    { name = "genkit-mcp" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "genkit", editable = "packages/genkit" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
+    { name = "genkit-mcp", editable = "packages/genkit-mcp" },
+    { name = "mcp", specifier = ">=1.26.0,<2" },
+]
+
+[[package]]
 name = "mdurl"
 version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -3634,7 +3674,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
-    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -3654,7 +3694,7 @@ requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "structlog", specifier = ">=25.2.0" },
 ]
 
@@ -3958,7 +3998,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
-    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "structlog", specifier = ">=24.0.0" },
 ]
 
@@ -4369,7 +4409,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-ollama", editable = "packages/genkit-ollama" },
-    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -5036,7 +5076,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
@@ -6519,7 +6559,7 @@ dependencies = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
-    { name = "pydantic", specifier = ">=2.10.5" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]

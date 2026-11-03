@@ -63,7 +63,7 @@ async def guarded_fn(sess: SessionRunner, ctx: AgentContext) -> AgentResult:
         history = await sess.get_messages()
         messages = history or None
         stream_resp = ai.generate_stream(
-            model=GoogleAI.gemini_model('gemini-flash-latest'),
+            model=GoogleAI.gemini('gemini-flash-latest'),
             system='Answer in one short sentence.',
             messages=messages,
         )

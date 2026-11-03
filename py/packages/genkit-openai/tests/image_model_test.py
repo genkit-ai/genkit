@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,7 +30,7 @@ from genkit_openai._models._image import (
     _to_generate_response,
     _to_image_generate_params,
 )
-from genkit_openai._openai_plugin import _ModelType, _multimodal_action_metadata
+from genkit_openai._openai_plugin import _ModelType
 
 from genkit import Genkit, GenkitError, Message, Part, Role
 from genkit.model import ModelRequest
@@ -261,9 +261,12 @@ class TestSupportedImageModels:
 
     def test_gpt_image_1_exposes_config_schema(self) -> None:
         """Verify GPT Image 1 advertises the constraints of its registered config class."""
-        metadata = _multimodal_action_metadata('gpt-image-1', SUPPORTED_IMAGE_MODELS, _ModelType.IMAGE).metadata
-        assert metadata is not None
-        schema = metadata['model']['customOptions']
+        plugin = OpenAI(api_key='test-key')
+        action = plugin._create_multimodal_action(
+            'gpt-image-1', OpenAIImageModel, SUPPORTED_IMAGE_MODELS, _ModelType.IMAGE
+        )
+        model_meta = cast(dict[str, Any], action.metadata['model'])
+        schema = model_meta['customOptions']
         properties = schema['properties']
 
         def _enum(name: str) -> list[str]:

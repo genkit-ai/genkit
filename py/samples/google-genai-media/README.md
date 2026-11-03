@@ -2,7 +2,7 @@
 
 Same `generate()` for speech and images. Video is
 `generate_operation` plus `check_operation`. Speech and image use
-Google AI Studio; video uses Vertex (`VertexAI.veo_model`).
+Google AI Studio; video uses Vertex (`VertexAI.veo`).
 
 ```bash
 export GEMINI_API_KEY=your-api-key

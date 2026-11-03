@@ -25,7 +25,7 @@ Requires GEMINI_API_KEY.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware
@@ -37,8 +37,8 @@ from genkit.exp.agent import AgentResponse
 # The capable default; a couple of agents also reach for the lite model below
 # for cheap sub-steps (decomposition, safety checks) so the main model isn't
 # paying for busywork.
-DEFAULT_MODEL = GoogleAI.gemini_model('gemini-flash-latest')
-LITE_MODEL = GoogleAI.gemini_model('gemini-flash-lite-latest')
+DEFAULT_MODEL = GoogleAI.gemini('gemini-flash-latest')
+LITE_MODEL = GoogleAI.gemini('gemini-flash-lite-latest')
 
 # The Middleware plugin lists `ToolApproval`, `Filesystem` and the rest in the
 # Dev UI; the agents pass their middleware instances directly in `use=[...]`.
@@ -53,7 +53,5 @@ def reply_text(res: AgentResponse[Any]) -> str:
     instead and let the caller (the Dev UI, or the orchestrator's model) see it.
     """
     if res.error:
-        # The wire status is a plain str; GenkitError takes the status literal.
-        status = cast(Any, res.error.status)
-        raise GenkitError(status=status, message=res.error.message, details=res.error.details)
+        raise GenkitError(status=res.error.status, message=res.error.message, details=res.error.details)
     return res.text
