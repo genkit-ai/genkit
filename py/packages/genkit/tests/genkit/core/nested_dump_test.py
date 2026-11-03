@@ -146,7 +146,7 @@ def test_model_config_dump_by_alias_false_keeps_field_names_and_nulls() -> None:
 
 @pytest.mark.asyncio
 async def test_model_config_temperature_none_still_clears_ref_default() -> None:
-    """config=ModelConfig(temperature=None) over a ref with a temperature sends no temperature."""
+    """config=ModelConfig(temperature=None) over a ref with a temperature clears the ref's temperature to None."""
     ai = Genkit()
     echo: EchoModel
     echo, _ = define_echo_model(ai, name='testEcho')
@@ -157,7 +157,7 @@ async def test_model_config_temperature_none_still_clears_ref_default() -> None:
     assert echo.last_request is not None
     sent = echo.last_request.config
     sent_dict = sent.model_dump() if isinstance(sent, BaseModel) else dict(sent or {})
-    assert 'temperature' not in sent_dict
+    assert sent_dict.get('temperature') is None
     assert sent_dict.get('topK', sent_dict.get('top_k')) == 3
 
 

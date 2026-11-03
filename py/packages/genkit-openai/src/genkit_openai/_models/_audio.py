@@ -193,7 +193,8 @@ def _to_tts_params(
     params: dict[str, Any] = {
         'model': model_name,
         'input': text,
-        'voice': config.pop('voice', 'alloy'),
+        # A voice set to None means the plugin default, not an omitted voice.
+        'voice': config.pop('voice', None) or 'alloy',
     }
 
     # Optional TTS-specific params.
