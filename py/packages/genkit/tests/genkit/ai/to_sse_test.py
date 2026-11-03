@@ -18,7 +18,7 @@ import pytest
 from pydantic import BaseModel
 
 import genkit.web._sse as _sse_mod
-from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError
+from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError, ToolContext
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._ai._generate import box_dead_turn, box_from_exc
 from genkit._core._error import BoxedFailure, Failure, GenkitError
@@ -177,6 +177,56 @@ async def test_generate_stream_to_sse_surfaces_tool_public_error_and_warns(
     assert [(r.name, r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
         ('genkit.web', 'WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
+
+
+class Prep(BaseModel):
+    """Kitchen progress a tool streams while it runs."""
+
+    stage: str
+    percent: int
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_frames_partial_tool_response_chunks() -> None:
+    """ToolContext.send_chunk progress goes out as a tool-role message frame marked partial, before the final one."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def plate_order(order_id: str, ctx: ToolContext[Prep]) -> str:
+        """Plate an order, streaming kitchen progress."""
+        ctx.send_chunk(Prep(stage='searing', percent=40))
+        return f'{order_id} plated'
+
+    define_scripted_model(
+        ai,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(
+                    role=Role.MODEL,
+                    content=[Part(tool_request=ToolRequest(name='plate_order', ref='call-1', input='T-7'))],
+                ),
+            ),
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Served.')]),
+            ),
+        ],
+    )
+
+    lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Plate T-7.', tools=['plate_order'])))
+    # The partial frame carries the tool's chunk as output, tagged partial; the
+    # final tool response follows untagged; the result frame closes the stream.
+    assert lines[:2] == [
+        'data: {"message":{"role":"tool","index":0.0,"content":[{"toolResponse":{"ref":"call-1",'
+        '"name":"plate_order","output":{"stage":"searing","percent":40}},"metadata":{"partial":true}}]}}\n\n',
+        'data: {"message":{"role":"tool","index":0.0,"content":[{"toolResponse":{"ref":"call-1",'
+        '"name":"plate_order","output":"T-7 plated"}}]}}\n\n',
+    ]
+    assert len(lines) == 3
+    result = json.loads(lines[2].removeprefix('data: '))['result']
+    assert result['message'] == {'role': 'model', 'content': [{'text': 'Served.'}]}
+    assert result['finishReason'] == 'stop'
 
 
 @pytest.mark.asyncio
