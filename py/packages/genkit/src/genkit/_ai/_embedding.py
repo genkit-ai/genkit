@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 from typing_extensions import Never, TypeVar
 
-from genkit._core._action import Action, ActionKind, get_func_description, with_request_annotation
+from genkit._core._action import Action, ActionKind, FlowContext, get_func_description, with_request_annotation
 from genkit._core._model import EmbedRequest, check_ref_config, check_ref_info
 from genkit._core._registry import Registry
 from genkit._core._schema import custom_options_schema, fixed_json_schema
@@ -83,7 +83,10 @@ class EmbedderRef(Generic[EmbedderRefConfigT]):
         object.__setattr__(self, 'info', check_ref_info(name=self.name, info=self.info, info_type=EmbedderInfo))
 
 
-EmbedderFn = Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
+EmbedderFn = (
+    Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
+    | Callable[[EmbedRequest[Any], FlowContext[Any]], Awaitable[EmbedResponse]]
+)
 
 
 class Embedder(Action[EmbedRequest, EmbedResponse, Never]):
