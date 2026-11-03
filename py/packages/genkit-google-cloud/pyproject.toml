@@ -44,8 +44,8 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit",
-  "genkit-otel",
+  "genkit>=0.12.0,<2",
+  "genkit-otel>=0.12.0,<2",
   "google-cloud-firestore>=2.14.0",
   "google-cloud-logging>=3.10.0",
   "opentelemetry-api>=1.20.0",
