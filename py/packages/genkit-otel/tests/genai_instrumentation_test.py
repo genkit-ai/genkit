@@ -15,8 +15,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
-import subprocess  # noqa: S404
-import sys
 from collections.abc import Mapping
 from typing import get_args
 
@@ -869,73 +867,11 @@ async def test_every_attribute_holding_content_is_in_content_attributes(harness)
     assert holding == GenAiInstrumentation.CONTENT_ATTRIBUTES
 
 
-def test_import_and_default_runs_succeed_when_private_otel_logs_is_blocked() -> None:
-    """Importing genkit_otel and running NO_CONTENT / SPAN_ONLY spans never imports opentelemetry._logs."""
-    script = (
-        'import asyncio, sys\n'
-        "sys.modules['opentelemetry._logs'] = None\n"
-        'from opentelemetry import trace\n'
-        'from opentelemetry.sdk.trace import TracerProvider\n'
-        'trace.set_tracer_provider(TracerProvider())\n'
-        'from genkit_otel import GenAiInstrumentation\n'
-        'from genkit import FinishReason, Message, ModelResponse, Part, Role\n'
-        'from genkit.model import ModelRequest\n'
-        'from genkit.telemetry import SpanMetadata\n'
-        'async def main() -> None:\n'
-        "    req = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('menu')])])\n"
-        '    res = ModelResponse(\n'
-        '        finish_reason=FinishReason.STOP,\n'
-        "        message=Message(role=Role.MODEL, content=[Part.from_text('soup')]),\n"
-        '    )\n'
-        "    for mode in (None, 'SPAN_ONLY'):\n"
-        '        instr = GenAiInstrumentation(content_capturing_mode=mode, emit_tool_spans=True)\n'
-        '        async def call_model(_s=None):\n'
-        '            return res\n'
-        '        async def call_tool(_s=None):\n'
-        "            return 'available'\n"
-        '        await instr.run_in_new_span(\n'
-        "            SpanMetadata(name='googleai/gemini-flash-latest', action_type='model', input=req),\n"
-        '            call_model,\n'
-        '        )\n'
-        '        await instr.run_in_new_span(\n'
-        "            SpanMetadata(name='check_stock', action_type='tool', input={'dish': 'soup'}),\n"
-        '            call_tool,\n'
-        '        )\n'
-        'asyncio.run(main())\n'
-        "assert sys.modules['opentelemetry._logs'] is None\n"
-        "print('ok')\n"
-    )
-    result = subprocess.run([sys.executable, '-c', script], capture_output=True, text=True, check=False)  # noqa: S603
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == 'ok'
-
-
-@pytest.mark.asyncio
-async def test_no_content_in_process_does_not_import_private_otel_logs(
-    harness,
+def test_otel_logger_resolves_once_with_scope_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default NO_CONTENT mode without injected otel_logger never touches opentelemetry._logs."""
-    monkeypatch.setitem(sys.modules, 'opentelemetry._logs', None)
-    instr = GenAiInstrumentation(
-        tracer=harness.tracer_provider.get_tracer('test'),
-        meter=harness.meter_provider.get_meter('test'),
-        emit_tool_spans=True,
-    )
-    await _run_model(
-        instr,
-        'googleai/gemini-flash-latest',
-        _model_request(messages=[Message(role=Role.USER, content=[Part.from_text('table 4')])]),
-        lambda span=None: _awaitable(_model_response()),
-    )
-    assert harness.span_named('chat gemini-flash-latest') is not None
-
-
-def test_otel_logger_resolves_from_opentelemetry_logs_once_with_scope_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Without an injected logger, _otel_logger calls opentelemetry._logs.get_logger(scope_name) once and caches it."""
-    import opentelemetry._logs as otel_logs
+    """Without an injected logger, _otel_logger calls OTel's get_logger(scope_name) once and caches it."""
+    from genkit_otel import _genai_instrumentation
 
     requested_scopes: list[str] = []
 
@@ -949,7 +885,7 @@ def test_otel_logger_resolves_from_opentelemetry_logs_once_with_scope_name(
         requested_scopes.append(scope_name)
         return recorded_logger
 
-    monkeypatch.setattr(otel_logs, 'get_logger', fake_get_logger)
+    monkeypatch.setattr(_genai_instrumentation, 'get_otel_logger', fake_get_logger)
 
     instr = GenAiInstrumentation(content_capturing_mode='EVENT_ONLY', scope_name='dining-genai')
     assert instr._otel_logger is recorded_logger

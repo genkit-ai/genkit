@@ -23,6 +23,7 @@ from collections.abc import Mapping
 from typing import ClassVar, Protocol, TypeVar
 
 from opentelemetry import metrics as metrics_api, trace as trace_api
+from opentelemetry._logs import get_logger as get_otel_logger
 from opentelemetry.metrics import Meter
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.util.types import AttributeValue
@@ -77,16 +78,6 @@ class OtelEventLogger(Protocol):
     ) -> None:
         """Emit a named event with span-scoped attributes."""
         ...
-
-
-def _get_otel_logger(scope_name: str) -> OtelEventLogger:
-    """Return the global OTel Logs-signal logger, the counterpart of ``trace.get_tracer``.
-
-    Imported on first use so span-only modes never load ``opentelemetry._logs``.
-    """
-    from opentelemetry._logs import get_logger
-
-    return get_logger(scope_name)
 
 
 class GenAiInstrumentation(Instrumentation):
@@ -173,7 +164,7 @@ class GenAiInstrumentation(Instrumentation):
         if self._injected_logger is not None:
             return self._injected_logger
         if self._cached_logger is None:
-            self._cached_logger = _get_otel_logger(self.scope_name)
+            self._cached_logger = get_otel_logger(self.scope_name)
         return self._cached_logger
 
     async def run_in_new_span(
