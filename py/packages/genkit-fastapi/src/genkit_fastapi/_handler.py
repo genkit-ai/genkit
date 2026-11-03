@@ -31,7 +31,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
-from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
+from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, to_sse, wants_stream
 
 logger = logging.getLogger(__name__)
 
@@ -85,18 +85,6 @@ def _log_failure(*, error: Exception, where: str) -> None:
         logger.exception('served flow %s failed', where)
     else:
         logger.warning('served flow %s failed: %s', where, error)
-
-
-def format_stream_chunk(chunk: object) -> str:
-    """Format a stream chunk for SSE."""
-    msg_json = json.dumps({'message': to_dict(chunk)}, separators=JSON_SEPARATORS)
-    return f'data: {msg_json}\n\n'
-
-
-def format_stream_result(result: object) -> str:
-    """Format the final stream result for SSE."""
-    res_json = json.dumps({'result': to_dict(result)}, separators=JSON_SEPARATORS)
-    return f'data: {res_json}\n\n'
 
 
 def format_stream_error(error: Exception) -> str:
@@ -178,14 +166,13 @@ async def _handle_action_request(
 
         async def event_stream() -> AsyncIterator[str]:
             try:
-                stream_response = action_obj.stream(input=action_input, context=context, init=resolved_init)
-                async for chunk in stream_response.stream:
-                    yield format_stream_chunk(chunk)
-                result = await stream_response.response
-                yield format_stream_result(result)
+                stream_handle = action_obj.stream(input=action_input, context=context, init=resolved_init)
             except Exception as e:
                 _log_failure(error=e, where='stream')
                 yield format_stream_error(e)
+                return
+            async for line in to_sse(stream_handle):
+                yield line
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
 

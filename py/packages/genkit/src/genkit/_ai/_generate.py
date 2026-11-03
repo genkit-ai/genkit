@@ -69,7 +69,15 @@ from genkit._core._action import (
 )
 from genkit._core._background import missing_operation_error, stamp_operation_action
 from genkit._core._compat import await_unchained
-from genkit._core._error import ErrorReason, Failure, GenkitError, PublicError, _StreamingCallbackError, attached_cause
+from genkit._core._error import (
+    BoxedFailure,
+    ErrorReason,
+    Failure,
+    GenkitError,
+    PublicError,
+    _StreamingCallbackError,
+    attached_cause,
+)
 from genkit._core._logger import get_logger, is_debug_enabled
 from genkit._core._middleware import (
     GenerateHookParams,
@@ -1029,6 +1037,7 @@ def as_model_response(*, raw: object, name: str) -> ModelResponse:
     )
     walked._message_parser = raw._message_parser
     walked._schema_type = raw._schema_type
+    walked._failure = raw._failure
     return walked
 
 
@@ -1176,6 +1185,7 @@ def box_dead_turn(
     out.finish_message = finish_message
     out.error = error
     out.message = None
+    out._failure = None
     if out.operation is not None and out.operation.error is None:
         # The ticket already started. The failure why lives on the
         # handle so check/cancel is not a clean start.
@@ -1264,7 +1274,7 @@ def box_from_exc(
         details['reason'] = reason.value
     # Failure.details is a JSON object (Go's map[string]any); drop an empty one.
     failure_details = dict(cast(Mapping[str, Any], details)) if isinstance(details, Mapping) and details else None
-    return box_dead_turn(
+    out = box_dead_turn(
         response=response,
         messages=messages,
         finish_reason=FinishReason.ABORTED if caller_stopped else FinishReason.FAILED,
@@ -1272,6 +1282,9 @@ def box_from_exc(
         error=Failure(status=status, message=finish_message, details=failure_details),
         request=request,
     )
+    if not caller_stopped:
+        out._failure = BoxedFailure.from_exc(exc)
+    return out
 
 
 def box_if_hook_dropped_ticket(

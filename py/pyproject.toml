@@ -273,6 +273,7 @@ select = [
 "packages/genkit-django/src/genkit_django/_handler.py" = ["TID251"]
 "packages/genkit-fastapi/src/genkit_fastapi/_handler.py" = ["TID251"]
 "packages/genkit-flask/src/genkit_flask/_handler.py" = ["TID251"]
+"packages/genkit/src/genkit/web/_sse.py" = ["TID251"]
 
 
 [tool.ruff.lint.isort]
