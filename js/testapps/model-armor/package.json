@@ -15,7 +15,7 @@
   },
   "devDependencies": {
     "genkit-cli": "link:../../../genkit-tools/cli",
-    "tsx": "^4.7.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }
