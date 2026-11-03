@@ -18,12 +18,9 @@
   "dependencies": {
     "@genkit-ai/evaluator": "workspace:*",
     "@genkit-ai/firebase": "workspace:*",
-    "@genkit-ai/google-cloud": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/middleware": "workspace:*",
-    "@google/generative-ai": "^0.15.0",
-    "@opentelemetry/sdk-trace-base": "~1.25.0",
-    "express": "^4.21.1",
+    "@google/genai": "^1.30.0",
     "firebase-admin": "^13.8.0",
     "genkit": "workspace:*",
     "partial-json": "^0.1.7",
