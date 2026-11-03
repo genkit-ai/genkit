@@ -16,11 +16,10 @@
 
 """Instrumentation that emits OpenTelemetry GenAI spans and metrics."""
 
-import importlib
 import json
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from typing import ClassVar, Protocol, TypeVar
 
 from opentelemetry import metrics as metrics_api, trace as trace_api
@@ -63,7 +62,12 @@ T = TypeVar('T')
 
 
 class OtelEventLogger(Protocol):
-    """Structural contract for emitting OpenTelemetry GenAI operation events."""
+    """The one call ``GenAiInstrumentation`` makes on an OTel Logs-signal logger.
+
+    This is OpenTelemetry's ``Logger`` (a sibling of ``Tracer`` and ``Meter``
+    that exports OTLP log records), not ``genkit.get_logger``. It keeps the
+    private ``opentelemetry._logs.Logger`` type out of the public signature.
+    """
 
     def emit(
         self,
@@ -76,12 +80,11 @@ class OtelEventLogger(Protocol):
 
 
 def _get_otel_logger(scope_name: str) -> OtelEventLogger:
-    """Resolve an OTel event logger, preferring ``opentelemetry.logs`` over ``opentelemetry._logs``."""
-    try:
-        logs_api = importlib.import_module('opentelemetry.logs')
-        get_logger: Callable[[str], OtelEventLogger] = logs_api.get_logger
-    except (ImportError, AttributeError):
-        from opentelemetry._logs import get_logger
+    """Return the global OTel Logs-signal logger, the counterpart of ``trace.get_tracer``.
+
+    Imported on first use so span-only modes never load ``opentelemetry._logs``.
+    """
+    from opentelemetry._logs import get_logger
 
     return get_logger(scope_name)
 
