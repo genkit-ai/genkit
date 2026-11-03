@@ -1,17 +1,17 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Genkit logging. ``get_logger`` is public via ``genkit.plugin_api``; the rest is internal."""
+"""Genkit logging. ``get_logger`` is public via ``genkit``; the rest is internal."""
 
 from __future__ import annotations
 
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Protocol, cast
 
 import structlog
-from structlog.typing import BindableLogger, FilteringBoundLogger
+from structlog.typing import BindableLogger
 
 from genkit._core._environment import is_dev_environment
 from genkit._core._telemetry._log_exporter import enable_log_export
@@ -237,11 +237,41 @@ def _interpolate_event(event: str, args: tuple[object, ...]) -> str:
         return event
 
 
-def get_logger(name: str | None = None) -> FilteringBoundLogger:
-    """Return a structlog logger whose lines also reach the Dev UI trace panel.
+class GenkitLogger(Protocol):
+    """The calls ``get_logger`` promises. Nothing here names the logging backend.
 
-    Same calls and kwargs as ``structlog.get_logger``. Under ``genkit start``,
-    each line is also exported to the Dev UI with the active trace and span IDs.
+    Each method takes an event string, optional printf-style ``args``, and
+    keyword ``fields`` that are recorded as structured attributes.
+    """
+
+    def debug(self, event: str, *args: object, **fields: object) -> None:
+        """Log at DEBUG."""
+        ...
+
+    def info(self, event: str, *args: object, **fields: object) -> None:
+        """Log at INFO."""
+        ...
+
+    def warning(self, event: str, *args: object, **fields: object) -> None:
+        """Log at WARNING."""
+        ...
+
+    def error(self, event: str, *args: object, **fields: object) -> None:
+        """Log at ERROR."""
+        ...
+
+    def exception(self, event: str, *args: object, **fields: object) -> None:
+        """Log at ERROR with the active exception's traceback."""
+        ...
+
+
+def get_logger(name: str | None = None) -> GenkitLogger:
+    """Return a logger whose lines also reach the Dev UI trace panel.
+
+    The logger has ``debug``, ``info``, ``warning``, ``error`` and
+    ``exception``. Each takes an event string and keyword fields. Under
+    ``genkit start``, each line is also exported to the Dev UI with the active
+    trace and span IDs.
 
     Example:
         ```python
@@ -265,10 +295,10 @@ def get_logger(name: str | None = None) -> FilteringBoundLogger:
             return 12
         ```
     """
-    return cast(FilteringBoundLogger, ExportTee(structlog.get_logger(name)))
+    return cast(GenkitLogger, ExportTee(structlog.get_logger(name)))
 
 
-def is_debug_enabled(logger: FilteringBoundLogger) -> bool:
+def is_debug_enabled(logger: GenkitLogger) -> bool:
     """Report whether ``logger`` emits DEBUG events.
 
     Args:
