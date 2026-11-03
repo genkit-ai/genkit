@@ -186,12 +186,12 @@ def run_loop(coro: Coroutine[object, object, T], *, debug: bool | None = None) -
     """Run a coroutine using uvloop if available, otherwise asyncio."""
     try:
         import uvloop  # noqa: PLC0415
-
-        logger.debug('Using uvloop (recommended)')
-        return uvloop.run(coro, debug=debug)
     except ImportError as e:
         logger.debug('Using asyncio (install uvloop for better performance)', error=e)
         return asyncio.run(coro, debug=debug)
+
+    logger.debug('Using uvloop (recommended)')
+    return uvloop.run(coro, debug=debug)
 
 
 class CloseableQueue(asyncio.Queue[T]):
