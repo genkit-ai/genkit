@@ -260,6 +260,7 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     ) -> None:
         self._stream = stream
         self._response = response
+        self._action_name: str | None = None
 
     @property
     def stream(self) -> AsyncIterator[ChunkT_co]:
@@ -1261,7 +1262,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             )
 
         channel, task = start_stream(run)
-        return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
+        stream_response = StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
+        stream_response._action_name = self.name
+        return stream_response
 
     def _initialize_io_schemas(
         self,

@@ -18,7 +18,17 @@ import pytest
 from pydantic import BaseModel
 
 import genkit.web._sse as _sse_mod
-from genkit import FlowContext, Genkit, Interrupt, Message, ModelResponse, Part, PublicError, ToolContext
+from genkit import (
+    FlowContext,
+    Genkit,
+    Interrupt,
+    Message,
+    ModelResponse,
+    Part,
+    PublicError,
+    StreamResponse,
+    ToolContext,
+)
 from genkit._ai._agents._client import AgentChunk, AgentResponse, AgentTurn
 from genkit._ai._generate import box_dead_turn, box_from_exc
 from genkit._core._error import BoxedFailure, Failure, GenkitError
@@ -54,6 +64,26 @@ async def _lines(stream: AsyncIterator[str]) -> list[str]:
     return [line async for line in stream]
 
 
+class _RawStreamHandle:
+    """Custom StreamHandle raising an arbitrary BaseException from ``.stream``."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self._exc = exc
+
+    @property
+    def stream(self) -> AsyncIterator[object]:
+        async def _gen() -> AsyncIterator[object]:
+            if False:
+                yield None
+            raise self._exc
+
+        return _gen()
+
+    @property
+    async def response(self) -> object:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_flow_to_sse_keeps_user_model_raw_field() -> None:
     """A user model with a `raw` field serializes whole, in chunks and in the result."""
@@ -86,19 +116,39 @@ async def test_flow_to_sse_encodes_lists_of_models_and_datetimes() -> None:
 
 @pytest.mark.asyncio
 async def test_flow_to_sse_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """The error frame is logged like the adapters log it: 4xx as a warning, without a traceback."""
+    """Named flow streams log the flow name on 4xx and 5xx; unnamed handles omit it without 'None'."""
     ai = Genkit()
 
     @ai.flow()
     async def track_order(order_id: str) -> str:
         raise PublicError('NOT_FOUND', f'order {order_id} missing')
 
-    with caplog.at_level(logging.WARNING):
-        lines = await _lines(to_sse(track_order.stream('A-1042')))
+    @ai.flow()
+    async def charge_card(_order_id: str) -> str:
+        raise RuntimeError('gateway timeout')
 
-    assert lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
-    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
-        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing'),
+    unnamed_custom = _RawStreamHandle(PublicError('NOT_FOUND', 'order A-1042 missing'))
+    raw_for_sr = _RawStreamHandle(PublicError('NOT_FOUND', 'order A-1042 missing'))
+    settled_response: asyncio.Future[object] = asyncio.get_running_loop().create_future()
+    settled_response.set_result(None)
+    unnamed_sr = StreamResponse(stream=raw_for_sr.stream, response=settled_response)
+    assert unnamed_sr._action_name is None
+
+    with caplog.at_level(logging.WARNING):
+        not_found_lines = await _lines(to_sse(track_order.stream('A-1042')))
+        internal_lines = await _lines(to_sse(charge_card.stream('A-1042')))
+        custom_lines = await _lines(to_sse(unnamed_custom))
+        sr_lines = await _lines(to_sse(unnamed_sr))
+
+    assert not_found_lines == ['data: {"error":{"message":"order A-1042 missing","status":"NOT_FOUND"}}\n\n']
+    assert internal_lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
+    assert custom_lines == not_found_lines
+    assert sr_lines == not_found_lines
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('WARNING', "served flow 'track_order' stream failed: NOT_FOUND: order A-1042 missing", False),
+        ('ERROR', "served flow 'charge_card' stream failed", True),
+        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
+        ('WARNING', 'served flow stream failed: NOT_FOUND: order A-1042 missing', False),
     ]
 
 
@@ -404,26 +454,6 @@ async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains(
     )
     assert first == 'data: {"message":{"modelChunk":{"role":"model","content":[{"text":"Hi"}]}}}\n\n'
     assert lines == ['data: {"error":{"message":"agent offline","status":"UNAVAILABLE"}}\n\n']
-
-
-class _RawStreamHandle:
-    """Custom StreamHandle raising an arbitrary BaseException from ``.stream``."""
-
-    def __init__(self, exc: BaseException) -> None:
-        self._exc = exc
-
-    @property
-    def stream(self) -> AsyncIterator[object]:
-        async def _gen() -> AsyncIterator[object]:
-            if False:
-                yield None
-            raise self._exc
-
-        return _gen()
-
-    @property
-    async def response(self) -> object:
-        return None
 
 
 @pytest.mark.asyncio

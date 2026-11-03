@@ -79,12 +79,12 @@ async def _read_json_request_body(*, request: Request) -> object:
         raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
-def _log_failure(*, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
+def _log_failure(*, error: Exception, flow: str, where: str) -> None:
+    """Log a served-flow failure, naming the flow; 5xx includes the traceback."""
     if error_status(error) >= 500:
-        logger.exception('served flow %s failed', where)
+        logger.exception('served flow %r %s failed', flow, where)
     else:
-        logger.warning('served flow %s failed: %s', where, error)
+        logger.warning('served flow %r %s failed: %s', flow, where, error)
 
 
 def format_stream_error(error: Exception) -> str:
@@ -143,7 +143,7 @@ async def _handle_action_request(
     try:
         body = await _read_json_request_body(request=request)
     except PublicError as err:
-        _log_failure(error=err, where='run')
+        _log_failure(error=err, flow=action.name, where='run')
         return json_error_response(err)
     try:
         if extract_input is not None and isinstance(body, dict):
@@ -168,7 +168,7 @@ async def _handle_action_request(
             try:
                 stream_handle = action_obj.stream(input=action_input, context=context, init=resolved_init)
             except Exception as e:
-                _log_failure(error=e, where='stream')
+                _log_failure(error=e, flow=action_obj.name, where='stream')
                 yield format_stream_error(e)
                 return
             async for line in to_sse(stream_handle):
@@ -182,7 +182,7 @@ async def _handle_action_request(
             return Response(status_code=empty_status)
         return {'result': to_dict(response.response)}
     except Exception as e:
-        _log_failure(error=e, where='run')
+        _log_failure(error=e, flow=action_obj.name, where='run')
         return json_error_response(e)
 
 
@@ -249,7 +249,8 @@ def genkit_fastapi_handler(
                 # The wrapper's own HTTP response (e.g. 503 while the action isn't ready).
                 raise
             except Exception as e:
-                _log_failure(error=e, where='handler')
+                flow_name = fn.name if isinstance(fn, Action) else getattr(fn, '__name__', '<unknown>')
+                _log_failure(error=e, flow=flow_name, where='handler')
                 return json_error_response(e)
 
             # This decorator reads context from the request itself. Routes that
@@ -271,7 +272,7 @@ def genkit_fastapi_handler(
                     # handles it so a 401 from context_provider stays a 401.
                     raise
                 except Exception as e:
-                    _log_failure(error=e, where='context provider')
+                    _log_failure(error=e, flow=action.name, where='context provider')
                     return json_error_response(e)
 
             return await handle_genkit_request(

@@ -137,7 +137,13 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
             e = exc
         else:
             raise
-        if error_status(e) >= 500:
+        action_name = getattr(handle, '_action_name', None)
+        if isinstance(action_name, str) and action_name:
+            if error_status(e) >= 500:
+                _logger.exception('served flow %r stream failed', action_name)
+            else:
+                _logger.warning('served flow %r stream failed: %s', action_name, e)
+        elif error_status(e) >= 500:
             _logger.exception('served flow stream failed')
         else:
             _logger.warning('served flow stream failed: %s', e)

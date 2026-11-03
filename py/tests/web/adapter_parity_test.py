@@ -146,13 +146,13 @@ CASES = [
     pytest.param(
         _missing_order,
         {},
-        Served(404, NOT_FOUND, (('WARNING', 'served flow run failed: NOT_FOUND: no order 99', False),)),
+        Served(404, NOT_FOUND, (('WARNING', "served flow 'order' run failed: NOT_FOUND: no order 99", False),)),
         id='public-error',
     ),
     pytest.param(
         _card_declined,
         {},
-        Served(500, INTERNAL, (('ERROR', 'served flow run failed', True),)),
+        Served(500, INTERNAL, (('ERROR', "served flow 'order' run failed", True),)),
         id='internal-error',
     ),
     pytest.param(
@@ -161,7 +161,7 @@ CASES = [
         Served(
             200,
             b'data: {"message":{"course":"starter"}}\n\n' + b'data: {"error":' + NOT_FOUND + b'}\n\n',
-            (('WARNING', 'served flow stream failed: NOT_FOUND: no order 99', False),),
+            (('WARNING', "served flow 'order' stream failed: NOT_FOUND: no order 99", False),),
         ),
         id='stream-public-error',
     ),
@@ -171,7 +171,7 @@ CASES = [
         Served(
             200,
             b'data: {"message":{"course":"starter"}}\n\n' + b'data: {"error":' + INTERNAL + b'}\n\n',
-            (('ERROR', 'served flow stream failed', True),),
+            (('ERROR', "served flow 'order' stream failed", True),),
         ),
         id='stream-internal-error',
     ),
