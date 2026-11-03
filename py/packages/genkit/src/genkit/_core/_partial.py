@@ -32,10 +32,11 @@ from contextlib import suppress
 from enum import Enum
 from functools import lru_cache
 from types import UnionType
-from typing import Annotated, Any, ForwardRef, Literal, TypeGuard, Union, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, ForwardRef, Literal, TypeGuard, Union, cast, get_args, get_origin, get_type_hints
 
-from pydantic import AliasChoices, BaseModel, RootModel, TypeAdapter
+from pydantic import AliasChoices, BaseModel, Discriminator, RootModel, TypeAdapter
 from pydantic.fields import FieldInfo
+from pydantic_core import SchemaValidator, core_schema
 
 SEQUENCE_ORIGINS = (list, tuple, Sequence, MutableSequence)
 MAPPING_ORIGINS = (dict, Mapping, MutableMapping)
@@ -61,18 +62,33 @@ def unwrap_annotated(*, annotation: Any) -> Any:  # noqa: ANN401
     return annotation
 
 
-def extract_discriminator(*, annotation: Any, info: FieldInfo | None = None) -> str | None:  # noqa: ANN401
-    if info is not None and isinstance(info.discriminator, str):
-        return info.discriminator
+def _unwrap_discriminator(value: object) -> str | object | None:
+    if isinstance(value, Discriminator):
+        return value.discriminator
+    return value
+
+
+def extract_discriminator(*, annotation: Any, info: FieldInfo | None = None) -> str | object | None:  # noqa: ANN401
+    if info is not None:
+        if info.discriminator is not None:
+            return _unwrap_discriminator(info.discriminator)
+        for meta in info.metadata:
+            disc = (
+                _unwrap_discriminator(meta) if isinstance(meta, Discriminator) else getattr(meta, 'discriminator', None)
+            )
+            if disc is not None:
+                return _unwrap_discriminator(disc)
     cur = annotation
     while get_origin(cur) is Annotated:
         args = get_args(cur)
         if not args:
             break
         for meta in args[1:]:
-            disc = getattr(meta, 'discriminator', None)
-            if isinstance(disc, str):
-                return disc
+            disc = (
+                _unwrap_discriminator(meta) if isinstance(meta, Discriminator) else getattr(meta, 'discriminator', None)
+            )
+            if disc is not None:
+                return _unwrap_discriminator(disc)
         cur = args[0]
     if get_origin(cur) in UNION_ORIGINS:
         for arg in get_args(cur):
@@ -264,27 +280,87 @@ def validate_closed_value(*, annotation: Any, raw: Any, schema_type: type[BaseMo
         return None, False
 
 
+@lru_cache(maxsize=512)
+def _cached_field_validator(schema_type: type[BaseModel], name: str) -> SchemaValidator | None:
+    """Compile a single-field validator preserving field constraints/validators without model validators."""
+    if not getattr(schema_type, '__pydantic_complete__', False):
+        schema_type.model_rebuild(raise_errors=False)
+    cs: Any = getattr(schema_type, '__pydantic_core_schema__', None)
+    if not isinstance(cs, Mapping):
+        return None
+    defs: list[Any] | None = None
+    cur: Any = cs
+    if cur.get('type') == 'definitions':
+        raw_defs = cur.get('definitions')
+        defs = list(raw_defs) if isinstance(raw_defs, Sequence) else None
+        cur = cur.get('schema')
+    if isinstance(cur, Mapping) and cur.get('type') == 'definition-ref' and defs is not None:
+        ref = cur.get('schema_ref')
+        cur = next((d for d in defs if isinstance(d, Mapping) and d.get('ref') == ref), None)
+    while isinstance(cur, Mapping) and cur.get('type') in (
+        'function-before',
+        'function-after',
+        'function-wrap',
+        'default',
+        'nullable',
+    ):
+        cur = cur.get('schema')
+    if not isinstance(cur, Mapping) or cur.get('type') != 'model':
+        return None
+    inner: Any = cur.get('schema')
+    while isinstance(inner, Mapping) and inner.get('type') in (
+        'function-before',
+        'function-after',
+        'function-wrap',
+    ):
+        inner = inner.get('schema')
+    if not isinstance(inner, Mapping) or inner.get('type') != 'model-fields':
+        return None
+    raw_fields: Any = inner.get('fields')
+    if not isinstance(raw_fields, Mapping) or name not in raw_fields:
+        return None
+
+    fields_dict: dict[str, Any] = {}
+    for fname, fentry in raw_fields.items():
+        if fname == name and isinstance(fentry, Mapping):
+            fe = dict(fentry)
+            fe.pop('validation_alias', None)
+            fields_dict[fname] = fe
+        else:
+            fields_dict[fname] = core_schema.model_field(
+                core_schema.with_default_schema(core_schema.any_schema(), default=None),
+            )
+
+    mf: Any = {
+        'type': 'model-fields',
+        'fields': fields_dict,
+        'model_name': inner.get('model_name', schema_type.__name__),
+        'computed_fields': [],
+    }
+    raw_cfg: Any = cur.get('config')
+    cfg: Any = dict(raw_cfg) if isinstance(raw_cfg, Mapping) else {}
+    cfg['extra_fields_behavior'] = 'ignore'
+    root: Any = {'type': 'definitions', 'schema': mf, 'definitions': defs} if defs else mf
+    return SchemaValidator(cast(core_schema.CoreSchema, root), config=cast(core_schema.CoreConfig, cfg))
+
+
 def validate_closed_field(
     *,
     schema_type: type[BaseModel],
     name: str,
-    annotation: Any,  # noqa: ANN401
     raw: Any,  # noqa: ANN401
     values: dict[str, Any],
 ) -> tuple[Any, bool]:
     try:
-        shell = object.__new__(schema_type)
-        field_map = dict.fromkeys(schema_type.model_fields)
-        field_map.update(values)
-        object.__setattr__(shell, '__dict__', field_map)
-        object.__setattr__(shell, '__pydantic_fields_set__', set(values))
-        extra = {} if schema_type.model_config.get('extra') == 'allow' else None
-        object.__setattr__(shell, '__pydantic_extra__', extra)
-        object.__setattr__(shell, '__pydantic_private__', None)
-        validated = schema_type.__pydantic_validator__.validate_assignment(shell, name, raw)
-        return getattr(validated, name), True
+        validator = _cached_field_validator(schema_type, name)
+        if validator is None:
+            return None, False
+        payload = dict(values)
+        payload[name] = raw
+        validated_dict, _, _ = validator.validate_python(payload)
+        return validated_dict[name], True
     except Exception:
-        return validate_closed_value(annotation=annotation, raw=raw, schema_type=schema_type)
+        return None, False
 
 
 def accepts_open_scalar(*, annotation: Any, raw: Any, schema_type: type[BaseModel]) -> bool:  # noqa: ANN401
@@ -310,13 +386,18 @@ def coerce(
     raw: Any,  # noqa: ANN401
     schema_type: type[BaseModel],
     closed: bool = False,
-    discriminator: str | None = None,
+    discriminator: str | object | None = None,
 ) -> Any:  # noqa: ANN401
     if raw is None:
         return None
 
-    disc = discriminator or extract_discriminator(annotation=annotation)
+    disc = discriminator if discriminator is not None else extract_discriminator(annotation=annotation)
     if isinstance(raw, dict) and disc is not None:
+        if not isinstance(disc, str):
+            if not closed:
+                return _UNRESOLVED
+            validated, ok = validate_closed_value(annotation=annotation, raw=raw, schema_type=schema_type)
+            return validated if ok else _UNRESOLVED
         candidates = [
             member for member in union_members(annotation=annotation, schema_type=schema_type) if is_model(member)
         ]
@@ -389,11 +470,15 @@ def coerce(
 def construct_partial(*, schema_type: type[BaseModel], data: dict[str, Any], closed: bool = False) -> BaseModel:
     """Build ``schema_type`` from streamed JSON, validating closed subtrees.
 
-    Optional fields default to their declared defaults and missing required
-    fields are ``None``. Keys and list items before the trailing open frontier
-    are validated against their real Pydantic types (falling back to
-    ``model_construct`` if a model constraint fails mid-stream).
-    ``(await stream.response).output`` remains the only fully validated value.
+    Optional fields populate from their declared default or ``default_factory``
+    (invoked fresh per chunk, so non-deterministic factories like ``uuid4`` or
+    ``datetime.now`` yield a new value on each chunk until final validation),
+    and missing required fields are ``None``. Keys and list items before the
+    trailing open frontier run field validation (``@field_validator`` and field
+    constraints, while ``@model_validator`` waits until the object itself
+    closes); closed values that fail validation fall back to
+    ``model_construct`` / raw values. ``(await stream.response).output``
+    remains the only fully validated value.
     """
     if closed:
         with suppress(Exception):
@@ -411,11 +496,10 @@ def construct_partial(*, schema_type: type[BaseModel], data: dict[str, Any], clo
         field_closed = closed or (matched_key != open_key)
         disc = extract_discriminator(annotation=annotation, info=info)
 
-        if field_closed and raw is not None and not (isinstance(raw, dict) and disc is not None):
+        if field_closed and raw is not None and not (isinstance(raw, dict) and isinstance(disc, str)):
             validated_field, ok = validate_closed_field(
                 schema_type=schema_type,
                 name=name,
-                annotation=annotation,
                 raw=raw,
                 values=values,
             )

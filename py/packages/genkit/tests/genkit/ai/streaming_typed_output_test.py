@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Annotated, Any, Literal, TypeVar, overload
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, RootModel, Tag, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from genkit import Genkit, Message, ModelResponse, ModelResponseChunk, Part
@@ -144,9 +144,8 @@ class TestChunkPartialOutput:
         assert _chunk('[1, 2, 3]', schema_type=Recipe).output == [1, 2, 3]
 
     def test_wrong_typed_value_does_not_raise(self) -> None:
-        # Chunks skip validation, so a wrong-typed field is stored as-is
-        # instead of crashing the caller's loop. The final response is
-        # where the real ValidationError surfaces.
+        # Failed validation falls back to the raw value instead of crashing
+        # the caller's loop; the final response surfaces the ValidationError.
         out = _chunk('{"title": 123}', schema_type=Recipe).output
         assert isinstance(out, Recipe)
         assert out.title == 123
@@ -180,9 +179,9 @@ class TestChunkPartialOutput:
 
 
 class TestNestedAndConstrainedOutput:
-    """Nested models and dropped constraints on a streaming chunk."""
+    """Nested models and constraint fallbacks on a streaming chunk."""
 
-    def test_constraints_and_validators_are_skipped(self) -> None:
+    def test_failed_constraints_and_validators_fall_back_to_raw(self) -> None:
         class Strict(BaseModel):
             servings: int = Field(gt=0)
             rating: Annotated[int, Field(ge=1, le=5)]
@@ -959,6 +958,145 @@ class TestDefaultsAndClosedSubtreeValidation:
         tp = Annotated[int, 'meta']
         assert _partial.unwrap_annotated(annotation=tp) is tp
         assert _partial.extract_discriminator(annotation=tp) is None
+
+    def test_callable_discriminator_with_tag_waits_until_closed(self) -> None:
+        def pet_kind(v: Any) -> str | None:  # noqa: ANN401
+            return v.get('kind') if isinstance(v, dict) else getattr(v, 'kind', None)
+
+        class Cat(BaseModel):
+            kind: Literal['cat']
+            name: str
+            lives: int = 9
+
+        class Dog(BaseModel):
+            kind: Literal['dog']
+            name: str
+            good: bool = True
+
+        CallablePetUnion = Annotated[  # noqa: N806
+            Annotated[Cat, Tag('cat')] | Annotated[Dog, Tag('dog')],
+            Discriminator(pet_kind),
+        ]
+
+        class Owner(BaseModel):
+            pet: CallablePetUnion
+            pets: list[CallablePetUnion] = []
+            owner_name: str = 'Ada'
+
+        # Open chunks must stay None rather than guessing Cat by key overlap.
+        c1 = _chunk('{"pet": {"kind": "dog", ', schema_type=Owner).output
+        assert isinstance(c1, Owner)
+        assert c1.pet is None
+
+        c2 = _chunk('{"pet": {"kind": "dog", "name": "Rex"', schema_type=Owner).output
+        assert isinstance(c2, Owner)
+        assert c2.pet is None
+
+        # Once a sibling key closes "pet" mid-stream, Pydantic resolves Dog via Discriminator(pet_kind).
+        c3 = _chunk(
+            '{"pet": {"kind": "dog", "name": "Rex", "good": false}, "owner_name": "Al',
+            schema_type=Owner,
+        ).output
+        assert isinstance(c3, Owner)
+        assert c3.pet == Dog(kind='dog', name='Rex', good=False)
+        assert c3.owner_name == 'Al'
+
+        # Once the root object closes, Owner validates cleanly into Dog.
+        c4 = _chunk('{"pet": {"kind": "dog", "name": "Rex", "good": false}}', schema_type=Owner).output
+        assert isinstance(c4, Owner)
+        assert c4.pet == Dog(kind='dog', name='Rex', good=False)
+
+        # In a list, closed items resolve via Discriminator(pet_kind) while the trailing open item waits.
+        c5 = _chunk(
+            '{"pet": {"kind": "dog", "name": "Rex"}, '
+            '"pets": [{"kind": "dog", "name": "Buddy"}, {"kind": "cat", "name": "Mi',
+            schema_type=Owner,
+        ).output
+        assert isinstance(c5, Owner)
+        assert c5.pets == [Dog(kind='dog', name='Buddy', good=True)]
+
+    def test_field_validators_run_mid_stream_without_firing_model_validators(self) -> None:
+        before_calls = 0
+        after_calls = 0
+
+        class Booking(BaseModel):
+            guest: str
+            nights: int
+            total: float
+
+            @field_validator('guest')
+            @classmethod
+            def _upper_guest(cls, v: str) -> str:
+                return v.upper()
+
+            @model_validator(mode='before')
+            @classmethod
+            def _before_check(cls, data: Any) -> Any:  # noqa: ANN401
+                nonlocal before_calls
+                before_calls += 1
+                return data
+
+            @model_validator(mode='after')
+            def _after_check(self) -> 'Booking':
+                nonlocal after_calls
+                after_calls += 1
+                if self.total != self.nights * 100:
+                    raise ValueError('total must equal nights * 100')
+                return self
+
+        # On chunk 1, 'guest' is still the last parsed key in data, so it streams raw;
+        # once 'nights' arrives on chunk 2, 'guest' is closed and uppercased to 'ANN'.
+        b1 = _chunk('{"guest": "ann", ', schema_type=Booking).output
+        assert isinstance(b1, Booking)
+        assert b1.guest == 'ann'
+        assert b1.nights is None
+        assert b1.total is None
+        assert (before_calls, after_calls) == (0, 0)
+
+        b2 = _chunk('{"guest": "ann", "nights": 2, ', schema_type=Booking).output
+        assert isinstance(b2, Booking)
+        assert b2.guest == 'ANN'
+        assert b2.nights == 2
+        assert b2.total is None
+        assert (before_calls, after_calls) == (0, 0)
+
+        b3 = _chunk('{"guest": "ann", "nights": 2, "total": 20', schema_type=Booking).output
+        assert isinstance(b3, Booking)
+        assert b3.guest == 'ANN'
+        assert b3.nights == 2
+        assert b3.total == 20
+        assert (before_calls, after_calls) == (0, 0)
+
+        b4 = _chunk('{"guest": "ann", "nights": 2, "total": 200.0}', schema_type=Booking).output
+        assert (before_calls, after_calls) == (1, 1)
+        assert b4 == Booking(guest='ANN', nights=2, total=200.0)
+
+        # If the closed root violates @model_validator, fallback still preserves @field_validator outputs.
+        b_invalid = _chunk('{"guest": "ann", "nights": 2, "total": 999.0}', schema_type=Booking).output
+        assert isinstance(b_invalid, Booking)
+        assert b_invalid.guest == 'ANN'
+        assert b_invalid.nights == 2
+        assert b_invalid.total == 999.0
+
+    def test_open_numbers_and_invalid_closed_enum_match_documented_edge_cases(self) -> None:
+        class EventPayload(BaseModel):
+            at: datetime | None = None
+            code: Literal[1, 12] | None = None
+            c: OrderStatus | None = None
+            n: int | None = None
+
+        open_dt = _chunk('{"at": 17000', schema_type=EventPayload).output
+        assert isinstance(open_dt, EventPayload)
+        assert open_dt.at == 17000
+
+        open_num_lit = _chunk('{"code": 1', schema_type=EventPayload).output
+        assert isinstance(open_num_lit, EventPayload)
+        assert open_num_lit.code == 1
+
+        invalid_closed_enum = _chunk('{"c": "blue", "n": 1', schema_type=EventPayload).output
+        assert isinstance(invalid_closed_enum, EventPayload)
+        assert invalid_closed_enum.c == 'blue'
+        assert invalid_closed_enum.n == 1
 
 
 @pytest.mark.asyncio

@@ -1823,12 +1823,21 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         """The reply so far, parsed as far as it goes. Never raises.
 
         With ``output_schema=Recipe``, this is a ``Recipe`` filled as far as
-        the JSON goes: optional fields start at their defaults, missing
-        required fields are ``None``, finished fields and list items are
-        validated, open ``str`` fields stream as prefixes, and open
-        ``Enum``/``datetime``/``Literal``/union fields stay at ``None`` (or
-        their default) until finished. ``(await stream.response).output`` is
-        the only fully validated ``Recipe``.
+        the JSON goes:
+        - Optional fields populate from their default or ``default_factory``
+          (called fresh per chunk, so non-deterministic factories like ``uuid4``
+          or ``datetime.now`` change per chunk until final validation), and
+          missing required fields are ``None``.
+        - Closed fields and list items run field validation (``@field_validator``
+          and field constraints, while ``@model_validator`` waits until the
+          object closes); closed values that fail validation pass through raw.
+        - Open ``str`` fields stream as prefixes, while open ``str`` values for
+          ``Enum``/``datetime``/``Literal`` and unresolved discriminated unions
+          stay at ``None`` (or their default) until closed. Open numbers still
+          pass through raw for ``datetime`` fields and for numeric ``Literal``
+          values that already match a member (even if more digits may follow).
+
+        ``(await stream.response).output`` is the only fully validated ``Recipe``.
 
         With no schema class, this is the JSON value so far (dict, list,
         or scalar). It's ``None`` before an object starts or while the text
@@ -1837,7 +1846,8 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         if self.role is not None and self.role != Role.MODEL:
             return None
         try:
-            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(self.accumulated_text)
+            text = self.accumulated_text
+            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(text)
             if (
                 self._schema_type is not None
                 and isinstance(parsed, dict)
@@ -1848,7 +1858,7 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
                     construct_partial(
                         schema_type=self._schema_type,
                         data=parsed,
-                        closed=is_complete_json(self.accumulated_text),
+                        closed=is_complete_json(text),
                     ),
                 )
             return cast('OutputT | None', parsed)
