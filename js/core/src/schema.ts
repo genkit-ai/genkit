@@ -14,27 +14,28 @@
  * limitations under the License.
  */
 
-import { Validator } from '@cfworker/json-schema';
+import {
+  Validator,
+  type OutputUnit,
+  type SchemaDraft,
+} from '@cfworker/json-schema';
 import type {
   StandardJSONSchemaV1,
   StandardSchemaV1,
 } from '@standard-schema/spec';
-import Ajv, { type ErrorObject, type JSONSchemaType } from 'ajv';
-import addFormats from 'ajv-formats';
 import { z } from 'zod';
-import { getGenkitRuntimeConfig } from './config.js';
 import { GenkitError } from './error.js';
 
 import type { Registry } from './registry.js';
-const ajv = new Ajv();
-addFormats(ajv);
 
 export { z }; // provide a consistent zod to use throughout genkit
 
 /**
  * JSON schema.
  */
-export type JSONSchema = JSONSchemaType<any> | any;
+// Deliberately loose: JSON schemas come from users, plugins and remote
+// servers (e.g. MCP) in many drafts and shapes.
+export type JSONSchema = any;
 
 /**
  * Any schema genkit can both validate with and describe as JSON schema:
@@ -191,8 +192,7 @@ function unsupportedSchemaError(label: string, zod3: boolean): GenkitError {
 }
 
 const jsonSchemas = new WeakMap<GenkitSchema, JSONSchema>();
-const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
-const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
+const jsonSchemaValidators = new WeakMap<JSONSchema, Validator>();
 
 /**
  * Annotates a Zod schema with UI-specific metadata.
@@ -365,14 +365,14 @@ function compatOverride(ctx: {
     if (VALIDATED_FORMATS.has(jsonSchema.format)) {
       // String formats (datetime, email, uuid, ...) also emit zod's internal
       // regex as `pattern`. `format` alone is what v3 emitted, is validated by
-      // ajv-formats/cfworker, and keeps validation errors readable. A
+      // the JSON schema validator, and keeps validation errors readable. A
       // user-supplied `.regex()` on top of a format is emitted under `allOf`
       // and is not affected.
       delete jsonSchema.pattern;
     } else {
       // zod-specific formats (cuid, base64, starts_with, ...): `pattern` is
-      // their only check, and the non-standard `format` makes strict ajv throw
-      // and some providers reject the schema. v3 emitted just the pattern.
+      // their only check, and some providers reject non-standard formats.
+      // v3 emitted just the pattern.
       delete jsonSchema.format;
     }
   } else if (def.type === 'nullable') {
@@ -447,26 +447,67 @@ export interface ValidationErrorDetail {
   message: string;
 }
 
-function ajvErrorToValidationErrorDetail(
-  error: ErrorObject
-): ValidationErrorDetail {
-  return {
-    path: error.instancePath.substring(1).replace(/\//g, '.') || '(root)',
-    message: error.message!,
-  };
+// Keywords whose error only says "a subschema failed"; the subschema's own
+// errors are more specific.
+const WRAPPER_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  'additionalProperties',
+  'items',
+  'prefixItems',
+  'additionalItems',
+  'allOf',
+  '$ref',
+  'dependentSchemas',
+]);
+
+// Combinators report one summary error plus one error per failed branch; the
+// summary is the readable one.
+const COMBINATOR_KEYWORDS = new Set(['anyOf', 'oneOf', 'not']);
+
+/**
+ * Reduces the validator's full error tree to one error per actual problem.
+ */
+function toValidationErrorDetails(
+  errors: OutputUnit[]
+): ValidationErrorDetail[] {
+  const under = (e: OutputUnit, parent: OutputUnit) =>
+    e !== parent && e.keywordLocation.startsWith(parent.keywordLocation + '/');
+  // `additionalProperties: false` also reports a "False boolean schema" error;
+  // the additionalProperties error names the offending property.
+  let kept = errors.filter((e) => e.keyword !== 'false');
+  const combinators = kept.filter((e) => COMBINATOR_KEYWORDS.has(e.keyword));
+  kept = kept.filter((e) => !combinators.some((c) => under(e, c)));
+  kept = kept.filter(
+    (e) => !WRAPPER_KEYWORDS.has(e.keyword) || !kept.some((o) => under(o, e))
+  );
+  const seen = new Set<string>();
+  const details: ValidationErrorDetail[] = [];
+  for (const e of kept) {
+    const path = e.instanceLocation
+      .replace(/^#\/?/, '')
+      .split('/')
+      .filter((p) => p !== '')
+      .map((p) => p.replace(/~1/g, '/').replace(/~0/g, '~'))
+      .join('.');
+    const detail = { path: path || '(root)', message: e.error };
+    const key = `${detail.path}\0${detail.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      details.push(detail);
+    }
+  }
+  return details;
 }
 
-function cfWorkerErrorToValidationErrorDetail(error: {
-  instanceLocation: string;
-  error: string;
-}): ValidationErrorDetail {
-  const path = error.instanceLocation.startsWith('#/')
-    ? error.instanceLocation.substring(2)
-    : '';
-  return {
-    path: path.replace(/\//g, '.') || '(root)',
-    message: error.error,
-  };
+function schemaDraft(jsonSchema: JSONSchema): SchemaDraft {
+  const declared =
+    typeof jsonSchema?.$schema === 'string' ? jsonSchema.$schema : '';
+  if (declared.includes('2020-12')) return '2020-12';
+  if (declared.includes('2019-09')) return '2019-09';
+  if (declared.includes('draft-04')) return '4';
+  // What genkit emits, and the most common draft for undeclared schemas.
+  return '7';
 }
 
 /**
@@ -495,46 +536,22 @@ export function validateSchema(
   if (!toValidate) {
     return { valid: true, schema: toValidate };
   }
-  const validationMode = getGenkitRuntimeConfig().jsonSchemaMode;
-
-  if (validationMode === 'interpret') {
-    let validator = cfWorkerValidators.get(toValidate);
-    if (!validator) {
-      validator = new Validator(toValidate);
-      cfWorkerValidators.set(toValidate, validator);
-    }
-
-    const result = validator.validate(sanitizeForJsonSchema(data));
-    if (!result.valid) {
-      return {
-        valid: false,
-        errors: result.errors.map(cfWorkerErrorToValidationErrorDetail),
-        schema: toValidate,
-      };
-    }
-
-    return {
-      valid: result.valid,
-      schema: toValidate,
-    };
-  }
-
-  let validator = ajvValidators.get(toValidate);
+  // An interpreting validator (no codegen), so it also runs where `eval` is
+  // unavailable, e.g. Cloudflare Workers.
+  let validator = jsonSchemaValidators.get(toValidate);
   if (!validator) {
-    validator = ajv.compile(toValidate);
-    ajvValidators.set(toValidate, validator);
+    validator = new Validator(toValidate, schemaDraft(toValidate), false);
+    jsonSchemaValidators.set(toValidate, validator);
   }
-
-  const valid = validator(data) as boolean;
-  if (!valid) {
+  const result = validator.validate(sanitizeForJsonSchema(data));
+  if (!result.valid) {
     return {
       valid: false,
-      errors: (validator.errors ?? []).map(ajvErrorToValidationErrorDetail),
+      errors: toValidationErrorDetails(result.errors),
       schema: toValidate,
     };
   }
-
-  return { valid, schema: toValidate };
+  return { valid: true, schema: toValidate };
 }
 
 type ParseResult<T> =

@@ -105,6 +105,9 @@ importers:
 
   core:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: ^4.1.1
+        version: 4.1.1
       '@opentelemetry/api':
         specifier: ^1.9.0
         version: 1.9.0
@@ -135,12 +138,6 @@ importers:
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15
-      ajv:
-        specifier: ^8.12.0
-        version: 8.18.0
-      ajv-formats:
-        specifier: ^3.0.1
-        version: 3.0.1(ajv@8.18.0)
       async-mutex:
         specifier: ^0.5.0
         version: 0.5.0
@@ -194,9 +191,6 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     optionalDependencies:
-      '@cfworker/json-schema':
-        specifier: ^4.1.1
-        version: 4.1.1
       '@genkit-ai/firebase':
         specifier: ^1.16.1
         version: 1.29.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0)(genkit@1.44.0(@google-cloud/firestore@7.11.6(encoding@0.1.13))(encoding@0.1.13)(firebase-admin@13.8.0(encoding@0.1.13))(firebase@11.10.0))
@@ -15443,8 +15437,7 @@ snapshots:
 
   '@braintree/sanitize-url@7.1.2': {}
 
-  '@cfworker/json-schema@4.1.1':
-    optional: true
+  '@cfworker/json-schema@4.1.1': {}
 
   '@chevrotain/types@11.1.2': {}
 
