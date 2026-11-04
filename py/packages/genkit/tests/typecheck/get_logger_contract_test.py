@@ -33,8 +33,7 @@ import structlog
 from structlog.testing import capture_logs
 from typing_extensions import assert_type
 
-from genkit import get_logger
-from genkit._core._logger import GenkitLogger
+from genkit import GenkitLogger, get_logger
 
 
 @pytest.fixture(autouse=True)

@@ -1,7 +1,7 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Genkit logging. ``get_logger`` is public via ``genkit``; the rest is internal."""
+"""Genkit logging. ``GenkitLogger`` and ``get_logger`` are public via ``genkit``; the rest is internal."""
 
 from __future__ import annotations
 

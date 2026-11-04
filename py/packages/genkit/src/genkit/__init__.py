@@ -42,7 +42,7 @@ from genkit._ai._prompt import (
 from genkit._core._action import FlowContext, StreamResponse
 from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
 from genkit._core._flow import Flow
-from genkit._core._logger import get_logger
+from genkit._core._logger import GenkitLogger, get_logger
 from genkit._core._model import (
     Document,
     Message,
@@ -88,5 +88,6 @@ __all__ = [
     'PublicError',
     'ErrorReason',
     # Log lines that reach the Dev UI trace panel
+    'GenkitLogger',
     'get_logger',
 ]
