@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-import Ajv from 'ajv';
 import * as assert from 'assert';
-import { afterEach, describe, it, mock } from 'node:test';
+import { describe, it } from 'node:test';
 
-import { setGenkitRuntimeConfig } from '../src/config.js';
 import {
   ValidationError,
   annotateSchema,
@@ -58,7 +56,12 @@ describe('validate()', () => {
       },
       data: { foo: 123 },
       valid: false,
-      errors: [{ path: 'foo', message: 'must be boolean' }],
+      errors: [
+        {
+          path: 'foo',
+          message: 'Instance type "number" is invalid. Expected "boolean".',
+        },
+      ],
     },
     {
       it: 'should return true for a valid zod schema',
@@ -71,7 +74,12 @@ describe('validate()', () => {
       schema: z.object({ foo: z.boolean() }),
       data: { foo: 123 },
       valid: false,
-      errors: [{ path: 'foo', message: 'must be boolean' }],
+      errors: [
+        {
+          path: 'foo',
+          message: 'Instance type "number" is invalid. Expected "boolean".',
+        },
+      ],
     },
     {
       it: 'should allow for date types',
@@ -84,7 +92,12 @@ describe('validate()', () => {
       schema: z.object({ foo: z.array(z.object({ bar: z.boolean() })) }),
       data: { foo: [{ bar: 123 }] },
       valid: false,
-      errors: [{ path: 'foo.0.bar', message: 'must be boolean' }],
+      errors: [
+        {
+          path: 'foo.0.bar',
+          message: 'Instance type "number" is invalid. Expected "boolean".',
+        },
+      ],
     },
     {
       it: 'should be understandable for top-level errors',
@@ -92,7 +105,11 @@ describe('validate()', () => {
       data: { foo: 'bar' },
       valid: false,
       errors: [
-        { path: '(root)', message: 'must NOT have additional properties' },
+        {
+          path: '(root)',
+          message:
+            'Property "foo" does not match additional properties schema.',
+        },
       ],
     },
     {
@@ -105,7 +122,10 @@ describe('validate()', () => {
       data: {},
       valid: false,
       errors: [
-        { path: '(root)', message: "must have required property 'foo'" },
+        {
+          path: '(root)',
+          message: 'Instance does not have required property "foo".',
+        },
       ],
     },
   ];
@@ -386,47 +406,99 @@ describe('annotateSchema()', () => {
   });
 });
 
-describe('disableSchemaCodeGeneration()', () => {
-  let compileMock: any;
-
-  function disableSchemaCodeGeneration() {
-    setGenkitRuntimeConfig({
-      jsonSchemaMode: 'interpret',
-    });
-  }
-
-  afterEach(() => {
-    setGenkitRuntimeConfig({
-      jsonSchemaMode: undefined,
-    });
-    if (compileMock) {
-      compileMock.mock.restore();
-      compileMock = undefined;
-    }
-  });
-
-  it('should validate using cfworker validator', () => {
-    compileMock = mock.method(Ajv.prototype, 'compile');
-
-    disableSchemaCodeGeneration();
+describe('validateSchema() with JSON schemas', () => {
+  it('reports one error per problem, at the failing path', () => {
     const result = validateSchema(
-      { foo: 123 },
+      { at: 'yesterday', items: [{ n: 1 }, { n: 'x' }, {}], u: true },
       {
         jsonSchema: {
           type: 'object',
-          properties: { foo: { type: 'boolean' } },
+          properties: {
+            q: { type: 'string' },
+            at: { type: 'string', format: 'date-time' },
+            items: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { n: { type: 'number' } },
+                required: ['n'],
+              },
+            },
+            u: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+          },
+          required: ['q'],
         },
       }
     );
+    assert.deepStrictEqual(result.errors, [
+      {
+        path: '(root)',
+        message: 'Instance does not have required property "q".',
+      },
+      { path: 'at', message: 'String does not match format "date-time".' },
+      {
+        path: 'items.1.n',
+        message: 'Instance type "string" is invalid. Expected "number".',
+      },
+      {
+        path: 'items.2',
+        message: 'Instance does not have required property "n".',
+      },
+      { path: 'u', message: 'Instance does not match any subschemas.' },
+    ]);
+  });
 
-    assert.strictEqual(result.valid, false);
-    const errorAtFoo = result.errors?.find((e) => e.path === 'foo');
-    assert.ok(errorAtFoo, 'Should have error at foo');
-    assert.strictEqual(compileMock.mock.callCount(), 0);
+  it('reports disallowed additional properties', () => {
+    const result = validateSchema(
+      { a: 1, b: 2 },
+      {
+        jsonSchema: {
+          type: 'object',
+          properties: { a: { type: 'number' } },
+          additionalProperties: false,
+        },
+      }
+    );
+    assert.deepStrictEqual(result.errors, [
+      {
+        path: '(root)',
+        message: 'Property "b" does not match additional properties schema.',
+      },
+    ]);
+  });
+
+  it('ignores unknown keywords such as x-genkit-* annotations', () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: { p: { type: 'string', 'x-genkit-widget': 'textarea' } },
+    };
+    assert.strictEqual(validateSchema({ p: 'ok' }, { jsonSchema }).valid, true);
+  });
+
+  it('supports draft 2020-12 schemas', () => {
+    const jsonSchema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'array',
+      prefixItems: [{ type: 'string' }, { type: 'number' }],
+    };
+    assert.strictEqual(validateSchema(['a', 1], { jsonSchema }).valid, true);
+    assert.deepStrictEqual(validateSchema(['a', 'b'], { jsonSchema }).errors, [
+      {
+        path: '1',
+        message: 'Instance type "string" is invalid. Expected "number".',
+      },
+    ]);
+  });
+
+  it('supports boolean schemas', () => {
+    assert.strictEqual(validateSchema(1, { jsonSchema: true }).valid, true);
+    assert.deepStrictEqual(validateSchema(1, { jsonSchema: false }).errors, [
+      { path: '(root)', message: 'False boolean schema.' },
+    ]);
+    assert.throws(() => parseSchema(1, { jsonSchema: false }), ValidationError);
   });
 
   it('should strip undefined values before validating', () => {
-    disableSchemaCodeGeneration();
     const result = validateSchema(
       { foo: 'hello', bar: undefined },
       {
@@ -441,7 +513,6 @@ describe('disableSchemaCodeGeneration()', () => {
   });
 
   it('should strip undefined values recursively', () => {
-    disableSchemaCodeGeneration();
     const result = validateSchema(
       { wrapper: { inner: 'hello', ignored: undefined } },
       {
@@ -460,7 +531,6 @@ describe('disableSchemaCodeGeneration()', () => {
   });
 
   it('should strip undefined values in objects inside arrays', () => {
-    disableSchemaCodeGeneration();
     const result = validateSchema(
       { items: [{ name: 'item1', desc: undefined }, { name: 'item2' }] },
       {
@@ -532,7 +602,10 @@ describe('Standard Schema (GenkitSchema)', () => {
     const schema = fakeStandardSchema();
     assert.strictEqual(validateSchema({ k: 1 }, { schema }).valid, true);
     assert.deepStrictEqual(validateSchema({ k: 'x' }, { schema }).errors, [
-      { path: 'k', message: 'must be number' },
+      {
+        path: 'k',
+        message: 'Instance type "string" is invalid. Expected "number".',
+      },
     ]);
   });
 

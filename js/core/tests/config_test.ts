@@ -26,40 +26,33 @@ describe('config', () => {
   afterEach(() => {
     // Reset config
     setGenkitRuntimeConfig({
-      jsonSchemaMode: undefined,
       sandboxedRuntime: undefined,
     });
   });
 
   it('should have default values', () => {
     const config = getGenkitRuntimeConfig();
-    assert.strictEqual(config.jsonSchemaMode, 'compile');
     assert.strictEqual(config.sandboxedRuntime, false);
   });
 
   it('should update config values', () => {
     setGenkitRuntimeConfig({
-      jsonSchemaMode: 'interpret',
       sandboxedRuntime: true,
     });
     const config = getGenkitRuntimeConfig();
-    assert.strictEqual(config.jsonSchemaMode, 'interpret');
     assert.strictEqual(config.sandboxedRuntime, true);
   });
 
   it('should unset config values', () => {
     setGenkitRuntimeConfig({
-      jsonSchemaMode: 'interpret',
       sandboxedRuntime: true,
     });
     let config = getGenkitRuntimeConfig();
-    assert.strictEqual(config.jsonSchemaMode, 'interpret');
     assert.strictEqual(config.sandboxedRuntime, true);
 
     resetGenkitRuntimeConfig();
 
     config = getGenkitRuntimeConfig();
-    assert.strictEqual(config.jsonSchemaMode, 'compile');
     assert.strictEqual(config.sandboxedRuntime, false);
   });
 });
