@@ -30,6 +30,8 @@ import {
   type Action,
   type ActionMetadata,
   type ActionParams,
+  type GenkitSchema,
+  type InferOutput,
   type SimpleMiddleware,
   type StreamingCallback,
 } from '@genkit-ai/core';
@@ -102,7 +104,7 @@ export {
 
 /** An action that represents a generative AI model, accepting a {@link GenerateRequest} and returning a {@link GenerateResponseData}. */
 export type ModelAction<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 > = Action<
   typeof GenerateRequestSchema,
   typeof GenerateResponseSchema,
@@ -113,7 +115,7 @@ export type ModelAction<
 
 /** An action that represents a generative AI model that runs in the background (asynchronously). */
 export type BackgroundModelAction<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 > = BackgroundAction<
   typeof GenerateRequestSchema,
   typeof GenerateResponseSchema
@@ -141,7 +143,7 @@ export type ModelMiddlewareArgument =
 
 /** Options for defining a new model via {@link defineModel} or {@link model}. */
 export type DefineModelOptions<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 > = {
   name: string;
   /** Known version names for this model, e.g. `gemini-1.0-pro-001`. */
@@ -160,9 +162,7 @@ export type DefineModelOptions<
  * Creates a {@link ModelAction} without registering it. Useful for plugin authors
  * who need to return a model action from a resolver.
  */
-export function model<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export function model<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
   options: DefineModelOptions<CustomOptionsSchema>,
   runner: (
     request: GenerateRequest<CustomOptionsSchema>,
@@ -186,7 +186,7 @@ export function model<
 }
 
 function modelActionOptions<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: DefineModelOptions<CustomOptionsSchema>
 ): ActionParams<typeof GenerateRequestSchema, typeof GenerateResponseSchema> {
@@ -216,7 +216,7 @@ function modelActionOptions<
  * Defines a new model and adds it to the registry.
  */
 export function defineModel<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: {
@@ -232,7 +232,7 @@ export function defineModel<
  * Defines a new model and adds it to the registry.
  */
 export function defineModel<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: DefineModelOptions<CustomOptionsSchema>,
@@ -243,7 +243,7 @@ export function defineModel<
 ): ModelAction<CustomOptionsSchema>;
 
 export function defineModel<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: any,
@@ -280,7 +280,7 @@ export function defineModel<
 
 /** Options for defining a background model that processes requests asynchronously. */
 export type DefineBackgroundModelOptions<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 > = DefineModelOptions<CustomOptionsSchema> & {
   start: (
     request: GenerateRequest<CustomOptionsSchema>,
@@ -300,7 +300,7 @@ export type DefineBackgroundModelOptions<
  * Defines a new model that runs in the background.
  */
 export function defineBackgroundModel<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: DefineBackgroundModelOptions<CustomOptionsSchema>
@@ -313,7 +313,7 @@ export function defineBackgroundModel<
  * Defines a new model that runs in the background.
  */
 export function backgroundModel<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: DefineBackgroundModelOptions<CustomOptionsSchema>
 ): BackgroundModelAction<CustomOptionsSchema> {
@@ -398,15 +398,15 @@ export const ModelReferenceSchema = z.object({
  * A reference to a model that includes optional configuration and version info.
  * Can be passed anywhere a {@link ModelArgument} is accepted.
  */
-export interface ModelReference<CustomOptions extends z.ZodType<any, any>>
+export interface ModelReference<CustomOptions extends GenkitSchema>
   extends z.infer<typeof ModelReferenceSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: ModelInfo;
   version?: string;
-  config?: z.infer<CustomOptions>;
+  config?: InferOutput<CustomOptions>;
 
-  withConfig(cfg: z.infer<CustomOptions>): ModelReference<CustomOptions>;
+  withConfig(cfg: InferOutput<CustomOptions>): ModelReference<CustomOptions>;
   withVersion(version: string): ModelReference<CustomOptions>;
 }
 
@@ -421,7 +421,7 @@ export function modelActionMetadata({
 }: {
   name: string;
   info?: ModelInfo;
-  configSchema?: z.ZodType<any, any>;
+  configSchema?: GenkitSchema;
   background?: boolean;
 }): ActionMetadata {
   return {
@@ -444,7 +444,7 @@ export function modelActionMetadata({
 
 /** Cretes a model reference. */
 export function modelRef<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: Omit<
     ModelReference<CustomOptionsSchema>,
@@ -462,7 +462,7 @@ export function modelRef<
     name,
   };
   ref.withConfig = (
-    cfg: z.infer<CustomOptionsSchema>
+    cfg: InferOutput<CustomOptionsSchema>
   ): ModelReference<CustomOptionsSchema> => {
     return modelRef({
       ...options,
@@ -540,22 +540,21 @@ function getPartCounts(parts: Part[]): PartCounts {
  * Union type for all the ways a model can be specified: by name string,
  * {@link ModelAction}, or {@link ModelReference}.
  */
-export type ModelArgument<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> = ModelAction<CustomOptions> | ModelReference<CustomOptions> | string;
+export type ModelArgument<CustomOptions extends GenkitSchema = GenkitSchema> =
+  | ModelAction<CustomOptions>
+  | ModelReference<CustomOptions>
+  | string;
 
 /** The result of resolving a {@link ModelArgument} to a concrete action, config, and version. */
 export interface ResolvedModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   modelAction: ModelAction;
-  config?: z.infer<CustomOptions>;
+  config?: InferOutput<CustomOptions>;
   version?: string;
 }
 
-export async function resolveModel<
-  C extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export async function resolveModel<C extends GenkitSchema = GenkitSchema>(
   registry: Registry,
   model: ModelArgument<C> | undefined,
   options?: { warnDeprecated?: boolean }

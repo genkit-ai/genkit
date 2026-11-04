@@ -17,6 +17,7 @@
 import { ActionMetadata, modelActionMetadata, z } from 'genkit';
 import { ModelAction, ModelInfo, ModelReference, modelRef } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import {
   ensureToolIds,
   fromInteractionSync,
@@ -68,7 +69,7 @@ export const LyriaConfigSchema = z
   .passthrough();
 
 export type LyriaConfigSchemaType = typeof LyriaConfigSchema;
-export type LyriaConfig = z.infer<LyriaConfigSchemaType>;
+export type LyriaConfig = InferOutput<LyriaConfigSchemaType>;
 
 type ConfigSchemaType = LyriaConfigSchemaType;
 

@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-import { z } from 'genkit';
+import type { GenkitSchema } from 'genkit';
 import { ModelInfo } from 'genkit/model';
 import { compatOaiTranscriptionModelRef } from '../audio.js';
 
 /** OpenAI transcription ModelRef helper, same as the OpenAI-compatible spec. */
 export function openAITranscriptionModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

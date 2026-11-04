@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { z, type ModelArgument } from 'genkit';
+import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import { ai } from '../index.js';
 
 const FUNNINESS_VALUES = [
@@ -32,10 +33,10 @@ const FunninessResponseSchema = z.object({
   verdict: z.enum(FUNNINESS_VALUES),
 });
 
-export async function funninessScore<CustomModelOptions extends z.ZodTypeAny>(
+export async function funninessScore<CustomModelOptions extends GenkitSchema>(
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: z.infer<CustomModelOptions>
+  judgeConfig?: InferOutput<CustomModelOptions>
 ): Promise<Score> {
   const d = dataPoint;
   try {

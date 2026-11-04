@@ -20,7 +20,7 @@
  * @module /
  */
 
-import { EmbedderReference, ModelReference, z } from 'genkit';
+import { EmbedderReference, ModelReference, type GenkitSchema } from 'genkit';
 import {
   genkitPluginV2,
   type GenkitPluginV2,
@@ -174,7 +174,7 @@ export type VertexAIPlugin = {
     name: deepResearch.KnownModels | (deepResearch.DeepResearchModelName & {}),
     config?: deepResearch.DeepResearchConfig
   ): ModelReference<deepResearch.DeepResearchConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
+  model(name: string, config?: any): ModelReference<GenkitSchema>;
 
   embedder(
     name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
@@ -191,7 +191,7 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
 (vertexAI as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodType<any, any>> => {
+): ModelReference<GenkitSchema> => {
   if (imagen.isImagenModelName(name)) {
     return imagen.model(name, config);
   }

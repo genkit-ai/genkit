@@ -20,7 +20,7 @@ import { Action, ActionMetadata, Middleware, action } from './action.js';
 import { ActionContext } from './context.js';
 import { GenkitError } from './error.js';
 import { ActionType, Registry } from './registry.js';
-import { toJsonSchema } from './schema.js';
+import { toJsonSchema, type GenkitSchema, type InferOutput } from './schema.js';
 
 /**
  * Zod schema of an opration representing a background task.
@@ -51,8 +51,8 @@ export interface Operation<O = any> {
  * The returned operation can used to check the status of the background operation and retrieve the response.
  */
 export interface BackgroundAction<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
   RunOptions extends BackgroundActionRunOptions = BackgroundActionRunOptions,
 > {
   __action: ActionMetadata<I, O>;
@@ -66,24 +66,24 @@ export interface BackgroundAction<
   readonly supportsCancel: boolean;
 
   start(
-    input?: z.infer<I>,
+    input?: InferOutput<I>,
     options?: RunOptions
-  ): Promise<Operation<z.infer<O>>>;
+  ): Promise<Operation<InferOutput<O>>>;
 
   check(
-    operation: Operation<z.infer<O>>,
+    operation: Operation<InferOutput<O>>,
     options?: RunOptions
-  ): Promise<Operation<z.infer<O>>>;
+  ): Promise<Operation<InferOutput<O>>>;
 
   cancel(
-    operation: Operation<z.infer<O>>,
+    operation: Operation<InferOutput<O>>,
     options?: RunOptions
-  ): Promise<Operation<z.infer<O>>>;
+  ): Promise<Operation<InferOutput<O>>>;
 }
 
 export async function lookupBackgroundAction<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   key: string
@@ -111,8 +111,8 @@ export async function lookupBackgroundAction<
 }
 
 class BackgroundActionImpl<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
   RunOptions extends BackgroundActionRunOptions = BackgroundActionRunOptions,
 > implements BackgroundAction<I, O, RunOptions>
 {
@@ -146,16 +146,16 @@ class BackgroundActionImpl<
   }
 
   async start(
-    input?: z.infer<I>,
+    input?: InferOutput<I>,
     options?: RunOptions
-  ): Promise<Operation<z.infer<O>>> {
+  ): Promise<Operation<InferOutput<O>>> {
     return await this.startAction(input, options);
   }
 
   async check(
-    operation: Operation<z.infer<O>>,
+    operation: Operation<InferOutput<O>>,
     options?: RunOptions
-  ): Promise<Operation<z.infer<O>>> {
+  ): Promise<Operation<InferOutput<O>>> {
     return await this.checkAction(operation, options);
   }
 
@@ -164,9 +164,9 @@ class BackgroundActionImpl<
   }
 
   async cancel(
-    operation: Operation<z.infer<O>>,
+    operation: Operation<InferOutput<O>>,
     options?: RunOptions
-  ): Promise<Operation<z.infer<O>>> {
+  ): Promise<Operation<InferOutput<O>>> {
     if (!this.cancelAction) {
       return operation;
     }
@@ -211,23 +211,23 @@ export interface BackgroundActionFnArg<S> {
  * Action factory params.
  */
 export type BackgroundActionParams<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > = {
   name: string;
   start: (
-    input: z.infer<I>,
-    options: BackgroundActionFnArg<z.infer<S>>
-  ) => Promise<Operation<z.infer<O>>>;
+    input: InferOutput<I>,
+    options: BackgroundActionFnArg<InferOutput<S>>
+  ) => Promise<Operation<InferOutput<O>>>;
   check: (
-    input: Operation<z.infer<O>>,
-    options: BackgroundActionFnArg<z.infer<S>>
-  ) => Promise<Operation<z.infer<O>>>;
+    input: Operation<InferOutput<O>>,
+    options: BackgroundActionFnArg<InferOutput<S>>
+  ) => Promise<Operation<InferOutput<O>>>;
   cancel?: (
-    input: Operation<z.infer<O>>,
-    options: BackgroundActionFnArg<z.infer<S>>
-  ) => Promise<Operation<z.infer<O>>>;
+    input: Operation<InferOutput<O>>,
+    options: BackgroundActionFnArg<InferOutput<S>>
+  ) => Promise<Operation<InferOutput<O>>>;
   actionType: ActionType;
 
   description?: string;
@@ -236,7 +236,7 @@ export type BackgroundActionParams<
   outputSchema?: O;
   outputJsonSchema?: JSONSchema7;
   metadata?: Record<string, any>;
-  use?: Middleware<z.infer<I>, z.infer<O>>[];
+  use?: Middleware<InferOutput<I>, InferOutput<O>>[];
   streamSchema?: S;
 };
 
@@ -244,9 +244,9 @@ export type BackgroundActionParams<
  * Defines an action with the given config and registers it in the registry.
  */
 export function defineBackgroundAction<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   config: BackgroundActionParams<I, O, S>
@@ -286,9 +286,9 @@ export function registerBackgroundAction(
  * Creates a background action with the given config.
  */
 export function backgroundAction<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 >(config: BackgroundActionParams<I, O, S>): BackgroundAction<I, O> {
   const startAction = action(
     {
@@ -309,7 +309,7 @@ export function backgroundAction<
       // wraps the start action, which actually returns an Operation<O>.
       // Previously hidden by zod v3's `any` inference; needs a proper fix.
       use: config.use as unknown as
-        | Middleware<z.infer<I>, Operation<z.infer<O>>>[]
+        | Middleware<InferOutput<I>, Operation<InferOutput<O>>>[]
         | undefined,
     },
     async (input, options) => {

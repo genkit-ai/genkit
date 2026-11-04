@@ -22,6 +22,8 @@ import {
   type ActionFnArg,
   type ActionMetadata,
   type ActionParams,
+  type GenkitSchema,
+  type InferOutput,
 } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
@@ -46,9 +48,9 @@ export type Embedding = z.infer<typeof EmbeddingSchema>;
 /**
  * A function used for embedder definition, encapsulates embedder implementation.
  */
-export type EmbedderFn<EmbedderOptions extends z.ZodType<any, any>> = (
+export type EmbedderFn<EmbedderOptions extends GenkitSchema> = (
   input: Document[],
-  embedderOpts?: z.infer<EmbedderOptions>
+  embedderOpts?: InferOutput<EmbedderOptions>
 ) => Promise<EmbedResponse>;
 
 /**
@@ -77,25 +79,24 @@ type EmbedResponse = z.infer<typeof EmbedResponseSchema>;
 /**
  * Embedder action -- a subtype of {@link Action} with input/output types for embedders.
  */
-export type EmbedderAction<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> = Action<typeof EmbedRequestSchema, typeof EmbedResponseSchema> & {
-  __configSchema?: CustomOptions;
-};
+export type EmbedderAction<CustomOptions extends GenkitSchema = GenkitSchema> =
+  Action<typeof EmbedRequestSchema, typeof EmbedResponseSchema> & {
+    __configSchema?: CustomOptions;
+  };
 
 /**
  * Options of an `embed` function.
  */
 export interface EmbedderParams<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   embedder: EmbedderArgument<CustomOptions>;
   content: string | DocumentData;
   metadata?: Record<string, unknown>;
-  options?: z.infer<CustomOptions>;
+  options?: InferOutput<CustomOptions>;
 }
 
-function withMetadata<CustomOptions extends z.ZodType<any, any>>(
+function withMetadata<CustomOptions extends GenkitSchema>(
   embedder: Action<typeof EmbedRequestSchema, typeof EmbedResponseSchema>,
   configSchema?: CustomOptions
 ): EmbedderAction<CustomOptions> {
@@ -105,7 +106,7 @@ function withMetadata<CustomOptions extends z.ZodType<any, any>>(
 }
 
 /** Configuration options for defining an embedder via {@link defineEmbedder} or {@link embedder}. */
-export interface EmbedderOptions<ConfigSchema extends z.ZodType<any, any>> {
+export interface EmbedderOptions<ConfigSchema extends GenkitSchema> {
   name: string;
   configSchema?: ConfigSchema;
   info?: EmbedderInfo;
@@ -116,12 +117,10 @@ export interface EmbedderOptions<ConfigSchema extends z.ZodType<any, any>> {
  *
  * Unlike `defineEmbedder` this function does not register the embedder in the reigistry.
  */
-export function embedder<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export function embedder<ConfigSchema extends GenkitSchema = GenkitSchema>(
   options: EmbedderOptions<ConfigSchema>,
   runner: (
-    input: EmbedRequest<z.infer<ConfigSchema>>,
+    input: EmbedRequest<InferOutput<ConfigSchema>>,
     opts: ActionFnArg<any>
   ) => Promise<EmbedResponse>
 ) {
@@ -142,7 +141,7 @@ export function embedder<
 }
 
 function embedderActionOptions<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
 >(
   options: EmbedderOptions<ConfigSchema>
 ): ActionParams<typeof EmbedRequestSchema, typeof EmbedResponseSchema> {
@@ -167,7 +166,7 @@ function embedderActionOptions<
  * Creates embedder model for the provided {@link EmbedderFn} model implementation.
  */
 export function defineEmbedder<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: EmbedderOptions<ConfigSchema>,
@@ -190,15 +189,13 @@ export function defineEmbedder<
  * A union type representing all the types that can refer to an embedder.
  */
 export type EmbedderArgument<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = string | EmbedderAction<CustomOptions> | EmbedderReference<CustomOptions>;
 
 /**
  * A veneer for interacting with embedder models.
  */
-export async function embed<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export async function embed<CustomOptions extends GenkitSchema = GenkitSchema>(
   registry: Registry,
   params: EmbedderParams<CustomOptions>
 ): Promise<Embedding[]> {
@@ -228,16 +225,14 @@ export async function embed<
   return response.embeddings;
 }
 
-interface ResolvedEmbedder<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> {
+interface ResolvedEmbedder<CustomOptions extends GenkitSchema = GenkitSchema> {
   embedderAction: EmbedderAction<CustomOptions>;
-  config?: z.infer<CustomOptions>;
+  config?: InferOutput<CustomOptions>;
   version?: string;
 }
 
 async function resolveEmbedder<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   params: EmbedderParams<CustomOptions>
@@ -271,14 +266,14 @@ async function resolveEmbedder<
  * A veneer for interacting with embedder models in bulk.
  */
 export async function embedMany<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   params: {
     embedder: EmbedderArgument<ConfigSchema>;
     content: string[] | DocumentData[];
     metadata?: Record<string, unknown>;
-    options?: z.infer<ConfigSchema>;
+    options?: InferOutput<ConfigSchema>;
   }
 ): Promise<EmbeddingBatch> {
   let embedder: EmbedderAction<ConfigSchema>;
@@ -329,12 +324,12 @@ export type EmbedderInfo = z.infer<typeof EmbedderInfoSchema>;
  * about the specific embedder, e.g. custom config options schema.
  */
 export interface EmbedderReference<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   name: string;
   configSchema?: CustomOptions;
   info?: EmbedderInfo;
-  config?: z.infer<CustomOptions>;
+  config?: InferOutput<CustomOptions>;
   version?: string;
 }
 
@@ -342,7 +337,7 @@ export interface EmbedderReference<
  * Helper method to configure a {@link EmbedderReference} to a plugin.
  */
 export function embedderRef<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: EmbedderReference<CustomOptionsSchema> & {
     namespace?: string;
@@ -365,7 +360,7 @@ export function embedderActionMetadata({
 }: {
   name: string;
   info?: EmbedderInfo;
-  configSchema?: z.ZodType<any, any>;
+  configSchema?: GenkitSchema;
 }): ActionMetadata {
   return {
     actionType: 'embedder',
