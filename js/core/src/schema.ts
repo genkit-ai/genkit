@@ -141,8 +141,10 @@ function compatOverride(ctx: {
     delete jsonSchema.propertyNames;
   } else if (def.type === 'number') {
     // `.int()` adds safe-integer bounds; they're noise for models.
-    if (jsonSchema.minimum === Number.MIN_SAFE_INTEGER) delete jsonSchema.minimum;
-    if (jsonSchema.maximum === Number.MAX_SAFE_INTEGER) delete jsonSchema.maximum;
+    if (jsonSchema.minimum === Number.MIN_SAFE_INTEGER)
+      delete jsonSchema.minimum;
+    if (jsonSchema.maximum === Number.MAX_SAFE_INTEGER)
+      delete jsonSchema.maximum;
   } else if (
     def.type === 'string' &&
     jsonSchema.format !== undefined &&
@@ -172,7 +174,8 @@ function collapseNullablePrimitive(jsonSchema: z.core.JSONSchema.BaseSchema) {
   const anyOf = jsonSchema.anyOf;
   if (!Array.isArray(anyOf) || anyOf.length !== 2) return;
   const nullIdx = anyOf.findIndex(
-    (s) => typeof s === 'object' && s.type === 'null' && Object.keys(s).length === 1
+    (s) =>
+      typeof s === 'object' && s.type === 'null' && Object.keys(s).length === 1
   );
   if (nullIdx === -1) return;
   const inner = anyOf[1 - nullIdx];
