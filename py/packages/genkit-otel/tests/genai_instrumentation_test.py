@@ -36,11 +36,12 @@ from genkit.telemetry import SpanContext, SpanMetadata, SpanNext
 
 
 def test_content_capturing_mode_is_on_the_package_door() -> None:
-    """from genkit_otel import gives GenAiInstrumentation and ContentCapturingMode; content keys are on the class."""
+    """from genkit_otel import exposes GenAiInstrumentation, ContentCapturingMode, and OtelEventLogger."""
     import genkit_otel
-    from genkit_otel import ContentCapturingMode
+    from genkit_otel import ContentCapturingMode, OtelEventLogger
 
-    assert genkit_otel.__all__ == ['ContentCapturingMode', 'GenAiInstrumentation']
+    assert genkit_otel.__all__ == ['ContentCapturingMode', 'GenAiInstrumentation', 'OtelEventLogger']
+    assert OtelEventLogger is not None
     assert GenAiInstrumentation.CONTENT_ATTRIBUTES is CONTENT_ATTRIBUTES
     assert get_args(ContentCapturingMode) == ('NO_CONTENT', 'SPAN_ONLY', 'EVENT_ONLY', 'SPAN_AND_EVENT')
 

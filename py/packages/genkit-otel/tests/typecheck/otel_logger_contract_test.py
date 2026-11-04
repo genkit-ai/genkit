@@ -27,9 +27,8 @@ objects.
 from collections.abc import Mapping
 
 import pytest
-from genkit_otel import GenAiInstrumentation
+from genkit_otel import GenAiInstrumentation, OtelEventLogger
 from genkit_otel._gen_ai_attributes import GEN_AI_OPERATION_DETAILS_EVENT
-from genkit_otel._genai_instrumentation import OtelEventLogger
 from opentelemetry._logs import get_logger
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.util.types import AttributeValue
