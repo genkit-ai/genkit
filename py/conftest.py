@@ -16,7 +16,31 @@
 
 """Workspace-wide pytest configuration."""
 
+import sys
+
+import pytest
 import structlog
+
+
+def _debugger_attached() -> bool:
+    """Return True when a Python debugger (not coverage) is attached."""
+    if hasattr(sys, 'monitoring') and sys.monitoring.get_tool(sys.monitoring.DEBUGGER_ID) is not None:
+        return True
+    trace = sys.gettrace()
+    if trace is None:
+        return False
+    module = getattr(trace, '__module__', None) or type(trace).__module__
+    return not module.startswith('coverage')
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_cmdline_main(config: pytest.Config) -> None:
+    """Fall back to in-process runs for ``-s`` or attached debuggers so ``breakpoint()`` works."""
+    if getattr(config.option, 'numprocesses', None) == 'auto' and (
+        config.getoption('capture', None) == 'no' or _debugger_attached()
+    ):
+        config.option.numprocesses = 0
+        config.option.dist = 'no'
 
 
 def pytest_configure() -> None:

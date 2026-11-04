@@ -128,10 +128,6 @@ DEP003 = ["pydantic_core"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/genkit"]
 
-[tool.pytest.ini_options]
-pythonpath = [".", "src", "tests", "packages/genkit/src"]
-testpaths  = ["tests"]
-
 [tool.uv.sources]
 genkit-a2ui                         = { workspace = true }
 genkit-amazon-bedrock               = { workspace = true }
