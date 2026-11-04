@@ -17,7 +17,7 @@
   "license": "ISC",
   "dependencies": {
     "@genkit-ai/vertexai": "workspace:*",
-    "dotenv": "^16.4.5",
+    "dotenv": "^18.0.8",
     "firebase-admin": "^13.8.0",
     "genkit": "workspace:*"
   },

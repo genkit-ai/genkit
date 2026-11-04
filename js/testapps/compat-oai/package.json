@@ -18,13 +18,13 @@
   "dependencies": {
     "@genkit-ai/compat-oai": "workspace:*",
     "@genkit-ai/express": "workspace:*",
+    "dotenv": "^18.0.8",
     "genkit": "workspace:*",
     "wav": "^1.0.2"
   },
   "devDependencies": {
     "@types/wav": "^1.0.4",
     "cross-env": "^10.1.0",
-    "dotenv": "^16.4.5",
     "genkit-cli": "link:../../../genkit-tools/cli",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
