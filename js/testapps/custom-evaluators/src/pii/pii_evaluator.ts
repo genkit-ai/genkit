@@ -26,10 +26,10 @@ export const PII_DETECTION: ByoMetric = {
 /**
  * Create the PII detection evaluator.
  */
-export function createPiiEvaluator<ModelCustomOptions extends z.ZodTypeAny>(
+export function createPiiEvaluator<ModelCustomOptions extends z.ZodType<any, any>>(
   ai: Genkit,
   judge: ModelReference<ModelCustomOptions>,
-  judgeConfig: z.infer<ModelCustomOptions>
+  judgeConfig?: z.infer<ModelCustomOptions>
 ): EvaluatorAction {
   return ai.defineEvaluator(
     {

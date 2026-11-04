@@ -29,11 +29,11 @@ const DeliciousnessDetectionResponseSchema = z.object({
 const deliciousnessPrompt = ai.prompt('deliciousness');
 
 export async function deliciousnessScore<
-  CustomModelOptions extends z.ZodTypeAny,
+  CustomModelOptions extends z.ZodType<any, any>,
 >(
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: CustomModelOptions
+  judgeConfig?: z.infer<CustomModelOptions>
 ): Promise<Score> {
   const d = dataPoint;
   try {
