@@ -16,9 +16,12 @@
 
 """Configuration types for the Amazon Bedrock plugin."""
 
-from pydantic import BaseModel, ConfigDict
+from typing import Any, Literal
+
+from pydantic import Field
 
 from genkit.model import ModelConfig
+from genkit.plugin_api import GenkitConfig
 
 DEFAULT_MAX_RETRIES = 3
 # Socket read timeout: the gap botocore tolerates between two reads, which
@@ -34,7 +37,10 @@ DEFAULT_MAX_POOL_CONNECTIONS = 50
 
 
 class BedrockConfig(ModelConfig):
-    """Per-call configuration for Bedrock models.
+    """Per-call configuration for Bedrock text models (the Converse API).
+
+    Stability image models take ``StabilityImageConfig`` instead, which
+    ``Bedrock.stability()`` binds.
 
     Unknown keys are rejected: only the declared fields reach the Converse
     API, so a tolerated typo (``maxTokens`` for ``maxOutputTokens``) would run
@@ -47,15 +53,69 @@ class BedrockConfig(ModelConfig):
     """Tool choice mode: ``auto``, ``required``/``any``, ``none``, or a tool name."""
 
 
-class BedrockImageConfig(BaseModel):
-    """Per-call configuration for Bedrock image models.
+_EXTRA_DESCRIPTION = (
+    'Bedrock body fields this class does not declare, in wire names, deep-merged into the InvokeModel body after '
+    "everything else (for example {'mode': 'text-to-image'}). Nested objects merge key by key. Fields built from "
+    'the prompt are rejected. Not checked otherwise; do not put secrets here.'
+)
 
-    Deliberately declares no properties and rejects nothing. Image config
-    shapes vary per model family (Titan Image and Nova Canvas nest their
-    options under ``imageGenerationConfig``; the Stability models take flat
-    fields like ``aspect_ratio``, ``output_format``, and ``seed``), so any
-    strict schema would silently reject every family-specific override at
-    Genkit's request validation.
+
+class AmazonImageConfig(GenkitConfig):
+    """Config for Titan Image and Nova Canvas, which Bedrock retired; not exported.
+
+    Bedrock retired Titan Image (v2 on 2026-06-30) and Nova Canvas (on
+    2026-09-30), so these models get no typed fields. The raw model ID still
+    routes to InvokeModel, and ``extra`` carries every body field the caller
+    wants beyond the prompt, e.g. ``{'imageGenerationConfig': {'seed': 7}}``.
+    Any other key raises as unknown, and Genkit's message names ``extra``.
     """
 
-    model_config = ConfigDict(extra='allow')
+    extra: dict[str, Any] | None = Field(default=None, description=_EXTRA_DESCRIPTION)
+
+
+StabilityAspectRatio = Literal['16:9', '1:1', '21:9', '2:3', '3:2', '4:5', '5:4', '9:16', '9:21']
+
+
+class StabilityImageConfig(GenkitConfig):
+    """Per-call configuration for Stable Diffusion 3.5, Stable Image Core and Stable Image Ultra.
+
+    Field names are the Stability wire names and are sent at the top level of
+    the request body. Extends ``GenkitConfig``, so Genkit's generic knobs
+    (``temperature``, ...) raise as unknown keys.
+
+    Example:
+        ```python
+        from genkit_amazon_bedrock import StabilityImageConfig
+
+        # 1. Widescreen jpeg, pinned seed
+        response = await ai.generate(
+            model='bedrock/stability.sd3-5-large-v1:0',
+            prompt='A food truck at dusk, string lights.',
+            config=StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg'),
+        )
+
+        # 2. The MIME type follows output_format
+        print(response.media[0].content_type)
+        # => image/jpeg
+        ```
+    """
+
+    aspect_ratio: StabilityAspectRatio | None = Field(default=None, description='Output aspect ratio. Default 1:1.')
+    seed: int | None = Field(
+        default=None,
+        ge=0,
+        le=4294967295,
+        description=(
+            'Randomness seed; 0 or unset picks a random one. '
+            'Stable Image Core and Ultra accept up to 4294967295; Stable Diffusion 3.5 caps at 4294967294.'
+        ),
+    )
+    negative_prompt: str | None = Field(default=None, max_length=10000, description='What to keep out of the image.')
+    output_format: Literal['png', 'jpeg', 'webp'] | None = Field(
+        default=None, description='Output format. Default png. webp is Stable Diffusion 3.5 only.'
+    )
+    extra: dict[str, Any] | None = Field(default=None, description=_EXTRA_DESCRIPTION)
+
+
+ImageConfig = StabilityImageConfig | AmazonImageConfig
+"""Any of the per-family image config classes."""
