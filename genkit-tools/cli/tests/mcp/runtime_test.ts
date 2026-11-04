@@ -26,7 +26,8 @@ import {
 import { defineFlowTools } from '../../src/mcp/flows';
 import { defineRuntimeTools } from '../../src/mcp/runtime';
 import { defineTraceTools } from '../../src/mcp/trace';
-import type { McpToolOptions } from '../../src/mcp/utils';
+import { McpRuntimeManager, type McpToolOptions } from '../../src/mcp/utils';
+import * as managerUtils from '../../src/utils/manager-utils';
 
 jest.mock('@genkit-ai/tools-common/utils', () => {
   const actual = jest.requireActual('@genkit-ai/tools-common/utils') as Record<
@@ -179,5 +180,74 @@ describe('MCP runtime tools', () => {
         },
       ],
     });
+  });
+});
+
+describe('McpRuntimeManager', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('reuses the telemetry server URL for a projectRoot across starts', async () => {
+    const resolveSpy = jest
+      .spyOn(managerUtils, 'resolveTelemetryServer')
+      .mockResolvedValue('http://localhost:4033');
+    const mockRuntimeManager1 = {
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    const mockRuntimeManager2 = {
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    const startDevSpy = jest
+      .spyOn(managerUtils, 'startDevProcessManager')
+      .mockResolvedValueOnce({
+        manager: mockRuntimeManager1,
+        processPromise: Promise.resolve(),
+      })
+      .mockResolvedValueOnce({
+        manager: mockRuntimeManager2,
+        processPromise: Promise.resolve(),
+      });
+    const startManagerSpy = jest
+      .spyOn(managerUtils, 'startManager')
+      .mockResolvedValue(mockRuntimeManager1);
+
+    const mcpManager = new McpRuntimeManager();
+
+    await mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+    await mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+    await mcpManager.getManager('/workspace');
+
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
+    expect(resolveSpy).toHaveBeenCalledWith({ projectRoot: '/workspace' });
+    expect(startDevSpy).toHaveBeenNthCalledWith(
+      1,
+      '/workspace',
+      'npx',
+      ['tsx', 'src/index.ts'],
+      expect.objectContaining({
+        telemetryServerUrl: 'http://localhost:4033',
+      })
+    );
+    expect(startDevSpy).toHaveBeenNthCalledWith(
+      2,
+      '/workspace',
+      'npx',
+      ['tsx', 'src/index.ts'],
+      expect.objectContaining({
+        telemetryServerUrl: 'http://localhost:4033',
+      })
+    );
+    expect(startManagerSpy).not.toHaveBeenCalled();
   });
 });

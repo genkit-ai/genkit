@@ -174,10 +174,12 @@ export async function getDevEnvVars(
   projectRoot: string,
   options?: DevProcessManagerOptions
 ): Promise<DevEnv> {
-  const telemetryServerUrl = await resolveTelemetryServer({
-    projectRoot,
-    corsOrigin: options?.corsOrigin,
-  });
+  const telemetryServerUrl =
+    options?.telemetryServerUrl ??
+    (await resolveTelemetryServer({
+      projectRoot,
+      corsOrigin: options?.corsOrigin,
+    }));
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
   const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
   const reflectionSecret = resolveReflectionSecret({

@@ -24,7 +24,11 @@ import {
   detectProjectLanguage,
   type SupportedDocLanguage,
 } from '../utils/docs';
-import { startDevProcessManager, startManager } from '../utils/manager-utils';
+import {
+  resolveTelemetryServer,
+  startDevProcessManager,
+  startManager,
+} from '../utils/manager-utils';
 
 export {
   SUPPORTED_DOC_LANGUAGES,
@@ -88,9 +92,19 @@ export function resolveProjectRoot(
 export class McpRuntimeManager {
   private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
+  private telemetryServers = new Map<string, string>();
 
   /** @param auth `--experimental-auth`. */
   constructor(private readonly auth?: boolean) {}
+
+  private async getTelemetryServerUrl(projectRoot: string): Promise<string> {
+    let url = this.telemetryServers.get(projectRoot);
+    if (!url) {
+      url = await resolveTelemetryServer({ projectRoot });
+      this.telemetryServers.set(projectRoot, url);
+    }
+    return url;
+  }
 
   async getManager(projectRoot: string) {
     if (this.manager && this.currentProjectRoot === projectRoot) {
@@ -99,9 +113,14 @@ export class McpRuntimeManager {
     if (this.manager) {
       await this.manager.stop();
     }
+    const telemetryServerUrl = await this.getTelemetryServerUrl(projectRoot);
     // No auth here: attaching to existing runtimes never generates a secret.
     // `this.auth` applies when a runtime is spawned (getManagerWithDevProcess).
-    this.manager = await startManager({ projectRoot, manageHealth: true });
+    this.manager = await startManager({
+      projectRoot,
+      manageHealth: true,
+      telemetryServerUrl,
+    });
     this.currentProjectRoot = projectRoot;
     return this.manager;
   }
@@ -117,6 +136,7 @@ export class McpRuntimeManager {
     if (this.manager) {
       await this.manager.stop();
     }
+    const telemetryServerUrl = await this.getTelemetryServerUrl(projectRoot);
     const devManager = await startDevProcessManager(
       projectRoot,
       command,
@@ -127,6 +147,7 @@ export class McpRuntimeManager {
         timeout,
         cwd: explicitProjectRoot ? projectRoot : undefined,
         auth: this.auth,
+        telemetryServerUrl,
       }
     );
     this.manager = devManager.manager;
