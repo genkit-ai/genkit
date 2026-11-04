@@ -1454,7 +1454,7 @@ export interface GetSnapshotDataInput {
 
 export type GetSnapshotDataAction<S = unknown> = Action<
   typeof GetSnapshotDataInputSchema,
-  z.ZodType<SessionSnapshot<S>>
+  z.ZodType<SessionSnapshot<S>, SessionSnapshot<S>>
 >;
 
 /**

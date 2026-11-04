@@ -25,11 +25,16 @@ import {
   type ActionContext,
   type ActionRunOptions,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
   type JSONSchema7,
 } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
-import { parseSchema, toJsonSchema } from '@genkit-ai/core/schema';
+import {
+  parseSchema,
+  parseSchemaAsync,
+  toJsonSchema,
+} from '@genkit-ai/core/schema';
 import { setCustomMetadataAttributes } from '@genkit-ai/core/tracing';
 import {
   type Part,
@@ -63,7 +68,7 @@ export interface Resumable<
      * The data with which you want to respond. Must conform to a tool's output schema or an
      * interrupt's input schema.
      **/
-    outputData: InferOutput<O>,
+    outputData: InferInput<O>,
     options?: { metadata?: Record<string, any> }
   ): ToolResponsePart;
 
@@ -88,7 +93,7 @@ export interface Resumable<
        * if the user revised an action before confirming. When input is replaced, the existing
        * tool request will be amended in the message history.
        **/
-      replaceInput?: InferOutput<I>;
+      replaceInput?: InferInput<I>;
     }
   ): ToolRequestPart;
 }
@@ -307,14 +312,14 @@ export interface ToolFnOptions extends ActionFnArg<never> {
 export type ToolFn<I extends GenkitSchema, O extends GenkitSchema> = (
   input: InferOutput<I>,
   ctx: ToolFnOptions & ToolRunOptions
-) => Promise<InferOutput<O>>;
+) => Promise<InferInput<O>>;
 
 /** The implementation function for a multipart tool that can return structured output, content parts, and metadata. */
 export type MultipartToolFn<I extends GenkitSchema, O extends GenkitSchema> = (
   input: InferOutput<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<{
-  output?: InferOutput<O>;
+  output?: InferInput<O>;
   content?: Part[];
   metadata?: Record<string, any>;
 }>;
@@ -382,9 +387,11 @@ function implementTool<I extends GenkitSchema, O extends GenkitSchema>(
         "The 'tool.restart' method is part of the 'interrupts' beta feature."
       );
     }
-    let replaceInput = options?.replaceInput;
+    const replaceInput = options?.replaceInput;
     if (replaceInput) {
-      replaceInput = parseSchema(replaceInput, {
+      // Validate only: the raw input goes into the tool request and is parsed
+      // when the tool runs (parsing twice would re-apply transforms).
+      parseSchema(replaceInput, {
         schema: config.inputSchema,
         jsonSchema: config.inputJsonSchema,
       });
@@ -640,17 +647,27 @@ function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
         dynamic: true,
       },
     },
-    (i, runOptions) => {
+    async (i, runOptions) => {
       recordResumedMetadata(runOptions);
       const interrupt = interruptTool(runOptions.registry);
-      if (fn) {
-        return fn(i, {
-          ...runOptions,
-          context: { ...runOptions.context },
-          interrupt,
-        });
+      if (!fn) {
+        return interrupt();
       }
-      return interrupt() as any; // we cast to any because `interrupt` throws.
+      const response = await fn(i, {
+        ...runOptions,
+        context: { ...runOptions.context },
+        interrupt,
+      });
+      // The action's output schema is the multipart envelope; parse `output`
+      // with the tool's own schema, like the v1 tool action does.
+      if (response.output === undefined) return response;
+      return {
+        ...response,
+        output: await parseSchemaAsync(response.output, {
+          schema: config.outputSchema,
+          jsonSchema: config.outputJsonSchema,
+        }),
+      };
     }
   ) as MultipartToolAction<I, O>;
   implementTool(a as any, config);

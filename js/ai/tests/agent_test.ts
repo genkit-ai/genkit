@@ -6564,7 +6564,9 @@ describe('detach finalize', () => {
       new Registry(),
       { name: 'finalizeIdempotent', store },
       async (sess) => {
-        await sess.run(async () => {});
+        // Keep the turn in flight until both detach inputs have arrived, so
+        // they target the same run (input items are parsed asynchronously).
+        await sess.run(() => new Promise((r) => setTimeout(r, 20)));
         return { message: { role: 'model', content: [{ text: 'done' }] } };
       }
     );
