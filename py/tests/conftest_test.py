@@ -18,15 +18,29 @@
 
 import argparse
 import bdb
+import contextlib
+import importlib.util
 import logging
 import sys
+from pathlib import Path
+from types import ModuleType
 from typing import cast
 from unittest import mock
 
 import pytest
 import structlog
 
-import conftest as root_conftest
+
+def _load_root_conftest() -> ModuleType:
+    path = Path(__file__).resolve().parents[1] / 'conftest.py'
+    spec = importlib.util.spec_from_file_location('py_workspace_conftest', path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+root_conftest = _load_root_conftest()
 
 
 class _FakeConfig:
@@ -82,16 +96,20 @@ def test_debugger_attached_distinguishes_bdb_from_coverage() -> None:
         __module__ = 'coverage.tracer'
 
     debugger = bdb.Bdb()
-    with (
-        mock.patch.object(sys, 'gettrace', return_value=debugger.trace_dispatch),
-        mock.patch('sys.monitoring.get_tool', return_value=None) if hasattr(sys, 'monitoring') else mock.MagicMock(),
-    ):
+    no_sysmon = (
+        mock.patch('sys.monitoring.get_tool', return_value=None)
+        if hasattr(sys, 'monitoring')
+        else contextlib.nullcontext()
+    )
+    with mock.patch.object(sys, 'gettrace', return_value=debugger.trace_dispatch), no_sysmon:
         assert root_conftest._debugger_attached() is True
 
-    with (
-        mock.patch.object(sys, 'gettrace', return_value=_FakeCoverageTracer()),
-        mock.patch('sys.monitoring.get_tool', return_value=None) if hasattr(sys, 'monitoring') else mock.MagicMock(),
-    ):
+    no_sysmon_cov = (
+        mock.patch('sys.monitoring.get_tool', return_value=None)
+        if hasattr(sys, 'monitoring')
+        else contextlib.nullcontext()
+    )
+    with mock.patch.object(sys, 'gettrace', return_value=_FakeCoverageTracer()), no_sysmon_cov:
         assert root_conftest._debugger_attached() is False
 
 

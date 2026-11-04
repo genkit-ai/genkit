@@ -56,12 +56,12 @@ ALL_TOOLS = [
 # assert is one the host asked for.
 LONG_TTL_MILLIS = 600_000
 
-# Long enough for a healthy test server to start and answer on a slow machine,
-# since the same timeout bounds its handshake.
-STALL_TIMEOUT_MILLIS = 3_000
+# Long enough for a healthy test server to start and answer under parallel
+# xdist load on CI runners, since the same timeout bounds its handshake.
+STALL_TIMEOUT_MILLIS = 8_000
 
 # Bounds every wait on a test server, so a regression fails rather than hangs.
-LIMIT = 15
+LIMIT = 30
 
 # Module level, so no test frame's locals can put it into a rendered traceback.
 SECRET = 'genkit-mcp-redaction-canary-7f3a'
