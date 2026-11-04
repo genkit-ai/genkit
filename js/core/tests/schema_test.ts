@@ -490,6 +490,14 @@ describe('validateSchema() with JSON schemas', () => {
     ]);
   });
 
+  it('supports boolean schemas', () => {
+    assert.strictEqual(validateSchema(1, { jsonSchema: true }).valid, true);
+    assert.deepStrictEqual(validateSchema(1, { jsonSchema: false }).errors, [
+      { path: '(root)', message: 'False boolean schema.' },
+    ]);
+    assert.throws(() => parseSchema(1, { jsonSchema: false }), ValidationError);
+  });
+
   it('should strip undefined values before validating', () => {
     const result = validateSchema(
       { foo: 'hello', bar: undefined },
