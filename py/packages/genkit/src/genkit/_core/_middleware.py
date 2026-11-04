@@ -301,6 +301,7 @@ class MiddlewareContext:
     def __init__(
         self,
         ai: GenkitLike,
+        *,
         abort_signal: asyncio.Event | None = None,
         context: dict[str, object] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
