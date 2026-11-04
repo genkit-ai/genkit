@@ -60,6 +60,9 @@ on:
       tools:
         description: "genkit-tools/** (CLI, Dev UI server, telemetry server)"
         value: ${{ jobs.detect.outputs.tools }}
+      schema:
+        description: "genkit-tools/genkit-schema.json"
+        value: ${{ jobs.detect.outputs.schema }}
       samples:
         description: "samples/**"
         value: ${{ jobs.detect.outputs.samples }}
@@ -81,6 +84,7 @@ jobs:
       js: ${{ steps.areas.outputs.js }}
       python: ${{ steps.areas.outputs.python }}
       tools: ${{ steps.areas.outputs.tools }}
+      schema: ${{ steps.areas.outputs.schema }}
       samples: ${{ steps.areas.outputs.samples }}
       specs: ${{ steps.areas.outputs.specs }}
       other: ${{ steps.other.outputs.other }}
@@ -93,6 +97,7 @@ jobs:
             js: js/**
             python: py/**
             tools: genkit-tools/**
+            schema: genkit-tools/genkit-schema.json
             samples: samples/**
             specs: tests/specs/**
 
