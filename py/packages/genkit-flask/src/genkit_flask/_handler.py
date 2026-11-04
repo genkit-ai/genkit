@@ -17,10 +17,11 @@
 """Genkit Flask plugin."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from asyncio import AbstractEventLoop
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator
 from typing import Any, TypeVar, cast
 
 from flask import Response, request
@@ -86,7 +87,7 @@ def _create_loop() -> AbstractEventLoop:
         return asyncio.new_event_loop()
 
 
-def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable[T]:
+def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Generator[T, None, None]:
     """Synchronously iterates over an AsyncIterable using a specified event loop."""
     ait_iter = ait.__aiter__()
 
@@ -97,12 +98,20 @@ def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable
         except StopAsyncIteration:
             return True, None
 
-    while True:
-        done, obj = loop.run_until_complete(get_next())
-        if done:
-            break
-        assert obj is not None
-        yield obj
+    try:
+        while True:
+            done, obj = loop.run_until_complete(get_next())
+            if done:
+                break
+            assert obj is not None
+            yield obj
+    finally:
+        # Werkzeug closes this iterator when the client hangs up. The async side
+        # only runs while we drive the loop, so close it here or the flow never
+        # hears about it.
+        aclose = getattr(ait_iter, 'aclose', None)
+        if aclose is not None and not loop.is_closed() and not loop.is_running():
+            loop.run_until_complete(aclose())
 
 
 class _FlaskRequestData(RequestData):
@@ -190,8 +199,11 @@ def genkit_flask_handler(
                         _log_failure(error=e, flow=flow.name, where='stream')
                         yield error_sse(e)
                         return
-                    async for line in to_sse(stream_response):
-                        yield line
+                    # closing this generator has to cancel the flow before the
+                    # loop stops; nothing runs the loop afterwards to collect it.
+                    async with contextlib.aclosing(to_sse(stream_response)) as lines:
+                        async for line in lines:
+                            yield line
 
                 return Response(_iter_over_async(async_gen(), loop), mimetype='text/event-stream')
             try:

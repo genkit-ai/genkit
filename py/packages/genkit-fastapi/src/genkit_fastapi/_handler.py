@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -173,8 +174,11 @@ async def _handle_action_request(
                 _log_failure(error=e, flow=action_obj.name, where='stream')
                 yield error_sse(e)
                 return
-            async for line in to_sse(stream_handle):
-                yield line
+            # a client that hangs up closes this generator; aclosing makes
+            # that cancel the flow right away instead of whenever it's collected.
+            async with contextlib.aclosing(to_sse(stream_handle)) as lines:
+                async for line in lines:
+                    yield line
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
 
