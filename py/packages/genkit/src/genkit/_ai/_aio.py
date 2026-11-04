@@ -1222,7 +1222,7 @@ class Genkit:
         async def _run_server() -> None:
             if config.mode == 'v2':
                 assert config.v2_url is not None
-                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {config.v2_url}')
+                logger.debug(f'Genkit Dev UI reflection v2 client connecting to {config.v2_url}')
                 server_v2 = ReflectionServerV2(self._registry, config.v2_url, secret=config.secret)
                 self._reflection_ready.set()
                 await server_v2.run_forever()
@@ -1272,7 +1272,7 @@ class Genkit:
                 if server.should_exit:
                     logger.warning(f'Reflection server at {spec.url} failed to start.')
                     return
-                await logger.adebug(f'Genkit reflection server running at {spec.url}')
+                logger.debug(f'Genkit reflection server running at {spec.url}')
                 await server_task
                 return
 
@@ -1285,7 +1285,7 @@ class Genkit:
                     return
 
                 runtime_manager.write_runtime_file()
-                await logger.adebug(f'Genkit Dev UI reflection server running at {spec.url}')
+                logger.debug(f'Genkit Dev UI reflection server running at {spec.url}')
                 await server_task
 
         def _thread_main() -> None:
