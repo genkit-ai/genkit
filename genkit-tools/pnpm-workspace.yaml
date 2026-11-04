@@ -18,3 +18,9 @@ packages:
   - 'common'
   - 'telemetry-server'
   - 'plugins/*'
+
+# Strip internal proxy tarball URLs when resolving lockfiles locally.
+pnpmfile: ../.pnpmfile.cjs
+
+# 21-day minimum release age (in minutes) to align with Airlock soak policy.
+minimumReleaseAge: 30240
