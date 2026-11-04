@@ -124,7 +124,7 @@ class Tts:
         try:
             result = await self.call(**kwargs)
         except GenkitError as e:
-            return 'raised', e.status, f'{e} {e.details} {e.cause}'
+            return 'raised', e.status, f'{e} {e.details} {e.__cause__}'
         error = getattr(result, 'error', None)
         if error is not None:
             assert getattr(result, 'finish_reason', None) == FinishReason.FAILED
@@ -294,15 +294,17 @@ async def test_required_field_from_prompt_config_satisfies_call_override() -> No
 
 
 @pytest.mark.asyncio
-async def test_call_override_clearing_required_field_fails_the_turn() -> None:
-    """A call that clears the prompt's voice with None leaves it missing for the model action."""
+async def test_call_override_none_on_required_field_raises_before_the_turn() -> None:
+    """An explicit None is a value, not a clear: None isn't a valid voice, so the call raises up front."""
     ai = Genkit()
     tts = Tts(ai, kind='model', declared='annotation')
     announce = ai.define_prompt(model='acme/tts', prompt=PROMPT, config={'voice': 'echo'})
 
-    response = await announce(config={'voice': None})
+    with pytest.raises(GenkitError) as err:
+        await announce(config={'voice': None})
 
-    assert response.finish_reason == FinishReason.FAILED
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert "acme/tts: config 'voice'" in str(err.value)
     assert tts.seen == []
 
 

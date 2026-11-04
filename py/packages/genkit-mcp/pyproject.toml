@@ -41,7 +41,7 @@ classifiers = [
 dependencies = [
   "anyio>=4.9.0",
   "exceptiongroup>=1.2.0; python_version < '3.11'",
-  "genkit",
+  "genkit>=0.12.0,<2",
   "mcp>=1.26.0,<2",
   "pydantic>=2.10.5",
 ]

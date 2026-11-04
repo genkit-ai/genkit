@@ -506,11 +506,7 @@ class AnthropicModel:
 
         params['model'] = config.version or self.model_name
         params['messages'] = self._to_anthropic_messages(request.messages)
-        params['max_tokens'] = int(max_tokens)
-        # ModelConfig types top_k as float, so 40 dumps as 40.0; Claude's top_k is an int.
-        top_k = params.get('top_k')
-        if isinstance(top_k, float) and top_k.is_integer():
-            params['top_k'] = int(top_k)
+        params['max_tokens'] = max_tokens
 
         if use_beta:
             # Resold surfaces (Vertex, Bedrock) do not offer every default beta, so only the direct API gets them.

@@ -787,6 +787,9 @@ function registerActionV2(
         message: 'Action type is missing for ' + resolvedAction.__action.name,
       });
     }
+    // tool()/resource() mark actions as dynamic so generate() registers them per call.
+    // Once a plugin registers them they're no longer dynamic (mirrors defineTool).
+    delete resolvedAction.__action.metadata?.dynamic;
     registry.registerAction(
       resolvedAction.__action.actionType,
       resolvedAction,

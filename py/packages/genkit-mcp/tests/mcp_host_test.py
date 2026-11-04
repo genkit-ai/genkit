@@ -4,7 +4,12 @@
 # you may not use this file except in compliance with the License.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for several MCP servers behind one dynamic action provider."""
+"""Integration tests for several MCP servers behind one dynamic action provider.
+
+Includes whitebox unit checks calling ``genkit._ai._generate.expand_wildcard_tools``
+to verify ``server:tool/*`` dynamic action provider expansion before ``generate``
+runs, without exporting internal generate plumbing on the public surface.
+"""
 
 import asyncio
 import io
@@ -25,14 +30,14 @@ from genkit_mcp._config import McpServerEntry
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Tool
-from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import ActionKind
-from genkit._core._typing import (
-    FinishReason,
-    Role,
-    ToolRequest,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role, Tool, get_logger
+
+# TID251: whitebox unit tests call `genkit._ai._generate.expand_wildcard_tools`
+# directly to assert `server:tool/*` dynamic action provider expansion before
+# `generate` runs, without exporting internal generate plumbing.
+from genkit._ai._generate import expand_wildcard_tools  # noqa: TID251
+from genkit.model import ToolRequest
+from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
 ALL_TOOLS = [
@@ -86,12 +91,12 @@ def missing_server(tmp_path: Path) -> McpServerEntry:
 
 
 def rendered_for_logs(error: BaseException) -> str:
-    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    """Render ``error``'s exception chain and frame locals into an isolated ``StringIO`` buffer."""
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)
@@ -302,7 +307,7 @@ async def test_a_host_closed_during_a_listing_fails_it_as_closed(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path) -> None:
-    """``<host>:tool/*`` reaches every server behind the one provider."""
+    """Whitebox check: ``<host>:tool/*`` expands across every hosted server via ``expand_wildcard_tools``."""
     ai = Genkit()
     host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:
@@ -310,7 +315,7 @@ async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path)
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha', 'beta'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha', 'beta'))
 
 
 @pytest.mark.asyncio
@@ -400,8 +405,8 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
     finally:
         await host.close()
 
-    assert sorted(before) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
-    assert sorted(after) == sorted(f'/tool.v2/{name}' for name in hosted('alpha', 'beta'))
+    assert sorted(before) == sorted(f'/tool/{name}' for name in hosted('alpha'))
+    assert sorted(after) == sorted(f'/tool/{name}' for name in hosted('alpha', 'beta'))
 
 
 @pytest.mark.asyncio
@@ -472,7 +477,7 @@ async def test_connect_reports_a_server_which_cannot_be_started_and_keeps_the_ho
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -560,7 +565,7 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -586,7 +591,7 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -641,13 +646,15 @@ async def test_close_is_final(tmp_path: Path) -> None:
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
     with pytest.raises(GenkitError, match=closed) as connecting:
         await host.connect('gamma', server(tmp_path, pid_name='gamma'))
+    with pytest.raises(GenkitError, match=closed) as connecting_disabled:
+        await host.connect('gamma', {'command': 'npx', 'disabled': True})
     with pytest.raises(GenkitError, match=closed) as reconnecting:
         await host.reconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as disconnecting:
         await host.disconnect('alpha')
     with pytest.raises(GenkitError, match=closed) as naming:
         host.tool_name('alpha', 'echo')
-    for raised in (listing, selecting, connecting, reconnecting, disconnecting, naming):
+    for raised in (listing, selecting, connecting, connecting_disabled, reconnecting, disconnecting, naming):
         assert raised.value.status == 'FAILED_PRECONDITION'
     assert server_processes() == []
 
@@ -782,7 +789,7 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
 
 
 @pytest.mark.asyncio
@@ -850,7 +857,7 @@ async def test_an_mcp_servers_block_of_stdio_servers_is_accepted_as_it_is(tmp_pa
 async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_path: Path) -> None:
     """A misspelt env must not launch the server without its secret, nor print the secret."""
     secret = 'sk-distinctive-secret-7f3a'
-    loaded: dict[str, Any] = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
+    loaded = json.loads(json.dumps({'command': 'npx', 'enviroment': {'API_KEY': secret}}))
     with pytest.raises(ValueError, match="MCP host 'hosted': server 'alpha' is not a stdio entry") as raised:
         McpHost('hosted', mcp_servers={'alpha': loaded})
     assert 'enviroment' in str(raised.value)
@@ -865,7 +872,6 @@ async def test_an_entry_with_an_unknown_key_is_refused_without_echoing_it(tmp_pa
     [
         {'url': 'https://mcp.example.com/sse?token=sk-distinctive-secret-7f3a'},
         {'type': 'sse', 'command': 'npx'},
-        {'command': 'npx', 'disabled': True},
     ],
 )
 async def test_an_entry_which_is_not_stdio_is_refused_by_name(tmp_path: Path, entry: dict[str, Any]) -> None:
@@ -873,6 +879,112 @@ async def test_an_entry_which_is_not_stdio_is_refused_by_name(tmp_path: Path, en
     with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry") as raised:
         McpHost('hosted', mcp_servers={**servers(tmp_path, 'alpha'), 'linear': json.loads(json.dumps(entry))})
     assert 'sk-distinctive-secret-7f3a' not in str(raised.value)
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_server_is_never_started_or_listed(tmp_path: Path) -> None:
+    """A block can switch a server off without editing it out, and the host leaves it alone."""
+    block = json.loads(
+        json.dumps({
+            'mcpServers': {
+                'alpha': {**server(tmp_path, pid_name='alpha'), 'disabled': False},
+                'beta': {**server(tmp_path, pid_name='beta'), 'disabled': True},
+            }
+        })
+    )
+    ai = Genkit()
+    host = define_mcp_host(ai, 'hosted', mcp_servers=block['mcpServers'])
+    try:
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        assert list(host._clients) == ['alpha']
+        assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'alpha').pid]
+        with pytest.raises(ValueError, match="holds no server named 'beta'"):
+            host.tool_name('beta', 'echo')
+    finally:
+        await host.close()
+
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
+    assert not (tmp_path / 'beta.pid').exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'entry',
+    [
+        {'url': 'https://mcp.example.com/sse?token=sk-distinctive-secret-7f3a', 'disabled': True},
+        {'command': 'npx', 'disabled': 'sometimes'},
+        {'disabled': True},
+    ],
+)
+async def test_a_disabled_entry_is_still_refused_when_it_is_not_stdio(tmp_path: Path, entry: dict[str, Any]) -> None:
+    """Switching a server off does not switch off checking its entry."""
+    with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry") as raised:
+        McpHost('hosted', mcp_servers={**servers(tmp_path, 'alpha'), 'linear': json.loads(json.dumps(entry))})
+    assert 'sk-distinctive-secret-7f3a' not in str(raised.value)
+
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(ValueError, match="MCP host 'hosted': server 'linear' is not a stdio entry"):
+            await host.connect('linear', json.loads(json.dumps(entry)))
+    finally:
+        await host.close()
+    assert server_processes() == []
+
+
+@pytest.mark.asyncio
+async def test_a_disabled_server_name_no_model_would_accept_is_refused(tmp_path: Path) -> None:
+    refused = "'my server' cannot prefix an MCP tool name"
+    with pytest.raises(ValueError, match=re.escape(refused)):
+        McpHost('hosted', mcp_servers={'my server': {'command': 'npx', 'disabled': True}})
+
+    host = McpHost('hosted', mcp_servers={})
+    try:
+        with pytest.raises(ValueError, match=re.escape(refused)):
+            await host.connect('my server', {'command': 'npx', 'disabled': True})
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
+async def test_connect_with_a_disabled_entry_removes_the_server_of_that_name(tmp_path: Path) -> None:
+    """Connecting an entry that says off leaves no server of that name running or listed."""
+    ai = Genkit()
+    host = define_mcp_host(
+        ai,
+        'hosted',
+        mcp_servers=servers(tmp_path, 'alpha', 'beta'),
+        cache_ttl_millis=LONG_TTL_MILLIS,
+    )
+    try:
+        await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+        assert len(server_processes()) == 2
+
+        await host.connect(
+            'beta', json.loads(json.dumps({**server(tmp_path, pid_name='replacement'), 'disabled': True}))
+        )
+
+        assert list(host._clients) == ['alpha']
+        assert [process.pid for process in server_processes()] == [server_process(tmp_path, 'alpha').pid]
+        expanded = await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
+    finally:
+        await host.close()
+
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
+    assert not (tmp_path / 'replacement.pid').exists()
+
+
+@pytest.mark.asyncio
+async def test_connect_with_a_disabled_entry_for_a_new_name_starts_nothing(tmp_path: Path) -> None:
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'alpha'))
+    try:
+        await host.connect('beta', json.loads(json.dumps({**server(tmp_path, pid_name='beta'), 'disabled': True})))
+        assert list(host._clients) == ['alpha']
+        assert tool_names(await host.get_active_tools()) == hosted('alpha')
+    finally:
+        await host.close()
+
+    assert not (tmp_path / 'beta.pid').exists()
     assert server_processes() == []
 
 

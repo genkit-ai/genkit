@@ -31,9 +31,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
-from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
+from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, to_sse, wants_stream
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # noqa: TID251
 
 # Compact JSON (no spaces) for smaller wire payload.
 JSON_SEPARATORS = (',', ':')
@@ -79,24 +79,19 @@ async def _read_json_request_body(*, request: Request) -> object:
         raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
-def _log_failure(*, error: Exception, where: str) -> None:
-    """Log a served-flow failure; 5xx includes the traceback."""
+def _log_failure(*, error: Exception, flow: str, where: str) -> None:
+    """Log a served-action failure to the host web server's stdlib logger, naming the action.
+
+    Intentionally emits to stdlib ``logging`` rather than ``genkit.get_logger``
+    because route failures happen at the HTTP boundary outside the flow span,
+    where ASGI server handlers (Uvicorn/Gunicorn), Sentry ``LoggingIntegration``,
+    and ``pytest`` ``caplog`` listen. 5xx errors include the traceback.
+    """
+    extra = {'genkit_action': flow}
     if error_status(error) >= 500:
-        logger.exception('served flow %s failed', where)
+        logger.exception('served action %r %s failed', flow, where, extra=extra)
     else:
-        logger.warning('served flow %s failed: %s', where, error)
-
-
-def format_stream_chunk(chunk: object) -> str:
-    """Format a stream chunk for SSE."""
-    msg_json = json.dumps({'message': to_dict(chunk)}, separators=JSON_SEPARATORS)
-    return f'data: {msg_json}\n\n'
-
-
-def format_stream_result(result: object) -> str:
-    """Format the final stream result for SSE."""
-    res_json = json.dumps({'result': to_dict(result)}, separators=JSON_SEPARATORS)
-    return f'data: {res_json}\n\n'
+        logger.warning('served action %r %s failed: %s', flow, where, error, extra=extra)
 
 
 def format_stream_error(error: Exception) -> str:
@@ -155,7 +150,7 @@ async def _handle_action_request(
     try:
         body = await _read_json_request_body(request=request)
     except PublicError as err:
-        _log_failure(error=err, where='run')
+        _log_failure(error=err, flow=action.name, where='run')
         return json_error_response(err)
     try:
         if extract_input is not None and isinstance(body, dict):
@@ -178,14 +173,13 @@ async def _handle_action_request(
 
         async def event_stream() -> AsyncIterator[str]:
             try:
-                stream_response = action_obj.stream(input=action_input, context=context, init=resolved_init)
-                async for chunk in stream_response.stream:
-                    yield format_stream_chunk(chunk)
-                result = await stream_response.response
-                yield format_stream_result(result)
+                stream_handle = action_obj.stream(input=action_input, context=context, init=resolved_init)
             except Exception as e:
-                _log_failure(error=e, where='stream')
+                _log_failure(error=e, flow=action_obj.name, where='stream')
                 yield format_stream_error(e)
+                return
+            async for line in to_sse(stream_handle):
+                yield line
 
         return StreamingResponse(event_stream(), media_type='text/event-stream')
 
@@ -195,7 +189,7 @@ async def _handle_action_request(
             return Response(status_code=empty_status)
         return {'result': to_dict(response.response)}
     except Exception as e:
-        _log_failure(error=e, where='run')
+        _log_failure(error=e, flow=action_obj.name, where='run')
         return json_error_response(e)
 
 
@@ -262,7 +256,8 @@ def genkit_fastapi_handler(
                 # The wrapper's own HTTP response (e.g. 503 while the action isn't ready).
                 raise
             except Exception as e:
-                _log_failure(error=e, where='handler')
+                flow_name = getattr(fn, '__name__', '<unknown>')
+                _log_failure(error=e, flow=flow_name, where='handler')
                 return json_error_response(e)
 
             # This decorator reads context from the request itself. Routes that
@@ -284,7 +279,7 @@ def genkit_fastapi_handler(
                     # handles it so a 401 from context_provider stays a 401.
                     raise
                 except Exception as e:
-                    _log_failure(error=e, where='context provider')
+                    _log_failure(error=e, flow=action.name, where='context provider')
                     return json_error_response(e)
 
             return await handle_genkit_request(

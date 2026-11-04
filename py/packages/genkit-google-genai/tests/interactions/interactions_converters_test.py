@@ -976,7 +976,7 @@ class TestFromInteractionSync:
         with pytest.raises(GenkitError, match='Quota exceeded for lyria') as raised:
             from_interaction_sync(interaction)
         assert raised.value.status == status
-        assert isinstance(raised.value.cause, ValueError)
+        assert isinstance(raised.value.__cause__, ValueError)
 
     def test_failed_step_error_grpc_code_is_classified(self) -> None:
         interaction = Interaction.model_validate({

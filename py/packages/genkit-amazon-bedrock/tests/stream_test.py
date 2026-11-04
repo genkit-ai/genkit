@@ -257,7 +257,7 @@ async def test_malformed_tool_input_raises() -> None:
             ctx,
         )
 
-    assert 'stream tool block 0' in excinfo.value.original_message
+    assert 'stream tool block 0' in excinfo.value.message
     assert chunks == []
 
 
@@ -268,7 +268,7 @@ async def test_trailing_data_after_tool_input_raises() -> None:
             text_request(),
         )
 
-    assert 'stream tool block 0' in excinfo.value.original_message
+    assert 'stream tool block 0' in excinfo.value.message
 
 
 async def test_content_block_stop_for_unknown_index_is_a_noop() -> None:

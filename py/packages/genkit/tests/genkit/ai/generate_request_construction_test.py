@@ -11,8 +11,7 @@ import pytest
 from genkit_openai import OpenAIConfig
 from pydantic import BaseModel
 
-from genkit import Document, Genkit, Part
-from genkit._core._error import GenkitError
+from genkit import Document, Genkit, GenkitError, Part
 from genkit._core._model import Message, ModelConfig, ModelRequest, ModelResponse
 from genkit._core._typing import Role
 from genkit.model import ModelContext
@@ -179,8 +178,9 @@ async def test_invalid_config_from_a_raw_run_raises_at_the_boundary(ai_and_seen:
     ai, _ = ai_and_seen
     action = await ai._registry.resolve_model('strict')
     assert action is not None
-    with pytest.raises(GenkitError, match="Invalid input for model 'strict'"):
+    with pytest.raises(GenkitError, match=r"strict: unknown config key 'thinking'") as err:
         await action.run(cast(Any, {'messages': [], 'config': {'thinking': True}}))
+    assert err.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio

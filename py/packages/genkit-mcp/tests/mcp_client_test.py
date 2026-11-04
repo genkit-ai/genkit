@@ -4,7 +4,12 @@
 # you may not use this file except in compliance with the License.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for the MCP client registered as a dynamic action provider."""
+"""Integration tests for the MCP client registered as a dynamic action provider.
+
+Includes whitebox unit checks calling ``genkit._ai._generate.expand_wildcard_tools``
+to verify ``server:tool/*`` dynamic action provider expansion before ``generate``
+runs, without exporting internal generate plumbing on the public surface.
+"""
 
 import asyncio
 import gc
@@ -24,14 +29,14 @@ from genkit_mcp import McpClient, define_mcp_client
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import McpConnection, _serving
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part
-from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import ActionKind
-from genkit._core._typing import (
-    FinishReason,
-    Role,
-    ToolRequest,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role
+
+# TID251: whitebox unit tests call `genkit._ai._generate.expand_wildcard_tools`
+# directly to assert `server:tool/*` dynamic action provider expansion before
+# `generate` runs, without exporting internal generate plumbing.
+from genkit._ai._generate import expand_wildcard_tools  # noqa: TID251
+from genkit.model import ToolRequest
+from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
 _T = TypeVar('_T')
@@ -133,7 +138,7 @@ def tool_call_response(tool_name: str, input: dict[str, Any]) -> ModelResponse:
 
 @pytest.mark.asyncio
 async def test_wildcard_selector_expands_to_every_tool(tmp_path: Path) -> None:
-    """``<provider>:tool/*`` binds every server tool, which needs metadata['name']."""
+    """Whitebox check: ``<provider>:tool/*`` expands to every server tool via ``expand_wildcard_tools``."""
     ai = Genkit()
     client = define_mcp_client(ai, 'fake', **server(tmp_path))
     try:
@@ -142,7 +147,7 @@ async def test_wildcard_selector_expands_to_every_tool(tmp_path: Path) -> None:
         await client.close()
 
     assert client.name == 'fake'
-    assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
+    assert sorted(expanded) == sorted(f'/tool/fake_{tool}' for tool in ALL_TOOLS)
 
 
 @pytest.mark.asyncio
@@ -215,14 +220,14 @@ async def test_generate_accepts_the_listed_tools(tmp_path: Path) -> None:
     assert tool_message.content[0].tool_response is not None
     assert tool_message.content[0].tool_response.output == 'hello'
     sent = next(tool for tool in pm.last_request.tools or [] if tool.name == 'fake_bad_output')
-    assert sent.output_schema is None
-    assert tools[0].output_schema is None
+    assert tools[0].definition().output_schema is None
     assert tools[-1].name == 'fake_bad_output'
-    assert tools[-1].output_schema == {
+    assert tools[-1].definition().output_schema == {
         'type': 'object',
         'properties': {'value': {'type': 'integer'}},
         'required': ['value'],
     }
+    assert sent.output_schema == tools[-1].definition().output_schema
 
 
 @pytest.mark.asyncio
@@ -250,7 +255,7 @@ async def test_a_dead_server_drops_the_listing_and_is_replaced(tmp_path: Path) -
         # The listing outlives its TTL, so re-listing here is the invalidation,
         # and a process to list from is the replaced connection.
         expanded = await expand_wildcard_tools(ai._registry, ['fake:tool/*'])
-        assert sorted(expanded) == sorted(f'/tool.v2/fake_{tool}' for tool in ALL_TOOLS)
+        assert sorted(expanded) == sorted(f'/tool/fake_{tool}' for tool in ALL_TOOLS)
         replaced = server_processes(tmp_path)
         assert len(replaced) == 1
         assert replaced[0].pid != killed[0].pid
@@ -771,7 +776,7 @@ async def test_get_active_tools_lists_what_the_selector_binds(tmp_path: Path) ->
 
     assert [tool.name for tool in tools] == [f'fake_{tool}' for tool in ALL_TOOLS]
     assert [tool.description for tool in tools][:2] == ['Echo input.', 'Another tool.']
-    assert sorted(expanded) == sorted(f'/tool.v2/{tool.name}' for tool in tools)
+    assert sorted(expanded) == sorted(f'/tool/{tool.name}' for tool in tools)
 
 
 @pytest.mark.asyncio
