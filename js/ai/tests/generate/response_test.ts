@@ -95,6 +95,21 @@ describe('GenerateResponse', () => {
           raw: { id: 'chatcmpl-2' },
         },
       },
+      {
+        should: 'keep raw as is when its toJSON is not a function',
+        responseData: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          raw: { id: 'chatcmpl-4', toJSON: 'plain value' },
+        },
+        expectedOutput: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          usage: {},
+          custom: {},
+          raw: { id: 'chatcmpl-4', toJSON: 'plain value' },
+        },
+      },
     ];
 
     for (const test of testCases) {
