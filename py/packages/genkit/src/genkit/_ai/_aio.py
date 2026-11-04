@@ -98,7 +98,13 @@ from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._flow import Flow
-from genkit._core._logger import REFLECTION_THREAD_NAME, configure_logging, get_logger, quiet_reflection_logs
+from genkit._core._logger import (
+    REFLECTION_THREAD_NAME,
+    configure_logging,
+    get_logger,
+    has_app_uvicorn_logging,
+    quiet_reflection_logs,
+)
 from genkit._core._middleware import Middleware
 from genkit._core._model import (
     Document,
@@ -1242,19 +1248,29 @@ class Genkit:
                 )
 
             app = create_reflection_asgi_app(registry=self._registry, secret=config.secret)
-            # uvicorn.Config applies log_config, log_level and access_log=False
-            # to the process-wide uvicorn.* loggers, which the app's own uvicorn
-            # server shares. Leave all three at their no-op values; the
-            # reflection server's own records are dropped by the thread-scoped
-            # filter from quiet_reflection_logs().
-            uvicorn_config = uvicorn.Config(
-                app,
-                host=spec.host,
-                port=spec.port,
-                loop='asyncio',
-                log_config=None,
-                log_level=None,
-            )
+            # If the application configured uvicorn loggers, leave log_config
+            # and log_level at None so uvicorn's Config doesn't re-apply
+            # dictConfig or overwrite levels; ReflectionLogFilter filters
+            # reflection records by thread. Otherwise, configure uvicorn with
+            # debug level so records reach ReflectionLogFilter (which quiets
+            # them under info and prints them under debug).
+            if has_app_uvicorn_logging():
+                uvicorn_config = uvicorn.Config(
+                    app,
+                    host=spec.host,
+                    port=spec.port,
+                    loop='asyncio',
+                    log_config=None,
+                    log_level=None,
+                )
+            else:
+                uvicorn_config = uvicorn.Config(
+                    app,
+                    host=spec.host,
+                    port=spec.port,
+                    loop='asyncio',
+                    log_level='debug',
+                )
             server = ReflectionServer(uvicorn_config, ready=self._reflection_ready)
             # Dev only: the runtime file exists so a local CLI watching the
             # same filesystem can discover this runtime. Nothing is watching in

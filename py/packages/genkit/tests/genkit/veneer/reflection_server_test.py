@@ -353,3 +353,25 @@ def test_no_server_from_host_or_port_alone() -> None:
 
     assert not ai._reflection_config.enabled  # pyright: ignore[reportPrivateUsage]
     assert not ai._reflection_ready.is_set()  # pyright: ignore[reportPrivateUsage]
+
+
+def test_reflection_server_configures_logging_when_app_has_none() -> None:
+    """When the app has no uvicorn logging, reflection server sets up default uvicorn config under debug."""
+    port = _find_free_port()
+    loggers = [logging.getLogger(n) for n in ('uvicorn', 'uvicorn.error', 'uvicorn.access')]
+    saved = [(lg, lg.level, list(lg.handlers), list(lg.filters), lg.propagate) for lg in loggers]
+    for lg in loggers:
+        lg.handlers = []
+        lg.level = logging.NOTSET
+    try:
+        with mock.patch.dict(os.environ, {GENKIT_ENV: GenkitEnvironment.DEV, 'GENKIT_LOG': 'debug'}):
+            ai = _genkit_on_port(port)
+            resp = _wait_and_get(ai, '/api/__health')
+            assert resp.status_code == 200
+        assert bool(logging.getLogger('uvicorn.error').handlers or logging.getLogger('uvicorn').handlers)
+    finally:
+        for lg, level, handlers, filters, propagate in saved:
+            lg.setLevel(level)
+            lg.handlers = handlers
+            lg.filters = filters
+            lg.propagate = propagate

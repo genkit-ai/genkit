@@ -44,6 +44,13 @@ REFLECTION_LOGGERS = (
     'uvicorn.error',
 )
 
+# Shared genkit start TTY. httpx and httpcore log INFO on every hop (Gemini
+# generateContent, the app's own clients). GENKIT_LOG=debug turns these back on.
+QUIET_LOGGERS = (
+    'httpx',
+    'httpcore',
+)
+
 
 def resolve_level() -> int:
     """Resolve logging level from GENKIT_LOG environment variable."""
@@ -96,8 +103,8 @@ def configure_structlog_level() -> bool:
     return True
 
 
-def configure_logging() -> None:
-    """Configure genkit console logging.
+def configure_logging(*, shared_tty: bool | None = None) -> None:
+    """Configure genkit console logging and mute client HTTP hops on a shared TTY.
 
     Safe to call more than once. Default console level is ``info``; override
     with ``GENKIT_LOG=debug|info|warn|error``. In ``GENKIT_ENV=dev``, debug
@@ -105,6 +112,20 @@ def configure_logging() -> None:
     """
     configure_structlog_level()
     _maybe_enable_log_export()
+
+    if shared_tty is None:
+        shared_tty = is_dev_environment()
+
+    if not shared_tty:
+        return
+
+    level = resolve_level()
+    quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
+
+    for name in QUIET_LOGGERS:
+        logger = logging.getLogger(name)
+        if logger.level == logging.NOTSET:
+            logger.setLevel(quiet_level)
 
 
 class ReflectionLogFilter(logging.Filter):
@@ -123,6 +144,15 @@ class ReflectionLogFilter(logging.Filter):
         level = resolve_level()
         quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
         return record.levelno >= quiet_level
+
+
+def has_app_uvicorn_logging() -> bool:
+    """Report whether the host application configured uvicorn loggers."""
+    for name in ('uvicorn', 'uvicorn.error', 'uvicorn.access'):
+        logger = logging.getLogger(name)
+        if logger.handlers or logger.level != logging.NOTSET:
+            return True
+    return False
 
 
 def quiet_reflection_logs() -> None:

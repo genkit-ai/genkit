@@ -16,12 +16,14 @@ from structlog.testing import capture_logs
 
 from genkit._core._logger import (
     GENKIT_LOG,
+    QUIET_LOGGERS,
     REFLECTION_LOGGERS,
     REFLECTION_THREAD_NAME,
     ReflectionLogFilter,
     configure_logging,
     configure_structlog_level,
     get_logger,
+    has_app_uvicorn_logging,
     is_debug_enabled,
     quiet_reflection_logs,
     resolve_level,
@@ -99,11 +101,83 @@ def test_quiet_reflection_logs_adds_one_filter_and_keeps_levels() -> None:
             lg.filters = filters
 
 
-def test_configure_logging_leaves_stdlib_loggers_alone() -> None:
-    """configure_logging only sets the structlog level; stdlib loggers are the app's."""
+def test_quiet_loggers_are_httpx_and_httpcore() -> None:
+    """Dev UI mutes client HTTP hops on a shared TTY, not provider SDKs."""
+    assert QUIET_LOGGERS == (
+        'httpx',
+        'httpcore',
+    )
+    assert 'uvicorn.access' not in QUIET_LOGGERS
+    assert 'uvicorn.error' not in QUIET_LOGGERS
+
+
+def test_configure_logging_mutes_quiet_loggers() -> None:
+    """Test that configure_logging sets QUIET_LOGGERS to WARNING on a shared TTY."""
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
+        mock_get_logger.return_value.level = logging.NOTSET
+        configure_logging(shared_tty=True)
+        for name in QUIET_LOGGERS:
+            mock_get_logger.assert_any_call(name)
+        expected_calls = [mock.call(logging.WARNING)] * len(QUIET_LOGGERS)
+        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
+
+
+def test_configure_logging_allows_debug() -> None:
+    """Test that GENKIT_LOG=debug sets QUIET_LOGGERS to DEBUG."""
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'debug'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
+        mock_get_logger.return_value.level = logging.NOTSET
+        configure_logging(shared_tty=True)
+        for name in QUIET_LOGGERS:
+            mock_get_logger.assert_any_call(name)
+        expected_calls = [mock.call(logging.DEBUG)] * len(QUIET_LOGGERS)
+        mock_get_logger.return_value.setLevel.assert_has_calls(expected_calls, any_order=True)
+
+
+def test_configure_logging_leaves_loggers_alone_in_prod() -> None:
+    """Test that configure_logging does not alter logger levels in non-dev env."""
     with mock.patch('logging.getLogger') as mock_get_logger:
-        configure_logging()
+        configure_logging(shared_tty=False)
         mock_get_logger.assert_not_called()
+
+
+def test_configure_logging_respects_user_configured_levels() -> None:
+    """Test that configure_logging does not overwrite explicitly set logger levels."""
+    with (
+        mock.patch.dict(os.environ, {'GENKIT_LOG': 'info'}),
+        mock.patch('logging.getLogger') as mock_get_logger,
+    ):
+        mock_get_logger.return_value.level = logging.DEBUG
+        configure_logging(shared_tty=True)
+        mock_get_logger.return_value.setLevel.assert_not_called()
+
+
+def test_has_app_uvicorn_logging() -> None:
+    """Reports True when uvicorn loggers have handlers or non-NOTSET level."""
+    loggers = [logging.getLogger(n) for n in ('uvicorn', 'uvicorn.error', 'uvicorn.access')]
+    saved = [(lg, lg.level, list(lg.handlers)) for lg in loggers]
+    try:
+        for lg in loggers:
+            lg.level = logging.NOTSET
+            lg.handlers = []
+        assert has_app_uvicorn_logging() is False
+
+        logging.getLogger('uvicorn.error').setLevel(logging.INFO)
+        assert has_app_uvicorn_logging() is True
+        logging.getLogger('uvicorn.error').setLevel(logging.NOTSET)
+
+        dummy_handler = logging.StreamHandler()
+        logging.getLogger('uvicorn.access').handlers = [dummy_handler]
+        assert has_app_uvicorn_logging() is True
+    finally:
+        for lg, level, handlers in saved:
+            lg.level = level
+            lg.handlers = handlers
 
 
 @pytest.fixture
