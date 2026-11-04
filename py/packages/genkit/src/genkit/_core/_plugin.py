@@ -22,8 +22,8 @@ import abc
 from collections.abc import Sequence
 from typing import Any
 
-from genkit._core._action import Action, ActionKind, set_action_name
-from genkit._core._background import BackgroundAction, background_base_id
+from genkit._core._action import Action, ActionKind
+from genkit._core._background import BackgroundAction
 from genkit._core._middleware import Middleware
 
 
@@ -159,32 +159,3 @@ class Plugin(abc.ABC):
             ```
         """
         return []
-
-    async def model(self, name: str) -> Action | None:
-        """Resolve a model action by id, with or without this plugin's prefix.
-
-        Follows the naming rule on :meth:`resolve`: one leading
-        ``{plugin.name}/`` is removed, the rest goes to ``resolve`` unchanged,
-        and the action is named ``{plugin.name}/{rest}``. Any other prefix is
-        part of the id, so ``Bedrock().model('googleai/gemini')`` asks Bedrock
-        for ``googleai/gemini``.
-        """
-        return await self._named_resolve(ActionKind.MODEL, name)
-
-    async def embedder(self, name: str) -> Action | None:
-        """Resolve an embedder action by id, with or without this plugin's prefix.
-
-        Same naming rule as :meth:`model`.
-        """
-        return await self._named_resolve(ActionKind.EMBEDDER, name)
-
-    async def _named_resolve(self, kind: ActionKind, name: str) -> Action | None:
-        requested_id = name.removeprefix(f'{self.name}/')
-        resolved = await self.resolve(kind, requested_id)
-        if isinstance(resolved, BackgroundAction):
-            base = background_base_id(kind, requested_id)
-            resolved._rename(resolved_action_name(plugin=self.name, requested_id=base))
-            return resolved._action_for(kind)
-        if resolved is not None:
-            set_action_name(resolved, resolved_action_name(plugin=self.name, requested_id=requested_id))
-        return resolved
