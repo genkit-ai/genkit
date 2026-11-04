@@ -2524,7 +2524,7 @@ export function defineCustomAgent<State = unknown>(
  */
 export function definePromptAgent<
   State = unknown,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   config: {
@@ -2594,7 +2594,7 @@ export function definePromptAgent<
       // {{history}}).  When the prompt has no explicit `messages` config
       // the render helper simply appends history after system/user.
       const genOpts = await cachedPromptAction.__executablePrompt.render(
-        promptInput as unknown as z.ZodTypeAny,
+        promptInput as unknown as z.ZodType<any, any>,
         { messages: history }
       );
 
@@ -2835,7 +2835,7 @@ export function validateResumeAgainstHistory(
  */
 export interface AgentConfig<
   State = unknown,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
 > extends PromptConfig<I> {
   /**
    * Optional Zod schema describing the shape of the custom session state.
@@ -2879,7 +2879,7 @@ export interface AgentConfig<
  */
 export function defineAgent<
   State = unknown,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(registry: Registry, config: AgentConfig<State, I>): Agent<State> {
   // Extract agent-specific fields from the combined config; the rest is
   // forwarded to definePrompt.

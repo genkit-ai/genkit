@@ -1284,7 +1284,6 @@ describe('prompt', () => {
     const rendered = await prompt.render({ foo: 'bar' });
     assert.deepStrictEqual(rendered.output?.jsonSchema, {
       $schema: 'http://json-schema.org/draft-07/schema#',
-      additionalProperties: true,
       properties: {
         output: {
           type: 'string',
@@ -1423,7 +1422,6 @@ describe('prompt', () => {
               },
             },
             required: ['name'],
-            additionalProperties: true,
             $schema: 'http://json-schema.org/draft-07/schema#',
           },
         },

@@ -25,7 +25,7 @@ import {
 export { Part, PartSchema };
 
 /** Zod schema for a serializable reference to a registered generate middleware. */
-export const MiddlewareRefSchema: z.ZodTypeAny = z.object({
+export const MiddlewareRefSchema: z.ZodType<any, any> = z.object({
   name: z.string(),
   config: z.any().optional(),
 });
@@ -53,7 +53,7 @@ export type Role = z.infer<typeof RoleSchema>;
 export const MessageSchema = z.object({
   role: RoleSchema,
   content: z.array(PartSchema),
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 /**
@@ -70,7 +70,7 @@ export const ModelInfoSchema = z.object({
   /** Friendly label for this model (e.g. "Google AI - Gemini Pro") */
   label: z.string().optional(),
   /** Model Specific configuration. */
-  configSchema: z.record(z.any()).optional(),
+  configSchema: z.record(z.string(), z.any()).optional(),
   /** Supported model capabilities. */
   supports: z
     .object({
@@ -119,15 +119,15 @@ export const ToolDefinitionSchema = z.object({
   key: z.string().optional(),
   description: z.string(),
   inputSchema: z
-    .record(z.any())
+    .record(z.string(), z.any())
     .describe('Valid JSON Schema representing the input of the tool.')
     .nullish(),
   outputSchema: z
-    .record(z.any())
+    .record(z.string(), z.any())
     .describe('Valid JSON Schema describing the output of the tool.')
     .nullish(),
   metadata: z
-    .record(z.any())
+    .record(z.string(), z.any())
     .describe('additional metadata for this tool definition')
     .optional(),
 });
@@ -207,7 +207,7 @@ export type GenerationCommonConfig = typeof GenerationCommonConfigSchema;
  */
 export const OutputConfigSchema = z.object({
   format: z.string().optional(),
-  schema: z.record(z.any()).optional(),
+  schema: z.record(z.string(), z.any()).optional(),
   constrained: z.boolean().optional(),
   contentType: z.string().optional(),
 });
@@ -228,7 +228,7 @@ export const ModelRequestSchema = z.object({
 });
 /** ModelRequest represents the parameters that are passed to a model when generating content. */
 export interface ModelRequest<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 > extends z.infer<typeof ModelRequestSchema> {
   config?: z.infer<CustomOptionsSchema>;
 }
@@ -249,7 +249,7 @@ export type GenerateRequestData = z.infer<typeof GenerateRequestSchema>;
  * Generate request.
  */
 export interface GenerateRequest<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 > extends z.infer<typeof GenerateRequestSchema> {
   config?: z.infer<CustomOptionsSchema>;
 }
@@ -269,7 +269,7 @@ export const GenerationUsageSchema = z.object({
   outputVideos: z.number().optional(),
   inputAudioFiles: z.number().optional(),
   outputAudioFiles: z.number().optional(),
-  custom: z.record(z.number()).optional(),
+  custom: z.record(z.string(), z.number()).optional(),
   thoughtsTokens: z.number().optional(),
   cachedContentTokens: z.number().optional(),
   cacheWriteTokens: z.number().optional(),
@@ -299,7 +299,7 @@ export const CandidateSchema = z.object({
   usage: GenerationUsageSchema.optional(),
   finishReason: FinishReasonSchema,
   finishMessage: z.string().optional(),
-  custom: z.unknown(),
+  custom: z.unknown().optional(),
 });
 /** @deprecated All responses now return a single candidate. Only the first candidate will be used if supplied. */
 export type CandidateData = z.infer<typeof CandidateSchema>;
@@ -358,8 +358,8 @@ export const ModelResponseSchema = z.object({
    */
   totalUsage: GenerationUsageSchema.optional(),
   /** @deprecated use `raw` instead */
-  custom: z.unknown(),
-  raw: z.unknown(),
+  custom: z.unknown().optional(),
+  raw: z.unknown().optional(),
   request: GenerateRequestSchema.optional(),
   operation: OperationSchema.optional(),
 });
@@ -436,7 +436,7 @@ export const GenerateActionOptionsSchema = z.object({
     .object({
       respond: z.array(ToolResponsePartSchema).optional(),
       restart: z.array(ToolRequestPartSchema).optional(),
-      metadata: z.record(z.any()).optional(),
+      metadata: z.record(z.string(), z.any()).optional(),
     })
     .optional(),
   /** When true, return tool calls for manual processing instead of automatically resolving them. */
