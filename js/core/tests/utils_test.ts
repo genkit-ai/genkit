@@ -16,7 +16,8 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { deepEqual } from '../src/utils.js';
+import { z } from '../src/schema.js';
+import { deepEqual, stripUndefinedProps } from '../src/utils.js';
 
 describe('deepEqual', () => {
   // ── Primitives ──────────────────────────────────────────────────────
@@ -167,5 +168,24 @@ describe('deepEqual', () => {
     };
     assert.strictEqual(deepEqual(original, legitimate), true);
     assert.strictEqual(deepEqual(original, forged), false);
+  });
+});
+
+describe('stripUndefinedProps', () => {
+  it('strips undefined props from nested plain objects', () => {
+    assert.deepStrictEqual(
+      stripUndefinedProps({ a: 1, b: undefined, c: { d: undefined, e: 2 } }),
+      { a: 1, c: { e: 2 } }
+    );
+  });
+
+  it('passes class instances (e.g. zod schemas) through by reference', () => {
+    const schema = z.object({ a: z.string() });
+    const date = new Date();
+    const out = stripUndefinedProps({ output: { schema }, date });
+    assert.strictEqual(out.output.schema, schema);
+    assert.strictEqual(out.date, date);
+    // Still a working schema (zod v4 internals live on a non-enumerable prop).
+    assert.deepStrictEqual(out.output.schema.parse({ a: 'x' }), { a: 'x' });
   });
 });

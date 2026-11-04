@@ -18,7 +18,6 @@ import { Validator } from '@cfworker/json-schema';
 import Ajv, { type ErrorObject, type JSONSchemaType } from 'ajv';
 import addFormats from 'ajv-formats';
 import { z } from 'zod';
-import zodToJsonSchema from 'zod-to-json-schema';
 import { getGenkitRuntimeConfig } from './config.js';
 import { GenkitError } from './error.js';
 
@@ -33,22 +32,24 @@ export { z }; // provide a consistent zod to use throughout genkit
  */
 export type JSONSchema = JSONSchemaType<any> | any;
 
-const jsonSchemas = new WeakMap<z.ZodTypeAny, JSONSchema>();
+const jsonSchemas = new WeakMap<z.ZodType, JSONSchema>();
 const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
 const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
-const schemaAnnotations = new WeakMap<z.ZodTypeAny, Record<string, any>>();
 
 /**
  * Annotates a Zod schema with UI-specific metadata.
  *
+ * Mutates the global zod metadata registry for this exact instance (unlike
+ * `.meta()`, which returns a clone), so existing references pick it up.
+ *
  * NOTE: It's typically recommended to use x-genkit-* (or similar) as the prefix.
  */
-export function annotateSchema<T extends z.ZodTypeAny>(
+export function annotateSchema<T extends z.ZodType<any, any>>(
   schema: T,
   annotations: Record<string, any>
 ): T {
-  const current = schemaAnnotations.get(schema) || {};
-  schemaAnnotations.set(schema, { ...current, ...annotations });
+  const current = z.globalRegistry.get(schema) ?? {};
+  z.globalRegistry.add(schema, { ...current, ...annotations });
   return schema;
 }
 
@@ -57,7 +58,7 @@ export function annotateSchema<T extends z.ZodTypeAny>(
  */
 export interface ProvidedSchema {
   jsonSchema?: JSONSchema;
-  schema?: z.ZodTypeAny;
+  schema?: z.ZodType;
 }
 
 /**
@@ -94,103 +95,98 @@ export function toJsonSchema({
   if (!jsonSchema && !schema) return null;
   if (jsonSchema) return jsonSchema;
   if (jsonSchemas.has(schema!)) return jsonSchemas.get(schema!)!;
-  const outSchema = zodToJsonSchema(schema!, {
-    removeAdditionalStrategy: 'strict',
+  // Note: the JSON schema cache is keyed by instance, so annotations added via
+  // annotateSchema after the first conversion are not reflected.
+  const outSchema = z.toJSONSchema(schema!, {
+    target: 'draft-07',
+    // JSON schema is used to validate raw (pre-parse) data and to describe
+    // inputs to models/tools, so describe the input side of transforms/defaults.
+    io: 'input',
+    // z.bigint(), z.symbol(), etc. become {} instead of throwing.
+    unrepresentable: 'any',
+    override: compatOverride,
   });
-  const annotatedSchema = applyAnnotations(schema!, outSchema as JSONSchema);
-  jsonSchemas.set(schema!, annotatedSchema);
-  return annotatedSchema;
+  jsonSchemas.set(schema!, outSchema);
+  return outSchema;
 }
 
 /**
- * Recursively applies annotations to a JSON schema by walking the Zod tree
- * and matching it against the JSON schema structure.
- *
- * Note: This currently does not resolve JSON schema `$ref` nodes. Annotations
- * on recursive schemas (using `z.lazy`) may not be correctly applied to the
- * referenced definitions.
+ * Keeps zod v4 JSON schema output close to what zod-to-json-schema (zod v3)
+ * produced, where the difference matters to model providers.
  */
-function applyAnnotations(schema: z.ZodTypeAny, json: any): any {
-  if (!json || typeof json !== 'object') return json;
-
-  const annotationsToApply: Record<string, any>[] = [];
-  let current = schema;
-
-  // Collect all annotations in the hierarchy (outer to inner)
-  while (current) {
-    const ann = schemaAnnotations.get(current);
-    if (ann) annotationsToApply.push(ann);
-
-    if (
-      current instanceof z.ZodOptional ||
-      current instanceof z.ZodNullable ||
-      current instanceof z.ZodDefault ||
-      current instanceof z.ZodEffects
-    ) {
-      current = (current as any)._def.innerType || (current as any)._def.schema;
-    } else {
-      break;
-    }
+function compatOverride(ctx: {
+  zodSchema: z.core.$ZodTypes;
+  jsonSchema: z.core.JSONSchema.BaseSchema;
+}) {
+  const { zodSchema, jsonSchema } = ctx;
+  const def = zodSchema._zod.def;
+  if (def.type === 'date') {
+    // v4 treats dates as unrepresentable. Data crosses the wire as ISO strings.
+    jsonSchema.type = 'string';
+    jsonSchema.format = 'date-time';
+  } else if (def.type === 'union' && jsonSchema.oneOf) {
+    // Discriminated unions emit `oneOf` in v4. Several providers (Gemini,
+    // OpenAI structured outputs) only support `anyOf`; the branches are
+    // disjoint by construction, so `anyOf` is equivalent.
+    jsonSchema.anyOf = jsonSchema.oneOf;
+    delete jsonSchema.oneOf;
+  } else if (
+    def.type === 'record' &&
+    typeof jsonSchema.propertyNames === 'object' &&
+    jsonSchema.propertyNames.type === 'string' &&
+    Object.keys(jsonSchema.propertyNames).length === 1
+  ) {
+    // `propertyNames: { type: 'string' }` is a no-op for JSON objects, and
+    // not supported by some provider schema subsets.
+    delete jsonSchema.propertyNames;
+  } else if (def.type === 'number') {
+    // `.int()` adds safe-integer bounds; they're noise for models.
+    if (jsonSchema.minimum === Number.MIN_SAFE_INTEGER) delete jsonSchema.minimum;
+    if (jsonSchema.maximum === Number.MAX_SAFE_INTEGER) delete jsonSchema.maximum;
+  } else if (
+    def.type === 'string' &&
+    jsonSchema.format !== undefined &&
+    typeof jsonSchema.pattern === 'string'
+  ) {
+    // String formats (datetime, email, uuid, ...) also emit zod's internal
+    // regex as `pattern`. `format` alone is what v3 emitted, is validated by
+    // ajv-formats/cfworker, and keeps validation errors readable. A
+    // user-supplied `.regex()` on top of a format is emitted under `allOf`
+    // and is not affected.
+    delete jsonSchema.pattern;
+  } else if (def.type === 'nullable') {
+    collapseNullablePrimitive(jsonSchema);
   }
+}
 
-  // Resolve annotations (outer-most last so it wins)
-  const resolvedAnnotations: Record<string, any> = {};
-  for (let i = annotationsToApply.length - 1; i >= 0; i--) {
-    Object.assign(resolvedAnnotations, annotationsToApply[i]);
+const PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean']);
+
+/**
+ * v4 emits `anyOf: [{ type: 'string', description }, { type: 'null' }]` for a
+ * described nullable primitive, where v3 emitted
+ * `{ type: ['string', 'null'], description }`. Many provider converters only
+ * understand the type array form, so fold it back. Objects/enums keep `anyOf`
+ * (same as v3).
+ */
+function collapseNullablePrimitive(jsonSchema: z.core.JSONSchema.BaseSchema) {
+  const anyOf = jsonSchema.anyOf;
+  if (!Array.isArray(anyOf) || anyOf.length !== 2) return;
+  const nullIdx = anyOf.findIndex(
+    (s) => typeof s === 'object' && s.type === 'null' && Object.keys(s).length === 1
+  );
+  if (nullIdx === -1) return;
+  const inner = anyOf[1 - nullIdx];
+  if (
+    typeof inner !== 'object' ||
+    typeof inner.type !== 'string' ||
+    !PRIMITIVE_TYPES.has(inner.type) ||
+    inner.enum !== undefined ||
+    inner.const !== undefined
+  ) {
+    return;
   }
-
-  for (const key in resolvedAnnotations) {
-    if (Object.prototype.hasOwnProperty.call(json, key)) {
-      console.warn(
-        `Annotation key "${key}" conflicts with existing JSON schema property and will be ignored.`
-      );
-      continue;
-    }
-    json[key] = resolvedAnnotations[key];
-  }
-
-  const inner = current;
-  if (inner instanceof z.ZodObject && json.properties) {
-    for (const key in inner.shape) {
-      if (json.properties[key]) {
-        applyAnnotations(inner.shape[key], json.properties[key]);
-      }
-    }
-  } else if (inner instanceof z.ZodArray && json.items) {
-    applyAnnotations(inner.element, json.items);
-  } else if (inner instanceof z.ZodUnion && json.anyOf) {
-    for (let i = 0; i < inner.options.length; i++) {
-      applyAnnotations(inner.options[i], json.anyOf[i]);
-    }
-  } else if (inner instanceof z.ZodIntersection && json.allOf) {
-    const schemas: z.ZodTypeAny[] = [];
-    const collect = (s: z.ZodTypeAny) => {
-      if (s instanceof z.ZodIntersection) {
-        collect(s._def.left);
-        collect(s._def.right);
-      } else {
-        schemas.push(s);
-      }
-    };
-    collect(inner);
-    if (schemas.length === json.allOf.length) {
-      for (let i = 0; i < schemas.length; i++) {
-        applyAnnotations(schemas[i], json.allOf[i]);
-      }
-    }
-  } else if (inner instanceof z.ZodRecord && json.additionalProperties) {
-    applyAnnotations(inner.valueSchema, json.additionalProperties);
-  } else if (inner instanceof z.ZodTuple && Array.isArray(json.items)) {
-    for (let i = 0; i < inner.items.length; i++) {
-      applyAnnotations(inner.items[i], json.items[i]);
-    }
-  } else if (inner instanceof z.ZodDiscriminatedUnion && json.anyOf) {
-    for (let i = 0; i < inner.options.length; i++) {
-      applyAnnotations(inner.options[i], json.anyOf[i]);
-    }
-  }
-
-  return json;
+  delete jsonSchema.anyOf;
+  Object.assign(jsonSchema, inner, { type: [inner.type, 'null'] });
 }
 
 /**
@@ -314,7 +310,7 @@ export function parseSchema<T = unknown>(
  *
  * @hidden
  */
-export function defineSchema<T extends z.ZodTypeAny>(
+export function defineSchema<T extends z.ZodType<any, any>>(
   registry: Registry,
   name: string,
   schema: T

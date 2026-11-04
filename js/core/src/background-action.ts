@@ -51,8 +51,8 @@ export interface Operation<O = any> {
  * The returned operation can used to check the status of the background operation and retrieve the response.
  */
 export interface BackgroundAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
   RunOptions extends BackgroundActionRunOptions = BackgroundActionRunOptions,
 > {
   __action: ActionMetadata<I, O>;
@@ -82,8 +82,8 @@ export interface BackgroundAction<
 }
 
 export async function lookupBackgroundAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   key: string
@@ -111,8 +111,8 @@ export async function lookupBackgroundAction<
 }
 
 class BackgroundActionImpl<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
   RunOptions extends BackgroundActionRunOptions = BackgroundActionRunOptions,
 > implements BackgroundAction<I, O, RunOptions>
 {
@@ -211,9 +211,9 @@ export interface BackgroundActionFnArg<S> {
  * Action factory params.
  */
 export type BackgroundActionParams<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   name: string;
   start: (
@@ -244,9 +244,9 @@ export type BackgroundActionParams<
  * Defines an action with the given config and registers it in the registry.
  */
 export function defineBackgroundAction<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   config: BackgroundActionParams<I, O, S>
@@ -286,9 +286,9 @@ export function registerBackgroundAction(
  * Creates a background action with the given config.
  */
 export function backgroundAction<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(config: BackgroundActionParams<I, O, S>): BackgroundAction<I, O> {
   const startAction = action(
     {
@@ -305,7 +305,12 @@ export function backgroundAction<
           jsonSchema: config.outputJsonSchema,
         }),
       },
-      use: config.use,
+      // TODO: middleware is declared against the final output type (O) but
+      // wraps the start action, which actually returns an Operation<O>.
+      // Previously hidden by zod v3's `any` inference; needs a proper fix.
+      use: config.use as unknown as
+        | Middleware<z.infer<I>, Operation<z.infer<O>>>[]
+        | undefined,
     },
     async (input, options) => {
       const operation = await config.start(input, options);
