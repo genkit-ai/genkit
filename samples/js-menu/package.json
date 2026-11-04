@@ -23,8 +23,8 @@
     "genkit": "^1.0.4"
   },
   "devDependencies": {
-    "genkit-cli": "^1.0.4",
-    "rimraf": "^6.0.1",
+    "genkit-cli": "^1.45.0",
+    "rimraf": "^6.1.4",
     "typescript": "^5.3.3"
   }
 }
