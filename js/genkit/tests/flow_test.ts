@@ -37,7 +37,7 @@ describe('flow', () => {
   it('streams simple chunks (no schema defined)', async () => {
     const streamingBananaFlow = ai.defineFlow(
       'banana',
-      (input, sendChunk) => {
+      (input: string, sendChunk) => {
         for (let i = 0; i < input.length; i++) {
           sendChunk(input.charAt(i));
         }
