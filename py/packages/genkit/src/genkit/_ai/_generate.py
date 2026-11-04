@@ -2024,6 +2024,31 @@ def apply_format(
     return (out_request, formatter)
 
 
+def warn_unsupported_tool_options(model: Action, *, tools: list[Action], tool_choice: str | None) -> None:
+    """Warn when the request sets tools or toolChoice and the model's info says it doesn't support them.
+
+    Only warns when the model declares ``supports``. A model with no
+    ``supports`` says nothing either way, so it is not warned about.
+    """
+    model_options = model.metadata.get('model')
+    supports = cast(dict[str, object], model_options).get('supports') if isinstance(model_options, dict) else None
+    if not isinstance(supports, dict):
+        return
+    supports = cast(dict[str, object], supports)
+    if tools and not supports.get('tools'):
+        logger.warning(
+            'model does not support tools, it may not behave the way you expect',
+            model=model.name,
+            tools=len(tools),
+        )
+    if tool_choice and not supports.get('toolChoice'):
+        logger.warning(
+            'model does not support toolChoice, it may not behave the way you expect',
+            model=model.name,
+            toolChoice=tool_choice,
+        )
+
+
 def supports_constrained(model: Action | None, *, has_tools: bool) -> bool:
     """Whether the model declares native constrained output for this request."""
     model_options = model.metadata.get('model') if model else None
@@ -2149,8 +2174,7 @@ async def to_model_request(
     model: Action,
 ) -> ModelRequest[Any]:
     """Convert GenerateActionOptions to a ModelRequest with tool definitions."""
-    # TODO(#4340): add warning when tools are not supported in ModelInfo
-    # TODO(#4341): add warning when toolChoice is not supported in ModelInfo
+    warn_unsupported_tool_options(model=model, tools=tools, tool_choice=options.tool_choice)
 
     tool_defs = [to_tool_definition(tool) for tool in tools] if tools else []
     output = options.output
