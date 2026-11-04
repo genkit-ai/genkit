@@ -22,12 +22,13 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
+import types
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from functools import cached_property
 from importlib import import_module
-from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, cast, get_args
+from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, Union, cast, get_args, get_origin
 
 from pydantic import (
     BaseModel,
@@ -330,18 +331,35 @@ RequestOptionsT = TypeVar('RequestOptionsT', default=dict[str, Any])
 
 
 def declared_config_type(cls: type) -> type[BaseModel] | None:
-    """The config class on ``ModelRequest[ThatClass]`` (or the embed / evaluator requests), else None.
+    """The config class on ``ModelRequest[ThatClass]`` or ``EmbedRequest[ThatClass]``, else None.
 
-    None when unparametrized or ``Any``.
+    None when unparametrized or ``Any``, and for any other class.
+
+    Reads the resolved type of the ``config`` / ``options`` field rather than
+    the generic args, so a subclass such as ``class MyRequest(EmbedRequest[Cfg])``
+    reports ``Cfg`` too. Pydantic leaves such a subclass's own generic args
+    empty, and a generic subclass with more than one type parameter does not
+    put the config class first.
     """
-    meta = getattr(cls, '__pydantic_generic_metadata__', None)
-    if not meta:
+    if not isinstance(cls, type):
         return None
-    args = meta.get('args') or ()
-    if not args:
+    if issubclass(cls, ModelRequest):
+        field = 'config'
+    elif issubclass(cls, EmbedRequest):
+        field = 'options'
+    else:
         return None
-    arg = args[0]
-    return arg if _is_model_class(arg) else None
+    info = cls.model_fields.get(field)
+    if info is None:
+        return None
+    annotation = info.annotation
+    # ModelRequest's config is ``Cfg | None``.
+    if get_origin(annotation) in (Union, types.UnionType):
+        members = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(members) != 1:
+            return None
+        annotation = members[0]
+    return annotation if _is_model_class(annotation) else None
 
 
 def check_config_type_arg(*, request: str, field: str, typevar_values: object) -> None:
