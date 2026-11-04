@@ -122,7 +122,12 @@ def genkit_flask_handler(
     ai: Genkit,
     context_provider: ContextProvider | None = None,
 ) -> Callable[[Action], Callable[..., Awaitable[FlaskRouteReturn]]]:
-    """A decorator for serving Genkit flows via a flask sever.
+    """A decorator for serving Genkit flows via a Flask server.
+
+    The returned view function is named after the flow (dots replaced with
+    underscores) so multiple handlers in one Flask app do not collide on
+    the default endpoint name. Pass ``endpoint=`` to Flask's route decorator
+    (e.g., ``@app.post('/chat', endpoint='custom_chat')``) to override it.
 
     ```python
     from genkit import FlowContext
@@ -203,6 +208,13 @@ def genkit_flask_handler(
                     _log_failure(error=e, flow=flow.name, where='run')
                     return _error_response(e)
 
+        # Flask's default endpoint is the view function's __name__. Name the
+        # view after the flow, as if @app.post had decorated the flow itself,
+        # so two handlers in one app don't both register as 'handler'.
+        # Flask rejects dots in view names.
+        view_name = flow.name.replace('.', '_')
+        handler.__name__ = view_name
+        handler.__qualname__ = view_name
         return handler
 
     return decorator
