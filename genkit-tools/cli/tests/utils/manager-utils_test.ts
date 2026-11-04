@@ -71,6 +71,16 @@ describe('getDevEnvVars', () => {
     expect(envVars.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).toBeUndefined();
   });
 
+  it('reuses a pre-resolved telemetryServerUrl from options', async () => {
+    const customUrl = 'http://localhost:4999';
+    const { envVars, telemetryServerUrl } = await getDevEnvVars('/root', {
+      telemetryServerUrl: customUrl,
+    });
+
+    expect(telemetryServerUrl).toBe(customUrl);
+    expect(envVars.GENKIT_TELEMETRY_SERVER).toBe(customUrl);
+  });
+
   it('uses OTLP env vars (and drops native ones) when experimentalUseOtel is set', async () => {
     const { envVars, telemetryServerUrl } = await getDevEnvVars('/root', {
       experimentalUseOtel: true,
