@@ -719,7 +719,8 @@ async def test_read_path_survives_an_invalidate_at_the_clock_read(
     assert list(listing) == ['/dynamic-action-provider/my-dap:tool/tool1']
 
 
-def test_closed_loops_are_pruned_from_the_fetch_map(registry: Registry, tool1: Action) -> None:
+@pytest.mark.parametrize('trace', [False, True])
+def test_closed_loops_are_pruned_from_the_fetch_map(registry: Registry, tool1: Action, trace: bool) -> None:
     """A loop that ends mid-fetch leaves an entry behind, and the next fetch clears it."""
     started: list[asyncio.Event] = []
     stalled: list[asyncio.Task[dict[str, ActionMetadata]]] = []
@@ -735,9 +736,14 @@ def test_closed_loops_are_pruned_from_the_fetch_map(registry: Registry, tool1: A
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 
+    async def list_actions() -> dict[str, ActionMetadata]:
+        if trace:
+            await dap.get_action('tool', 'tool1')
+        return await dap.list_action_metadata_by_key('my-dap')
+
     async def start_and_walk_away() -> None:
         started.append(asyncio.Event())
-        stalled.append(asyncio.ensure_future(dap.list_action_metadata_by_key('my-dap')))
+        stalled.append(asyncio.ensure_future(list_actions()))
         await started[0].wait()
 
     abandoned = asyncio.new_event_loop()
@@ -758,4 +764,222 @@ def test_closed_loops_are_pruned_from_the_fetch_map(registry: Registry, tool1: A
         survivor.close()
 
     assert abandoned not in dap._fetch_tasks
+    assert all(task.get_loop() is not abandoned for task in dap._trace_tasks)
     assert not stalled[0].done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('finish_old_first', [True, False])
+async def test_invalidation_does_not_reuse_or_cache_an_inflight_fetch(
+    registry: Registry, tool1: Action, tool2: Action, finish_old_first: bool
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            return {'tool': [tool1]}
+        return {'tool': [tool2]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=60_000)
+    old = asyncio.create_task(dap.list_action_metadata_by_key('my-dap'))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        dap.invalidate_cache()
+        if finish_old_first:
+            release.set()
+            await old
+        fresh = await asyncio.wait_for(dap.list_action_metadata_by_key('my-dap'), 2)
+        assert list(fresh) == ['/dynamic-action-provider/my-dap:tool/tool2']
+        release.set()
+        assert list(await old) == ['/dynamic-action-provider/my-dap:tool/tool1']
+        assert list(await dap.list_action_metadata_by_key('my-dap')) == list(fresh)
+        assert calls == 2
+    finally:
+        release.set()
+        await old
+
+
+def test_failed_fetch_on_another_loop_preserves_a_newer_cache(registry: Registry, tool1: Action) -> None:
+    started = threading.Event()
+    release: concurrent.futures.Future[None] = concurrent.futures.Future()
+    calls = 0
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        if asyncio.get_running_loop() is old_loop:
+            started.set()
+            await asyncio.wrap_future(release)
+            raise RuntimeError('old fetch failed')
+        calls += 1
+        return {'tool': [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn, cache_ttl_millis=60_000)
+    with _background_loop() as old_loop:
+        old = asyncio.run_coroutine_threadsafe(dap.list_action_metadata_by_key('my-dap'), old_loop)
+        try:
+            assert started.wait(timeout=5)
+            fresh = asyncio.run(dap.list_action_metadata_by_key('my-dap'))
+            release.set_result(None)
+            with pytest.raises(RuntimeError, match='old fetch failed'):
+                old.result(timeout=5)
+            assert asyncio.run(dap.list_action_metadata_by_key('my-dap')) == fresh
+            assert calls == 1
+        finally:
+            if not release.done():
+                release.set_result(None)
+            with pytest.raises(RuntimeError, match='old fetch failed'):
+                old.result(timeout=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('listing_first', [True, False])
+@pytest.mark.parametrize('resolvers', [1, 3])
+async def test_coalesced_resolution_records_once_in_resolver_context(
+    registry: Registry, tool1: Action, listing_first: bool, resolvers: int
+) -> None:
+    from contextvars import ContextVar
+
+    caller = ContextVar('caller', default='unset')
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+    recorded: list[str] = []
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return {'tool': [tool1]}
+
+    async def record_fn(input: DapMetadata) -> DapMetadata:
+        recorded.append(caller.get())
+        return input
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+    dap.action = Action(name='my-dap', kind=ActionKind.DYNAMIC_ACTION_PROVIDER, fn=record_fn)
+
+    async def listing() -> None:
+        caller.set('listing')
+        await dap.list_action_metadata_by_key('my-dap')
+
+    async def resolve() -> None:
+        caller.set('resolver')
+        assert await dap.get_action('tool', 'tool1') is tool1
+
+    first = asyncio.create_task(listing() if listing_first else resolve())
+    await asyncio.wait_for(started.wait(), 2)
+    others = [asyncio.create_task(resolve()) for _ in range(resolvers - (not listing_first))]
+    if not listing_first:
+        others.append(asyncio.create_task(listing()))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, *others)
+    assert calls == 1
+    assert recorded == ['resolver']
+    # Cache hits retain the existing no-extra-span behavior.
+    await resolve()
+    await listing()
+    assert calls == 1
+    assert recorded == ['resolver']
+
+
+@pytest.mark.asyncio
+async def test_recording_backend_failure_does_not_fail_resolution_or_evict_cache(
+    registry: Registry, tool1: Action
+) -> None:
+    from genkit._core._telemetry._instrumentation import reset_instrumentation
+    from genkit.telemetry import configure_instrumentation
+
+    calls = 0
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        calls += 1
+        return {'tool': [tool1]}
+
+    class FailingBackend:
+        async def run_in_new_span(self, metadata, next):
+            raise RuntimeError('recording unavailable')
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+    reset_instrumentation()
+    configure_instrumentation(FailingBackend())
+    try:
+        assert await dap.get_action('tool', 'tool1') is tool1
+        assert list(await dap.list_action_metadata_by_key('my-dap')) == ['/dynamic-action-provider/my-dap:tool/tool1']
+        assert calls == 1
+    finally:
+        reset_instrumentation()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_resolver_does_not_cancel_shared_recording(registry: Registry, tool1: Action) -> None:
+    fetch_started = asyncio.Event()
+    fetch_release = asyncio.Event()
+    trace_started = asyncio.Event()
+    trace_release = asyncio.Event()
+    records = 0
+
+    async def dap_fn() -> DapValue:
+        fetch_started.set()
+        await fetch_release.wait()
+        return {'tool': [tool1]}
+
+    async def record_fn(input: DapMetadata) -> DapMetadata:
+        nonlocal records
+        records += 1
+        trace_started.set()
+        await trace_release.wait()
+        return input
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+    dap.action = Action(name='my-dap', kind=ActionKind.DYNAMIC_ACTION_PROVIDER, fn=record_fn)
+    leaving = asyncio.create_task(dap.get_action('tool', 'tool1'))
+    await asyncio.wait_for(fetch_started.wait(), 2)
+    staying = asyncio.create_task(dap.get_action('tool', 'tool1'))
+    await asyncio.sleep(0)
+    fetch_release.set()
+    try:
+        await asyncio.wait_for(trace_started.wait(), 2)
+        leaving.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leaving
+        # Reflection and hot-cache resolutions do not wait for the recorder.
+        assert await asyncio.wait_for(dap.get_action('tool', 'tool1'), 2) is tool1
+        assert list(await asyncio.wait_for(dap.list_action_metadata_by_key('my-dap'), 2)) == [
+            '/dynamic-action-provider/my-dap:tool/tool1'
+        ]
+        assert not staying.done()
+    finally:
+        trace_release.set()
+        await asyncio.gather(leaving, staying, return_exceptions=True)
+    assert records == 1
+    assert await staying is tool1
+    assert dap._trace_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_done_failed_fetch_is_not_reused_before_cleanup(registry: Registry, tool1: Action, mocker) -> None:
+    calls = 0
+
+    async def dap_fn() -> DapValue:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError('first fetch failed')
+        return {'tool': [tool1]}
+
+    dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
+    # Hold the entry past completion to exercise the window before its callback.
+    mocker.patch.object(dap, '_forget_fetch', return_value=lambda task: None)
+    with pytest.raises(RuntimeError, match='first fetch failed'):
+        await dap.list_action_metadata_by_key('my-dap')
+    assert list(await dap.list_action_metadata_by_key('my-dap')) == ['/dynamic-action-provider/my-dap:tool/tool1']
+    assert calls == 2
