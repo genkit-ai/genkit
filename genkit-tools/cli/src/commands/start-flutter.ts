@@ -41,6 +41,7 @@ interface FlutterRunOptions {
 
 /** Command to run a Flutter app in dev mode and/or the Dev UI. */
 export const startFlutter = new Command('start:flutter')
+  .allowExcessArguments(true)
   .description('runs a flutter app in Genkit dev mode')
   .option('-n, --noui', 'do not start the Dev UI', false)
   .option('-p, --port <port>', 'port for the Dev UI', parsePort)

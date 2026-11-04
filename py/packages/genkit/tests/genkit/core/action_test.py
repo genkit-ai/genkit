@@ -10,6 +10,7 @@ import inspect
 import json
 from typing import Any, cast
 
+import anyio
 import pytest
 from pydantic import BaseModel, ConfigDict
 
@@ -26,7 +27,7 @@ from genkit._core._action import (
     parse_dap_qualified_name,
     parse_plugin_name_from_action_name,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError, Interrupt
 from genkit._core._model import OutputConfig
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import ModelRequest
@@ -46,7 +47,8 @@ def test_action_enum_behaves_like_str() -> None:
     assert ActionKind.FLOW == 'flow'
     assert ActionKind.MODEL == 'model'
     assert ActionKind.PROMPT == 'prompt'
-    assert ActionKind.TOOL == 'tool.v2'
+    assert ActionKind.TOOL == 'tool'
+    assert ActionKind.TOOL_V2 == 'tool.v2'
     assert ActionKind.UTIL == 'util'
 
 
@@ -62,7 +64,8 @@ def test_parse_action_key_valid() -> None:
         ('/custom/test-action', (ActionKind.CUSTOM, 'test-action')),
         ('/flow/my-flow', (ActionKind.FLOW, 'my-flow')),
         ('/agent/my-agent', (ActionKind.AGENT, 'my-agent')),
-        ('/tool.v2/my-tool', (ActionKind.TOOL, 'my-tool')),
+        ('/tool/my-tool', (ActionKind.TOOL, 'my-tool')),
+        ('/tool.v2/my-tool', (ActionKind.TOOL_V2, 'my-tool')),
     ]
 
     for key, expected in test_cases:
@@ -86,10 +89,10 @@ def test_parse_action_key_invalid_format() -> None:
             parse_action_key(key)
 
 
-def test_parse_action_key_rejects_tool_kind() -> None:
-    """Catalog tools live under ``/tool.v2/``; ``/tool/`` is not a kind."""
-    with pytest.raises(ValueError, match='Invalid action kind'):
-        parse_action_key('/tool/my-tool')
+def test_parse_action_key_reads_tool_and_tool_v2() -> None:
+    """``/tool/`` is the tool itself, ``/tool.v2/`` its envelope action, same as JS and Go."""
+    assert parse_action_key('/tool/my-tool') == (ActionKind.TOOL, 'my-tool')
+    assert parse_action_key('/tool.v2/my-tool') == (ActionKind.TOOL_V2, 'my-tool')
 
 
 @pytest.mark.parametrize('kind', ['retriever', 'indexer', 'reranker'])
@@ -114,7 +117,8 @@ def test_create_action_key() -> None:
     assert create_action_key(ActionKind.CUSTOM, 'foo') == '/custom/foo'
     assert create_action_key(ActionKind.MODEL, 'foo') == '/model/foo'
     assert create_action_key(ActionKind.PROMPT, 'foo') == '/prompt/foo'
-    assert create_action_key(ActionKind.TOOL, 'foo') == '/tool.v2/foo'
+    assert create_action_key(ActionKind.TOOL, 'foo') == '/tool/foo'
+    assert create_action_key(ActionKind.TOOL_V2, 'foo') == '/tool.v2/foo'
     assert create_action_key(ActionKind.UTIL, 'foo') == '/util/foo'
     assert create_action_key(ActionKind.AGENT, 'foo') == '/agent/foo'
 
@@ -322,7 +326,7 @@ async def test_invalid_input_error_names_the_action_kind(kind: ActionKind, want:
     with pytest.raises(GenkitError) as e:
         await action.run(input='abc')
 
-    assert e.value.original_message == want
+    assert e.value.message == want
 
 
 @pytest.mark.asyncio
@@ -524,9 +528,9 @@ async def test_bidi_send_after_close_raises_connection_closed() -> None:
     with pytest.raises(GenkitError) as raised:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.CONNECTION_CLOSED
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 0}
 
 
@@ -540,9 +544,9 @@ async def test_bidi_send_after_a_turn_then_close_raises_connection_closed() -> N
     with pytest.raises(GenkitError) as raised:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.CONNECTION_CLOSED
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 1}
 
 
@@ -556,9 +560,9 @@ async def test_bidi_send_after_close_twice_raises_connection_closed() -> None:
     with pytest.raises(GenkitError) as raised:
         await conn.send('late')
     assert raised.value.status == 'FAILED_PRECONDITION'
-    assert raised.value.reason is RuntimeErrorReason.CONNECTION_CLOSED
-    assert 'already been closed' in raised.value.original_message
-    assert 'CONNECTION_CLOSED' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.CONNECTION_CLOSED
+    assert 'already been closed' in raised.value.message
+    assert 'CONNECTION_CLOSED' not in raised.value.message
     assert await conn.output() == {'turns': 0}
 
 
@@ -628,7 +632,7 @@ async def test_await_flow_that_raises_public_error_keeps_status_and_message() ->
         await order('99')
 
     assert exc.value.status == 'NOT_FOUND'
-    assert exc.value.original_message == 'no order 99'
+    assert exc.value.message == 'no order 99'
 
 
 @pytest.mark.asyncio
@@ -644,8 +648,8 @@ async def test_await_flow_that_raises_genkit_error_keeps_status() -> None:
         await ship('99')
 
     assert exc.value.status == 'FAILED_PRECONDITION'
-    assert exc.value.original_message == 'order is not paid'
-    assert exc.value.cause is None
+    assert exc.value.message == 'order is not paid'
+    assert exc.value.__cause__ is None
 
 
 @pytest.mark.asyncio
@@ -678,6 +682,98 @@ async def test_await_tool_that_raises_value_error_raises_value_error() -> None:
         await balance('acme')
 
     assert type(exc.value) is ValueError
+
+
+@pytest.mark.asyncio
+async def test_await_flow_that_raises_interrupt_raises_internal_genkit_error() -> None:
+    """A flow has no tool loop to pause, so its Interrupt becomes GenkitError INTERNAL.
+
+    Interrupt is a BaseException; letting it escape the flow would skip every
+    `except Exception` between here and the web adapter.
+    """
+    ai = Genkit()
+    interrupt = Interrupt({'reason': 'needs approval', 'order_id': 'A-17'})
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        raise interrupt
+
+    with pytest.raises(GenkitError) as exc:
+        await refund('A-17')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.message == 'Interrupt raised outside a tool'
+    assert (
+        str(exc.value) == "INTERNAL: Interrupt raised outside a tool: {'reason': 'needs approval', 'order_id': 'A-17'}"
+    )
+    assert exc.value.__cause__ is interrupt
+
+
+@pytest.mark.asyncio
+async def test_await_flow_with_task_group_interrupt_raises_internal_genkit_error() -> None:
+    """An Interrupt from a task group child fails the flow with GenkitError, not a BaseExceptionGroup.
+
+    The group isn't an Exception, so a served flow would otherwise skip the
+    web adapter's handler and return a bare 500. anyio raises the same
+    builtin group as asyncio.TaskGroup on 3.11+, and the backport on 3.10.
+    """
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, order_id)
+        return 'refunded'
+
+    with pytest.raises(GenkitError) as exc:
+        await refund('A-17')
+
+    assert exc.value.status == 'INTERNAL'
+    assert exc.value.message == 'Interrupt raised inside a task group'
+
+
+@pytest.mark.asyncio
+async def test_await_flow_with_task_group_value_error_raises_exception_group() -> None:
+    """A task group with only ordinary failures still propagates as the ExceptionGroup it was."""
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise ValueError(f'unknown order {order_id}')
+
+    @ai.flow()
+    async def refund(order_id: str) -> str:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, order_id)
+        return 'refunded'
+
+    with pytest.raises(Exception) as exc:  # noqa: PT011 - asserting the exact type below
+        await refund('A-17')
+
+    assert type(exc.value).__name__ == 'ExceptionGroup'
+
+
+@pytest.mark.asyncio
+async def test_await_tool_that_raises_interrupt_raises_interrupt_past_except_exception() -> None:
+    """Calling a tool directly lets its Interrupt through raw, past `except Exception`."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    caught_by_catch_all = False
+    with pytest.raises(Interrupt) as exc:
+        try:
+            await refund_order('A-17')
+        except Exception:  # noqa: BLE001 - the catch-all under test
+            caught_by_catch_all = True
+
+    assert not caught_by_catch_all
+    assert exc.value.metadata == {'reason': 'needs approval', 'order_id': 'A-17'}
 
 
 @pytest.mark.asyncio
@@ -719,7 +815,7 @@ async def test_flow_genkit_error_with_tracing_on_keeps_trace_id_unset(hex_ids: N
     with pytest.raises(GenkitError) as exc:
         await ship('99')
 
-    assert exc.value.trace_id is None
+    assert not hasattr(exc.value, 'trace_id')
     assert exc.value.status == 'FAILED_PRECONDITION'
 
 
@@ -771,8 +867,8 @@ async def test_flow_bad_return_with_tracing_on_has_no_trace_id(hex_ids: None) ->
         await charge('o1')
 
     assert exc.value.status == 'INTERNAL'
-    assert exc.value.reason is RuntimeErrorReason.INVALID_OUTPUT
-    assert exc.value.trace_id is None
+    assert exc.value.reason is ErrorReason.INVALID_OUTPUT
+    assert not hasattr(exc.value, 'trace_id')
     assert 'trace_id' not in (exc.value.details or {})
 
 

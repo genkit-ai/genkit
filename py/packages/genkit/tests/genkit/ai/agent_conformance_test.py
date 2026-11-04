@@ -45,7 +45,7 @@ from genkit._ai._agents._runtime import SessionRunner
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._types import TurnContext, TurnResult
 from genkit._ai._tools import Interrupt, ToolContext
-from genkit._core._error import GenkitError, GenkitRuntimeError
+from genkit._core._error import Failure, GenkitError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -63,6 +63,7 @@ from genkit._core._typing import (
 )
 from genkit.exp import Genkit
 from genkit.exp.agent import Agent, AgentContext
+from genkit.plugin_api import StatusName
 from genkit.testing import ScriptedModel, define_scripted_model
 
 DEFAULT_STEP_TIMEOUT_S = 5.0
@@ -331,9 +332,9 @@ def assert_contains_subsequence(*, actual: list[Any], expected: list[Any], path:
 def dump(*, model: BaseModel) -> dict[str, Any]:
     """Serialize a wire model to its camelCase JSON form for spec comparison.
 
-    Unset fields stay off the object. A field that was set to null stays null,
-    so a spec can tell "not present" from an explicit ``~``. Wire models
-    default to dropping nulls, so this has to opt out.
+    Unset fields stay off the object. On spec step models a field that was set
+    to null stays null, so a spec can tell "not present" from an explicit
+    ``~``. Genkit wire types never send null, so there it drops either way.
     """
     return model.model_dump(by_alias=True, exclude_unset=True, exclude_none=False, mode='json')
 
@@ -693,7 +694,7 @@ async def _close_quietly(*, conn: Any) -> None:  # noqa: ANN401
 def _thrown_message(*, thrown: BaseException) -> str:
     """``STATUS: text`` for a GenkitError — the status prefix, not a cause suffix."""
     if isinstance(thrown, GenkitError):
-        return f'{thrown.status}: {thrown.original_message}'
+        return f'{thrown.status}: {thrown.message}'
     return str(thrown)
 
 
@@ -988,11 +989,10 @@ def test_has_id_false_means_absent() -> None:
         assert_has_id(actual='snap-1', want=False, path='output.snapshotId')
 
 
-def test_dump_keeps_explicit_null_and_drops_unset() -> None:
+def test_dump_of_snapshot_with_explicit_null_finish_reason_omits_it_like_the_wire() -> None:
+    """A Genkit wire type never sends null, so an explicit None compares like unset."""
     pinned = SessionSnapshotSchema(snapshot_id='s', created_at='t', finish_reason=None)
-    dumped = dump(model=pinned)
-    assert 'finishReason' in dumped
-    assert dumped['finishReason'] is None
+    assert 'finishReason' not in dump(model=pinned)
     omitted = SessionSnapshotSchema(snapshot_id='s', created_at='t')
     assert 'finishReason' not in dump(model=omitted)
 
@@ -1000,11 +1000,11 @@ def test_dump_keeps_explicit_null_and_drops_unset() -> None:
 def test_snapshot_error_contains_is_exact_message() -> None:
     """Snapshot errorContains uses subset matching; a string field is exact."""
 
-    def snap(*, message: str, status: str | None = None) -> SessionSnapshotSchema:
+    def snap(*, message: str, status: StatusName | None = None) -> SessionSnapshotSchema:
         return SessionSnapshotSchema(
             snapshot_id='s',
             created_at='t',
-            error=GenkitRuntimeError(status=status, message=message),
+            error=Failure(status=status, message=message),
         )
 
     wrapped = snap(message='background: intentional failure (wrapped)')

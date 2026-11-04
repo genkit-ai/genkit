@@ -16,22 +16,15 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
-    "@genkit-ai/dev-local-vectorstore": "workspace:*",
-    "@genkit-ai/evaluator": "workspace:*",
-    "@genkit-ai/firebase": "workspace:*",
-    "@genkit-ai/google-genai": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "dotenv": "^16.4.5",
-    "express": "^4.21.0",
-    "firebase-admin": ">=12.2",
-    "genkitx-chromadb": "workspace:*",
-    "genkitx-langchain": "workspace:*",
-    "genkitx-pinecone": "workspace:*",
-    "google-auth-library": "^9.11.0"
+    "firebase-admin": "^13.8.0",
+    "genkit": "workspace:*"
   },
   "devDependencies": {
+    "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
 }

@@ -68,7 +68,7 @@ jobs:
       # Every import is declared, and every declared dependency is imported.
       - name: Check dependencies match imports
         run: |
-          for package in genkit genkit-google-genai; do
+          for package in genkit genkit-google-genai genkit-mcp; do
             uv run --no-sync --directory "py/packages/$package" deptry src
           done
 

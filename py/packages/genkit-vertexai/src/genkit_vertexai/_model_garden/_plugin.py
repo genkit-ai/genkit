@@ -33,6 +33,7 @@ from genkit_vertexai._model_garden._model_info import (
     SUPPORTED_OPENAI_COMPAT_MODELS,
     get_default_model_info,
 )
+from genkit_vertexai._model_garden._secrets import reject_secrets_api_key
 from google.auth import default as google_auth_default
 from google.auth.exceptions import DefaultCredentialsError
 
@@ -173,11 +174,7 @@ class ModelGardenModel:
         supports = model_info.supports
         return {
             'name': model_info.label,
-            'supports': (
-                supports.model_dump(by_alias=False, exclude_none=False)
-                if supports and hasattr(supports, 'model_dump')
-                else {}
-            ),
+            'supports': supports.model_dump(by_alias=False) if supports and hasattr(supports, 'model_dump') else {},
         }
 
     def to_openai_compatible_model(self) -> Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse]]:
@@ -189,6 +186,7 @@ class ModelGardenModel:
         """
 
         async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+            reject_secrets_api_key(ctx.context)
             # Private import across packages, on purpose. The [openai] extra
             # pins genkit-openai to this package's exact version, so Model
             # Garden reuses the OpenAI-compatible model class instead of

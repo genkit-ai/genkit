@@ -29,6 +29,7 @@ from genkit_openai._models._utils import (
     _extract_text,
     extract_config_dict,
     pop_extra_body,
+    reject_version,
     reraise_openai_error,
 )
 from openai import AsyncOpenAI
@@ -36,10 +37,19 @@ from openai.types.images_response import ImagesResponse
 from pydantic import Field
 
 from genkit import FinishReason, Message, ModelResponse, Part, Role
-from genkit.model import ModelConfig, ModelContext, ModelInfo, ModelRequest, ModelSupports
+from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports
+from genkit.plugin_api import GenkitConfig
+
+_IMAGE_EXTRA_DESCRIPTION = (
+    'Images API fields this class does not declare, in API wire names, sent as the request body. '
+    'prompt and model are built by Genkit and rejected here. Not checked; do not put API keys here.'
+)
 
 
-class OpenAIDalleConfig(ModelConfig):
+# The image configs extend GenkitConfig, not ModelConfig: the Images API has
+# no temperature, token cap, top_k/top_p, stop strings, or version pin, so
+# those keys raise instead of being accepted and dropped.
+class OpenAIDalleConfig(GenkitConfig):
     """Settings the DALL-E image endpoint reads from config."""
 
     size: str | None = None
@@ -48,9 +58,10 @@ class OpenAIDalleConfig(ModelConfig):
     n: int | None = None
     user: str | None = None
     response_format: str | None = None
+    extra: dict[str, Any] | None = Field(default=None, description=_IMAGE_EXTRA_DESCRIPTION)
 
 
-class OpenAIGptImageConfig(ModelConfig):
+class OpenAIGptImageConfig(GenkitConfig):
     """Settings the GPT Image endpoint reads from config."""
 
     size: Literal['1024x1024', '1536x1024', '1024x1536', 'auto'] | None = None
@@ -65,6 +76,7 @@ class OpenAIGptImageConfig(ModelConfig):
     moderation: Literal['low', 'auto'] | None = None
     output_compression: int | None = Field(default=None, ge=1, le=100)
     output_format: Literal['png', 'jpeg', 'webp'] | None = None
+    extra: dict[str, Any] | None = Field(default=None, description=_IMAGE_EXTRA_DESCRIPTION)
 
 
 # Supported image generation models with their metadata.
@@ -115,24 +127,20 @@ def _to_image_generate_params(
     prompt = _extract_prompt_text(request)
     config = extract_config_dict(request)
     extra_body = pop_extra_body(config, managed=('prompt', 'model'), label='openai image')
+    reject_version(config, label='openai image')
 
     # Start with required params.
-    effective_model = config.pop('version', None) or model_name
     params: dict[str, Any] = {
-        'model': effective_model,
+        'model': model_name,
         'prompt': prompt,
     }
 
     # GPT Image 1 rejects the response_format parameter; its API always
     # returns base64 image data. DALL-E models retain the existing default.
-    if 'gpt-image' not in effective_model.lower():
+    if 'gpt-image' not in model_name.lower():
         params['response_format'] = config.pop('response_format', 'b64_json')
     else:
         config.pop('response_format', None)
-
-    # Strip standard GenAI config keys that don't apply to image generation.
-    for key in ('temperature', 'max_output_tokens', 'stop_sequences', 'top_k', 'top_p'):
-        config.pop(key, None)
 
     # Pass remaining config through (size, quality, style, n, etc.).
     params.update(config)

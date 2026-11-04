@@ -6,33 +6,33 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from typing import Any
 
 import pytest
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from genkit_fastapi import handle_genkit_request
+from genkit_fastapi.exp import serve_agent
 
-# serve_agent needs the agent subsystem; skip the whole module where it isn't built.
-_genkit_agent = pytest.importorskip('genkit.exp.agent', reason='agents API not available')
-if not hasattr(_genkit_agent, 'InMemorySessionStore'):
-    pytest.skip('agents API not available', allow_module_level=True)
-InMemorySessionStore = _genkit_agent.InMemorySessionStore
-AgentInit = _genkit_agent.AgentInit
-
-from genkit_fastapi import handle_genkit_request  # noqa: E402
-from genkit_fastapi.exp import serve_agent  # noqa: E402
-
-from genkit._ai._agents._client import error_from_http  # noqa: E402
-from genkit._core._error import RuntimeErrorReason  # noqa: E402
-from genkit._core._model import (  # noqa: E402
+from genkit import (
+    ErrorReason,
+    FinishReason,
     Message,
     ModelResponse,
-    ModelResponseChunk as ModelResponseChunkModel,
+    ModelResponseChunk,
     Part,
+    Role,
 )
-from genkit._core._typing import FinishReason, Role  # noqa: E402
-from genkit.exp import Genkit  # noqa: E402
-from genkit.testing import define_scripted_model  # noqa: E402
+
+# error_from_http is private: this test pins the client-side HTTP error mapping.
+from genkit._ai._agents._client import error_from_http  # noqa: TID251
+from genkit.exp import Genkit
+from genkit.exp.agent import AgentInit, InMemorySessionStore
+from genkit.testing import define_scripted_model
+from genkit.web import to_sse
 
 
 def build_agent(name: str, *, server_managed: bool = True) -> Any:
@@ -47,7 +47,7 @@ def build_agent(name: str, *, server_managed: bool = True) -> Any:
                 message=Message(role=Role.MODEL, content=[Part.from_text('Hi there!')]),
             )
         ],
-        chunks=[[ModelResponseChunkModel(role=Role.MODEL, content=[Part.from_text('Hi there!')])]],
+        chunks=[[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Hi there!')])]],
     )
     ai.define_prompt(name=name, model='scriptedModel', system='You echo things.')
     return ai.define_prompt_agent(name=name, store=InMemorySessionStore() if server_managed else None)
@@ -259,13 +259,13 @@ def test_serve_agent_bad_input_returns_400_with_its_message(path: str, body: dic
             {'snapshotId': 'snap-1'},
             "Cannot use 'snapshotId' with agent 'initAgent': this agent has no store configured "
             "(client-managed state). Send 'state' instead.",
-            RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED,
+            ErrorReason.SESSION_STORE_NOT_CONFIGURED,
             id='snapshot-id-without-store',
         ),
     ],
 )
 def test_serve_agent_init_mismatch_returns_agent_init_error(
-    server_managed: bool, init: dict[str, Any], message: str, reason: RuntimeErrorReason | None
+    server_managed: bool, init: dict[str, Any], message: str, reason: ErrorReason | None
 ) -> None:
     """AgentInitError is a PublicError, so a remote client sees the status, message, and reason it would in-process."""
     response = client(build_agent('initAgent', server_managed=server_managed)).post(
@@ -281,3 +281,62 @@ def test_serve_agent_init_mismatch_returns_agent_init_error(
     err = error_from_http(status_code=response.status_code, body=response.text)
     assert err.status == 'FAILED_PRECONDITION'
     assert err.reason is reason
+
+
+def test_serve_agent_stream_failure_log_names_the_agent(caplog: pytest.LogCaptureFixture) -> None:
+    """A streamed agent failure logs the agent's action name via to_sse."""
+    with caplog.at_level(logging.WARNING):
+        response = client(build_agent('orderAgent', server_managed=True)).post(
+            '/api/chat?stream=true',
+            json={
+                'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}},
+                'init': {'state': {'custom': {'table': 4}}},
+            },
+        )
+
+    msg = (
+        "Cannot send 'state' to agent 'orderAgent': this agent uses a server-managed store. "
+        "Send 'snapshotId' or 'sessionId' instead."
+    )
+    assert sse_events(response.text) == [{'error': {'message': msg, 'status': 'FAILED_PRECONDITION'}}]
+    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
+        ('WARNING', f"served action 'orderAgent' stream failed: FAILED_PRECONDITION: {msg}", False),
+    ]
+
+
+_UUID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+
+
+def frames(text: str) -> list[str]:
+    """SSE data lines with session / snapshot uuids masked, so frames from separate runs compare whole."""
+    return [_UUID.sub('<id>', line) for line in text.splitlines() if line.startswith('data: ')]
+
+
+def test_hand_rolled_routes_send_the_same_frames_as_serve_agent() -> None:
+    """handle_genkit_request and genkit.web.to_sse(turn) send serve_agent's frames, payloads included."""
+    served = client(build_agent('servedFrames')).post('/api/chat?stream=true', json={'message': 'Hi'})
+
+    via_request = build_agent('requestFrames')
+    via_to_sse = build_agent('toSseFrames')
+    app = FastAPI()
+
+    @app.post('/request', response_model=None)
+    async def request_route(request: Request) -> object:
+        return await handle_genkit_request(request, action=via_request)
+
+    @app.post('/to_sse')
+    async def to_sse_route() -> StreamingResponse:
+        return StreamingResponse(to_sse(via_to_sse.chat().send_stream('Hi')), media_type='text/event-stream')
+
+    hand = TestClient(app)
+    wire_body = {'data': {'message': {'role': 'user', 'content': [{'text': 'Hi'}]}}}
+
+    expected = [
+        'data: {"message":{"modelChunk":{"role":"model","index":0.0,"content":[{"text":"Hi there!"}]}}}',
+        'data: {"message":{"turnEnd":{"snapshotId":"<id>","finishReason":"stop"}}}',
+        'data: {"result":{"sessionId":"<id>","snapshotId":"<id>",'
+        '"message":{"role":"model","content":[{"text":"Hi there!"}]},"artifacts":[],"finishReason":"stop"}}',
+    ]
+    assert frames(served.text) == expected
+    assert frames(hand.post('/request?stream=true', json=wire_body).text) == expected
+    assert frames(hand.post('/to_sse').text) == expected

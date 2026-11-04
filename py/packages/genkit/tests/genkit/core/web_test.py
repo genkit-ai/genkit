@@ -42,9 +42,11 @@ def test_request_context_types_live_on_genkit_web_only() -> None:
     assert sorted(genkit.web.__all__) == [
         'ContextProvider',
         'RequestData',
+        'StreamHandle',
         'error_body',
         'error_status',
         'read_body',
+        'to_sse',
         'wants_stream',
     ]
     assert not {'ContextProvider', 'RequestData'} & set(genkit.__all__)
@@ -84,7 +86,7 @@ def test_read_body_input_key_is_rejected() -> None:
         read_body({'input': 1})
 
     assert excinfo.value.status == 'INVALID_ARGUMENT'
-    assert excinfo.value.original_message == WRAP_MESSAGE
+    assert excinfo.value.message == WRAP_MESSAGE
 
 
 @pytest.mark.parametrize('body', [[1], 'x', None, 7, {'foo': 'bar'}])
@@ -94,7 +96,7 @@ def test_read_body_non_object_is_rejected(body: object) -> None:
         read_body(body)
 
     assert excinfo.value.status == 'INVALID_ARGUMENT'
-    assert excinfo.value.original_message == WRAP_MESSAGE
+    assert excinfo.value.message == WRAP_MESSAGE
 
 
 def test_wants_stream_on_event_stream_accept_or_stream_true() -> None:

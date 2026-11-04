@@ -34,10 +34,13 @@ from genkit_google_genai._models._sdk_config import (
     GEMINI_UNSUPPORTED_GENERATION_FIELDS,
     attach_config_extra,
     attach_leftovers,
+    check_timeout_seconds,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
+    reject_bool_timeout,
     sdk_config_error,
     split_sdk_fields,
+    timeout_seconds_to_ms,
 )
 from genkit_google_genai._models._secrets import context_api_key, reject_request_config_api_key
 from genkit_google_genai._provider_errors import TRANSPORT_ERRORS, api_error, transport_error
@@ -60,6 +63,7 @@ from pydantic.alias_generators import to_camel, to_snake
 from typing_extensions import NotRequired, Self, TypedDict
 
 from genkit import (
+    ErrorReason,
     FinishReason,
     GenkitError,
     Message,
@@ -67,7 +71,6 @@ from genkit import (
     ModelResponseChunk,
     Part,
     Role,
-    RuntimeErrorReason,
 )
 from genkit.model import (
     ConstrainedSupport,
@@ -399,7 +402,7 @@ def file_search_fields(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'{prefix}{names} needs file_search_store_names',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     return stores, set_options
 
@@ -438,7 +441,7 @@ def flattened_key_error(key: str, value: object, fields: Collection[str]) -> Gen
         message = f'{key} takes True or False'
     else:
         return None
-    return GenkitError(status='INVALID_ARGUMENT', message=message, reason=RuntimeErrorReason.INVALID_INPUT)
+    return GenkitError(status='INVALID_ARGUMENT', message=message, reason=ErrorReason.INVALID_INPUT)
 
 
 def _both_set_error(first: str, second: str) -> ValueError:
@@ -499,6 +502,25 @@ class GeminiConfig(ModelConfig):
             "multi-regions ('us', 'eu'), or 'global'."
         ),
     )
+    timeout: float | None = Field(
+        default=None,
+        description=(
+            'HTTP timeout for this request, in seconds (positive, finite). Overrides the plugin timeout for this call. '
+            'The Gemini API rejects deadlines under 10s with HTTP 400; Vertex AI accepts shorter values.'
+        ),
+    )
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def _no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
+
+    @field_validator('timeout')
+    @classmethod
+    def _check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
 
     safety_settings: Annotated[
         list[SafetySetting] | None,
@@ -620,45 +642,10 @@ class GeminiConfig(ModelConfig):
                 )
         return self
 
-    # inherited from ModelConfig:
-    # version, temperature, max_output_tokens, top_k, top_p, stop_sequences
-
-    temperature: Annotated[
-        float | None,
-        WithJsonSchema({
-            'type': 'number',
-            'minimum': 0.0,
-            'maximum': 2.0,
-            'description': (
-                'Controls the randomness of the output. Values can range over [0.0, 2.0]. The default value is 1.0.'
-            ),
-        }),
-    ] = Field(
-        default=None,
-        ge=0.0,
-        le=2.0,
-    )
-
-    top_p: Annotated[
-        float | None,
-        WithJsonSchema({
-            'type': 'number',
-            'minimum': 0.0,
-            'maximum': 1.0,
-            'description': (
-                'The maximum cumulative probability of tokens to consider when sampling. '
-                'Values can range over [0.0, 1.0]. The default value is 0.95.'
-            ),
-        }),
-    ] = Field(
-        default=None,
-        ge=0.0,
-        le=1.0,
-    )
-    top_k: int | None = Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
-        default=None,
-        description=('The maximum number of tokens to consider when sampling.'),
-    )
+    # version, temperature, max_output_tokens, top_k, top_p and stop_sequences
+    # come from ModelConfig and are not re-declared; Gemini's ranges are
+    # applied through common_field_bounds.
+    common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
 
     thinking_level: ThinkingLevel | None = Field(
         default=None,
@@ -681,13 +668,6 @@ class GeminiConfig(ModelConfig):
             'thought and thoughts are available.'
         ),
     )
-
-    max_output_tokens: int | None = (
-        Field(  # pyrefly: ignore[bad-override]  # pyright: ignore[reportIncompatibleVariableOverride]
-            default=None, description='Maximum number of tokens to generate.'
-        )
-    )
-    stop_sequences: list[str] | None = Field(default=None, description='Stop sequences.')
 
     # Sampling knobs GenerateContentConfig types. Declared so they stay flat
     # and SDK-validated now that unknown keys raise.
@@ -829,8 +809,8 @@ class GeminiImageConfig(GeminiConfig):
 class GemmaConfig(GeminiConfig):
     """Gemma Config."""
 
-    # Inherits temperature from GeminiConfig
-    temperature: float | None = None
+    # Gemma takes any temperature; top_p keeps Gemini's range.
+    common_field_bounds = {'top_p': (0.0, 1.0)}
 
 
 GEMINI_TEXT_SUPPORTS = ModelSupports(
@@ -964,6 +944,11 @@ GEMINI_3_6_FLASH = ModelInfo(
 
 GEMINI_3_7_FLASH = ModelInfo(
     label='Google AI - Gemini 3.7 Flash',
+    supports=GEMINI_TEXT_SUPPORTS,
+)
+
+GEMINI_3_8_FLASH = ModelInfo(
+    label='Google AI - Gemini 3.8 Flash',
     supports=GEMINI_TEXT_SUPPORTS,
 )
 
@@ -1171,6 +1156,7 @@ KnownSharedGemini: TypeAlias = Literal[
     'gemini-3.5-flash',
     'gemini-3.6-flash',
     'gemini-3.7-flash',
+    'gemini-3.8-flash',
 ]
 # Vertex AI does not serve the rotating ``-latest`` aliases.
 KnownGoogleAIGemini: TypeAlias = Literal[
@@ -1227,6 +1213,7 @@ _add_model(GEMINI_3_PRO_PREVIEW, ['gemini-3-pro-preview', 'gemini-pro-latest'])
 _add_model(GEMINI_3_5_FLASH, ['gemini-3.5-flash', 'gemini-flash-latest'])
 _add_model(GEMINI_3_6_FLASH, ['gemini-3.6-flash'])
 _add_model(GEMINI_3_7_FLASH, ['gemini-3.7-flash'])
+_add_model(GEMINI_3_8_FLASH, ['gemini-3.8-flash'])
 _add_model(GEMINI_3_1_PRO_PREVIEW, ['gemini-3.1-pro-preview'])
 _add_model(GEMINI_3_1_PRO_PREVIEW_CUSTOMTOOLS, ['gemini-3.1-pro-preview-customtools'])
 _add_model(GEMINI_3_1_FLASH_LITE_PREVIEW, ['gemini-3.1-flash-lite-preview'])
@@ -2029,7 +2016,7 @@ class GeminiModel:
         # plugin's credentials, endpoint, headers, and timeouts.
         kwargs = dict(self._client_kwargs)
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
 
         if api_version:
             opts.api_version = api_version
@@ -2363,6 +2350,7 @@ class GeminiModel:
 
         leftovers: dict[str, Any] = {}
         extra: dict[str, Any] | None = None
+        timeout: float | None = None
         if request.config:
             # 2. Normalize config into a dict
             dumped_config = self._normalize_config_to_dict(request.config)
@@ -2370,6 +2358,8 @@ class GeminiModel:
             if dumped_config is not None:
                 # config.extra is wire-shaped; it goes on the body as-is in step 5.
                 extra = dumped_config.pop('extra', None)
+                # timeout is transport, not body: it rides on this request's http_options.
+                timeout = dumped_config.pop('timeout', None)
 
                 # 3. Extract tool-related fields
                 self._check_backend_fields(dumped_config)
@@ -2399,7 +2389,7 @@ class GeminiModel:
 
         has_output = bool(request.output_format or request.output_schema or request.output_content_type)
 
-        if cfg is not None or tools or system_instruction or has_output or leftovers or extra:
+        if cfg is not None or tools or system_instruction or has_output or leftovers or extra or timeout is not None:
             if cfg is None:
                 cfg = genai_types.GenerateContentConfig()
 
@@ -2439,7 +2429,21 @@ class GeminiModel:
                 managed_generation_fields=GEMINI_MANAGED_GENERATION_FIELDS,
                 unsupported_generation_fields=GEMINI_UNSUPPORTED_GENERATION_FIELDS,
             )
-            return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
+            if timeout is not None:
+                # google-genai layers a request's http_options over the client's
+                # field by field, but populate_server_timeout_header caches
+                # X-Server-Timeout on the shared client and skips it if present,
+                # so set this call's X-Server-Timeout explicitly too.
+                ms = timeout_seconds_to_ms(timeout)
+                http_options = cfg.http_options.model_copy() if cfg.http_options else genai_types.HttpOptions()
+                http_options.timeout = ms
+                headers = {
+                    key: val for key, val in (http_options.headers or {}).items() if key.lower() != 'x-server-timeout'
+                }
+                headers['X-Server-Timeout'] = str(math.ceil(ms / 1000))
+                http_options.headers = headers
+                cfg.http_options = http_options
+            return cfg
 
         return None
 
@@ -2499,7 +2503,7 @@ class GeminiModel:
 
     def _invalid_config(self, message: str) -> GenkitError:
         return GenkitError(
-            status='INVALID_ARGUMENT', message=f'{self._version}: {message}', reason=RuntimeErrorReason.INVALID_INPUT
+            status='INVALID_ARGUMENT', message=f'{self._version}: {message}', reason=ErrorReason.INVALID_INPUT
         )
 
     def _check_backend_fields(self, config: Mapping[str, Any]) -> None:

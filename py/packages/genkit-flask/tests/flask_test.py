@@ -18,8 +18,10 @@
 """Tests for the Flask plugin."""
 
 import json
+import logging
 from typing import Any
 
+import pytest
 from flask import Flask, abort
 from genkit_flask import genkit_flask_handler
 from pydantic import BaseModel
@@ -301,23 +303,35 @@ def test_streamed_flow_failure_ends_with_same_error_frame() -> None:
     assert chunks[-1] == b'data: {"error":{"message":"no order 99","status":"NOT_FOUND"}}\n\n'
 
 
-def test_flask_malformed_json_body_returns_400_valid_json_message() -> None:
-    """A Flask POST that is not JSON is 400 request body must be valid JSON."""
-    response = (
-        create_app()
-        .test_client()
-        .post(
-            '/chat',
-            data='{bad',
-            content_type='application/json',
+def test_flask_malformed_json_body_returns_400_valid_json_message(caplog: pytest.LogCaptureFixture) -> None:
+    """A Flask POST that is not JSON is 400 request body must be valid JSON and logs the flow name."""
+    with caplog.at_level(logging.DEBUG, logger='genkit_flask._handler'):
+        response = (
+            create_app()
+            .test_client()
+            .post(
+                '/chat',
+                data='{bad',
+                content_type='application/json',
+            )
         )
-    )
 
     assert response.status_code == 400
     assert json.loads(response.data) == {
         'message': 'request body must be valid JSON',
         'status': 'INVALID_ARGUMENT',
     }
+    records = [r for r in caplog.records if r.name == 'genkit_flask._handler']
+    assert [
+        (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
+    ] == [
+        (
+            logging.WARNING,
+            "served action 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
+            False,
+            'say_hi',
+        )
+    ]
 
 
 def test_flask_provider_401_returns_500_internal_error() -> None:
@@ -442,3 +456,77 @@ def test_flask_context_provider_abort_keeps_its_status() -> None:
     response = app.test_client().post('/chat', json={'data': 'x'})
 
     assert response.status_code == 401
+
+
+def test_flask_failure_logs_name_the_flow(caplog: pytest.LogCaptureFixture) -> None:
+    """Failure lines say which flow failed: 5xx with traceback, 4xx without."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/order')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def place_order(_: str) -> None:
+        raise ValueError('kitchen on fire')
+
+    client = app.test_client()
+    with caplog.at_level(logging.DEBUG, logger='genkit_flask._handler'):
+        assert client.post('/order', json={'data': 'soup'}).status_code == 500
+
+    records = [r for r in caplog.records if r.name == 'genkit_flask._handler']
+    assert [r.getMessage() for r in records] == ["served action 'place_order' run failed"]
+    assert records[0].exc_info is not None
+
+
+def test_flask_client_error_log_names_the_flow(caplog: pytest.LogCaptureFixture) -> None:
+    """A 4xx warning names the flow and carries no traceback."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/allergens')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def check_allergens(_: str) -> None:
+        raise PublicError('INVALID_ARGUMENT', 'we do not serve peanuts')
+
+    with caplog.at_level(logging.DEBUG, logger='genkit_flask._handler'):
+        assert app.test_client().post('/allergens', json={'data': 'peanuts'}).status_code == 400
+
+    records = [r for r in caplog.records if r.name == 'genkit_flask._handler']
+    assert [r.getMessage() for r in records] == [
+        "served action 'check_allergens' run failed: INVALID_ARGUMENT: we do not serve peanuts"
+    ]
+    assert records[0].exc_info is None
+
+
+def test_two_handlers_in_one_app_get_their_own_endpoints() -> None:
+    """Each route registers under its flow's name, so a second route doesn't collide."""
+    ai = Genkit()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/menu')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def suggest_dish(cuisine: str) -> str:
+        return f'{cuisine} tasting menu'
+
+    @app.post('/allergens')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def check_allergens(dish: str) -> str:
+        return f'{dish}: contains peanuts'
+
+    @app.post('/specials')
+    @genkit_flask_handler(ai)
+    @ai.flow(name='menu.specials')
+    async def specials(_: str) -> str:
+        return 'smoked salmon tartine'
+
+    client = app.test_client()
+    assert client.post('/menu', json={'data': 'thai'}).json == {'result': 'thai tasting menu'}
+    assert client.post('/allergens', json={'data': 'pad thai'}).json == {'result': 'pad thai: contains peanuts'}
+    assert client.post('/specials', json={'data': ''}).json == {'result': 'smoked salmon tartine'}
+    assert {'suggest_dish', 'check_allergens', 'menu_specials'} <= set(app.view_functions)

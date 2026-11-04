@@ -305,7 +305,7 @@ async def test_throttled_batch_embed_keeps_retry_after() -> None:
     # 3. AWS's message appears once, not once per wrapping layer.
     assert str(excinfo.value).count('Too many requests') == 1
     assert excinfo.value.status == 'RESOURCE_EXHAUSTED'
-    assert excinfo.value.response_metadata == {'retry_after_ms': 3000.0}
+    assert excinfo.value.retry_after_ms == 3000.0
     document_error = excinfo.value.__cause__
     assert document_error is not None
     assert document_error.__cause__ is throttled

@@ -28,11 +28,12 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 import anyio
 import uvicorn
 from pydantic import BaseModel
+from typing_extensions import Never
 
 from genkit._ai._background_model import (
     BackgroundModel,
@@ -44,7 +45,7 @@ from genkit._ai._background_model import (
     check_operation,
     define_background_model,
 )
-from genkit._ai._embedding import Embedder, EmbedderFn, EmbedderInfo, EmbedderRef, define_embedder
+from genkit._ai._embedding import Embedder, EmbedderFn, EmbedderInfo, EmbedderRef, EmbedderRefConfigT, define_embedder
 from genkit._ai._evaluator import (
     BatchEvaluator,
     BatchEvaluatorFn,
@@ -55,7 +56,7 @@ from genkit._ai._evaluator import (
     define_evaluator,
 )
 from genkit._ai._formats._builtin import built_in_formats
-from genkit._ai._formats._types import FormatDef
+from genkit._ai._formats._types import Formatter
 from genkit._ai._generate import (
     CallScope,
     define_generate_action,
@@ -71,9 +72,10 @@ from genkit._ai._model import (
     ModelResponse,
     ModelResponseChunk,
     background_model_name,
+    call_config_class,
     check_call_config,
     define_model,
-    normalize_config,
+    python_config_schema,
     resolve_for_generate,
 )
 from genkit._ai._prompt import (
@@ -88,13 +90,14 @@ from genkit._ai._prompt import (
     register_prompt_actions,
     to_generate_options,
 )
-from genkit._ai._tools import ORIGINAL_OUTPUT_SCHEMA_KEY, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context
+from genkit._ai._tools import define_interrupt
+from genkit._core._action import Action, ActionKind, FlowContext, get_current_context
 from genkit._core._background import missing_operation_error
 from genkit._core._channel import run_loop, start_stream
+from genkit._core._config_check import layer_call_config
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._flow import Flow
 from genkit._core._logger import configure_logging, get_logger, resolve_level
 from genkit._core._middleware import Middleware
@@ -122,17 +125,18 @@ from genkit._core._registry import Registry, define_dynamic_action_provider as d
 from genkit._core._telemetry._attrs import metadata_key
 from genkit._core._telemetry._http import maybe_inject_dev_instrumentation
 from genkit._core._telemetry._instrumentation import run_in_new_span
-from genkit._core._tool import Tool
+from genkit._core._tool import Tool, ToolContext
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
+    EmbedResponse,
     EvaluatorRequest,
     EvaluatorResponse,
     ModelInfo,
     Role,
 )
 
-from ._decorators import _FlowDecorator
+from ._decorators import _FlowDecorator, _ToolDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -310,21 +314,21 @@ class Genkit:
     @overload
     def flow(
         self,
-        func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT], object], Awaitable[OutputT]],
         /,
     ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        func: Callable[[InputT, FlowContext[ChunkT]], Awaitable[OutputT]],
         /,
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT], InputT], Awaitable[OutputT]],
         /,
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
@@ -338,7 +342,7 @@ class Genkit:
     @overload
     def flow(
         self,
-        func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]],
+        func: Callable[[FlowContext[ChunkT]], Awaitable[OutputT]],
         /,
     ) -> Flow[None, OutputT, ChunkT]: ...
 
@@ -447,28 +451,73 @@ class Genkit:
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool]: ...
+    ) -> _ToolDecorator: ...
+
+    # Same order as Genkit.flow: the `object` shapes catch `(ctx, x: Any)` and
+    # `(x: Any)` / `(x: object)` before a ctx shape can claim them.
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT, ChunkT]: ...
 
     @overload
     def tool(
         self,
-        func: Callable[..., Any],
+        func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]],
         /,
-    ) -> Tool: ...
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Tool[None, OutputT]: ...
 
     def tool(
         self,
-        name: str | Callable[..., Any] | None = None,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
         *,
         description: str | None = None,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
-    ) -> Callable[[Callable[..., Any]], Tool] | Tool:
+    ) -> _ToolDecorator | Tool[Any, Any, Any]:
         """Decorator to register a function as a tool.
 
         Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
         ``@ai.tool('custom_name', description='...')``).
 
         The return annotation is what the model binds as ``outputSchema``.
+        Awaiting the tool directly returns what the function returned.
 
         A tool takes at most one input, and that input's type is the schema the
         model fills in. For several fields, use one Pydantic model. To read the
@@ -492,27 +541,9 @@ class Genkit:
 
             res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
         """
-        if callable(name):
-            return define_tool(
-                self._registry,
-                name,
-                None,
-                description,
-                input_schema=input_schema,
-            )
-
-        tool_name: str | None = name
-
-        def wrapper(func: Callable[..., Any]) -> Tool:
-            return define_tool(
-                self._registry,
-                func,
-                tool_name,
-                description,
-                input_schema=input_schema,
-            )
-
-        return wrapper
+        if not isinstance(name, str) and name is not None:
+            return _ToolDecorator(self._registry, None, description, input_schema)(name)
+        return _ToolDecorator(self._registry, name, description, input_schema)
 
     def define_middleware(
         self,
@@ -562,7 +593,7 @@ class Genkit:
         *,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Tool:
+    ) -> Tool[Any, NoReturn]:
         """Register an interrupt tool that always pauses for user input.
 
         Args:
@@ -571,7 +602,7 @@ class Genkit:
             description: Tool description
 
         Returns:
-            The registered interrupt tool
+            The registered interrupt tool. Awaiting it directly raises ``Interrupt``.
 
         Example:
             ask_user = ai.define_interrupt(
@@ -718,9 +749,9 @@ class Genkit:
         """
         return define_embedder(self._registry, name, fn, info, metadata, description, config_schema=config_schema)
 
-    def define_format(self, format: FormatDef) -> None:
-        """Register a custom output format."""
-        self._registry.register_value('format', format.name, format)
+    def define_format(self, formatter: Formatter) -> None:
+        """Register a custom output format. See `genkit.formats.Formatter`."""
+        self._registry.register_value('format', formatter.name, formatter)
 
     async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
         """Return the model action registered under ``name``, or None.
@@ -757,10 +788,7 @@ class Genkit:
         action = await self._registry.resolve_action(ActionKind.TOOL, name)
         if action is None:
             return None
-        schema = action.metadata.get(ORIGINAL_OUTPUT_SCHEMA_KEY)
-        return Tool._from_action(
-            action, original_output_schema=cast(dict[str, object], schema) if isinstance(schema, dict) else None
-        )
+        return Tool.from_action(action)
 
     def lookup_value(self, *, kind: str, name: str) -> object | None:
         """Return the value defined under ``kind`` and ``name``, or None."""
@@ -1421,32 +1449,48 @@ class Genkit:
     # Genkit-specific methods (generation, embedding, retrieval, etc.)
     # -------------------------------------------------------------------------
 
-    def _resolve_embedder_name(self, embedder: str | EmbedderRef) -> str:
+    def _resolve_embedder_name(self, embedder: str | EmbedderRef | None) -> str:
         """Resolve embedder name from string or EmbedderRef."""
+        if embedder is None:
+            raise ValueError('Embedder must be specified as a string name or an EmbedderRef.')
         return embedder.name if isinstance(embedder, EmbedderRef) else embedder
 
-    def _embedder_options(
+    async def _embedder_and_options(
         self,
         *,
-        embedder: str | EmbedderRef,
-        config: dict[str, object] | None,
-    ) -> dict[str, object]:
-        """Copy ref config plus version, then overlay call-site config.
+        embedder: str | EmbedderRef[BaseModel] | None,
+        config: object,
+    ) -> tuple[Action[EmbedRequest, EmbedResponse, Never], dict[str, Any]]:
+        """Resolve the embedder, check the call config, and layer the options.
 
-        Returns an empty dict when neither the ref nor the call sets anything,
-        so the embedder always receives request.options as a dict. ``config``
-        goes through the same check as ``generate``: a dict, or a BaseModel
-        dumped to the fields it set; anything else raises INVALID_ARGUMENT. The
-        caller's EmbedderRef.config dict is left unchanged so they can reuse the
-        same ref on later calls.
+        Same steps as generate: pick the class (call_config_class), check the
+        caller's keys, then ``ref.version < ref.config < call`` folded to that
+        class. A required field left out is checked at the action boundary,
+        where the embedder's own defaults go underneath.
         """
-        ref_config = embedder.config if isinstance(embedder, EmbedderRef) else None
-        version = embedder.version if isinstance(embedder, EmbedderRef) else None
-        merged: dict[str, object] = normalize_config(config=ref_config)
-        if version:
-            merged['version'] = version
-        merged.update(normalize_config(config=config))
-        return merged
+        name = self._resolve_embedder_name(embedder)
+        action = await self._registry.resolve_embedder(name)
+        if action is None:
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Embedder '{name}' not found.",
+                reason=ErrorReason.ACTION_NOT_FOUND,
+            )
+        ref = embedder if isinstance(embedder, EmbedderRef) else None
+        schema = call_config_class(
+            name=name,
+            kind='embedder',
+            ref_schema=ref.config_schema if ref else None,
+            action_schema=python_config_schema(action.config_schema),
+        )
+        check_call_config(config=config, schema=schema, model=name)
+        options = layer_call_config(
+            call=config,
+            version=ref.version if ref else None,
+            ref_config=ref.config if ref else None,
+            schema=schema,
+        )
+        return action, options
 
     # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
     @overload
@@ -1909,16 +1953,18 @@ class Genkit:
     async def embed(
         self,
         *,
-        embedder: str | EmbedderRef,
+        embedder: str | EmbedderRef[EmbedderRefConfigT],
         content: str | Document,
         metadata: dict[str, object] | None = None,
-        config: dict[str, object] | None = None,
+        config: EmbedderRefConfigT | Mapping[str, Any] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for a single document or string.
 
-        ``config`` is merged over the ``EmbedderRef``'s config (the call wins
-        per key) and reaches the embedder as ``request.options``. An embedder
-        name that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
+        ``config`` is layered over the ``EmbedderRef``'s version and config
+        (the call wins per key) and reaches the embedder as
+        ``request.options``. A config object must be the embedder's options
+        class. An embedder name that isn't registered raises ``GenkitError``
+        with ``NOT_FOUND``.
 
         ``metadata`` is attached to a string ``content``. A ``Document``
         already carries its own metadata, so passing both raises ``TypeError``.
@@ -1935,16 +1981,7 @@ class Genkit:
         if metadata is not None and isinstance(content, Document):
             raise TypeError(_DOCUMENT_METADATA_CONFLICT)
 
-        embedder_name = self._resolve_embedder_name(embedder)
-        final_options = self._embedder_options(embedder=embedder, config=config)
-
-        embed_action = await self._registry.resolve_embedder(embedder_name)
-        if embed_action is None:
-            raise GenkitError(
-                status='NOT_FOUND',
-                message=f"Embedder '{embedder_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
-            )
+        embed_action, final_options = await self._embedder_and_options(embedder=embedder, config=config)
 
         documents = [Document.from_text(content, metadata)] if isinstance(content, str) else [content]
 
@@ -1961,10 +1998,10 @@ class Genkit:
     async def embed_many(
         self,
         *,
-        embedder: str | EmbedderRef,
+        embedder: str | EmbedderRef[EmbedderRefConfigT],
         content: list[str] | list[Document],
         metadata: dict[str, object] | None = None,
-        config: dict[str, object] | None = None,
+        config: EmbedderRefConfigT | Mapping[str, Any] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for multiple documents in a single batch call.
 
@@ -1978,16 +2015,7 @@ class Genkit:
             Document.from_text(item, metadata) if isinstance(item, str) else item for item in content
         ]
 
-        embedder_name = self._resolve_embedder_name(embedder)
-        final_options = self._embedder_options(embedder=embedder, config=config)
-
-        embed_action = await self._registry.resolve_embedder(embedder_name)
-        if embed_action is None:
-            raise GenkitError(
-                status='NOT_FOUND',
-                message=f"Embedder '{embedder_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
-            )
+        embed_action, final_options = await self._embedder_and_options(embedder=embedder, config=config)
 
         response = (
             await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
@@ -2043,7 +2071,7 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Evaluator '{evaluator_name}' not found.",
-                reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+                reason=ErrorReason.ACTION_NOT_FOUND,
             )
 
         if not eval_run_id:
@@ -2254,14 +2282,14 @@ class Genkit:
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f"Model '{resolved.name}' not found.",
-                reason=RuntimeErrorReason.MODEL_NOT_FOUND,
+                reason=ErrorReason.MODEL_NOT_FOUND,
             )
 
         if model_action.kind != ActionKind.BACKGROUND_MODEL:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",
-                reason=RuntimeErrorReason.UNSUPPORTED_BY_MODEL,
+                reason=ErrorReason.UNSUPPORTED_BY_MODEL,
             )
 
         # Call generate with already-resolved wire name + config.
@@ -2281,7 +2309,7 @@ class Genkit:
             # failed is not that ticket — while-not-done would poll it
             # as a live job.
             raise GenkitError(
-                status=cast(StatusName, response.error.status or 'INTERNAL'),
+                status=response.error.status or 'INTERNAL',
                 message=response.error.message,
                 details=response.error.details,
                 reason=response.error.reason,

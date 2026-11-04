@@ -26,7 +26,7 @@ from typing import Any, cast
 from jsonschema.validators import validator_for
 from pydantic import TypeAdapter
 
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 
 
 class InvalidOutputSchemaError(GenkitError):
@@ -37,7 +37,7 @@ class InvalidOutputSchemaError(GenkitError):
             status='INVALID_ARGUMENT',
             message=f'Invalid output_schema: {cause}',
             cause=cause,
-            reason=RuntimeErrorReason.INVALID_SCHEMA,
+            reason=ErrorReason.INVALID_SCHEMA,
         )
 
 
@@ -49,6 +49,31 @@ def to_json_schema(schema: type | dict[str, Any] | str | None) -> dict[str, Any]
         return schema
     type_adapter = TypeAdapter(schema)
     return type_adapter.json_schema()
+
+
+def custom_options_schema(schema: type | dict[str, Any]) -> dict[str, Any]:
+    """The JSON schema a config class publishes as ``customOptions`` for the Dev UI form.
+
+    Pydantic writes ``"default": null`` on every optional field. A form that
+    prefills from defaults would send those back as explicit nulls, and an
+    explicit None in config is a value, so null defaults are left out. A
+    JSON-schema dict is published as given.
+    """
+    if isinstance(schema, dict):
+        return schema
+    return cast(dict[str, Any], _without_null_defaults(to_json_schema(schema)))
+
+
+def _without_null_defaults(node: object) -> object:
+    if isinstance(node, dict):
+        return {
+            key: _without_null_defaults(value)
+            for key, value in cast(dict[str, Any], node).items()
+            if not (key == 'default' and value is None)
+        }
+    if isinstance(node, list):
+        return [_without_null_defaults(item) for item in cast(list[Any], node)]
+    return node
 
 
 @functools.cache
@@ -109,5 +134,5 @@ def parse_schema(*, data: object, json_schema: dict[str, Any]) -> None:
     raise GenkitError(
         status='INVALID_ARGUMENT',
         message='Schema validation failed. Parse Errors:\n\n' + '\n'.join(lines),
-        reason=RuntimeErrorReason.INVALID_INPUT,
+        reason=ErrorReason.INVALID_INPUT,
     )

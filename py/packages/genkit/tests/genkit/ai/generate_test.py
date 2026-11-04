@@ -7,9 +7,14 @@
 
 import asyncio
 import contextvars
+import copy
+import gc
 import json
 import pathlib
+import pickle  # noqa: S403
+import sys
 import time
+import weakref
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any, ClassVar, cast
 
@@ -19,7 +24,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_type
 
 from genkit import Document, Genkit, Message, ModelResponse, ModelResponseChunk, MultipartToolResponse, Part, Tool
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
 from genkit._ai._generate import (
     DEFAULT_MAX_TURNS,
     CallScope,
@@ -29,7 +33,7 @@ from genkit._ai._generate import (
 )
 from genkit._ai._model import text_from_content, text_from_message
 from genkit._ai._tools import Interrupt, ToolContext, define_tool
-from genkit._core._error import GenkitError, PublicError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError, PublicError, _StreamingCallbackError
 from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
 from genkit._core._protocols import RegistryLike
@@ -43,6 +47,7 @@ from genkit._core._typing import (
     Role,
     ToolRequest,
 )
+from genkit.formats import FormatHandler, Formatter, FormatterConfig
 from genkit.middleware import (
     GenerateHookParams,
     Middleware,
@@ -1638,7 +1643,7 @@ def test_wrap_tool_params_from_tool_request() -> None:
     async def fn() -> str:
         return ''
 
-    tool = define_tool(scratch, fn, name='lookup').action()
+    tool = define_tool(scratch, fn, name='lookup')
     params = ToolHookParams(tool_request_part=Part.from_tool_request(name='lookup'), tool=tool)
     assert params.tool_request_part.tool_request is not None
     assert params.tool_request_part.tool_request.name == 'lookup'
@@ -1651,7 +1656,7 @@ def test_wrap_tool_params_text_part_raises() -> None:
     async def fn() -> str:
         return ''
 
-    tool = define_tool(scratch, fn, name='lookup').action()
+    tool = define_tool(scratch, fn, name='lookup')
     with pytest.raises(ValidationError, match='tool request'):
         ToolHookParams(tool_request_part=Part.from_text('hi'), tool=tool)
 
@@ -2073,8 +2078,8 @@ async def test_middleware_tool_already_on_the_request_raises() -> None:
     with pytest.raises(GenkitError, match="tool 'ping' is contributed by middleware") as raised:
         await ai.generate(prompt='hi', tools=['ping'], use=[AlsoPing()])
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2097,7 +2102,7 @@ async def test_two_middleware_contributing_the_same_tool_raises() -> None:
     with pytest.raises(GenkitError, match="tool 'ping' is contributed by middleware") as raised:
         await ai.generate(prompt='hi', use=[_ping_mw('ping_a')(), _ping_mw('ping_b')()])
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
 
 
 @pytest.mark.asyncio
@@ -3044,8 +3049,8 @@ async def test_generate_rejects_negative_max_turns() -> None:
     with pytest.raises(GenkitError, match='max turns cannot be negative, got -1') as raised:
         await ai.generate(prompt='hi', max_turns=-1)
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -3066,7 +3071,7 @@ async def test_generate_max_turns_zero_drops_first_tool_round() -> None:
     assert response.finish_message == 'Exceeded maximum tool call iterations (0)'
     assert response.message is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert [m.role for m in response.messages] == [Role.USER]
     assert response.messages[0].text == 'hi'
 
@@ -3187,13 +3192,14 @@ async def test_generate_schema_failure_preserves_history() -> None:
     assert response.finish_message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'not valid JSON' in response.error.message
     assert response.error.details == {'reason': 'INVALID_OUTPUT'}
     assert response.message is not None
     assert response.message.text == 'not json'
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
-    assert response.messages[0].text == 'give me a recipe'
+    # The scripted model has no native JSON mode, so the schema instructions follow the prompt.
+    assert response.messages[0].content[0].text == 'give me a recipe'
     assert response.messages[1] == response.message
 
 
@@ -3325,7 +3331,7 @@ async def test_max_turns_exceeded_leaves_the_unanswered_round_out_of_history() -
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'ABORTED'
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert response.error.details == {'reason': 'MAX_TURNS_EXCEEDED'}
     assert response.error.message == response.finish_message
     assert tool_calls == DEFAULT_MAX_TURNS
@@ -3373,7 +3379,7 @@ async def test_closed_history_after_tool_turn_keeps_intermediate_messages() -> N
     assert response.output is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.error.details == {'reason': 'INVALID_OUTPUT'}
     assert 'not valid JSON' in response.error.message
     assert response.message is not None
@@ -3625,7 +3631,7 @@ async def test_generate_schema_failure_after_tool_turn_preserves_history() -> No
     assert response.text == 'not json'
     assert response.output is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.message is not None
     assert response.message.text == 'not json'
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
@@ -3680,7 +3686,7 @@ async def test_unknown_tool_on_first_turn_drops_unanswered_request() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'NOT_FOUND'
-    assert response.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert response.error.reason is ErrorReason.TOOL_NOT_FOUND
     assert response.error.details == {'reason': 'TOOL_NOT_FOUND'}
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
@@ -3709,7 +3715,7 @@ async def test_unknown_tool_after_tool_turn_drops_unanswered_request() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'NOT_FOUND'
-    assert response.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert response.error.reason is ErrorReason.TOOL_NOT_FOUND
     assert response.error.details == {'reason': 'TOOL_NOT_FOUND'}
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -3775,7 +3781,7 @@ async def test_wrap_generate_injected_tool_does_not_run() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'NOT_FOUND'
-    assert response.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert response.error.reason is ErrorReason.TOOL_NOT_FOUND
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'hi'
 
@@ -3810,7 +3816,7 @@ async def test_wrap_generate_cannot_swap_the_named_tool_for_another() -> None:
     assert response.finish_message == 'Tool sneaky not found'
     assert response.message is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert response.error.reason is ErrorReason.TOOL_NOT_FOUND
     assert [message.role for message in response.messages] == [Role.USER]
 
 
@@ -3908,7 +3914,7 @@ async def test_wrap_generate_injected_tool_after_closed_round_does_not_run() -> 
     assert response.finish_message == 'Tool sneaky not found'
     assert response.message is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
+    assert response.error.reason is ErrorReason.TOOL_NOT_FOUND
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'r1'
     assert _tool_output(response.messages[2]) == '72F'
@@ -3932,7 +3938,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_action() -> None:
         ran.append('impostor')
         return 'IMPOSTOR'
 
-    leak = define_tool(scratch, impostor, name='lookup').action()
+    leak = define_tool(scratch, impostor, name='lookup')
 
     class SwapBody(Middleware):
         async def wrap_generate(
@@ -3981,7 +3987,7 @@ async def test_wrap_generate_cannot_replace_the_named_tool_after_a_closed_round(
         ran.append('impostor')
         return 'IMPOSTOR'
 
-    leak = define_tool(scratch, impostor, name='lookup').action()
+    leak = define_tool(scratch, impostor, name='lookup')
 
     class SwapBody(Middleware):
         async def wrap_generate(
@@ -4044,7 +4050,7 @@ async def test_resume_restart_cannot_replace_the_named_tool_action() -> None:
         ran.append('impostor')
         return 'IMPOSTOR'
 
-    leak = define_tool(scratch, impostor, name='lookup').action()
+    leak = define_tool(scratch, impostor, name='lookup')
 
     class SwapBody(Middleware):
         async def wrap_generate(
@@ -4108,7 +4114,7 @@ async def test_tool_failure_after_tool_turn_keeps_closed_rounds() -> None:
     assert response.finish_message == 'internal error'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert isinstance(response.error.details, dict)
     assert response.error.details['reason'] == 'TOOL_FAILED'
     assert response.error.message == response.finish_message
@@ -4157,7 +4163,7 @@ async def test_tool_public_error_message_is_the_sentence() -> None:
     assert response.error is not None
     assert response.error.status == 'NOT_FOUND'
     assert response.error.message == 'No order 99'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
 
@@ -4190,7 +4196,7 @@ async def test_output_schema_does_not_replace_tool_failure() -> None:
     assert response.output is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
 
@@ -4264,7 +4270,7 @@ async def test_one_parallel_tool_failure_drops_successful_sibling() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'closed'
     assert _tool_output(response.messages[2]) == 'ok-1'
@@ -4308,7 +4314,7 @@ async def test_sibling_interrupt_goes_with_failed_tool_round() -> None:
     assert response.interrupts == []
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'start'
@@ -4428,7 +4434,7 @@ async def test_generate_invalid_tool_args_drops_unanswered_request() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'weather in paris?'
@@ -4462,7 +4468,7 @@ async def test_generate_invalid_tool_args_after_tool_turn_keeps_closed_rounds() 
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'r1'
@@ -4493,7 +4499,7 @@ async def test_generate_unserializable_tool_output_drops_unanswered_request() ->
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'weather in paris?'
@@ -4526,7 +4532,7 @@ async def test_generate_unserializable_tool_output_after_tool_turn_keeps_closed_
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
     assert _tool_request(response.messages[1]).ref == 'r1'
@@ -4638,7 +4644,7 @@ async def test_generate_stream_closes_with_structured_max_turns_response() -> No
     assert response.output is None
     assert response.error is not None
     assert response.error.status == 'ABORTED'
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert response.error.details == {'reason': 'MAX_TURNS_EXCEEDED'}
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
@@ -4805,7 +4811,7 @@ async def test_generate_on_chunk_failure_returns_closed_history() -> None:
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'hi'
@@ -4875,7 +4881,7 @@ async def test_generate_on_chunk_genkit_error_is_internal_not_the_sink_reason() 
         raise GenkitError(
             status='NOT_FOUND',
             message='sink closed',
-            reason=RuntimeErrorReason.TOOL_FAILED,
+            reason=ErrorReason.TOOL_FAILED,
         )
 
     response = await generate_action(
@@ -4892,8 +4898,8 @@ async def test_generate_on_chunk_genkit_error_is_internal_not_the_sink_reason() 
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
-    assert response.error.details is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert response.error.details == {'reason': 'STREAM_CALLBACK_FAILED'}
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'hi'
@@ -5024,7 +5030,7 @@ async def test_generate_with_five_middleware_and_max_turns_50_returns_aborted_af
     assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
     assert response.error is not None
     assert response.error.status == 'ABORTED'
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert pm.request_count == 51
 
 
@@ -5052,7 +5058,7 @@ async def test_generate_stream_with_five_middleware_and_max_turns_50_returns_abo
     assert response.finish_message == 'Exceeded maximum tool call iterations (50)'
     assert response.error is not None
     assert response.error.status == 'ABORTED'
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert pm.request_count == 51
 
 
@@ -5078,7 +5084,7 @@ async def test_generate_with_five_middleware_and_max_turns_200_returns_aborted()
     assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
     assert response.error is not None
     assert response.error.status == 'ABORTED'
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert pm.request_count == 201
 
 
@@ -5106,7 +5112,7 @@ async def test_generate_stream_with_five_middleware_and_max_turns_200_returns_ab
     assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
     assert response.error is not None
     assert response.error.status == 'ABORTED'
-    assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+    assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
     assert pm.request_count == 201
 
 
@@ -5139,7 +5145,7 @@ async def test_generate_eager_task_factory_two_hundred_tool_turns_returns() -> N
         assert response.finish_message == 'Exceeded maximum tool call iterations (200)'
         assert response.error is not None
         assert response.error.status == 'ABORTED'
-        assert response.error.reason is RuntimeErrorReason.MAX_TURNS_EXCEEDED
+        assert response.error.reason is ErrorReason.MAX_TURNS_EXCEEDED
         assert pm.request_count == 201
     finally:
         loop.set_task_factory(previous)
@@ -5850,7 +5856,7 @@ async def test_generate_with_400_middleware_tool_hook_error_returns_internal() -
     assert response.finish_message == 'internal error'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [message.role for message in response.messages] == [Role.USER]
@@ -5892,7 +5898,7 @@ async def test_generate_with_400_middleware_one_of_two_tools_failing_drops_the_o
     assert response.finish_message == 'internal error'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.TOOL_FAILED
+    assert response.error.reason is ErrorReason.TOOL_FAILED
     assert response.message is None
     assert [message.role for message in response.messages] == [Role.USER]
 
@@ -6171,16 +6177,15 @@ async def test_generate_with_400_middleware_cancelled_on_a_later_turn_raises_can
     """Cancelling generate while a later turn's model hangs raises CancelledError and stops there."""
     ai = Genkit(model='hangOnTurn2Model')
     started = asyncio.Event()
-    model_calls = 0
+    calls: list[int] = []
 
     @ai.tool(name='step')
     async def step() -> str:
         return 'ok'
 
     async def hang_on_turn_2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
-        nonlocal model_calls
-        model_calls += 1
-        if model_calls == 1:
+        calls.append(1)
+        if len(calls) == 1:
             return _model_calls_tool(name='step', ref='r1')
         started.set()
         await asyncio.Event().wait()
@@ -6197,11 +6202,17 @@ async def test_generate_with_400_middleware_cancelled_on_a_later_turn_raises_can
         ),
     )
     await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    previous_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(1000)
+    try:
+        assert repr(task)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        sys.setrecursionlimit(previous_limit)
 
-    assert model_calls == 2
+    assert len(calls) == 2
     await _assert_no_extra_tasks(before)
 
 
@@ -6416,7 +6427,7 @@ async def test_abort_during_first_tool_drops_unfinished_round() -> None:
     assert response.error is not None
     assert response.error.status == 'CANCELLED'
     assert response.error.reason is None
-    assert response.error.details is not None
+    assert response.error.details is None
     assert response.error.message == response.finish_message
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
@@ -6802,7 +6813,7 @@ async def test_generate_middleware_genkit_error_keeps_closed_rounds() -> None:
                 raise GenkitError(
                     status='FAILED_PRECONDITION',
                     message='hook denied',
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             return await next_fn(params, ctx)
 
@@ -6813,7 +6824,7 @@ async def test_generate_middleware_genkit_error_keeps_closed_rounds() -> None:
     assert response.finish_message == 'hook denied'
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert response.error.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in (response.error.message or '')
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL]
@@ -6846,7 +6857,7 @@ async def test_generate_first_turn_middleware_genkit_error_drops_unanswered_mode
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message='hook denied',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
 
     response = await ai.generate(prompt='start', use=[DenyFirstTurn()])
@@ -6854,7 +6865,7 @@ async def test_generate_first_turn_middleware_genkit_error_drops_unanswered_mode
     assert response.finish_message == 'hook denied'
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert response.error.reason is ErrorReason.INVALID_INPUT
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
 
@@ -6918,7 +6929,7 @@ async def test_generate_middleware_genkit_error_after_next_fn_keeps_closed_round
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message='hook after closed',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
 
     pm.responses = [
@@ -6934,7 +6945,7 @@ async def test_generate_middleware_genkit_error_after_next_fn_keeps_closed_round
     assert response.finish_message == 'hook after closed'
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert response.error.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in (response.error.message or '')
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
@@ -6962,7 +6973,7 @@ async def test_generate_middleware_genkit_error_after_next_fn_keeps_model_turn()
             raise GenkitError(
                 status='FAILED_PRECONDITION',
                 message='hook after closed',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
 
     pm.responses = [
@@ -6977,7 +6988,7 @@ async def test_generate_middleware_genkit_error_after_next_fn_keeps_model_turn()
     assert response.finish_message == 'hook after closed'
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'
-    assert response.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert response.error.reason is ErrorReason.INVALID_INPUT
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER, Role.MODEL]
     assert response.messages[1].text == 'done'
@@ -7971,7 +7982,7 @@ async def test_generate_on_chunk_validation_error_returns_closed_history() -> No
     assert response.message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.error.message == response.finish_message
     assert [message.role for message in response.messages] == [Role.USER]
     assert response.messages[0].text == 'hi'
@@ -7986,18 +7997,18 @@ async def test_generate_format_parse_error_keeps_model_text() -> None:
     class Recipe(BaseModel):
         title: str
 
-    class BoomFormat(FormatDef):
+    class BoomFormat(Formatter):
         def __init__(self) -> None:
             super().__init__('boom', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
             def message_parser(_msg: Message) -> object:
                 raise TypeError('parser exploded')
 
             def chunk_parser(_chunk: ModelResponseChunk) -> object:
                 return None
 
-            return Formatter(
+            return FormatHandler(
                 message_parser=message_parser,
                 chunk_parser=chunk_parser,
                 instructions=None,
@@ -8022,7 +8033,7 @@ async def test_generate_format_parse_error_keeps_model_text() -> None:
     assert response.output is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'not valid JSON' in response.error.message
     assert response.error.details == {'reason': 'INVALID_OUTPUT'}
     assert response.message is not None
@@ -8214,7 +8225,7 @@ async def test_generate_enum_off_list_is_error_finish() -> None:
     assert response.text == 'MAYBE'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.error.details == {'reason': 'INVALID_OUTPUT'}
     assert response.message is not None
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
@@ -8253,8 +8264,8 @@ async def test_generate_unknown_format_is_invalid_argument() -> None:
     with pytest.raises(GenkitError, match='Unable to resolve format') as raised:
         await ai.generate(prompt='hi', output_format='no-such-format')
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ACTION_NOT_FOUND' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
+    assert 'ACTION_NOT_FOUND' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -8267,9 +8278,9 @@ async def test_unknown_middleware_raises_with_invalid_input() -> None:
         await ai.generate(prompt='hi', use=cast(Any, [MiddlewareRef(name='ghost')]))
     error = raised.value
     assert error.status == 'NOT_FOUND'
-    assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'ghost' in error.original_message
-    assert 'ACTION_NOT_FOUND' not in error.original_message
+    assert error.reason is ErrorReason.INVALID_INPUT
+    assert 'ghost' in error.message
+    assert 'ACTION_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8281,9 +8292,9 @@ async def test_unknown_model_raises_with_model_not_found() -> None:
         await ai.generate(model='nope/ghost', prompt='hi')
     error = raised.value
     assert error.status == 'NOT_FOUND'
-    assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert "Failed to resolve model 'nope/ghost'" in error.original_message
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert error.reason is ErrorReason.MODEL_NOT_FOUND
+    assert "Failed to resolve model 'nope/ghost'" in error.message
+    assert 'MODEL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8296,9 +8307,9 @@ async def test_unknown_tool_on_request_raises_with_tool_not_found() -> None:
         await ai.generate(model='echoModel', prompt='hi', tools=['ghost'])
     error = raised.value
     assert error.status == 'NOT_FOUND'
-    assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
-    assert 'Unable to resolve tool ghost' in error.original_message
-    assert 'TOOL_NOT_FOUND' not in error.original_message
+    assert error.reason is ErrorReason.TOOL_NOT_FOUND
+    assert 'Unable to resolve tool ghost' in error.message
+    assert 'TOOL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8311,8 +8322,8 @@ async def test_generate_with_tool_ref_slash_retriever_raises_tool_not_found() ->
         await ai.generate(model='echoModel', prompt='hi', tools=['/retriever/x'])
     error = raised.value
     assert error.status == 'NOT_FOUND'
-    assert error.reason is RuntimeErrorReason.TOOL_NOT_FOUND
-    assert error.original_message == 'Unable to resolve tool /retriever/x'
+    assert error.reason is ErrorReason.TOOL_NOT_FOUND
+    assert error.message == 'Unable to resolve tool /retriever/x'
 
 
 @pytest.mark.asyncio
@@ -8324,9 +8335,9 @@ async def test_generate_without_model_or_default_raises_model_not_found() -> Non
         await ai.generate(prompt='hi')
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert 'No model configured' in error.original_message
-    assert 'MODEL_NOT_FOUND' not in error.original_message
+    assert error.reason is ErrorReason.MODEL_NOT_FOUND
+    assert 'No model configured' in error.message
+    assert 'MODEL_NOT_FOUND' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8339,9 +8350,9 @@ async def test_generate_jsonl_with_object_schema_raises_invalid_schema() -> None
         await ai.generate(prompt='hi', output_format='jsonl', output_schema={'type': 'object'})
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'jsonl' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert error.reason is ErrorReason.INVALID_SCHEMA
+    assert 'jsonl' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8354,9 +8365,9 @@ async def test_generate_enum_with_object_schema_raises_invalid_schema() -> None:
         await ai.generate(prompt='hi', output_format='enum', output_schema={'type': 'object'})
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'enum' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert error.reason is ErrorReason.INVALID_SCHEMA
+    assert 'enum' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8369,9 +8380,9 @@ async def test_generate_array_with_object_schema_raises_invalid_schema() -> None
         await ai.generate(prompt='hi', output_format='array', output_schema={'type': 'object'})
     error = raised.value
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert 'array' in error.original_message
-    assert 'INVALID_SCHEMA' not in error.original_message
+    assert error.reason is ErrorReason.INVALID_SCHEMA
+    assert 'array' in error.message
+    assert 'INVALID_SCHEMA' not in error.message
 
 
 @pytest.mark.asyncio
@@ -8428,7 +8439,7 @@ async def test_generate_four_output_scenarios_with_schema() -> None:
     assert r1.finish_message is None
     assert r1.error is not None
     assert r1.error.status == 'INTERNAL'
-    assert r1.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r1.error.reason is ErrorReason.INVALID_OUTPUT
     assert r1.error.details == {'reason': 'INVALID_OUTPUT'}
     assert 'not valid JSON' in r1.error.message
     assert r1.messages[-1].text == raw_text_only
@@ -8448,7 +8459,7 @@ async def test_generate_four_output_scenarios_with_schema() -> None:
     assert r2.finish_message is None
     assert r2.error is not None
     assert r2.error.status == 'INTERNAL'
-    assert r2.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r2.error.reason is ErrorReason.INVALID_OUTPUT
     assert r2.error.details == {'reason': 'INVALID_OUTPUT'}
     assert 'not valid JSON' in r2.error.message
     assert r2.messages[-1].text == raw_text_unparseable
@@ -8517,7 +8528,7 @@ async def test_generate_four_output_scenarios_with_format_json_no_schema() -> No
     assert r1.finish_message is None
     assert r1.error is not None
     assert r1.error.status == 'INTERNAL'
-    assert r1.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r1.error.reason is ErrorReason.INVALID_OUTPUT
     assert r1.error.details == {'reason': 'INVALID_OUTPUT'}
     assert 'not valid JSON' in r1.error.message
     assert r1.messages[-1].text == raw_text_only
@@ -8537,7 +8548,7 @@ async def test_generate_four_output_scenarios_with_format_json_no_schema() -> No
     assert r2.finish_message is None
     assert r2.error is not None
     assert r2.error.status == 'INTERNAL'
-    assert r2.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert r2.error.reason is ErrorReason.INVALID_OUTPUT
     assert r2.error.details == {'reason': 'INVALID_OUTPUT'}
     assert 'not valid JSON' in r2.error.message
     assert r2.messages[-1].text == raw_text_unparseable
@@ -8594,7 +8605,7 @@ async def test_generate_array_format_no_schema_unparseable_records_invalid_outpu
     assert response.finish_message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.error.details == {'reason': 'INVALID_OUTPUT'}
     assert response.messages[-1].text == 'Sorry, I cannot do that.'
 
@@ -8618,7 +8629,7 @@ async def test_generate_array_format_object_reply_records_invalid_output() -> No
     assert response.finish_message is None
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.error.details == {'reason': 'INVALID_OUTPUT'}
     assert 'not valid for the requested format' in response.error.message
     assert response.messages[-1].text == '{"dish": "Tartine"}'
@@ -8771,8 +8782,166 @@ async def test_generate_with_failing_streaming_callback_returns_callback_message
     assert response.finish_message == 'model sink closed'
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
     assert response.message is None
     assert [m.role for m in response.messages] == [Role.USER]
+
+
+class _RaisingChunkRewriter(Middleware):
+    """Forwards the first chunk, then its own chunk callback hits a bug."""
+
+    seen: int = 0
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        self.seen = 0
+        previous = ctx.on_chunk
+
+        def rewrite(chunk: ModelResponseChunk) -> None:
+            self.seen += 1
+            if self.seen == 2:
+                raise KeyError('dish_id')
+            if previous is not None:
+                previous(chunk)
+
+        ctx.replace_on_chunk(rewrite)
+        try:
+            return await next_fn(params, ctx)
+        finally:
+            ctx.replace_on_chunk(previous)
+
+
+def _two_chunk_model(ai: Genkit) -> ScriptedModel:
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_model_says('Smoked Salmon Tartine')] * 3
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Salmon')]),
+        ]
+    ] * 3
+    return pm
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_raising_middleware_chunk_callback_fails_with_stream_callback_reason() -> None:
+    """A middleware's replaced on_chunk raising fails the turn like the caller's would, one model call."""
+    ai = Genkit(model='scriptedModel')
+    pm = _two_chunk_model(ai)
+
+    stream = ai.generate_stream(prompt='Suggest a dish.', use=[_RaisingChunkRewriter()])
+    chunks = [chunk.text async for chunk in stream]
+    response = await stream.response
+
+    assert chunks == ['Smoked ']
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == "'dish_id'"
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert response.message is None
+    assert pm.request_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_with_middleware_assigning_raising_on_chunk_fails_with_stream_callback_reason() -> None:
+    """`ctx.on_chunk = fn` is guarded like replace_on_chunk."""
+    ai = Genkit(model='scriptedModel')
+    pm = _two_chunk_model(ai)
+
+    class AssignsOnChunk(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            previous = ctx.on_chunk
+
+            def broken(_: ModelResponseChunk) -> None:
+                raise RuntimeError('menu cache missing')
+
+            ctx.on_chunk = broken
+            try:
+                return await next_fn(params, ctx)
+            finally:
+                ctx.on_chunk = previous
+
+    stream = ai.generate_stream(prompt='Suggest a dish.', use=[AssignsOnChunk()])
+    chunks = [chunk.text async for chunk in stream]
+    response = await stream.response
+
+    assert chunks == []
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'menu cache missing'
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert pm.request_count == 1
+
+
+def test_replace_on_chunk_does_not_double_wrap_a_downstream_callback_failure() -> None:
+    """A middleware callback forwarding to a raising caller surfaces the caller's error once."""
+    caller_error = ValueError('client disconnected')
+
+    def caller(_: ModelResponseChunk) -> None:
+        raise caller_error
+
+    ctx = MiddlewareContext(ai=Genkit(), on_chunk=caller)
+    downstream = ctx.on_chunk
+
+    def forward(chunk: ModelResponseChunk) -> None:
+        assert downstream is not None
+        downstream(chunk)
+
+    previous = ctx.replace_on_chunk(forward)
+    with pytest.raises(_StreamingCallbackError) as raised:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')]))
+
+    assert raised.value.__cause__ is caller_error
+    ctx.replace_on_chunk(previous)
+    assert ctx.on_chunk is previous
+
+
+@pytest.mark.asyncio
+async def test_generate_with_middleware_forwarding_to_raising_caller_keeps_caller_message() -> None:
+    """Middleware forwarding chunks to a raising caller callback: caller's message, one model call."""
+    ai = Genkit(model='scriptedModel')
+    pm = _two_chunk_model(ai)
+
+    class Forwards(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            previous = ctx.on_chunk
+
+            def forward(chunk: ModelResponseChunk) -> None:
+                if previous is not None:
+                    previous(chunk)
+
+            ctx.replace_on_chunk(forward)
+            try:
+                return await next_fn(params, ctx)
+            finally:
+                ctx.replace_on_chunk(previous)
+
+    def on_chunk(_: object) -> None:
+        raise RuntimeError('client disconnected')
+
+    prompt = ai.define_prompt(prompt='Suggest a dish.')
+    response = await prompt(on_chunk=on_chunk, use=[Forwards()])
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.message == 'client disconnected'
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert pm.request_count == 1
 
 
 @pytest.mark.asyncio
@@ -8795,6 +8964,84 @@ async def test_generate_with_model_raising_wrapped_provider_500_returns_internal
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert 'password' not in (response.finish_message or '')
+
+
+@pytest.mark.parametrize(
+    ('http_status', 'expected_status', 'upstream_text'),
+    [
+        (403, 'PERMISSION_DENIED', 'Permission denied on resource project demo-proj-123'),
+        (404, 'NOT_FOUND', 'Publisher Model projects/demo-proj-123/locations/us-central1/models/gemini-x not found'),
+        (503, 'UNAVAILABLE', 'Ollama server unreachable; start it with ollama serve'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_with_model_raising_non_500_provider_error_keeps_provider_text_in_process(
+    http_status: int,
+    expected_status: str,
+    upstream_text: str,
+) -> None:
+    """Non-500 provider_error preserves provider finish_message and status for in-process callers."""
+    ai = Genkit()
+
+    async def provider_fail(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        raise provider_error(RuntimeError(upstream_text), http_status=http_status)
+
+    ai.define_model(name='provider_fail', fn=provider_fail)
+
+    response = await ai.generate(model='provider_fail', prompt='hi')
+    stream_response = await ai.generate_stream(model='provider_fail', prompt='hi').response
+
+    for res in (response, stream_response):
+        assert res.finish_reason == FinishReason.FAILED
+        assert res.finish_message == upstream_text
+        assert res.error is not None
+        assert res.error.status == expected_status
+        assert res.error.message == upstream_text
+
+
+class _FrameSentinel:
+    """Weakref-trackable object living in a failing model frame."""
+
+
+@pytest.mark.parametrize(
+    'make_exc',
+    [
+        lambda: provider_error(RuntimeError('upstream 403'), http_status=403),
+        lambda: GenkitError(status='UNAVAILABLE', message='ollama serve not running'),
+        lambda: PublicError('NOT_FOUND', 'order 42 missing', details={'order_id': '42'}),
+        lambda: RuntimeError('plain crash'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_model_response_releases_frame_locals_and_survives_deepcopy_and_pickle(
+    make_exc: Callable[[], Exception],
+) -> None:
+    """A failed ModelResponse retains no exception frame locals and survives deepcopy and pickle round-trips."""
+    ai = Genkit()
+    sentinel_refs: list[weakref.ReferenceType[_FrameSentinel]] = []
+
+    async def failing_model(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        local_resource = _FrameSentinel()
+        sentinel_refs.append(weakref.ref(local_resource))
+        raise make_exc()
+
+    ai.define_model(name='failing_model', fn=failing_model)
+
+    response = await ai.generate(model='failing_model', prompt='hi')
+    gc.collect()
+
+    assert len(sentinel_refs) == 1
+    assert sentinel_refs[0]() is None
+    assert response.finish_reason == FinishReason.FAILED
+
+    deep_copied = copy.deepcopy(response)
+    unpickled = pickle.loads(pickle.dumps(response))  # noqa: S301
+
+    for clone in (deep_copied, unpickled):
+        assert clone.finish_reason == FinishReason.FAILED
+        assert clone.finish_message == response.finish_message
+        assert clone.error == response.error
+        assert clone._failure == response._failure
 
 
 @pytest.mark.asyncio
@@ -8847,7 +9094,7 @@ async def test_generate_output_schema_cut_off_with_length_returns_none() -> None
     assert response.output is None
     assert response.finish_reason == FinishReason.LENGTH
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.text == '{"name":"X","population": 21'
 
 
@@ -8863,7 +9110,7 @@ async def test_generate_output_schema_cut_off_with_stop_returns_none() -> None:
     assert response.output is None
     assert response.finish_reason == FinishReason.STOP
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -8904,7 +9151,7 @@ async def test_generate_json_format_cut_off_returns_none() -> None:
 
     assert response.output is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -8944,7 +9191,7 @@ async def test_generate_output_schema_brace_in_prose_wrong_shape_returns_none() 
 
     assert response.output is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
 
 
 @pytest.mark.asyncio
@@ -8958,7 +9205,7 @@ async def test_generate_output_schema_cut_off_with_length_error_says_cut_off() -
 
     assert response.output is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'cut off at the token limit' in response.error.message
     assert 'finish_reason=length' in response.error.message
 
@@ -8974,7 +9221,7 @@ async def test_generate_output_schema_bad_json_with_stop_error_says_not_valid_js
 
     assert response.output is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert 'not valid JSON' in response.error.message
 
 
@@ -9016,7 +9263,7 @@ async def test_generate_array_format_cut_off_before_first_item_returns_none() ->
 
     assert response.output is None
     assert response.error is not None
-    assert response.error.reason is RuntimeErrorReason.INVALID_OUTPUT
+    assert response.error.reason is ErrorReason.INVALID_OUTPUT
     assert response.finish_reason == FinishReason.LENGTH
 
 
@@ -9048,16 +9295,16 @@ async def test_generate_jsonl_format_drops_cut_off_last_line() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() -> None:
-    """A custom FormatDef whose parser closes a cut-off object still gets its City back."""
+    """A custom Formatter whose parser closes a cut-off object still gets its City back."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
 
-    class ClosingFormat(FormatDef):
+    class ClosingFormat(Formatter):
         def __init__(self) -> None:
             super().__init__('closing', FormatterConfig(format='json'))
 
-        def handle(self, schema: dict[str, object] | None) -> Formatter[object, object]:
-            return Formatter(
+        def handle(self, schema: dict[str, object] | None) -> FormatHandler[object, object]:
+            return FormatHandler(
                 message_parser=lambda msg: json.loads(msg.text + '}'),
                 chunk_parser=lambda _chunk: None,
                 instructions=None,
@@ -9075,3 +9322,51 @@ async def test_generate_custom_format_parser_output_is_used_for_cut_off_reply() 
 
     assert response.output == _City(name='X', population=21)
     assert response.error is None
+
+
+def _ledger_offline_from_os_error() -> None:
+    try:
+        raise OSError('ledger socket closed')
+    except OSError as e:
+        raise GenkitError(status='INTERNAL', message='ledger offline') from e
+
+
+def _ledger_offline_with_cause() -> None:
+    raise GenkitError(status='INTERNAL', message='ledger offline', cause=OSError('ledger socket closed'))
+
+
+def _ledger_provider_500() -> None:
+    raise provider_error(OSError('upstream 500 body'), http_status=500)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('raise_failure', 'finish_message'),
+    [
+        # `raise ... from e` alone is a chain, not an attached cause: the message is the app's.
+        (_ledger_offline_from_os_error, 'ledger offline'),
+        # cause= on an INTERNAL error marks a wrapped foreign error: redacted.
+        (_ledger_offline_with_cause, 'internal error'),
+        (_ledger_provider_500, 'internal error'),
+    ],
+)
+async def test_failed_tool_finish_message_redacts_only_an_attached_cause(
+    raise_failure: Callable[[], None], finish_message: str
+) -> None:
+    """A tool's INTERNAL GenkitError shows its message unless it wraps a foreign error via cause=."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='refund_order')
+    async def refund_order() -> str:
+        raise_failure()
+        return 'refunded'
+
+    pm.responses = [_model_calls_tool(name='refund_order', ref='r1')]
+
+    response = await ai.generate(prompt='refund A-17', tools=['refund_order'])
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == finish_message
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.details == {'reason': 'TOOL_FAILED'}

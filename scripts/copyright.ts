@@ -110,7 +110,7 @@ console.log('Checking copyright in sources...');
       console.error(
         `Copyright header missing in ${missing.map(({ path }) => path).join(', ')}`
       );
-      console.error('Run `npm run format` at root to update');
+      console.error('Run `pnpm format` at root to update');
       process.exit(1);
     }
     console.log('Copyright headers okay');

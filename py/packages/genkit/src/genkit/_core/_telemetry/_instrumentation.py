@@ -53,7 +53,7 @@ class SpanNext(Protocol[T_co]):
 class SpanMetadata:
     """Description of a span about to be created.
 
-    ``action_type`` is the action kind (``'model'``, ``'flow'``, ``'tool.v2'``...)
+    ``action_type`` is the action kind (``'model'``, ``'flow'``, ``'tool'``...)
     for action spans, or the span's own type (``'util'``, ``'flowStep'``...)
     for plain spans. Providers decide how to encode values.
     """
