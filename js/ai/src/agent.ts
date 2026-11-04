@@ -29,6 +29,8 @@ import {
   type ActionContext,
   type ActionFnArg,
   type BidiAction,
+  type GenkitSchema,
+  type InferOutput,
   type SpanFailureMarks,
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
@@ -1827,7 +1829,7 @@ export function defineCustomAgent<State = unknown>(
   config: {
     name: string;
     description?: string;
-    stateSchema?: z.ZodType<State>;
+    stateSchema?: GenkitSchema<State>;
     store?: SessionStore<State>;
     clientTransform?: ClientTransform<State>;
     /**
@@ -2524,7 +2526,7 @@ export function defineCustomAgent<State = unknown>(
  */
 export function definePromptAgent<
   State = unknown,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   config: {
@@ -2536,8 +2538,8 @@ export function definePromptAgent<
      * prompt be reused/customized across multiple agents (e.g. supplying a
      * different `role` or `tone` to a shared dotprompt template).
      */
-    promptInput?: z.infer<I>;
-    stateSchema?: z.ZodType<State>;
+    promptInput?: InferOutput<I>;
+    stateSchema?: GenkitSchema<State>;
     store?: SessionStore<State>;
     clientTransform?: ClientTransform<State>;
     /**
@@ -2594,7 +2596,7 @@ export function definePromptAgent<
       // {{history}}).  When the prompt has no explicit `messages` config
       // the render helper simply appends history after system/user.
       const genOpts = await cachedPromptAction.__executablePrompt.render(
-        promptInput as unknown as z.ZodType<any, any>,
+        promptInput as unknown as GenkitSchema,
         { messages: history }
       );
 
@@ -2835,7 +2837,7 @@ export function validateResumeAgainstHistory(
  */
 export interface AgentConfig<
   State = unknown,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
 > extends PromptConfig<I> {
   /**
    * Optional Zod schema describing the shape of the custom session state.
@@ -2847,7 +2849,7 @@ export interface AgentConfig<
    * - Custom state is validated at load time (from a snapshot store or from the
    *   client-supplied `init.state`).
    */
-  stateSchema?: z.ZodType<State>;
+  stateSchema?: GenkitSchema<State>;
   store?: SessionStore<State>;
   clientTransform?: ClientTransform<State>;
   /**
@@ -2864,7 +2866,7 @@ export interface AgentConfig<
    * definition power differently-customized agents (e.g. supplying a different
    * `role` or `tone`). Type-checked against the prompt's `input.schema`.
    */
-  promptInput?: z.infer<I>;
+  promptInput?: InferOutput<I>;
 }
 
 /**
@@ -2879,7 +2881,7 @@ export interface AgentConfig<
  */
 export function defineAgent<
   State = unknown,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
 >(registry: Registry, config: AgentConfig<State, I>): Agent<State> {
   // Extract agent-specific fields from the combined config; the rest is
   // forwarded to definePrompt.

@@ -14,7 +14,14 @@
  * limitations under the License.
  */
 
-import { action, z, type Action } from '@genkit-ai/core';
+import {
+  action,
+  toZodSchema,
+  z,
+  type Action,
+  type GenkitSchema,
+  type InferOutput,
+} from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import { PartSchema, type Part } from './parts.js';
@@ -25,10 +32,10 @@ import {
 } from './retriever.js';
 
 /** Implementation function for a reranker. Receives a query, documents, and options. */
-export type RerankerFn<RerankerOptions extends z.ZodType<any, any>> = (
+export type RerankerFn<RerankerOptions extends GenkitSchema> = (
   query: Document,
   documents: Document[],
-  queryOpts: z.infer<RerankerOptions>
+  queryOpts: InferOutput<RerankerOptions>
 ) => Promise<RerankerResponse>;
 
 /**
@@ -90,14 +97,13 @@ export const RerankerInfoSchema = z.object({
 export type RerankerInfo = z.infer<typeof RerankerInfoSchema>;
 
 /** An action that reranks documents based on relevance to a query. */
-export type RerankerAction<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> = Action<typeof RerankerRequestSchema, typeof RerankerResponseSchema> & {
-  __configSchema?: CustomOptions;
-};
+export type RerankerAction<CustomOptions extends GenkitSchema = GenkitSchema> =
+  Action<typeof RerankerRequestSchema, typeof RerankerResponseSchema> & {
+    __configSchema?: CustomOptions;
+  };
 
 function rerankerWithMetadata<
-  RerankerOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  RerankerOptions extends GenkitSchema = GenkitSchema,
 >(
   reranker: Action<typeof RerankerRequestSchema, typeof RerankerResponseSchema>,
   configSchema?: RerankerOptions
@@ -110,9 +116,7 @@ function rerankerWithMetadata<
 /**
  *  Creates a reranker action for the provided {@link RerankerFn} implementation and registers it in the registry.
  */
-export function defineReranker<
-  OptionsType extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export function defineReranker<OptionsType extends GenkitSchema = GenkitSchema>(
   registry: Registry,
   options: {
     name: string;
@@ -131,9 +135,7 @@ export function defineReranker<
 /**
  *  Creates a reranker action for the provided {@link RerankerFn} implementation.
  */
-export function reranker<
-  OptionsType extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export function reranker<OptionsType extends GenkitSchema = GenkitSchema>(
   options: {
     name: string;
     configSchema?: OptionsType;
@@ -147,7 +149,7 @@ export function reranker<
       name: options.name,
       inputSchema: options.configSchema
         ? RerankerRequestSchema.extend({
-            options: options.configSchema.optional(),
+            options: toZodSchema(options.configSchema).optional(),
           })
         : RerankerRequestSchema,
       outputSchema: RerankerResponseSchema,
@@ -180,23 +182,23 @@ export function reranker<
 
 /** Parameters for running a reranking via the `rerank` function. */
 export interface RerankerParams<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   reranker: RerankerArgument<CustomOptions>;
   query: string | DocumentData;
   documents: DocumentData[];
-  options?: z.infer<CustomOptions>;
+  options?: InferOutput<CustomOptions>;
 }
 
 /** Union type for specifying a reranker: by name string, action, or reference. */
 export type RerankerArgument<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = RerankerAction<CustomOptions> | RerankerReference<CustomOptions> | string;
 
 /**
  * Reranks documents from a {@link RerankerArgument} based on the provided query.
  */
-export async function rerank<CustomOptions extends z.ZodType<any, any>>(
+export async function rerank<CustomOptions extends GenkitSchema>(
   registry: Registry,
   params: RerankerParams<CustomOptions>
 ): Promise<Array<RankedDocument>> {
@@ -228,7 +230,7 @@ export const CommonRerankerOptionsSchema = z.object({
 });
 
 /** A reference to a reranker, including its name, optional config schema, and info. */
-export interface RerankerReference<CustomOptions extends z.ZodType<any, any>> {
+export interface RerankerReference<CustomOptions extends GenkitSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: RerankerInfo;
@@ -238,7 +240,7 @@ export interface RerankerReference<CustomOptions extends z.ZodType<any, any>> {
  * Helper method to configure a {@link RerankerReference} to a plugin.
  */
 export function rerankerRef<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: RerankerReference<CustomOptionsSchema>
 ): RerankerReference<CustomOptionsSchema> {

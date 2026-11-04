@@ -98,7 +98,12 @@ export {
   annotateSchema,
   defineJsonSchema,
   defineSchema,
+  isZodSchema,
   toJsonSchema,
+  toZodSchema,
+  type GenkitSchema,
+  type InferInput,
+  type InferOutput,
   type JSONSchema,
 } from './schema.js';
 export * from './telemetryTypes.js';

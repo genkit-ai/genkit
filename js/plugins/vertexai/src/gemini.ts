@@ -35,7 +35,13 @@ import {
   type VertexAI,
 } from '@google-cloud/vertexai';
 import { ApiClient } from '@google-cloud/vertexai/build/src/resources/index.js';
-import { GenkitError, z, type Genkit, type JSONSchema } from 'genkit';
+import {
+  GenkitError,
+  z,
+  type Genkit,
+  type GenkitSchema,
+  type JSONSchema,
+} from 'genkit';
 import {
   GenerationCommonConfigDescriptions,
   GenerationCommonConfigSchema,
@@ -1120,8 +1126,7 @@ export function defineGeminiKnownModel(
 ): ModelAction {
   const modelName = `vertexai/${name}`;
 
-  const model: ModelReference<z.ZodType<any, any>> =
-    SUPPORTED_GEMINI_MODELS[name];
+  const model: ModelReference<GenkitSchema> = SUPPORTED_GEMINI_MODELS[name];
   if (!model) throw new Error(`Unsupported model: ${name}`);
 
   return defineGeminiModel({

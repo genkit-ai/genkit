@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import type { EmbedderReference, z } from 'genkit';
+import type { EmbedderReference, GenkitSchema } from 'genkit';
 import type { CommonPluginOptions } from '../common/types.js';
 import type { VectorSearchOptions } from './vector_search/index.js';
 
 /** Options specific to vector search configuration */
 export interface VectorSearchOptionsConfig {
   /** Configure Vertex AI vector search index options */
-  vectorSearchOptions?: VectorSearchOptions<z.ZodType<any, any>, any, any>[];
+  vectorSearchOptions?: VectorSearchOptions<GenkitSchema, any, any>[];
   embedder?: EmbedderReference;
 }
 

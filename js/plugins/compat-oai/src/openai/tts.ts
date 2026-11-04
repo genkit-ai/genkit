@@ -14,13 +14,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { z } from 'genkit';
+import type { GenkitSchema } from 'genkit';
 import { ModelInfo } from 'genkit/model';
 import { compatOaiSpeechModelRef, SpeechConfigSchema } from '../audio.js';
 
 /** OpenAI speech ModelRef helper, same as the OpenAI-compatible spec. */
 export function openAISpeechModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

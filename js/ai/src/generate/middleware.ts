@@ -14,12 +14,20 @@
  * limitations under the License.
  */
 
-import { ActionRunOptions, GenkitError, z } from '@genkit-ai/core';
+import {
+  ActionRunOptions,
+  GenkitError,
+  z,
+  type GenkitSchema,
+  type InferOutput,
+} from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import { GenkitAI } from '../genkit-ai.js';
-import type { GenerateActionOptions } from '../model-types.js';
-import { type MiddlewareRef } from '../model-types.js';
+import {
+  type GenerateActionOptions,
+  type MiddlewareRef,
+} from '../model-types.js';
 import {
   GenerateRequest,
   GenerateResponseChunkData,
@@ -50,12 +58,12 @@ export type MiddlewareDesc = z.infer<typeof MiddlewareDescSchema>;
  * inclusion in a `GenerateOptions.use` array.
  */
 export interface GenerateMiddleware<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
   PluginOptions = void,
 > extends MiddlewareDesc {
   /** Configures the middleware, returning a MiddlewareRef for usage in `generate({use: [...]})`. */
   (
-    config?: z.infer<ConfigSchema>
+    config?: InferOutput<ConfigSchema>
   ): MiddlewareRef & { __def: GenerateMiddleware<ConfigSchema, PluginOptions> };
   /** The unique name of this middleware. */
   name: string;
@@ -81,7 +89,7 @@ export interface GenerateMiddleware<
 }
 
 interface GenerateMiddlewarePluginInstance<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
   PluginOptions = void,
 > extends GenerateMiddleware<ConfigSchema, PluginOptions> {
   /** Options passed to the middleware plugin function. */
@@ -149,17 +157,17 @@ export interface GenerateMiddlewareDef {
  * Options passed to the middleware factory function.
  */
 export interface MiddlewareFnOptions<
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
   PluginOptions = void,
 > {
-  config: z.infer<ConfigSchema> | undefined;
+  config: InferOutput<ConfigSchema> | undefined;
   pluginConfig: PluginOptions;
   ai: GenkitAI;
 }
 
 export function generateMiddleware<
   PluginOptions = void,
-  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  ConfigSchema extends GenkitSchema = GenkitSchema,
 >(
   options: {
     name: string;
@@ -171,7 +179,7 @@ export function generateMiddleware<
     options: MiddlewareFnOptions<ConfigSchema, PluginOptions>
   ) => GenerateMiddlewareDef
 ): GenerateMiddleware<ConfigSchema, PluginOptions> {
-  const def = function (config?: z.infer<ConfigSchema>) {
+  const def = function (config?: InferOutput<ConfigSchema>) {
     return {
       name: options.name,
       config,
@@ -188,7 +196,7 @@ export function generateMiddleware<
     version: 'v2',
     middleware: () => {
       const wrappedDef = Object.assign(
-        function (config?: z.infer<ConfigSchema>) {
+        function (config?: InferOutput<ConfigSchema>) {
           return def(config);
         },
         def,

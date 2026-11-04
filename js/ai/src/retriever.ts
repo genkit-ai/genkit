@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
-import { GenkitError, action, z, type Action } from '@genkit-ai/core';
+import {
+  GenkitError,
+  action,
+  toZodSchema,
+  z,
+  type Action,
+  type GenkitSchema,
+  type InferOutput,
+} from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
 import { toJsonSchema } from '@genkit-ai/core/schema';
 import { Document, DocumentDataSchema, type DocumentData } from './document.js';
@@ -26,17 +34,17 @@ export { type MediaPart, type Part, type TextPart } from './parts.js';
 /**
  * Retriever implementation function signature.
  */
-export type RetrieverFn<RetrieverOptions extends z.ZodType<any, any>> = (
+export type RetrieverFn<RetrieverOptions extends GenkitSchema> = (
   query: Document,
-  queryOpts: z.infer<RetrieverOptions>
+  queryOpts: InferOutput<RetrieverOptions>
 ) => Promise<RetrieverResponse>;
 
 /**
  * Indexer implementation function signature.
  */
-export type IndexerFn<IndexerOptions extends z.ZodType<any, any>> = (
+export type IndexerFn<IndexerOptions extends GenkitSchema> = (
   docs: Array<Document>,
-  indexerOpts: z.infer<IndexerOptions>
+  indexerOpts: InferOutput<IndexerOptions>
 ) => Promise<void>;
 
 const RetrieverRequestSchema = z.object({
@@ -74,23 +82,21 @@ export type RetrieverInfo = z.infer<typeof RetrieverInfoSchema>;
 /**
  * A retriever action type.
  */
-export type RetrieverAction<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> = Action<typeof RetrieverRequestSchema, typeof RetrieverResponseSchema> & {
-  __configSchema?: CustomOptions;
-};
+export type RetrieverAction<CustomOptions extends GenkitSchema = GenkitSchema> =
+  Action<typeof RetrieverRequestSchema, typeof RetrieverResponseSchema> & {
+    __configSchema?: CustomOptions;
+  };
 
 /**
  * An indexer action type.
  */
-export type IndexerAction<
-  IndexerOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> = Action<typeof IndexerRequestSchema, z.ZodVoid> & {
-  __configSchema?: IndexerOptions;
-};
+export type IndexerAction<IndexerOptions extends GenkitSchema = GenkitSchema> =
+  Action<typeof IndexerRequestSchema, z.ZodVoid> & {
+    __configSchema?: IndexerOptions;
+  };
 
 function retrieverWithMetadata<
-  RetrieverOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  RetrieverOptions extends GenkitSchema = GenkitSchema,
 >(
   retriever: Action<
     typeof RetrieverRequestSchema,
@@ -104,7 +110,7 @@ function retrieverWithMetadata<
 }
 
 function indexerWithMetadata<
-  IndexerOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  IndexerOptions extends GenkitSchema = GenkitSchema,
 >(
   indexer: Action<typeof IndexerRequestSchema, z.ZodVoid>,
   configSchema?: IndexerOptions
@@ -118,7 +124,7 @@ function indexerWithMetadata<
  *  Creates a retriever action for the provided {@link RetrieverFn} implementation.
  */
 export function defineRetriever<
-  OptionsType extends z.ZodType<any, any> = z.ZodType<any, any>,
+  OptionsType extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: {
@@ -136,9 +142,7 @@ export function defineRetriever<
 /**
  *  Creates a retriever action for the provided {@link RetrieverFn} implementation.
  */
-export function retriever<
-  OptionsType extends z.ZodType<any, any> = z.ZodType<any, any>,
->(
+export function retriever<OptionsType extends GenkitSchema = GenkitSchema>(
   options: {
     name: string;
     configSchema?: OptionsType;
@@ -152,7 +156,7 @@ export function retriever<
       name: options.name,
       inputSchema: options.configSchema
         ? RetrieverRequestSchema.extend({
-            options: options.configSchema.optional(),
+            options: toZodSchema(options.configSchema).optional(),
           })
         : RetrieverRequestSchema,
       outputSchema: RetrieverResponseSchema,
@@ -181,7 +185,7 @@ export function retriever<
 /**
  *  Creates an indexer action for the provided {@link IndexerFn} implementation.
  */
-export function defineIndexer<IndexerOptions extends z.ZodType<any, any>>(
+export function defineIndexer<IndexerOptions extends GenkitSchema>(
   registry: Registry,
   options: {
     name: string;
@@ -198,7 +202,7 @@ export function defineIndexer<IndexerOptions extends z.ZodType<any, any>>(
 /**
  *  Creates an indexer action for the provided {@link IndexerFn} implementation.
  */
-export function indexer<IndexerOptions extends z.ZodType<any, any>>(
+export function indexer<IndexerOptions extends GenkitSchema>(
   options: {
     name: string;
     embedderInfo?: EmbedderInfo;
@@ -212,7 +216,7 @@ export function indexer<IndexerOptions extends z.ZodType<any, any>>(
       name: options.name,
       inputSchema: options.configSchema
         ? IndexerRequestSchema.extend({
-            options: options.configSchema.optional(),
+            options: toZodSchema(options.configSchema).optional(),
           })
         : IndexerRequestSchema,
       outputSchema: z.void(),
@@ -241,24 +245,24 @@ export function indexer<IndexerOptions extends z.ZodType<any, any>>(
 
 /** Parameters for running a retrieval via the `retrieve` function. */
 export interface RetrieverParams<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   retriever: RetrieverArgument<CustomOptions>;
   query: string | DocumentData;
-  options?: z.infer<CustomOptions>;
+  options?: InferOutput<CustomOptions>;
 }
 
 /**
  * A type that can be used to pass a retriever as an argument, either using a reference or an action.
  */
 export type RetrieverArgument<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = RetrieverAction<CustomOptions> | RetrieverReference<CustomOptions> | string;
 
 /**
  * Retrieves documents from a {@link RetrieverArgument} based on the provided query.
  */
-export async function retrieve<CustomOptions extends z.ZodType<any, any>>(
+export async function retrieve<CustomOptions extends GenkitSchema>(
   registry: Registry,
   params: RetrieverParams<CustomOptions>
 ): Promise<Array<Document>> {
@@ -289,25 +293,24 @@ export async function retrieve<CustomOptions extends z.ZodType<any, any>>(
 /**
  * A type that can be used to pass an indexer as an argument, either using a reference or an action.
  */
-export type IndexerArgument<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
-> = IndexerReference<CustomOptions> | IndexerAction<CustomOptions> | string;
+export type IndexerArgument<CustomOptions extends GenkitSchema = GenkitSchema> =
+  IndexerReference<CustomOptions> | IndexerAction<CustomOptions> | string;
 
 /**
  * Options passed to the index function.
  */
 export interface IndexerParams<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > {
   indexer: IndexerArgument<CustomOptions>;
   documents: Array<DocumentData>;
-  options?: z.infer<CustomOptions>;
+  options?: InferOutput<CustomOptions>;
 }
 
 /**
  * Indexes documents using a {@link IndexerArgument}.
  */
-export async function index<CustomOptions extends z.ZodType<any, any>>(
+export async function index<CustomOptions extends GenkitSchema>(
   registry: Registry,
   params: IndexerParams<CustomOptions>
 ): Promise<void> {
@@ -338,7 +341,7 @@ export const CommonRetrieverOptionsSchema = z.object({
 /**
  * A retriver reference object.
  */
-export interface RetrieverReference<CustomOptions extends z.ZodType<any, any>> {
+export interface RetrieverReference<CustomOptions extends GenkitSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: RetrieverInfo;
@@ -348,7 +351,7 @@ export interface RetrieverReference<CustomOptions extends z.ZodType<any, any>> {
  * Helper method to configure a {@link RetrieverReference} to a plugin.
  */
 export function retrieverRef<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: RetrieverReference<CustomOptionsSchema>
 ): RetrieverReference<CustomOptionsSchema> {
@@ -364,7 +367,7 @@ export const IndexerInfoSchema = RetrieverInfoSchema;
 export type IndexerInfo = z.infer<typeof IndexerInfoSchema>;
 
 /** A reference to an indexer, including its name, optional config schema, and info. */
-export interface IndexerReference<CustomOptions extends z.ZodType<any, any>> {
+export interface IndexerReference<CustomOptions extends GenkitSchema> {
   name: string;
   configSchema?: CustomOptions;
   info?: IndexerInfo;
@@ -374,7 +377,7 @@ export interface IndexerReference<CustomOptions extends z.ZodType<any, any>> {
  * Helper method to configure a {@link IndexerReference} to a plugin.
  */
 export function indexerRef<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: IndexerReference<CustomOptionsSchema>
 ): IndexerReference<CustomOptionsSchema> {
@@ -431,7 +434,7 @@ function itemToMetadata(
  * Simple retriever options.
  */
 export interface SimpleRetrieverOptions<
-  C extends z.ZodType<any, any> = z.ZodType<any, any>,
+  C extends GenkitSchema = GenkitSchema,
   R = any,
 > {
   /** The name of the retriever you're creating. */
@@ -463,12 +466,12 @@ export interface SimpleRetrieverOptions<
  * @returns A Genkit retriever.
  */
 export function defineSimpleRetriever<
-  C extends z.ZodType<any, any> = z.ZodType<any, any>,
+  C extends GenkitSchema = GenkitSchema,
   R = any,
 >(
   registry: Registry,
   options: SimpleRetrieverOptions<C, R>,
-  handler: (query: Document, config: z.infer<C>) => Promise<R[]>
+  handler: (query: Document, config: InferOutput<C>) => Promise<R[]>
 ) {
   return defineRetriever(
     registry,

@@ -26,6 +26,7 @@ import {
   modelRef,
   type EmbedderReference,
   type Genkit,
+  type GenkitSchema,
   type ModelReference,
   type z,
 } from 'genkit';
@@ -315,7 +316,7 @@ export type VertexAIPlugin = {
     name: keyof typeof ACTUAL_IMAGEN_MODELS | (`imagen${string}` & {}),
     config?: z.infer<typeof ImagenConfigSchema>
   ): ModelReference<typeof ImagenConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
+  model(name: string, config?: any): ModelReference<GenkitSchema>;
   embedder(
     name: string,
     config?: VertexEmbeddingConfig
@@ -332,7 +333,7 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
 (vertexAI as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodType<any, any>> => {
+): ModelReference<GenkitSchema> => {
   warnDeprecated();
   if (name.startsWith('imagen')) {
     return modelRef({
