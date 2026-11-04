@@ -148,6 +148,51 @@ export const withInputSchema = ai.defineFlow(
   }
 );
 
+// Input and output are parsed with their schemas: defaults, transforms and
+// refinements apply, whether the flow is called directly, streamed, or run
+// from the Dev UI. Try `{ "query": "  genkit  " }` in the Dev UI.
+export const withSchemaParsing = ai.defineFlow(
+  {
+    name: 'withSchemaParsing',
+    inputSchema: z
+      .object({
+        query: z.string().trim().min(1),
+        limit: z.number().int().default(3),
+        since: z
+          .string()
+          .optional()
+          .transform((s) => (s ? new Date(s) : undefined)),
+      })
+      .refine((i) => i.query !== 'forbidden', {
+        message: 'that query is not allowed',
+        path: ['query'],
+      }),
+    outputSchema: z.object({
+      results: z.array(z.string()),
+      truncated: z.boolean().default(false),
+    }),
+  },
+  // input: { query: string; limit: number; since?: Date }
+  async ({ query, limit, since }) => {
+    const results = Array.from(
+      { length: limit },
+      (_, i) =>
+        `${query} #${i + 1}${since ? ` since ${since.toISOString()}` : ''}`
+    );
+    // `truncated` is filled in by the output schema default.
+    return { results };
+  }
+);
+
+export const callsWithSchemaParsing = ai.defineFlow(
+  'callsWithSchemaParsing',
+  async () => {
+    // Callers pass the schema's input type: `limit` and `since` are optional.
+    const { results, truncated } = await withSchemaParsing({ query: ' hi ' });
+    return { results, truncated };
+  }
+);
+
 export const withContext = ai.defineFlow(
   {
     name: 'withContext',
