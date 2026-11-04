@@ -26,6 +26,7 @@
   "author": "genkit",
   "license": "Apache-2.0",
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/api-logs": "^0.52.0",
     "@opentelemetry/context-async-hooks": "~1.25.0",
@@ -36,8 +37,6 @@
     "@opentelemetry/sdk-trace-base": "~1.25.0",
     "@standard-schema/spec": "^1.1.0",
     "@types/json-schema": "^7.0.15",
-    "ajv": "^8.12.0",
-    "ajv-formats": "^3.0.1",
     "async-mutex": "^0.5.0",
     "cors": "^2.8.5",
     "dotprompt": "^1.1.1",
@@ -62,7 +61,6 @@
     "zod": "^4.6.7"
   },
   "optionalDependencies": {
-    "@cfworker/json-schema": "^4.1.1",
     "@genkit-ai/firebase": "^1.16.1"
   },
   "types": "lib/index.d.ts",
