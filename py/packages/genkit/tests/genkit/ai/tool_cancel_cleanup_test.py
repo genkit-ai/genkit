@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 
-from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit import FinishReason, Genkit, Message, ModelResponse, Part, Role
 from genkit._ai._generate import execute_tool_request, resolve_tool
 from genkit._ai._tools import Interrupt
 from genkit._core._middleware import MiddlewareContext
@@ -274,72 +274,37 @@ async def test_generate_cancel_with_tool_raising_in_finally_leaves_zero_unretrie
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_request_preserves_non_cancel_errors_and_interrupts_when_abort_signal_set() -> None:
-    """A normal Exception or Interrupt from the tool body is not rewritten into Task aborted if abort_signal is set."""
+async def test_execute_tool_request_preserves_non_cancel_errors_and_interrupts() -> None:
+    """A normal Exception or Interrupt from the tool body propagates unchanged."""
     ai = Genkit()
-    abort_signal = asyncio.Event()
 
     @ai.tool(name='charge_card')
     async def charge_card() -> str:
-        abort_signal.set()
         raise ValueError('card declined')
-
-    abort_signal_intr = asyncio.Event()
 
     @ai.tool(name='wire_funds')
     async def wire_funds() -> str:
-        abort_signal_intr.set()
         raise Interrupt({'confirm': 'wire_transfer'})
 
     charge_action = await resolve_tool(ai._registry, 'charge_card')
     charge_trp = Part.from_tool_request(name='charge_card', ref='r1', input={})
-    ctx = MiddlewareContext(ai, abort_signal=abort_signal)
+    ctx = MiddlewareContext(ai)
 
     with pytest.raises(ValueError, match='card declined'):
         await execute_tool_request(tool=charge_action, tool_request_part=charge_trp, ctx=ctx)
 
     wire_action = await resolve_tool(ai._registry, 'wire_funds')
     wire_trp = Part.from_tool_request(name='wire_funds', ref='r2', input={})
-    intr_ctx = MiddlewareContext(ai, abort_signal=abort_signal_intr)
+    intr_ctx = MiddlewareContext(ai)
 
     with pytest.raises(Interrupt) as intr_info:
         await execute_tool_request(tool=wire_action, tool_request_part=wire_trp, ctx=intr_ctx)
     assert intr_info.value.metadata == {'confirm': 'wire_transfer'}
 
-    abort_live = asyncio.Event()
-    hold_started = asyncio.Event()
-    hold_cleaned = False
-
-    @ai.tool(name='hold_funds')
-    async def hold_funds() -> str:
-        nonlocal hold_cleaned
-        hold_started.set()
-        try:
-            await asyncio.sleep(10)
-        finally:
-            await asyncio.sleep(0)
-            hold_cleaned = True
-        return 'held'
-
-    hold_action = await resolve_tool(ai._registry, 'hold_funds')
-    hold_trp = Part.from_tool_request(name='hold_funds', ref='r3', input={})
-    hold_ctx = MiddlewareContext(ai, abort_signal=abort_live)
-
-    abort_task = asyncio.create_task(execute_tool_request(tool=hold_action, tool_request_part=hold_trp, ctx=hold_ctx))
-    await hold_started.wait()
-    abort_live.set()
-
-    with pytest.raises(GenkitError) as abort_err:
-        await abort_task
-    assert abort_err.value.status == 'CANCELLED'
-    assert abort_err.value.message == 'Task aborted'
-    assert hold_cleaned is True
-    assert asyncio.all_tasks() == {asyncio.current_task()}
-
 
 @pytest.mark.asyncio
-async def test_execute_tool_request_happy_path_awaits_cancelled_watcher_task() -> None:
-    """Happy-path tool execution cancels and awaits watcher_task before returning."""
+async def test_execute_tool_request_happy_path_leaves_no_background_tasks() -> None:
+    """Happy-path tool execution leaves zero background tasks running."""
     ai = Genkit()
 
     @ai.tool(name='fetch_menu')

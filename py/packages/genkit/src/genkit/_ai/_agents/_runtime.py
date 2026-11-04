@@ -44,6 +44,7 @@ from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
+from genkit._core._compat import await_unchained, cancelling
 from genkit._core._error import (
     ErrorReason,
     Failure,
@@ -267,8 +268,7 @@ class AgentContext(ActionRunContext[AgentStreamChunk]):
     """Execution context passed to a custom agent function.
 
     Provides ``ctx.send_chunk(chunk)`` for streaming :class:`AgentStreamChunk`
-    items, ``ctx.context`` for caller context data, and ``ctx.abort_signal``
-    for cancellation.
+    items and ``ctx.context`` for caller context data.
     """
 
 
@@ -725,7 +725,8 @@ class AgentRuntime:
         self,
         *,
         snapshot_id: str,
-        abort_signal: asyncio.Event,
+        fn_task: asyncio.Task[Any],
+        snapshot_aborted: asyncio.Event | None = None,
         context: dict[str, Any] | None = None,
     ) -> None:
         if self.store is None or not isinstance(self.store, SnapshotSubscriber):
@@ -740,7 +741,9 @@ class AgentRuntime:
         # unsubscribes. Returning early would skip that teardown.
         async for status in statuses:
             if status == SnapshotStatus.ABORTED:
-                abort_signal.set()
+                if snapshot_aborted is not None:
+                    snapshot_aborted.set()
+                fn_task.cancel()
 
     async def refresh_heartbeat(self, snapshot_id: str, *, context: dict[str, Any] | None = None) -> None:
         """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
@@ -782,6 +785,7 @@ class AgentRuntime:
         err_holder: list[Exception],
         result_holder: list[AgentResult],
         heartbeat_task: asyncio.Task,
+        snapshot_aborted: asyncio.Event | None = None,
         context: dict[str, Any] | None = None,
     ) -> None:
         """Background task: wait for fn, then rewrite pending snapshot with final state.
@@ -790,7 +794,24 @@ class AgentRuntime:
         multi-tenant store still writes the terminal status under the request's
         tenant after the original call has returned.
         """
-        await fn_task
+        self_cancels: list[asyncio.CancelledError] = []
+        try:
+            await await_unchained(fn_task, on_cancel=self_cancels.append)
+        except asyncio.CancelledError:
+            if (
+                self_cancels
+                or cancelling(asyncio.current_task()) > 0
+                or snapshot_aborted is None
+                or not snapshot_aborted.is_set()
+            ):
+                fn_task.cancel()
+                heartbeat_task.cancel()
+                raise
+            await forward_task
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+            return
         await forward_task
 
         # The turn has settled, so stop refreshing its heartbeat before we rewrite
@@ -851,11 +872,9 @@ class AgentRuntime:
              background finalizer rewrites snapshot when fn finishes
         """
         detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        abort_signal = asyncio.Event()
         action_ctx = AgentContext(
             context=get_current_context(),
             streaming_callback=self.send_chunk,
-            abort_signal=abort_signal,
         )
 
         # Forward task: BidiAction client_inputs -> runtime intake.
@@ -931,9 +950,10 @@ class AgentRuntime:
         # --- Detach path ---
         if detach_future.done():
             if self.store is None:
-                # Detach without a store is a config error; signal abort and raise.
-                abort_signal.set()
-                await fn_task
+                # Detach without a store is a config error; cancel the turn and raise.
+                fn_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fn_task
                 await forward_task
                 raise ValueError(
                     f"Agent '{self.name}' received a detach request, but cannot proceed because detach "
@@ -985,10 +1005,12 @@ class AgentRuntime:
             # Pin tenant context for background abort-watch / heartbeat / finalize
             # — ambient context may be gone by the time those tasks run or settle.
             detach_context = get_current_context()
+            snapshot_aborted = asyncio.Event()
             t1 = asyncio.create_task(
                 self.watch_snapshot_abort(
                     snapshot_id=pending_snap.snapshot_id,
-                    abort_signal=abort_signal,
+                    fn_task=fn_task,
+                    snapshot_aborted=snapshot_aborted,
                     context=detach_context,
                 )
             )
@@ -1003,15 +1025,24 @@ class AgentRuntime:
                     err_holder=err_holder,
                     result_holder=result_holder,
                     heartbeat_task=heartbeat_task,
+                    snapshot_aborted=snapshot_aborted,
                     context=detach_context,
                 )
             )
+
+            def _on_finalize_done(done_task: asyncio.Task[None]) -> None:
+                self.background_tasks.discard(done_task)
+                if done_task.cancelled():
+                    fn_task.cancel()
+                    t1.cancel()
+                    heartbeat_task.cancel()
+
             self.background_tasks.add(t1)
             self.background_tasks.add(heartbeat_task)
             self.background_tasks.add(t2)
             t1.add_done_callback(self.background_tasks.discard)
             heartbeat_task.add_done_callback(self.background_tasks.discard)
-            t2.add_done_callback(self.background_tasks.discard)
+            t2.add_done_callback(_on_finalize_done)
             return AgentOutput(
                 session_id=state.session_id,
                 snapshot_id=pending_snap.snapshot_id,
@@ -1097,7 +1128,6 @@ async def generate_prompt_agent_turn(
         scope,
         options,
         on_chunk=on_chunk,
-        abort_signal=ctx.abort_signal,
         context=ctx.context,
     )
 
