@@ -137,6 +137,64 @@ describe('defineInterrupt', () => {
     });
   });
 
+  describe('schema parsing', () => {
+    it('restart() validates replaceInput but keeps it raw (parsed when the tool runs)', () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'test',
+          description: 'test',
+          inputSchema: z.string().transform((s) => s.toUpperCase()),
+        },
+        async (input, { interrupt }) => interrupt()
+      );
+      assert.deepStrictEqual(
+        t.restart({ toolRequest: { name: 'test', input: 'a' } }, undefined, {
+          replaceInput: 'b',
+        }).toolRequest.input,
+        'b'
+      );
+    });
+
+    it('respond() returns the parsed output', () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'test',
+          description: 'test',
+          outputSchema: z.object({ ok: z.boolean().default(true) }),
+        },
+        async (input, { interrupt }) => interrupt()
+      );
+      assert.deepStrictEqual(
+        t.respond({ toolRequest: { name: 'test', input: {} } }, {}).toolResponse
+          .output,
+        { ok: true }
+      );
+    });
+
+    it('parses tool input and output, including the v2 tool action', async () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'parsed',
+          description: 'test',
+          inputSchema: z.object({ n: z.number().default(2) }),
+          outputSchema: z.object({
+            doubled: z.number(),
+            note: z.string().default('ok'),
+          }),
+        },
+        async ({ n }) => ({ doubled: n * 2 })
+      );
+      assert.deepStrictEqual(await t({}), { doubled: 4, note: 'ok' });
+      const v2 = await registry.lookupAction('/tool.v2/parsed');
+      assert.deepStrictEqual(await v2({}), {
+        output: { doubled: 4, note: 'ok' },
+      });
+    });
+  });
+
   describe('multipart tools', () => {
     it('should define a multipart tool', async () => {
       const t = defineTool(

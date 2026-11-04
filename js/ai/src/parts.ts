@@ -127,7 +127,7 @@ export type ToolResponse = z.infer<typeof ToolResponseSchemaBase> & {
 };
 
 /** Zod schema for a tool response, including optional multipart content. */
-export const ToolResponseSchema: z.ZodType<ToolResponse> =
+export const ToolResponseSchema: z.ZodType<ToolResponse, ToolResponse> =
   ToolResponseSchemaBase.extend({
     content: z.array(z.any()).optional(),
     // TODO: switch to this once we have effective recursive schema support across the board.

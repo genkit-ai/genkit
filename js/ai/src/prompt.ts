@@ -24,6 +24,7 @@ import {
   type ActionAsyncParams,
   type ActionContext,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
   type JSONSchema7,
   type z,
@@ -31,7 +32,7 @@ import {
 import { lazy } from '@genkit-ai/core/async';
 import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
-import { toJsonSchema } from '@genkit-ai/core/schema';
+import { parseSchemaAsync, toJsonSchema } from '@genkit-ai/core/schema';
 import { SPAN_TYPE_ATTR, runInNewSpan } from '@genkit-ai/core/tracing';
 import { Message as DpMessage, PromptFunction } from 'dotprompt';
 import { existsSync, readFileSync, readdirSync } from 'fs';
@@ -81,7 +82,7 @@ export type PromptAction<I extends GenkitSchema = GenkitSchema> = Action<
       type: 'prompt';
     };
   };
-  __executablePrompt: ExecutablePrompt<InferOutput<I>>;
+  __executablePrompt: ExecutablePrompt<InferInput<I>>;
 };
 
 export function isPromptAction(action: Action): action is PromptAction {
@@ -102,7 +103,7 @@ export type ExecutablePromptAction<I extends GenkitSchema = GenkitSchema> =
         type: 'executablePrompt';
       };
     };
-    __executablePrompt: ExecutablePrompt<InferOutput<I>>;
+    __executablePrompt: ExecutablePrompt<InferInput<I>>;
   };
 
 /**
@@ -238,7 +239,7 @@ export function definePrompt<
 >(
   registry: Registry,
   options: PromptConfig<I, O, CustomOptions>
-): ExecutablePrompt<InferOutput<I>, O, CustomOptions> {
+): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
   return definePromptAsync(
     registry,
     `${options.name}${options.variant ? `.${options.variant}` : ''}`,
@@ -256,7 +257,7 @@ function definePromptAsync<
   name: string,
   optionsPromise: PromiseLike<PromptConfig<I, O, CustomOptions>>,
   metadata?: Record<string, any>
-): ExecutablePrompt<InferOutput<I>, O, CustomOptions> {
+): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
   const promptCache = {} as PromptCache;
 
   const renderOptionsFn = async (
@@ -387,7 +388,7 @@ function definePromptAsync<
     rendererActionConfig,
     (action) => {
       (action as PromptAction<I>).__executablePrompt =
-        executablePrompt as never as ExecutablePrompt<InferOutput<I>>;
+        executablePrompt as never as ExecutablePrompt<InferInput<I>>;
     }
   ) as Promise<PromptAction<I>>;
 
@@ -419,7 +420,7 @@ function definePromptAsync<
     executablePromptActionConfig,
     (action) => {
       (action as ExecutablePromptAction<I>).__executablePrompt =
-        executablePrompt as never as ExecutablePrompt<InferOutput<I>>;
+        executablePrompt as never as ExecutablePrompt<InferInput<I>>;
     }
   ) as Promise<ExecutablePromptAction<I>>;
 
@@ -486,8 +487,25 @@ function wrapInExecutablePrompt<
   rendererAction: Promise<PromptAction<I>>;
   metadata?: Record<string, any>;
 }) {
+  // Direct calls parse the input like the prompt action does, so defaults and
+  // transforms apply either way. A missing input is passed through as is
+  // rather than failing an object schema (e.g. `prompt()` with all-optional
+  // fields), at the cost of not applying defaults in that case.
+  const parseInput = async (
+    input: InferInput<I> | undefined
+  ): Promise<InferOutput<I>> => {
+    const { inputSchema, inputJsonSchema } = (await wrapOpts.rendererAction)
+      .__action;
+    return input === undefined
+      ? (input as InferOutput<I>)
+      : parseSchemaAsync<InferOutput<I>>(input, {
+          schema: inputSchema,
+          jsonSchema: inputJsonSchema,
+        });
+  };
+
   const executablePrompt = (async (
-    input?: InferOutput<I>,
+    input?: InferInput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateResponse<InferOutput<O>>> => {
     return await runInNewSpan(
@@ -503,32 +521,32 @@ function wrapInExecutablePrompt<
       },
       async (metadata) => {
         const output = await generate(wrapOpts.registry, {
-          ...(await wrapOpts.renderOptionsFn(input as InferOutput<I>, opts)),
+          ...(await wrapOpts.renderOptionsFn(await parseInput(input), opts)),
         });
         metadata.output = output;
         return output;
       }
     );
-  }) as ExecutablePrompt<InferOutput<I>, O, CustomOptions>;
+  }) as ExecutablePrompt<InferInput<I>, O, CustomOptions>;
 
   executablePrompt.ref = { name: wrapOpts.name, metadata: wrapOpts.metadata };
 
   executablePrompt.render = async (
-    input?: InferOutput<I>,
+    input?: InferInput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateOptions<O, CustomOptions>> => {
     return {
-      ...(await wrapOpts.renderOptionsFn(input as InferOutput<I>, opts)),
+      ...(await wrapOpts.renderOptionsFn(await parseInput(input), opts)),
     } as GenerateOptions<O, CustomOptions>;
   };
 
   executablePrompt.stream = (
-    input?: InferOutput<I>,
+    input?: InferInput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): GenerateStreamResponse<InferOutput<O>> => {
     return generateStream(
       wrapOpts.registry,
-      wrapOpts.renderOptionsFn(input as InferOutput<I>, opts)
+      parseInput(input).then((parsed) => wrapOpts.renderOptionsFn(parsed, opts))
     );
   };
 
