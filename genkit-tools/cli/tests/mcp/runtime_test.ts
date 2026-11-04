@@ -250,4 +250,34 @@ describe('McpRuntimeManager', () => {
     );
     expect(startManagerSpy).not.toHaveBeenCalled();
   });
+
+  it('deduplicates concurrent telemetry server resolutions and retries after failure', async () => {
+    let resolveServer!: (url: string) => void;
+    const pendingPromise = new Promise<string>((resolve) => {
+      resolveServer = resolve;
+    });
+    const resolveSpy = jest
+      .spyOn(managerUtils, 'resolveTelemetryServer')
+      .mockRejectedValueOnce(new Error('port bind failed'))
+      .mockReturnValueOnce(pendingPromise);
+    const mockRuntimeManager = {
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    jest
+      .spyOn(managerUtils, 'startManager')
+      .mockResolvedValue(mockRuntimeManager);
+
+    const mcpManager = new McpRuntimeManager();
+
+    await expect(mcpManager.getManager('/workspace')).rejects.toThrow(
+      'port bind failed'
+    );
+
+    const p1 = mcpManager.getManager('/workspace');
+    const p2 = mcpManager.getManager('/workspace');
+    resolveServer('http://localhost:4033');
+    await Promise.all([p1, p2]);
+
+    expect(resolveSpy).toHaveBeenCalledTimes(2);
+  });
 });
