@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError, z, type ActionContext } from 'genkit';
+import { GenkitError, type ActionContext } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
 import {
   isMultiRegionalLocation,
@@ -347,23 +347,32 @@ export type RequestClientOptions = ClientOptions & {
 };
 
 /**
+ * Client option overrides that may be carried in a model request config.
+ * Other config fields are allowed and ignored; `location`/`apiKey` are
+ * validated at runtime.
+ */
+type RequestConfigOverrides = Record<string, unknown> & {
+  apiVersion?: ClientOptions['apiVersion'];
+};
+
+/**
  * If location or apiKey are present in reqConfig, they will
  * override the values in the clientOptions. The newOptions will
  * contain the clientOptions with those overrides.
  * @param clientOptions The client options
  * @param reqConfig The request config
  */
-export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+export function calculateRequestOptions(
   clientOptions: RequestClientOptions,
-  reqConfig?: z.infer<T>
+  reqConfig?: RequestConfigOverrides
 ): RequestClientOptions;
-export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+export function calculateRequestOptions(
   clientOptions: ClientOptions,
-  reqConfig?: z.infer<T>
+  reqConfig?: RequestConfigOverrides
 ): ClientOptions;
-export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+export function calculateRequestOptions(
   clientOptions: RequestClientOptions | ClientOptions,
-  reqConfig?: z.infer<T>
+  reqConfig?: RequestConfigOverrides
 ): RequestClientOptions | ClientOptions {
   let newOptions = { ...clientOptions };
   if (reqConfig?.apiVersion) {

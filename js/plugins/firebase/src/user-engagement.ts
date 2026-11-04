@@ -36,7 +36,7 @@ export enum FirebaseUserAcceptanceEnum {
 /** Explicit user feedback on response. */
 export const FirebaseUserFeedbackSchema = z.object({
   /** User sentiment of response. */
-  value: z.nativeEnum(FirebaseUserFeedbackEnum),
+  value: z.enum(FirebaseUserFeedbackEnum),
   /** Optional free text feedback to supplement score. */
   text: z.optional(z.string()),
 });
@@ -44,7 +44,7 @@ export const FirebaseUserFeedbackSchema = z.object({
 /** Implicit user acceptance of response. */
 export const FirebaseUserAcceptanceSchema = z.object({
   /** Whether the user took the desired action based on the response. */
-  value: z.nativeEnum(FirebaseUserAcceptanceEnum),
+  value: z.enum(FirebaseUserAcceptanceEnum),
 });
 
 /** Schema for providing user engagement metadata. One or both of feedback and acceptance should be provided. */

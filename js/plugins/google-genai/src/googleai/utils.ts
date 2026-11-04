@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError, z, type ActionContext } from 'genkit';
+import { GenkitError, type ActionContext } from 'genkit';
 import process from 'process';
 import { ClientOptions } from './types.js';
 
@@ -132,9 +132,11 @@ export function calculateApiKey(
  * For each field in ClientOptions, if the request config object has
  * a matching non-empty/non-null field, it overrides the original.
  */
-export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
+export function calculateRequestOptions(
   clientOptions: ClientOptions,
-  reqConfig?: z.infer<T>
+  // Loosely typed on purpose: callers pass arbitrary model config objects and
+  // each override is validated at runtime below.
+  reqConfig?: Record<string, unknown>
 ): ClientOptions {
   if (!reqConfig) {
     return clientOptions;
@@ -163,30 +165,53 @@ export function calculateRequestOptions<T extends z.ZodObject<any, any, any>>(
   }
 
   if (reqConfig.customHeaders && typeof reqConfig.customHeaders === 'object') {
-    newOptions.customHeaders = reqConfig.customHeaders;
+    // Config schemas declare customHeaders as Record<string, string>.
+    newOptions.customHeaders = reqConfig.customHeaders as Record<
+      string,
+      string
+    >;
   }
 
   return newOptions;
 }
+
+type ClientOptionOverrideKey =
+  | 'timeout'
+  | 'apiKey'
+  | 'apiVersion'
+  | 'apiClient'
+  | 'baseUrl'
+  | 'customHeaders';
+
+// Unlike `Omit`, key remapping keeps known keys when `T` also has an index
+// signature (e.g. inferred types of passthrough/loose zod objects).
+type WithoutClientOptionOverrides<T> = {
+  [P in keyof T as P extends ClientOptionOverrideKey ? never : P]: T[P];
+};
 
 /**
  * The config can have client option overrides, but they should not
  * be sent with the request like normal config.
  * @param requestConfig
  */
-export function removeClientOptionOverrides<
-  T extends z.ZodObject<any, any, any>,
->(requestConfig?: z.infer<T>): z.infer<T> {
-  let newConfig = { ...requestConfig };
-
-  delete newConfig?.timeout;
-  delete newConfig?.apiKey;
-  delete newConfig?.apiVersion;
-  delete newConfig?.apiClient;
-  delete newConfig?.baseUrl;
-  delete newConfig?.customHeaders;
-
-  return newConfig;
+export function removeClientOptionOverrides<C extends Record<string, unknown>>(
+  requestConfig: C
+): WithoutClientOptionOverrides<C>;
+// Untyped implementation signature: TS can't relate the generic destructured
+// rest (`Omit<C, ...>`) to the key-remapped return type above.
+export function removeClientOptionOverrides(
+  requestConfig: Record<string, unknown>
+): Record<string, unknown> {
+  const {
+    timeout: _timeout,
+    apiKey: _apiKey,
+    apiVersion: _apiVersion,
+    apiClient: _apiClient,
+    baseUrl: _baseUrl,
+    customHeaders: _customHeaders,
+    ...rest
+  } = requestConfig;
+  return rest;
 }
 
 /**

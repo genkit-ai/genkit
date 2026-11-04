@@ -297,17 +297,20 @@ export type OpenAIPlugin = {
       | (`o${number}` & {}),
     config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
   ): ModelReference<typeof OpenAIChatCompletionConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
   embedder(
     name:
       | keyof typeof SUPPORTED_EMBEDDING_MODELS
       | (`${string}-embedding-${string}` & {}),
     config?: z.infer<typeof TextEmbeddingConfigSchema>
   ): EmbedderReference<typeof TextEmbeddingConfigSchema>;
-  embedder(name: string, config?: any): EmbedderReference<z.ZodTypeAny>;
+  embedder(name: string, config?: any): EmbedderReference<z.ZodType<any, any>>;
 };
 
-const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
+const model = ((
+  name: string,
+  config?: any
+): ModelReference<z.ZodType<any, any>> => {
   if (name.includes('gpt-image-1') || name.includes('dall-e')) {
     return openAIImageModelRef({
       name,
@@ -341,7 +344,7 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
 const embedder = ((
   name: string,
   config?: any
-): EmbedderReference<z.ZodTypeAny> => {
+): EmbedderReference<z.ZodType<any, any>> => {
   return embedderRef({
     name,
     config,

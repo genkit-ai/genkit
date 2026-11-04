@@ -51,14 +51,16 @@ export const vertexAiIndexerRef = (params: {
  * vector search options and embedder configurations.
  *
  * @param {VertexVectorSearchOptions<EmbedderCustomOptions>} params - The parameters for creating the indexers.
- * @returns {IndexerAction<z.ZodTypeAny>[]} - An array of indexer actions.
+ * @returns {IndexerAction<z.ZodType<any, any>>[]} - An array of indexer actions.
  */
-export function vertexAiIndexers<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function vertexAiIndexers<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(
   ai: Genkit,
   params: VertexVectorSearchOptions<EmbedderCustomOptions>
-): IndexerAction<z.ZodTypeAny>[] {
+): IndexerAction<z.ZodType<any, any>>[] {
   const vectorSearchOptions = params.pluginOptions.vectorSearchOptions;
-  const indexers: IndexerAction<z.ZodTypeAny>[] = [];
+  const indexers: IndexerAction<z.ZodType<any, any>>[] = [];
 
   if (!vectorSearchOptions || vectorSearchOptions.length === 0) {
     return indexers;

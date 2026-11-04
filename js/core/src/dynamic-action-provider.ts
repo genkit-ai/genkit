@@ -25,7 +25,11 @@ import { GenkitError } from './error.js';
 import { ActionMetadataRecord, ActionType, Registry } from './registry.js';
 
 type DapValue = {
-  [K in ActionType]?: Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny>[];
+  [K in ActionType]?: Action<
+    z.ZodType<any, any>,
+    z.ZodType<any, any>,
+    z.ZodType<any, any>
+  >[];
 };
 
 class SimpleCache {
@@ -111,7 +115,10 @@ export interface DynamicRegistry {
   getAction(
     actionType: string,
     actionName: string
-  ): Promise<Action<z.ZodTypeAny, z.ZodTypeAny, z.ZodTypeAny> | undefined>;
+  ): Promise<
+    | Action<z.ZodType<any, any>, z.ZodType<any, any>, z.ZodType<any, any>>
+    | undefined
+  >;
   listActionMetadata(
     actionType: string,
     actionName: string
@@ -122,7 +129,7 @@ export interface DynamicRegistry {
 export type DynamicActionProviderAction = Action<
   z.ZodVoid,
   z.ZodArray<typeof ActionMetadataSchema>,
-  z.ZodTypeAny
+  z.ZodType<any, any>
 > &
   DynamicRegistry & {
     __action: {
@@ -133,7 +140,7 @@ export type DynamicActionProviderAction = Action<
   };
 
 export function isDynamicActionProvider(
-  obj: Action<z.ZodTypeAny, z.ZodTypeAny>
+  obj: Action<z.ZodType<any, any>, z.ZodType<any, any>>
 ): obj is DynamicActionProviderAction {
   return obj.__action?.metadata?.type == 'dynamic-action-provider';
 }

@@ -136,7 +136,6 @@ describe('createMcpServer', async () => {
           description: 'test tool',
           inputSchema: {
             $schema: 'http://json-schema.org/draft-07/schema#',
-            additionalProperties: true,
             properties: {
               foo: {
                 type: 'string',

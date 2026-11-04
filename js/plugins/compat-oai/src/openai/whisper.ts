@@ -64,7 +64,7 @@ export const WhisperConfigSchema = TranscriptionConfigSchema.extend({
  * @returns the created {@link ModelAction}
  */
 export function defineOpenAIWhisperModel<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   client: OpenAI;
@@ -118,7 +118,7 @@ export function defineOpenAIWhisperModel<
 
 /** OpenAI whisper ModelRef helper. */
 export function openAIWhisperModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;
@@ -133,7 +133,10 @@ export function openAIWhisperModelRef<
   } = params;
   return modelRef({
     name,
-    configSchema: configSchema || (WhisperConfigSchema as any),
+    // When configSchema is omitted, CustomOptions is its default (untyped), so the
+    // common schema is a valid stand-in.
+    configSchema:
+      configSchema ?? (WhisperConfigSchema as unknown as CustomOptions),
     info,
     config,
     namespace: 'openai',

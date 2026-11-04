@@ -20,7 +20,7 @@ import { compatOaiSpeechModelRef, SpeechConfigSchema } from '../audio.js';
 
 /** OpenAI speech ModelRef helper, same as the OpenAI-compatible spec. */
 export function openAISpeechModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;

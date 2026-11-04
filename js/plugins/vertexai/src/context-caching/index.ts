@@ -39,7 +39,7 @@ import {
  */
 export async function handleContextCache(
   apiClient: ApiClient,
-  request: GenerateRequest<z.ZodTypeAny>,
+  request: GenerateRequest<z.ZodType<any, any>>,
   chatRequest: StartChatParams,
   modelVersion: string,
   cacheConfigDetails: CacheConfigDetails
@@ -109,7 +109,7 @@ export async function handleContextCache(
  */
 export async function handleCacheIfNeeded(
   apiClient: ApiClient,
-  request: GenerateRequest<z.ZodTypeAny>,
+  request: GenerateRequest<z.ZodType<any, any>>,
   chatRequest: StartChatParams,
   modelVersion: string,
   cacheConfigDetails: CacheConfigDetails | null

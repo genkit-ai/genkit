@@ -169,7 +169,7 @@ export const FileCitationSchema = z
     /** Media ID in case of image citations, if applicable. */
     media_id: z.string().optional(),
     /** User-provided metadata about the retrieved context. */
-    custom_metadata: z.record(z.unknown()).optional(),
+    custom_metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .passthrough();
 export type FileCitation = z.infer<typeof FileCitationSchema>;

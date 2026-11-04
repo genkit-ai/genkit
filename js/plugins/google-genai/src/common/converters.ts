@@ -49,8 +49,36 @@ export function toGeminiTool(tool: ToolDefinition): FunctionDeclaration {
   return declaration;
 }
 
+/**
+ * Nullable schemas can be expressed as `anyOf: [X, {type: 'null'}]` (zod v4
+ * emits this for objects, enums, and described nullables). Gemini function
+ * declarations have no such construct, so fold it into `X` with
+ * `nullable: true`. Outer keywords (e.g. `description`) win over inner ones.
+ */
+function unwrapNullableUnion<S extends Record<string, any>>(
+  property: S
+): S | undefined {
+  const variants: unknown = property.anyOf ?? property.oneOf;
+  if (!Array.isArray(variants) || variants.length !== 2) {
+    return undefined;
+  }
+  const nonNull = variants.filter((v) => v?.type !== 'null');
+  if (nonNull.length !== 1) {
+    return undefined;
+  }
+  const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = property;
+  return { ...nonNull[0], ...rest, nullable: true };
+}
+
 function toGeminiSchemaProperty(property?: ToolDefinition['inputSchema']) {
-  if (!property || !property.type) {
+  if (!property) {
+    return undefined;
+  }
+  const unwrapped = unwrapNullableUnion(property);
+  if (unwrapped) {
+    return toGeminiSchemaProperty(unwrapped);
+  }
+  if (!property.type) {
     return undefined;
   }
   const baseSchema: Schema = {};
@@ -323,7 +351,7 @@ function toGeminiPart(part: Part): GeminiPart {
 
 function toGeminiRole(
   role: MessageData['role'],
-  model?: ModelReference<z.ZodTypeAny>
+  model?: ModelReference<z.ZodType<any, any>>
 ): string {
   switch (role) {
     case 'user':
@@ -349,7 +377,7 @@ function toGeminiRole(
 
 export function toGeminiMessage(
   message: MessageData,
-  model?: ModelReference<z.ZodTypeAny>
+  model?: ModelReference<z.ZodType<any, any>>
 ): GeminiContent {
   let sortedParts = message.content;
   if (message.role === 'tool') {

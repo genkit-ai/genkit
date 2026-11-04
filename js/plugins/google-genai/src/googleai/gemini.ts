@@ -185,12 +185,12 @@ const VoiceConfigSchema = z
           .describe('Name of the preset voice to use')
           .optional(),
       })
-      .describe('Configuration for the prebuilt speaker to use')
       .passthrough()
+      .describe('Configuration for the prebuilt speaker to use')
       .optional(),
   })
-  .describe('Configuration for the voice to use')
-  .passthrough();
+  .passthrough()
+  .describe('Configuration for the voice to use');
 
 export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
   apiKey: z
@@ -220,7 +220,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     { [GENKIT_UI_METADATA.WIDGET]: GENKIT_UI_WIDGETS.SAFETY_SETTINGS }
   ),
   codeExecution: z
-    .union([z.boolean(), z.object({}).strict()])
+    .union([z.boolean(), z.strictObject({})])
     .describe('Enables the model to generate and run code.')
     .optional(),
   // TODO(v2): Remove. This plugin does not implement context caching, so this
@@ -241,6 +241,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
       mode: z.enum(['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE']).optional(),
       allowedFunctionNames: z.array(z.string()).optional(),
     })
+    .passthrough()
     .describe(
       'Controls how the model uses the provided tools (function declarations). ' +
         'With AUTO (Default) mode, the model decides whether to generate a ' +
@@ -249,20 +250,19 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
         'predict a function call and guarantee function schema adherence. ' +
         'With NONE, the model is prohibited from making function calls.'
     )
-    .passthrough()
     .optional(),
   responseModalities: z
     .array(z.enum(['TEXT', 'IMAGE', 'AUDIO']))
     .describe('The modalities to be used in response.')
     .optional(),
   googleSearchRetrieval: z // some models use this, some use just googleSearch
-    .union([z.boolean(), z.object({}).passthrough()])
+    .union([z.boolean(), z.looseObject({})])
     .describe(
       'Retrieve public web data for grounding, powered by Google Search.'
     )
     .optional(),
   googleSearch: z
-    .union([z.boolean(), z.object({}).passthrough()])
+    .union([z.boolean(), z.looseObject({})])
     .describe(
       'Retrieve public web data for grounding, powered by Google Search.'
     )
@@ -289,7 +289,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .passthrough()
     .optional(),
   urlContext: z
-    .union([z.boolean(), z.object({}).passthrough()])
+    .union([z.boolean(), z.looseObject({})])
     .describe('Return grounding metadata from links included in the query')
     .optional(),
   retrievalConfig: z
@@ -391,19 +391,19 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
                   speaker: z.string().describe('Name of the speaker to use'),
                   voiceConfig: VoiceConfigSchema,
                 })
+                .passthrough()
                 .describe(
                   'Configuration for a single speaker in a multi speaker setup'
                 )
-                .passthrough()
             )
             .describe('Configuration for all the enabled speaker voices'),
         })
-        .describe('Configuration for multi-speaker setup')
         .passthrough()
+        .describe('Configuration for multi-speaker setup')
         .optional(),
     })
-    .describe('Speech generation config')
     .passthrough()
+    .describe('Speech generation config')
     .optional(),
   audioFormat: z
     .object({
@@ -426,11 +426,11 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
         .describe('Sample rate in Hz, for example 24000, 16000 or 8000.')
         .optional(),
     })
+    .passthrough()
     .describe(
       'Format of the generated audio. Supported by models that use the ' +
         'Interactions API (for example gemini-3.8-flash-tts).'
     )
-    .passthrough()
     .optional(),
 }).passthrough();
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
@@ -482,10 +482,10 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
         })
         .optional(),
     })
+    .passthrough()
     .describe(
       'Retrieve public web data for grounding, powered by Google Search.'
     )
-    .passthrough()
     .optional(),
 }).passthrough();
 export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
@@ -531,8 +531,8 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
         )
         .optional(),
     })
-    .describe('Format of the generated video.')
     .passthrough()
+    .describe('Format of the generated video.')
     .optional(),
   videoConfig: z
     .object({
@@ -554,8 +554,8 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
         )
         .optional(),
     })
-    .describe('Video generation settings.')
     .passthrough()
+    .describe('Video generation settings.')
     .optional(),
 }).passthrough();
 export type GeminiVideoConfigSchemaType = typeof GeminiVideoConfigSchema;

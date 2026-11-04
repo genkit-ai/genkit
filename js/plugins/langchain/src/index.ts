@@ -23,7 +23,10 @@ import { langchainEvaluator } from './evaluators.js';
 export { GenkitTracer } from './tracing.js';
 
 interface LangchainPluginParams<
-  ModelCustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  ModelCustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 > {
   evaluators?: {
     criteria?: Criteria[];

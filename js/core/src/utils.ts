@@ -42,6 +42,13 @@ export function stripUndefinedProps<T>(input: T): T {
   ) {
     return input;
   }
+  // Only recurse into plain objects. Class instances (zod schemas, Dates,
+  // Buffers, etc.) are passed through as-is: copying them by enumerable keys
+  // breaks them (e.g. zod v4 keeps its internals on a non-enumerable `_zod`).
+  const proto = Object.getPrototypeOf(input);
+  if (proto !== Object.prototype && proto !== null) {
+    return input;
+  }
   const out = {} as T;
   for (const key in input) {
     if (input[key] !== undefined) {

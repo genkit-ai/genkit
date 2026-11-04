@@ -103,6 +103,14 @@ function toAnthropicSchema(
   // Remove $schema if present
   delete out.$schema;
 
+  // Zod v4 emits `oneOf` for discriminated unions, which structured outputs
+  // doesn't support. Members are mutually exclusive by construction, so
+  // `anyOf` is equivalent.
+  if (Array.isArray(out.oneOf) && out.anyOf === undefined) {
+    out.anyOf = out.oneOf;
+    delete out.oneOf;
+  }
+
   // Add additionalProperties: false to objects
   if (out.type === 'object') {
     out.additionalProperties = false;

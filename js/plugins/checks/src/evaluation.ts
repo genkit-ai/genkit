@@ -108,7 +108,7 @@ function createPolicyEvaluator(
   );
 }
 
-async function checksEvalInstance<ResponseType extends z.ZodTypeAny>(
+async function checksEvalInstance<ResponseType extends z.ZodType<any, any>>(
   ai: Genkit,
   projectId: string,
   auth: GoogleAuth,

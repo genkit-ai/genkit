@@ -40,39 +40,35 @@ const DEFAULT_FALLBACK_STATUSES: StatusName[] = [
   'UNIMPLEMENTED',
 ];
 
-export const FallbackOptionsSchema = z
-  .object({
-    /**
-     * An array of models to try in order.
-     */
-    models: annotateSchema(
-      z
-        .array(ModelReferenceSchema)
-        .describe('An array of models to try in order.'),
-      { [GENKIT_UI_METADATA.WIDGET]: GENKIT_UI_WIDGETS.MODEL_LIST }
+export const FallbackOptionsSchema = z.looseObject({
+  /**
+   * An array of models to try in order.
+   */
+  models: annotateSchema(
+    z
+      .array(ModelReferenceSchema)
+      .describe('An array of models to try in order.'),
+    { [GENKIT_UI_METADATA.WIDGET]: GENKIT_UI_WIDGETS.MODEL_LIST }
+  ),
+  /**
+   * An array of `StatusName` values that should trigger a fallback.
+   * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']
+   */
+  statuses: z
+    .array(StatusNameSchema)
+    .optional()
+    .describe('An array of StatusName values that should trigger a fallback.'),
+  /**
+   * If true, the fallback model will not inherit the original request's configuration.
+   * @default false
+   */
+  isolateConfig: z
+    .boolean()
+    .optional()
+    .describe(
+      "If true, the fallback model will not inherit the original request's configuration."
     ),
-    /**
-     * An array of `StatusName` values that should trigger a fallback.
-     * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL', 'NOT_FOUND', 'UNIMPLEMENTED']
-     */
-    statuses: z
-      .array(StatusNameSchema)
-      .optional()
-      .describe(
-        'An array of StatusName values that should trigger a fallback.'
-      ),
-    /**
-     * If true, the fallback model will not inherit the original request's configuration.
-     * @default false
-     */
-    isolateConfig: z
-      .boolean()
-      .optional()
-      .describe(
-        "If true, the fallback model will not inherit the original request's configuration."
-      ),
-  })
-  .passthrough();
+});
 
 export type FallbackOptions = z.infer<typeof FallbackOptionsSchema>;
 

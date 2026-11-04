@@ -674,7 +674,6 @@ describe('generate', () => {
             name: 'dynamicMultipartTool',
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
-              additionalProperties: true,
               type: 'object',
             },
             key: '/tool.v2/dynamicMultipartTool',

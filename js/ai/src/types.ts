@@ -28,14 +28,14 @@ export type LlmStats = z.infer<typeof LlmStatsSchema>;
 export const ToolSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
-  schema: z.any(),
+  schema: z.any().optional(),
 });
 
 export type Tool = z.infer<typeof ToolSchema>;
 
 export const ToolCallSchema = z.object({
   toolName: z.string(),
-  arguments: z.any(),
+  arguments: z.any().optional(),
 });
 
 export type ToolCall = z.infer<typeof ToolCallSchema>;

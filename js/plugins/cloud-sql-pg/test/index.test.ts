@@ -96,7 +96,7 @@ const mockGenkit: Genkit = {
 } as unknown as Genkit;
 
 // Mock EmbedderArgument as configured in Genkit plugin
-const mockEmbedder: EmbedderArgument<z.ZodTypeAny> = {
+const mockEmbedder: EmbedderArgument<z.ZodType<any, any>> = {
   name: 'mock-embedder',
   type: 'embedder',
   configSchema: z.object({}),
