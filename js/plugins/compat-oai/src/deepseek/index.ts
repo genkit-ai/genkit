@@ -36,6 +36,8 @@ import {
 
 export type DeepSeekPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
+export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+
 function createResolver(pluginOptions: PluginOptions) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
     if (actionType === 'model') {
@@ -86,12 +88,14 @@ export function deepSeekPlugin(
         'Please pass in the API key or set the DEEPSEEK_API_KEY environment variable.',
     });
   }
-  const pluginOptions = { name: 'deepseek', ...options };
-  return openAICompatible({
-    name: 'deepseek',
-    baseURL: 'https://api.deepseek.com',
-    apiKey,
+  const pluginOptions: PluginOptions = {
     ...options,
+    name: 'deepseek',
+    baseURL: DEEPSEEK_BASE_URL,
+    apiKey,
+  };
+  return openAICompatible({
+    ...pluginOptions,
     initializer: async (client) => {
       return Object.values(SUPPORTED_DEEPSEEK_MODELS).map((modelRef) =>
         defineCompatOpenAIModel({
