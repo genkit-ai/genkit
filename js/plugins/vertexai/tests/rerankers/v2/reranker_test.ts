@@ -57,18 +57,19 @@ describe('defineReranker', () => {
     const query = Document.fromText('test query');
     const documents = [Document.fromText('doc1'), Document.fromText('doc2')];
 
-    const result = (await rerankerAction({
+    const result = await rerankerAction({
       query,
       documents,
       options: {},
-    })) as any;
+    });
 
-    assert.deepStrictEqual(result.documents.map((d) => d.text).sort(), [
-      'doc1',
-      'doc2',
-    ]);
+    // Action output is parsed data, not Document instances.
     assert.deepStrictEqual(
-      result.documents.map((d) => d.metadata.score).sort(),
+      result.documents.map((d) => new Document(d).text).sort(),
+      ['doc1', 'doc2']
+    );
+    assert.deepStrictEqual(
+      result.documents.map((d) => d.metadata?.score).sort(),
       [0.8, 0.9]
     );
     assert.strictEqual(fetchSpy.callCount, 1);

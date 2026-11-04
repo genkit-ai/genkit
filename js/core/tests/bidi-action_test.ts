@@ -286,6 +286,9 @@ describe('bidi action', () => {
     );
 
     const session = act.streamBidi();
+    // Depending on timing the generator is closed either by the input channel
+    // closing or by a failing sendChunk (which rejects the output).
+    session.output.catch(() => {});
     session.send('1');
     session.send('2');
 
