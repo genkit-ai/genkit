@@ -311,7 +311,11 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
       if (item.text === '') {
         continue;
       }
-      if (typeof item.text !== 'string' && !item.media) {
+      if (
+        typeof item.text !== 'string' &&
+        !item.media &&
+        !item.custom?.anthropicDocument
+      ) {
         throw new Error(
           `Unsupported tool response content: ${JSON.stringify(item)}`
         );

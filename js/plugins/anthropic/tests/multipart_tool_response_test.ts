@@ -90,6 +90,63 @@ for (const RunnerClass of [Runner, BetaRunner]) {
       );
     });
 
+    it('preserves custom document source and citation options alongside output', () => {
+      const document = {
+        source: {
+          type: 'text',
+          mediaType: 'text/plain',
+          data: 'document content',
+        },
+        title: 'Report',
+        context: 'Tool-provided reference',
+        citations: { enabled: true },
+      };
+      const result = convert({
+        ...response,
+        output: 'Reference retrieved',
+        content: [{ custom: { anthropicDocument: document } }],
+      });
+      assert.deepStrictEqual(result.content, [
+        { type: 'text', text: 'Reference retrieved' },
+        {
+          type: 'document',
+          source: {
+            type: 'text',
+            media_type: 'text/plain',
+            data: 'document content',
+          },
+          title: document.title,
+          context: document.context,
+          citations: document.citations,
+        },
+      ]);
+    });
+
+    it('retains API-specific restrictions for custom file documents', () => {
+      const responseWithFile = {
+        ...response,
+        content: [
+          {
+            custom: {
+              anthropicDocument: {
+                source: { type: 'file', fileId: 'file_123' },
+              },
+            },
+          },
+        ],
+      };
+      if (RunnerClass === Runner) {
+        assert.throws(
+          () => convert(responseWithFile),
+          /File-based document sources require the beta API/
+        );
+      } else {
+        assert.deepStrictEqual(convert(responseWithFile).content, [
+          { type: 'document', source: { type: 'file', file_id: 'file_123' } },
+        ]);
+      }
+    });
+
     it('converts PDF content into document blocks', () => {
       const result = convert({
         ...response,
