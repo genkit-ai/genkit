@@ -198,4 +198,59 @@ describe('registerAllTools', () => {
       metadata: undefined,
     });
   });
+
+  it('uses a binary media type for embedded resources without mimeType', async () => {
+    const ai = genkit({});
+    const transport = new FakeTransport();
+    transport.tools.push({
+      name: 'embeddedResource',
+      inputSchema: { type: 'object', properties: {} },
+    });
+    transport.callToolResult = {
+      content: [
+        {
+          type: 'resource',
+          resource: { uri: 'file:///data.bin', blob: 'YQ==' },
+        },
+        {
+          type: 'resource',
+          resource: {
+            uri: 'file:///image.png',
+            blob: 'Yg==',
+            mimeType: 'image/png',
+          },
+        },
+      ],
+    };
+
+    const client = new Client({ name: 'test', version: '1.0' });
+    await client.connect(transport);
+    await registerAllTools(ai, client, {
+      name: 'test-host',
+      serverName: 'test-server',
+      multipart: true,
+    });
+
+    const action = await ai.registry.lookupAction(
+      '/tool.v2/test-server/embeddedResource'
+    );
+    assert.ok(action);
+    assert.deepStrictEqual(await action({}, {}), {
+      content: [
+        {
+          media: {
+            url: 'data:application/octet-stream;base64,YQ==',
+            contentType: 'application/octet-stream',
+          },
+        },
+        {
+          media: {
+            url: 'data:image/png;base64,Yg==',
+            contentType: 'image/png',
+          },
+        },
+      ],
+      metadata: undefined,
+    });
+  });
 });

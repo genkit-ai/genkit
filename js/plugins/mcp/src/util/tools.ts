@@ -93,10 +93,11 @@ function processMultipartResult(result: CallToolResult) {
             (textOutput ? '\n\n' : '') +
             `Resource (${c.resource.uri}):\n${c.resource.text}`;
         } else if ('blob' in c.resource && c.resource.blob) {
+          const contentType = c.resource.mimeType ?? 'application/octet-stream';
           content.push({
             media: {
-              url: `data:${c.resource.mimeType};base64,${c.resource.blob}`,
-              contentType: c.resource.mimeType,
+              url: `data:${contentType};base64,${c.resource.blob}`,
+              contentType,
             },
           });
         }
