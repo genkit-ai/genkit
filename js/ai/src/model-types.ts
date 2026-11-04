@@ -30,7 +30,9 @@ import {
 export { Part, PartSchema };
 
 /** Zod schema for a serializable reference to a registered generate middleware. */
-export const MiddlewareRefSchema: z.ZodType<any, any> = z.object({
+// Loose: in-process callers attach the middleware definition (`__def`) so it
+// can run without being registered; parsing must not strip it.
+export const MiddlewareRefSchema: z.ZodType<any, any> = z.looseObject({
   name: z.string(),
   config: z.any().optional(),
 });
