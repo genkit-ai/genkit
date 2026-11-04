@@ -67,6 +67,22 @@ for (const RunnerClass of [Runner, BetaRunner]) {
       );
     });
 
+    for (const output of ['Screenshot captured', false, 0]) {
+      it(`preserves primary output ${JSON.stringify(output)} alongside media`, () => {
+        assert.deepStrictEqual(
+          convert({ ...response, output, content: [image] }).content,
+          [
+            {
+              type: 'text',
+              text:
+                typeof output === 'string' ? output : JSON.stringify(output),
+            },
+            imageBlock,
+          ]
+        );
+      });
+    }
+
     it('skips empty text without dropping adjacent media', () => {
       assert.deepStrictEqual(
         convert({ ...response, content: [{ text: '' }, image] }).content,

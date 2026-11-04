@@ -293,7 +293,7 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
     };
   }
 
-  /** Converts multipart tool results while preserving legacy structured output. */
+  /** Converts multipart tool results while preserving the primary output. */
   protected toAnthropicToolResponseParts(
     part: Part
   ): RunnerToolResponseContent<ApiTypes>[] {
