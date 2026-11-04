@@ -18,3 +18,5 @@ export {
   FirestoreSessionStore,
   type FirestoreSessionStoreOptions,
 } from './session-store/firestore.js';
+
+export { sensitiveDataProtection, type SdpOptions } from './sdp/index.js';
