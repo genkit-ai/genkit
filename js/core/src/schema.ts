@@ -87,7 +87,7 @@ export function toZodSchema<S extends GenkitSchema>(
           code: 'custom',
           message: issue.message,
           path: (issue.path ?? []).map((p) =>
-            typeof p === 'object' ? p.key : p
+            p && typeof p === 'object' ? p.key : p
           ) as PropertyKey[] as (string | number)[],
         });
       }
