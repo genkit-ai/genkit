@@ -587,3 +587,25 @@ async def test_embed_openai_double_prefixed_id_sends_prefixed_model() -> None:
     await ai.embed(embedder='openai/openai/text-embedding-3-small', content='hi')
 
     assert client.embeddings.create.call_args.kwargs['model'] == 'openai/text-embedding-3-small'
+
+
+@pytest.mark.asyncio
+async def test_embedder_splits_large_batches_into_chunks() -> None:
+    """More than 2048 documents are sent in several requests, order preserved."""
+    client = MagicMock()
+
+    async def create(*, model: str, input: list[str], **kwargs: Any) -> MagicMock:  # noqa: A002
+        result = MagicMock()
+        result.data = [MagicMock(embedding=[float(text)]) for text in input]
+        return result
+
+    client.embeddings.create = AsyncMock(side_effect=create)
+    action = _plugin_with(client)._create_embedder_action('text-embedding-3-small')
+
+    docs = [Document.from_text(str(i)) for i in range(5000)]
+    response = await action._fn(EmbedRequest(input=docs, options={'dimensions': 256}))
+
+    sizes = [len(call.kwargs['input']) for call in client.embeddings.create.await_args_list]
+    assert sizes == [2048, 2048, 904]
+    assert all(call.kwargs['dimensions'] == 256 for call in client.embeddings.create.await_args_list)
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(5000)]
