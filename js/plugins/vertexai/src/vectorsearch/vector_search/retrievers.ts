@@ -36,16 +36,18 @@ const DEFAULT_K = 10;
  * vector search options and embedder configurations.
  *
  * @param {VertexVectorSearchOptions<EmbedderCustomOptions>} params - The parameters for creating the retrievers.
- * @returns {RetrieverAction<z.ZodTypeAny>[]} - An array of retriever actions.
+ * @returns {RetrieverAction<z.ZodType<any, any>>[]} - An array of retriever actions.
  */
-export function vertexAiRetrievers<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function vertexAiRetrievers<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(
   ai: Genkit,
   params: VertexVectorSearchOptions<EmbedderCustomOptions>
-): RetrieverAction<z.ZodTypeAny>[] {
+): RetrieverAction<z.ZodType<any, any>>[] {
   const vectorSearchOptions = params.pluginOptions.vectorSearchOptions;
   const defaultEmbedder = params.defaultEmbedder;
 
-  const retrievers: RetrieverAction<z.ZodTypeAny>[] = [];
+  const retrievers: RetrieverAction<z.ZodType<any, any>>[] = [];
 
   if (!vectorSearchOptions || vectorSearchOptions.length === 0) {
     return retrievers;

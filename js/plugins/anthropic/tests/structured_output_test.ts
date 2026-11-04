@@ -166,6 +166,37 @@ describe('Structured Output Tests', () => {
     );
   });
 
+  test('should rewrite oneOf (discriminated union) to anyOf in output_format schema', async () => {
+    const mockClient = createMockAnthropicClient({
+      messageResponse: createMockAnthropicMessage({
+        text: '{"shape":{"kind":"circle","radius":1}}',
+      }),
+    });
+    const plugin = createPlugin({ apiVersion: 'beta', mockClient });
+    const ai = createGenkitInstance(plugin);
+
+    await ai.generate({
+      model: SUPPORTING_MODEL,
+      prompt: 'Generate a shape',
+      output: {
+        schema: z.object({
+          shape: z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('circle'), radius: z.number() }),
+            z.object({ kind: z.literal('square'), side: z.number() }),
+          ]),
+        }),
+        format: 'json',
+        constrained: true,
+      },
+    });
+
+    const shape = getApiRequest(mockClient, 'beta').output_format.schema
+      .properties.shape;
+    assert.strictEqual(shape.oneOf, undefined);
+    assert.strictEqual(shape.anyOf.length, 2);
+    assert.strictEqual(shape.anyOf[0].additionalProperties, false);
+  });
+
   test('should NOT pass output_format to API when constrained is false and using beta API', async () => {
     const mockClient = createMockAnthropicClient({
       messageResponse: createMockAnthropicMessage({

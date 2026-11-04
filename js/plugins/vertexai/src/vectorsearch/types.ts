@@ -21,7 +21,7 @@ import type { VectorSearchOptions } from './vector_search/index.js';
 /** Options specific to vector search configuration */
 export interface VectorSearchOptionsConfig {
   /** Configure Vertex AI vector search index options */
-  vectorSearchOptions?: VectorSearchOptions<z.ZodTypeAny, any, any>[];
+  vectorSearchOptions?: VectorSearchOptions<z.ZodType<any, any>, any, any>[];
   embedder?: EmbedderReference;
 }
 

@@ -61,8 +61,8 @@ export const genkitEvalRef = (metric: GenkitMetric) =>
  * Genkit evaluation plugin that provides the RAG evaluators
  */
 export function genkitEval<
-  ModelCustomOptions extends z.ZodTypeAny,
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  ModelCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   params: PluginOptions<ModelCustomOptions, EmbedderCustomOptions>
 ): GenkitPlugin {
@@ -89,8 +89,8 @@ function fillScores(
  * Configures a Genkit evaluator
  */
 export function genkitEvaluators<
-  ModelCustomOptions extends z.ZodTypeAny,
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  ModelCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: PluginOptions<ModelCustomOptions, EmbedderCustomOptions>
@@ -263,7 +263,10 @@ export function genkitEvaluators<
   });
 }
 
-function resolveConfig<M extends z.ZodTypeAny, E extends z.ZodTypeAny>(
+function resolveConfig<
+  M extends z.ZodType<any, any>,
+  E extends z.ZodType<any, any>,
+>(
   metric: GenkitMetricConfig<M, E>,
   params: PluginOptions<M, E>
 ): ResolvedConfig<M, E> {

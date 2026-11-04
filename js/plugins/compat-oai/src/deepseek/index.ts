@@ -114,10 +114,13 @@ export type DeepSeekPlugin = {
     name: keyof typeof SUPPORTED_DEEPSEEK_MODELS,
     config?: z.infer<typeof DeepSeekChatCompletionConfigSchema>
   ): ModelReference<typeof DeepSeekChatCompletionConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
 };
 
-const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
+const model = ((
+  name: string,
+  config?: any
+): ModelReference<z.ZodType<any, any>> => {
   return deepSeekModelRef({
     name,
     config,

@@ -83,9 +83,9 @@ function registerPrompt(
 }
 
 function createExecutablePrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   client: Client,
   prompt: Prompt,

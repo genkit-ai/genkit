@@ -802,7 +802,7 @@ export function openAIModelRunner(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAIModel<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   client: OpenAI;
@@ -837,7 +837,7 @@ const GENERIC_MODEL_INFO: ModelInfo = {
 
 /** ModelRef helper, with reasonable defaults for OpenAI-compatible providers */
 export function compatOaiModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;
@@ -854,7 +854,11 @@ export function compatOaiModelRef<
   } = params;
   return modelRef({
     name,
-    configSchema: configSchema || (ChatCompletionCommonConfigSchema as any),
+    // When configSchema is omitted, CustomOptions is its default (untyped), so the
+    // common schema is a valid stand-in.
+    configSchema:
+      configSchema ??
+      (ChatCompletionCommonConfigSchema as unknown as CustomOptions),
     info: info,
     config,
     namespace,

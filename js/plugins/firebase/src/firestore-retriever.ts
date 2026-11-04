@@ -140,7 +140,7 @@ export function defineFirestoreRetriever(
         label: label || `Firestore - ${name}`,
       },
       configSchema: z.object({
-        where: z.record(z.any()).optional(),
+        where: z.record(z.string(), z.any()).optional(),
         /** Max number of results to return. Defaults to 10. */
         limit: z.number().optional(),
         /* Supply or override the distanceMeasure */

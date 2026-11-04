@@ -51,7 +51,7 @@ const fetchReport = ai.defineTool(
       id: z.string(),
       title: z.string(),
       details: z.string(),
-      metrics: z.record(z.any()),
+      metrics: z.record(z.string(), z.any()),
     }),
   },
   async ({ reportId }) => {
