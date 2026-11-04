@@ -181,11 +181,11 @@ async def test_skills_unknown_name_lists_available_skills(tmp_path, ctx) -> None
     skills = Skills(skill_paths=[str(tmp_path)])
     tool = skills.tools(ctx)[0]
 
-    unknown = await tool.action().run(input={'skill_name': 'missing'})
-    assert unknown.response.output == 'Unknown skill "missing". Available skills: poetry, zebra'
+    unknown = await tool(input={'skill_name': 'missing'})
+    assert unknown == 'Unknown skill "missing". Available skills: poetry, zebra'
 
-    known = await tool.action().run(input={'skill_name': 'poetry'})
-    assert known.response.output == 'Write a poem.'
+    known = await tool(input={'skill_name': 'poetry'})
+    assert known == 'Write a poem.'
 
 
 @pytest.mark.asyncio
