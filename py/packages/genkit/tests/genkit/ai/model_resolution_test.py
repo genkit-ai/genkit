@@ -31,7 +31,7 @@ from genkit._ai._model import (
     resolve_model_name,
     resolve_model_ref,
 )
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import EmbedRequest, Message, ModelRequest, ModelResponse, Part
 from genkit._core._operation import Operation
 from genkit._core._registry import Registry
@@ -94,8 +94,8 @@ def test_normalize_config_dumps_pydantic() -> None:
     assert normalize_config(config=None) == {}
 
 
-def test_resolve_model_ref_strips_explicit_none() -> None:
-    """Post-merge None-strip: cleared keys are absent from the resolved config."""
+def test_resolve_model_ref_keeps_explicit_none() -> None:
+    """An explicit None is a value: it replaces the ref's value and stays in the config."""
     ref = ModelRef(
         name='googleai/gemini-pro-latest',
         config_schema=CustomConfig,
@@ -104,7 +104,7 @@ def test_resolve_model_ref_strips_explicit_none() -> None:
 
     resolved = resolve_model_ref(model=ref, config={'temperature': None})
 
-    assert 'temperature' not in resolved.config
+    assert resolved.config['temperature'] is None
     assert resolved.config['top_k'] == 40
 
 
@@ -160,7 +160,7 @@ def test_normalize_config_rejects_unsupported_type() -> None:
     """A leftover int is INVALID_ARGUMENT, same class of reject as model=123."""
     with pytest.raises(GenkitError, match='config is int, expected Mapping or BaseModel') as exc_info:
         normalize_config(config=123)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.message
 
 
@@ -170,7 +170,7 @@ def test_resolve_model_name_raises_when_default_is_not_string() -> None:
     registry.register_value('defaultModel', 'defaultModel', 123)
     with pytest.raises(GenkitError, match='defaultModel is int, expected str or ModelRef') as exc_info:
         resolve_model_name(model=None, registry=registry)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.message
 
 
@@ -199,8 +199,8 @@ def test_resolve_model_name_empty_default_means_not_configured() -> None:
         resolve_model_name(model='', registry=registry)
     with pytest.raises(GenkitError, match='No model configured') as omitted:
         resolve_model_name(model=None, registry=registry)
-    assert empty.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
-    assert omitted.value.reason is RuntimeErrorReason.MODEL_NOT_FOUND
+    assert empty.value.reason is ErrorReason.MODEL_NOT_FOUND
+    assert omitted.value.reason is ErrorReason.MODEL_NOT_FOUND
     assert 'MODEL_NOT_FOUND' not in empty.value.message
     assert 'MODEL_NOT_FOUND' not in omitted.value.message
 
@@ -215,14 +215,14 @@ def test_normalize_config_keeps_python_field_names() -> None:
     assert normalize_config(config=ModelConfig(max_output_tokens=100)) == {'max_output_tokens': 100}
 
 
-def test_resolve_model_ref_model_config_none_clears_default() -> None:
-    """ModelConfig(temperature=None) clears a ref default, not just a dict None."""
+def test_resolve_model_ref_model_config_none_overrides_ref() -> None:
+    """ModelConfig(temperature=None) overrides a ref value, the same as a dict None."""
     ref = ModelRef(name='m', config_schema=ModelConfig, config=ModelConfig(temperature=0.7))
     resolved = resolve_model_ref(
         model=ref,
         config=normalize_config(config=ModelConfig(temperature=None)),
     )
-    assert 'temperature' not in resolved.config
+    assert resolved.config == {'temperature': None}
 
 
 def test_resolve_model_ref_same_key_override_on_aliased_field() -> None:
@@ -427,8 +427,8 @@ def test_resolve_model_arg_points_a_background_model_at_generate_operation() -> 
         resolve_model_arg(model=background, registry=ai._registry)
 
 
-def test_resolve_call_model_string_path_omits_none() -> None:
-    """None means omit on a name, same as after a ref merge."""
+def test_resolve_call_model_string_path_keeps_none() -> None:
+    """An explicit None is a value on a name, same as after a ref merge."""
     registry = Registry()
     registry.register_value('defaultModel', 'defaultModel', 'echo')
     resolved = resolve_call_model(
@@ -437,8 +437,7 @@ def test_resolve_call_model_string_path_omits_none() -> None:
         registry=registry,
     )
     assert resolved.name == 'echo'
-    assert 'temperature' not in resolved.config
-    assert resolved.config['top_k'] == 40
+    assert resolved.config == {'temperature': None, 'top_k': 40}
 
 
 def test_resolve_call_model_string_path_does_not_fold() -> None:
@@ -520,7 +519,7 @@ def test_assert_correct_config_class_uses_schema_only() -> None:
         GenkitError, match=r'config must be .+\.CustomConfig or a mapping, got .+\.OtherFamilyConfig'
     ) as exc_info:
         assert_correct_config_class(config=OtherFamilyConfig(frequency_penalty=0.2), schema=CustomConfig)
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
     assert 'INVALID_INPUT' not in exc_info.value.message
 
 
@@ -582,15 +581,12 @@ def test_overlay_config_folds_and_last_layer_wins() -> None:
     ) == {'max_output_tokens': 5}
 
 
-def test_overlay_config_none_clears() -> None:
-    """None after fold drops the field instead of leaving a sibling alias."""
-    assert (
-        overlay_config(
-            layers=[{'max_output_tokens': 100}, {'maxOutputTokens': None}],
-            schema=ModelConfig,
-        )
-        == {}
-    )
+def test_overlay_config_none_replaces_the_folded_field() -> None:
+    """None after fold replaces the field instead of leaving a sibling alias."""
+    assert overlay_config(
+        layers=[{'max_output_tokens': 100}, {'maxOutputTokens': None}],
+        schema=ModelConfig,
+    ) == {'max_output_tokens': None}
 
 
 def test_overlay_config_unknown_keys_pass_through() -> None:
@@ -608,12 +604,11 @@ def test_resolve_model_ref_alias_overlay_replaces_field() -> None:
     assert resolved.config == {'max_output_tokens': 5}
 
 
-def test_resolve_model_ref_alias_none_clears_field() -> None:
-    """Call-time maxOutputTokens=None clears the dumped ref default."""
+def test_resolve_model_ref_alias_none_replaces_field() -> None:
+    """Call-time maxOutputTokens=None replaces the dumped ref value under one key."""
     ref = ModelRef(name='m', config_schema=ModelConfig, config=ModelConfig(max_output_tokens=100))
     resolved = resolve_model_ref(model=ref, config={'maxOutputTokens': None})
-    assert 'max_output_tokens' not in resolved.config
-    assert 'maxOutputTokens' not in resolved.config
+    assert resolved.config == {'max_output_tokens': None}
 
 
 def test_resolve_model_ref_alias_replaces_nested_bag() -> None:
@@ -637,15 +632,15 @@ def test_resolve_model_ref_alias_replaces_nested_bag() -> None:
     assert resolved.config == {'thinking_config': {'thinkingBudget': 256}}
 
 
-def test_resolve_model_ref_alias_none_clears_nested_bag() -> None:
-    """thinkingConfig=None clears the whole thinking_config slot."""
+def test_resolve_model_ref_alias_none_replaces_nested_bag() -> None:
+    """thinkingConfig=None replaces the whole thinking_config slot."""
     ref = ModelRef(
         name='m',
         config_schema=AliasedNestedConfig,
         config=AliasedNestedConfig(thinking_config={'thinking_budget': 1024, 'thinking_level': 'low'}),
     )
     resolved = resolve_model_ref(model=ref, config={'thinkingConfig': None})
-    assert 'thinking_config' not in resolved.config
+    assert resolved.config['thinking_config'] is None
     assert 'thinkingConfig' not in resolved.config
 
 

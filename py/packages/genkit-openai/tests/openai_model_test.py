@@ -34,10 +34,13 @@ from openai.types.chat import ChatCompletion, ChatCompletionChunk
 from pydantic import BaseModel
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, ModelResponseChunk, Operation, Part, Role
-from genkit._ai._formats._json import JsonFormat
-from genkit._ai._generate import apply_format
-from genkit._core._model import GenerateActionOptions
-from genkit._core._typing import GenerateActionOutputConfig
+
+# Exercise core's private JSON formatter to verify the adapter's fallback
+# alongside the actual prompt instruction, rather than recreating it here.
+from genkit._ai._formats._json import JsonFormat  # noqa: TID251
+from genkit._ai._generate import apply_format  # noqa: TID251
+from genkit._core._model import GenerateActionOptions  # noqa: TID251
+from genkit._core._typing import GenerateActionOutputConfig  # noqa: TID251
 from genkit.model import (
     GenerationUsage,
     ModelConfig,
@@ -227,58 +230,32 @@ async def test_get_openai_config_uses_max_completion_tokens_for_reasoning_models
     model = OpenAIModel(model=model_name, client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, reasoning_effort=reasoning_effort),
+        config=OpenAIConfig(max_output_tokens=32, reasoning_effort=reasoning_effort),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_completion_tokens'] == 32
     assert 'max_tokens' not in body
+    assert 'max_output_tokens' not in body
 
 
 @pytest.mark.asyncio
 async def test_get_openai_config_keeps_max_tokens_for_legacy_models() -> None:
-    """Legacy OpenAI-compatible models continue to receive max_tokens."""
+    """Legacy OpenAI-compatible models receive max_output_tokens as max_tokens."""
     model = OpenAIModel(model='gpt-4o', client=MagicMock())
     request = ModelRequest(
         messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32),
+        config=OpenAIConfig(max_output_tokens=32, stop_sequences=['###']),
     )
 
     body = await model._get_openai_request_config(request)
 
     assert body['max_tokens'] == 32
+    assert body['stop'] == ['###']
     assert 'max_completion_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_prefers_explicit_max_completion_tokens() -> None:
-    """An explicit modern token limit wins when both fields are configured."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_completion_tokens=64),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_completion_tokens'] == 64
-    assert 'max_tokens' not in body
-
-
-@pytest.mark.asyncio
-async def test_get_openai_config_max_tokens_wins_over_max_output_tokens() -> None:
-    """`max_tokens=32` with `max_output_tokens=128` sends a cap of 32."""
-    model = OpenAIModel(model='gpt-4o', client=MagicMock())
-    request = ModelRequest(
-        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
-        config=OpenAIConfig(max_tokens=32, max_output_tokens=128),
-    )
-
-    body = await model._get_openai_request_config(request)
-
-    assert body['max_tokens'] == 32
     assert 'max_output_tokens' not in body
+    assert 'stop_sequences' not in body
 
 
 @pytest.mark.asyncio
@@ -1859,7 +1836,7 @@ async def test_generate_classifies_known_mid_stream_error(sample_request: ModelR
     assert isinstance(error, GenkitError)
     assert error.status == 'RESOURCE_EXHAUSTED'
     assert error.message == 'Rate limit reached for gpt-4o'
-    assert type(error.cause) is APIError
+    assert type(error.__cause__) is APIError
 
 
 @pytest.mark.asyncio
@@ -1874,7 +1851,7 @@ async def test_generate_unknown_mid_stream_error_is_unknown_genkit_error(sample_
     assert isinstance(error, GenkitError)
     assert error.status == 'UNKNOWN'
     assert error.message == 'Upstream reset'
-    assert type(error.cause) is APIError
+    assert type(error.__cause__) is APIError
 
 
 class _DroppingStream(httpx.AsyncByteStream):
@@ -1927,4 +1904,4 @@ async def test_generate_classifies_a_stream_cut_mid_read(
 
     assert chunks == ['Grilled']
     assert exc_info.value.status == status
-    assert exc_info.value.cause is drop
+    assert exc_info.value.__cause__ is drop

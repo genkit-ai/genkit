@@ -43,7 +43,8 @@ logger = get_logger(__name__)
 
 # Genkit common fields that are not chat.completions.create() kwargs.
 # version becomes the wire model id; stop_sequences becomes stop; extra
-# becomes extra_body; max_output_tokens becomes the max_tokens cap.
+# becomes extra_body; max_output_tokens becomes max_tokens or
+# max_completion_tokens, per model.
 _GENKIT_ONLY = frozenset({'top_k', 'version', 'max_output_tokens', 'stop_sequences', 'extra'})
 
 # Body fields Genkit builds from the request. `extra` can't set them: the
@@ -74,6 +75,11 @@ _JSON_OBJECT_ONLY_MODELS = frozenset({
 })
 _LEGACY_JSON_MODELS = _PROMPT_ONLY_JSON_MODELS | _JSON_OBJECT_ONLY_MODELS
 
+# How to set a managed field instead, appended to the extra rejection.
+_MANAGED_FIELD_HINTS = {
+    'model': 'pin a model with version',
+}
+
 
 def _uses_max_completion_tokens(model: str | None) -> bool:
     """Whether a model requires the reasoning-model token-limit parameter."""
@@ -93,37 +99,33 @@ def _uses_max_completion_tokens(model: str | None) -> bool:
 def _openai_create_kwargs(*, config: OpenAIConfig, model: str | None = None) -> dict[str, Any]:
     """Kwargs for chat.completions.create().
 
-    Peel Genkit-only keys. ``stop_sequences`` becomes ``stop`` when ``stop``
-    was not set. ``version`` is peeled here and applied as ``model`` by the
-    caller when ``OpenAIConfig.model`` is unset. Declared fields go out under
-    the Python field name. ``extra`` goes out as ``extra_body``, which the SDK
-    merges over the JSON body, so a colliding key wins. The reply cap is
-    ``max_completion_tokens``, else ``max_tokens``, else Genkit's
-    ``max_output_tokens``. For reasoning models, the cap is emitted as
-    ``max_completion_tokens`` because the OpenAI API rejects the deprecated
-    ``max_tokens`` field.
+    Peel Genkit-only keys. ``stop_sequences`` becomes ``stop``. ``version``
+    is peeled here and applied as ``model`` by the caller when
+    ``OpenAIConfig.model`` is unset. Declared fields go out under the Python
+    field name. ``extra`` goes out as ``extra_body``, which the SDK merges over
+    the JSON body, so a colliding key wins. ``max_output_tokens`` goes out as
+    ``max_completion_tokens`` for reasoning models (or when
+    ``reasoning_effort`` is set), since the OpenAI API rejects the deprecated
+    ``max_tokens`` there, and as ``max_tokens`` otherwise.
     """
     body: dict[str, Any] = {}
     for name in type(config).model_fields:
-        if name in _GENKIT_ONLY or name == 'max_tokens':
+        if name in _GENKIT_ONLY:
             continue
         value = getattr(config, name)
         if value is not None:
             body[name] = value
-    cap = config.max_tokens
-    if cap is None and config.max_output_tokens is not None:
-        cap = int(config.max_output_tokens)
-    # Keep an explicit max_completion_tokens when both are supplied so the
-    # request stays valid; reasoning models reject the deprecated max_tokens.
-    if cap is not None and config.max_completion_tokens is None:
+    if config.max_output_tokens is not None:
         if _uses_max_completion_tokens(model) or config.reasoning_effort is not None:
-            body['max_completion_tokens'] = cap
+            body['max_completion_tokens'] = config.max_output_tokens
         else:
-            body['max_tokens'] = cap
-    if 'stop' not in body and config.stop_sequences is not None:
+            body['max_tokens'] = config.max_output_tokens
+    if config.stop_sequences is not None:
         body['stop'] = config.stop_sequences
     if config.extra:
-        body['extra_body'] = check_extra_body(config.extra, managed=_MANAGED_BODY_FIELDS, label='openai')
+        body['extra_body'] = check_extra_body(
+            config.extra, managed=_MANAGED_BODY_FIELDS, label='openai', hints=_MANAGED_FIELD_HINTS
+        )
     return body
 
 
@@ -679,15 +681,8 @@ class OpenAIModel:
         if isinstance(config, OpenAIConfig):
             return config
 
-        if isinstance(config, (ModelConfig, ModelConfig)):
-            return OpenAIConfig(
-                version=config.version,
-                temperature=config.temperature,
-                max_tokens=int(config.max_output_tokens) if config.max_output_tokens is not None else None,
-                top_p=config.top_p,
-                stop=config.stop_sequences,
-                extra=config.extra,
-            )
+        if isinstance(config, ModelConfig):
+            return OpenAIConfig.model_validate(config.model_dump(exclude_unset=True))
 
         if isinstance(config, dict):
             config_dict = cast(dict[str, Any], config)

@@ -28,8 +28,8 @@ from genkit_google_genai._constants import is_multi_regional_location, multi_reg
 from genkit_google_genai._models._sdk_config import (
     VEO_MANAGED_BODY_FIELDS,
     attach_config_extra,
+    copy_http_options,
     dump_family_config,
-    keep_client_extra_body,
     sdk_config_error,
 )
 from genkit_google_genai._models._secrets import context_api_key, misplaced_key_error
@@ -39,8 +39,8 @@ from google.genai import types as genai_types
 from google.genai.errors import APIError
 from pydantic import Field, ValidationError, model_validator
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
-from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports, OperationError
+from genkit import Failure, FinishReason, GenkitError, Message, ModelResponse, Operation, Part, Role
+from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports
 from genkit.plugin_api import GenkitConfig
 
 # Quote autocomplete needs a Literal, so these aliases list the Veo ids each
@@ -216,7 +216,7 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     """
     op = Operation(id=api_op.name or '', done=bool(api_op.done))
     if api_op.error:
-        op.error = OperationError(message=_operation_error_message(error=api_op.error))
+        op.error = Failure(message=_operation_error_message(error=api_op.error))
         return op
 
     response = api_op.response
@@ -247,13 +247,11 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
     # dropped every sample. Name that, don't hand back an empty success.
     if api_op.done and response.rai_media_filtered_count:
         reasons = [str(reason) for reason in (response.rai_media_filtered_reasons or []) if reason]
-        op.error = OperationError(
-            message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.'
-        )
+        op.error = Failure(message='; '.join(reasons) or 'All generated videos were filtered out by safety filters.')
         return op
 
     if api_op.done and not content and not op.error:
-        op.error = OperationError(message='Operation completed but returned no playable media.')
+        op.error = Failure(message='Operation completed but returned no playable media.')
     return op
 
 
@@ -317,7 +315,7 @@ class VeoModel:
 
         kwargs = dict(self._client_kwargs or {})
         plugin_opts = kwargs.get('http_options')
-        opts = plugin_opts.model_copy(deep=True) if plugin_opts is not None else genai_types.HttpOptions()
+        opts = copy_http_options(plugin_opts) if plugin_opts is not None else genai_types.HttpOptions()
         if api_key is not None:
             kwargs['api_key'] = api_key
             # The SDK rejects api_key with credentials, project, or location.
@@ -435,8 +433,7 @@ class VeoModel:
         except ValidationError as e:
             raise sdk_config_error(action_name=self._name, error=e) from e
 
-        cfg = attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
-        return keep_client_extra_body(cfg, (self._client_kwargs or {}).get('http_options'))
+        return attach_config_extra(cfg, extra, action_name=self._name, managed_body_fields=VEO_MANAGED_BODY_FIELDS)
 
     @property
     def metadata(self) -> dict:

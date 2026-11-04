@@ -53,12 +53,12 @@ from genkit._ai._model import (
     ModelResponseChunk,
     assert_correct_config_class,
     check_call_config,
-    config_class_for_generate,
+    clear_on_hop,
     config_schema_at_define,
-    fold_config_aliases,
     normalize_config,
     resolve_call_model,
     resolve_for_generate,
+    resolve_model_name,
 )
 from genkit._core._action import (
     Action,
@@ -70,7 +70,7 @@ from genkit._core._action import (
 )
 from genkit._core._channel import start_stream
 from genkit._core._config_check import check_config_values, config_field_names
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._middleware import Middleware, _dump_middleware_ref_config, middleware_class_index
 from genkit._core._model import (
@@ -361,38 +361,35 @@ class Prompt(Generic[InputT, OutputT]):
         """
         override_config = opts.get('config')
         override_model = opts.get('model')
+        # A hop is a different model name: 'gem' and ModelRef(name='gem') are the same model.
+        hopping = (
+            override_model is not None
+            and self._defined_model_name is not None
+            and resolve_model_name(model=override_model, registry=self._ai._registry) != self._defined_model_name
+        )
         model = override_model if override_model is not None else self._def.model
-        merged_config: Mapping[str, Any] | BaseModel | None
-        if override_config is not None:
-            # exclude_unset semantics via normalize_config: untouched fields are
-            # absent (cannot clobber defaults); an explicitly-set None survives
-            # the merge and clears the lower-precedence value downstream.
-            base = normalize_config(config=self._def.config)
-            override = normalize_config(config=override_config)
-            # `maxOutputTokens` in the prompt and `max_output_tokens` in the
-            # call are one setting: fold both to field names so the call wins.
-            # A model typed only by its ModelRequest[...] annotation folds too.
-            schema = await config_class_for_generate(model=model, registry=self._ai._registry)
-            if schema is not None:
-                base = fold_config_aliases(config=base, schema=schema)
-                override = fold_config_aliases(config=override, schema=schema)
-            merged_config = {**base, **override} if base or override else None
-        else:
-            merged_config = self._def.config
-
         resolved = await resolve_for_generate(
             model=model,
-            config=merged_config,
+            config=override_config,
+            prompt_config=self._def.config,
+            hopping=hopping,
             registry=self._ai._registry,
         )
+        check_config = override_config
+        if hopping and isinstance(override_config, Mapping):
+            _, check_config = clear_on_hop(
+                prompt_config=self._def.config,
+                call_config=override_config,
+                schema=resolved.config_schema,
+            )
         check_call_config(
-            config=override_config,
+            config=check_config,
             schema=resolved.config_schema,
             model=resolved.name,
         )
         # Re-check the stored typed config unless this call hops models.
-        # A None override clears that default, so the prompt's copy of the
-        # key is not checked against the model this call hits.
+        # A key the call sets to None replaces the prompt's value, so the
+        # prompt's copy of that key is not checked against the model this call hits.
         if self._defined_model_name is None or self._defined_model_name == resolved.name:
             assert_correct_config_class(
                 config=self._def.config,
@@ -400,7 +397,7 @@ class Prompt(Generic[InputT, OutputT]):
                 model=resolved.name,
             )
         check_config_values(
-            config=prompt_config_after_clears(
+            config=unoverridden_prompt_config(
                 stored=self._def.config,
                 override=override_config,
                 schema=resolved.config_schema,
@@ -596,24 +593,24 @@ async def prepare_prompt(
     return PreparedPrompt(scope=scope, options=options, context=context)
 
 
-def prompt_config_after_clears(
+def unoverridden_prompt_config(
     *,
     stored: Mapping[str, Any] | BaseModel | None,
     override: object,
     schema: type[BaseModel] | None,
 ) -> dict[str, Any]:
-    """The prompt's config minus keys this call set to None.
+    """The prompt's config minus keys this call sets.
 
-    None means "clear the default". The prompt still names the key, but
-    this call does not send it, so it must not fail the model's check.
+    The call's value (None included) replaces the prompt's, so the prompt's
+    copy is not sent and must not fail the model's check. The call's own
+    values are checked with the call config. A stored None is a value.
     """
     stored_bag = normalize_config(config=stored)
     if override is None:
-        return {key: value for key, value in stored_bag.items() if value is not None}
-    override_bag = normalize_config(config=override)
+        return stored_bag
     names = config_field_names(schema) if schema is not None else {}
-    cleared = {names.get(key, key) for key, value in override_bag.items() if value is None}
-    return {key: value for key, value in stored_bag.items() if value is not None and names.get(key, key) not in cleared}
+    replaced = {names.get(key, key) for key in normalize_config(config=override)}
+    return {key: value for key, value in stored_bag.items() if names.get(key, key) not in replaced}
 
 
 def _register_prompt_action_pair(
@@ -912,7 +909,7 @@ def check_prompt_input(
                 message=f"Invalid input for action '{name}': {error}",
                 status='INVALID_ARGUMENT',
                 cause=error,
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             ) from error
         return {**data, **validated.model_dump()}
     if isinstance(schema, dict):
@@ -920,10 +917,10 @@ def check_prompt_input(
             check_output_schema(schema)
         except InvalidOutputSchemaError as error:
             raise GenkitError(
-                message=f"Invalid input_schema for prompt '{name}': {error.cause}",
+                message=f"Invalid input_schema for prompt '{name}': {error.__cause__}",
                 status='INVALID_ARGUMENT',
-                cause=error.cause,
-                reason=RuntimeErrorReason.INVALID_SCHEMA,
+                cause=error.__cause__,
+                reason=ErrorReason.INVALID_SCHEMA,
             ) from error
         # Keys only a class default filled in don't count against a file that
         # doesn't declare them; the caller never passed them.
@@ -938,7 +935,7 @@ def check_prompt_input(
                 message=f"Invalid input for action '{name}': {error.message}",
                 status='INVALID_ARGUMENT',
                 cause=error,
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             ) from error
     return data
 
@@ -1367,7 +1364,7 @@ def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN40
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'dotprompt `use` must be a list, got {type(raw).__name__}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     refs: list[MiddlewareRef] = []
     for i, entry in enumerate(raw):
@@ -1376,7 +1373,7 @@ def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN40
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'dotprompt `use[{i}]` is an empty string',
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             refs.append(MiddlewareRef(name=entry))
         elif isinstance(entry, dict):
@@ -1385,14 +1382,14 @@ def _parse_dotprompt_use(raw: Any) -> list[MiddlewareRef] | None:  # noqa: ANN40
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=f'dotprompt `use[{i}]` is missing required `name` field',
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             refs.append(MiddlewareRef(name=name, config=entry.get('config')))
         else:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f'dotprompt `use[{i}]` must be a string or map, got {type(entry).__name__}',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
     return refs
 
@@ -1750,7 +1747,7 @@ async def lookup_prompt(registry: Registry, name: str, variant: str | None = Non
     raise GenkitError(
         status='NOT_FOUND',
         message=f'Prompt {name}{variant_str} not found',
-        reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+        reason=ErrorReason.ACTION_NOT_FOUND,
     )
 
 

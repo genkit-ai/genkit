@@ -18,6 +18,7 @@
 """Tests for the Django plugin."""
 
 import json
+import logging
 import sys
 import types
 from collections.abc import Iterator
@@ -308,7 +309,7 @@ async def test_405_non_post_returns_valid_json(urlconf: None) -> None:  # noqa: 
 
 @pytest.mark.asyncio
 async def test_500_flow_exception_returns_valid_json(urlconf: None) -> None:  # noqa: ARG001
-    """500 (flow exception) must return valid JSON in HttpErrorWireFormat shape."""
+    """500 (flow exception) must return valid JSON in the `{status, message, details}` shape."""
     client = AsyncClient()
     code_snippet = 'query = f"SELECT * FROM users WHERE id={user_input}"'
     response = await client.post(
@@ -503,3 +504,23 @@ async def test_context_provider_reads_raw_django_request(urlconf: None) -> None:
 
     assert response.status_code == 200
     assert json.loads(response.content) == {'result': 'table T7'}
+
+
+@pytest.mark.asyncio
+async def test_django_failure_logs_name_the_flow(
+    urlconf: None,  # noqa: ARG001
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Failure lines say which flow failed: 5xx with traceback, 4xx without."""
+    client = AsyncClient()
+    with caplog.at_level(logging.DEBUG, logger='genkit_django._handler'):
+        await client.post('/error_flow', data=json.dumps({'data': 'x'}), content_type='application/json')
+        await client.post('/public_flow', data=json.dumps({'data': '99'}), content_type='application/json')
+
+    records = [r for r in caplog.records if r.name == 'genkit_django._handler']
+    assert [r.getMessage() for r in records] == [
+        "served action 'raise_error' run failed",
+        "served action 'raise_public' run failed: NOT_FOUND: no order 99",
+    ]
+    assert records[0].exc_info is not None
+    assert records[1].exc_info is None

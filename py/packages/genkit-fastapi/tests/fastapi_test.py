@@ -17,20 +17,37 @@
 
 """Tests for the FastAPI plugin."""
 
+import asyncio
+import datetime
+import functools
 import json
 import logging
 from typing import Any, cast
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
-from genkit_fastapi import genkit_fastapi_handler, serve_flow
+from genkit_fastapi import genkit_fastapi_handler, handle_genkit_request, serve_flow
 from pydantic import BaseModel, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from genkit import FlowContext, Genkit, GenkitError, Interrupt, PublicError
+from genkit import (
+    FinishReason,
+    FlowContext,
+    Genkit,
+    GenkitError,
+    Interrupt,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    PublicError,
+    Role,
+)
 from genkit.plugin_api import provider_error
-from genkit.web import RequestData
+from genkit.testing import define_scripted_model
+from genkit.web import RequestData, to_sse
 
 
 def assert_is_error_response(parsed: dict) -> None:
@@ -627,6 +644,7 @@ def test_served_flow_provider_failure_logs_traceback(caplog: pytest.LogCaptureFi
 
     assert response.status_code == 500
     assert any(record.exc_info for record in caplog.records)
+    assert [r.getMessage() for r in caplog.records if r.exc_info] == ["served action 'ask' run failed"]
 
 
 def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pytest.LogCaptureFixture) -> None:
@@ -646,10 +664,11 @@ def test_served_flow_client_error_logs_one_warning_without_traceback(caplog: pyt
     assert response.status_code == 404
     assert [record.levelno for record in records] == [logging.WARNING]
     assert records[0].exc_info is None
+    assert records[0].getMessage() == "served action 'lookup_order' run failed: NOT_FOUND: order not found"
 
 
-def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
-    """A streamed flow whose model call fails with a provider 401 ends with Internal Error."""
+def test_fastapi_stream_provider_401_sends_sse_internal_error(caplog: pytest.LogCaptureFixture) -> None:
+    """A streamed flow whose model call fails with a provider 401 ends with Internal Error and logs the failure."""
     ai = Genkit()
 
     @ai.flow()
@@ -658,14 +677,16 @@ def test_fastapi_stream_provider_401_sends_sse_internal_error() -> None:
 
     app = FastAPI()
     app.include_router(serve_flow(ask, base_path='/ask'))
-    response = TestClient(app).post(
-        '/ask',
-        json={'data': 'hi'},
-        headers={'Accept': 'text/event-stream'},
-    )
+    with caplog.at_level(logging.ERROR):
+        response = TestClient(app).post(
+            '/ask',
+            json={'data': 'hi'},
+            headers={'Accept': 'text/event-stream'},
+        )
 
     assert sse_error_event(response.text) == {'message': 'Internal Error', 'status': 'INTERNAL'}
     assert 'API key not valid' not in response.text
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [('ERROR', "served action 'ask' stream failed")]
 
 
 def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event() -> None:
@@ -695,20 +716,32 @@ def test_fastapi_stream_public_error_with_nested_model_details_sends_error_event
     }
 
 
-def test_fastapi_malformed_json_body_returns_400_valid_json_message() -> None:
-    """A FastAPI POST that is not JSON is 400 request body must be valid JSON."""
+def test_fastapi_malformed_json_body_returns_400_valid_json_message(caplog: pytest.LogCaptureFixture) -> None:
+    """A FastAPI POST that is not JSON is 400 request body must be valid JSON and logs the flow name."""
     client = TestClient(create_app())
-    response = client.post(
-        '/chat',
-        content=b'{bad',
-        headers={'content-type': 'application/json'},
-    )
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi._handler'):
+        response = client.post(
+            '/chat',
+            content=b'{bad',
+            headers={'content-type': 'application/json'},
+        )
 
     assert response.status_code == 400
     assert response.json() == {
         'message': 'request body must be valid JSON',
         'status': 'INVALID_ARGUMENT',
     }
+    records = [r for r in caplog.records if r.name == 'genkit_fastapi._handler']
+    assert [
+        (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
+    ] == [
+        (
+            logging.WARNING,
+            "served action 'say_hi' run failed: INVALID_ARGUMENT: request body must be valid JSON",
+            False,
+            'say_hi',
+        )
+    ]
 
 
 def test_fastapi_context_provider_route_malformed_json_returns_400() -> None:
@@ -781,6 +814,40 @@ def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_erro
 
     assert response.status_code == 500
     assert response.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+
+def test_fastapi_handler_wrapper_failure_logs_wrapper_name_or_unknown(caplog: pytest.LogCaptureFixture) -> None:
+    """A failing route wrapper logs its __name__, or '<unknown>' when the callable has none."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @app.post('/named', response_model=None)
+    @genkit_fastapi_handler(ai)
+    async def wrapped_route() -> Any:
+        raise RuntimeError('db pool closed')
+
+    async def load_route(_name: str) -> Any:
+        raise RuntimeError('db pool closed')
+
+    app.post('/partial', response_model=None)(genkit_fastapi_handler(ai)(functools.partial(load_route, 'orders')))
+
+    client = TestClient(app)
+    with caplog.at_level(logging.DEBUG, logger='genkit_fastapi._handler'):
+        named_resp = client.post('/named', json={'data': 'x'})
+        partial_resp = client.post('/partial', json={'data': 'x'})
+
+    assert named_resp.status_code == 500
+    assert partial_resp.status_code == 500
+    assert named_resp.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert partial_resp.json() == {'message': 'Internal Error', 'status': 'INTERNAL'}
+
+    records = [r for r in caplog.records if r.name == 'genkit_fastapi._handler']
+    assert [
+        (r.levelno, r.getMessage(), r.exc_info is not None, getattr(r, 'genkit_action', None)) for r in records
+    ] == [
+        (logging.ERROR, "served action 'wrapped_route' handler failed", True, 'wrapped_route'),
+        (logging.ERROR, "served action '<unknown>' handler failed", True, '<unknown>'),
+    ]
 
 
 def test_fastapi_context_provider_http_exception_keeps_its_status() -> None:
@@ -864,3 +931,238 @@ def test_fastapi_wrapper_http_exception_keeps_503() -> None:
 
     assert response.status_code == 503
     assert response.json() == {'detail': 'not ready'}
+
+
+class _Turn:
+    """A generate_stream-shaped handle for to_sse tests."""
+
+    def __init__(
+        self,
+        chunks: list[object],
+        result: object = None,
+        error: Exception | None = None,
+        *,
+        fail_after_chunks: bool = False,
+    ) -> None:
+        self._chunks = chunks
+        self._result = result
+        self._error = error
+        self._fail_after_chunks = fail_after_chunks
+
+    @property
+    def stream(self):
+        return self._iter()
+
+    async def _iter(self):
+        if self._error is not None and not self._chunks and not self._fail_after_chunks:
+            raise self._error
+        for chunk in self._chunks:
+            yield chunk
+        if self._error is not None and self._fail_after_chunks:
+            raise self._error
+
+    @property
+    def response(self):
+        return self._done()
+
+    async def _done(self):
+        if self._error is not None and not self._fail_after_chunks:
+            raise self._error
+        return self._result
+
+
+def _sse_lines(turn: _Turn) -> list[str]:
+    async def collect() -> list[str]:
+        return [line async for line in to_sse(turn)]
+
+    return asyncio.run(collect())
+
+
+def test_to_sse_text_chunk_then_result_are_data_frames() -> None:
+    """A chunk then a result become data: {message} and data: {result}."""
+    lines = _sse_lines(_Turn(chunks=[{'text': 'Hi'}], result={'ok': True}))
+
+    assert lines == [
+        'data: {"message":{"text":"Hi"}}\n\n',
+        'data: {"result":{"ok":true}}\n\n',
+    ]
+
+
+def test_to_sse_no_chunks_is_only_the_result_frame() -> None:
+    """A settled turn with no chunks is a single result frame."""
+    lines = _sse_lines(_Turn(chunks=[], result={'ok': True}))
+
+    assert lines == ['data: {"result":{"ok":true}}\n\n']
+
+
+def test_to_sse_error_after_a_chunk_is_chunk_then_error_no_result() -> None:
+    """A failure after a chunk keeps the chunk and sends error, not result."""
+    lines = _sse_lines(
+        _Turn(
+            chunks=[{'text': 'Hi'}],
+            error=GenkitError(status='INTERNAL', message='boom'),
+            fail_after_chunks=True,
+        )
+    )
+
+    assert len(lines) == 2
+    assert lines[0] == 'data: {"message":{"text":"Hi"}}\n\n'
+    assert lines[1].startswith('data: {')
+    payload = json.loads(lines[1].removeprefix('data: ').strip())
+    assert 'error' in payload
+    assert 'result' not in payload
+
+
+def test_to_sse_error_before_chunks_is_only_the_error_frame() -> None:
+    """A failure before any chunk is a single error frame."""
+    lines = _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
+
+    assert len(lines) == 1
+    payload = json.loads(lines[0].removeprefix('data: ').strip())
+    assert 'error' in payload
+    assert 'result' not in payload
+    assert 'message' not in payload
+
+
+def test_to_sse_lives_on_genkit_web_only() -> None:
+    """to_sse is genkit.web's; genkit_fastapi and genkit_fastapi.exp don't re-export it."""
+    import genkit_fastapi
+    import genkit_fastapi.exp
+
+    import genkit.web
+
+    assert 'to_sse' in genkit.web.__all__
+    assert 'to_sse' not in genkit_fastapi.__all__
+    assert 'to_sse' not in genkit_fastapi.exp.__all__
+
+
+class SourceMeta(BaseModel):
+    """Where a CRM record came from."""
+
+    source: str
+
+
+class CrmDoc(BaseModel):
+    """A user model that happens to have a `raw` field."""
+
+    title: str
+    raw: SourceMeta
+
+
+def test_serve_flow_keeps_user_model_raw_field_over_json_and_sse() -> None:
+    """A flow returning a model with a `raw` field serves it whole; only agent wrappers unwrap `raw`."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def fetch_doc(title: str, ctx: FlowContext[CrmDoc]) -> CrmDoc:
+        ctx.send_chunk(CrmDoc(title='draft', raw=SourceMeta(source='crm')))
+        return CrmDoc(title=title, raw=SourceMeta(source='crm'))
+
+    app = FastAPI()
+    app.include_router(serve_flow(fetch_doc, base_path='/doc'))
+    client = TestClient(app)
+
+    as_json = client.post('/doc', json={'data': 'T'})
+    as_sse = client.post('/doc?stream=true', json={'data': 'T'})
+
+    assert as_json.json() == {'result': {'title': 'T', 'raw': {'source': 'crm'}}}
+    assert as_sse.text == (
+        'data: {"message":{"title":"draft","raw":{"source":"crm"}}}\n\n'
+        'data: {"result":{"title":"T","raw":{"source":"crm"}}}\n\n'
+    )
+
+
+def test_to_sse_keeps_user_model_raw_field() -> None:
+    """to_sse on a handle of user models doesn't flatten a `raw` field."""
+    doc = CrmDoc(title='T', raw=SourceMeta(source='crm'))
+
+    assert _sse_lines(_Turn(chunks=[doc], result=doc)) == [
+        'data: {"message":{"title":"T","raw":{"source":"crm"}}}\n\n',
+        'data: {"result":{"title":"T","raw":{"source":"crm"}}}\n\n',
+    ]
+
+
+class Visit(BaseModel):
+    """A booking with a datetime field that bare json.dumps rejects."""
+
+    guest: str
+    at: datetime.datetime
+
+
+def test_served_flow_streams_models_with_datetimes_and_lists_over_sse() -> None:
+    """serve_flow and handle_genkit_request encode datetimes and list[BaseModel] over SSE via to_sse."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def bookings(guest: str, ctx: FlowContext[Visit]) -> list[Visit]:
+        visit = Visit(guest=guest, at=datetime.datetime(2026, 3, 1, 19, 30))
+        ctx.send_chunk(visit)
+        return [visit]
+
+    app = FastAPI()
+    app.include_router(serve_flow(bookings, base_path='/bookings'))
+
+    @app.post('/custom_bookings', response_model=None)
+    async def custom_bookings(request: Request) -> object:
+        return await handle_genkit_request(request, action=bookings)
+
+    client = TestClient(app)
+    expected = (
+        'data: {"message":{"guest":"Ada","at":"2026-03-01T19:30:00"}}\n\n'
+        'data: {"result":[{"guest":"Ada","at":"2026-03-01T19:30:00"}]}\n\n'
+    )
+
+    assert client.post('/bookings?stream=true', json={'data': 'Ada'}).text == expected
+    assert client.post('/custom_bookings?stream=true', json={'data': 'Ada'}).text == expected
+
+
+def test_to_sse_logs_the_served_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """The error frame's failure is logged, 5xx with the traceback."""
+    with caplog.at_level(logging.ERROR):
+        _sse_lines(_Turn(chunks=[], error=GenkitError(status='INTERNAL', message='boom')))
+
+    assert [(r.levelname, r.getMessage()) for r in caplog.records] == [
+        ('ERROR', 'served stream failed'),
+    ]
+    assert caplog.records[0].exc_info is not None
+
+
+def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
+    """The README's chat route: chunks and result are plain text, and no request rides along."""
+    ai = Genkit()
+    reply = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_text('Pad thai, no peanuts.')]),
+    )
+    define_scripted_model(
+        ai,
+        responses=[reply],
+        chunks=[
+            [
+                ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Pad thai')]),
+                ModelResponseChunk(role=Role.MODEL, content=[Part.from_text(', no peanuts.')]),
+            ]
+        ],
+    )
+
+    @ai.flow()
+    async def ask_chef(prompt: str, ctx: FlowContext[str]) -> str:
+        stream = ai.generate_stream(model='scriptedModel', system='Comp VIPs up to $50.', prompt=prompt)
+        async for chunk in stream:
+            ctx.send_chunk(chunk.text)
+        return (await stream.response).text
+
+    app = FastAPI()
+
+    @app.post('/chat/stream')
+    async def chat_stream(prompt: str) -> StreamingResponse:
+        stream = ask_chef.stream(prompt, context={'user_id': 'u_42'})
+        return StreamingResponse(to_sse(stream), media_type='text/event-stream')
+
+    response = TestClient(app).post('/chat/stream', params={'prompt': 'Dinner?'})
+
+    assert response.text == (
+        'data: {"message":"Pad thai"}\n\n'
+        'data: {"message":", no peanuts."}\n\n'
+        'data: {"result":"Pad thai, no peanuts."}\n\n'
+    )

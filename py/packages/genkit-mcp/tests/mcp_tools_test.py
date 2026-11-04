@@ -44,7 +44,6 @@ from pydantic import AnyUrl
 from structlog.testing import capture_logs
 
 from genkit import Part
-from genkit._core._typing import Resource
 from genkit.plugin_api import Action
 
 
@@ -172,7 +171,7 @@ def test_call_result_to_multipart_maps_multipart_content_and_meta() -> None:
         Part.from_media(url='data:image/png;base64,image-data', content_type='image/png'),
         Part.from_media(url='data:audio/mpeg;base64,audio-data', content_type='audio/mpeg'),
         Part.from_media(url='data:application/pdf;base64,blob-data', content_type='application/pdf'),
-        Part(resource=Resource(uri='https://example.test/docs')),
+        Part.model_validate({'resource': {'uri': 'https://example.test/docs'}}),
     ]
 
 
@@ -383,9 +382,27 @@ async def test_mcp_tools_to_handles_wraps_each_action_with_the_server_output_sch
     handles = mcp_tools_to_handles(tools, 'catalog', call)
 
     assert [handle.name for handle in handles] == ['catalog_lookup', 'catalog_look_up']
-    assert [handle.output_schema for handle in handles] == [output_schema, None]
-    assert [server_tool_of(handle.action()) for handle in handles] == ['lookup', 'look.up']
+    assert [handle.definition().output_schema for handle in handles] == [output_schema, None]
+    assert [server_tool_of(handle) for handle in handles] == ['lookup', 'look.up']
     assert (await handles[1]({})).output == 'look.up'
+
+
+def test_mcp_tool_handle_exposes_output_schema_on_definition() -> None:
+    """An MCP tool declaring ``outputSchema`` exposes it on ``handle.definition().output_schema``."""
+    output_schema: dict[str, Any] = {
+        'type': 'object',
+        'properties': {'temperature_c': {'type': 'number'}},
+        'required': ['temperature_c'],
+    }
+    tools = [
+        Tool(name='sensor_reading', inputSchema={'type': 'object'}, outputSchema=output_schema),
+        Tool(name='ping', inputSchema={'type': 'object'}),
+    ]
+
+    handles = mcp_tools_to_handles(tools, 'lab', no_content)
+
+    assert handles[0].definition().output_schema == output_schema
+    assert handles[1].definition().output_schema is None
 
 
 @pytest.mark.parametrize(

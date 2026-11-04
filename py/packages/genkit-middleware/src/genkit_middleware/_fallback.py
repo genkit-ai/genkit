@@ -27,7 +27,6 @@ from genkit import GenkitError, ModelResponse, ModelResponseChunk
 from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelRef, ModelRequest
 from genkit.plugin_api import Action, GenkitConfig
-from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 # Everything Retry would retry, plus failures another model may not have:
@@ -70,12 +69,18 @@ class FallbackConfig(GenkitConfig):
 
 
 def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
-    """The config this backup runs with: the ref's version and config only."""
+    """The config this backup runs with: the ref's version and config only.
+
+    Stored as wire keys (``by_alias=True``) because ``FallbackConfig`` is a
+    JSON middleware config, with ``ref.version < ref.config`` and an explicit
+    ``None`` kept. The backup model's own defaults and validation apply when
+    it runs.
+    """
     bag: dict[str, Any] = {}
     if model.version is not None:
         bag['version'] = model.version
     if model.config is not None:
-        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=True))
+        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=False))
     return bag or None
 
 
@@ -151,9 +156,6 @@ class Fallback(Middleware[FallbackConfig]):
         raise last_error
 
     def _should_fall_back(self, exc: Exception) -> bool:
-        # The caller's own on_chunk failure never switches models. A raw
-        # exception has no status, so it also stays on this model. Only a
+        # A raw exception has no status, so it stays on this model. Only a
         # listed GenkitError status sends the request on.
-        if caused_by_caller_callback(exc):
-            return False
         return isinstance(exc, GenkitError) and exc.status in self.config.statuses
