@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js' with { 'resolution-mode': 'import' };
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js' with { 'resolution-mode': 'import' };
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
   CallToolRequest,
   CallToolResult,
@@ -29,7 +28,7 @@ import type {
   Prompt,
   PromptMessage,
   Tool,
-} from '@modelcontextprotocol/sdk/types.js' with { 'resolution-mode': 'import' };
+} from '@modelcontextprotocol/sdk/types.js';
 import {
   ListResourceTemplatesRequest,
   ListResourcesRequest,
@@ -52,6 +51,9 @@ import { logger } from 'genkit/logging';
 import { toJsonSchema } from 'genkit/schema';
 import { toToolDefinition, type ToolAction } from 'genkit/tool';
 import type { McpServerOptions } from './index.js';
+
+const loadServer = () => import('@modelcontextprotocol/sdk/server/index.js');
+type Server = InstanceType<Awaited<ReturnType<typeof loadServer>>['Server']>;
 
 /**
  * Represents an MCP (Model Context Protocol) server that exposes Genkit tools
@@ -89,9 +91,7 @@ export class GenkitMcpServer {
    */
   async setup(): Promise<void> {
     if (this.actionsResolved) return;
-    const { Server } = await import(
-      '@modelcontextprotocol/sdk/server/index.js'
-    );
+    const { Server } = await loadServer();
 
     this.server = new Server(
       { name: this.options.name, version: this.options.version || '1.0.0' },
