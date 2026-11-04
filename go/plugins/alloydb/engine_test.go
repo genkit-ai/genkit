@@ -16,9 +16,12 @@ package alloydb
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"cloud.google.com/go/alloydbconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/oauth2"
 )
 
 func TestApplyEngineOptionsConfig(t *testing.T) {
@@ -160,5 +163,21 @@ func TestGetUser(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCloseClosesDialer(t *testing.T) {
+	ctx := context.Background()
+	// A static token source keeps the dialer from looking up credentials.
+	d, err := alloydbconn.NewDialer(ctx, alloydbconn.WithTokenSource(oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "test"})))
+	if err != nil {
+		t.Fatalf("alloydbconn.NewDialer: %v", err)
+	}
+	engine := &PostgresEngine{dialer: d}
+	engine.Close()
+
+	const instance = "projects/p/locations/r/clusters/c/instances/i"
+	if _, err := d.Dial(ctx, instance); !errors.Is(err, alloydbconn.ErrDialerClosed) {
+		t.Errorf("Dial after Close: got error %v, want %v", err, alloydbconn.ErrDialerClosed)
 	}
 }
