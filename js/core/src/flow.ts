@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import type { z } from 'zod';
 import {
   ActionFnArg,
   ActionRunOptions,
@@ -23,26 +22,33 @@ import {
   type Action,
 } from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
+import type { GenkitSchema, InferOutput } from './schema.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
 
 /**
  * Flow is an observable, streamable, (optionally) strongly typed function.
  */
 export interface Flow<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
-> extends Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<Init>>, Init> {}
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
+> extends Action<
+    I,
+    O,
+    S,
+    ActionRunOptions<InferOutput<S>, InferOutput<Init>>,
+    Init
+  > {}
 
 /**
  * Configuration for a streaming flow.
  */
 export interface FlowConfig<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 > {
   /** Name of the flow. */
   name: string;
@@ -73,24 +79,24 @@ export interface FlowSideChannel<S> extends ActionFnArg<S> {
  * Function to be executed in the flow.
  */
 export type FlowFn<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > = (
   /** Input to the flow. */
-  input: z.infer<I>,
+  input: InferOutput<I>,
   /** Callback for streaming functions only. */
-  streamingCallback: FlowSideChannel<z.infer<S>>
-) => Promise<z.infer<O>> | z.infer<O>;
+  streamingCallback: FlowSideChannel<InferOutput<S>>
+) => Promise<InferOutput<O>> | InferOutput<O>;
 
 /**
  * Defines a  flow. This operates on the currently active registry.
  */
 export function flow<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   config: FlowConfig<I, O, S, Init> | string,
   fn: FlowFn<I, O, S>
@@ -105,10 +111,10 @@ export function flow<
  * Defines a non-streaming flow. This operates on the currently active registry.
  */
 export function defineFlow<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   config: FlowConfig<I, O, S, Init> | string,
@@ -125,10 +131,10 @@ export function defineFlow<
  * Registers a flow as an action in the registry.
  */
 function flowAction<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(config: FlowConfig<I, O, S, Init>, fn: FlowFn<I, O, S>): Flow<I, O, S, Init> {
   return action(
     {
@@ -154,17 +160,17 @@ function flowAction<
       }
     ) => {
       const ctx = sendChunk;
-      (ctx as FlowSideChannel<z.infer<S>>).sendChunk = sendChunk;
-      (ctx as FlowSideChannel<z.infer<S>>).context = context;
-      (ctx as FlowSideChannel<z.infer<S>>).trace = trace;
-      (ctx as FlowSideChannel<z.infer<S>>).abortSignal = abortSignal;
-      (ctx as FlowSideChannel<z.infer<S>>).streamingRequested =
+      (ctx as FlowSideChannel<InferOutput<S>>).sendChunk = sendChunk;
+      (ctx as FlowSideChannel<InferOutput<S>>).context = context;
+      (ctx as FlowSideChannel<InferOutput<S>>).trace = trace;
+      (ctx as FlowSideChannel<InferOutput<S>>).abortSignal = abortSignal;
+      (ctx as FlowSideChannel<InferOutput<S>>).streamingRequested =
         streamingRequested;
       // Forward inputStream/init so the side-channel object actually has the
       // members ActionFnArg declares (avoids a type-vs-runtime mismatch).
-      (ctx as FlowSideChannel<z.infer<S>>).inputStream = inputStream;
-      (ctx as FlowSideChannel<z.infer<S>>).init = init;
-      return fn(input, ctx as FlowSideChannel<z.infer<S>>);
+      (ctx as FlowSideChannel<InferOutput<S>>).inputStream = inputStream;
+      (ctx as FlowSideChannel<InferOutput<S>>).init = init;
+      return fn(input, ctx as FlowSideChannel<InferOutput<S>>);
     }
   );
 }

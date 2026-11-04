@@ -23,6 +23,7 @@ import {
   modelRef,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import { isKnownKey } from '../common/utils.js';
 import { imagenPredict } from './client.js';
 import { fromImagenResponse, toImagenPredictRequest } from './converters.js';
@@ -169,7 +170,7 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type ImagenConfigSchemaType = typeof ImagenConfigSchema;
-export type ImagenConfig = z.infer<ImagenConfigSchemaType>;
+export type ImagenConfig = InferOutput<ImagenConfigSchemaType>;
 
 export const ImagenTryOnConfigSchema = z
   .object({
@@ -210,7 +211,7 @@ export const ImagenTryOnConfigSchema = z
   })
   .passthrough();
 export type ImagenTryOnConfigSchemaType = typeof ImagenTryOnConfigSchema;
-export type ImagenTryOnConfig = z.infer<ImagenTryOnConfigSchemaType>;
+export type ImagenTryOnConfig = InferOutput<ImagenTryOnConfigSchemaType>;
 
 export type ConfigSchemaType =
   | ImagenConfigSchemaType

@@ -24,8 +24,10 @@ import {
   annotateSchema,
   parseSchema,
   toJsonSchema,
+  toZodSchema,
   validateSchema,
   z,
+  type GenkitSchema,
 } from '../src/schema.js';
 
 describe('validate()', () => {
@@ -477,5 +479,95 @@ describe('disableSchemaCodeGeneration()', () => {
       }
     );
     assert.strictEqual(result.valid, true);
+  });
+});
+
+/**
+ * Minimal hand-rolled Standard Schema + Standard JSON Schema implementation
+ * (what ArkType / Valibot provide), for an object with a required numeric `k`.
+ */
+function fakeStandardSchema(
+  opts: { async?: boolean } = {}
+): GenkitSchema<{ k: number }, { k: number }> {
+  const validate = (value: unknown) => {
+    const ok =
+      typeof value === 'object' &&
+      value !== null &&
+      typeof (value as { k?: unknown }).k === 'number';
+    const result = ok
+      ? { value: value as { k: number } }
+      : { issues: [{ message: 'k must be a number', path: [{ key: 'k' }] }] };
+    return opts.async ? Promise.resolve(result) : result;
+  };
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'fake',
+      validate,
+      jsonSchema: {
+        input: () => ({
+          $schema: 'http://json-schema.org/draft-07/schema#',
+          type: 'object',
+          properties: { k: { type: 'number' } },
+          required: ['k'],
+        }),
+        output: () => ({}),
+      },
+    },
+  };
+}
+
+describe('Standard Schema (GenkitSchema)', () => {
+  it('converts a non-zod schema to JSON schema via ~standard.jsonSchema', () => {
+    assert.deepStrictEqual(toJsonSchema({ schema: fakeStandardSchema() }), {
+      $schema: 'http://json-schema.org/draft-07/schema#',
+      type: 'object',
+      properties: { k: { type: 'number' } },
+      required: ['k'],
+    });
+  });
+
+  it('validates a non-zod schema', () => {
+    const schema = fakeStandardSchema();
+    assert.strictEqual(validateSchema({ k: 1 }, { schema }).valid, true);
+    assert.deepStrictEqual(validateSchema({ k: 'x' }, { schema }).errors, [
+      { path: 'k', message: 'must be number' },
+    ]);
+  });
+
+  it('composes into zod schemas and keeps sync .parse() working', () => {
+    const composed = z.object({
+      q: z.string(),
+      options: toZodSchema(fakeStandardSchema()).optional(),
+    });
+    assert.deepStrictEqual(composed.parse({ q: 'x', options: { k: 1 } }), {
+      q: 'x',
+      options: { k: 1 },
+    });
+    const bad = composed.safeParse({ q: 'x', options: { k: 'no' } });
+    assert.strictEqual(bad.success, false);
+    assert.deepStrictEqual(
+      bad.error?.issues.map((i) => [i.path.join('.'), i.message]),
+      [['options.k', 'k must be a number']]
+    );
+    assert.deepStrictEqual(
+      toJsonSchema({ schema: composed }).properties.options,
+      {
+        type: 'object',
+        properties: { k: { type: 'number' } },
+        required: ['k'],
+      }
+    );
+  });
+
+  it('supports async validation via parseAsync', async () => {
+    const adapter = toZodSchema(fakeStandardSchema({ async: true }));
+    assert.deepStrictEqual(await adapter.parseAsync({ k: 2 }), { k: 2 });
+    assert.strictEqual((await adapter.safeParseAsync({})).success, false);
+  });
+
+  it('returns zod schemas as is', () => {
+    const schema = z.string();
+    assert.strictEqual(toZodSchema(schema), schema);
   });
 });

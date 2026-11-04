@@ -16,6 +16,7 @@
 
 import { z, type EvaluatorAction, type Genkit } from 'genkit';
 import type { BaseEvalDataPoint } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import { runInNewSpan } from 'genkit/tracing';
 import type { GoogleAuth } from 'google-auth-library';
 import {
@@ -114,7 +115,7 @@ async function checksEvalInstance<ResponseType extends z.ZodType<any, any>>(
   auth: GoogleAuth,
   partialRequest: any,
   responseSchema: ResponseType
-): Promise<z.infer<ResponseType>> {
+): Promise<InferOutput<ResponseType>> {
   const request = {
     ...partialRequest,
   };

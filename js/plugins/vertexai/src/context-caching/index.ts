@@ -18,7 +18,7 @@ import {
   CachedContents,
   type ApiClient,
 } from '@google-cloud/vertexai/build/src/resources/index.js';
-import { GenkitError, type GenerateRequest, type z } from 'genkit';
+import { GenkitError, type GenerateRequest, type GenkitSchema } from 'genkit';
 import { logger } from 'genkit/logging';
 import type { CacheConfigDetails } from './types.js';
 import {
@@ -39,7 +39,7 @@ import {
  */
 export async function handleContextCache(
   apiClient: ApiClient,
-  request: GenerateRequest<z.ZodType<any, any>>,
+  request: GenerateRequest<GenkitSchema>,
   chatRequest: StartChatParams,
   modelVersion: string,
   cacheConfigDetails: CacheConfigDetails
@@ -109,7 +109,7 @@ export async function handleContextCache(
  */
 export async function handleCacheIfNeeded(
   apiClient: ApiClient,
-  request: GenerateRequest<z.ZodType<any, any>>,
+  request: GenerateRequest<GenkitSchema>,
   chatRequest: StartChatParams,
   modelVersion: string,
   cacheConfigDetails: CacheConfigDetails | null

@@ -16,7 +16,7 @@
 
 import similarity from 'compute-cosine-similarity';
 import * as fs from 'fs';
-import { z, type Embedding, type Genkit } from 'genkit';
+import { z, type Embedding, type Genkit, type GenkitSchema } from 'genkit';
 import type { EmbedderArgument } from 'genkit/embedder';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import {
@@ -26,6 +26,7 @@ import {
   retrieverRef,
   type DocumentData,
 } from 'genkit/retriever';
+import type { InferOutput } from 'genkit/schema';
 import { Md5 } from 'ts-md5';
 
 const _LOCAL_FILESTORE = '__db_{INDEX_NAME}.json';
@@ -57,10 +58,10 @@ function addDocument(
   }
 }
 
-interface Params<EmbedderCustomOptions extends z.ZodType<any, any>> {
+interface Params<EmbedderCustomOptions extends GenkitSchema> {
   indexName: string;
   embedder: EmbedderArgument<EmbedderCustomOptions>;
-  embedderOptions?: z.infer<EmbedderCustomOptions>;
+  embedderOptions?: InferOutput<EmbedderCustomOptions>;
 }
 
 /**
@@ -68,9 +69,9 @@ interface Params<EmbedderCustomOptions extends z.ZodType<any, any>> {
  *
  * NOT INTENDED FOR USE IN PRODUCTION
  */
-export function devLocalVectorstore<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
->(params: Params<EmbedderCustomOptions>[]): GenkitPlugin {
+export function devLocalVectorstore<EmbedderCustomOptions extends GenkitSchema>(
+  params: Params<EmbedderCustomOptions>[]
+): GenkitPlugin {
   return genkitPlugin('devLocalVectorstore', async (ai) => {
     params.map((p) => configureDevLocalRetriever(ai, p));
     params.map((p) => configureDevLocalIndexer(ai, p));
@@ -106,14 +107,14 @@ export function devLocalIndexerRef(indexName: string) {
 }
 
 async function importDocumentsToLocalVectorstore<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: {
     indexName: string;
     docs: Array<Document>;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { docs, embedder, embedderOptions } = { ...params };
@@ -141,8 +142,8 @@ async function importDocumentsToLocalVectorstore<
 }
 
 async function getClosestDocuments<
-  I extends z.ZodType<any, any>,
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  I extends GenkitSchema,
+  EmbedderCustomOptions extends GenkitSchema,
 >(params: {
   queryEmbeddings: Array<number>;
   db: Record<string, DbValue>;
@@ -166,14 +167,12 @@ async function getClosestDocuments<
 /**
  * Configures a local vectorstore retriever
  */
-function configureDevLocalRetriever<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
->(
+function configureDevLocalRetriever<EmbedderCustomOptions extends GenkitSchema>(
   ai: Genkit,
   params: {
     indexName: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { embedder, embedderOptions } = params;
@@ -204,14 +203,12 @@ function configureDevLocalRetriever<
 /**
  * Configures a local vectorstore indexer.
  */
-function configureDevLocalIndexer<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
->(
+function configureDevLocalIndexer<EmbedderCustomOptions extends GenkitSchema>(
   ai: Genkit,
   params: {
     indexName: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { embedder, embedderOptions } = params;

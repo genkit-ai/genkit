@@ -48,6 +48,7 @@ import {
   type ModelAction,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import { getGenkitClientHeader } from '../../common/index.js';
 import { PluginOptions } from './types.js';
 import { checkModelName } from './utils.js';
@@ -67,7 +68,7 @@ export const MistralConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type MistralConfigSchemaType = typeof MistralConfigSchema;
-export type MistralConfig = z.infer<MistralConfigSchemaType>;
+export type MistralConfig = InferOutput<MistralConfigSchemaType>;
 
 // This contains all the config schema types
 type ConfigSchemaType = MistralConfigSchemaType;

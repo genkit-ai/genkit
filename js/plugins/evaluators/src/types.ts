@@ -17,11 +17,12 @@
 import type {
   EmbedderArgument,
   EmbedderReference,
+  GenkitSchema,
   ModelArgument,
   ModelReference,
-  z,
 } from 'genkit';
 import type { EvalStatusEnum, Score } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 
 export enum GenkitMetric {
   FAITHFULNESS = 'FAITHFULNESS',
@@ -39,42 +40,42 @@ export interface BaseGenkitMetricConfig {
 }
 
 export interface FaithfulnessGenkitMetricConfig<
-  ModelCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
 > extends BaseGenkitMetricConfig {
   type: GenkitMetric.FAITHFULNESS;
   judge: ModelReference<ModelCustomOptions>;
-  judgeConfig?: z.infer<ModelCustomOptions>;
+  judgeConfig?: InferOutput<ModelCustomOptions>;
 }
 
 export interface MaliciousnessGenkitMetricConfig<
-  ModelCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
 > extends BaseGenkitMetricConfig {
   type: GenkitMetric.MALICIOUSNESS;
   judge: ModelReference<ModelCustomOptions>;
-  judgeConfig?: z.infer<ModelCustomOptions>;
+  judgeConfig?: InferOutput<ModelCustomOptions>;
 }
 
 export interface AnswerAccuracyGenkitMetricConfig<
-  ModelCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
 > extends BaseGenkitMetricConfig {
   type: GenkitMetric.ANSWER_ACCURACY;
   judge: ModelReference<ModelCustomOptions>;
-  judgeConfig?: z.infer<ModelCustomOptions>;
+  judgeConfig?: InferOutput<ModelCustomOptions>;
 }
 
 export interface AnswerRelevancyGenkitMetricConfig<
-  ModelCustomOptions extends z.ZodType<any, any>,
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
+  EmbedderCustomOptions extends GenkitSchema,
 > extends BaseGenkitMetricConfig {
   type: GenkitMetric.ANSWER_RELEVANCY;
   judge: ModelReference<ModelCustomOptions>;
-  judgeConfig?: z.infer<ModelCustomOptions>;
+  judgeConfig?: InferOutput<ModelCustomOptions>;
   embedder: EmbedderReference<EmbedderCustomOptions>;
-  embedderOptions?: z.infer<EmbedderCustomOptions>;
+  embedderOptions?: InferOutput<EmbedderCustomOptions>;
 }
 export type GenkitMetricConfig<
-  M extends z.ZodType<any, any>,
-  E extends z.ZodType<any, any>,
+  M extends GenkitSchema,
+  E extends GenkitSchema,
 > =
   | GenkitMetric
   | FaithfulnessGenkitMetricConfig<M>
@@ -83,19 +84,19 @@ export type GenkitMetricConfig<
   | AnswerRelevancyGenkitMetricConfig<M, E>;
 
 export interface PluginOptions<
-  ModelCustomOptions extends z.ZodType<any, any>,
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
+  EmbedderCustomOptions extends GenkitSchema,
 > {
   metrics: Array<GenkitMetricConfig<ModelCustomOptions, EmbedderCustomOptions>>;
   judge?: ModelArgument<ModelCustomOptions>;
-  judgeConfig?: z.infer<ModelCustomOptions>;
+  judgeConfig?: InferOutput<ModelCustomOptions>;
   embedder?: EmbedderArgument<EmbedderCustomOptions>;
-  embedderOptions?: z.infer<EmbedderCustomOptions>;
+  embedderOptions?: InferOutput<EmbedderCustomOptions>;
 }
 
 export type ResolvedConfig<
-  ModelCustomOptions extends z.ZodType<any, any>,
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
+  EmbedderCustomOptions extends GenkitSchema,
 > = Omit<PluginOptions<ModelCustomOptions, EmbedderCustomOptions>, 'metrics'> &
   BaseGenkitMetricConfig;
 

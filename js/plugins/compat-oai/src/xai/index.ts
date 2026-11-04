@@ -20,6 +20,7 @@ import {
   modelActionMetadata,
   ModelReference,
   z,
+  type GenkitSchema,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { ResolvableAction, type GenkitPluginV2 } from 'genkit/plugin';
@@ -142,13 +143,10 @@ export type XAIPlugin = {
     name: keyof typeof SUPPORTED_IMAGE_MODELS,
     config?: z.infer<typeof ImageGenerationCommonConfigSchema>
   ): ModelReference<typeof ImageGenerationCommonConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
+  model(name: string, config?: any): ModelReference<GenkitSchema>;
 };
 
-const model = ((
-  name: string,
-  config?: any
-): ModelReference<z.ZodType<any, any>> => {
+const model = ((name: string, config?: any): ModelReference<GenkitSchema> => {
   if (name.includes('image')) {
     return xaiImageModelRef({
       name,
