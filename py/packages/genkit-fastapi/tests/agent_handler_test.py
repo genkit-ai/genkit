@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 import pytest
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from genkit_fastapi import handle_genkit_request
@@ -197,8 +197,8 @@ def test_handle_genkit_request_agent_route_with_data_envelope_runs_turn() -> Non
     agent = build_agent('handRolledAgent')
     app = FastAPI()
 
-    @app.post('/custom', response_model=None)
-    async def custom(request: Request) -> object:
+    @app.post('/custom')
+    async def custom(request: Request) -> Response:
         # A real app would build this context and init from its own Depends params.
         return await handle_genkit_request(
             request,
@@ -320,8 +320,8 @@ def test_hand_rolled_routes_send_the_same_frames_as_serve_agent() -> None:
     via_to_sse = build_agent('toSseFrames')
     app = FastAPI()
 
-    @app.post('/request', response_model=None)
-    async def request_route(request: Request) -> object:
+    @app.post('/request')
+    async def request_route(request: Request) -> Response:
         return await handle_genkit_request(request, action=via_request)
 
     @app.post('/to_sse')

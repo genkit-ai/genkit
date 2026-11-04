@@ -985,9 +985,14 @@ async def test_attached_turn_abort() -> None:
     ai.define_prompt(name='abortAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='abortAgent', store=store)
 
-    # We make the mock model sleep to simulate a slow response
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    # Block the first model call until the test finishes so slow CI runners
+    # cannot enter model_fn after response_cb is cleared for turn 2.
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
-        await asyncio.sleep(5)
+        started.set()
+        await release.wait()
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('Slow response finished')]),
@@ -996,42 +1001,44 @@ async def test_attached_turn_abort() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send_stream('Hello')
+    try:
+        turn = chat.send_stream('Hello')
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-    # Let it run a bit
-    await asyncio.sleep(0.1)
+        # Abort the turn client-side (stops reading the stream)
+        await turn.abort()
 
-    # Abort the turn client-side (stops reading the stream)
-    await turn.abort()
+        # Verify awaiting the turn raises CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await turn.response
 
-    # Verify awaiting the turn raises CancelledError
-    with pytest.raises(asyncio.CancelledError):
-        await turn.response
+        # Abort is a client-side detach only: the prompt was still asked, so the
+        # optimistic user message stays in history (just without a reply).
+        texts_after_abort = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts_after_abort == ['Hello']
 
-    # Abort is a client-side detach only: the prompt was still asked, so the
-    # optimistic user message stays in history (just without a reply).
-    texts_after_abort = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts_after_abort == ['Hello']
-
-    # Restore normal fast response for the second turn
-    pm.response_cb = None
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+        # Restore normal fast response for the second turn
+        pm.response_cb = None
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+            )
         )
-    )
 
-    # We can keep going; the next turn appends onto the kept history.
-    turn2 = chat.send_stream('Continue conversation')
-    res2 = await turn2.response
+        # We can keep going; the next turn appends onto the kept history.
+        turn2 = chat.send_stream('Continue conversation')
+        res2 = await turn2.response
 
-    # The detached turn's 'Hello' is still there, followed by the new exchange.
-    texts = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
-    assert res2.message is not None
-    assert res2.message.content is not None
-    assert res2.message.content[0].text == 'Second turn echo'
+        # The detached turn's 'Hello' is still there, followed by the new exchange.
+        texts = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
+        assert res2.message is not None
+        assert res2.message.content is not None
+        assert res2.message.content[0].text == 'Second turn echo'
+    finally:
+        release.set()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1044,8 +1051,12 @@ async def test_await_turn_under_timeout_detaches() -> None:
     ai.define_prompt(name='timeoutAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='timeoutAgent', store=InMemorySessionStore())
 
+    started = asyncio.Event()
+    release = asyncio.Event()
+
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
-        await asyncio.sleep(5)
+        started.set()
+        await release.wait()
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('too late')]),
@@ -1054,30 +1065,36 @@ async def test_await_turn_under_timeout_detaches() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send_stream('Hello')
+    try:
+        turn = chat.send_stream('Hello')
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-    # The deadline fires before the slow model responds → surfaces as TimeoutError.
-    async def _await_turn() -> None:
-        await turn.response
+        # The deadline fires before the slow model responds → surfaces as TimeoutError.
+        async def _await_turn() -> None:
+            await turn.response
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(_await_turn(), 0.2)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(_await_turn(), 0.01)
 
-    # Detach kept the optimistic prompt; the session reads as a turn with no reply.
-    texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts_after == ['Hello']
+        # Detach kept the optimistic prompt; the session reads as a turn with no reply.
+        texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts_after == ['Hello']
 
-    # And we can continue cleanly.
-    pm.response_cb = None
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+        # And we can continue cleanly.
+        pm.response_cb = None
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+            )
         )
-    )
-    res2 = await chat.send('Continue conversation')
-    assert res2.message is not None
-    assert res2.message.content[0].text == 'Second turn echo'
+        res2 = await chat.send('Continue conversation')
+        assert res2.message is not None
+        assert res2.message.content is not None
+        assert res2.message.content[0].text == 'Second turn echo'
+    finally:
+        release.set()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1089,8 +1106,12 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     ai.define_prompt(name='streamTimeoutAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='streamTimeoutAgent', store=InMemorySessionStore())
 
+    started = asyncio.Event()
+    release = asyncio.Event()
+
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
-        await asyncio.sleep(5)
+        started.set()
+        await release.wait()
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('too late')]),
@@ -1099,17 +1120,22 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send_stream('Hello')
+    try:
+        turn = chat.send_stream('Hello')
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-    async def _drain() -> None:
-        async for _chunk in turn.stream:
-            pass
+        async def _drain() -> None:
+            async for _chunk in turn.stream:
+                pass
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(_drain(), 0.2)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(_drain(), 0.01)
 
-    texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts_after == ['Hello']
+        texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts_after == ['Hello']
+    finally:
+        release.set()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1119,19 +1145,18 @@ async def test_session_abort() -> None:
 
     store = InMemorySessionStore()
 
-    tool_executed = False
-    tool_cancelled = False
+    tool_started = asyncio.Event()
+    tool_cancelled = asyncio.Event()
 
     @ai.tool()
     async def slow_tool(arg: str) -> str:
-        nonlocal tool_executed, tool_cancelled
-        tool_executed = True
         try:
-            await asyncio.sleep(10)
-            return 'Slow tool complete'
+            tool_started.set()
+            await asyncio.Future()
         except asyncio.CancelledError:
-            tool_cancelled = True
+            tool_cancelled.set()
             raise
+        return 'Slow tool complete'
 
     # Define a simple agent that uses this tool
     ai.define_prompt(name='sessionAbortAgent', model='scriptedModel', system='Use the slow tool.', tools=[slow_tool])
@@ -1152,8 +1177,7 @@ async def test_session_abort() -> None:
     task = await chat.detach('Trigger slow action')
     assert task.snapshot_id is not None
 
-    # Give it a tiny moment to start execution
-    await asyncio.sleep(0.2)
+    await asyncio.wait_for(tool_started.wait(), timeout=5.0)
 
     # Abort the running snapshot on the server (requires a store)
     status = await chat.abort()
@@ -1161,12 +1185,11 @@ async def test_session_abort() -> None:
     # detached turn was still running (spec: tests/specs/agent.yaml).
     assert status == SnapshotStatus.PENDING
 
-    # Give the background task a moment to process cancellation
-    await asyncio.sleep(0.5)
+    await asyncio.wait_for(tool_cancelled.wait(), timeout=5.0)
 
     # Verify the tool was started and successfully cancelled by the server abort!
-    assert tool_executed
-    assert tool_cancelled
+    assert tool_started.is_set()
+    assert tool_cancelled.is_set()
 
 
 @pytest.mark.asyncio

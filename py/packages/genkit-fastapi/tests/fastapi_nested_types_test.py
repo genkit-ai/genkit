@@ -34,7 +34,7 @@ def test_fastapi_flow_returning_model_with_nested_message_unchanged() -> None:
     ai = Genkit()
     app = FastAPI()
 
-    @app.post('/turn', response_model=None)
+    @app.post('/turn')
     @genkit_fastapi_handler(ai)
     @ai.flow()
     async def turn(_: str) -> Turn:
