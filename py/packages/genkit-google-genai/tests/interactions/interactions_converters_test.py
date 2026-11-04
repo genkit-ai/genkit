@@ -611,21 +611,24 @@ class TestFromInteractionStep:
         )
         assert result == []
 
-    def test_function_call_is_tool_request(self) -> None:
-        result = from_interaction_step(
-            StepAdapter.validate_python({
-                'type': 'function_call',
-                'id': 'c1',
-                'name': 'get_weather',
-                'arguments': {'city': 'Austin'},
-            })
-        )
-        root = result[0]
-        assert root.tool_request is not None
-        assert root.tool_request is not None
-        assert root.tool_request.name == 'get_weather'
-        assert root.tool_request.input == {'city': 'Austin'}
-        assert root.tool_request.ref == 'c1'
+    def test_function_call_is_tool_request_when_pending_and_custom_otherwise(self) -> None:
+        step = StepAdapter.validate_python({
+            'type': 'function_call',
+            'id': 'c1',
+            'name': 'get_weather',
+            'arguments': {'city': 'Austin'},
+        })
+        pending = from_interaction_step(step, is_pending=True)[0]
+        assert pending.tool_request is not None
+        assert pending.tool_request.name == 'get_weather'
+        assert pending.tool_request.input == {'city': 'Austin'}
+        assert pending.tool_request.ref == 'c1'
+
+        resolved = from_interaction_step(step)[0]
+        assert resolved.tool_request is None
+        assert resolved.custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Austin'}}
+        }
 
     def test_function_result_is_custom_stash_not_tool_response(self) -> None:
         result = from_interaction_step(
@@ -736,42 +739,46 @@ class TestInboundFlattensToSingleModelMessage:
         }
         assert message.content[0].reasoning is not None
         assert message.content[1].text is not None
-        assert message.content[2].tool_request is not None
+        assert message.content[2].custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Austin'}}
+        }
         assert message.content[0].reasoning == 'need a tool'
         assert message.content[1].text == 'checking'
-        assert message.content[2].tool_request.ref == 'c1'
 
     def test_already_resolved_tool_pair_stays_inside_model_message(self) -> None:
-        """A tape that already has function_result still flattens into one model turn."""
+        """A tape that already has function_result stashes both call and result as custom, never tool_request."""
         steps = [
             StepAdapter.validate_python({
                 'type': 'function_call',
                 'id': 'c1',
-                'name': 'get_weather',
-                'arguments': {'city': 'Austin'},
+                'name': 'write_to_file',
+                'arguments': {'path': 'hello.py'},
             }),
             StepAdapter.validate_python({
                 'type': 'function_result',
                 'call_id': 'c1',
-                'name': 'get_weather',
-                'result': {'temp': 92},
+                'name': 'write_to_file',
+                'result': {'ok': True},
             }),
             StepAdapter.validate_python({
                 'type': 'model_output',
-                'content': [{'type': 'text', 'text': '92F'}],
+                'content': [{'type': 'text', 'text': 'Wrote hello.py'}],
             }),
         ]
-        parts = parts_from_steps(steps)
-        assert parts[0].tool_request is not None
+        parts = parts_from_steps(steps, status='requires_action')
+        assert parts[0].tool_request is None
+        assert parts[0].custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'write_to_file', 'arguments': {'path': 'hello.py'}}
+        }
         assert parts[1].custom is not None
         assert parts[2].text is not None
         stash = parts[1].custom['serverFunctionResult']
-        assert stash['name'] == 'get_weather'
-        assert stash['result'] == {'temp': 92}
+        assert stash['name'] == 'write_to_file'
+        assert stash['result'] == {'ok': True}
 
 
 class TestFunctionCallRoundTrip:
-    """The bug we hit: function_call must be ToolRequestPart, not CustomPart."""
+    """Pending function_call steps use ToolRequestPart; server-resolved ones round-trip via serverFunctionCall."""
 
     def test_outbound_then_inbound_preserves_tool_request(self) -> None:
         messages = [
@@ -782,9 +789,8 @@ class TestFunctionCallRoundTrip:
         ]
         steps = to_interaction_steps(messages)
         assert steps == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
-        inbound = from_interaction_step(StepAdapter.validate_python(steps[0]))
+        inbound = from_interaction_step(StepAdapter.validate_python(steps[0]), is_pending=True)
         root = inbound[0]
-        assert root.tool_request is not None
         assert root.tool_request is not None
         assert root.tool_request.name == 'get_weather'
         assert root.tool_request.input == {'city': 'Austin'}
@@ -796,11 +802,36 @@ class TestFunctionCallRoundTrip:
             'id': 'c1',
             'name': 'get_weather',
             'arguments': {'city': 'Austin'},
+            'signature': 'sig-call',
         })
-        part = from_interaction_step(step)[0]
-        assert part.tool_request is not None
-        again = to_interaction_steps([Message(role='model', content=[part])])
-        assert again == [{'type': 'function_call', 'name': 'get_weather', 'arguments': {'city': 'Austin'}, 'id': 'c1'}]
+        pending_part = from_interaction_step(step, is_pending=True)[0]
+        assert pending_part.tool_request is not None
+        assert pending_part.metadata == {'thoughtSignature': 'sig-call'}
+        assert to_interaction_steps([Message(role='model', content=[pending_part])]) == [
+            {
+                'type': 'function_call',
+                'name': 'get_weather',
+                'arguments': {'city': 'Austin'},
+                'id': 'c1',
+                'signature': 'sig-call',
+            }
+        ]
+
+        server_part = from_interaction_step(step, is_pending=False)[0]
+        assert server_part.tool_request is None
+        assert server_part.custom == {
+            'serverFunctionCall': {'id': 'c1', 'name': 'get_weather', 'arguments': {'city': 'Austin'}}
+        }
+        assert server_part.metadata == {'thoughtSignature': 'sig-call'}
+        assert to_interaction_steps([Message(role='model', content=[server_part])]) == [
+            {
+                'type': 'function_call',
+                'name': 'get_weather',
+                'arguments': {'city': 'Austin'},
+                'id': 'c1',
+                'signature': 'sig-call',
+            }
+        ]
 
     def test_thought_round_trip_keeps_signature(self) -> None:
         messages = [
@@ -1001,11 +1032,54 @@ class TestFromInteractionSync:
         assert raised.value.status == 'UNKNOWN'
         assert str(raised.value) == 'UNKNOWN: model crashed'
 
-    @pytest.mark.parametrize('status', ['queued', 'requires_action'])
-    def test_other_in_flight_statuses_are_failed_precondition(self, status: str) -> None:
+    def test_queued_is_failed_precondition(self) -> None:
         with pytest.raises(GenkitError, match='still running') as raised:
-            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': status}))
+            from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'queued'}))
         assert raised.value.status == 'FAILED_PRECONDITION'
+
+    def test_requires_action_returns_pending_tool_requests_and_skips_resolved_sandbox_calls(self) -> None:
+        interaction = Interaction.model_validate({
+            'id': 'v1_abc123',
+            'status': 'requires_action',
+            'environment_id': 'env-123',
+            'steps': [
+                {
+                    'type': 'function_call',
+                    'id': 'sandbox-1',
+                    'name': 'write_to_file',
+                    'arguments': {'path': 'a.txt'},
+                },
+                {
+                    'type': 'function_result',
+                    'call_id': 'sandbox-1',
+                    'name': 'write_to_file',
+                    'result': {'ok': True},
+                },
+                {
+                    'type': 'function_call',
+                    'id': 'call-1',
+                    'name': 'lookup_allergens',
+                    'arguments': {'dish': 'ramen'},
+                },
+            ],
+        })
+        result = from_interaction_sync(interaction)
+        assert result.finish_reason == 'stop'
+        assert result.message is not None
+        assert result.message.metadata == {
+            'interactionId': 'v1_abc123',
+            'environmentId': 'env-123',
+            'interactionStatus': 'requires_action',
+        }
+        assert result.message.content[0].tool_request is None
+        assert result.message.content[0].custom == {
+            'serverFunctionCall': {'id': 'sandbox-1', 'name': 'write_to_file', 'arguments': {'path': 'a.txt'}}
+        }
+        assert result.message.content[1].custom is not None
+        assert result.message.content[2].tool_request is not None
+        assert result.message.content[2].tool_request.name == 'lookup_allergens'
+        assert result.message.content[2].tool_request.ref == 'call-1'
+        assert result.message.content[2].tool_request.input == {'dish': 'ramen'}
 
     def test_cancelled(self) -> None:
         result = from_interaction_sync(Interaction.model_validate({'id': '123', 'status': 'cancelled'}))
