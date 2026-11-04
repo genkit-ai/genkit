@@ -280,4 +280,49 @@ describe('McpRuntimeManager', () => {
 
     expect(resolveSpy).toHaveBeenCalledTimes(2);
   });
+
+  it('clears cached manager after stopping if a subsequent start fails', async () => {
+    jest
+      .spyOn(managerUtils, 'resolveTelemetryServer')
+      .mockResolvedValue('http://localhost:4033');
+    const mockRuntimeManager1 = {
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    const mockRuntimeManager2 = {
+      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    jest
+      .spyOn(managerUtils, 'startDevProcessManager')
+      .mockResolvedValueOnce({
+        manager: mockRuntimeManager1,
+        processPromise: Promise.resolve(),
+      })
+      .mockRejectedValueOnce(new Error('dev process failed to start'));
+    const startManagerSpy = jest
+      .spyOn(managerUtils, 'startManager')
+      .mockResolvedValue(mockRuntimeManager2);
+
+    const mcpManager = new McpRuntimeManager();
+
+    await mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+    await expect(
+      mcpManager.getManagerWithDevProcess({
+        projectRoot: '/workspace',
+        command: 'npx',
+        args: ['tsx', 'src/index.ts'],
+        explicitProjectRoot: false,
+      })
+    ).rejects.toThrow('dev process failed to start');
+
+    const activeManager = await mcpManager.getManager('/workspace');
+
+    expect(mockRuntimeManager1.stop).toHaveBeenCalledTimes(1);
+    expect(startManagerSpy).toHaveBeenCalledTimes(1);
+    expect(activeManager).toBe(mockRuntimeManager2);
+  });
 });

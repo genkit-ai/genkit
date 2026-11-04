@@ -115,6 +115,8 @@ export class McpRuntimeManager {
     }
     if (this.manager) {
       await this.manager.stop();
+      this.manager = undefined;
+      this.currentProjectRoot = undefined;
     }
     const telemetryServerUrl = await this.getTelemetryServerUrl(projectRoot);
     // No auth here: attaching to existing runtimes never generates a secret.
@@ -138,6 +140,8 @@ export class McpRuntimeManager {
     const { projectRoot, command, args, timeout, explicitProjectRoot } = params;
     if (this.manager) {
       await this.manager.stop();
+      this.manager = undefined;
+      this.currentProjectRoot = undefined;
     }
     const telemetryServerUrl = await this.getTelemetryServerUrl(projectRoot);
     const devManager = await startDevProcessManager(
@@ -161,6 +165,8 @@ export class McpRuntimeManager {
   async kill() {
     if (this.manager) {
       await this.manager.stop();
+      this.manager = undefined;
+      this.currentProjectRoot = undefined;
     }
   }
 }
