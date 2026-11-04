@@ -164,7 +164,7 @@ def test_real_workspace_passes_consistency_and_extras_contract() -> None:
     # Both vertex-ai and vertexai aliases resolve to the same bounded target.
     assert opt_deps['vertex-ai'] == [f'genkit-vertexai[anthropic,openai]>={core_version},<2']
     assert opt_deps['vertexai'] == [f'genkit-vertexai[anthropic,openai]>={core_version},<2']
-    assert opt_deps['evaluators'] == [f'genkit-evaluators>={core_version},<1']
+    assert 'evaluators' not in opt_deps
 
     # Every publishable plugin is reachable from at least one genkit[...] extra.
     referenced_plugins = {spec.split('[', 1)[0].split('>=', 1)[0] for specs in opt_deps.values() for spec in specs}

@@ -62,7 +62,6 @@ jobs:
             py/packages/genkit-amazon-bedrock
             py/packages/genkit-anthropic
             py/packages/genkit-django
-            py/packages/genkit-evaluators
             py/packages/genkit-fastapi
             py/packages/genkit-flask
             py/packages/genkit-google-cloud
@@ -107,7 +106,7 @@ jobs:
           fi
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist/
           verbose: true
