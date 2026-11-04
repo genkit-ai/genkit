@@ -495,3 +495,123 @@ describe('action schema checks', () => {
     );
   });
 });
+
+describe('action schema parsing', () => {
+  beforeEach(() => {
+    spanExporter.exportedSpans = [];
+  });
+
+  const Input = z.object({
+    q: z.string().trim(),
+    limit: z.number().default(10),
+  });
+  const Output = z.object({
+    hits: z.array(z.string()),
+    more: z.boolean().default(false),
+  });
+
+  function searchAction() {
+    const seen: z.infer<typeof Input>[] = [];
+    const act = action(
+      {
+        name: 'search',
+        actionType: 'custom',
+        inputSchema: Input,
+        outputSchema: Output,
+        streamSchema: z.string(),
+      },
+      async (input, { sendChunk }) => {
+        seen.push(input);
+        sendChunk(input.q);
+        // `more` is omitted on purpose: the output schema fills it in.
+        return { hits: [input.q] };
+      }
+    );
+    return { act, seen };
+  }
+
+  it('fn receives parsed input and the caller gets parsed output', async () => {
+    const { act, seen } = searchAction();
+    // Caller types are the schema's input: `limit` is optional.
+    const result = await act({ q: ' x ' });
+    assert.deepStrictEqual(seen, [{ q: 'x', limit: 10 }]);
+    assert.deepStrictEqual(result, { hits: ['x'], more: false });
+  });
+
+  it('stream() parses the input exactly once, like run()', async () => {
+    const once = z.string().transform((s) => `<${s}>`);
+    const act = action(
+      { name: 'wrap', actionType: 'custom', inputSchema: once },
+      async (input) => input
+    );
+    assert.strictEqual(await act('a'), '<a>');
+    assert.strictEqual(await act.stream('a').output, '<a>');
+  });
+
+  it('stream() returns the same parsed output as run()', async () => {
+    const { act, seen } = searchAction();
+    const { stream, output } = act.stream({ q: ' y ' });
+    const chunks: string[] = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    assert.deepStrictEqual(chunks, ['y']);
+    assert.deepStrictEqual(await output, { hits: ['y'], more: false });
+    assert.deepStrictEqual(seen, [{ q: 'y', limit: 10 }]);
+  });
+
+  it('enforces refinements on input and output', async () => {
+    const act = action(
+      {
+        name: 'refined',
+        actionType: 'custom',
+        inputSchema: z.number().refine((n) => n > 0, 'must be positive'),
+        outputSchema: z.number().refine((n) => n < 10, 'must be small'),
+      },
+      async (n) => n * 5
+    );
+    assert.strictEqual(await act(1), 5);
+    await assert.rejects(act(0), /must be positive/);
+    await assert.rejects(act(3), /must be small/);
+  });
+
+  it('supports async refinements', async () => {
+    const act = action(
+      {
+        name: 'asyncRefined',
+        actionType: 'custom',
+        inputSchema: z.string().refine(async (s) => s.startsWith('ok')),
+      },
+      async (s) => s
+    );
+    assert.strictEqual(await act('ok!'), 'ok!');
+    await assert.rejects(act('nope'), /Schema validation failed/);
+  });
+
+  it('parses init data', async () => {
+    let seenInit: unknown;
+    const act = action(
+      {
+        name: 'withInit',
+        actionType: 'custom',
+        initSchema: z.object({ mode: z.string().default('fast') }),
+      },
+      async (_, { init }) => {
+        seenInit = init;
+        return null;
+      }
+    );
+    await act.run(undefined, { init: {} });
+    assert.deepStrictEqual(seenInit, { mode: 'fast' });
+  });
+
+  it('records the parsed output on the span', async () => {
+    const { act } = searchAction();
+    await act({ q: 'z' });
+    const span = spanExporter.exportedSpans.find(
+      (s) => s.attributes['genkit:name'] === 'search'
+    );
+    assert.strictEqual(
+      span?.attributes['genkit:output'],
+      JSON.stringify({ hits: ['z'], more: false })
+    );
+  });
+});

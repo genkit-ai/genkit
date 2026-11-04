@@ -506,22 +506,136 @@ export function validateSchema(
   return { valid, schema: toValidate };
 }
 
+type ParseResult<T> =
+  | { success: true; data: T }
+  | { success: false; errors: ValidationErrorDetail[] };
+
+function issuesToDetails(
+  issues: ReadonlyArray<StandardSchemaV1.Issue>
+): ValidationErrorDetail[] {
+  return issues.map((issue) => ({
+    path:
+      (issue.path ?? [])
+        .map((p) => String(typeof p === 'object' ? p.key : p))
+        .join('.') || '(root)',
+    message: issue.message,
+  }));
+}
+
+function fromStandardResult<T>(
+  result: StandardSchemaV1.Result<unknown>
+): ParseResult<T> {
+  return result.issues
+    ? { success: false, errors: issuesToDetails(result.issues) }
+    : { success: true, data: result.value as T };
+}
+
+function fromZodResult<T>(
+  result: z.ZodSafeParseResult<unknown>
+): ParseResult<T> {
+  return result.success
+    ? { success: true, data: result.data as T }
+    : { success: false, errors: issuesToDetails(result.error.issues) };
+}
+
+function asyncSchemaError(): GenkitError {
+  return new GenkitError({
+    status: 'FAILED_PRECONDITION',
+    message:
+      'Schema requires async validation (e.g. an async refinement), which is not supported in this synchronous context. Use parseSchemaAsync().',
+  });
+}
+
+function throwOnFailure<T>(
+  data: unknown,
+  options: ProvidedSchema,
+  result: ParseResult<T>
+): T {
+  if (!result.success) {
+    throw new ValidationError({
+      data,
+      errors: result.errors,
+      schema: toJsonSchema(options),
+    });
+  }
+  return result.data;
+}
+
 /**
- * Parses raw data object against the provided schema.
+ * Parses data with the provided schema and returns the schema's output:
+ * defaults, transforms and refinements are applied. Zod schemas are parsed
+ * with zod, other Standard Schemas with `~standard.validate`. A JSON schema
+ * (which takes priority, as in {@link toJsonSchema}) is only validated against
+ * and the data is returned as is.
+ *
+ * Throws if the schema needs async validation; use {@link parseSchemaAsync}
+ * where possible.
  */
 export function parseSchema<T = unknown>(
   data: unknown,
   options: ProvidedSchema
 ): T {
-  const result = validateSchema(data, options);
-  if (!result.valid) {
-    throw new ValidationError({
-      data,
-      errors: result.errors,
-      schema: result.schema,
-    });
+  const { schema, jsonSchema } = options;
+  if (jsonSchema || !schema) {
+    return throwOnFailure(data, options, validateJsonSchema<T>(data, options));
   }
-  return data as T;
+  if (isIgnoredValue(schema)) return data as T;
+  if (isZodSchema(schema)) {
+    let result: z.ZodSafeParseResult<unknown>;
+    try {
+      result = schema.safeParse(data);
+    } catch (e) {
+      if (e instanceof z.core.$ZodAsyncError) throw asyncSchemaError();
+      throw e;
+    }
+    return throwOnFailure(data, options, fromZodResult<T>(result));
+  }
+  const result = schema['~standard'].validate(data);
+  if (result instanceof Promise) {
+    // Nobody awaits it; keep a rejection from surfacing as unhandled.
+    result.catch(() => {});
+    throw asyncSchemaError();
+  }
+  return throwOnFailure(data, options, fromStandardResult<T>(result));
+}
+
+/**
+ * Async version of {@link parseSchema}. Supports async refinements and
+ * Standard Schema libraries that validate asynchronously.
+ */
+export async function parseSchemaAsync<T = unknown>(
+  data: unknown,
+  options: ProvidedSchema
+): Promise<T> {
+  const { schema, jsonSchema } = options;
+  if (jsonSchema || !schema) {
+    return throwOnFailure(data, options, validateJsonSchema<T>(data, options));
+  }
+  if (isIgnoredValue(schema)) return data as T;
+  const result = isZodSchema(schema)
+    ? fromZodResult<T>(await schema.safeParseAsync(data))
+    : fromStandardResult<T>(await schema['~standard'].validate(data));
+  return throwOnFailure(data, options, result);
+}
+
+/**
+ * A top-level `z.void()` means "no meaningful value" (like a TS `void` return),
+ * not "must be undefined": e.g. an indexer whose runner returns something, or
+ * a client sending `null` for a void input. Its JSON schema is `{}`, so it was
+ * never enforced; keep passing the value through as is.
+ */
+function isIgnoredValue(schema: GenkitSchema): boolean {
+  return schema instanceof z.ZodVoid;
+}
+
+function validateJsonSchema<T>(
+  data: unknown,
+  options: ProvidedSchema
+): ParseResult<T> {
+  const result = validateSchema(data, options);
+  return result.valid
+    ? { success: true, data: data as T }
+    : { success: false, errors: result.errors };
 }
 
 /**
