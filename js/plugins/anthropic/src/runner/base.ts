@@ -293,6 +293,39 @@ export abstract class BaseRunner<ApiTypes extends RunnerTypes> {
     };
   }
 
+  /** Converts multipart tool results while preserving legacy structured output. */
+  protected toAnthropicToolResponseParts(
+    part: Part
+  ): RunnerToolResponseContent<ApiTypes>[] {
+    const content = part.toolResponse?.content;
+    if (!content?.length) {
+      return [this.toAnthropicToolResponseContent(part)];
+    }
+
+    const blocks: RunnerToolResponseContent<ApiTypes>[] = [];
+    if (part.toolResponse?.output !== undefined) {
+      blocks.push(this.toAnthropicToolResponseContent(part));
+    }
+    for (const item of content) {
+      // Anthropic text blocks must be non-empty.
+      if (item.text === '') {
+        continue;
+      }
+      if (typeof item.text !== 'string' && !item.media) {
+        throw new Error(
+          `Unsupported tool response content: ${JSON.stringify(item)}`
+        );
+      }
+      // Both runners support text, images and documents in tool results.
+      blocks.push(
+        this.toAnthropicMessageContent(
+          item
+        ) as RunnerToolResponseContent<ApiTypes>
+      );
+    }
+    return blocks;
+  }
+
   protected getThinkingSignature(part: Part): string | undefined {
     const metadata = part.metadata as Record<string, unknown> | undefined;
     return typeof metadata?.thoughtSignature === 'string'
