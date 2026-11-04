@@ -680,7 +680,7 @@ def augment_with_context(
 
 def raise_if_aborted(abort_signal: asyncio.Event) -> None:
     if abort_signal.is_set():
-        raise GenkitError(status='ABORTED', message='Generation aborted.')
+        raise GenkitError(status='CANCELLED', message='Generation aborted.')
 
 
 def define_generate_action(ai: _aio.Genkit) -> None:
@@ -852,6 +852,9 @@ async def run_generate(
             current_turn=current_turn,
             call=call,
         )
+    except asyncio.CancelledError as exc:
+        stamp_cancelled_error(exc=exc, messages=call.messages)
+        raise
     except (Exception, _StreamingCallbackError) as exc:
         if streaming_callback_cause(exc=exc) is None:
             raise
@@ -1271,10 +1274,34 @@ def log_dropped_failure(exc: BaseException, *, model: str | None = None, tool: s
     logger.error('%s raised, returning finish_reason=failed', culprit, exc_info=exc, **fields)
 
 
-def raise_if_foreign_cancel(*, exc: BaseException, abort_signal: asyncio.Event) -> None:
+def stamp_cancelled_error(
+    *,
+    exc: asyncio.CancelledError,
+    messages: list[Message],
+) -> None:
+    """Attach the closed history onto a foreign CancelledError as ``messages``.
+
+    The history ends at the last completed round. The unfinished turn is
+    dropped, as on a failed or aborted response. Only the exception is
+    stamped, never the current task: a long-lived caller task would carry
+    stale history into later calls. Read it back with
+    ``genkit._core._compat.cancelled_history``, which handles 3.10 re-raising
+    a fresh ``CancelledError`` on await.
+    """
+    exc.__dict__['messages'] = [as_message(m) for m in messages]
+
+
+def raise_if_foreign_cancel(
+    *,
+    exc: BaseException,
+    abort_signal: asyncio.Event,
+    messages: list[Message] | None = None,
+) -> None:
     # abort_signal is our own stop. A wait_for / task.cancel() has to
     # surface as CancelledError so the deadline still works.
     if isinstance(exc, asyncio.CancelledError) and not abort_signal.is_set():
+        if messages is not None:
+            stamp_cancelled_error(exc=exc, messages=messages)
         raise
 
 
@@ -1506,7 +1533,11 @@ async def run_wrap_generate(
             name=resolved.model.name,
         )
     except TURN_FAILURES as exc:
-        raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
+        raise_if_foreign_cancel(
+            exc=exc,
+            abort_signal=ctx.abort_signal,
+            messages=call.messages,
+        )
         # A hook can raise before the model ever built a request. Build it here
         # so the caller still gets back what they asked for; the cost is only
         # paid on the failure path.
@@ -1595,7 +1626,11 @@ async def generate_turn(
             current_turn=current_turn,
         )
     except TURN_FAILURES as exc:
-        raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
+        raise_if_foreign_cancel(
+            exc=exc,
+            abort_signal=ctx.abort_signal,
+            messages=call.messages,
+        )
         return box_from_exc(
             response=call.earned(),
             messages=call.messages,
@@ -1879,7 +1914,11 @@ async def run_tools_or_stop(
             on_tool_chunk=make_tool_chunk_streamer(chunks=chunks, ctx=ctx),
         )
     except TURN_FAILURES as exc:
-        raise_if_foreign_cancel(exc=exc, abort_signal=ctx.abort_signal)
+        raise_if_foreign_cancel(
+            exc=exc,
+            abort_signal=ctx.abort_signal,
+            messages=list(options.messages),
+        )
         return box_from_exc(
             response=response,
             messages=list(options.messages),
@@ -2283,7 +2322,10 @@ async def resolve_tool_requests(
             logger.debug('tool triggered an interrupt', tool=trp.tool_request.name)
             return (None, interrupt_request_part(trp, intr))
 
-    outs = await asyncio.gather(*[run_one_tool(tool, trp) for _, tool, trp in work])
+    outs = await gather_turn(
+        [run_one_tool(tool, trp) for _, tool, trp in work],
+        watched_abort=mw_pipeline.ctx.abort_signal,
+    )
 
     has_interrupts = False
     response_parts: list[Part] = []
@@ -2312,6 +2354,70 @@ async def resolve_tool_requests(
         return (revised_model_message, None)
 
     return (None, Message(role=Role.TOOL, content=response_parts))
+
+
+async def gather_turn(
+    coros: Sequence[Awaitable[T]],
+    *,
+    watched_abort: asyncio.Event | None,
+) -> list[T]:
+    """Run one turn's tools concurrently. If one fails or cancels, cancel and await the rest.
+
+    ``asyncio.gather`` raises the first failure but leaves the other tools
+    running, so they would keep committing side effects after generate
+    returned. It also cancels all children directly on outer cancellation
+    before ``except`` runs, which would deliver a second cancel during
+    ``finally`` cleanup. ``asyncio.wait`` avoids that so each task is
+    cancelled at most once.
+
+    ``watched_abort`` is the caller's abort signal. Once it fires, every
+    in-flight task is cancelled, including any ``wrap_tool`` middleware
+    around the tool.
+    """
+    if not coros:
+        return []
+    tasks = [asyncio.ensure_future(c) for c in coros]
+    cancelled: set[int] = set()
+
+    def cancel_pending() -> None:
+        for t in tasks:
+            if not t.done() and id(t) not in cancelled:
+                cancelled.add(id(t))
+                t.cancel()
+
+    watcher_task = None
+    if watched_abort is not None:
+        # Pass the event in: type checkers drop the not-None narrowing
+        # across a closure boundary.
+        async def watch_abort(abort_signal: asyncio.Event) -> None:
+            await abort_signal.wait()
+            cancel_pending()
+
+        watcher_task = asyncio.create_task(watch_abort(watched_abort))
+
+    try:
+        pending: set[asyncio.Future[T]] = set(tasks)
+        while pending:
+            done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+            for t in tasks:
+                if t in done:
+                    _ = t.result()
+        return [t.result() for t in tasks]
+    except BaseException:
+        cancel_pending()
+        # Wait via asyncio.wait (not gather) so a second outer cancel cannot
+        # propagate into tasks while their finally blocks are still cleaning up,
+        # then retrieve every sibling's outcome so none goes unretrieved.
+        await asyncio.wait(tasks)
+        for t in tasks:
+            if not t.cancelled():
+                _ = t.exception()
+        raise
+    finally:
+        if watcher_task is not None:
+            watcher_task.cancel()
+            with contextlib.suppress(BaseException):
+                await watcher_task
 
 
 def to_pending_response(request: Part, response: Part) -> Part:
@@ -2379,26 +2485,58 @@ async def execute_tool_request(
             on_tool_chunk=on_tool_chunk,
         )
     )
+    # gather_turn's watcher cancels this whole call on abort; this one covers
+    # callers that run a tool outside gather_turn. Either way tool_task is
+    # cancelled once, so its own cleanup is not interrupted.
+    tool_cancelled = False
+
+    def cancel_tool() -> None:
+        nonlocal tool_cancelled
+        if not tool_task.done() and not tool_cancelled:
+            tool_cancelled = True
+            tool_task.cancel()
 
     async def watch_abort() -> None:
         await abort_signal.wait()
-        if not tool_task.done():
-            tool_task.cancel()
+        cancel_tool()
 
     watcher_task = asyncio.create_task(watch_abort())
+    closing = False
+
     try:
-        tool_response = await tool_task
-    except asyncio.CancelledError:
-        # An outer cancel (deadline / gather teardown) is delivered to *us*, not to
-        # the detached tool_task — cancel it so the tool body actually winds down
-        # instead of running to completion after the caller is gone. (Idempotent on
-        # the abort path, where the watcher already cancelled it.)
+        # Wait via asyncio.wait rather than awaiting or shielding tool_task directly:
+        # awaiting tool_task forwards an outer cancel before we can suppress teardown
+        # exceptions, and asyncio.shield logs 'exception in shielded future' to the
+        # loop exception handler on Python 3.14 even when tool_task is awaited below.
+        await asyncio.wait((tool_task,))
+        tool_response = tool_task.result()
+    except GeneratorExit:
+        # No awaiting while the coroutine is being closed.
+        closing = True
         tool_task.cancel()
-        if abort_signal.is_set():
-            raise GenkitError(status='ABORTED', message='Task aborted') from None
         raise
+    except asyncio.CancelledError:
+        if abort_signal.is_set() and tool_task.done() and not tool_task.cancelled() and tool_task.exception() is None:
+            # The tool returned before the abort reached this wait. Keep its
+            # output so a round whose tools all finished still closes; the abort
+            # stops the loop before the next model call.
+            tool_response = tool_task.result()
+        else:
+            # An outer cancel (deadline, gather_turn teardown, or abort) cancels
+            # the wait, not tool_task itself. Cancel and await tool_task so its
+            # finally blocks and async context managers finish and any teardown
+            # exception is retrieved.
+            cancel_tool()
+            with contextlib.suppress(BaseException):
+                await tool_task
+            if abort_signal.is_set():
+                raise GenkitError(status='CANCELLED', message='Task aborted') from None
+            raise
     finally:
         watcher_task.cancel()
+        if not closing:
+            with contextlib.suppress(BaseException):
+                await watcher_task
 
     tool_req = tool_request_part.tool_request
     if tool_req is None:
@@ -2497,16 +2635,21 @@ async def resolve_resume_options(
     indexed_requests = [
         (index, part) for index, part in enumerate(last_message.content) if part.tool_request is not None
     ]
-    resolved_tools = await asyncio.gather(*[
-        resolve_resumed_tool(
-            options=options,
-            tool_request_part=part,
-            mw_pipeline=mw_pipeline,
-            tools=resolved.tools,
-            on_tool_chunk=on_tool_chunk,
-        )
-        for _, part in indexed_requests
-    ])
+    # Restarts run without execute_tool_request's abort watcher, so nothing
+    # else cancels them: always cancel the rest when one fails.
+    resolved_tools = await gather_turn(
+        [
+            resolve_resumed_tool(
+                options=options,
+                tool_request_part=part,
+                mw_pipeline=mw_pipeline,
+                tools=resolved.tools,
+                on_tool_chunk=on_tool_chunk,
+            )
+            for _, part in indexed_requests
+        ],
+        watched_abort=None,
+    )
 
     tool_responses = []
     has_interrupts = False
