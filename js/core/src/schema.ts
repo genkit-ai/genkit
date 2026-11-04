@@ -516,7 +516,7 @@ function issuesToDetails(
   return issues.map((issue) => ({
     path:
       (issue.path ?? [])
-        .map((p) => String(typeof p === 'object' ? p.key : p))
+        .map((p) => String(p && typeof p === 'object' ? p.key : p))
         .join('.') || '(root)',
     message: issue.message,
   }));
