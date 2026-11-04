@@ -18,17 +18,21 @@ import * as assert from 'assert';
 import { z } from 'genkit';
 import { genkit } from 'genkit/beta';
 import { spawn } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { box } from '../src/box.js';
 import { sandboxExec } from '../src/providers/sandbox-exec.js';
+import { sessionRoute } from '../src/route.js';
 import { execRunner } from '../src/runners/exec-runner.js';
 import { childEnv } from '../src/runners/util.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const boxedEntry = path.join(here, 'fixtures', 'boxed-entry.ts');
 const nestedEntry = path.join(here, 'fixtures', 'nested-entry.ts');
+const storedAgentEntry = path.join(here, 'fixtures', 'stored-agent-entry.ts');
 const TSX = path.join(here, '..', 'node_modules', '.bin', 'tsx');
 
 describe('childEnv', () => {
@@ -167,6 +171,61 @@ describe('execRunner (integration)', () => {
     // The boxed echo model/agent replies with `echo:...`.
     const text = res.message.content.map((p) => p.text ?? '').join('');
     assert.ok(text.includes('echo:'), `unexpected agent reply: ${text}`);
+  });
+
+  it('defineAgent: a registered boxed agent keeps its session across turns', async () => {
+    const ai = genkit({});
+    const b = box(ai, { runner: execRunner({ cmd: `${TSX} ${boxedEntry}` }) });
+    runners.push(b);
+    const echo = b.defineAgent({
+      name: 'echoAgent',
+      stateManagement: 'server',
+    });
+
+    const chat = echo.chat();
+    await chat.send('one');
+    const second = await chat.send('two');
+    // The second turn resumed the first turn's snapshot inside the box, so the
+    // conversation holds both exchanges.
+    const texts = second.messages.map((m) =>
+      m.content.map((p) => p.text ?? '').join('')
+    );
+    assert.ok(texts.includes('one') && texts.includes('two'), `${texts}`);
+
+    // How the Dev UI drives it over reflection: run() with an init.
+    const res = await echo.run(
+      { message: { role: 'user', content: [{ text: 'three' }] } },
+      { init: { snapshotId: chat.snapshotId } }
+    );
+    assert.ok(res.telemetry.traceId, 'caller-side trace id');
+    const reply = res.result.message?.content.map((p) => p.text).join('');
+    assert.ok(reply?.startsWith('echo:'), `unexpected reply: ${reply}`);
+  });
+
+  it('sessionRoute + a shared store: a turn on another box continues the session', async () => {
+    const storeDir = mkdtempSync(path.join(tmpdir(), 'box-sessions-'));
+    const ai = genkit({});
+    const b = box(ai, {
+      runner: execRunner({
+        cmd: `${TSX} ${storedAgentEntry}`,
+        env: { BOX_TEST_STORE_DIR: storeDir },
+      }),
+      route: sessionRoute,
+    });
+    runners.push(b);
+    const agent = b.defineAgent({
+      name: 'storedAgent',
+      stateManagement: 'server',
+    });
+
+    const chat = agent.chat({ sessionId: 'alice' });
+    const first = await chat.send('one'); // names alice: alice's box
+    // Resumes by snapshot alone, so it lands on the shared box, which loads
+    // the session from the store.
+    const second = await chat.send('two');
+    const pidOf = (text: string) => /pid=(\d+)/.exec(text)?.[1];
+    assert.match(second.text, /^turns=2 /);
+    assert.notStrictEqual(pidOf(first.text), pidOf(second.text));
   });
 
   it('accepts cmd as an argv array', async () => {
