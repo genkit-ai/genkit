@@ -2461,6 +2461,73 @@ func TestGenerateData(t *testing.T) {
 	})
 }
 
+func TestGenerateDataJSONValues(t *testing.T) {
+	testGenerateDataJSONValue(t, "integer", 42)
+	testGenerateDataJSONValue(t, "zero", 0)
+	testGenerateDataJSONValue(t, "false", false)
+	testGenerateDataJSONValue(t, "escaped string", "line one\n\"line two\"\\end")
+	testGenerateDataJSONValue(t, "object", struct {
+		Count int `json:"count"`
+	}{Count: 42})
+	testGenerateDataJSONValue(t, "array", []int{1, 2})
+}
+
+func testGenerateDataJSONValue[Out any](t *testing.T, name string, want Out) {
+	t.Helper()
+	t.Run(name, func(t *testing.T) {
+		raw, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := newTestRegistry(t)
+		model := defineFakeModel(t, r, fakeModelConfig{
+			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+				if cb != nil {
+					if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart(string(raw))}}); err != nil {
+						return nil, err
+					}
+				}
+				return &ModelResponse{
+					Request:      req,
+					Message:      NewModelTextMessage(string(raw)),
+					FinishReason: FinishReasonStop,
+				}, nil
+			},
+		})
+
+		t.Run("GenerateData", func(t *testing.T) {
+			got, _, err := GenerateData[Out](t.Context(), r, WithModel(model), WithPrompt("Return the requested JSON value."))
+			if err != nil {
+				t.Fatalf("GenerateData() error = %v", err)
+			}
+			if got == nil {
+				t.Fatal("GenerateData() returned no output")
+			}
+			assertEqual(t, *got, want)
+		})
+
+		t.Run("GenerateDataStream", func(t *testing.T) {
+			var final *StreamValue[Out, Out]
+			var chunks []Out
+			for value, err := range GenerateDataStream[Out](t.Context(), r, WithModel(model), WithPrompt("Return the requested JSON value.")) {
+				if err != nil {
+					t.Fatalf("GenerateDataStream() error = %v", err)
+				}
+				if value.Done {
+					final = value
+				} else {
+					chunks = append(chunks, value.Chunk)
+				}
+			}
+			if final == nil {
+				t.Fatal("GenerateDataStream() yielded no final response")
+			}
+			assertEqual(t, final.Output, want)
+			assertEqual(t, chunks, []Out{want})
+		})
+	})
+}
+
 // TestGenerateDataCallerSchemaOverride verifies that GenerateData injects the
 // output type inferred from Out but still lets a caller-supplied
 // WithOutputSchema win the schema slot, while typed extraction keeps working.
