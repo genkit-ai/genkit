@@ -77,10 +77,10 @@ export function toZodSchema<S extends GenkitSchema>(
   const cached = zodAdapters.get(schema);
   if (cached) return cached as z.ZodType<InferOutput<S>, InferInput<S>>;
   const std = schema['~standard'];
-  // Standard Schema validation may be async, so this adapter requires
-  // parseAsync/safeParseAsync when parsed directly with zod.
-  const adapter = z.unknown().transform(async (value, ctx) => {
-    const result = await std.validate(value);
+  const toResult = (
+    result: StandardSchemaV1.Result<InferOutput<S>>,
+    ctx: z.core.$RefinementCtx<unknown>
+  ): InferOutput<S> => {
     if (result.issues) {
       for (const issue of result.issues) {
         ctx.addIssue({
@@ -93,7 +93,18 @@ export function toZodSchema<S extends GenkitSchema>(
       }
       return z.NEVER;
     }
-    return result.value as InferOutput<S>;
+    return result.value;
+  };
+  // Stays synchronous when the library validates synchronously (zod, ArkType,
+  // Valibot all do), so composed schemas still work with `.parse()`. Only
+  // libraries with async validation require `.parseAsync()`.
+  const adapter = z.unknown().transform((value, ctx) => {
+    const result = std.validate(value) as
+      | StandardSchemaV1.Result<InferOutput<S>>
+      | Promise<StandardSchemaV1.Result<InferOutput<S>>>;
+    return result instanceof Promise
+      ? result.then((r) => toResult(r, ctx))
+      : toResult(result, ctx);
   });
   foreignSchemas.set(adapter, schema);
   zodAdapters.set(schema, adapter);

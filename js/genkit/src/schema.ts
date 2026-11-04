@@ -32,6 +32,7 @@ export {
   annotateSchema,
   parseSchema,
   toJsonSchema,
+  toZodSchema,
   validateSchema,
   type GenkitSchema,
   type InferInput,
