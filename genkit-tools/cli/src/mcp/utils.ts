@@ -92,18 +92,21 @@ export function resolveProjectRoot(
 export class McpRuntimeManager {
   private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
-  private telemetryServers = new Map<string, string>();
+  private telemetryServers = new Map<string, Promise<string>>();
 
   /** @param auth `--experimental-auth`. */
   constructor(private readonly auth?: boolean) {}
 
-  private async getTelemetryServerUrl(projectRoot: string): Promise<string> {
-    let url = this.telemetryServers.get(projectRoot);
-    if (!url) {
-      url = await resolveTelemetryServer({ projectRoot });
-      this.telemetryServers.set(projectRoot, url);
+  private getTelemetryServerUrl(projectRoot: string): Promise<string> {
+    let urlPromise = this.telemetryServers.get(projectRoot);
+    if (!urlPromise) {
+      urlPromise = resolveTelemetryServer({ projectRoot }).catch((err) => {
+        this.telemetryServers.delete(projectRoot);
+        throw err;
+      });
+      this.telemetryServers.set(projectRoot, urlPromise);
     }
-    return url;
+    return urlPromise;
   }
 
   async getManager(projectRoot: string) {
