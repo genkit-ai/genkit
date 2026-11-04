@@ -278,8 +278,8 @@ export function toJsonSchema(
   label = 'schema'
 ): JSONSchema | undefined {
   // if neither jsonSchema or schema is present return undefined
-  if (!jsonSchema && !schema) return null;
-  if (jsonSchema) return jsonSchema;
+  if (!hasJsonSchema(jsonSchema) && !schema) return null;
+  if (hasJsonSchema(jsonSchema)) return jsonSchema;
   if (jsonSchemas.has(schema!)) return jsonSchemas.get(schema!)!;
   assertGenkitSchema(schema, label);
   if (!isZodSchema(schema)) {
@@ -474,8 +474,10 @@ function toValidationErrorDetails(
   const under = (e: OutputUnit, parent: OutputUnit) =>
     e !== parent && e.keywordLocation.startsWith(parent.keywordLocation + '/');
   // `additionalProperties: false` also reports a "False boolean schema" error;
-  // the additionalProperties error names the offending property.
+  // the additionalProperties error names the offending property. A top-level
+  // `false` schema reports only the latter, so keep it then.
   let kept = errors.filter((e) => e.keyword !== 'false');
+  if (kept.length === 0) kept = errors;
   const combinators = kept.filter((e) => COMBINATOR_KEYWORDS.has(e.keyword));
   kept = kept.filter((e) => !combinators.some((c) => under(e, c)));
   kept = kept.filter(
@@ -498,6 +500,14 @@ function toValidationErrorDetails(
     }
   }
   return details;
+}
+
+/**
+ * Whether a JSON schema was provided. `false` (rejects everything) and `true`
+ * are valid schemas, so this can't be a truthiness check.
+ */
+function hasJsonSchema(jsonSchema: JSONSchema): boolean {
+  return jsonSchema !== undefined && jsonSchema !== null;
 }
 
 function schemaDraft(jsonSchema: JSONSchema): SchemaDraft {
@@ -533,15 +543,21 @@ export function validateSchema(
   options: ProvidedSchema
 ): ValidationResponse {
   const toValidate = toJsonSchema(options);
-  if (!toValidate) {
+  if (!hasJsonSchema(toValidate)) {
     return { valid: true, schema: toValidate };
   }
   // An interpreting validator (no codegen), so it also runs where `eval` is
-  // unavailable, e.g. Cloudflare Workers.
-  let validator = jsonSchemaValidators.get(toValidate);
+  // unavailable, e.g. Cloudflare Workers. Boolean schemas (`true`/`false`)
+  // can't be WeakMap keys and are cheap to build, so only objects are cached.
+  let validator =
+    typeof toValidate === 'object'
+      ? jsonSchemaValidators.get(toValidate)
+      : undefined;
   if (!validator) {
     validator = new Validator(toValidate, schemaDraft(toValidate), false);
-    jsonSchemaValidators.set(toValidate, validator);
+    if (typeof toValidate === 'object') {
+      jsonSchemaValidators.set(toValidate, validator);
+    }
   }
   const result = validator.validate(sanitizeForJsonSchema(data));
   if (!result.valid) {
@@ -637,7 +653,7 @@ export function parseSchema<T = unknown>(
   options: ProvidedSchema
 ): T {
   const { schema, jsonSchema } = options;
-  if (jsonSchema || !schema) {
+  if (hasJsonSchema(jsonSchema) || !schema) {
     return throwOnFailure(data, options, validateJsonSchema<T>(data, options));
   }
   if (isIgnoredValue(schema)) return data as T;
@@ -669,7 +685,7 @@ export async function parseSchemaAsync<T = unknown>(
   options: ProvidedSchema
 ): Promise<T> {
   const { schema, jsonSchema } = options;
-  if (jsonSchema || !schema) {
+  if (hasJsonSchema(jsonSchema) || !schema) {
     return throwOnFailure(data, options, validateJsonSchema<T>(data, options));
   }
   if (isIgnoredValue(schema)) return data as T;
