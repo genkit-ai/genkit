@@ -22,6 +22,7 @@ from structlog.testing import capture_logs
 from genkit._core._constants import GENKIT_VERSION
 from genkit._core._environment import GENKIT_ENV
 from genkit._core._logger import configure_structlog_level, get_logger, is_debug_enabled
+from genkit._core._reflection import create_reflection_asgi_app
 from genkit._core._reflection_v2 import ReflectionServerV2
 from genkit._core._registry import Registry
 from genkit._core._telemetry import _log_exporter as log_exporter
@@ -347,6 +348,36 @@ def test_handshake_enables_log_export_when_env_url_missing() -> None:
         server.apply_handshake_telemetry('http://localhost:4033')
         assert log_export_is_enabled() is True
         server.apply_handshake_telemetry('http://localhost:4033')
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_reset_export', '_dev_env')
+async def test_notify_enables_log_export_when_env_url_missing() -> None:
+    """The v1 /api/notify URL turns on log export too, same as the v2 handshake."""
+    os.environ.pop('GENKIT_TELEMETRY_SERVER', None)
+    app = create_reflection_asgi_app(Registry())
+
+    with patch('genkit._core._reflection.connect_developer_ui_collector') as connect:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            response = await client.post('/api/notify', json={'telemetryServerUrl': 'http://localhost:4033'})
+
+    assert response.status_code == 200
+    connect.assert_called_once_with(url='http://localhost:4033')
+    assert log_export_is_enabled() is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('_reset_export', '_dev_env')
+@pytest.mark.parametrize('body', [{}, {'telemetryServerUrl': ''}], ids=['no-url', 'empty-url'])
+async def test_notify_without_url_leaves_log_export_off(body: dict[str, str]) -> None:
+    os.environ.pop('GENKIT_TELEMETRY_SERVER', None)
+    app = create_reflection_asgi_app(Registry())
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post('/api/notify', json=body)
+
+    assert response.status_code == 200
+    assert log_export_is_enabled() is False
 
 
 def test_build_log_record_bounds_and_redacts_attrs() -> None:
