@@ -283,7 +283,6 @@ class ToolContext(ActionRunContext[ChunkT]):
         super().__init__(
             context=ctx.context,
             streaming_callback=ctx.streaming_callback,
-            abort_signal=ctx.abort_signal,
         )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input

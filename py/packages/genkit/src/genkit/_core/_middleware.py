@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import re
 from collections.abc import Awaitable, Callable, Iterable
@@ -285,15 +284,13 @@ class MiddlewareContext:
     find what the app defined. Inside an agent, read the session with
     ``genkit.exp.current_session()``. Also carries a copy of the call's
     ``context=`` (auth, secrets; the same dict flows and tools read as
-    ``ctx.context``), streaming hooks, and the abort signal for the whole
-    generate invocation.
+    ``ctx.context``) and streaming hooks.
 
     A callback stored on ``on_chunk`` that raises fails the turn; see
     ``replace_on_chunk``.
     """
 
     ai: GenkitLike
-    abort_signal: asyncio.Event
     context: dict[str, object]
     _on_chunk: Callable[[ModelResponseChunk], None] | None
     telemetry_labels: dict[str, str] | None
@@ -302,13 +299,11 @@ class MiddlewareContext:
         self,
         ai: GenkitLike,
         *,
-        abort_signal: asyncio.Event | None = None,
         context: dict[str, object] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
         telemetry_labels: dict[str, str] | None = None,
     ) -> None:
         self.ai = ai
-        self.abort_signal = abort_signal if abort_signal is not None else asyncio.Event()
         self.context = context if context is not None else {}
         self._on_chunk = _guard_on_chunk(on_chunk)
         self.telemetry_labels = telemetry_labels

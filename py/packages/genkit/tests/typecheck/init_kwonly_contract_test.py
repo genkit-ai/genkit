@@ -23,7 +23,6 @@ keyword-only options, and reject extra positional arguments past ``*``. Each
 checker fails on an unused ignore comment here, so dropping ``*`` breaks CI.
 """
 
-import asyncio
 import inspect
 from collections.abc import AsyncIterator, Callable
 
@@ -54,7 +53,6 @@ async def _seat_table(
 def test_keyword_only_constructors_accept_documented_shapes() -> None:
     """Positional identity args plus keyword options type-check and construct cleanly."""
     ai = Genkit()
-    abort = asyncio.Event()
 
     action = Action(
         ActionKind.CUSTOM,
@@ -81,7 +79,7 @@ def test_keyword_only_constructors_accept_documented_shapes() -> None:
     )
     assert prompt.ref['name'] == 'menu_summary.dinner'
 
-    run_ctx = ActionRunContext(context={'table': 4}, abort_signal=abort)
+    run_ctx = ActionRunContext(context={'table': 4})
     flow_ctx = FlowContext(context={'table': 4})
     model_ctx: ModelContext = ModelContext(context={'table': 4})
     agent_ctx: AgentContext = AgentContext(context={'table': 4})
@@ -92,7 +90,6 @@ def test_keyword_only_constructors_accept_documented_shapes() -> None:
     )
     mw_ctx = MiddlewareContext(
         ai,
-        abort_signal=abort,
         context={'table': 4},
         telemetry_labels={'service': 'dining'},
     )
@@ -107,7 +104,6 @@ def test_keyword_only_constructors_accept_documented_shapes() -> None:
 def test_positional_arguments_past_star_fail_type_checkers_and_runtime() -> None:
     """Passing optional configuration positionally is both a static type error and a runtime TypeError."""
     ai = Genkit()
-    abort = asyncio.Event()
     flow_ctx = FlowContext()
 
     with pytest.raises(TypeError, match='positional argument'):
@@ -135,7 +131,7 @@ def test_positional_arguments_past_star_fail_type_checkers_and_runtime() -> None
         ToolContext(flow_ctx, {'approved': True})  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[bad-argument-count]  # ty: ignore[too-many-positional-arguments]
 
     with pytest.raises(TypeError, match='positional argument'):
-        MiddlewareContext(ai, abort)  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[bad-argument-count]  # ty: ignore[too-many-positional-arguments]
+        MiddlewareContext(ai, {'table': 4})  # pyright: ignore[reportCallIssue]  # pyrefly: ignore[bad-argument-count]  # ty: ignore[too-many-positional-arguments]
 
 
 @pytest.mark.parametrize(

@@ -63,6 +63,7 @@ from genkit._ai._generate import (
     generate_action,
     register_middleware,
     register_tools,
+    start_generate_stream,
 )
 from genkit._ai._model import (
     Message,
@@ -93,7 +94,7 @@ from genkit._ai._prompt import (
 from genkit._ai._tools import define_interrupt
 from genkit._core._action import Action, ActionKind, FlowContext, get_current_context
 from genkit._core._background import missing_operation_error
-from genkit._core._channel import run_loop, start_stream
+from genkit._core._channel import run_loop
 from genkit._core._config_check import layer_call_config
 from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
@@ -1837,12 +1838,23 @@ class Genkit:
 
         Example:
             result = ai.generate_stream(prompt='Write a haiku about rain.')
-            async for chunk in result:
+            async for chunk in result.stream:
                 print(chunk.text)
             final = await result.response
         """
+        initial_msgs: list[Message] = []
+        if not isinstance(messages, str):
+            if system:
+                initial_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
+            if messages:
+                initial_msgs.extend(messages)
+            if prompt:
+                initial_msgs.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
 
-        async def _run_generate(send_chunk: Callable[[ModelResponseChunk], None]) -> ModelResponse[Any]:
+        async def _run_generate(
+            send_chunk: Callable[[ModelResponseChunk], None],
+            caller_stopped: asyncio.Event,
+        ) -> ModelResponse[Any]:
             return await self._generate(
                 model=model,
                 prompt=prompt,
@@ -1865,10 +1877,11 @@ class Genkit:
                 use=use,
                 docs=docs,
                 on_chunk=send_chunk,
+                caller_stopped=caller_stopped,
             )
 
-        channel, task = start_stream(_run_generate)
-        return ModelStreamResponse[Any](stream=channel, response=task)
+        stream, task = start_generate_stream(initial_messages=initial_msgs, run=_run_generate)
+        return ModelStreamResponse[Any](stream=stream, response=task)
 
     async def _generate(
         self,
@@ -1894,6 +1907,7 @@ class Genkit:
         use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+        caller_stopped: asyncio.Event | None = None,
     ) -> ModelResponse[Any]:
         """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
 
@@ -1948,6 +1962,7 @@ class Genkit:
             options,
             on_chunk=on_chunk,
             context=context,
+            caller_stopped=caller_stopped,
         )
 
     async def embed(
