@@ -18,7 +18,7 @@
 
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from typing import Protocol
 
 from pydantic_core import to_jsonable_python
@@ -88,7 +88,7 @@ def error_sse(error: Exception) -> str:
     return _frame('error', error_body(error))
 
 
-async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
+async def to_sse(handle: StreamHandle) -> AsyncGenerator[str, None]:
     r"""Frame a streaming handle as Genkit SSE lines.
 
     Yields ``data: {"message": ...}`` for each chunk, then ``data: {"result": ...}``.
@@ -130,9 +130,17 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
     Yields:
         One SSE ``data:`` line per frame, each ending in a blank line.
     """
+    chunks = handle.stream.__aiter__()
     try:
-        async for chunk in handle.stream:
-            yield _frame('message', _frame_value(chunk))
+        try:
+            async for chunk in chunks:
+                yield _frame('message', _frame_value(chunk))
+        finally:
+            # Closing `to_sse` early (e.g. a client disconnect) closes the
+            # chunk iterator right away so the run cancels immediately.
+            aclose = getattr(chunks, 'aclose', None)
+            if aclose is not None:
+                await aclose()
         result = await handle.response
         # ModelStreamResponse boxes turn failures onto .response instead of raising
         # from .stream; re-raise here so SSE callers get the error frame and log.

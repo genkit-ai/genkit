@@ -17,6 +17,7 @@
 """Genkit Django handler for serving flows as HTTP endpoints."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -118,7 +119,7 @@ def genkit_django_handler(
     ]
     ```
 
-    Requires Django ASGI (Django 4.1+). The returned view is `csrf_exempt`
+    Requires Django ASGI (Django 5.0+). The returned view is `csrf_exempt`
     because this is a JSON API.
 
     Args:
@@ -182,8 +183,11 @@ def genkit_django_handler(
                         _log_failure(error=e, flow=flow.name, where='stream')
                         yield error_sse(e)
                         return
-                    async for line in to_sse(stream_response):
-                        yield line
+                    # a client that hangs up closes this generator; aclosing makes
+                    # that cancel the flow right away instead of whenever it's collected.
+                    async with contextlib.aclosing(to_sse(stream_response)) as lines:
+                        async for line in lines:
+                            yield line
 
                 return StreamingHttpResponse(event_stream(), content_type='text/event-stream; charset=utf-8')
 
