@@ -52,8 +52,8 @@ describe('actionToMessage', () => {
       A2UI_MIME_TYPE
     );
     assert.deepStrictEqual(
-      (dataPart as { data: { envelopes: unknown[] } }).data,
-      { envelopes: [{ action }] }
+      (dataPart as { data: { messages: unknown[] } }).data,
+      { messages: [{ action }] }
     );
   });
 

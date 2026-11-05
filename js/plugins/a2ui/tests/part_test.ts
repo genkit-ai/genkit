@@ -41,7 +41,7 @@ const sampleActionEnvelope: ActionEnvelope = {
 describe('a2uiPart', () => {
   it('wraps envelopes in a data part tagged with the a2ui mime type', () => {
     const part = a2uiPart([sampleEnvelope]);
-    assert.deepStrictEqual(part.data, { envelopes: [sampleEnvelope] });
+    assert.deepStrictEqual(part.data, { messages: [sampleEnvelope] });
     assert.strictEqual(part.metadata.mimeType, A2UI_MIME_TYPE);
   });
 });
@@ -58,17 +58,17 @@ describe('isA2uiPart', () => {
   it('rejects a data part with a different mime type', () => {
     assert.strictEqual(
       isA2uiPart({
-        data: { envelopes: [] },
+        data: { messages: [] },
         metadata: { mimeType: 'application/json' },
       }),
       false
     );
   });
 
-  it('rejects a data part whose data.envelopes is not an array', () => {
+  it('rejects a data part whose data.messages is not an array', () => {
     assert.strictEqual(
       isA2uiPart({
-        data: { envelopes: {} },
+        data: { messages: {} },
         metadata: { mimeType: A2UI_MIME_TYPE },
       }),
       false
@@ -141,9 +141,19 @@ describe('a2uiEnvelopesFromParts', () => {
     // surface envelopes. Arrays are `typeof 'object'`, and a stray object like
     // `{ foo: 1 }` carries no surface discriminant, so both are dropped.
     const part = {
-      data: { envelopes: [null, 'nope', [], { foo: 1 }, sampleEnvelope] },
+      data: { messages: [null, 'nope', [], { foo: 1 }, sampleEnvelope] },
       metadata: { mimeType: A2UI_MIME_TYPE },
     };
     assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);
+  });
+
+  it('still reads parts written with the pre-spec `envelopes` key', () => {
+    // Persisted sessions from before the rename must keep replaying.
+    const legacy = {
+      data: { envelopes: [sampleEnvelope] },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.ok(isA2uiPart(legacy));
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([legacy]), [sampleEnvelope]);
   });
 });
