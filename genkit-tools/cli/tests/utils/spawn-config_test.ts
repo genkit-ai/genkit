@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import * as fs from 'fs/promises';
+import { beforeEach, describe, expect, it, vi, type Mocked } from 'vitest';
 import { SERVER_HARNESS_COMMAND } from '../../src/commands/server-harness';
 import { type CLIRuntimeInfo } from '../../src/utils/runtime-detector';
 import {
@@ -23,12 +23,12 @@ import {
   validateExecutablePath,
 } from '../../src/utils/spawn-config';
 
-jest.mock('fs/promises');
-const mockedFs = fs as jest.Mocked<typeof fs>;
+vi.mock('fs/promises');
+const mockedFs = fs as Mocked<typeof fs>;
 
 describe('spawn-config', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   describe('buildServerHarnessSpawnConfig', () => {

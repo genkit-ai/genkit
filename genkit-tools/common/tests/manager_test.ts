@@ -14,18 +14,11 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import fs from 'fs/promises';
 import http from 'http';
 import os from 'os';
 import path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RuntimeManager } from '../src/manager/manager';
 import {
   REFLECTION_SECRET_HEADER,
@@ -35,17 +28,18 @@ import {
 import { RuntimeEvent, type RuntimeInfo } from '../src/manager/types';
 import { logger } from '../src/utils/logger';
 
-jest.mock('chokidar', () => ({
-  watch: jest.fn().mockReturnValue({
-    on: jest.fn(),
-    close: jest.fn(),
-  }),
-}));
+vi.mock('chokidar', () => {
+  const watch = vi.fn().mockReturnValue({
+    on: vi.fn(),
+    close: vi.fn(),
+  });
+  return { watch, default: { watch } };
+});
 
 describe('RuntimeManager', () => {
   it('should allow unsubscribing from runtime events', async () => {
     const manager = await RuntimeManager.create({ projectRoot: '.' });
-    const listener = jest.fn();
+    const listener = vi.fn();
 
     // Subscribe
     const unsubscribe = manager.onRuntimeEvent(listener);
@@ -274,9 +268,7 @@ describe('RuntimeManager reflection auth', () => {
   });
 
   it('does not log the secret from an invalid discovery file', async () => {
-    const errorSpy = jest
-      .spyOn(logger, 'error')
-      .mockImplementation(() => logger);
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => logger);
     try {
       // Missing required fields (pid, reflectionServerUrl, ...).
       await withRuntimeFile({ id: 'rt-bad', reflectionSecret: 'top-secret' });
@@ -288,9 +280,7 @@ describe('RuntimeManager reflection auth', () => {
   });
 
   it('does not log the secret from a corrupt discovery file', async () => {
-    const errorSpy = jest
-      .spyOn(logger, 'error')
-      .mockImplementation(() => logger);
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => logger);
     try {
       const created = (await RuntimeManager.create({
         projectRoot,

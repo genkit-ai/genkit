@@ -22,13 +22,21 @@ import {
   waitUntilHealthy,
   type DevToolsInfo,
 } from '@genkit-ai/tools-common/utils';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import axios from 'axios';
 import { spawn, type ChildProcess } from 'child_process';
 import * as clc from 'colorette';
 import * as fs from 'fs/promises';
 import open from 'open';
 import path from 'path';
+import {
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mocked,
+  type MockedFunction,
+} from 'vitest';
 import { uiStart } from '../../src/commands/ui-start';
 import { detectCLIRuntime } from '../../src/utils/runtime-detector';
 import {
@@ -37,43 +45,44 @@ import {
 } from '../../src/utils/spawn-config';
 
 // Mock all external dependencies
-jest.mock('@genkit-ai/tools-common/utils');
-jest.mock('axios');
-jest.mock('child_process');
-jest.mock('colorette');
-jest.mock('fs/promises');
+vi.mock('@genkit-ai/tools-common/utils');
+vi.mock('axios');
+vi.mock('child_process');
+vi.mock('colorette');
+vi.mock('fs/promises');
 // Use real getPort - don't mock it
-jest.mock('open');
-jest.mock('../../src/utils/runtime-detector');
-jest.mock('../../src/utils/spawn-config');
+vi.mock('open');
+vi.mock('../../src/utils/runtime-detector');
+vi.mock('../../src/utils/spawn-config');
 
-const mockedFindProjectRoot = findProjectRoot as jest.MockedFunction<
+const mockedFindProjectRoot = findProjectRoot as MockedFunction<
   typeof findProjectRoot
 >;
-const mockedFindServersDir = findServersDir as jest.MockedFunction<
+const mockedFindServersDir = findServersDir as MockedFunction<
   typeof findServersDir
 >;
-const mockedIsValidDevToolsInfo = isValidDevToolsInfo as jest.MockedFunction<
+const mockedIsValidDevToolsInfo = isValidDevToolsInfo as MockedFunction<
   typeof isValidDevToolsInfo
 >;
-const mockedLogger = logger as jest.Mocked<typeof logger>;
-const mockedWaitUntilHealthy = waitUntilHealthy as jest.MockedFunction<
+const mockedLogger = logger as Mocked<typeof logger>;
+const mockedWaitUntilHealthy = waitUntilHealthy as MockedFunction<
   typeof waitUntilHealthy
 >;
-const mockedAxios = axios as jest.Mocked<typeof axios>;
-const mockedSpawn = spawn as jest.MockedFunction<typeof spawn>;
-const mockedClc = clc as jest.Mocked<typeof clc>;
-const mockedFs = fs as jest.Mocked<typeof fs>;
-const mockedOpen = open as jest.MockedFunction<typeof open>;
-const mockedDetectCLIRuntime = detectCLIRuntime as jest.MockedFunction<
+const mockedAxios = axios as Mocked<typeof axios>;
+const mockedSpawn = spawn as MockedFunction<typeof spawn>;
+const mockedClc = clc as Mocked<typeof clc>;
+const mockedFs = fs as Mocked<typeof fs>;
+const mockedOpen = open as MockedFunction<typeof open>;
+const mockedDetectCLIRuntime = detectCLIRuntime as MockedFunction<
   typeof detectCLIRuntime
 >;
 const mockedBuildServerHarnessSpawnConfig =
-  buildServerHarnessSpawnConfig as jest.MockedFunction<
+  buildServerHarnessSpawnConfig as MockedFunction<
     typeof buildServerHarnessSpawnConfig
   >;
-const mockedValidateExecutablePath =
-  validateExecutablePath as jest.MockedFunction<typeof validateExecutablePath>;
+const mockedValidateExecutablePath = validateExecutablePath as MockedFunction<
+  typeof validateExecutablePath
+>;
 
 describe('ui:start', () => {
   const createCommand = () =>
@@ -111,8 +120,8 @@ describe('ui:start', () => {
   };
 
   const mockChildProcess = {
-    on: jest.fn().mockReturnThis(),
-    unref: jest.fn(),
+    on: vi.fn().mockReturnThis(),
+    unref: vi.fn(),
     stdin: null,
     stdout: null,
     stderr: null,
@@ -123,28 +132,28 @@ describe('ui:start', () => {
     signalCode: null,
     spawnargs: [],
     spawnfile: '',
-    kill: jest.fn(),
-    send: jest.fn(),
-    disconnect: jest.fn(),
-    ref: jest.fn(),
-    addListener: jest.fn(),
-    emit: jest.fn(),
-    once: jest.fn(),
-    prependListener: jest.fn(),
-    prependOnceListener: jest.fn(),
-    removeListener: jest.fn(),
-    removeAllListeners: jest.fn(),
-    setMaxListeners: jest.fn(),
-    getMaxListeners: jest.fn(),
-    listeners: jest.fn(),
-    rawListeners: jest.fn(),
-    listenerCount: jest.fn(),
-    eventNames: jest.fn(),
-    off: jest.fn(),
+    kill: vi.fn(),
+    send: vi.fn(),
+    disconnect: vi.fn(),
+    ref: vi.fn(),
+    addListener: vi.fn(),
+    emit: vi.fn(),
+    once: vi.fn(),
+    prependListener: vi.fn(),
+    prependOnceListener: vi.fn(),
+    removeListener: vi.fn(),
+    removeAllListeners: vi.fn(),
+    setMaxListeners: vi.fn(),
+    getMaxListeners: vi.fn(),
+    listeners: vi.fn(),
+    rawListeners: vi.fn(),
+    listenerCount: vi.fn(),
+    eventNames: vi.fn(),
+    off: vi.fn(),
   } as unknown as ChildProcess;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     mockedFindProjectRoot.mockResolvedValue(mockProjectRoot);
     mockedFindServersDir.mockResolvedValue(mockServersDir);
     mockedDetectCLIRuntime.mockReturnValue(mockCLIRuntime);

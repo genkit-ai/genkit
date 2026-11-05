@@ -14,14 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineDocsTool } from '../../src/mcp/docs';
 import * as docsUtils from '../../src/utils/docs';
 import { SAMPLE_DOCS } from '../utils/docs';
@@ -31,10 +24,10 @@ describe('MCP docs tools', () => {
 
   beforeEach(async () => {
     registeredTools = {};
-    jest.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
+    vi.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
 
     const mockServer: any = {
-      registerTool: jest.fn((name: string, _config: any, handler: any) => {
+      registerTool: vi.fn((name: string, _config: any, handler: any) => {
         registeredTools[name] = handler;
       }),
     };
@@ -42,12 +35,12 @@ describe('MCP docs tools', () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('list_genkit_docs', () => {
     it('auto-detects project language when language is omitted', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
 
       const res = await registeredTools['list_genkit_docs']({});
       expect(docsUtils.detectProjectLanguage).toHaveBeenCalledWith(
@@ -60,7 +53,7 @@ describe('MCP docs tools', () => {
     });
 
     it('respects an explicit language override', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       const res = await registeredTools['list_genkit_docs']({
         language: 'dart',
@@ -74,7 +67,7 @@ describe('MCP docs tools', () => {
 
   describe('search_genkit_docs', () => {
     it('auto-detects project language when language is omitted', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       const res = await registeredTools['search_genkit_docs']({
         query: 'Flows',
@@ -86,7 +79,7 @@ describe('MCP docs tools', () => {
     });
 
     it('respects an explicit language override', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       const res = await registeredTools['search_genkit_docs']({
         query: 'Flows',

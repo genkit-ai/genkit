@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import type { TraceData } from '../../src/types';
 import { getSpanStatus, stackTraceSpans } from '../../src/utils';
 import { BASE_FLOW_SPAN_ID, MockTrace } from './trace';
