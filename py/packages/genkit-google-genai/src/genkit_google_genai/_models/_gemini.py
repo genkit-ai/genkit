@@ -1531,10 +1531,19 @@ class GeminiModel:
         Returns:
             Genai tool compatible with Gemini API, plus how it was declared.
         """
-        params = self._convert_schema_property(tool.input_schema)
+        dropped: list[str] = []
+        params = self._convert_schema_property(tool.input_schema, dropped=dropped)
+        if dropped:
+            logger.warning(
+                'Sending tool %s without required properties %s, which cannot be converted',
+                tool.name,
+                ', '.join(dict.fromkeys(dropped)),
+            )
         wrapped = False
         # Empty params: Gemini requires type=OBJECT even for no-arg tools.
         if not params:
+            if tool.input_schema:
+                logger.warning('Sending tool %s without its input schema, which cannot be converted', tool.name)
             params = genai_types.Schema(type=genai_types.Type.OBJECT, properties={})
         elif params.type != genai_types.Type.OBJECT:
             # wrap after convert so OBJECT / Type.OBJECT / $ref enums / ['null']
@@ -1552,6 +1561,9 @@ class GeminiModel:
                 response = self._convert_schema_property(tool.output_schema)
             except GenkitError as e:
                 logger.warning('Sending tool %s without its output schema: %s', tool.name, e.message)
+            else:
+                if response is None:
+                    logger.warning('Sending tool %s without its output schema, which cannot be converted', tool.name)
 
         wire_name = tool.name.replace('/', '__')
         function = genai_types.FunctionDeclaration(
@@ -1599,6 +1611,7 @@ class GeminiModel:
         *,
         strict: bool = False,
         ancestors: frozenset[int] = frozenset(),
+        dropped: list[str] | None = None,
     ) -> genai_types.Schema | None:
         """Convert a JSON Schema dict into a Gemini ``Schema``.
 
@@ -1626,6 +1639,7 @@ class GeminiModel:
                 out. An object with ``additionalProperties`` and no
                 ``properties`` also converts to None.
             ancestors: Ids of the nodes being converted on the current path.
+            dropped: Collects the names of required properties left out.
 
         Returns:
             Schema or None
@@ -1646,7 +1660,7 @@ class GeminiModel:
 
                 if isinstance(ref_schema, dict):
                     schema = self._convert_schema_property(
-                        cast(dict[str, object], ref_schema), root, strict=strict, ancestors=ancestors
+                        cast(dict[str, object], ref_schema), root, strict=strict, ancestors=ancestors, dropped=dropped
                     )
                 else:
                     schema = None
@@ -1661,13 +1675,19 @@ class GeminiModel:
                 branches = input_schema.get(keyword)
                 if isinstance(branches, list):
                     return self._convert_union(
-                        input_schema, keyword, cast(list[object], branches), root, strict=strict, ancestors=ancestors
+                        input_schema,
+                        keyword,
+                        cast(list[object], branches),
+                        root,
+                        strict=strict,
+                        ancestors=ancestors,
+                        dropped=dropped,
                     )
             enum = input_schema.get('enum')
             if isinstance(enum, list) and self._string_enum_members(cast(list[object], enum)) is not None:
                 nullable = any(m is None for m in cast(list[object], enum))
                 typed: dict[str, object] = {**input_schema, 'type': ['string', 'null'] if nullable else 'string'}
-                return self._convert_schema_property(typed, root, strict=strict, ancestors=ancestors)
+                return self._convert_schema_property(typed, root, strict=strict, ancestors=ancestors, dropped=dropped)
             if strict:
                 unsupported = sorted(set(input_schema) - self._SCHEMA_ANNOTATION_KEYS)
                 if unsupported:
@@ -1718,7 +1738,7 @@ class GeminiModel:
             items_value = input_schema.get('items')
             if isinstance(items_value, dict):
                 schema.items = self._convert_schema_property(
-                    cast(dict[str, object], items_value), root, strict=strict, ancestors=ancestors
+                    cast(dict[str, object], items_value), root, strict=strict, ancestors=ancestors, dropped=dropped
                 )
             if schema.items is None:
                 return None
@@ -1734,7 +1754,7 @@ class GeminiModel:
                 for key, value in properties.items():
                     nested_schema = (
                         self._convert_schema_property(
-                            cast(dict[str, object], value), root, strict=strict, ancestors=ancestors
+                            cast(dict[str, object], value), root, strict=strict, ancestors=ancestors, dropped=dropped
                         )
                         if isinstance(value, dict)
                         else None
@@ -1747,6 +1767,8 @@ class GeminiModel:
                                 status='INVALID_ARGUMENT',
                                 message=f'{self._version}: required property {key} cannot be converted',
                             )
+                        if dropped is not None:
+                            dropped.append(key)
                         schema.required = [name for name in schema.required or () if name != key] or None
 
         return schema
@@ -1760,6 +1782,7 @@ class GeminiModel:
         *,
         strict: bool,
         ancestors: frozenset[int],
+        dropped: list[str] | None,
     ) -> genai_types.Schema | None:
         """Convert an ``anyOf`` or ``oneOf`` node to ``any_of``; a ``null`` branch becomes ``nullable``.
 
@@ -1772,7 +1795,8 @@ class GeminiModel:
         converted = [
             s
             for b in typed
-            if (s := self._convert_schema_property(b, root, strict=strict, ancestors=ancestors)) is not None
+            if (s := self._convert_schema_property(b, root, strict=strict, ancestors=ancestors, dropped=dropped))
+            is not None
         ]
         if not converted:
             return None
