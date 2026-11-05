@@ -221,12 +221,12 @@ describe('McpRuntimeManager', () => {
       explicitProjectRoot: false,
     });
     await mcpManager.getManagerWithDevProcess({
-      projectRoot: '/workspace',
+      projectRoot: '/workspace/sub/..',
       command: 'npx',
       args: ['tsx', 'src/index.ts'],
       explicitProjectRoot: false,
     });
-    await mcpManager.getManager('/workspace');
+    await mcpManager.getManager('/workspace/.');
 
     expect(resolveSpy).toHaveBeenCalledTimes(1);
     expect(resolveSpy).toHaveBeenCalledWith({ projectRoot: '/workspace' });
@@ -281,12 +281,16 @@ describe('McpRuntimeManager', () => {
     expect(resolveSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('clears cached manager after stopping if a subsequent start fails', async () => {
+  it('detaches cached manager before awaiting stop() so concurrent or post-failure calls do not return a dying manager', async () => {
     jest
       .spyOn(managerUtils, 'resolveTelemetryServer')
       .mockResolvedValue('http://localhost:4033');
+    let resolveStop1!: () => void;
+    const stop1Promise = new Promise<void>((resolve) => {
+      resolveStop1 = resolve;
+    });
     const mockRuntimeManager1 = {
-      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      stop: jest.fn<() => Promise<void>>().mockReturnValue(stop1Promise),
     } as any;
     const mockRuntimeManager2 = {
       stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -310,16 +314,21 @@ describe('McpRuntimeManager', () => {
       args: ['tsx', 'src/index.ts'],
       explicitProjectRoot: false,
     });
-    await expect(
-      mcpManager.getManagerWithDevProcess({
-        projectRoot: '/workspace',
-        command: 'npx',
-        args: ['tsx', 'src/index.ts'],
-        explicitProjectRoot: false,
-      })
-    ).rejects.toThrow('dev process failed to start');
 
-    const activeManager = await mcpManager.getManager('/workspace');
+    const restartPromise = mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+
+    // While mockRuntimeManager1.stop() is still pending, a concurrent getManager
+    // call should not receive the dying mockRuntimeManager1 instance.
+    const concurrentGetPromise = mcpManager.getManager('/workspace');
+    resolveStop1();
+
+    await expect(restartPromise).rejects.toThrow('dev process failed to start');
+    const activeManager = await concurrentGetPromise;
 
     expect(mockRuntimeManager1.stop).toHaveBeenCalledTimes(1);
     expect(startManagerSpy).toHaveBeenCalledTimes(1);

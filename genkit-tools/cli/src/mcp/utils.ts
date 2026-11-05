@@ -18,6 +18,7 @@ import {
   BaseRuntimeManager,
   GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
+import path from 'path';
 import { z } from 'zod';
 import {
   SUPPORTED_DOC_LANGUAGES,
@@ -98,35 +99,40 @@ export class McpRuntimeManager {
   constructor(private readonly auth?: boolean) {}
 
   private getTelemetryServerUrl(projectRoot: string): Promise<string> {
-    let urlPromise = this.telemetryServers.get(projectRoot);
+    const resolvedRoot = path.resolve(projectRoot);
+    let urlPromise = this.telemetryServers.get(resolvedRoot);
     if (!urlPromise) {
-      urlPromise = resolveTelemetryServer({ projectRoot }).catch((err) => {
-        this.telemetryServers.delete(projectRoot);
-        throw err;
-      });
-      this.telemetryServers.set(projectRoot, urlPromise);
+      urlPromise = resolveTelemetryServer({ projectRoot: resolvedRoot }).catch(
+        (err) => {
+          this.telemetryServers.delete(resolvedRoot);
+          throw err;
+        }
+      );
+      this.telemetryServers.set(resolvedRoot, urlPromise);
     }
     return urlPromise;
   }
 
   async getManager(projectRoot: string) {
-    if (this.manager && this.currentProjectRoot === projectRoot) {
+    const resolvedRoot = path.resolve(projectRoot);
+    if (this.manager && this.currentProjectRoot === resolvedRoot) {
       return this.manager;
     }
     if (this.manager) {
-      await this.manager.stop();
+      const prev = this.manager;
       this.manager = undefined;
       this.currentProjectRoot = undefined;
+      await prev.stop();
     }
-    const telemetryServerUrl = await this.getTelemetryServerUrl(projectRoot);
+    const telemetryServerUrl = await this.getTelemetryServerUrl(resolvedRoot);
     // No auth here: attaching to existing runtimes never generates a secret.
     // `this.auth` applies when a runtime is spawned (getManagerWithDevProcess).
     this.manager = await startManager({
-      projectRoot,
+      projectRoot: resolvedRoot,
       manageHealth: true,
       telemetryServerUrl,
     });
-    this.currentProjectRoot = projectRoot;
+    this.currentProjectRoot = resolvedRoot;
     return this.manager;
   }
 
@@ -137,36 +143,39 @@ export class McpRuntimeManager {
     explicitProjectRoot: boolean;
     timeout?: number;
   }): Promise<BaseRuntimeManager> {
-    const { projectRoot, command, args, timeout, explicitProjectRoot } = params;
+    const { command, args, timeout, explicitProjectRoot } = params;
+    const resolvedRoot = path.resolve(params.projectRoot);
     if (this.manager) {
-      await this.manager.stop();
+      const prev = this.manager;
       this.manager = undefined;
       this.currentProjectRoot = undefined;
+      await prev.stop();
     }
-    const telemetryServerUrl = await this.getTelemetryServerUrl(projectRoot);
+    const telemetryServerUrl = await this.getTelemetryServerUrl(resolvedRoot);
     const devManager = await startDevProcessManager(
-      projectRoot,
+      resolvedRoot,
       command,
       args,
       {
         nonInteractive: true,
         healthCheck: timeout !== 0,
         timeout,
-        cwd: explicitProjectRoot ? projectRoot : undefined,
+        cwd: explicitProjectRoot ? resolvedRoot : undefined,
         auth: this.auth,
         telemetryServerUrl,
       }
     );
     this.manager = devManager.manager;
-    this.currentProjectRoot = projectRoot;
+    this.currentProjectRoot = resolvedRoot;
     return this.manager;
   }
 
   async kill() {
     if (this.manager) {
-      await this.manager.stop();
+      const prev = this.manager;
       this.manager = undefined;
       this.currentProjectRoot = undefined;
+      await prev.stop();
     }
   }
 }
