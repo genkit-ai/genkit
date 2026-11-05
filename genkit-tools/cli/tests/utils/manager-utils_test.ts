@@ -32,7 +32,10 @@ import {
   jest,
 } from '@jest/globals';
 import getPort, { makeRange } from 'get-port';
+import { mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   getDevEnvVars,
   resolveReflectionSecret,
@@ -46,11 +49,13 @@ import {
 
 describe('resolveTelemetryServer', () => {
   let origTelemetryServer: string | undefined;
+  let projectRoot: string;
   let startTelemetrySpy: jest.SpiedFunction<
     typeof telemetryServer.startTelemetryServer
   >;
 
   beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'genkit-telemetry-'));
     origTelemetryServer = process.env.GENKIT_TELEMETRY_SERVER;
     delete process.env.GENKIT_TELEMETRY_SERVER;
     startTelemetrySpy = jest
@@ -59,6 +64,7 @@ describe('resolveTelemetryServer', () => {
   });
 
   afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true });
     if (origTelemetryServer === undefined) {
       delete process.env.GENKIT_TELEMETRY_SERVER;
     } else {
@@ -70,9 +76,9 @@ describe('resolveTelemetryServer', () => {
   it('returns GENKIT_TELEMETRY_SERVER when set without starting a server', async () => {
     process.env.GENKIT_TELEMETRY_SERVER = 'http://custom:9999';
 
-    await expect(
-      resolveTelemetryServer({ projectRoot: '/root' })
-    ).resolves.toBe('http://custom:9999');
+    await expect(resolveTelemetryServer({ projectRoot })).resolves.toBe(
+      'http://custom:9999'
+    );
     expect(startTelemetrySpy).not.toHaveBeenCalled();
   });
 
@@ -88,7 +94,7 @@ describe('resolveTelemetryServer', () => {
 
     try {
       const url = await resolveTelemetryServer({
-        projectRoot: '/root',
+        projectRoot,
         corsOrigin: 'http://localhost:4000',
       });
       const chosenPort = Number(new URL(url).port);
