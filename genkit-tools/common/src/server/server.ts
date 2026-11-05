@@ -21,17 +21,21 @@ import express, { type ErrorRequestHandler } from 'express';
 import type { Server } from 'http';
 import os from 'os';
 import path from 'path';
-import type { GenkitToolsError } from '../manager';
-import type { BaseRuntimeManager } from '../manager/manager';
-import { detectRuntimeSync, logger, writeToolsInfoFile } from '../utils';
+import type { GenkitToolsError } from '../manager/index.js';
+import type { BaseRuntimeManager } from '../manager/manager.js';
 import {
   createToolsRequestEvent,
   extractActionType,
   recordRequestEvent,
-} from '../utils/analytics';
-import { toolsPackage } from '../utils/package';
-import { downloadAndExtractUiAssets } from '../utils/ui-assets';
-import { TOOLS_SERVER_ROUTER } from './router';
+} from '../utils/analytics.js';
+import {
+  detectRuntimeSync,
+  logger,
+  writeToolsInfoFile,
+} from '../utils/index.js';
+import { toolsPackage } from '../utils/package.js';
+import { downloadAndExtractUiAssets } from '../utils/ui-assets.js';
+import { TOOLS_SERVER_ROUTER } from './router.js';
 
 const MAX_PAYLOAD_SIZE = 30000000;
 /**

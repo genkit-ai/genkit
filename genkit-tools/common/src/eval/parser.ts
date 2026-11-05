@@ -14,16 +14,16 @@
  * limitations under the License.
  */
 
-import type { Action } from '../types/action';
-import type { EvalInput, EvalMetric, EvalResult } from '../types/eval';
-import type { EvalFnResponse, EvalResponse } from '../types/evaluator';
+import type { Action } from '../types/action.js';
+import type { EvalInput, EvalMetric, EvalResult } from '../types/eval.js';
+import type { EvalFnResponse, EvalResponse } from '../types/evaluator.js';
 import {
   EVALUATOR_METADATA_KEY_DEFINITION,
   EVALUATOR_METADATA_KEY_DISPLAY_NAME,
   countBy,
   groupBy,
   meanBy,
-} from '../utils/eval';
+} from '../utils/eval.js';
 
 /** Maximum allowed unique strings / enums for generating summaries */
 export const MAX_UNIQUE_STRING_DIST = 5;

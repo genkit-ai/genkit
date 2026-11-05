@@ -31,11 +31,11 @@ import fs from 'fs/promises';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
 import path from 'path';
-import { detectCLIRuntime } from '../utils/runtime-detector';
+import { detectCLIRuntime } from '../utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,
-} from '../utils/spawn-config';
+} from '../utils/spawn-config.js';
 
 interface StartOptions {
   port?: string;

@@ -34,8 +34,8 @@ import { Command, Option } from 'commander';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
   runWithManager,
-} from '../utils/manager-utils';
-import { parsePositiveInt } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parsePositiveInt } from '../utils/option-parsers.js';
 
 interface EvalRunCliOptions {
   /** --experimental-auth. */

@@ -1,12 +1,13 @@
 {
   "name": "@genkit-ai/tools-common",
   "version": "1.45.0",
+  "type": "module",
   "scripts": {
-    "compile": "pnpm genversion && tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json",
+    "compile": "pnpm genversion && tsc",
     "build:clean": "rimraf ./lib",
     "build": "pnpm run build:clean && pnpm run compile",
     "test": "vitest run",
-    "build:watch": "pnpm genversion && tsc -b ./tsconfig.cjs.json ./tsconfig.esm.json ./tsconfig.types.json --watch",
+    "build:watch": "pnpm genversion && tsc --watch",
     "genversion": "genversion -esf --property name,version src/utils/version.ts"
   },
   "dependencies": {
@@ -54,61 +55,55 @@
   "files": [
     "lib/"
   ],
-  "types": "./lib/types/types/index.d.ts",
+  "types": "./lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/types/types/index.d.ts",
-      "require": "./lib/cjs/types/index.js",
-      "import": "./lib/esm/types/index.js",
-      "default": "./lib/esm/types/index.js"
+      "types": "./lib/types/index.d.ts",
+      "import": "./lib/types/index.js",
+      "default": "./lib/types/index.js"
     },
     "./eval": {
-      "types": "./lib/types/eval/index.d.ts",
-      "require": "./lib/cjs/eval/index.js",
-      "import": "./lib/esm/eval/index.js",
-      "default": "./lib/esm/eval/index.js"
+      "types": "./lib/eval/index.d.ts",
+      "import": "./lib/eval/index.js",
+      "default": "./lib/eval/index.js"
     },
     "./plugin": {
-      "types": "./lib/types/plugin/index.d.ts",
-      "require": "./lib/cjs/plugin/index.js",
-      "import": "./lib/esm/plugin/index.js",
-      "default": "./lib/esm/plugin/index.js"
+      "types": "./lib/plugin/index.d.ts",
+      "import": "./lib/plugin/index.js",
+      "default": "./lib/plugin/index.js"
     },
     "./manager": {
-      "types": "./lib/types/manager/index.d.ts",
-      "require": "./lib/cjs/manager/index.js",
-      "import": "./lib/esm/manager/index.js",
-      "default": "./lib/esm/manager/index.js"
+      "types": "./lib/manager/index.d.ts",
+      "import": "./lib/manager/index.js",
+      "default": "./lib/manager/index.js"
     },
     "./server": {
-      "types": "./lib/types/server/index.d.ts",
-      "require": "./lib/cjs/server/index.js",
-      "import": "./lib/esm/server/index.js",
-      "default": "./lib/esm/server/index.js"
+      "types": "./lib/server/index.d.ts",
+      "import": "./lib/server/index.js",
+      "default": "./lib/server/index.js"
     },
     "./utils": {
-      "types": "./lib/types/utils/index.d.ts",
-      "require": "./lib/cjs/utils/index.js",
-      "import": "./lib/esm/utils/index.js",
-      "default": "./lib/esm/utils/index.js"
+      "types": "./lib/utils/index.d.ts",
+      "import": "./lib/utils/index.js",
+      "default": "./lib/utils/index.js"
     }
   },
   "typesVersions": {
     "*": {
       "eval": [
-        "lib/types/eval"
+        "lib/eval"
       ],
       "plugin": [
-        "lib/types/plugin"
+        "lib/plugin"
       ],
       "manager": [
-        "lib/types/manager"
+        "lib/manager"
       ],
       "server": [
-        "lib/types/server"
+        "lib/server"
       ],
       "utils": [
-        "lib/types/utils"
+        "lib/utils"
       ]
     }
   }

@@ -14,22 +14,22 @@
  * limitations under the License.
  */
 
-export { RuntimeEvent, RuntimeInfo } from '../manager/types';
-export { GenkitError } from '../types/error';
-export * from './action';
-export * from './agent';
-export * from './agents-conformance';
-export * from './analytics';
-export * from './apis';
-export * from './document';
-export * from './env';
-export * from './eval';
-export * from './evaluator';
-export * from './log';
-export * from './middleware';
-export * from './model';
-export * from './prompt';
-export * from './reflection';
-export * from './retriever';
-export * from './status';
-export * from './trace';
+export { RuntimeEvent, RuntimeInfo } from '../manager/types.js';
+export { GenkitError } from '../types/error.js';
+export * from './action.js';
+export * from './agent.js';
+export * from './agents-conformance.js';
+export * from './analytics.js';
+export * from './apis.js';
+export * from './document.js';
+export * from './env.js';
+export * from './eval.js';
+export * from './evaluator.js';
+export * from './log.js';
+export * from './middleware.js';
+export * from './model.js';
+export * from './prompt.js';
+export * from './reflection.js';
+export * from './retriever.js';
+export * from './status.js';
+export * from './trace.js';

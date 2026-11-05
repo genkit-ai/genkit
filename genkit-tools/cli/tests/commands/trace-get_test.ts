@@ -33,11 +33,11 @@ import {
   type Mocked,
   type MockedFunction,
 } from 'vitest';
-import { traceGet } from '../../src/commands/trace-get';
-import { runWithManager } from '../../src/utils/manager-utils';
+import { traceGet } from '../../src/commands/trace-get.js';
+import { runWithManager } from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
-vi.mock('../../src/utils/manager-utils');
+vi.mock('../../src/utils/manager-utils.js');
 
 const mockedFindProjectRoot = findProjectRoot as MockedFunction<
   typeof findProjectRoot

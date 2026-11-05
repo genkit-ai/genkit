@@ -15,12 +15,12 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { evalExtractData } from '../../src/commands/eval-extract-data';
-import { evalFlow } from '../../src/commands/eval-flow';
-import { evalRun } from '../../src/commands/eval-run';
-import { mcp } from '../../src/commands/mcp';
+import { evalExtractData } from '../../src/commands/eval-extract-data.js';
+import { evalFlow } from '../../src/commands/eval-flow.js';
+import { evalRun } from '../../src/commands/eval-run.js';
+import { mcp } from '../../src/commands/mcp.js';
 
-vi.mock('../../src/mcp/server', () => ({
+vi.mock('../../src/mcp/server.js', () => ({
   startMcpServer: vi.fn(),
 }));
 

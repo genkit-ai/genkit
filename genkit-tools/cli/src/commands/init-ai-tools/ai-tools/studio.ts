@@ -15,8 +15,12 @@
  */
 
 import { Runtime } from '@genkit-ai/tools-common/manager';
-import { AIToolConfigResult, AIToolModule, InitConfigOptions } from '../types';
-import { getGenkitContext, updateContentInPlace } from '../utils';
+import {
+  AIToolConfigResult,
+  AIToolModule,
+  InitConfigOptions,
+} from '../types.js';
+import { getGenkitContext, updateContentInPlace } from '../utils.js';
 
 const RULES_PATH = '.idx/airules.md';
 

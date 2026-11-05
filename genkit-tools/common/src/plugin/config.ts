@@ -18,9 +18,10 @@ import * as clc from 'colorette';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as process from 'process';
+import { pathToFileURL } from 'url';
 import { z } from 'zod';
-import { TraceDataSchema } from '../types/trace';
-import { ToolPluginSchema } from './plugins';
+import { TraceDataSchema } from '../types/trace.js';
+import { ToolPluginSchema } from './plugins.js';
 
 const CONFIG_NAME = 'genkit-tools.conf.js';
 export const EVAL_FIELDS = ['input', 'output', 'context'] as const;
@@ -100,7 +101,9 @@ async function findToolsConfigInternal(): Promise<ToolsConfig | null> {
   while (path.resolve(current, '..') !== current) {
     if (fs.existsSync(path.resolve(current, CONFIG_NAME))) {
       const configPath = path.resolve(current, CONFIG_NAME);
-      const config = (await import(configPath)) as { default: unknown };
+      const config = (await import(pathToFileURL(configPath).href)) as {
+        default: unknown;
+      };
       const result = ToolsConfigSchema.safeParse(config.default);
       if (result.success) {
         return result.data;

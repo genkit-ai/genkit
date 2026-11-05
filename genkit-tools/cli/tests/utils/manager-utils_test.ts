@@ -46,7 +46,7 @@ import {
   startManager,
   waitForActionKeys,
   waitForRuntime,
-} from '../../src/utils/manager-utils';
+} from '../../src/utils/manager-utils.js';
 
 describe('resolveTelemetryServer', () => {
   let origTelemetryServer: string | undefined;
