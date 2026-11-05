@@ -148,7 +148,7 @@ def _build_views() -> dict[str, Any]:
     @genkit_django_handler(ai)
     @ai.flow()
     async def close_tab(table: int) -> Receipt:
-        return {'table': table}  # type: ignore[return-value]
+        return {'table': table, 'note': None}  # type: ignore[return-value]
 
     @genkit_django_handler(ai)
     @ai.flow()
@@ -440,13 +440,13 @@ async def test_django_flow_with_default_and_null_data_uses_python_default(urlcon
 
 
 @pytest.mark.asyncio
-async def test_django_flow_returning_partial_dict_for_model_sends_defaults(urlconf: None) -> None:  # noqa: ARG001
-    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+async def test_django_flow_returning_dict_for_model_omits_none_fields(urlconf: None) -> None:  # noqa: ARG001
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` omits `note` on the wire."""
     client = AsyncClient()
     response = await client.post('/close_tab', data=json.dumps({'data': 4}), content_type='application/json')
 
     assert response.status_code == 200
-    assert json.loads(response.content) == {'result': {'table': 4, 'note': None}}
+    assert json.loads(response.content) == {'result': {'table': 4}}
 
 
 @pytest.mark.asyncio

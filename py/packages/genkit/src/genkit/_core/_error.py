@@ -831,7 +831,7 @@ class BoxedFailure:
         return GenkitError(status=self.status, message=self.message, source=self.source)
 
 
-def error_status(error: object) -> int:
+def error_status(error: Exception) -> int:
     """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
     A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
@@ -880,7 +880,7 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def error_body(error: object) -> dict[str, Any]:
+def error_body(error: Exception) -> dict[str, Any]:
     """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's

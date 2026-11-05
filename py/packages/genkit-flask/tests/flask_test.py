@@ -420,8 +420,8 @@ class Receipt(BaseModel):
     note: str | None = None
 
 
-def test_flask_flow_returning_partial_dict_for_model_sends_defaults() -> None:
-    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+def test_flask_flow_returning_dict_for_model_omits_none_fields() -> None:
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` omits `note` on the wire."""
     ai = Genkit()
     app = Flask(__name__)
     app.config.update({'TESTING': True})
@@ -430,12 +430,12 @@ def test_flask_flow_returning_partial_dict_for_model_sends_defaults() -> None:
     @genkit_flask_handler(ai)
     @ai.flow()
     async def close_tab(table: int) -> Receipt:
-        return {'table': table}  # type: ignore[return-value]
+        return {'table': table, 'note': None}  # type: ignore[return-value]
 
     response = app.test_client().post('/close_tab', json={'data': 4})
 
     assert response.status_code == 200
-    assert response.json == {'result': {'table': 4, 'note': None}}
+    assert response.json == {'result': {'table': 4}}
 
 
 def test_flask_context_provider_abort_keeps_its_status() -> None:

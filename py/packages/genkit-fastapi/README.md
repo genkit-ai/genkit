@@ -153,7 +153,7 @@ from fastapi import Depends, Request
 from genkit_fastapi import handle_genkit_request
 
 
-@app.post('/api/deploy', response_model=None)
+@app.post('/api/deploy')
 async def deploy_endpoint(request: Request, user: User = Depends(current_user)):
     return await handle_genkit_request(
         request,
@@ -170,7 +170,7 @@ For custom route definitions, you can also use `@genkit_fastapi_handler`:
 from genkit_fastapi import genkit_fastapi_handler
 
 
-@app.post('/custom-chat', response_model=None)
+@app.post('/custom-chat')
 @genkit_fastapi_handler(ai)
 @ai.flow()
 async def custom_chat(prompt: str) -> str:

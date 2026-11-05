@@ -63,8 +63,29 @@ def _frame_value(obj: object) -> object:
     return to_jsonable_python(obj, by_alias=True, exclude_none=True)
 
 
+def _dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=_JSON_SEPARATORS)
+
+
 def _frame(key: str, value: object) -> str:
-    return f'data: {json.dumps({key: value}, separators=_JSON_SEPARATORS)}\n\n'
+    return f'data: {_dumps({key: value})}\n\n'
+
+
+def result_json(result: object) -> str:
+    """Encode a one-shot result as compact ``{"result": ...}`` JSON, the bytes every adapter sends."""
+    # Same encoding as to_sse frames: aliases, no null model fields.
+    return _dumps({'result': _frame_value(result)})
+
+
+def error_json(error: Exception) -> str:
+    """Encode ``error_body(error)`` as compact JSON; pair with ``error_status(error)``."""
+    return _dumps(error_body(error))
+
+
+def error_sse(error: Exception) -> str:
+    r"""Encode ``error_body(error)`` as one ``data: {"error": ...}\n\n`` SSE frame."""
+    # For failures before to_sse runs, e.g. action.stream(...) raising.
+    return _frame('error', error_body(error))
 
 
 async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
@@ -148,4 +169,4 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
             _logger.exception('served stream failed')
         else:
             _logger.warning('served stream failed: %s', e)
-        yield _frame('error', error_body(e))
+        yield error_sse(e)

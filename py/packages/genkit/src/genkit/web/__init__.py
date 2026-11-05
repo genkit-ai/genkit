@@ -18,12 +18,15 @@ r"""For serving flows over HTTP or writing a web framework adapter.
 
 ``read_body`` turns the parsed JSON body into the flow input: callers send
 ``{"data": ...}``, or ``{}`` for no input. ``wants_stream`` says whether to
-answer with server-sent events. When a flow fails, send ``error_body`` as the
-JSON body and ``error_status`` as the HTTP status. A PublicError's text
-reaches the caller, and bad input names the failing fields; anything else is
-a generic ``Internal Error`` so server details stay in your logs. A
-``ContextProvider`` reads the ``RequestData`` for one request and returns what
-goes into the flow's context.
+answer with server-sent events, and ``result_json`` encodes a one-shot return
+value as compact ``{"result": ...}`` JSON (camelCase aliases, ``None`` model
+fields omitted, nested models and datetimes serialized). When a flow fails,
+send ``error_json`` (or the ``error_body`` dict) with ``error_status`` as the
+HTTP status, or yield ``error_sse`` if a stream fails before ``to_sse`` starts.
+A PublicError's text reaches the caller, and bad input names the failing
+fields; anything else is a generic ``Internal Error`` so server details stay in
+your logs. A ``ContextProvider`` reads the ``RequestData`` for one request and
+returns what goes into the flow's context.
 
 ``to_sse`` frames a streaming handle (``flow.stream()``,
 ``ai.generate_stream()``, ``prompt.stream()``, ``chat.send_stream()``) as the
@@ -34,21 +37,22 @@ frames itself. ``to_sse`` sends the handle's result as returned, so
 ``ai.generate_stream()``, ``prompt.stream()``, and flows returning a
 ``ModelResponse`` put ``request`` (system prompt, tools, docs, history) on the
 wire; stream a flow returning ``response.text`` or ``response.output`` from a
-served route. Non-streaming results are often Pydantic models, so serialize
-them with ``pydantic_core.to_json``: compact JSON by alias, the same bytes the
-adapters send.
+served route.
 
 Example:
     ```python
-    from pydantic_core import to_json
     from starlette.requests import Request
     from starlette.responses import Response, StreamingResponse
 
-    from genkit.web import RequestData, error_body, error_status, read_body, to_sse, wants_stream
-
-
-    def to_wire(payload: object) -> bytes:
-        return to_json(payload, by_alias=True, exclude_none=True)
+    from genkit.web import (
+        RequestData,
+        error_json,
+        error_status,
+        read_body,
+        result_json,
+        to_sse,
+        wants_stream,
+    )
 
 
     # 1. Read auth off the request; the result becomes ctx.context in the flow
@@ -72,9 +76,9 @@ Example:
                 stream = order_flow.stream(input=flow_input, context=ctx)
                 return StreamingResponse(to_sse(stream), media_type='text/event-stream')
             response = await order_flow.run(input=flow_input, context=ctx)
-            return Response(to_wire({'result': response.response}), media_type='application/json')
+            return Response(result_json(response.response), media_type='application/json')
         except Exception as e:
-            return Response(to_wire(error_body(e)), status_code=error_status(e), media_type='application/json')
+            return Response(error_json(e), status_code=error_status(e), media_type='application/json')
 
 
     # POST /order {"data": {"dish": "pad thai"}}
@@ -90,15 +94,18 @@ Example:
 from genkit._core._context import ContextProvider, RequestData
 from genkit._core._error import error_body, error_status
 from genkit._core._web import read_body, wants_stream
-from genkit.web._sse import StreamHandle, to_sse
+from genkit.web._sse import StreamHandle, error_json, error_sse, result_json, to_sse
 
 __all__ = [
     'ContextProvider',
     'RequestData',
     'StreamHandle',
     'error_body',
+    'error_json',
+    'error_sse',
     'error_status',
     'read_body',
+    'result_json',
     'to_sse',
     'wants_stream',
 ]
