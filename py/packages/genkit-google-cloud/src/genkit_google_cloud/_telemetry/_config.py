@@ -29,6 +29,7 @@ from typing import Any
 import structlog
 from genkit_otel import GenAiInstrumentation
 from google.auth import default as google_auth_default
+from google.auth.credentials import Credentials as GoogleCredentials
 from google.auth.exceptions import DefaultCredentialsError
 from opentelemetry import _logs, metrics, trace as trace_api
 from opentelemetry.exporter.cloud_logging import CloudLoggingExporter  # ty: ignore[deprecated]
@@ -266,17 +267,29 @@ class GcpTelemetry:
 
         self.metric_export_timeout_ms = metric_export_timeout_ms or self.metric_export_interval_ms
 
+    def _get_google_credentials(self) -> GoogleCredentials | None:
+        """Resolve Google Cloud credentials from dict or Credentials object."""
+        if not self.credentials:
+            return None
+        if isinstance(self.credentials, dict):
+            try:
+                from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+
+                return ServiceAccountCredentials.from_service_account_info(self.credentials)
+            except Exception as e:
+                logger.warning('Failed to load service account credentials from dict', error=str(e))
+                return None
+        return self.credentials
+
     def _build_exporter_kwargs(self) -> dict[str, Any]:
         """Build kwargs for the OTel Cloud exporters, which take ``project_id``.
 
         Returns:
-            A dict with project_id and/or credentials if available, empty dict otherwise.
+            A dict with project_id if available, empty dict otherwise.
         """
         kwargs: dict[str, Any] = {}
         if self.project:
             kwargs['project_id'] = self.project
-        if self.credentials:
-            kwargs['credentials'] = self.credentials
         return kwargs
 
     def initialize(self) -> None:
@@ -290,8 +303,11 @@ class GcpTelemetry:
         should_export = self.force_dev_export or not is_dev
 
         if should_export and not self.project:
-            # Only when exporting: an ADC lookup can probe the metadata server.
-            self.project = _adc_project_id()
+            if isinstance(self.credentials, dict) and self.credentials.get('project_id'):
+                self.project = str(self.credentials['project_id'])
+            else:
+                # Only when exporting: an ADC lookup can probe the metadata server.
+                self.project = _adc_project_id()
 
         self._configure_logging()
 
@@ -333,8 +349,24 @@ class GcpTelemetry:
             ) -> Mapping[str, Any]:
                 return self._inject_trace_context(logger_instance, method_name, event_dict)
 
-            # Append processor to chain
-            processors.append(_genkit_inject_trace_context)
+            # Insert processor before the final renderer processor if present, or append.
+            # Structlog renderers return a formatted string/bytes, so mutating processors
+            # must run before them in the chain.
+            insert_idx = len(processors)
+            for idx, proc in enumerate(processors):
+                cls_name = getattr(getattr(proc, '__class__', None), '__name__', '')
+                if cls_name.endswith('Renderer') or isinstance(
+                    proc,
+                    (
+                        structlog.dev.ConsoleRenderer,
+                        structlog.processors.JSONRenderer,
+                        structlog.processors.KeyValueRenderer,
+                    ),
+                ):
+                    insert_idx = idx
+                    break
+
+            processors.insert(insert_idx, _genkit_inject_trace_context)
             structlog.configure(processors=processors)
             logger.debug('Configured structlog for GCP trace correlation')
 
@@ -344,8 +376,16 @@ class GcpTelemetry:
     def _configure_tracing(self) -> None:
         try:
             if not self.disable_traces:
-                exporter_kwargs = self._build_exporter_kwargs()
-                base_exporter = GenkitGCPExporter(**exporter_kwargs) if exporter_kwargs else GenkitGCPExporter()
+                kwargs: dict[str, Any] = {}
+                if self.project:
+                    kwargs['project_id'] = self.project
+                creds = self._get_google_credentials()
+                if creds:
+                    from google.cloud.trace_v2 import TraceServiceClient
+
+                    kwargs['client'] = TraceServiceClient(credentials=creds)
+
+                base_exporter = GenkitGCPExporter(**kwargs) if kwargs else GenkitGCPExporter()
 
                 trace_exporter = GcpAdjustingTraceExporter(
                     exporter=base_exporter,
@@ -361,10 +401,17 @@ class GcpTelemetry:
 
     def _configure_otel_logs(self) -> None:
         try:
-            exporter = CloudLoggingExporter(  # ty: ignore[deprecated]
-                project_id=self.project,
-                default_log_name='genkit',
-            )
+            kwargs: dict[str, Any] = {
+                'project_id': self.project,
+                'default_log_name': 'genkit',
+            }
+            creds = self._get_google_credentials()
+            if creds:
+                from google.cloud.logging_v2.services.logging_service_v2 import LoggingServiceV2Client
+
+                kwargs['client'] = LoggingServiceV2Client(credentials=creds)
+
+            exporter = CloudLoggingExporter(**kwargs)  # ty: ignore[deprecated]
             _hang_exporter_on_process_logger(exporter=exporter)
         except Exception as e:
             handle_logging_error(e)
@@ -401,8 +448,16 @@ class GcpTelemetry:
             finally:
                 detector_logger.setLevel(original_level)
 
-            exporter_kwargs = self._build_exporter_kwargs()
-            cloud_monitoring_exporter = CloudMonitoringMetricsExporter(**exporter_kwargs)
+            kwargs: dict[str, Any] = {}
+            if self.project:
+                kwargs['project_id'] = self.project
+            creds = self._get_google_credentials()
+            if creds:
+                from google.cloud.monitoring_v3 import MetricServiceClient
+
+                kwargs['client'] = MetricServiceClient(credentials=creds)
+
+            cloud_monitoring_exporter = CloudMonitoringMetricsExporter(**kwargs)
 
             metrics_exporter = GenkitMetricExporter(
                 exporter=cloud_monitoring_exporter,
