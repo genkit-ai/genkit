@@ -1144,7 +1144,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             location
             or os.getenv(const.GOOGLE_CLOUD_LOCATION)
             or os.getenv(const.GCLOUD_LOCATION)
-            or const.DEFAULT_REGION
+            or (None if (api_key and not self._project) else const.DEFAULT_REGION)
         )
 
         opts = _plugin_http_options(
@@ -1157,11 +1157,11 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         self._http_client_factory = _loop_local_http_client(http_client_factory)
         self._base_url_pinned = bool(opts.base_url)
         self._legacy_response_schema = legacy_response_schema
-        multi_region = const.is_multi_regional_location(self._location)
-        if multi_region and not self._base_url_pinned:
+        if const.is_multi_regional_location(self._location) and not self._base_url_pinned:
             # Multi-regions ('us', 'eu') are served from dedicated endpoints
             # that the google-genai SDK does not derive itself.
             opts.base_url = const.multi_regional_base_url(self._location)
+        multi_region = const.is_multi_regional_location(self._location)
 
         # Resolve the project here rather than leaving it to the SDK: with any
         # base_url set the SDK skips its own ADC lookup, evaluator registration
@@ -1236,7 +1236,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 create_vertex_evaluators(
                     list(VertexAIEvaluationMetricType),
                     project=self._project,
-                    location=self._location,
+                    location=self._location or const.DEFAULT_REGION,
                 )
             )
 
@@ -1322,7 +1322,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         [action] = create_vertex_evaluators(
             [metric_type],
             project=self._project,
-            location=self._location,
+            location=self._location or const.DEFAULT_REGION,
         )
         return action
 
@@ -1449,7 +1449,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 create_vertex_evaluators(
                     list(VertexAIEvaluationMetricType),
                     project=self._project,
-                    location=self._location,
+                    location=self._location or const.DEFAULT_REGION,
                 )
             )
 
