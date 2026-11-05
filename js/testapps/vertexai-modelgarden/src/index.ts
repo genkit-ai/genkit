@@ -19,16 +19,13 @@ import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 // Import the Genkit core libraries and plugins.
 import { genkit, z } from 'genkit';
 
-// Import models from the Vertex AI plugin. The Vertex AI API provides access to
-// several generative models. Here, we import Gemini 1.5 Flash.
-
 const ai = genkit({
   plugins: [
     // Load the Vertex AI plugin. You can optionally specify your project ID
     // by passing in a config object; if you don't, the Vertex AI plugin uses
     // the value from the GCLOUD_PROJECT environment variable.
     vertexAI({
-      location: 'us-central1',
+      location: 'global',
     }),
     vertexModelGarden({
       location: 'us-central1',
@@ -366,14 +363,14 @@ export const generateFunction = ai.defineFlow(
 // No naming collisions
 export const geminiModel = ai.defineFlow(
   {
-    name: 'gemini-2.5-flash - tool flow',
+    name: 'gemini-3.8-flash - tool flow',
     inputSchema: z.string().default('Paris, France'),
     outputSchema: z.string(),
     streamSchema: z.any(),
   },
   async (location, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
