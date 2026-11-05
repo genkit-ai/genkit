@@ -168,9 +168,6 @@ importers:
       '@jest/globals':
         specifier: ^29.7.0
         version: 29.7.0
-      '@types/adm-zip':
-        specifier: ^0.5.8
-        version: 0.5.8
       '@types/configstore':
         specifier: ^6.0.2
         version: 6.0.2
@@ -192,9 +189,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.2
         version: 8.18.2
-      bun-types:
-        specifier: ^1.4.3
-        version: 1.4.3
+      genversion:
+        specifier: ^3.2.0
+        version: 3.2.0
       jest:
         specifier: ^29.7.0
         version: 29.7.0(@types/node@20.19.43)(ts-node@10.9.2(@types/node@20.19.43)(typescript@5.9.3))
@@ -871,9 +868,6 @@ packages:
 
   '@tsconfig/node16@1.0.4':
     resolution: {integrity: sha512-vxhUy4J8lyeyinH7Azl1pdd43GJhZH/tP2weN8TntQblOY+A0XbT8DJk1/oCPuOOyg/Ja757rG0CgHcWC8OfMA==}
-
-  '@types/adm-zip@0.5.8':
-    resolution: {integrity: sha512-RVVH7QvZYbN+ihqZ4kX/dMiowf6o+Jk1fNwiSdx0NahBJLU787zkULhGhJM8mf/obmLGmgdMM0bXsQTmyfbR7Q==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -3307,10 +3301,6 @@ snapshots:
   '@tsconfig/node14@1.0.3': {}
 
   '@tsconfig/node16@1.0.4': {}
-
-  '@types/adm-zip@0.5.8':
-    dependencies:
-      '@types/node': 20.19.43
 
   '@types/babel__core@7.20.5':
     dependencies:
