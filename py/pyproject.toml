@@ -50,6 +50,7 @@ dev = [
   "pytest-asyncio>=0.25.3",
   "pytest>=8.3.4",
   "pytest-cov>=6.0.0",
+  "pytest-xdist>=3.6.1",
   "datamodel-code-generator>=0.27.3",
   "pytest-mock>=3.14.0",
   "twine>=7.0.0",
@@ -94,10 +95,11 @@ lint = [
 # Pytest for unit testing and coverage.
 [tool.pytest.ini_options]
 addopts = [
-  "--cov",
-  #"--cov-report=", # Disable terminal report generation by pytest-cov
+  "-n",
+  "auto",
+  "--dist",
+  "worksteal",
   "-ra",
-  "-vv",
   "--import-mode=importlib",
 ]
 asyncio_default_fixture_loop_scope = "session"
@@ -124,6 +126,8 @@ omit = [
   "**/constants.py", # Typically just constants
   "**/typing.py",    # Often auto-generated or complex types
   "**/types.py",     # Often auto-generated or complex types
+  "**/tests/**",     # Unit test suites
+  "**/*_test.py",    # Standalone test modules
 ]
 source = ["packages"]
 
