@@ -19,7 +19,7 @@
 import asyncio
 import functools
 import sys
-from typing import Any, TypeVar, overload as overload
+from typing import TYPE_CHECKING, Any, TypeVar, overload as overload
 
 # StrEnum - use strenum package for cross-version compatibility
 # Note: StrEnum was added to stdlib in Python 3.11, but we use strenum for 3.10 compat
@@ -31,7 +31,39 @@ else:
     from strenum import StrEnum as StrEnum  # noqa: E402
 from typing_extensions import override as override  # noqa: E402
 
+if TYPE_CHECKING:
+    from genkit._core._model import Message
+
 _T = TypeVar('_T')
+
+
+def cancelled_history(exc: BaseException) -> 'list[Message] | None':
+    """Return the history that generate attached to a cancel, or None.
+
+    On a foreign cancel, generate sets ``messages`` on the ``CancelledError``
+    it re-raises: the history up to the last completed round, with no
+    partial turn.
+
+    - Direct ``task.cancel()`` on 3.11+ re-raises that same ``CancelledError``.
+    - ``asyncio.wait_for`` and ``asyncio.timeout`` raise ``TimeoutError``
+      (``asyncio.TimeoutError`` on 3.10) with the ``CancelledError`` on
+      ``__cause__``.
+    - On 3.10, each task hop raises a fresh ``CancelledError`` with the
+      previous one on ``__context__``.
+    """
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, (TimeoutError, asyncio.TimeoutError)):
+            cur = cur.__cause__
+            continue
+        if isinstance(cur, asyncio.CancelledError) and 'messages' in cur.__dict__:
+            return cur.__dict__['messages']
+        if sys.version_info >= (3, 11):
+            return None
+        cur = cur.__context__
+    return None
 
 
 def _wake_waiter(waiter: asyncio.Future[None], _task: object) -> None:
