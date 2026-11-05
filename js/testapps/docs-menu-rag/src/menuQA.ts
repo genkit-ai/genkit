@@ -34,7 +34,7 @@ export const menuQAFlow = ai.defineFlow(
 
     // generate a response
     const llmResponse = await ai.generate({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       prompt: `
     You are acting as a helpful AI assistant that can answer 
     questions about the food available on the menu at Genkit Grub Pub.
