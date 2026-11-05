@@ -1,0 +1,194 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pin: agents are only on `from genkit.exp import Genkit`.
+
+The leftover a caller reuses is the instance they constructed. Stable
+`from genkit import Genkit` has no agent methods. Experimental
+`from genkit.exp import Genkit` does, and still runs generate.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from genkit import Genkit as StableGenkit
+from genkit._core._model import AgentInput, AgentResult, Message, ModelResponse, Part
+from genkit._core._typing import (
+    AgentFinishReason,
+    FinishReason,
+    Role,
+)
+from genkit.exp import Genkit
+from genkit.exp.agent import (
+    AgentContext,
+    FileSessionStore,
+    InMemorySessionStore,
+    SessionRunner,
+    TurnContext,
+    TurnResult,
+    remote_agent,
+)
+from genkit.testing import define_scripted_model
+
+
+def test_stable_genkit_has_no_agent_methods() -> None:
+    ai = StableGenkit()
+    assert not hasattr(ai, 'define_agent')
+    assert not hasattr(ai, 'define_prompt_agent')
+    assert not hasattr(ai, 'define_custom_agent')
+    assert not hasattr(ai, 'agent')
+
+
+def test_stable_genkit_keeps_graduated_methods() -> None:
+    ai = StableGenkit()
+    assert hasattr(ai, 'define_interrupt')
+    assert hasattr(ai, 'generate')
+    assert hasattr(ai, 'generate_operation')
+
+
+def test_exp_types_import() -> None:
+    assert FileSessionStore is not None
+    assert InMemorySessionStore is not None
+    assert remote_agent is not None
+
+
+def test_from_genkit_agent_is_not_importable() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        import genkit.agent  # ty: ignore[unresolved-import]  # noqa: F401
+
+
+def test_from_genkit_exp_agent_imports() -> None:
+    from genkit.exp.agent import (  # noqa: F401
+        Agent,
+        FileSessionStore,
+        InMemorySessionStore,
+        remote_agent as _remote_agent,
+    )
+
+    assert Agent is not None
+    assert InMemorySessionStore is not None
+    assert _remote_agent is not None
+
+
+@pytest.mark.asyncio
+async def test_exp_genkit_define_agent_one_turn() -> None:
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+
+    agent = ai.define_agent(name='echoAgent', model='scriptedModel', system='Reply briefly.')
+    out = await agent.chat().send('hello')
+
+    assert out.text == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_exp_genkit_define_prompt_agent_one_turn() -> None:
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='promptAgent', model='scriptedModel', system='Reply briefly.')
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from-prompt')]),
+        )
+    )
+
+    agent = ai.define_prompt_agent(name='promptAgent')
+    out = await agent.chat().send('hello')
+
+    assert out.text == 'from-prompt'
+
+
+@pytest.mark.asyncio
+async def test_exp_genkit_define_custom_agent_one_turn() -> None:
+    ai = Genkit()
+
+    async def echo_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, __: TurnContext) -> TurnResult | None:
+            text = ''
+            if inp.message and inp.message.content:
+                text = inp.message.content[0].text or ''
+            await session_runner.add_messages([Message(role='model', content=[Part.from_text(f'Echo: {text}')])])
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    agent = ai.define_custom_agent(name='customEcho', fn=echo_fn)
+    out = await agent.chat().send('hi')
+
+    assert out.text == 'Echo: hi'
+
+
+@pytest.mark.asyncio
+async def test_exp_genkit_agent_lookup() -> None:
+    ai = Genkit()
+    define_scripted_model(ai)
+    defined = ai.define_agent(name='lookupAgent', model='scriptedModel')
+    found = await ai.agent('lookupAgent')
+
+    assert found is defined
+
+
+@pytest.mark.asyncio
+async def test_exp_genkit_still_generates() -> None:
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('gen')]),
+        )
+    )
+
+    response = await ai.generate(model='scriptedModel', prompt='hello')
+
+    assert response.text == 'gen'
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_awaiting_failing_flow_reports_message_without_details() -> None:
+    """A turn that awaits a flow raising RuntimeError('db rejected') records that message and no details."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def lookup(account: str) -> str:
+        raise RuntimeError('db rejected')
+
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
+        async def handle_turn(inp: AgentInput, __: TurnContext) -> TurnResult | None:
+            await lookup('acme')
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    agent = ai.define_custom_agent(name='lookupAgent', fn=fn)
+
+    res = await agent.chat().send('hello')
+
+    assert res.finish_reason == AgentFinishReason.FAILED
+    assert res.error is not None
+    assert res.error.message == 'db rejected'
+    assert res.error.details is None
+    assert res.error.status == 'INTERNAL'

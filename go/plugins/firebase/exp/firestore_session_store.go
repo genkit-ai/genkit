@@ -21,18 +21,31 @@
 // Firestore. It resolves its Firestore client from the Firebase plugin
 // registered with the Genkit instance, then wires into an agent:
 //
-//	g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: "my-project"}))
+//	g := genkit.Init(ctx,
+//		genkit.WithPlugins(
+//			&firebase.Firebase{ProjectId: "my-project"},
+//			&googlegenai.GoogleAI{},
+//		),
+//		genkit.WithExperimental(),
+//	)
 //
-//	store, err := exp.NewFirestoreSessionStore[MyState](ctx, g)
+//	store, err := firebasex.NewFirestoreSessionStore[MyState](ctx, g)
 //	// handle err
 //
-//	agent := aix.DefineAgent(g, "assistant", run, aix.WithSessionStore(store))
+//	agent := genkitx.DefineAgent(g, "assistant",
+//		aix.InlinePrompt{
+//			ai.WithModelName("googleai/gemini-flash-latest"),
+//			ai.WithSystem("You are a helpful assistant."),
+//		},
+//		aix.WithSessionStore(store),
+//	)
 //
 // APIs in this package are under active development and may change in any minor
 // version release. Use with caution in production environments.
 package exp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -56,10 +69,13 @@ const (
 	kindCheckpoint = "checkpoint"
 )
 
-// Compile-time checks that the store satisfies the session-store interfaces.
+// Compile-time checks that the store has the capabilities it documents. The
+// conformance suite skips the checks for a capability a store lacks, so losing
+// one would otherwise go unnoticed.
 var (
-	_ aix.SessionStore[any]  = (*FirestoreSessionStore[any])(nil)
-	_ aix.SnapshotSubscriber = (*FirestoreSessionStore[any])(nil)
+	_ aix.SessionStore[any]           = (*FirestoreSessionStore[any])(nil)
+	_ aix.SnapshotMetadataReader[any] = (*FirestoreSessionStore[any])(nil)
+	_ aix.SnapshotSubscriber          = (*FirestoreSessionStore[any])(nil)
 )
 
 // FirestoreSessionStore is a Firestore-backed [aix.SessionStore] that persists
@@ -292,6 +308,18 @@ func (s *FirestoreSessionStore[State]) pointerRef(prefix, sessionID string) *fir
 
 // --- Reads ---
 
+// docGetter reads one document: a transaction's Get for reads that must see
+// several documents at one consistent point, or directGet for a read of a
+// single document, which is atomic on its own.
+type docGetter = func(*firestore.DocumentRef) (*firestore.DocumentSnapshot, error)
+
+// directGet reads documents outside any transaction.
+func directGet(ctx context.Context) docGetter {
+	return func(ref *firestore.DocumentRef) (*firestore.DocumentSnapshot, error) {
+		return ref.Get(ctx)
+	}
+}
+
 // GetSnapshot retrieves a snapshot by ID. Returns nil if not found. The
 // reconstruction runs inside a read-only transaction so the snapshot's
 // checkpoint shards and diff segment are read at one consistent point, never a
@@ -300,31 +328,13 @@ func (s *FirestoreSessionStore[State]) GetSnapshot(ctx context.Context, snapshot
 	if snapshotID == "" {
 		return nil, nil
 	}
-	prefix, err := s.prefixFor(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshot: %w", err)
-	}
-	var result *aix.SessionSnapshot[State]
-	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		result = nil
+	return s.readInTx(ctx, "GetSnapshot", func(tx *firestore.Transaction, prefix string) (*aix.SessionSnapshot[State], error) {
 		doc, state, ok, err := s.reconstruct(tx, prefix, snapshotID)
-		if err != nil {
-			return err
+		if err != nil || !ok {
+			return nil, err
 		}
-		if !ok {
-			return nil
-		}
-		snap, err := s.toSnapshot(doc, state)
-		if err != nil {
-			return err
-		}
-		result = snap
-		return nil
-	}, firestore.ReadOnly)
-	if err != nil {
-		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshot: %w", err)
-	}
-	return result, nil
+		return s.toSnapshot(doc, state)
+	})
 }
 
 // GetLatestSnapshot returns the session's most recently created snapshot
@@ -336,28 +346,31 @@ func (s *FirestoreSessionStore[State]) GetLatestSnapshot(ctx context.Context, se
 	if sessionID == "" {
 		return nil, errors.New("firebase: FirestoreSessionStore.GetLatestSnapshot: session ID is empty")
 	}
+	return s.readInTx(ctx, "GetLatestSnapshot", func(tx *firestore.Transaction, prefix string) (*aix.SessionSnapshot[State], error) {
+		pointer, err := s.readPointer(tx.Get, prefix, sessionID)
+		if err != nil || pointer == nil {
+			return nil, err
+		}
+		doc, state, ok, err := s.reconstructFrom(tx, prefix, pointer.CheckpointID, pointer.CheckpointShardCount, pointer.SegmentPath, pointer.CurrentSnapshotID)
+		if err != nil || !ok {
+			return nil, err
+		}
+		return s.toSnapshot(doc, state)
+	})
+}
+
+// readInTx runs lookup inside a read-only transaction, so every document it
+// reads is seen at one consistent point, and wraps failures with op, the
+// exported method's name. A nil row from lookup is a miss.
+func (s *FirestoreSessionStore[State]) readInTx(ctx context.Context, op string, lookup func(tx *firestore.Transaction, prefix string) (*aix.SessionSnapshot[State], error)) (*aix.SessionSnapshot[State], error) {
 	prefix, err := s.prefixFor(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshot: %w", err)
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.%s: %w", op, err)
 	}
 	var result *aix.SessionSnapshot[State]
 	err = s.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
 		result = nil
-		pointer, err := s.readPointer(tx, prefix, sessionID)
-		if err != nil {
-			return err
-		}
-		if pointer == nil {
-			return nil
-		}
-		doc, state, ok, err := s.reconstructFrom(tx, prefix, pointer.CheckpointID, pointer.CheckpointShardCount, pointer.SegmentPath, pointer.CurrentSnapshotID)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return nil
-		}
-		snap, err := s.toSnapshot(doc, state)
+		snap, err := lookup(tx, prefix)
 		if err != nil {
 			return err
 		}
@@ -365,7 +378,7 @@ func (s *FirestoreSessionStore[State]) GetLatestSnapshot(ctx context.Context, se
 		return nil
 	}, firestore.ReadOnly)
 	if err != nil {
-		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshot: %w", err)
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.%s: %w", op, err)
 	}
 	return result, nil
 }
@@ -374,21 +387,91 @@ func (s *FirestoreSessionStore[State]) GetLatestSnapshot(ctx context.Context, se
 // segment path, then materializes its state. Returns ok=false when the snapshot
 // does not exist.
 func (s *FirestoreSessionStore[State]) reconstruct(tx *firestore.Transaction, prefix, id string) (snapshotDoc, any, bool, error) {
-	snap, err := tx.Get(s.snapshotRef(prefix, id))
-	if err != nil {
-		if isNotFound(err) {
-			return snapshotDoc{}, nil, false, nil
-		}
+	doc, ok, err := s.readDoc(tx.Get, prefix, id)
+	if err != nil || !ok {
 		return snapshotDoc{}, nil, false, err
 	}
+	return s.reconstructFrom(tx, prefix, doc.CheckpointID, doc.CheckpointShardCount, doc.SegmentPath, id)
+}
+
+// readDoc reads one snapshot document through get, without materializing its
+// state. Returns ok=false when the document does not exist.
+func (s *FirestoreSessionStore[State]) readDoc(get docGetter, prefix, id string) (snapshotDoc, bool, error) {
+	snap, err := get(s.snapshotRef(prefix, id))
+	if err != nil {
+		if isNotFound(err) {
+			return snapshotDoc{}, false, nil
+		}
+		return snapshotDoc{}, false, err
+	}
 	if !snap.Exists() {
-		return snapshotDoc{}, nil, false, nil
+		return snapshotDoc{}, false, nil
 	}
 	var doc snapshotDoc
 	if err := snap.DataTo(&doc); err != nil {
-		return snapshotDoc{}, nil, false, fmt.Errorf("decode snapshot %q: %w", id, err)
+		return snapshotDoc{}, false, fmt.Errorf("decode snapshot %q: %w", id, err)
 	}
-	return s.reconstructFrom(tx, prefix, doc.CheckpointID, doc.CheckpointShardCount, doc.SegmentPath, id)
+	return doc, true, nil
+}
+
+// GetSnapshotMetadata retrieves a snapshot's document without reconstructing
+// its state, per [aix.SnapshotMetadataReader]: one document read in place of
+// the checkpoint shards and diff chain a full read materializes, and no
+// transaction around it, since a single document read is atomic on its own
+// and a transaction would only add its begin and commit round trips. Returns
+// nil if not found.
+func (s *FirestoreSessionStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*aix.SessionSnapshot[State], error) {
+	if snapshotID == "" {
+		return nil, nil
+	}
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshotMetadata: %w", err)
+	}
+	snap, err := s.metadataAt(ctx, prefix, snapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetSnapshotMetadata: %w", err)
+	}
+	return snap, nil
+}
+
+// GetLatestSnapshotMetadata resolves the session's latest row through its
+// pointer and reads that row's document without reconstructing its state, per
+// [aix.SnapshotMetadataReader]. Two single-document reads, outside any
+// transaction: a read that lands just before the pointer advances answers
+// with the row that was the latest at that moment, which is all any read can
+// promise, and a row the pointer names but that is gone reads as a miss, as
+// it would inside a transaction.
+func (s *FirestoreSessionStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*aix.SessionSnapshot[State], error) {
+	if sessionID == "" {
+		return nil, errors.New("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: session ID is empty")
+	}
+	prefix, err := s.prefixFor(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: %w", err)
+	}
+	pointer, err := s.readPointer(directGet(ctx), prefix, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: %w", err)
+	}
+	if pointer == nil {
+		return nil, nil
+	}
+	snap, err := s.metadataAt(ctx, prefix, pointer.CurrentSnapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("firebase: FirestoreSessionStore.GetLatestSnapshotMetadata: %w", err)
+	}
+	return snap, nil
+}
+
+// metadataAt reads one snapshot document outside any transaction and converts
+// it without its state. Returns nil if the document does not exist.
+func (s *FirestoreSessionStore[State]) metadataAt(ctx context.Context, prefix, id string) (*aix.SessionSnapshot[State], error) {
+	doc, ok, err := s.readDoc(directGet(ctx), prefix, id)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return s.toSnapshot(doc, nil)
 }
 
 // reconstructFrom materializes the state of targetID from a known checkpoint
@@ -456,7 +539,7 @@ func (s *FirestoreSessionStore[State]) reconstructFrom(tx *firestore.Transaction
 		}
 		var patch aix.JSONPatch
 		if len(d.StatePatch) > 0 {
-			if err := json.Unmarshal(d.StatePatch, &patch); err != nil {
+			if err := decodeExact(d.StatePatch, &patch); err != nil {
 				return snapshotDoc{}, nil, false, fmt.Errorf("unmarshal patch %q: %w", d.SnapshotID, err)
 			}
 		}
@@ -490,15 +573,15 @@ func stitch(shardSnaps []*firestore.DocumentSnapshot) (any, error) {
 		buf = append(buf, sd.Chunk...)
 	}
 	var state any
-	if err := json.Unmarshal(buf, &state); err != nil {
+	if err := decodeExact(buf, &state); err != nil {
 		return nil, fmt.Errorf("unmarshal checkpoint state: %w", err)
 	}
 	return state, nil
 }
 
 // readPointer reads a session's pointer document. Returns nil when absent.
-func (s *FirestoreSessionStore[State]) readPointer(tx *firestore.Transaction, prefix, sessionID string) (*pointerDoc, error) {
-	snap, err := tx.Get(s.pointerRef(prefix, sessionID))
+func (s *FirestoreSessionStore[State]) readPointer(get docGetter, prefix, sessionID string) (*pointerDoc, error) {
+	snap, err := get(s.pointerRef(prefix, sessionID))
 	if err != nil {
 		if isNotFound(err) {
 			return nil, nil
@@ -584,7 +667,7 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 		}
 
 		// Reads phase 2: the per-session pointer.
-		pointer, err := s.readPointer(tx, prefix, sessionID)
+		pointer, err := s.readPointer(tx.Get, prefix, sessionID)
 		if err != nil {
 			return err
 		}
@@ -625,6 +708,7 @@ func (s *FirestoreSessionStore[State]) planWrite(tx *firestore.Transaction, pref
 		// Upsert: preserve the document's role and chain position; only the state
 		// and metadata change. Callers must only upsert the leaf - rewriting a
 		// non-leaf's state would invalidate its descendants' diffs.
+		// TODO(#6810): reject such a rewrite instead of corrupting them.
 		if existingDoc.Kind == kindCheckpoint {
 			return s.planCheckpoint(id, newState, existingDoc.CheckpointShardCount)
 		}
@@ -985,4 +1069,13 @@ func coalesceSend(ch chan aix.SnapshotStatus, status aix.SnapshotStatus) {
 	case ch <- status:
 	default:
 	}
+}
+
+// decodeExact decodes JSON into v keeping numbers as json.Number, so an
+// integer above 2^53 in a state or patch keeps its exact value through
+// aix.ApplyPatch instead of rounding through float64.
+func decodeExact(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return dec.Decode(v)
 }

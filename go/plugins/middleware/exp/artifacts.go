@@ -68,14 +68,14 @@ const artifactsMarker = "artifacts-listing"
 type Artifacts struct {
 	// Readonly, when true, provides only the read_artifact tool; the model
 	// cannot create or update artifacts. Defaults to false.
-	Readonly bool `json:"readonly,omitempty"`
+	Readonly bool `json:"readonly,omitempty" jsonschema_description:"Provides only the read_artifact tool so the model cannot create or update artifacts. Defaults to false."`
 }
 
-func (a *Artifacts) Name() string { return provider + "/artifacts" }
+func (a Artifacts) Name() string { return provider + "/artifacts" }
 
 // New returns the hooks that register the artifact tools and inject the
 // artifact listing into the system prompt on each turn.
-func (a *Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
+func (a Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
 	tools := []ai.Tool{newReadArtifactTool()}
 	if !a.Readonly {
 		tools = append(tools, newWriteArtifactTool())
@@ -97,7 +97,7 @@ func (a *Artifacts) New(ctx context.Context) (*ai.Hooks, error) {
 }
 
 type readArtifactInput struct {
-	Name string `json:"name" jsonschema:"description=The name of the artifact to read."`
+	Name string `json:"name" jsonschema_description:"The name of the artifact to read."`
 }
 
 type readArtifactOutput struct {
@@ -107,7 +107,7 @@ type readArtifactOutput struct {
 }
 
 func newReadArtifactTool() ai.Tool {
-	return aix.NewTool("read_artifact",
+	return plainTool("read_artifact",
 		"Reads the content of a named artifact from the session. Use this to "+
 			"inspect artifacts produced by sub-agents or previously created artifacts.",
 		func(ctx context.Context, in readArtifactInput) (readArtifactOutput, error) {
@@ -125,8 +125,8 @@ func newReadArtifactTool() ai.Tool {
 }
 
 type writeArtifactInput struct {
-	Name    string `json:"name" jsonschema:"description=A unique name for the artifact (e.g. a filename like report.md)."`
-	Content string `json:"content" jsonschema:"description=The full text content of the artifact."`
+	Name    string `json:"name" jsonschema_description:"A unique name for the artifact (e.g. a filename like report.md)."`
+	Content string `json:"content" jsonschema_description:"The full text content of the artifact."`
 }
 
 type writeArtifactOutput struct {
@@ -134,7 +134,7 @@ type writeArtifactOutput struct {
 }
 
 func newWriteArtifactTool() ai.Tool {
-	return aix.NewTool("write_artifact",
+	return plainTool("write_artifact",
 		"Creates or updates a named artifact in the session. If an artifact with "+
 			"the same name already exists, it is replaced. Use this to produce "+
 			"files, reports, code, or other deliverables.",

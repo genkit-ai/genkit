@@ -30,16 +30,16 @@ for FileSessionStore to keep the tree on disk. Requires GEMINI_API_KEY.
 from __future__ import annotations
 
 from genkit_google_genai import GoogleAI
-from genkit_middleware import Artifacts, Middleware
+from genkit_middleware.exp import Artifacts
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 
-ai = Genkit(plugins=[GoogleAI(), Middleware()])
+ai = Genkit(plugins=[GoogleAI()])
 
 writer = ai.define_agent(
     name='writer',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system=(
         'You build a landing page in a single artifact named "landing.md". On every '
         'request rewrite the whole file, keep it under 14 lines, and reply with one '
@@ -54,7 +54,7 @@ def page(chat) -> str:
     """The landing.md the agent is maintaining in this timeline."""
     for art in chat.artifacts:
         if art.name == 'landing.md':
-            return ''.join(getattr(getattr(p, 'root', p), 'text', '') for p in art.parts).strip()
+            return ''.join((p.text or '') for p in art.parts).strip()
     return ''
 
 

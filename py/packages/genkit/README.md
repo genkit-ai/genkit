@@ -1,52 +1,57 @@
 # genkit
 
-Genkit is a framework designed to help you build AI-powered applications and features.
-It provides open source libraries for Python, Node.js and Go, plus developer tools for testing
-and debugging.
+[![PyPI version](https://img.shields.io/pypi/v/genkit)](https://pypi.org/project/genkit/) [![Python versions](https://img.shields.io/pypi/pyversions/genkit)](https://pypi.org/project/genkit/) [![Downloads](https://img.shields.io/pypi/dm/genkit)](https://pypi.org/project/genkit/) [![License](https://img.shields.io/pypi/l/genkit)](https://github.com/genkit-ai/genkit/blob/main/LICENSE)
 
-You can deploy and run Genkit libraries anywhere Python is supported. It's designed to work with
-many AI model providers and vector databases. While we offer integrations for Firebase and Google Cloud,
-you can use Genkit independently of any Google services.
+Genkit is a Python SDK from Google. One API for generate, tools, structured output, and agents, plus a local Developer UI.
 
-## Setup Instructions
+Vertex AI, Cloud Trace, and Firestore are there if you want them. So are OpenAI, Anthropic, Ollama, and Bedrock.
+
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
+## Install
 
 ```bash
 uv add genkit genkit-google-genai
 ```
 
-
 ```python
 from pydantic import BaseModel, Field
-from genkit import Genkit
+from genkit import Genkit, PublicError
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(
-    plugins=[GoogleAI()],
-    model='googleai/gemini-flash-latest',
-)
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
 
-class RpgCharacter(BaseModel):
-    """An RPG game character."""
-
-    name: str = Field(description='name of the character')
-    back_story: str = Field(description='back story')
-    abilities: list[str] = Field(description='list of abilities (3-4)')
+class Issue(BaseModel):
+    title: str = Field(description='Short title')
+    severity: str = Field(description='critical, warning, or info')
+    suggestion: str = Field(description='How to fix it')
 
 
 @ai.flow()
-async def generate_character(name: str) -> RpgCharacter:
+async def review(code: str) -> Issue:
     result = await ai.generate(
-        prompt=f'generate an RPG character named {name}',
-        output_schema=RpgCharacter,
+        prompt=f'Review this code:\n{code}',
+        output_schema=Issue,
     )
+    if result.output is None:
+        raise PublicError(
+            'INTERNAL',
+            f'Model did not return an Issue (finish_reason={result.finish_reason}, error={result.error})',
+        )
     return result.output
 
 
 async def main() -> None:
-    """Main function."""
-    character = await generate_character('Goblorb')
-    print(character.model_dump_json(indent=2))
+    print((await review('eval(user_input)')).model_dump_json(indent=2))
 
 
 if __name__ == '__main__':

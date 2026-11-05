@@ -20,14 +20,14 @@ Keeping interfaces here instead of in their implementation modules breaks
 circular-import cycles.  A realistic example in Genkit is the Registry/Plugin/Middleware cycle:
 
     1. Registry (_registry.py) imports Plugin (_plugin.py) to manage plugins.
-    2. Plugin (_plugin.py) imports GenerateMiddleware (_middleware.py) to type-hint list_middleware.
-    3. BaseMiddleware/GenerateMiddleware (_middleware.py) need to annotate their request-scoped
+    2. Plugin (_plugin.py) imports Middleware (_middleware.py) to type-hint list_middleware.
+    3. Middleware/_MiddlewareMetadata (_middleware.py) need to annotate their request-scoped
        registry attribute, which refers back to Registry.
 
     If _middleware.py imported Registry from _registry.py directly, it would complete the
     import cycle: _registry -> _plugin -> _middleware -> _registry.
 
-    Solution: BaseMiddleware type-hints with RegistryLike from this leaf module, breaking the cycle.
+    Solution: Middleware type-hints with RegistryLike from this leaf module, breaking the cycle.
 """
 
 from __future__ import annotations
@@ -36,7 +36,8 @@ from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from genkit._core._action import Action, ActionKind
-from genkit._core._typing import Artifact, MessageData
+from genkit._core._model import Artifact, Message, ModelRequest, ModelResponse, ModelResponseChunk
+from genkit._core._tool import Tool
 
 
 @runtime_checkable
@@ -72,11 +73,10 @@ class RegistryLike(Protocol):
 
 
 class SessionLike(Protocol):
-    """Structural interface for agent session state peekable from generate middleware.
+    """Structural interface for the agent session returned by ``genkit.exp.current_session()``.
 
     The concrete ``Session`` in ``_ai._agents._session`` satisfies this protocol.
-    Middleware should treat ``GenerateMiddlewareContext.session`` as optional and only
-    call methods when a bind is present.
+    Outside an agent there's no session, so callers check for ``None`` first.
     """
 
     async def get_artifacts(self) -> list[Artifact]:
@@ -87,11 +87,11 @@ class SessionLike(Protocol):
         """Append artifacts, replacing any existing entry with the same name."""
         ...
 
-    async def get_messages(self) -> list[MessageData]:
+    async def get_messages(self) -> list[Message]:
         """Return a copy of messages currently stored on the session."""
         ...
 
-    async def add_messages(self, messages: list[MessageData]) -> None:
+    async def add_messages(self, messages: list[Message]) -> None:
         """Append messages to the session history."""
         ...
 
@@ -105,13 +105,20 @@ class SessionLike(Protocol):
 
 
 class GenkitLike(Protocol):
-    """Structural interface for the Genkit instance exposed on middleware context."""
+    """The ``Genkit`` instance as middleware sees it on ``ctx.ai``.
 
-    @property
-    def registry(self) -> RegistryLike:
-        """The call-scoped registry for this generate invocation."""
+    At runtime ``ctx.ai`` is the app's ``Genkit``. This protocol lists the
+    methods middleware is meant to call; ``_core`` can't import ``Genkit``.
+    """
+
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+        """Return the model action registered under ``name``, or None."""
         ...
 
-    def current_session(self) -> SessionLike | None:
-        """Return the bound agent session, if running inside one."""
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None."""
+        ...
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
         ...

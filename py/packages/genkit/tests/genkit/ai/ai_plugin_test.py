@@ -22,13 +22,15 @@
 
 import pytest
 
-from genkit import Genkit, Message, ModelResponse, Part, Plugin, Role, TextPart
-from genkit._core._action import Action, ActionRunContext
+from genkit import Genkit, Message, ModelResponse, Part, Role
+from genkit._core._action import Action
+from genkit._core._middleware import _MiddlewareMetadata
 from genkit._core._model import ModelRequest
 from genkit._core._registry import ActionKind
-from genkit._core._typing import ActionMetadata, FinishReason
-from genkit.middleware import BaseMiddleware, GenerateMiddleware
-from genkit.plugin_api import new_middleware
+from genkit._core._typing import FinishReason
+from genkit.middleware import Middleware
+from genkit.model import ModelContext
+from genkit.plugin_api import Plugin
 
 
 class AsyncResolveOnlyPlugin(Plugin):
@@ -45,12 +47,12 @@ class AsyncResolveOnlyPlugin(Plugin):
         """Resolve an action."""
         if action_type != ActionKind.MODEL:
             return None
-        if name != f'{self.name}/lazy-model':
+        if name != 'lazy-model':
             return None
 
-        async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(req: ModelRequest, ctx: ModelContext) -> ModelResponse:
             return ModelResponse(
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='OK: lazy'))]),
+                message=Message(role=Role.MODEL, content=[Part.from_text('OK: lazy')]),
                 finish_reason=FinishReason.STOP,
             )
 
@@ -60,14 +62,10 @@ class AsyncResolveOnlyPlugin(Plugin):
             fn=_generate,
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         """List available actions."""
-        return [
-            ActionMetadata(
-                action_type=ActionKind.MODEL,
-                name=f'{self.name}/lazy-model',
-            )
-        ]
+        action = await self.resolve(ActionKind.MODEL, 'lazy-model')
+        return [action] if action else []
 
 
 class AsyncInitPlugin(Plugin):
@@ -87,9 +85,9 @@ class AsyncInitPlugin(Plugin):
         if name != f'{self.name}/init-model':
             return None
 
-        async def _generate(req: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+        async def _generate(req: ModelRequest, ctx: ModelContext) -> ModelResponse:
             return ModelResponse(
-                message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='OK: resolve'))]),
+                message=Message(role=Role.MODEL, content=[Part.from_text('OK: resolve')]),
                 finish_reason=FinishReason.STOP,
             )
 
@@ -99,18 +97,14 @@ class AsyncInitPlugin(Plugin):
             fn=_generate,
         )
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         """List available actions."""
-        return [
-            ActionMetadata(
-                action_type=ActionKind.MODEL,
-                name=f'{self.name}/init-model',
-            )
-        ]
+        action = await self.resolve(ActionKind.MODEL, f'{self.name}/init-model')
+        return [action] if action else []
 
 
-class _RegistryMw(BaseMiddleware):
-    pass
+class _RegistryMw(Middleware):
+    name = 'ai_plugin_test_mw'
 
 
 class MiddlewareListingPlugin(Plugin):
@@ -124,22 +118,22 @@ class MiddlewareListingPlugin(Plugin):
     async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
         return None
 
-    async def list_actions(self) -> list[ActionMetadata]:
+    async def list_actions(self) -> list[Action]:
         return []
 
-    def list_middleware(self) -> list[GenerateMiddleware]:
-        return [new_middleware(_RegistryMw, name='ai_plugin_test_mw')]
+    def list_middleware(self) -> list[type[Middleware]]:
+        return [_RegistryMw]
 
 
 @pytest.mark.asyncio
 async def test_plugin_list_middleware_registers_on_registry() -> None:
-    """Descriptors from Plugin.list_middleware appear under list_values('middleware')."""
+    """Middleware classes from Plugin.list_middleware appear under list_values('middleware')."""
     ai = Genkit(plugins=[MiddlewareListingPlugin()])
-    names = ai.registry.list_values('middleware')
+    names = ai._registry.list_values('middleware')
     assert 'ai_plugin_test_mw' in names
-    desc = ai.registry.lookup_value('middleware', 'ai_plugin_test_mw')
+    desc = ai._registry.lookup_value('middleware', 'ai_plugin_test_mw')
     assert desc is not None
-    assert isinstance(desc, GenerateMiddleware)
+    assert isinstance(desc, _MiddlewareMetadata)
 
 
 @pytest.mark.asyncio

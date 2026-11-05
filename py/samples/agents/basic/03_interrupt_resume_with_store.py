@@ -32,8 +32,9 @@ from genkit_google_genai import GoogleAI
 from genkit_middleware import Middleware, ToolApproval
 from pydantic import BaseModel, Field
 
-from genkit import Genkit, ToolRequestPart
-from genkit.agent import (
+from genkit import Part
+from genkit.exp import Genkit
+from genkit.exp.agent import (
     AgentFinishReason,
     InMemorySessionStore,
 )
@@ -62,7 +63,7 @@ store = InMemorySessionStore()
 
 agent = ai.define_agent(
     name='bankingAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='Banking assistant. Call transferMoney when the user asks to transfer money.',
     tools=[transfer_money],
     use=[tool_approval],
@@ -78,9 +79,7 @@ async def main() -> None:
     assert out1.finish_reason == AgentFinishReason.INTERRUPTED
 
     # Human approves each pending tool call, then one resume continues the turn.
-    restart_parts: list[ToolRequestPart] = [
-        intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts
-    ]
+    restart_parts: list[Part] = [intr.restart(resumed_metadata={'tool_approved': True}) for intr in out1.interrupts]
     out2 = await chat.resume(restart=restart_parts)
     assert out2.finish_reason == AgentFinishReason.STOP
 

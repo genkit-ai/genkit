@@ -2,6 +2,16 @@
 
 Export Genkit telemetry to Google Cloud Trace, Cloud Monitoring, and Cloud Logging.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Installation
 
 ```bash
@@ -15,9 +25,67 @@ from genkit import Genkit
 from genkit_google_cloud import enable_google_cloud_telemetry
 from genkit_google_genai import GoogleAI
 
-enable_google_cloud_telemetry(project_id='my-project')
+enable_google_cloud_telemetry(project='my-project')
 
-ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 ```
 
 Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
+
+### Sampling
+
+Every trace is exported by default (unless `OTEL_TRACES_SAMPLER` says
+otherwise). To export a fraction, pass `sampler=`.
+`ParentBased` keeps the caller's decision when a request arrives with a
+`traceparent`, so a trace that started upstream is not cut in half:
+
+```python
+from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+
+enable_google_cloud_telemetry(
+    project='my-project',
+    sampler=ParentBased(TraceIdRatioBased(0.1)),
+)
+# => about 1 in 10 new traces reach Cloud Trace
+```
+
+`sampler=` applies to the tracer provider this helper creates. If your app
+already set one, put the sampler on that provider instead; passing
+`sampler=` then raises `INVALID_ARGUMENT`:
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+
+trace.set_tracer_provider(TracerProvider(sampler=ParentBased(TraceIdRatioBased(0.1))))
+enable_google_cloud_telemetry(project='my-project')
+# => Cloud Trace joins your provider and uses its sampler
+```
+
+
+## Sessions on Firestore
+
+`FirestoreSessionStore` persists agent sessions durably: every turn is
+stored as a snapshot, sessions survive restarts and resume across
+processes, and status subscriptions enable features like a cross-process
+stop button.
+
+```python
+from genkit.exp import Genkit
+from genkit_google_cloud.exp import FirestoreSessionStore
+
+ai = Genkit()
+store = FirestoreSessionStore()  # uses Application Default Credentials
+agent = ai.define_agent(name='assistant', store=store)
+```
+
+Notes:
+
+- Data lives under three collection roots derived from `collection`
+  (default `genkit-sessions`, plus `-shards` and `-pointers`). Delete all
+  three together when cleaning up.
+- Multi-tenant apps pass `snapshot_path_prefix` to derive a per-tenant
+  path segment from call context.
+- After a regenerate/branch, resume a specific branch by `snapshot_id`;
+  `session_id` lookup follows the most recently written branch.
+- See the class docstring for costs, limits, and lifecycle details.

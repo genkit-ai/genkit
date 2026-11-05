@@ -35,8 +35,13 @@ import (
 // persistence automatically.
 //
 // The prompt is defined inline via [aix.InlinePrompt] and registered under the
-// agent's name. To back the agent with a prompt already in the registry (e.g.
-// one from a .prompt file), use [DefinePromptAgent] instead.
+// agent's name; it accepts every option [genkit.DefinePrompt] does. To back the
+// agent with a prompt already in the registry (e.g. one from a .prompt file),
+// use [DefinePromptAgent] instead.
+//
+// Each turn hands the session's conversation to the prompt, so a prompt that
+// declares messages of its own places it (see [aix.InlinePrompt]); one that
+// declares none has it placed between the system message and the user prompt.
 //
 // The State type parameter is inferred from the typed agent options
 // (e.g. [aix.WithSessionStore], [aix.WithStateTransform]); pass an explicit
@@ -90,6 +95,13 @@ func DefineAgent[State any](
 // rather than a positional argument, so it composes with the other agent
 // options in one variadic. For full control over the per-turn loop, use
 // [DefineCustomAgent].
+//
+// Each turn hands the session's conversation to the prompt, so a prompt that
+// declares messages of its own places it with {{history}} or
+// [ai.HistoryFromContext] (see [aix.InlinePrompt] for the rule); one that
+// declares none has it placed between the system message and the user prompt.
+// A .prompt file's body is a multi-turn template, so {{history}} works in it
+// directly.
 //
 // The State type parameter is inferred from the typed agent options; pass an
 // explicit [State] only when no typed option provides it.
@@ -187,6 +199,56 @@ func DefineCustomAgent[State any](
 ) *aix.Agent[State] {
 	requireExperimental(g, "DefineCustomAgent")
 	return aix.DefineCustomAgent(genkitbridge.RegistryOf(g), name, fn, opts...)
+}
+
+// DefineRemoteAgent registers an agent that a Genkit app in Go, JS, or Dart
+// serves over HTTP and returns its [aix.AgentHandle]. It is
+// [aix.NewRemoteAgent] followed by [aix.AgentHandle.Register]: url is the
+// agent's turn route in the [AgentRoutes] layout (e.g.
+// "https://billing.internal/agents/billing"), and opts configure the HTTP
+// client, headers, and route URLs and declare what the agent supports.
+//
+// Once registered, the agent resolves by name like one defined in this
+// process: the agents middleware delegates to it with an [aix.AgentRef], and
+// the Dev UI can call it. [AllAgentRoutes] does not serve it, so this app does
+// not expose the other service's agent with its own credentials.
+//
+// Declare the agent's capabilities with [aix.WithAgentMetadata] and its
+// description with [aix.WithDescription]. Without metadata, callers treat its
+// capabilities as unknown: the agents middleware forwards it no history and
+// learns from the agent's refusal whether it can run in the background.
+//
+// Example:
+//
+//	billing := exp.DefineRemoteAgent(g, "billing", "https://billing.internal/agents/billing",
+//		aix.WithHTTPClient(idTokenClient),
+//		aix.WithDescription[any]("Answers billing questions."),
+//		aix.WithAgentMetadata(&aix.AgentMetadata{
+//			StateManagement: aix.AgentStateManagementServer,
+//			Abortable:       true,
+//		}),
+//	)
+func DefineRemoteAgent(g *genkit.Genkit, name, url string, opts ...aix.RemoteAgentOption) *aix.AgentHandle {
+	requireExperimental(g, "DefineRemoteAgent")
+	h := aix.NewRemoteAgent(name, url, opts...)
+	h.Register(genkitbridge.RegistryOf(g))
+	return h
+}
+
+// LookupAgent resolves an agent registered on g by name and returns its
+// [aix.AgentHandle]: the untyped caller-side view for code that does not hold
+// the typed [aix.Agent] value (orchestrators, middleware, tools). The handle
+// runs the agent ([aix.AgentHandle.Run], [aix.AgentHandle.RunText]), launches
+// and tracks background work ([aix.AgentHandle.RunDetached],
+// [aix.AgentHandle.Task]), and reads or aborts snapshots, with custom
+// state as raw JSON.
+//
+// It returns nil when name resolves to no agent, matching every other Lookup
+// in the framework. Like [ListAgents] it does not require
+// [genkit.WithExperimental]: it only reads the registry, and an agent can only
+// have been registered through the gated constructors.
+func LookupAgent(g *genkit.Genkit, name string) *aix.AgentHandle {
+	return aix.LookupAgent(genkitbridge.RegistryOf(g), name)
 }
 
 // ListAgents returns a slice of all [api.Action] instances that represent

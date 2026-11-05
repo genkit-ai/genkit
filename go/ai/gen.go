@@ -18,6 +18,10 @@
 
 package ai
 
+import (
+	"github.com/firebase/genkit/go/core/status"
+)
+
 type ActionMetadata struct {
 	ActionType  string `json:"actionType,omitempty"`
 	Description string `json:"description,omitempty"`
@@ -44,7 +48,7 @@ type customPart struct {
 
 type dataPart struct {
 	// Data contains arbitrary structured data.
-	Data any `json:"data,omitempty"`
+	Data any `json:"data"`
 	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
@@ -79,6 +83,7 @@ const (
 	FinishReasonLength      FinishReason = "length"
 	FinishReasonBlocked     FinishReason = "blocked"
 	FinishReasonAborted     FinishReason = "aborted"
+	FinishReasonFailed      FinishReason = "failed"
 	FinishReasonInterrupted FinishReason = "interrupted"
 	FinishReasonOther       FinishReason = "other"
 	FinishReasonUnknown     FinishReason = "unknown"
@@ -91,7 +96,7 @@ type GenerateActionOptions struct {
 	// Docs provides retrieved documents to be used as context for this generation.
 	Docs []*Document `json:"docs,omitempty"`
 	// MaxTurns is the maximum number of tool call iterations that can be performed
-	// in a single generate call. Defaults to 5.
+	// in a single generate call. Defaults to 50 in Go; other runtimes set their own.
 	MaxTurns int `json:"maxTurns,omitempty"`
 	// Messages contains the conversation history for multi-turn prompting when supported.
 	Messages []*Message `json:"messages,omitempty"`
@@ -171,8 +176,20 @@ type GenerationCommonConfig struct {
 }
 
 // GenerationUsage provides information about resource consumption during generation.
+//
+// Token counts follow one convention whatever the provider reports:
+// InputTokens is the whole prompt, cached tokens included, and
+// CachedContentTokens and CacheWriteTokens are parts of it. OutputTokens and
+// ThoughtsTokens do not overlap: together they are every token the model
+// generated. TotalTokens is the provider's own total when it reports one, and
+// otherwise InputTokens + OutputTokens + ThoughtsTokens.
 type GenerationUsage struct {
-	// CachedContentTokens counts tokens that were served from cache.
+	// CacheWriteTokens counts the input tokens written to the provider's cache,
+	// which some providers bill above the base input rate. They are part of
+	// InputTokens.
+	CacheWriteTokens int `json:"cacheWriteTokens,omitempty"`
+	// CachedContentTokens counts the input tokens served from the provider's cache.
+	// They are part of InputTokens.
 	CachedContentTokens int `json:"cachedContentTokens,omitempty"`
 	// Custom contains additional usage metrics specific to the model provider.
 	Custom map[string]float64 `json:"custom,omitempty"`
@@ -182,7 +199,9 @@ type GenerationUsage struct {
 	InputCharacters int `json:"inputCharacters,omitempty"`
 	// InputImages is the number of images in the input.
 	InputImages int `json:"inputImages,omitempty"`
-	// InputTokens is the number of tokens in the input prompt.
+	// InputTokens is the number of tokens in the input prompt. It includes the
+	// tokens served from cache (CachedContentTokens) and the tokens written to
+	// cache (CacheWriteTokens).
 	InputTokens int `json:"inputTokens,omitempty"`
 	// InputVideos is the number of videos in the input.
 	InputVideos int `json:"inputVideos,omitempty"`
@@ -192,13 +211,20 @@ type GenerationUsage struct {
 	OutputCharacters int `json:"outputCharacters,omitempty"`
 	// OutputImages is the number of images generated in the output.
 	OutputImages int `json:"outputImages,omitempty"`
-	// OutputTokens is the number of tokens generated in the response.
+	// OutputTokens is the number of tokens generated in the response, not
+	// counting ThoughtsTokens. A provider that does not report reasoning apart
+	// from the answer counts its reasoning here.
 	OutputTokens int `json:"outputTokens,omitempty"`
 	// OutputVideos is the number of videos generated in the output.
 	OutputVideos int `json:"outputVideos,omitempty"`
-	// ThoughtsTokens counts tokens used in reasoning or thinking processes.
+	// ThoughtsTokens counts the reasoning or thinking tokens that the provider
+	// reports apart from the answer. They are not part of OutputTokens. Zero means
+	// that the provider reported no reasoning count, not that the model did not
+	// reason.
 	ThoughtsTokens int `json:"thoughtsTokens,omitempty"`
-	// TotalTokens is the sum of input and output tokens.
+	// TotalTokens is the provider's own total when it reports one, so a billed
+	// bucket the other counts leave out is not lost, and otherwise InputTokens +
+	// OutputTokens + ThoughtsTokens.
 	TotalTokens int `json:"totalTokens,omitempty"`
 }
 
@@ -334,6 +360,13 @@ type ModelRequest struct {
 type ModelResponse struct {
 	// Custom contains model-specific extra information. Deprecated: use Raw instead.
 	Custom any `json:"custom,omitempty"`
+	// Error is the structured failure information for a response that
+	// accompanies an error, set whenever FinishReason is [FinishReasonFailed] or
+	// [FinishReasonAborted]. It is the classified form of FinishMessage, so a
+	// caller reading a response that travelled as data (a trace, a persisted
+	// turn) branches on the status rather than matching a string. Nil on a
+	// response that carries no failure.
+	Error *status.Error `json:"error,omitempty"`
 	// FinishMessage provides additional details about why generation finished.
 	FinishMessage string `json:"finishMessage,omitempty"`
 	// FinishReason indicates why generation stopped (e.g., stop, length, blocked).
@@ -348,7 +381,15 @@ type ModelResponse struct {
 	Raw any `json:"raw,omitempty"`
 	// Request is the ModelRequest struct used to trigger this response.
 	Request *ModelRequest `json:"request,omitempty"`
-	// Usage describes how many resources were used by this generation request.
+	// TotalUsage is the usage of every model call made under one generate run,
+	// summed field by field ([GenerationUsage.Custom] key by key): the tool loop's
+	// calls and the calls its tools and hooks make, such as a nested generate or
+	// a fallback model. Generate sets it; a model never does. Usage reports only
+	// the call that produced the response. A subagent's calls count in its own
+	// session instead, and a resumed run counts only its own calls.
+	TotalUsage *GenerationUsage `json:"totalUsage,omitempty"`
+	// Usage describes how many resources the model call that produced this
+	// response used.
 	Usage         *GenerationUsage `json:"usage,omitempty"`
 	formatHandler StreamingFormatHandler
 }
@@ -445,7 +486,7 @@ type reasoningPart struct {
 	// Metadata contains arbitrary key-value data for this part.
 	Metadata map[string]any `json:"metadata,omitempty"`
 	// Reasoning contains the reasoning text of the message.
-	Reasoning string `json:"reasoning,omitempty"`
+	Reasoning string `json:"reasoning"`
 }
 
 // RerankerRequest represents a request to rerank documents based on relevance.

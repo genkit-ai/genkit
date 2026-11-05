@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any, Generic, cast
 from uuid import uuid4
@@ -37,34 +37,46 @@ from genkit._ai._agents._session import (
     reserve_snapshot_id,
     run_with_session,
 )
+from genkit._ai._agents._session_stores._util import session_id_of
 from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
-from genkit._ai._generate import generate_action
+from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._json_patch import diff_json
-from genkit._core._action import ActionRunContext, StreamingCallback, get_current_context
+from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
-from genkit._core._error import GenkitError
+from genkit._core._compat import await_unchained, cancelling
+from genkit._core._error import (
+    ErrorReason,
+    Failure,
+    GenkitError,
+    Interrupt,
+    PublicError,
+    StatusName,
+    TaskGroupError,
+    interrupt_escape_error,
+)
 from genkit._core._logger import get_logger
-from genkit._core._model import GenerateActionOptions, Message, ModelResponse, ModelResponseChunk
-from genkit._core._registry import Registry
-from genkit._core._trace._attrs import metadata_key
-from genkit._core._tracing import SpanMetadata, run_in_new_span
-from genkit._core._typing import (
-    AgentFinishReason,
+from genkit._core._model import (
     AgentInit,
     AgentInput,
     AgentOutput,
     AgentResult,
     AgentStreamChunk,
     Artifact,
+    GenerateActionOptions,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    SessionSnapshot,
+    SessionState,
+)
+from genkit._core._telemetry._instrumentation import SpanContext, run_in_new_span
+from genkit._core._typing import (
+    AgentFinishReason,
     FinishReason,
-    GenkitRuntimeError,
     JsonPatch,
     JsonPatchOp,
     JsonPatchOperation,
-    MessageData,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
     TurnEnd,
 )
@@ -102,7 +114,7 @@ class SessionRunner(Generic[StateT]):
         self.on_end_turn = on_end_turn
         self.turn_index: int = 0
         self.last_turn_finish_reason: AgentFinishReason | None = None
-        self.last_turn_error: GenkitRuntimeError | None = None
+        self.last_turn_error: Failure | None = None
         self.last_good_state: SessionState | None = None
         self.last_good_state_version: int | None = None
         self.last_good_finish_reason: AgentFinishReason | None = None
@@ -158,14 +170,18 @@ class SessionRunner(Generic[StateT]):
             if self.on_begin_turn is not None:
                 await self.on_begin_turn()
 
-            span_meta = SpanMetadata(
-                name=f'runTurn-{self.turn_index + 1}',
-                type='flowStep',
-                input=inp,
-            )
             try:
-                with run_in_new_span(span_meta) as span:
-                    turn_result = await fn(inp, turn_ctx)
+
+                async def body(span: SpanContext, turn_input: AgentInput = inp, ctx: TurnContext = turn_ctx) -> object:
+                    try:
+                        turn_result = await fn(turn_input, ctx)
+                    except (Interrupt, TaskGroupError) as exc:
+                        # No generate loop here to pause. Convert inside the
+                        # span so runTurn-N records the failure.
+                        failure = interrupt_escape_error(exc)
+                        if failure is None:
+                            raise
+                        raise failure from exc
                     finish_reason = turn_result.finish_reason if turn_result else None
                     self.last_turn_finish_reason = finish_reason
                     self.last_turn_error = None
@@ -178,21 +194,33 @@ class SessionRunner(Generic[StateT]):
                     # (messages, artifacts, custom) so a trace can show what
                     # changed without reading the client response.
                     state = await self.session.state()
-                    span_meta.output = {
-                        'state': state.model_dump(by_alias=True, exclude_none=True, mode='json'),
-                    }
-                    # Tag with the id this turn actually persisted under
-                    # (server-managed only; omitted when nothing was written).
-                    if snapshot_id and span.is_recording():
-                        span.set_attribute(metadata_key('agent:snapshotId'), snapshot_id)
+                    if snapshot_id:
+                        span.set_metadata({'agent:snapshotId': snapshot_id})
+                    return {'state': state.model_dump(by_alias=True, exclude_none=True, mode='json')}
+
+                await run_in_new_span(
+                    f'runTurn-{self.turn_index + 1}',
+                    body,
+                    action_type='flowStep',
+                    input=inp,
+                )
 
                 self.last_good_state = await self.session.state()
                 self.last_good_state_version = self.session.version
                 self.last_good_finish_reason = self.last_turn_finish_reason
                 self.turn_index += 1
-            except Exception as exc:
+            except (Exception, Interrupt, TaskGroupError) as exc:
+                # body converts the turn's own Interrupt; this covers one
+                # raised from a hook outside it.
+                failure = interrupt_escape_error(exc)
+                if failure is not None:
+                    turn_error: Exception = failure
+                elif isinstance(exc, Exception):
+                    turn_error = exc
+                else:
+                    raise
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
-                self.last_turn_error = to_error_details(exc)
+                self.last_turn_error = to_error_details(turn_error)
 
                 if self.on_end_turn is not None:
                     await self.on_end_turn(AgentFinishReason.FAILED)
@@ -214,13 +242,13 @@ class SessionRunner(Generic[StateT]):
 
     # --- Session passthrough helpers ---
 
-    async def get_messages(self) -> list[MessageData]:
+    async def get_messages(self) -> list[Message]:
         return await self.session.get_messages()
 
-    async def set_messages(self, messages: list[MessageData]) -> None:
+    async def set_messages(self, messages: list[Message]) -> None:
         await self.session.set_messages(messages)
 
-    async def add_messages(self, messages: list[MessageData]) -> None:
+    async def add_messages(self, messages: list[Message]) -> None:
         await self.session.add_messages(messages)
 
     async def get_artifacts(self) -> list[Artifact]:
@@ -236,11 +264,20 @@ class SessionRunner(Generic[StateT]):
         await self.session.update_custom(fn)
 
 
-# AgentFn — custom agent entrypoint; receives SessionRunner + ActionRunContext.
+class AgentContext(ActionRunContext[AgentStreamChunk]):
+    """Execution context passed to a custom agent function.
+
+    Provides ``ctx.send_chunk(chunk)`` for streaming :class:`AgentStreamChunk`
+    items and ``ctx.context`` for caller context data.
+    """
+
+
+# AgentFn — custom agent entrypoint; receives SessionRunner + AgentContext.
 AgentFn = Callable[
-    [SessionRunner, ActionRunContext],
+    [SessionRunner, AgentContext],
     Awaitable[AgentResult],
 ]
+"""Custom agent entrypoint: takes a `SessionRunner` and the run context, returns an `AgentResult`."""
 
 
 # ---------------------------------------------------------------------------
@@ -266,17 +303,16 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
         # see exactly what was wrong, not just that something was.
         raise GenkitError(
             status='INVALID_ARGUMENT',
-            message=(
-                f"Invalid custom state for agent '{agent_name}': {e.error_count()} schema validation error(s).\n{e}"
-            ),
+            message=f"Invalid custom state for agent '{agent_name}'",
+            cause=e,
             details={
                 'schema': state_schema.model_json_schema(),
-                'errors': [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in e.errors()],
             },
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
-class AgentInitError(GenkitError):
+class AgentInitError(PublicError):
     """API misuse on agent init that must surface as a thrown/HTTP error.
 
     Covers calling an agent with an init that does not match its state-management
@@ -284,7 +320,22 @@ class AgentInitError(GenkitError):
     problems (missing snapshot, non-resumable snapshot, invalid custom state)
     stay as plain ``GenkitError`` so the caller can absorb them into
     ``finish_reason='failed'``.
+
+    It is a ``PublicError``: the message names only the init fields and ids the
+    caller sent, so a served agent returns its status, message, and
+    ``details.reason`` and a remote client reads the same ``reason`` it would
+    in-process.
     """
+
+    def __init__(self, *, status: StatusName, message: str, reason: ErrorReason | None = None) -> None:
+        """Initialize an AgentInitError.
+
+        Args:
+            status: The status name for this error.
+            message: Caller-facing sentence; must not include server-side data.
+            reason: Stable reason, sent on the wire as ``details.reason``.
+        """
+        super().__init__(status, message, details={'reason': reason.value} if reason is not None else None)
 
 
 def seeded_init_fields(state: SessionState) -> str:
@@ -316,21 +367,23 @@ def assert_init_matches_state_management(
 ) -> None:
     """Raise ``AgentInitError`` when init does not match the agent's store mode."""
     if (init.snapshot_id or init.session_id) and store is None:
-        field = 'snapshot_id' if init.snapshot_id else 'session_id'
+        # Wire-facing errors use the wire (camelCase) field names so a
+        # client talking over HTTP sees the same identifiers it sent.
+        field = 'snapshotId' if init.snapshot_id else 'sessionId'
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
                 f"Cannot use '{field}' with agent '{agent_name}': this agent has no "
                 "store configured (client-managed state). Send 'state' instead."
             ),
+            reason=ErrorReason.SESSION_STORE_NOT_CONFIGURED,
         )
     if init.state is not None and store is not None:
-        fields = seeded_init_fields(init.state)
         raise AgentInitError(
             status='FAILED_PRECONDITION',
             message=(
-                f"Cannot send {fields} to agent '{agent_name}': this agent uses a "
-                "server-managed store. Send 'snapshot_id' or 'session_id' instead."
+                f"Cannot send 'state' to agent '{agent_name}': this agent uses a "
+                "server-managed store. Send 'snapshotId' or 'sessionId' instead."
             ),
         )
 
@@ -345,6 +398,8 @@ async def load_session(
     """Construct a Session from AgentInit payload.
 
     Server-managed (store set): resume via snapshot_id or session_id.
+    snapshot_id is that exact row (must be completed). session_id continues
+    the conversation: skip a dead leaf, or start fresh if none is completed.
     Client-managed (no store): use init.state or start fresh.
 
     When ``state_schema`` is set the custom state loaded from a snapshot or the
@@ -356,11 +411,6 @@ async def load_session(
     """
     name = agent_name or 'agent'
 
-    if init.snapshot_id and init.session_id:
-        raise AgentInitError(
-            status='INVALID_ARGUMENT',
-            message=(f"Cannot send both 'snapshot_id' and 'session_id' to agent '{name}'. Provide exactly one."),
-        )
     assert_init_matches_state_management(init=init, store=store, agent_name=name)
 
     ctx = get_current_context()
@@ -371,7 +421,20 @@ async def load_session(
             raise GenkitError(
                 status='NOT_FOUND',
                 message=f'Snapshot {init.snapshot_id!r} not found',
+                reason=ErrorReason.SNAPSHOT_NOT_FOUND,
             )
+        # When init carries both ids, the snapshot id picks the row and the
+        # session id is an ownership check: the snapshot must belong to that
+        # session. Wrong pairing is a client error, not a silent load.
+        if init.session_id:
+            snap_session_id = session_id_of(snap)
+            if snap_session_id != init.session_id:
+                # The caller sees this message, so don't name the owning session.
+                raise AgentInitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Snapshot {init.snapshot_id!r} does not belong to session {init.session_id!r}.',
+                    reason=ErrorReason.INVALID_SESSION_ID,
+                )
         # A failed/aborted/pending snapshot is kept for inspection but isn't a
         # valid place to continue a conversation from.
         if snap.status != SnapshotStatus.COMPLETED:
@@ -382,6 +445,7 @@ async def load_session(
                     f'(status: {snap.status.value if snap.status else "unknown"}). '
                     "Only 'completed' snapshots can be resumed."
                 ),
+                reason=ErrorReason.SNAPSHOT_NOT_RESUMABLE,
             )
         validate_custom_state(
             custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
@@ -516,7 +580,7 @@ class AgentRuntime:
         *,
         finish_reason: AgentFinishReason | None = None,
         status: SnapshotStatus | None = None,
-        error: GenkitRuntimeError | None = None,
+        error: Failure | None = None,
         force: bool = False,
         snapshot_id: str | None = None,
     ) -> str | None:
@@ -623,7 +687,7 @@ class AgentRuntime:
         snapshot_id = await self.maybe_snapshot(
             finish_reason=finish_reason,
             status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
-            error=self.session_runner.last_turn_error if is_failed else None,
+            error=self.session_runner.last_turn_error,
             force=is_failed,
         )
         # turnEnd is just the boundary marker. The full session rides home on
@@ -657,19 +721,31 @@ class AgentRuntime:
             out.snapshot_id = await self.ensure_recovery_snapshot()
         return out
 
-    async def watch_snapshot_abort(self, *, snapshot_id: str, abort_signal: asyncio.Event) -> None:
+    async def watch_snapshot_abort(
+        self,
+        *,
+        snapshot_id: str,
+        fn_task: asyncio.Task[Any],
+        snapshot_aborted: asyncio.Event | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
         if self.store is None or not isinstance(self.store, SnapshotSubscriber):
             return
-        q = await self.store.on_snapshot_status_change(snapshot_id)
-        while True:
-            status = await q.get()
-            if status is None:
-                return
+        # Prefer the detach-time context from the caller so the subscription
+        # stays on the request's tenant even if this task starts after ambient
+        # context has moved on.
+        statuses = await self.store.on_snapshot_status_change(
+            snapshot_id, context=context if context is not None else get_current_context()
+        )
+        # Aborted is terminal, so the stream ends right after that yield and
+        # unsubscribes. Returning early would skip that teardown.
+        async for status in statuses:
             if status == SnapshotStatus.ABORTED:
-                abort_signal.set()
-                return
+                if snapshot_aborted is not None:
+                    snapshot_aborted.set()
+                fn_task.cancel()
 
-    async def refresh_heartbeat(self, snapshot_id: str) -> None:
+    async def refresh_heartbeat(self, snapshot_id: str, *, context: dict[str, Any] | None = None) -> None:
         """Keep a detached turn's pending snapshot fresh so readers don't flag it dead.
 
         A reader treats a pending snapshot whose heartbeat has gone stale as
@@ -677,13 +753,14 @@ class AgentRuntime:
         detached turn is genuinely still running we bump the beat on an interval.
         The mutator only touches a still-pending snapshot, so a beat never
         resurrects a terminal snapshot or races a concurrent abort/finalize.
+
+        ``context`` should be the detach-time tenant context (same as abort-watch
+        and finalize). Falls back to ambient context if the caller omitted it.
         """
         if self.store is None:
             return
         interval_s = DEFAULT_HEARTBEAT_INTERVAL_MS / 1000
-        # Capture at start (detach time) so beats keep using the request's
-        # tenant context even if ambient context later changes.
-        beat_context = get_current_context()
+        beat_context = context if context is not None else get_current_context()
 
         def beat(existing: SessionSnapshot | None) -> SessionSnapshot | None:
             if existing is None or existing.status != SnapshotStatus.PENDING:
@@ -708,9 +785,33 @@ class AgentRuntime:
         err_holder: list[Exception],
         result_holder: list[AgentResult],
         heartbeat_task: asyncio.Task,
+        snapshot_aborted: asyncio.Event | None = None,
+        context: dict[str, Any] | None = None,
     ) -> None:
-        """Background task: wait for fn, then rewrite pending snapshot with final state."""
-        await fn_task
+        """Background task: wait for fn, then rewrite pending snapshot with final state.
+
+        ``context`` should be captured at detach time (same as heartbeats) so a
+        multi-tenant store still writes the terminal status under the request's
+        tenant after the original call has returned.
+        """
+        self_cancels: list[asyncio.CancelledError] = []
+        try:
+            await await_unchained(fn_task, on_cancel=self_cancels.append)
+        except asyncio.CancelledError:
+            if (
+                self_cancels
+                or cancelling(asyncio.current_task()) > 0
+                or snapshot_aborted is None
+                or not snapshot_aborted.is_set()
+            ):
+                fn_task.cancel()
+                heartbeat_task.cancel()
+                raise
+            await forward_task
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+            return
         await forward_task
 
         # The turn has settled, so stop refreshing its heartbeat before we rewrite
@@ -722,7 +823,13 @@ class AgentRuntime:
         state = await self.session.state()
         now = datetime.now(timezone.utc).isoformat()
         fn_err = err_holder[0] if err_holder else None
-        if fn_err:
+        # SessionRunner.run swallows turn exceptions into last_turn_error and
+        # still returns. The attached path consults that field; detached
+        # finalize used to look only at err_holder, so a graceful turn failure
+        # wrote status=completed / error=None. Same rule as emit_turn_end.
+        turn_err = self.session_runner.last_turn_error
+        is_failed = fn_err is not None or self.session_runner.last_turn_finish_reason == AgentFinishReason.FAILED
+        if is_failed:
             finish_reason = AgentFinishReason.FAILED
         else:
             result = result_holder[0] if result_holder else None
@@ -737,9 +844,9 @@ class AgentRuntime:
             return SessionSnapshot(
                 snapshot_id=existing.snapshot_id if existing else '',
                 parent_id=pending_snap.parent_id or '',
-                status=SnapshotStatus.FAILED if fn_err else SnapshotStatus.COMPLETED,
+                status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(to_error_details(fn_err) if fn_err else None),
+                error=(to_error_details(fn_err) if fn_err else turn_err),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
@@ -748,7 +855,7 @@ class AgentRuntime:
             await self.store.save_snapshot(  # type: ignore[union-attr]
                 pending_snap.snapshot_id,
                 finalize,
-                context=get_current_context(),
+                context=context,
             )
         except Exception:  # noqa: BLE001
             # Best-effort: the snapshot stays pending, but its heartbeat stopped
@@ -765,11 +872,9 @@ class AgentRuntime:
              background finalizer rewrites snapshot when fn finishes
         """
         detach_future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        abort_signal = asyncio.Event()
-        action_ctx = ActionRunContext(
+        action_ctx = AgentContext(
             context=get_current_context(),
-            streaming_callback=cast(StreamingCallback, self.send_chunk),
-            abort_signal=abort_signal,
+            streaming_callback=self.send_chunk,
         )
 
         # Forward task: BidiAction client_inputs -> runtime intake.
@@ -780,6 +885,12 @@ class AgentRuntime:
                 async for item in client_inputs:
                     if item.detach:
                         is_detached = True
+                        # Stop chunk emission immediately: a detached run must
+                        # not stream chunks back on this connection. Setting the
+                        # flag here — before the payload is queued — closes the
+                        # race where the background turn starts streaming before
+                        # the detach branch of run() marks the runtime detached.
+                        self.detached = True
                         # Forward the detach input's payload (if any) into the turn
                         # loop and close it *before* signaling detach. Doing it in
                         # this order means the turn is deterministically queued for
@@ -813,8 +924,14 @@ class AgentRuntime:
                     coro=fn(self.session_runner, action_ctx),
                 )
                 result_holder.append(result)
-            except Exception as e:  # noqa: BLE001
-                err_holder.append(e)
+            except (Exception, Interrupt, TaskGroupError) as e:  # noqa: BLE001
+                failure = interrupt_escape_error(e)
+                if failure is not None:
+                    err_holder.append(failure)
+                elif isinstance(e, Exception):
+                    err_holder.append(e)
+                else:
+                    raise
             finally:
                 # Synchronously close self.turn_inputs to signal turn completion,
                 # letting SessionRunner stop waiting for more inputs.
@@ -833,9 +950,10 @@ class AgentRuntime:
         # --- Detach path ---
         if detach_future.done():
             if self.store is None:
-                # Detach without a store is a config error; signal abort and raise.
-                abort_signal.set()
-                await fn_task
+                # Detach without a store is a config error; cancel the turn and raise.
+                fn_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fn_task
                 await forward_task
                 raise ValueError(
                     f"Agent '{self.name}' received a detach request, but cannot proceed because detach "
@@ -884,10 +1002,21 @@ class AgentRuntime:
             # emitting chunks to it. The turn keeps running; a background task
             # finalizes the snapshot when fn finishes.
             self.detached = True
+            # Pin tenant context for background abort-watch / heartbeat / finalize
+            # — ambient context may be gone by the time those tasks run or settle.
+            detach_context = get_current_context()
+            snapshot_aborted = asyncio.Event()
             t1 = asyncio.create_task(
-                self.watch_snapshot_abort(snapshot_id=pending_snap.snapshot_id, abort_signal=abort_signal)
+                self.watch_snapshot_abort(
+                    snapshot_id=pending_snap.snapshot_id,
+                    fn_task=fn_task,
+                    snapshot_aborted=snapshot_aborted,
+                    context=detach_context,
+                )
             )
-            heartbeat_task = asyncio.create_task(self.refresh_heartbeat(pending_snap.snapshot_id))
+            heartbeat_task = asyncio.create_task(
+                self.refresh_heartbeat(pending_snap.snapshot_id, context=detach_context)
+            )
             t2 = asyncio.create_task(
                 self.finalize_detach(
                     pending_snap=pending_snap,
@@ -896,14 +1025,24 @@ class AgentRuntime:
                     err_holder=err_holder,
                     result_holder=result_holder,
                     heartbeat_task=heartbeat_task,
+                    snapshot_aborted=snapshot_aborted,
+                    context=detach_context,
                 )
             )
+
+            def _on_finalize_done(done_task: asyncio.Task[None]) -> None:
+                self.background_tasks.discard(done_task)
+                if done_task.cancelled():
+                    fn_task.cancel()
+                    t1.cancel()
+                    heartbeat_task.cancel()
+
             self.background_tasks.add(t1)
             self.background_tasks.add(heartbeat_task)
             self.background_tasks.add(t2)
             t1.add_done_callback(self.background_tasks.discard)
             heartbeat_task.add_done_callback(self.background_tasks.discard)
-            t2.add_done_callback(self.background_tasks.discard)
+            t2.add_done_callback(_on_finalize_done)
             return AgentOutput(
                 session_id=state.session_id,
                 snapshot_id=pending_snap.snapshot_id,
@@ -975,10 +1114,10 @@ class AgentRuntime:
 async def generate_prompt_agent_turn(
     *,
     session_runner: SessionRunner,
-    ctx: ActionRunContext,
-    registry: Registry,
-    gen_options: GenerateActionOptions,
-    history: list[MessageData],
+    ctx: AgentContext,
+    scope: CallScope,
+    options: GenerateActionOptions,
+    history: list[Message],
 ) -> TurnResult | None:
     """Run generate for one agent turn and persist session messages."""
 
@@ -986,10 +1125,9 @@ async def generate_prompt_agent_turn(
         ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
     response = await generate_action(
-        registry,
-        gen_options,
+        scope,
+        options,
         on_chunk=on_chunk,
-        abort_signal=ctx.abort_signal,
         context=ctx.context,
     )
 
@@ -1002,12 +1140,21 @@ async def generate_prompt_agent_turn(
         )
         return TurnResult(finish_reason=AgentFinishReason.INTERRUPTED)
 
-    if response.message:
-        await persist_turn_messages(
-            session_runner=session_runner,
-            history=history,
-            response_message=response.message,
-            response=response,
+    # Max-turns abort has no model message (the refused round was
+    # dropped) but request.messages still has the closed tool turns.
+    await persist_turn_messages(
+        session_runner=session_runner,
+        history=history,
+        response_message=response.message,
+        response=response,
+    )
+
+    # Bad JSON is not a dead turn — generate already kept the model text.
+    if response.error is not None and response.error.reason is not ErrorReason.INVALID_OUTPUT:
+        raise GenkitError(
+            message=response.error.message,
+            status=response.error.status,
+            details=response.error.details,
         )
 
     # Return the turn result wrapping the model finish reason
@@ -1020,16 +1167,33 @@ async def generate_prompt_agent_turn(
 # ---------------------------------------------------------------------------
 
 
-def to_error_details(exc: Exception) -> GenkitRuntimeError:
-    status = getattr(exc, 'status', None) or 'INTERNAL'
+def to_error_details(exc: BaseException) -> Failure:
+    """A turn failure as data, with the status classified like Go's ``status.Classified``.
+
+    Classifies the top-level exception; Go also walks the wrapped chain
+    with ``errors.As``.
+
+    Only a GenkitError names its own status. A third-party ``.status``
+    attribute (aiohttp's ``status=429``) isn't a Genkit status, so it never
+    leaks through.
+    """
+    status: StatusName
+    details: dict[str, Any] | None = None
     if isinstance(exc, GenkitError):
-        message = exc.original_message
+        status = exc.status
+        message = exc.message
+        if isinstance(exc.details, Mapping) and exc.details:
+            details = dict(cast(Mapping[str, Any], exc.details))
     else:
+        if isinstance(exc, asyncio.CancelledError):
+            status = 'CANCELLED'
+        # asyncio.TimeoutError is a separate class until 3.11.
+        elif isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            status = 'DEADLINE_EXCEEDED'
+        else:
+            status = 'INTERNAL'
         message = str(exc) or 'Internal failure'
-    details = getattr(exc, 'detail', None) or getattr(exc, 'details', None)
-    if details is None and not isinstance(exc, GenkitError):
-        details = str(exc)
-    return GenkitRuntimeError(status=str(status), message=message, details=details)
+    return Failure(status=status, message=message, details=details)
 
 
 def to_agent_finish_reason(fr: FinishReason) -> AgentFinishReason:
@@ -1042,12 +1206,12 @@ def to_agent_finish_reason(fr: FinishReason) -> AgentFinishReason:
 async def persist_turn_messages(
     *,
     session_runner: SessionRunner,
-    history: list[MessageData],
-    response_message: MessageData | Message | None,
+    history: list[Message],
+    response_message: Message | None,
     response: ModelResponse | None = None,
 ) -> None:
     if response is not None and response.request is not None and response.request.messages:
-        clean: list[MessageData] = []
+        clean: list[Message] = []
         for m in response.request.messages:
             meta = m.metadata or {}
             if meta.get(PREAMBLE_KEY):
@@ -1061,7 +1225,7 @@ async def persist_turn_messages(
     if response_message is None:
         return
 
-    clean_history: list[MessageData] = [coerce_message(m) for m in history]
+    clean_history: list[Message] = [coerce_message(m) for m in history]
     clean_history = [m for m in clean_history if not (m.metadata or {}).get(PREAMBLE_KEY)]
     clean_history.append(coerce_message(response_message))
     await session_runner.set_messages(clean_history)

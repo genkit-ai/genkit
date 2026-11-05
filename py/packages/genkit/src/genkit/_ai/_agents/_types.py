@@ -22,10 +22,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from genkit._core._error import Failure
+from genkit._core._model import AgentStreamChunk, SessionState
 from genkit._core._typing import (
     AgentFinishReason,
-    AgentStreamChunk,
-    SessionState,
 )
 
 StateManagement = Literal['server', 'client']
@@ -41,11 +41,13 @@ StateManagement = Literal['server', 'client']
 # explicitly cleared one — there's no "return None to omit," precisely so a transform
 # that forgets to return can't silently wipe the client's entire view.
 StateTransform = Callable[[SessionState], SessionState]
+"""Redacts session state before a client sees it; must return a state, never None."""
 
 # ChunkTransform — reshape or drop a stream chunk before it reaches the client.
 # Returning None drops the chunk (the point of the hook, e.g. hide artifact chunks);
 # the blast radius is one chunk, so unlike the state hook that's safe.
 ChunkTransform = Callable[[AgentStreamChunk], AgentStreamChunk | None]
+"""Reshapes a stream chunk before a client sees it; returning None drops the chunk."""
 
 
 @dataclass(frozen=True)
@@ -70,3 +72,4 @@ class TurnResult:
     """What an agent turn function returns to tell the loop how the turn ended."""
 
     finish_reason: AgentFinishReason | None = None
+    error: Failure | None = None

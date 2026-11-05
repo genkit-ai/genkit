@@ -20,10 +20,10 @@ from genkit import Genkit
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner
 from genkit._ai._agents._session import Session, get_current_session, run_with_session
 from genkit._ai._agents._types import TurnContext
-from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._typing import AgentInput, AgentResult, SessionState
-from genkit.middleware import GenerateMiddlewareContext
+from genkit._core._model import AgentInput, AgentResult, SessionState
+from genkit.exp.agent import AgentContext
+from genkit.middleware import MiddlewareContext
 
 
 @pytest.mark.asyncio
@@ -32,15 +32,15 @@ async def test_get_current_session_outside_bind() -> None:
 
 
 @pytest.mark.asyncio
-async def test_middleware_context_session_field() -> None:
+async def test_middleware_context_ai_current_session_inside_agent_session_raises_attribute_error() -> None:
+    """Inside an agent session, a hook calling ctx.ai.current_session() gets AttributeError."""
     ai = Genkit()
-    ctx = GenerateMiddlewareContext(ai=ai)
-    assert ctx.ai.current_session() is None
-
+    ctx = MiddlewareContext(ai=ai)
     session = Session(SessionState(custom={'bound': True}))
 
     async def check() -> None:
-        assert ctx.ai.current_session() is session
+        with pytest.raises(AttributeError):
+            ctx.ai.current_session()  # type: ignore[attr-defined]  # pyright: ignore[reportAttributeAccessIssue]
 
     await run_with_session(session=session, coro=check())
 
@@ -101,7 +101,7 @@ async def test_agent_runtime_binds_session_during_handler() -> None:
     )
     seen: list[Session | None] = []
 
-    async def agent_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         seen.append(get_current_session())
 
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:

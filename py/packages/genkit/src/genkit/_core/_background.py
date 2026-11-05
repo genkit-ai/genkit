@@ -14,394 +14,629 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Background model definitions for the Genkit framework."""
+"""Background actions: start, check and cancel over a generic Operation.
+
+Mirrors Go ``core.BackgroundActionDef[In, Out]`` and JS
+``BackgroundAction<I, O>``. Knows nothing about models; the AI layer builds
+``BackgroundModel`` on top of it (``genkit._ai._background_model``).
+"""
 
 from __future__ import annotations
 
-import time
-from collections.abc import Awaitable, Callable
-from typing import Any, Generic, TypeVar
+import inspect
+from collections.abc import Awaitable, Callable, Mapping
+from functools import wraps
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_args, get_origin
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+from typing_extensions import Self
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._model import ModelRequest, ModelResponse
-from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
-from genkit._core._typing import (
-    ModelInfo,
-    Operation,
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    ActionRunContext,
+    FlowContext,
+    get_current_context,
+    set_action_name,
 )
+from genkit._core._error import ErrorReason, GenkitError, StatusName
+from genkit._core._operation import Operation
+from genkit._core._schema import fixed_json_schema
+from genkit._core._typing import ActionMetadata
 
-# Type variable for operation output
-OutputT = TypeVar('OutputT')
+if TYPE_CHECKING:
+    from genkit._core._registry import Registry
+
+InT = TypeVar('InT')
+OutT = TypeVar('OutT')
+
+# Annotation-only aliases. Operation[OutT] is a concrete pydantic class at
+# runtime, so CheckOpFn[X] can't be subscripted outside an annotation; spell
+# the Callable out when you need a runtime alias.
+StartOpFn = Callable[[InT, FlowContext], Awaitable[Operation]]
+CheckOpFn = Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
+CancelOpFn = Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:
-    """Create an action key matching JS format: /{actionType}/{name}.
-
-    Args:
-        action_type: The action type (e.g., 'background-model').
-        name: The action name.
-
-    Returns:
-        Action key in format /{actionType}/{name}.
-    """
+    """Create an action key in format: /{action_type}/{name}."""
     return f'/{action_type}/{name}'
 
 
-# Type aliases for background model functions matching JS signatures
-# JS: start: (input, options) => Promise<Operation<OutputT>>
-StartModelOpFn = Callable[[ModelRequest, ActionRunContext], Awaitable[Operation]]
-# JS: check: (input: Operation<OutputT>) => Promise<Operation<OutputT>>
-CheckModelOpFn = Callable[[Operation], Awaitable[Operation]]
-# JS: cancel?: (input: Operation<OutputT>) => Promise<Operation<OutputT>>
-CancelModelOpFn = Callable[[Operation], Awaitable[Operation]]
+def stamp_operation_action(
+    *,
+    operation: Operation,
+    name: str,
+    kind: ActionKind = ActionKind.BACKGROUND_MODEL,
+) -> None:
+    """A handle needs the start action key so check/cancel can find the job."""
+    if operation.action:
+        return
+    operation.action = _make_action_key(kind, name)
 
 
-class BackgroundAction(Generic[OutputT]):
-    """A background action that can run for a long time.
+def first_validation_error(error: ValidationError) -> str:
+    """One line naming the first bad field, e.g. ``Done: Extra inputs are not permitted``."""
+    errors = error.errors()
+    first = errors[0]
+    loc = '.'.join(str(part) for part in first['loc']) or '<root>'
+    more = f' (+{len(errors) - 1} more)' if len(errors) > 1 else ''
+    return f'{loc}: {first["msg"]}{more}'
 
-    Unlike regular actions, background actions can run for extended periods.
-    The returned operation can be used to check status and retrieve the response.
 
-    This class matches the JS BackgroundAction interface from
-    js/core/src/background-action.ts.
+def _operation_class(output_type: type[Any] | None) -> type[Operation[Any]]:
+    # A runtime type argument, so the subscript goes through Any for checkers.
+    return cast(Any, Operation)[output_type] if output_type is not None else Operation
 
-    Attributes:
-        __action: Action metadata (matches JS __action property).
-        start_action: Action to start the operation.
-        check_action: Action to check operation status.
-        cancel_action: Optional action to cancel operations.
-        supports_cancel: Whether this action supports cancellation.
+
+def validate_operation(
+    operation: Operation,
+    *,
+    output_type: type[Any] | None,
+    name: str,
+    status: StatusName,
+) -> Operation[Any]:
+    """The same handle as an ``Operation[output_type]``, with every field validated.
+
+    A fn may return a plain ``Operation`` or assign ``op.output = {...}`` or
+    ``op.error = ...``, which skips validation, so the handle is always
+    rebuilt. Nested model instances are not revalidated, so this is cheap.
+    ``status`` says whose mistake a bad field is: INTERNAL (reason
+    INVALID_OUTPUT) for what a fn returned, INVALID_ARGUMENT (reason
+    INVALID_INPUT) for a handle the caller passed in.
+
+    Raises:
+        GenkitError: ``status`` naming the first field that fails.
     """
+    fields = {field: getattr(operation, field) for field in operation.model_fields_set}
+    try:
+        return _operation_class(output_type).model_validate(fields)
+    except ValidationError as e:
+        raise GenkitError(
+            status=status,
+            message=f"'{name}': invalid Operation: {first_validation_error(e)}",
+            reason=ErrorReason.INVALID_INPUT if status == 'INVALID_ARGUMENT' else ErrorReason.INVALID_OUTPUT,
+        ) from e
+
+
+def require_operation(*, value: object, output_type: type[Any] | None = None) -> Operation[Any]:
+    """A poll handle: a live Operation, or the dict a stored one dumped to.
+
+    Either is validated as an ``Operation[output_type]`` as strictly as the
+    check/cancel action input (``extra='forbid'``), so a typo'd key like
+    ``Done`` or a bad ``output`` fails here with the field named, before any
+    action runs.
+    """
+    if isinstance(value, Operation):
+        fields: dict[str, object] = {field: getattr(value, field) for field in value.model_fields_set}
+    elif isinstance(value, Mapping):
+        fields = dict(value)
+    else:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'got {type(value).__name__}, expected Operation',
+            reason=ErrorReason.INVALID_INPUT,
+        )
+    try:
+        return _operation_class(output_type).model_validate(fields)
+    except ValidationError as e:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'invalid Operation: {first_validation_error(e)}',
+            reason=ErrorReason.INVALID_INPUT,
+        ) from e
+
+
+def operation_context(
+    *,
+    context: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Fold check/cancel ``config=`` into the context bag the plugin reads.
+
+    ``config`` here is client knobs (``base_url``, ``location``), not video
+    settings. A per-request key lives in ``context['secrets']``. Top-level
+    ``config=`` wins when both are set so the caller's explicit override is
+    what the plugin sees.
+
+    Supplying only ``config=`` keeps the current action context. An explicit
+    ``context={}`` still clears it. Both omitted returns ``None`` so
+    ``Action.run`` inherits directly.
+    """
+    if context is None and config is None:
+        return None
+    folded = dict(context if context is not None else (get_current_context() or {}))
+    if config is not None:
+        folded['config'] = dict(config)
+    return folded
+
+
+class MissingOperationError(GenkitError):
+    """A background action lost the operation handle it created."""
+
+
+def missing_operation_error(*, name: str) -> MissingOperationError:
+    """The caller asked for a handle and this action did not return one."""
+    return MissingOperationError(
+        status='FAILED_PRECONDITION',
+        message=f"'{name}' did not return an operation.",
+    )
+
+
+def _concrete_type(arg: object) -> type[Any] | None:
+    """A type argument Genkit can validate against; None for TypeVars and Any."""
+    return arg if isinstance(arg, type) else None
+
+
+class BackgroundAction(Generic[InT, OutT]):
+    """A handle over a background job's start, check and cancel actions.
+
+    A composite, not an ``Action``: start, check and cancel each have their
+    own registry key. ``start`` returns an ``Operation[OutT]``; pass it to
+    ``check`` until ``done``. Subclass with concrete type arguments, e.g.
+    ``class ReportJob(BackgroundAction[ReportRequest, Report])``, and the
+    handle's ``output`` validates as ``Report``.
+
+    Every attribute is either a ClassVar derived from the type arguments or
+    derived from the three actions in ``_bind``, so a handle rebuilt from the
+    registry (``_from_actions``) behaves like the one that was defined.
+
+    Example:
+        ```python
+        # 1. Type the job by subclassing with concrete type arguments
+        class ReportJob(BackgroundAction[RenderRequest, Report]):
+            pass
+
+
+        async def start(request: RenderRequest, ctx: FlowContext) -> Operation:
+            return Operation(id=await renderer.submit(request.quarter))
+
+
+        async def check(op: Operation[Report], ctx: FlowContext) -> Operation:
+            return await renderer.poll(op.id)
+
+
+        # 2. Build it; plugins return it from init() or resolve()
+        job = ReportJob('render-report', start, check, kind=ActionKind.CUSTOM)
+
+        # 3. The handle's output validates as Report
+        op = await job.check(await job.start(RenderRequest(quarter='q3')))
+        print(type(op.output).__name__)
+        # => Report
+        ```
+    """
+
+    # Derived from the type arguments in __init_subclass__. None means Any.
+    _input_type: ClassVar[type[Any] | None] = None
+    _output_type: ClassVar[type[Any] | None] = None
+    # How error messages name this kind of job.
+    _noun: ClassVar[str] = 'Background action'
+    _cancel_unsupported_reason: ClassVar[ErrorReason | None] = None
+
+    start_action: Action
+    check_action: Action
+    cancel_action: Action | None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
+        """Read InT / OutT off ``class X(BackgroundAction[In, Out])``."""
+        super().__init_subclass__(**kwargs)
+        for base in getattr(cls, '__orig_bases__', ()):
+            origin = get_origin(base)
+            if isinstance(origin, type) and issubclass(origin, BackgroundAction):
+                args = get_args(base)
+                if len(args) == 2:
+                    cls._input_type = _concrete_type(args[0])
+                    cls._output_type = _concrete_type(args[1])
 
     def __init__(
         self,
-        start_action: Action,
-        check_action: Action,
-        cancel_action: Action | None = None,
+        name: str,
+        start: StartOpFn[InT],
+        check: CheckOpFn[OutT],
+        *,
+        kind: ActionKind,
+        cancel: CancelOpFn[OutT] | None = None,
+        metadata: dict[str, Any] | None = None,
+        description: str | None = None,
     ) -> None:
-        """Initialize a BackgroundAction.
+        """Build a background action without registering it.
 
         Args:
-            start_action: Action to start the operation.
-            check_action: Action to check operation status.
-            cancel_action: Optional action to cancel the operation.
+            name: The start action's name. Check and cancel are
+                ``{name}/check`` and ``{name}/cancel``.
+            start: Starts the job and returns an ``Operation``.
+            check: Polls an ``Operation[OutT]``.
+            kind: The start action's kind; it is the first segment of the
+                ``action`` key stamped on every handle.
+            cancel: Optional; without it ``cancel`` raises UNIMPLEMENTED.
+            metadata: Copied onto all three actions, like JS/Go.
+            description: The start action's description.
         """
-        self.start_action = start_action
-        self.check_action = check_action
-        self.cancel_action = cancel_action
+        self._bind(
+            *operation_actions(
+                type(self),
+                name,
+                kind=kind,
+                start=start,
+                check=check,
+                cancel=cancel,
+                metadata=metadata,
+                description=description,
+            )
+        )
 
-        # Match JS __action property structure
-        self.__action = {
-            'name': start_action.name,
-            'description': start_action.description,
-            'actionType': start_action.kind,
-            'metadata': start_action.metadata,
-        }
+    def _bind(self, start: Action, check: Action, cancel: Action | None) -> None:
+        """The only writer of instance state. Subclasses derive extra fields here."""
+        self.start_action = start
+        self.check_action = check
+        self.cancel_action = cancel
+
+    @classmethod
+    def _from_actions(cls, start: Action, check: Action, cancel: Action | None = None) -> Self:
+        """Rebuild from registered actions without re-running the fn wrapping."""
+        obj = cls.__new__(cls)
+        obj._bind(start, check, cancel)
+        return obj
+
+    @classmethod
+    async def lookup(cls, registry: Registry, key: str) -> Self | None:
+        """Look up a background action by its start action key.
+
+        Matches JS ``lookupBackgroundAction``. The key format is
+        ``/{actionType}/{name}``, e.g. ``/background-model/video-gen``.
+        """
+        start_action = await registry.resolve_action_by_key(key)
+        if start_action is None:
+            return None
+        # JS: const actionName = key.substring(key.indexOf('/', 1) + 1);
+        parts = key.split('/', 2)  # ['', 'background-model', 'name']
+        if len(parts) < 3:
+            return None
+        action_name = parts[2]
+        check_action = await registry.resolve_action_by_key(f'/{ActionKind.CHECK_OPERATION}/{action_name}/check')
+        if check_action is None:
+            return None
+        cancel_action = await registry.resolve_action_by_key(f'/{ActionKind.CANCEL_OPERATION}/{action_name}/cancel')
+        return cls._from_actions(start_action, check_action, cancel_action)
 
     @property
     def name(self) -> str:
-        """The name of the background action."""
+        """The name of the start action."""
         return self.start_action.name
+
+    @property
+    def kind(self) -> ActionKind:
+        """The action kind of the start action."""
+        return self.start_action.kind
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """The start action's metadata."""
+        return self.start_action.metadata
+
+    @property
+    def input_schema(self) -> dict[str, Any] | None:
+        """The start action's input JSON schema."""
+        return self.start_action.input_schema
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        """The start action's output JSON schema (the Operation)."""
+        return self.start_action.output_schema
 
     @property
     def supports_cancel(self) -> bool:
         """Whether this background action supports cancellation."""
         return self.cancel_action is not None
 
+    @property
+    def actions(self) -> list[Action]:
+        """The start, check and (if any) cancel actions, for registering or listing.
+
+        A background action is three registered actions, not one. Register all
+        of them, or a poll fails later with the check action not found.
+        """
+        actions = [self.start_action, self.check_action]
+        if self.cancel_action is not None:
+            actions.append(self.cancel_action)
+        return actions
+
+    def _action_metadata(self) -> ActionMetadata:
+        """Listed once, as the start action, for Registry.list_actions()."""
+        return self.start_action._action_metadata()
+
+    def _rename(self, name: str) -> None:
+        """Name start ``name``, check ``name/check``, cancel ``name/cancel``."""
+        set_action_name(self.start_action, name)
+        set_action_name(self.check_action, f'{name}/check')
+        if self.cancel_action is not None:
+            set_action_name(self.cancel_action, f'{name}/cancel')
+
+    def _action_for(self, kind: ActionKind) -> Action | None:
+        """The member action a lookup of ``kind`` wants: check, cancel, or start."""
+        if kind == ActionKind.CHECK_OPERATION:
+            return self.check_action
+        if kind == ActionKind.CANCEL_OPERATION:
+            return self.cancel_action
+        return self.start_action
+
+    def _require_handle(self, value: object) -> Operation[OutT]:
+        """A caller's handle (Operation or stored dict) as ``Operation[OutT]``."""
+        return require_operation(value=value, output_type=self._output_type)
+
+    def _ensure_operation(self, *, response: object, name: str) -> Operation[OutT]:
+        """A start/check/cancel fn returns an Operation, not a dict."""
+        if isinstance(response, Operation):
+            return validate_operation(response, output_type=self._output_type, name=name, status='INTERNAL')
+        raise missing_operation_error(name=name)
+
     async def start(
         self,
-        input: ModelRequest | None = None,
-        options: dict[str, Any] | None = None,
-    ) -> Operation:
+        input: InT | None = None,  # noqa: A002
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> Operation[OutT]:
         """Start a background operation.
 
-        Matches JS: start(input?, options?) => Promise<Operation<OutputT>>
-
         Args:
-            input: The input request.
-            options: Optional run options.
+            input: The start request.
+            context: Optional run context. Per-request keys go in
+                ``context['secrets']``.
 
         Returns:
             An Operation with an ID to track the job.
         """
-        result = await self.start_action.run(input)
-        return _ensure_operation(result.response)
+        # Same pocket as check/cancel: a tenant key on start has to reach the
+        # plugin, not die on this wrapper.
+        result = await self.start_action.run(input, context=context)
+        return self._ensure_operation(response=result.response, name=self.start_action.name)
 
-    async def check(self, operation: Operation) -> Operation:
+    async def check(
+        self,
+        operation: Operation | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> Operation[OutT]:
         """Check the status of a background operation.
 
-        Matches JS: check(operation) => Promise<Operation<OutputT>>
-
         Args:
-            operation: The operation to check.
+            operation: The operation to check, or the dict a stored one
+                dumped to.
+            context: Optional run context (secrets, folded client config).
 
-        Returns:
-            Updated Operation with current status.
+        Raises:
+            GenkitError: INVALID_ARGUMENT if ``operation`` is not an
+                ``Operation`` or a dict that validates as one.
         """
-        result = await self.check_action.run(operation)
-        return _ensure_operation(result.response)
+        operation = self._require_handle(operation)
+        result = await self.check_action.run(operation, context=context)
+        return self._ensure_operation(response=result.response, name=self.check_action.name)
 
-    async def cancel(self, operation: Operation) -> Operation:
+    async def cancel(
+        self,
+        operation: Operation | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> Operation[OutT]:
         """Cancel a background operation.
 
-        Matches JS: cancel(operation) => Promise<Operation<OutputT>>
-
-        If cancellation is not supported, returns the operation unchanged
-        (matching JS behavior).
-
         Args:
-            operation: The operation to cancel.
+            operation: The operation to cancel, or the dict a stored one
+                dumped to.
+            context: Optional run context (secrets, folded client config).
 
-        Returns:
-            Updated Operation reflecting cancellation attempt.
+        Raises:
+            GenkitError: UNIMPLEMENTED if this action does not implement
+                cancel, INVALID_ARGUMENT if ``operation`` is not an
+                ``Operation`` or a dict that validates as one.
         """
+        operation = self._require_handle(operation)
+        # Raising here is deliberate: returning the operation unchanged would
+        # make "can't cancel" indistinguishable from "cancelled".
         if self.cancel_action is None:
-            # Match JS behavior: return operation unchanged if cancel not supported
-            return operation
-        result = await self.cancel_action.run(operation)
-        return _ensure_operation(result.response)
+            raise GenkitError(
+                status='UNIMPLEMENTED',
+                message=f'{self._noun} {operation.action} does not support cancellation.',
+                reason=self._cancel_unsupported_reason,
+            )
+        result = await self.cancel_action.run(operation, context=context)
+        return self._ensure_operation(response=result.response, name=self.cancel_action.name)
 
 
-def _ensure_operation(response: Any) -> Operation:  # noqa: ANN401
-    """Convert response to Operation type."""
-    if isinstance(response, Operation):
-        return response
-    if isinstance(response, dict):
-        return Operation.model_validate(response)
-    raise TypeError(f'Expected Operation, got {type(response)}')
-
-
-class DefineBackgroundModelOptions(BaseModel):
-    """Options for defining a background model.
-
-    Matches JS DefineBackgroundModelOptions from js/ai/src/model.ts.
-
-    Attributes:
-        name: Unique name for this background model.
-        label: Human-readable label (defaults to name).
-        versions: Known version names for this model.
-        supports: Model capability information.
-        config_schema: Custom options schema for this model.
-    """
-
-    name: str
-    label: str | None = None
-    versions: list[str] | None = None
-    supports: dict[str, Any] | None = None
-    config_schema: type | dict[str, Any] | None = None
-
-
-def define_background_model(
-    registry: Registry,
+def _operation_action(
+    *,
+    cls: type[BackgroundAction[Any, Any]],
+    kind: ActionKind,
+    start_kind: ActionKind,
     name: str,
-    start: StartModelOpFn,
-    check: CheckModelOpFn,
-    cancel: CancelModelOpFn | None = None,
-    label: str | None = None,
-    info: ModelInfo | None = None,
-    config_schema: type | dict[str, Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    description: str | None = None,
-) -> BackgroundAction[ModelResponse]:
-    """Define and register a background model.
+    fn: Callable[..., Awaitable[Operation]],
+    description: str,
+    metadata: dict[str, object],
+    suffix: str = '',
+    config_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> Action:
+    """An Action for start/check/cancel that validates and stamps the Operation.
 
-    This matches the JS defineBackgroundModel function from js/ai/src/model.ts.
+    ``fn``'s signature is still the Action's (``metadata_fn``), so
+    ``(ctx, request)`` and ``(request, ctx)`` both work: the wrapper forwards
+    through ``params.call``. The stamp is the start action key, so a caller who
+    passes the Operation back reaches the right check/cancel.
 
-    A background model consists of three actions:
-    - Start action: /{background-model}/{name}
-    - Check action: /check-operation/{name}/check
-    - Cancel action: /cancel-operation/{name}/cancel (optional)
-
-    Args:
-        registry: The registry to register the actions with.
-        name: The unique name for this background model.
-        start: Function to start the background operation.
-        check: Function to check operation status.
-        cancel: Optional function to cancel operations.
-        label: Human-readable label (defaults to info.label, then model name).
-        info: Model capability information.
-        config_schema: Schema for model configuration options.
-        metadata: Additional metadata for the model.
-        description: Description for the model action.
-
-    Returns:
-        A BackgroundAction that can be used to interact with the model.
-
-    Example:
-        >>> action = define_background_model(
-        ...     registry=registry,
-        ...     name='video-gen',
-        ...     start=start_fn,
-        ...     check=check_fn,
-        ... )
-        >>> op = await action.start(request)
-        >>> while not op.done:
-        ...     await asyncio.sleep(5)
-        ...     op = await action.check(op)
+    The action is named ``{name}{suffix}``. The registry may add the plugin
+    prefix after this is built, so the key is read from the action's live name
+    minus ``suffix`` (e.g. ``/check``) when it runs.
     """
-    action_key = _make_action_key(ActionKind.BACKGROUND_MODEL, name)
+    # Action rejects a sync fn, but it only sees the async wrapper below.
+    if not inspect.iscoroutinefunction(fn):
+        raise TypeError(f"Action handlers must be async functions. Got sync function for '{name}{suffix}'.")
+    output_type = cls._output_type
 
-    # Build model metadata matching JS structure
-    model_meta: dict[str, Any] = metadata.copy() if metadata else {}
-    model_options: dict[str, Any] = {}
-
-    if info:
-        model_options.update(info.model_dump(by_alias=True, exclude_none=True))
-
-    # Precedence: explicit label argument > info.label > fallback to model name
-    label = label or model_options.get('label') or name
-    model_options['label'] = label
-
-    if config_schema:
-        model_options['customOptions'] = to_json_schema(config_schema)
-
-    model_meta['model'] = model_options
-
-    # Build output schema metadata (matching JS)
-    output_schema_meta = to_json_schema(ModelResponse)
-    model_meta['outputSchema'] = output_schema_meta
-
-    # Wrap the start function to add the action key and timing (matching JS)
-    async def wrapped_start(request: ModelRequest, ctx: ActionRunContext) -> Operation:
-        start_time = time.perf_counter()
-        op = await start(request, ctx)
-        # Set action key matching JS format: /{actionType}/{name}
-        op.action = action_key
-        latency_ms = (time.perf_counter() - start_time) * 1000
-        if op.metadata is None:
-            op.metadata = {}
-        op.metadata['latencyMs'] = latency_ms
+    # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
+    @wraps(fn)
+    async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
+        if isinstance(input, Operation):
+            # check/cancel: the caller's handle, often reloaded from storage.
+            input = validate_operation(input, output_type=output_type, name=action.name, status='INVALID_ARGUMENT')  # noqa: A001
+        op = await action.params.call(fn, input, ctx)
+        if isinstance(op, Operation):
+            stamp_operation_action(operation=op, name=action.name.removesuffix(suffix), kind=start_kind)
+            op = validate_operation(op, output_type=output_type, name=action.name, status='INTERNAL')
         return op
 
-    # Wrap the check function (matching JS - no ctx parameter)
-    async def wrapped_check(op: Operation, ctx: ActionRunContext) -> Operation:
-        updated = await check(op)
-        # Preserve action key
-        updated.action = action_key
-        return updated
-
-    # Register the start action
-    # JS: actionType: config.actionType (background-model)
-    # JS: name: config.name
-    start_action = registry.register_action(
-        name=name,
-        kind=ActionKind.BACKGROUND_MODEL,
-        fn=wrapped_start,
-        metadata=model_meta,
-        description=description or f'Background model: {label}',
+    action = Action(
+        kind=kind,
+        name=f'{name}{suffix}',
+        fn=run_and_stamp,
+        metadata_fn=fn,
+        metadata=metadata,
+        description=description,
+        config_schema=config_schema,
+        _context_kind=start_kind,
     )
+    return action
 
-    # Register the check action
-    # JS: actionType: 'check-operation'
-    # JS: name: `${config.name}/check`
-    check_action = registry.register_action(
-        name=f'{name}/check',
+
+def operation_actions(
+    cls: type[BackgroundAction[Any, Any]],
+    name: str,
+    *,
+    kind: ActionKind,
+    start: Callable[..., Awaitable[Operation]],
+    check: Callable[..., Awaitable[Operation]],
+    cancel: Callable[..., Awaitable[Operation]] | None = None,
+    metadata: dict[str, Any] | None = None,
+    description: str | None = None,
+    label: str | None = None,
+    config_schema: type[BaseModel] | dict[str, Any] | None = None,
+) -> tuple[Action, Action, Action | None]:
+    """Build the start, check and cancel actions for a ``cls`` background job.
+
+    Like JS ``backgroundAction``, check and cancel carry the start metadata
+    plus ``outputSchema`` (the ``Operation.output`` type, from ``cls``).
+    """
+    label = label or name
+    base_meta: dict[str, Any] = metadata.copy() if metadata else {}
+    start_meta = dict(base_meta)
+    sub_meta = dict(base_meta)
+    if cls._output_type is not None:
+        output_schema_meta = fixed_json_schema(cls._output_type)
+        start_meta['outputSchema'] = output_schema_meta
+        sub_meta['outputSchema'] = output_schema_meta
+
+    start_action = _operation_action(
+        cls=cls,
+        kind=kind,
+        start_kind=kind,
+        name=name,
+        fn=start,
+        metadata=start_meta,
+        description=description or f'{cls._noun}: {label}',
+        config_schema=config_schema,
+    )
+    if not start_action.input_schema and cls._input_type is not None:
+        start_action.input_schema = fixed_json_schema(cls._input_type)
+    if not start_action.output_schema:
+        start_action.output_schema = fixed_json_schema(Operation)
+
+    check_action = _operation_action(
+        cls=cls,
         kind=ActionKind.CHECK_OPERATION,
-        fn=wrapped_check,
-        metadata={'outputSchema': output_schema_meta},
+        start_kind=kind,
+        name=name,
+        suffix='/check',
+        fn=check,
+        metadata=dict(sub_meta),
         description=f'Check operation status for {label}',
     )
-
-    # Register the cancel action if provided
-    # JS: actionType: 'cancel-operation'
-    # JS: name: `${config.name}/cancel`
     cancel_action = None
     if cancel is not None:
-        # Capture cancel in local scope for the nested function
-        cancel_fn = cancel
-
-        async def wrapped_cancel(op: Operation, ctx: ActionRunContext) -> Operation:
-            cancelled = await cancel_fn(op)
-            cancelled.action = action_key
-            return cancelled
-
-        cancel_action = registry.register_action(
-            name=f'{name}/cancel',
+        cancel_action = _operation_action(
+            cls=cls,
             kind=ActionKind.CANCEL_OPERATION,
-            fn=wrapped_cancel,
-            metadata={'outputSchema': output_schema_meta},
+            start_kind=kind,
+            name=name,
+            suffix='/cancel',
+            fn=cancel,
+            metadata=dict(sub_meta),
             description=f'Cancel operation for {label}',
         )
-
-    return BackgroundAction(
-        start_action=start_action,
-        check_action=check_action,
-        cancel_action=cancel_action,
-    )
+    return start_action, check_action, cancel_action
 
 
-async def lookup_background_action(
+BackgroundActionT = TypeVar('BackgroundActionT', bound=BackgroundAction[Any, Any])
+
+
+async def resolve_operation_action(
     registry: Registry,
-    key: str,
-) -> BackgroundAction[ModelResponse] | None:
-    """Look up a background action by its action key.
+    key: str | None,
+    *,
+    lookup: Callable[[Registry, str], Awaitable[BackgroundActionT | None]],
+    noun: str = 'background action',
+) -> BackgroundActionT:
+    """The background action that owns a handle's ``action`` key."""
+    if not key:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message='Provided operation is missing original request information',
+            reason=ErrorReason.INVALID_INPUT,
+        )
+    try:
+        found = await lookup(registry, key)
+    except ValueError as e:
+        # The key is caller data (often reloaded from storage), so a mangled
+        # key is the caller's bad argument, not an internal failure.
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to resolve {noun} from original request: {key}',
+            reason=ErrorReason.ACTION_NOT_FOUND,
+        ) from e
+    if found is None:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'Failed to resolve {noun} from original request: {key}',
+            reason=ErrorReason.ACTION_NOT_FOUND,
+        )
+    return found
 
-    Matches JS lookupBackgroundAction from js/core/src/background-action.ts.
 
-    The key format is /{actionType}/{name}, e.g., /background-model/video-gen.
+def background_base_id(kind: ActionKind, requested_id: str) -> str:
+    """The start id behind a resolve request for any of the three keys.
 
-    Args:
-        registry: The registry to search in.
-        key: The action key (e.g., '/background-model/video-gen').
-
-    Returns:
-        The BackgroundAction if found, None otherwise.
+    ``/check-operation/{n}/check`` and ``/cancel-operation/{n}/cancel`` both
+    belong to the background action registered as ``{n}``.
     """
-    # Look up the start action
-    start_action = await registry.resolve_action_by_key(key)
-    if start_action is None:
-        return None
-
-    # Extract action name from key: /{actionType}/{name} -> {name}
-    # JS: const actionName = key.substring(key.indexOf('/', 1) + 1);
-    parts = key.split('/', 2)  # ['', 'background-model', 'name']
-    if len(parts) < 3:
-        return None
-    action_name = parts[2]
-
-    # Look up check action: /check-operation/{name}/check
-    check_key = f'/check-operation/{action_name}/check'
-    check_action = await registry.resolve_action_by_key(check_key)
-    if check_action is None:
-        return None
-
-    # Look up cancel action (optional): /cancel-operation/{name}/cancel
-    cancel_key = f'/cancel-operation/{action_name}/cancel'
-    cancel_action = await registry.resolve_action_by_key(cancel_key)
-
-    return BackgroundAction(
-        start_action=start_action,
-        check_action=check_action,
-        cancel_action=cancel_action,
-    )
+    if kind == ActionKind.CHECK_OPERATION:
+        return requested_id.removesuffix('/check')
+    if kind == ActionKind.CANCEL_OPERATION:
+        return requested_id.removesuffix('/cancel')
+    return requested_id
 
 
-async def check_operation(
-    registry: Registry,
-    operation: Operation,
-) -> Operation:
-    """Check the status of a background operation.
-
-    Matches JS checkOperation from js/ai/src/check-operation.ts.
-
-    Args:
-        registry: The registry to look up actions from.
-        operation: The operation to check.
-
-    Returns:
-        Updated Operation with current status.
-
-    Raises:
-        ValueError: If operation is missing action or action not found.
-    """
-    if not operation.action:
-        raise ValueError('Provided operation is missing original request information')
-
-    background_action = await lookup_background_action(registry, operation.action)
-    if background_action is None:
-        raise ValueError(f'Failed to resolve background action from original request: {operation.action}')
-
-    return await background_action.check(operation)
+def operation_key(value: object) -> str | None:
+    """The ``action`` key on a handle or its stored dict, if any."""
+    if isinstance(value, Operation):
+        return value.action
+    if isinstance(value, Mapping):
+        key = cast(Mapping[str, object], value).get('action')
+        return key if isinstance(key, str) else None
+    return None

@@ -28,9 +28,9 @@ Example:
     # 1. Initialize Genkit with the Anthropic plugin
     ai = Genkit(plugins=[Anthropic()])
 
-    # 2. Generate content using Claude Sonnet 4.5
+    # 2. Generate content using Claude Sonnet 4.6
     res = await ai.generate(
-        model='anthropic/claude-sonnet-4-5',
+        model=Anthropic.claude('claude-sonnet-4-6'),
         prompt='Explain recursion in 10 words.',
     )
 
@@ -46,31 +46,13 @@ See Also:
     - Anthropic documentation: https://docs.anthropic.com/
 """
 
-from genkit_anthropic.config import (
-    AnthropicConfig,
-    AnyToolChoice,
-    AutoToolChoice,
-    OutputConfig,
-    RequestMetadata,
-    SpecificToolChoice,
-    TaskBudget,
-    ThinkingConfig,
-    ToolChoice,
-    ToolChoiceNone,
-)
-from genkit_anthropic.plugin import Anthropic, anthropic_name
+from genkit_anthropic._config import AnthropicConfig, Effort, ThinkingDisplay, ThinkingMode
+from genkit_anthropic._plugin import Anthropic
 
 __all__ = [
     'Anthropic',
     'AnthropicConfig',
-    'AutoToolChoice',
-    'AnyToolChoice',
-    'OutputConfig',
-    'RequestMetadata',
-    'SpecificToolChoice',
-    'TaskBudget',
-    'ThinkingConfig',
-    'ToolChoice',
-    'ToolChoiceNone',
-    'anthropic_name',
+    'Effort',
+    'ThinkingDisplay',
+    'ThinkingMode',
 ]

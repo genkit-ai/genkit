@@ -2,6 +2,16 @@
 
 This plugin provides utilities for conveninetly exposing Genkit flows and actions via Express HTTP server as REST APIs.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 See [official documentation](https://genkit.dev/docs/frameworks/express/) for more.
 
 ## Installation
@@ -20,7 +30,7 @@ import express from 'express';
 
 const simpleFlow = ai.defineFlow('simpleFlow', async (input, { sendChunk }) => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: input,
     onChunk: (c) => sendChunk(c.text),
   });

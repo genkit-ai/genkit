@@ -24,6 +24,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
@@ -36,7 +37,7 @@ func newTestRegistry(t *testing.T) *registry.Registry {
 
 func defineModel(t *testing.T, r *registry.Registry, name string, fn ai.ModelFunc) ai.Model {
 	t.Helper()
-	return ai.DefineModel(r, name, &ai.ModelOptions{
+	return registerTestModel(r, name, &ai.ModelOptions{
 		Supports: &ai.ModelSupports{Multiturn: true, SystemRole: true},
 	}, fn)
 }
@@ -55,7 +56,7 @@ func TestRetrySucceedsOnFirstAttempt(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -81,7 +82,7 @@ func TestRetryRecoversAfterTransientError(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -104,7 +105,7 @@ func TestRetryExhaustsMaxRetries(t *testing.T) {
 	})
 
 	retry := &Retry{MaxRetries: 2}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -125,7 +126,7 @@ func TestRetryDoesNotRetryNonMatchingGenkitError(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -148,7 +149,7 @@ func TestRetryRetriesNonGenkitErrors(t *testing.T) {
 	})
 
 	retry := &Retry{}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -176,7 +177,7 @@ func TestRetryRetriesUnclassifiedErrorWithNarrowedStatuses(t *testing.T) {
 	})
 
 	retry := &Retry{Statuses: []core.StatusName{core.UNAVAILABLE}}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	resp, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err != nil {
@@ -202,7 +203,7 @@ func TestRetryCustomStatuses(t *testing.T) {
 		Statuses:   []core.StatusName{core.PERMISSION_DENIED},
 		MaxRetries: 1,
 	}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -231,7 +232,7 @@ func TestRetryBackoffDelays(t *testing.T) {
 		BackoffFactor:  2,
 		NoJitter:       true,
 	}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, _ = ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 
@@ -265,7 +266,7 @@ func TestRetryMaxDelayClamp(t *testing.T) {
 		BackoffFactor:  2,
 		NoJitter:       true,
 	}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, _ = ai.Generate(ctx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 
@@ -300,7 +301,7 @@ func TestRetryStopsWhenContextCanceledDuringBackoff(t *testing.T) {
 	defer func() { sleepFunc = origSleep }()
 
 	retry := &Retry{MaxRetries: 5}
-	ai.DefineMiddleware(r, "retry", retry)
+	registerTestMiddleware(r, "retry", retry)
 
 	_, err := ai.Generate(reqCtx, r, ai.WithModel(m), ai.WithPrompt("hello"), ai.WithUse(retry))
 	if err == nil {
@@ -313,3 +314,30 @@ func TestRetryStopsWhenContextCanceledDuringBackoff(t *testing.T) {
 }
 
 var ctx = context.Background()
+
+// TestUnclassifiedErrorsKeepTheirContract pins the distinction Classified
+// draws. An error chain can carry a typed-nil *status.Error without anything
+// having classified it, and reading that as a deliberate INTERNAL would retry
+// it here and fail over to a different billed model in the fallback middleware.
+func TestUnclassifiedErrorsKeepTheirContract(t *testing.T) {
+	var typedNil *status.Error
+	unclassified := fmt.Errorf("provider blew up: %w", typedNil)
+
+	// Retry's contract: an unclassified error is always retried, whatever the
+	// status list says.
+	if !isRetryable(unclassified, []status.Name{status.Unavailable}) {
+		t.Error("isRetryable = false for an unclassified error, want true regardless of the list")
+	}
+	// Fallback's contract: an unclassified error propagates instead.
+	if isFallbackRetryable(unclassified, defaultFallbackStatuses) {
+		t.Error("isFallbackRetryable = true for an unclassified error, want false")
+	}
+	// A deliberate INTERNAL is still honored on both sides.
+	classified := status.Errorf(status.ErrInternal, "the plugin said so")
+	if !isRetryable(classified, defaultRetryStatuses) {
+		t.Error("isRetryable = false for a deliberate INTERNAL")
+	}
+	if !isFallbackRetryable(classified, defaultFallbackStatuses) {
+		t.Error("isFallbackRetryable = false for a deliberate INTERNAL")
+	}
+}

@@ -131,7 +131,7 @@ if [[ -n "$GITHUB_RUN_ID" ]]; then
     echo "Downloading artifact: genkit-$platform"
     if [[ "$DRY_RUN" == "false" ]]; then
       # Use gh CLI to download the artifact
-      if gh run download "$GITHUB_RUN_ID" -n "genkit-$platform" -R firebase/genkit; then
+      if gh run download "$GITHUB_RUN_ID" -n "genkit-$platform" -R genkit-ai/genkit; then
         continue
         # The artifact is downloaded as a directory, move the binary to the current directory
         # if [[ -f "genkit-$platform" ]]; then
@@ -161,7 +161,7 @@ elif [[ -n "$GITHUB_TAG" ]]; then
     
     echo "Downloading release asset: genkit-$platform$ext"
     if [[ "$DRY_RUN" == "false" ]]; then
-      gh release download "$GITHUB_TAG" -p "genkit-$platform$ext" -R firebase/genkit || {
+      gh release download "$GITHUB_TAG" -p "genkit-$platform$ext" -R genkit-ai/genkit || {
         echo "Error: Failed to download genkit-$platform$ext"
         exit 1
       }

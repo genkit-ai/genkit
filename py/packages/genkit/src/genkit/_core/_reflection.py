@@ -32,19 +32,23 @@ from uuid import uuid4
 import uvicorn
 from pydantic import BaseModel
 from starlette.applications import Starlette
+from starlette.datastructures import Headers
 from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-from genkit._core._action import Action, BidiAction
+from genkit._core._action import Action, BidiAction, input_from_json, parse_action_key
 from genkit._core._constants import GENKIT_VERSION
-from genkit._core._error import get_reflection_json
+from genkit._core._environment import is_dev_environment
+from genkit._core._error import Interrupt, get_reflection_json, interrupt_escape_error
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddleware
+from genkit._core._middleware import _MiddlewareMetadata
+from genkit._core._model import AgentInit, AgentInput, ModelRef
+from genkit._core._reflection_config import REFLECTION_SECRET_HEADER, secrets_equal
 from genkit._core._registry import Registry
-from genkit._core._typing import AgentInit, AgentInput
+from genkit._core._telemetry._http import connect_developer_ui_collector
 
 logger = get_logger(__name__)
 
@@ -56,6 +60,15 @@ def agent_has_server_store(action: Action) -> bool:
     agent_meta = (action.metadata or {}).get('agent')
     agent_dict = cast(dict[str, Any], agent_meta) if isinstance(agent_meta, dict) else {}
     return agent_dict.get('stateManagement') == 'server'
+
+
+async def resolve_runnable_key(registry: Registry, key: str) -> Action | None:
+    """Resolve a Dev UI run key. A key that doesn't parse (such as a removed kind) is not found."""
+    try:
+        parse_action_key(key)
+    except ValueError:
+        return None
+    return await registry.resolve_action_by_key(key)
 
 
 def resolve_agent_init(action: Action, init_val: object) -> AgentInit:
@@ -107,7 +120,8 @@ class ActionRunner:
 
     async def on_trace_start(self, tid: str, sid: str) -> None:
         self.trace_id, self.span_id = tid, sid
-        if task := asyncio.current_task():
+        # Empty ids aren't a run the Developer UI can cancel.
+        if tid and (task := asyncio.current_task()):
             self.active_actions[tid] = task
         self.trace_ready.set()
 
@@ -128,8 +142,8 @@ class ActionRunner:
                 else None
             )
             # A bidi action's fn already gives a single-turn view of a connection
-            # when driven through run() (seed one input, stream chunks, return the
-            # output), so the HTTP path just needs run(). The only bidi-specific
+            # when driven through _run() (seed one input, stream chunks, return the
+            # output), so the HTTP path just needs _run(). The only bidi-specific
             # step is normalizing the agent payload: minting a session id for a
             # server-store agent and defaulting an absent turn to an empty input.
             input_val = self.payload.get('input')
@@ -141,8 +155,8 @@ class ActionRunner:
                 else:
                     input_val = AgentInput.model_validate(as_agent_input_dict(input_val))
 
-            output = await self.action.run(
-                input=input_val,
+            output = await self.action._run(
+                input=input_from_json(input_val),
                 on_chunk=on_chunk,
                 context=self.payload.get('context', {}),
                 on_trace_start=self.on_trace_start,
@@ -154,20 +168,21 @@ class ActionRunner:
                 if isinstance(output.response, BaseModel)
                 else output.response
             )
-            self.queue.put_nowait(
-                json.dumps({
-                    'result': result,
-                    'telemetry': {'traceId': output.trace_id, 'spanId': output.span_id},
-                })
-            )
+            payload: dict[str, Any] = {'result': result}
+            if output.trace_id:
+                payload['telemetry'] = {'traceId': output.trace_id, 'spanId': output.span_id}
+            self.queue.put_nowait(json.dumps(payload))
         except asyncio.CancelledError:
             raise
-        except Exception as e:
+        except (Exception, Interrupt) as e:
+            # A tool run on its own has no generate loop to pause, so its
+            # Interrupt is reported like any other failure.
             # Dev UI already shows the error + stack from the reflection response.
             # Dumping a full traceback here turns every playground failure into
             # terminal noise.
             logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
-            self.queue.put_nowait(json.dumps({'error': get_reflection_json(e).model_dump(by_alias=True)}))
+            error = get_reflection_json(interrupt_escape_error(e) or e, trace_id=self.trace_id)
+            self.queue.put_nowait(json.dumps({'error': error.model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()
             self.queue.put_nowait(None)
@@ -194,11 +209,38 @@ class ActionRunner:
         return StreamingResponse(gen(), media_type='text/plain' if self.stream else 'application/json', headers=headers)
 
 
+class ReflectionAuthMiddleware:
+    """Rejects requests that do not carry the configured secret.
+
+    ``/api/__health`` is exempt: it carries no registry content and is what
+    orchestrators and the CLI probe before they have any reason to know a
+    secret. The 401 body is empty on purpose.
+
+    Plain ASGI rather than ``BaseHTTPMiddleware`` so streaming ``runAction``
+    responses pass through untouched.
+    """
+
+    def __init__(self, app: ASGIApp, secret: str) -> None:
+        self._app = app
+        self._secret = secret
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope['type'] != 'http' or scope['path'] == '/api/__health':
+            await self._app(scope, receive, send)
+            return
+        provided = Headers(scope=scope).get(REFLECTION_SECRET_HEADER)
+        if not provided or not secrets_equal(provided, self._secret):
+            await Response(status_code=401)(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
 def create_reflection_asgi_app(
     registry: Registry,
     on_startup: LifecycleHook | None = None,
     on_shutdown: LifecycleHook | None = None,
     version: str = GENKIT_VERSION,
+    secret: str | None = None,
 ) -> Starlette:
     active_actions: dict[str, asyncio.Task[Any]] = {}
 
@@ -225,8 +267,8 @@ def create_reflection_asgi_app(
                 'name': action.name,
                 'description': action.description,
                 'metadata': action.metadata,
-                'inputSchema': action.input_schema or action.input_json_schema,
-                'outputSchema': action.output_schema or action.output_json_schema,
+                'inputSchema': action.input_schema or None,
+                'outputSchema': action.output_schema or None,
             })
 
         return JSONResponse(response, headers={'x-genkit-version': version})
@@ -245,11 +287,15 @@ def create_reflection_asgi_app(
             if type_param == 'middleware':
                 serialized: dict[str, Any] = {}
                 for key, val in raw_values.items():
-                    assert isinstance(val, GenerateMiddleware), (
-                        f'registry middleware/{key!r} must be GenerateMiddleware, got {type(val).__name__}'
+                    assert isinstance(val, _MiddlewareMetadata), (
+                        f'registry middleware/{key!r} must be _MiddlewareMetadata, got {type(val).__name__}'
                     )
                     serialized[key] = val.model_dump(by_alias=True, exclude_none=True, mode='json')
                 raw_values = serialized
+            elif type_param == 'defaultModel':
+                # Dev UI lists a model name. A stored ModelRef is an object;
+                # only the name is JSON-serializable here.
+                raw_values = {key: val.name if isinstance(val, ModelRef) else val for key, val in raw_values.items()}
             return JSONResponse(raw_values, headers={'x-genkit-version': version})
         except Exception:
             logger.exception('Reflection /api/values failed')
@@ -262,7 +308,18 @@ def create_reflection_asgi_app(
     async def envs(_: Request) -> JSONResponse:
         return JSONResponse(['dev'])
 
-    async def notify(_: Request) -> JSONResponse:
+    async def notify(req: Request) -> JSONResponse:
+        url: str | None = None
+        try:
+            body = await req.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            raw = body.get('telemetryServerUrl')
+            if isinstance(raw, str) and raw:
+                url = raw
+        if url:
+            connect_developer_ui_collector(url=url)
         return JSONResponse({}, headers={'x-genkit-version': version})
 
     async def cancel(req: Request) -> JSONResponse:
@@ -276,9 +333,17 @@ def create_reflection_asgi_app(
 
     async def run(req: Request) -> Response:
         payload = await req.json()
-        action = await registry.resolve_action_by_key(payload['key'])
+        key = payload['key']
+        action = await resolve_runnable_key(registry, key)
         if not action:
-            return JSONResponse({'error': f'Action not found: {payload["key"]}'}, status_code=404)
+            return JSONResponse({'error': f'Action not found: {key}'}, status_code=404)
+        context = payload.get('context')
+        if context is not None and not isinstance(context, dict):
+            return JSONResponse(
+                {'error': 'context must be a JSON object when provided'},
+                status_code=400,
+                headers={'x-genkit-version': version},
+            )
 
         runner = ActionRunner(
             action=action,
@@ -298,25 +363,30 @@ def create_reflection_asgi_app(
         if on_shutdown is not None:
             await on_shutdown()
 
+    routes = [
+        Route('/api/__health', health, methods=['GET']),
+    ]
+    # Dev only: it kills the process and answers GET, so any page that can
+    # cause a request to it could take the process down.
+    if is_dev_environment():
+        routes.append(Route('/api/__quitquitquit', terminate, methods=['GET', 'POST']))
+
+    middleware: list[Middleware] = []
+    if secret:
+        # ty (0.0.x) cannot match any factory against Starlette's ParamSpec'd
+        # `_MiddlewareFactory` protocol, including this documented form.
+        middleware.append(Middleware(ReflectionAuthMiddleware, secret=secret))  # ty: ignore[invalid-argument-type]
+
     app = Starlette(
+        middleware=middleware,
         routes=[
-            Route('/api/__health', health, methods=['GET']),
-            Route('/api/__quitquitquit', terminate, methods=['GET', 'POST']),
+            *routes,
             Route('/api/actions', actions, methods=['GET']),
             Route('/api/values', values, methods=['GET']),
             Route('/api/envs', envs, methods=['GET']),
             Route('/api/notify', notify, methods=['POST']),
             Route('/api/runAction', run, methods=['POST']),
             Route('/api/cancelAction', cancel, methods=['POST']),
-        ],
-        middleware=[
-            Middleware(
-                CORSMiddleware,  # type: ignore[arg-type]
-                allow_origins=['*'],
-                allow_methods=['*'],
-                allow_headers=['*'],
-                expose_headers=['X-Genkit-Trace-Id', 'X-Genkit-Span-Id', 'x-genkit-version'],
-            )
         ],
         lifespan=lifespan,
     )

@@ -31,25 +31,6 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
-// ReflectionErrorDetails is the details field of a [ReflectionError].
-//
-// Deprecated: the reflection API's error envelope is internal to that
-// boundary and will stop being part of this package's surface.
-type ReflectionErrorDetails struct {
-	Stack   *string `json:"stack,omitempty"` // Use pointer for optional
-	TraceID *string `json:"traceId,omitempty"`
-}
-
-// ReflectionError is the wire format for HTTP errors for Reflection API responses.
-//
-// Deprecated: the reflection API's error envelope is internal to that
-// boundary and will stop being part of this package's surface.
-type ReflectionError struct {
-	Details *ReflectionErrorDetails `json:"details,omitempty"`
-	Message string                  `json:"message"`
-	Code    int                     `json:"code"`
-}
-
 // GenkitError is the base error type for Genkit errors.
 //
 // Deprecated: use [status.Error]. This is an alias for it, so the two are the
@@ -145,60 +126,4 @@ func NewError(name StatusName, message string, args ...any) *GenkitError {
 	// rather than capturing a second with debug.Stack.
 	ge.Details = map[string]any{"stack": ge.Stack()}
 	return ge
-}
-
-// SchemaValidationError is an error returned when action input fails parsing
-// or schema validation, e.g. when a model produces malformed tool arguments.
-//
-// Deprecated: match [status.ErrInvalidInput] with errors.Is instead.
-type SchemaValidationError struct {
-	*GenkitError
-}
-
-// Unwrap returns the underlying GenkitError so that errors.Is and errors.As
-// continue to match *GenkitError anywhere a SchemaValidationError is returned.
-func (e *SchemaValidationError) Unwrap() error { return e.GenkitError }
-
-// NewSchemaValidationError creates a SchemaValidationError for the given action key and validation error.
-//
-// Deprecated: use status.Errorf with [status.ErrInvalidInput].
-func NewSchemaValidationError(actionKey string, err error) *SchemaValidationError {
-	return &SchemaValidationError{
-		GenkitError: status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", actionKey, err),
-	}
-}
-
-// ToReflectionError returns a JSON-serializable representation for reflection API responses.
-//
-// Deprecated: the reflection API's error envelope is internal to that boundary
-// and will stop being part of this package's surface.
-func ToReflectionError(err error) ReflectionError {
-	e := status.Convert(err)
-	if e == nil {
-		return ReflectionError{Code: status.Internal.HTTPCode(), Details: &ReflectionErrorDetails{}}
-	}
-	// v1 recorded the stack under Details["stack"]; status.Errorf keeps it off
-	// the details map and formats it on demand. Read both so errors from either
-	// constructor still carry a stack to the Dev UI.
-	stack, stackOK := e.Details["stack"].(string)
-	if !stackOK {
-		stack = e.Stack()
-		stackOK = stack != ""
-	}
-	traceID, traceOK := e.Details["traceId"].(string)
-	var details *ReflectionErrorDetails
-	if stackOK || traceOK {
-		details = &ReflectionErrorDetails{}
-		if stackOK {
-			details.Stack = &stack
-		}
-		if traceOK {
-			details.TraceID = &traceID
-		}
-	}
-	return ReflectionError{
-		Details: details,
-		Code:    e.Status.HTTPCode(),
-		Message: e.Message,
-	}
 }

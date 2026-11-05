@@ -20,11 +20,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
+	"github.com/firebase/genkit/go/ai/exp/localstore"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
@@ -75,6 +81,24 @@ func hasToolResponse(msgs []*ai.Message) bool {
 	return false
 }
 
+// launchMessages is a conversation in which a delegation earlier on returned
+// each of taskIDs ("<agent>:<snapshotId>", under the default tool prefix). The
+// background-task and continue tools accept only handles the conversation
+// launched, so a test that makes its task outside the middleware seeds the
+// generate call with these messages.
+func launchMessages(taskIDs ...string) []*ai.Message {
+	req := &ai.Message{Role: ai.RoleModel}
+	resp := &ai.Message{Role: ai.RoleTool}
+	for i, id := range taskIDs {
+		agent, _, _ := strings.Cut(id, ":")
+		tool := makeToolName(defaultToolPrefix, agent)
+		ref := fmt.Sprintf("launch-%d", i)
+		req.Content = append(req.Content, ai.NewToolRequestPart(&ai.ToolRequest{Name: tool, Ref: ref, Input: map[string]any{"task": "earlier work"}}))
+		resp.Content = append(resp.Content, ai.NewToolResponsePart(&ai.ToolResponse{Name: tool, Ref: ref, Output: map[string]any{"taskId": id}}))
+	}
+	return []*ai.Message{ai.NewUserTextMessage("earlier"), req, resp}
+}
+
 // delegateOnceModel calls toolName once with the given task, then returns
 // "done" after it sees any tool response.
 func delegateOnceModel(t *testing.T, g *genkit.Genkit, name, toolName, task string) ai.Model {
@@ -86,46 +110,102 @@ func delegateOnceModel(t *testing.T, g *genkit.Genkit, name, toolName, task stri
 	})
 }
 
-// decodeDelegation re-decodes a tool response output into a delegationResult,
-// tolerating either the raw struct or a JSON-normalized map.
-func decodeDelegation(t *testing.T, v any) delegationResult {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal tool output: %v", err)
-	}
-	var dr delegationResult
-	if err := json.Unmarshal(b, &dr); err != nil {
-		t.Fatalf("unmarshal delegationResult: %v", err)
-	}
-	return dr
-}
-
-// delegationResponses collects every delegation tool response for toolName.
-func delegationResponses(t *testing.T, msgs []*ai.Message, toolName string) []delegationResult {
-	t.Helper()
-	var out []delegationResult
+// toolOutputs collects the raw outputs of every tool response for toolName.
+func toolOutputs(msgs []*ai.Message, toolName string) []any {
+	var out []any
 	for _, m := range msgs {
 		for _, p := range m.Content {
 			if p.IsToolResponse() && p.ToolResponse != nil && p.ToolResponse.Name == toolName {
-				out = append(out, decodeDelegation(t, p.ToolResponse.Output))
+				out = append(out, p.ToolResponse.Output)
 			}
 		}
 	}
 	return out
 }
 
-func TestAgentsValidation(t *testing.T) {
-	if _, err := (&Agents{}).New(ctx); err == nil {
-		t.Error("expected error when no agents are configured")
+// decodeToolOutput re-decodes a tool response output into T, tolerating either
+// the raw struct or a JSON-normalized map.
+func decodeToolOutput[T any](t *testing.T, v any) T {
+	t.Helper()
+	var decoded T
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal tool output: %v", err)
 	}
-	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: ""}}}).New(ctx); err == nil {
-		t.Error("expected error when an agent reference has no name")
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal %T: %v", decoded, err)
+	}
+	return decoded
+}
+
+// delegationResponses collects every delegation tool response for toolName.
+func delegationResponses(t *testing.T, msgs []*ai.Message, toolName string) []delegationResult {
+	t.Helper()
+	var out []delegationResult
+	for _, v := range toolOutputs(msgs, toolName) {
+		out = append(out, decodeToolOutput[delegationResult](t, v))
+	}
+	return out
+}
+
+func TestAgentsValidation(t *testing.T) {
+	if _, err := (&Agents{}).New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error when no agents are configured, got %v", err)
+	}
+	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: ""}}}).New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error when an agent reference has no name, got %v", err)
 	}
 	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: "ok"}}}).New(ctx); err != nil {
 		t.Errorf("unexpected error for a valid config: %v", err)
 	}
+
+	// Generated tool names are validated as a set at New time, so collisions
+	// surface as a config error instead of a generate-time duplicate-tool
+	// rejection of the whole request.
+	if _, err := (&Agents{Agents: []aix.AgentRef{{Name: "dup"}, {Name: "dup"}}}).New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error for duplicate agent names, got %v", err)
+	}
+	// With a bare prefix, a delegation tool can land exactly on a shared
+	// background-task tool's name.
+	bare := ""
+	collide := &Agents{
+		Agents:     []aix.AgentRef{{Name: "check_background_tasks"}},
+		ToolPrefix: &bare,
+		Async:      true,
+	}
+	if _, err := collide.New(ctx); !errors.Is(err, status.ErrInvalidArgument) {
+		t.Errorf("expected an INVALID_ARGUMENT error when a delegation tool collides with a background-task tool, got %v", err)
+	}
 }
+
+func TestAgentsBackgroundToolNames(t *testing.T) {
+	// Default and empty prefixes keep the well-known bare names; an explicit
+	// non-empty prefix namespaces all three so two Async instances can coexist.
+	bare := []string{"check_background_tasks", "wait_for_background_tasks", "abort_background_tasks"}
+	cases := []struct {
+		name   string
+		prefix *string
+		want   []string
+	}{
+		{name: "nil prefix", prefix: nil, want: bare},
+		{name: "empty prefix", prefix: ptr(""), want: bare},
+		{name: "custom prefix", prefix: ptr("research"), want: []string{
+			"research_check_background_tasks",
+			"research_wait_for_background_tasks",
+			"research_abort_background_tasks",
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Agents{ToolPrefix: tc.prefix}
+			if got := a.backgroundToolNames().all(); !slices.Equal(got, tc.want) {
+				t.Errorf("backgroundToolNames().all() = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
 
 func TestAgentsInjectsSystemPrompt(t *testing.T) {
 	g := newTestGenkit(t)
@@ -173,7 +253,11 @@ func TestAgentsDelegationRunsSubAgent(t *testing.T) {
 
 	genkitx.DefineAgent[any](g, "researcher",
 		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/researcher", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-			return textResp(req, "research complete"), nil
+			// A reply split across text parts (as Gemini sends them) reads
+			// back as its Message.Text, not with separators between parts.
+			return &ai.ModelResponse{Request: req, Message: ai.NewModelMessage(
+				ai.NewTextPart("research"), ai.NewTextPart(" complete"),
+			)}, nil
 		}))},
 	)
 
@@ -204,9 +288,14 @@ func TestAgentsUnknownAgentReportsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The refusal names the agent and says it is not registered, which is the
+	// deployment mistake it actually is: the name was configured on this
+	// middleware, so an empty lookup means nothing defined it in this process.
 	got := delegationResponses(t, resp.History(), "delegate_to_ghost")
-	if len(got) != 1 || !strings.Contains(got[0].Response, "not found") {
-		t.Fatalf("expected a 'not found' delegation response, got %+v", got)
+	if len(got) != 1 ||
+		!strings.Contains(got[0].Response, `"ghost"`) ||
+		!strings.Contains(got[0].Response, "not registered") {
+		t.Fatalf("expected a refusal naming the unregistered agent, got %+v", got)
 	}
 }
 
@@ -321,7 +410,7 @@ func TestAgentsForwardsHistory(t *testing.T) {
 
 	var joined strings.Builder
 	for _, m := range subMessages {
-		joined.WriteString(messageText(m))
+		joined.WriteString(m.Text())
 		joined.WriteByte('\n')
 	}
 	if !strings.Contains(joined.String(), "platypus") {
@@ -355,6 +444,221 @@ func TestAgentsSubAgentFailureReported(t *testing.T) {
 	got := delegationResponses(t, resp.History(), "delegate_to_researcher")
 	if len(got) != 1 || !strings.Contains(got[0].Response, "Error calling agent") {
 		t.Fatalf("expected an error delegation response, got %+v", got)
+	}
+}
+
+func TestAgentsSyncDelegationCarriesTaskHandle(t *testing.T) {
+	// A synchronous delegation to a server-managed sub-agent settles with the
+	// run's last committed snapshot on the output, and the result stamps it as
+	// the same "<agent>:<snapshotId>" handle background delegations mint, plus
+	// the outcome. The handle is what lets the orchestrator address the run
+	// after the fact (check it, resume it) instead of only reading its text.
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "keeper",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/keeper", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "kept"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_keeper", "keep X")
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "keeper"}}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_keeper")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delegation response, got %d", len(got))
+	}
+	if got[0].Response != "kept" {
+		t.Errorf("Response = %q, want %q", got[0].Response, "kept")
+	}
+	if !strings.HasPrefix(got[0].TaskID, "keeper:") || len(got[0].TaskID) <= len("keeper:") {
+		t.Errorf("TaskID = %q, want \"keeper:<snapshotId>\"", got[0].TaskID)
+	}
+	if got[0].Status != string(aix.SnapshotStatusCompleted) {
+		t.Errorf("Status = %q, want %q", got[0].Status, aix.SnapshotStatusCompleted)
+	}
+}
+
+func TestAgentsSyncFailureCarriesTaskHandle(t *testing.T) {
+	// A server-managed sub-agent that fails still committed what it could, and
+	// the failed run's last snapshot is its resume point. The failure result
+	// carries that handle and the "failed" outcome next to the explanatory
+	// text, so the orchestrator holds something actionable, not only prose.
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "flaky",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/flaky", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return nil, errors.New("model melted")
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+
+	orch := delegateOnceModel(t, g, "test/orch", "delegate_to_flaky", "try X")
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "flaky"}}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"), ai.WithUse(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_flaky")
+	if len(got) != 1 {
+		t.Fatalf("expected 1 delegation response, got %d", len(got))
+	}
+	if !strings.Contains(got[0].Response, "model melted") {
+		t.Errorf("Response = %q, want the failure text", got[0].Response)
+	}
+	if !strings.HasPrefix(got[0].TaskID, "flaky:") || len(got[0].TaskID) <= len("flaky:") {
+		t.Errorf("TaskID = %q, want \"flaky:<snapshotId>\"", got[0].TaskID)
+	}
+	if got[0].Status != string(aix.SnapshotStatusFailed) {
+		t.Errorf("Status = %q, want %q", got[0].Status, aix.SnapshotStatusFailed)
+	}
+}
+
+// TestLaunchedHere pins which task handles count as this conversation's: one
+// this generate call minted, or one a delegation or continue tool's result in
+// the history carries, in either form the result takes there. The same handle
+// carried by any other tool's response (a sub-agent's text relayed back, a
+// retrieved document) is not one.
+func TestLaunchedHere(t *testing.T) {
+	const id = "researcher:snap-1"
+	launchTools := map[string]bool{"delegate_to_researcher": true, "continue_task": true}
+	toolMsg := func(name string, output any) []*ai.Message {
+		return []*ai.Message{{Role: ai.RoleTool, Content: []*ai.Part{
+			ai.NewToolResponsePart(&ai.ToolResponse{Name: name, Output: output}),
+		}}}
+	}
+	tests := []struct {
+		name         string
+		launched     map[string]struct{}
+		conversation []*ai.Message
+		want         bool
+	}{
+		{"minted in this call", map[string]struct{}{id: {}}, nil, true},
+		{"delegation result from history", nil, toolMsg("delegate_to_researcher", map[string]any{"taskId": id}), true},
+		{"delegation result in process", nil, toolMsg("delegate_to_researcher", delegationResult{TaskID: id}), true},
+		{"continue result", nil, toolMsg("continue_task", &delegationResult{TaskID: id}), true},
+		{"another tool's response", nil, toolMsg("search_web", map[string]any{"taskId": id}), false},
+		{"another handle", nil, toolMsg("delegate_to_researcher", map[string]any{"taskId": "researcher:snap-2"}), false},
+		{"nothing", nil, nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// What the generate hook does with each request.
+			st := &agentsState{launched: map[string]struct{}{}, launchTools: launchTools}
+			maps.Copy(st.launched, tt.launched)
+			for _, seen := range launchedTaskIDs(tt.conversation, launchTools) {
+				st.launched[seen] = struct{}{}
+			}
+			if got := launchedHere(st, id); got != tt.want {
+				t.Errorf("launchedHere = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAgentsClientManagedDelegationNotContinuable(t *testing.T) {
+	// A client-managed sub-agent persists nothing, so its settled result
+	// carries no task handle, and the continue tool refuses a handle naming it:
+	// only server-managed sub-agents leave resume points behind.
+	g := newTestGenkit(t)
+
+	genkitx.DefineAgent[any](g, "ephemeral",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/ephemeral", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "done here"), nil
+		}))},
+	)
+
+	// The history carries a handle naming the agent, as a delegation from a
+	// time it kept a store would have left (the continue tool accepts only
+	// handles the conversation launched), so the continue reaches the
+	// client-managed refusal. That seeded launch is the first delegation
+	// response the model sees; its own delegation is the second.
+	orch := toolModel(t, g, "test/orch", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		delegations := toolOutputs(req.Messages, "delegate_to_ephemeral")
+		resumes := toolOutputs(req.Messages, "continue_task")
+		switch {
+		case len(delegations) < 2:
+			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_ephemeral", Input: map[string]any{"task": "do X"}}), nil
+		case len(resumes) == 0:
+			return toolReqResp(req, &ai.ToolRequest{Name: "continue_task",
+				Input: map[string]any{"taskId": "ephemeral:whatever"}}), nil
+		default:
+			return textResp(req, "done"), nil
+		}
+	})
+	// A server-managed sibling keeps the continue tool registered, so the
+	// refusal (and not a missing tool) is what answers the model.
+	genkitx.DefineAgent[any](g, "keeper",
+		aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/keeper", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+			return textResp(req, "kept"), nil
+		}))},
+		aix.WithSessionStore[any](localstore.NewInMemorySessionStore[any]()),
+	)
+	mw := &Agents{Agents: []aix.AgentRef{{Name: "ephemeral"}, {Name: "keeper"}}}
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch),
+		ai.WithMessages(launchMessages("ephemeral:whatever")...), ai.WithPrompt("go"), ai.WithUse(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_ephemeral")
+	if len(got) != 2 {
+		t.Fatalf("expected the seeded and 1 new delegation response, got %d", len(got))
+	}
+	if got[1].TaskID != "" || got[1].Status != "" {
+		t.Errorf("client-managed result carries a handle: taskId=%q status=%q", got[1].TaskID, got[1].Status)
+	}
+	resumes := delegationResponses(t, resp.History(), "continue_task")
+	if len(resumes) != 1 || !strings.Contains(resumes[0].Response, "cannot be continued") {
+		t.Fatalf("expected the client-managed continue refusal, got %+v", resumes)
+	}
+}
+
+func TestAgentsTwoClientManagedInstancesCoexist(t *testing.T) {
+	// The shared resume tool is registered only when a configured sub-agent
+	// can leave a handle behind, so two default-configured instances whose
+	// sub-agents are all client-managed register no shared names, coexist on
+	// one generate call, and omit the resume guidance from the prompt.
+	g := newTestGenkit(t)
+	for _, name := range []string{"alpha", "beta"} {
+		genkitx.DefineAgent[any](g, name,
+			aix.InlinePrompt{ai.WithModel(toolModel(t, g, "test/"+name, func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return textResp(req, "ok"), nil
+			}))},
+		)
+	}
+
+	var capturedSystem string
+	orch := toolModel(t, g, "test/orch-two", func(ctx context.Context, req *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+		if sys := findSystem(req.Messages); sys != nil {
+			capturedSystem = sys.Text()
+		}
+		if len(toolOutputs(req.Messages, "delegate_to_alpha")) == 0 {
+			return toolReqResp(req, &ai.ToolRequest{Name: "delegate_to_alpha", Input: map[string]any{"task": "go"}}), nil
+		}
+		return textResp(req, "done"), nil
+	})
+
+	resp, err := genkit.Generate(ctx, g, ai.WithModel(orch), ai.WithPrompt("go"),
+		ai.WithUse(
+			&Agents{Agents: []aix.AgentRef{{Name: "alpha"}}},
+			&Agents{Agents: []aix.AgentRef{{Name: "beta"}}},
+		))
+	if err != nil {
+		t.Fatalf("two client-managed instances on one call: %v", err)
+	}
+	got := delegationResponses(t, resp.History(), "delegate_to_alpha")
+	if len(got) != 1 || got[0].Response != "ok" {
+		t.Fatalf("delegation through the first instance failed: %+v", got)
+	}
+	if strings.Contains(capturedSystem, continueTaskToolName) {
+		t.Errorf("system prompt advertises the unregistered resume tool: %q", capturedSystem)
 	}
 }
 
@@ -526,6 +830,7 @@ func TestAgentsConfigSerialization(t *testing.T) {
 		MaxDelegations:   3,
 		HistoryLength:    2,
 		ArtifactStrategy: ArtifactStrategySession,
+		Async:            true,
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -543,6 +848,9 @@ func TestAgentsConfigSerialization(t *testing.T) {
 	}
 	if got.ArtifactStrategy != ArtifactStrategySession {
 		t.Errorf("artifactStrategy lost in round trip: %q", got.ArtifactStrategy)
+	}
+	if !got.Async {
+		t.Error("async lost in round trip")
 	}
 }
 
@@ -572,4 +880,18 @@ func artifactNames(arts []*aix.Artifact) []string {
 		}
 	}
 	return names
+}
+
+func TestDiscoverDescription_PromptFile(t *testing.T) {
+	// A prompt agent named "triage" finds support/triage.prompt by its file name,
+	// so the roster must find its description the same way.
+	g := genkit.Init(context.Background(), genkit.WithPromptFS(fstest.MapFS{
+		"prompts/support/triage.prompt": &fstest.MapFile{Data: []byte("---\ndescription: Routes support requests.\n---\nHi")},
+	}))
+
+	for _, name := range []string{"support/triage", "triage"} {
+		if got, want := discoverDescription(g, name), "Routes support requests."; got != want {
+			t.Errorf("discoverDescription(%q) = %q, want %q", name, got, want)
+		}
+	}
 }

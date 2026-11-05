@@ -18,30 +18,33 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from genkit._ai._tools import Interrupt
-from genkit._core._tracing import SpanMetadata, run_in_new_span
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, MultipartToolResponse, ToolHookParams
+from genkit import Interrupt, MultipartToolResponse
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
+from genkit.plugin_api import ActionKind, GenkitConfig
+from genkit.telemetry import SpanContext, run_in_new_span
 
 
-class ToolApprovalConfig(BaseModel):
+class ToolApprovalConfig(GenkitConfig):
     """Tools that may run without an approval interrupt."""
 
     allowed_tools: list[str] = Field(default_factory=list)
 
 
-class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
+class ToolApproval(Middleware[ToolApprovalConfig]):
     """Tool approval middleware that interrupts execution for non-allowed tools."""
+
+    name = 'tool_approval'
+    description = 'Requires approval before executing tools'
 
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Intercept tool execution and require approval if not in allowed list."""
         tool_name = params.tool.name
@@ -54,11 +57,20 @@ class ToolApproval(BaseMiddleware[ToolApprovalConfig]):
         if isinstance(resumed, dict) and (resumed.get('toolApproved') or resumed.get('tool_approved')):
             return await next_fn(params, ctx)
 
-        tool_input = params.tool_request_part.tool_request.input
-        with run_in_new_span(
-            SpanMetadata(name=tool_name, type='action', subtype='tool', input=tool_input),
-        ) as span:
-            if tool_input is not None:
-                inp_json = tool_input.model_dump_json() if isinstance(tool_input, BaseModel) else json.dumps(tool_input)
-                span.set_attribute('genkit:input', inp_json)
+        tool_req = params.tool_request_part.tool_request
+        if tool_req is None:
+            raise ValueError('wrap_tool needs a tool request part')
+        tool_input = tool_req.input
+
+        async def body(_span: SpanContext) -> MultipartToolResponse:
             raise Interrupt({'message': f'Tool not in approved list: {tool_name}'})
+
+        # the denied call should look like the tool ran and interrupted, so the
+        # trace shows a tool span rather than a bare step.
+        return await run_in_new_span(
+            tool_name,
+            body,
+            action_type=str(ActionKind.TOOL),
+            input=tool_input,
+            is_action=True,
+        )

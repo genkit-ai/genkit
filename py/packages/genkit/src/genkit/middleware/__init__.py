@@ -16,19 +16,19 @@
 
 """Middleware for Genkit model calls.
 
-Define a subclass of ``BaseMiddleware`` and register it on your app
+Define a subclass of ``Middleware`` and register it on your app
 with ``@ai.middleware``:
 
     from genkit import Genkit
-    from genkit.middleware import BaseMiddleware
+    from genkit.middleware import Middleware, MiddlewareContext
 
     ai = Genkit()
 
     @ai.middleware(name='logging')
-    class LoggingMiddleware(BaseMiddleware):
-        async def wrap_generate(self, params, next_fn, ctx: GenerateMiddlewareContext):
+    class LoggingMiddleware(Middleware):
+        async def wrap_generate(self, params, ctx: MiddlewareContext, next_fn):
             print('before')
-            result = await next_fn(params)
+            result = await next_fn(params, ctx)
             print('after')
             return result
 
@@ -64,21 +64,17 @@ A_after()
 """
 
 from genkit._core._middleware import (
-    BaseMiddleware,
     GenerateHookParams,
-    GenerateMiddleware,
-    GenerateMiddlewareContext,
+    Middleware,
+    MiddlewareContext,
     ModelHookParams,
     ToolHookParams,
 )
-from genkit._core._typing import MultipartToolResponse
 
 __all__ = [
-    'BaseMiddleware',
     'GenerateHookParams',
-    'GenerateMiddleware',
-    'GenerateMiddlewareContext',
+    'Middleware',
+    'MiddlewareContext',
     'ModelHookParams',
-    'MultipartToolResponse',
     'ToolHookParams',
 ]

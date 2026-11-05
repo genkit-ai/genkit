@@ -23,6 +23,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	"github.com/firebase/genkit/go/core"
 )
 
 func TestValidateSupport(t *testing.T) {
@@ -254,7 +256,17 @@ func TestValidateSupport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			handler := validateSupport("test-model", tt.opts)(mockModelFunc)
+			// Version validation moved from validateSupport to
+			// normalizeConfig (it must see the raw, pre-conversion config),
+			// so chain both here the way model construction does.
+			var versions []string
+			if tt.opts != nil {
+				versions = tt.opts.Versions
+			}
+			handler := core.ChainMiddleware(
+				normalizeConfig[any]("test-model", versions),
+				validateSupport("test-model", tt.opts),
+			)(mockModelFunc)
 			_, err := handler(context.Background(), tt.input, nil)
 
 			if (err != nil) != tt.wantErr {
@@ -699,5 +711,65 @@ func TestAugmentWithContext(t *testing.T) {
 			middleware := augmentWithContext(tc.opts, tc.options)
 			_, _ = middleware(next)(context.Background(), tc.input, nil)
 		})
+	}
+}
+
+// TestValidateVersion pins the version-validation contract: a declared list
+// enforces membership, and a model that declares no versions is unconstrained
+// so pinning an arbitrary version is not rejected.
+func TestValidateVersion(t *testing.T) {
+	declared := []string{"m-1", "m-2"}
+	if err := validateVersion("m", declared, map[string]any{"version": "m-2"}); err != nil {
+		t.Errorf("declared version rejected: %v", err)
+	}
+	if err := validateVersion("m", declared, map[string]any{"version": "m-9"}); err == nil {
+		t.Error("undeclared version accepted against a declared list")
+	}
+	for _, versions := range [][]string{nil, {}} {
+		if err := validateVersion("m", versions, map[string]any{"version": "m-anything"}); err != nil {
+			t.Errorf("version rejected on an unconstrained model (versions=%v): %v", versions, err)
+		}
+	}
+}
+
+// TestModelActionFillsTheCallersRequest pins that a model that leaves
+// Response.Request unset gets the request the caller sent, not the one the
+// model saw: a model without system role support sees the system prompt as a
+// user and model pair, which must not leak into the caller's history.
+func TestModelActionFillsTheCallersRequest(t *testing.T) {
+	r := childRegistry(t)
+	m := NewModel("test/no-system-role", &ModelOptions{Supports: &ModelSupports{Multiturn: true}}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		if req.Messages[0].Role == RoleSystem {
+			t.Errorf("model saw a system message, want it simulated")
+		}
+		return &ModelResponse{Message: NewModelTextMessage("hi")}, nil
+	})
+	m.Register(r)
+	resp, err := Generate(t.Context(), r, WithModel(m), WithSystem("Be brief."), WithPrompt("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := resp.History()
+	if len(history) != 3 || history[0].Role != RoleSystem || history[1].Role != RoleUser {
+		t.Errorf("History() = %v, want the system, user, and model messages", history)
+	}
+}
+
+// TestModelActionOutputOmitsRequest pins that a model action run directly, as
+// the Dev UI and the reflection API run it, does not echo the request in its
+// output: the trace would carry the input twice and the wire form would
+// diverge from JS.
+func TestModelActionOutputOmitsRequest(t *testing.T) {
+	r := childRegistry(t)
+	m := NewModel("test/plain", &ModelOptions{Supports: &ModelSupports{Multiturn: true}}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{Message: NewModelTextMessage("hi")}, nil
+	})
+	m.Register(r)
+	resp, err := m.(*ModelAction).Generate(t.Context(), &ModelRequest{Messages: []*Message{NewUserTextMessage("hello")}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Request != nil {
+		t.Errorf("Request = %+v, want nil", resp.Request)
 	}
 }

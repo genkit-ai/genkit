@@ -1,0 +1,148 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Google AI Interactions Lyria audio model action."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from genkit_google_genai._interactions._client import create_interaction
+from genkit_google_genai._interactions._converters import (
+    ensure_tool_ids,
+    from_interaction_sync,
+    split_system_instruction,
+    to_interaction_steps,
+)
+from genkit_google_genai._interactions._options import ClientOptions, ResponseModality
+from genkit_google_genai._models._interactions_registry import lyria_model_info
+from genkit_google_genai._models._interactions_utils import (
+    EXTRA_DESCRIPTION,
+    INPUT_HINT,
+    MODEL_ID_HINT,
+    SYSTEM_INSTRUCTION_HINT,
+    TIMEOUT_DESCRIPTION,
+    api_key_for_context,
+    client_overrides_from_config,
+    extract_version,
+    lowercase_choice_list,
+    partition_keys,
+    pop_extra,
+    reject_function_tools,
+    reject_managed_extra,
+    remove_client_option_overrides,
+    require_interaction_steps,
+)
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, deep_merge, reject_bool_timeout
+from genkit_google_genai._models._secrets import reject_request_config_api_key
+from pydantic import Field, field_validator
+
+from genkit import ModelResponse
+from genkit.model import Model, ModelContext, ModelRequest
+from genkit.plugin_api import GenkitConfig
+
+CREATE_OPTION_KEYS = ('response_modalities',)
+
+
+class LyriaConfig(GenkitConfig):
+    """Google AI Interactions Lyria model configuration.
+
+    Unknown keys are rejected. An API field this class doesn't declare goes in
+    ``extra``, which is deep-merged into the create body.
+
+    ``timeout`` is the HTTP timeout for this request, in seconds.
+    """
+
+    base_url: str | None = None
+    api_version: str | None = None
+    timeout: float | None = Field(default=None, description=TIMEOUT_DESCRIPTION)
+    custom_headers: dict[str, str] | None = None
+    response_modalities: list[ResponseModality] | None = None
+    extra: dict[str, Any] | None = Field(default=None, description=EXTRA_DESCRIPTION)
+
+    @field_validator('timeout', mode='before')
+    @classmethod
+    def no_bool_timeout(cls, value: object) -> object:
+        """``True`` is not a number of seconds."""
+        return reject_bool_timeout(value)
+
+    @field_validator('timeout')
+    @classmethod
+    def check_timeout(cls, value: float | None) -> float | None:
+        """Reject 0, negative, inf and NaN; ``timeout`` is seconds."""
+        return check_timeout_seconds(value)
+
+    @field_validator('response_modalities', mode='before')
+    @classmethod
+    def fold_modalities_case(cls, value: object) -> object:
+        """Accept TEXT/AUDIO the same as lowercase wire values."""
+        return lowercase_choice_list(value)
+
+
+# Fields Genkit builds from the request; extra can't replace them.
+LYRIA_MANAGED_EXTRA = {
+    'model': MODEL_ID_HINT,
+    'input': INPUT_HINT,
+    'systeminstruction': SYSTEM_INSTRUCTION_HINT,
+    'tools': 'Lyria takes no tools.',
+}
+
+
+def create_lyria_action(
+    name: str,
+    *,
+    plugin_api_key: str | None,
+    client_options: ClientOptions,
+) -> Model:
+    """Build a foreground model action for Interactions Lyria."""
+    version = extract_version(name)
+    info = lyria_model_info(version)
+
+    async def run(request: ModelRequest[LyriaConfig], ctx: ModelContext) -> ModelResponse:
+        reject_request_config_api_key(request.config)
+        config = request.config or LyriaConfig()
+        api_key = api_key_for_context(ctx.context, plugin_api_key)
+        merged_options = client_options.merge(client_overrides_from_config(config))
+        dumped = remove_client_option_overrides(config.model_dump(exclude_none=True))
+        extra = pop_extra(dumped)
+        reject_function_tools(name, request)
+        reject_managed_extra(name, extra, LYRIA_MANAGED_EXTRA)
+        # GenkitConfig rejects undeclared keys, so nothing is left over.
+        create_options, _ = partition_keys(dumped, CREATE_OPTION_KEYS)
+        modalities = create_options.get('response_modalities') or ['audio', 'text']
+        system_instruction, turns = split_system_instruction(request.messages or [])
+        steps = to_interaction_steps(ensure_tool_ids(turns))
+        create_kwargs: dict[str, Any] = {
+            'model': version,
+            'input': steps,
+            'response_modalities': modalities,
+        }
+        if system_instruction:
+            create_kwargs['system_instruction'] = system_instruction
+        # A system prompt is enough to start a clip — empty user turns
+        # should not fail the call when instruction is already set.
+        if not system_instruction:
+            require_interaction_steps(steps)
+
+        created = await create_interaction(api_key, deep_merge(create_kwargs, extra), merged_options)
+        return from_interaction_sync(created)
+
+    return Model(
+        name,
+        run,
+        info=info,
+        config_schema=LyriaConfig,
+    )

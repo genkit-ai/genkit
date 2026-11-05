@@ -30,10 +30,16 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
+import { Command, Option } from 'commander';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
+import { parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalRunCliOptions {
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   output?: string;
   evaluators?: string;
   force?: boolean;
@@ -43,6 +49,8 @@ interface EvalRunCliOptions {
 
 /** Command to run evaluation on a dataset. */
 export const evalRun = new Command('eval:run')
+  .allowExcessArguments(true)
+  .usage('[options] <dataset> [-- <command...>]')
   .description('evaluate provided dataset against configured evaluators')
   .argument(
     '<dataset>',
@@ -50,23 +58,32 @@ export const evalRun = new Command('eval:run')
   )
   .option(
     '--output <filename>',
-    'name of the output file to write evaluation results. Defaults to json output.'
+    'name of the output file to write evaluation results'
   )
-  .option(
-    '--output-format <format>',
-    'The output file format (csv, json)',
-    'json'
+  .addOption(
+    new Option('--output-format <format>', 'The output file format')
+      .choices(['json', 'csv'])
+      .default('json')
   )
   .option(
     '--evaluators <evaluators>',
     'comma separated list of evaluators to use (by default uses all)'
   )
   .option(
-    '--batchSize <batchSize>',
-    'batch size to use for parallel evals (default to 1, no parallelization)',
-    Number.parseInt
+    '--batch-size <batchSize>',
+    'batch size to use for parallel evals (defaults to 1, no parallelization)',
+    parsePositiveInt
+  )
+  .addOption(
+    new Option(
+      '--batchSize <batchSize>',
+      'batch size to use for parallel evals'
+    )
+      .argParser(parsePositiveInt)
+      .hideHelp()
   )
   .option('--force', 'Automatically accept all interactive prompts')
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (dataset: string, options: EvalRunCliOptions) => {
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
@@ -159,5 +176,6 @@ export const evalRun = new Command('eval:run')
     await runWithManager(projectRoot, runAction, {
       runtimeCommand,
       waitForActionKeys,
+      auth: options.experimentalAuth,
     });
   });

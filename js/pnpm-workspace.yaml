@@ -17,8 +17,30 @@ packages:
   - 'plugins/*'
   - 'testapps/*'
   - 'testapps/agents/web'
+  - 'testapps/a2ui/web'
   - '!testapps/bleigh-scratch'
   - '!testapps/firebase-functions-sample1'
   - '!testapps/firebase-functions-sample1/functions'
   - 'third_party/*'
   - '!./scripts'
+
+# Strip internal proxy tarball URLs when resolving lockfiles locally.
+pnpmfile: ../.pnpmfile.cjs
+
+# 21-day minimum release age (in minutes) to align with Airlock soak policy.
+minimumReleaseAge: 30240
+
+# Exempt validated 1P Genkit, Google AI/Cloud, and Firebase SDK packages.
+minimumReleaseAgeExclude:
+  - '@genkit-ai/*'
+  - 'genkit'
+  - 'dotprompt'
+  - '@google/genai'
+  - '@google-cloud/*'
+  - '@googleapis/checks'
+  - 'googleapis'
+  - 'google-auth-library'
+  - '@firebase/*'
+  - 'firebase'
+  - 'firebase-admin'
+  - 'firebase-functions'

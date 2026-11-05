@@ -3,18 +3,17 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the formats module initialization and built-in formats."""
+"""Tests for the built-in formats."""
 
-from genkit._ai._formats import (
-    ArrayFormat,
-    EnumFormat,
-    FormatDef,
-    Formatter,
-    JsonFormat,
-    JsonlFormat,
-    TextFormat,
-    built_in_formats,
-)
+import genkit
+import genkit.formats
+from genkit._ai._formats._array import ArrayFormat
+from genkit._ai._formats._builtin import built_in_formats
+from genkit._ai._formats._enum import EnumFormat
+from genkit._ai._formats._json import JsonFormat
+from genkit._ai._formats._jsonl import JsonlFormat
+from genkit._ai._formats._text import TextFormat
+from genkit.formats import Formatter
 
 
 class TestBuiltInFormats:
@@ -34,10 +33,10 @@ class TestBuiltInFormats:
         """Test that there are exactly 5 built-in formats."""
         assert len(built_in_formats) == 5
 
-    def test_built_in_formats_are_format_def_instances(self) -> None:
-        """Test that all built-in formats are FormatDef instances."""
-        for format_def in built_in_formats:
-            assert isinstance(format_def, FormatDef)
+    def test_built_in_formats_are_formatter_instances(self) -> None:
+        """Test that all built-in formats are Formatter instances."""
+        for fmt in built_in_formats:
+            assert isinstance(fmt, Formatter)
 
 
 class TestJsonFormatConfig:
@@ -51,7 +50,6 @@ class TestJsonFormatConfig:
         assert json_format.config.content_type == 'application/json'
         assert json_format.config.constrained is True
         assert json_format.config.format == 'json'
-        assert json_format.config.default_instructions is False
 
 
 class TestArrayFormatConfig:
@@ -104,13 +102,14 @@ class TestTextFormatConfig:
 class TestModuleExports:
     """Test that all required types are exported from the module."""
 
-    def test_format_def_exported(self) -> None:
-        """Test that FormatDef class is exported."""
-        assert FormatDef is not None
+    def test_genkit_formats_exports(self) -> None:
+        """genkit.formats exports exactly the three custom-format types."""
+        assert sorted(genkit.formats.__all__) == ['FormatHandler', 'Formatter', 'FormatterConfig']
 
-    def test_formatter_exported(self) -> None:
-        """Test that Formatter class is exported."""
-        assert Formatter is not None
+    def test_root_does_not_export_format_types(self) -> None:
+        """Format types live in genkit.formats, not the root package."""
+        for name in ('Formatter', 'FormatterConfig', 'FormatHandler', 'FormatDef'):
+            assert name not in genkit.__all__
 
     def test_all_format_classes_exported(self) -> None:
         """Test that all format classes are exported."""

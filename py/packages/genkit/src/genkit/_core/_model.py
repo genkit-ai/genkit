@@ -22,215 +22,1348 @@ properties and methods on top of the generated wire types.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import cached_property
-from typing import Any, ClassVar, Generic, cast
+from importlib import import_module
+from typing import Any, ClassVar, Final, Generic, Literal, TypeGuard, cast, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetJsonSchemaHandler,
+    PrivateAttr,
+    RootModel,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
-from typing_extensions import TypeVar
+from pydantic.config import JsonDict
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema, PydanticCustomError
+from typing_extensions import Self, TypedDict, TypeVar
 
-from genkit._core._base import GenkitModel
-from genkit._core._extract_json import extract_json
+from genkit._core import _typing as typing_mod
+from genkit._core._base import GenkitConfig, GenkitModel, dump_keeping_unknown
+from genkit._core._config_check import copy_containers
+from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError
+from genkit._core._extract_json import extract_json, extract_partial_json, is_complete_json
+from genkit._core._logger import get_logger
+from genkit._core._operation import Operation
+from genkit._core._partial import construct_partial
+from genkit._core._schema import parse_schema
 from genkit._core._typing import (
-    Candidate,
+    AgentFinishReason,
+    Artifact as ArtifactData,
     DocumentData,
-    DocumentPart,
     FinishReason,
-    GenerateActionOptionsData,
     GenerateActionOutputConfig,
-    GenerationCommonConfig,
     GenerationUsage,
+    JsonPatch,
     Media,
-    MediaModel,
-    MediaPart,
     MessageData,
     MiddlewareRef,
-    ModelResponseChunk as ModelResponseChunkSchema,
-    Operation,
-    Part,
-    Resume,
+    ModelInfo,
+    OutputConfig as OutputConfigData,
+    PartData,
+    Resource,
+    Resume as ResumeData,
     Role,
-    Text,
-    TextPart,
-    ToolChoice,
+    SnapshotStatus,
     ToolDefinition,
-    ToolRequestPart,
+    ToolRequest,
+    ToolResponse,
+    TurnEnd,
 )
 
-ModelConfig = GenerationCommonConfig  # public name for GenerationCommonConfig
-ModelUsage = GenerationUsage  # public name for GenerationUsage
+
+# ModelConfigDict is the hand-copied autocomplete list for this class — keep
+# the keys matching so a new knob shows up in the IDE the same day it becomes legal.
+#
+# The common fields are declared here rather than inherited from the generated
+# GenerationCommonConfig, which types token counts as float (JSON Schema has
+# one number type). The names match it field for field; a test pins that.
+# As a GenkitConfig, model_dump() returns field names for provider SDKs and
+# by_alias=True gives the wire shape.
+#
+# A plugin config extends this class and never re-declares or aliases these
+# fields: tighter provider bounds go in a validator, and a provider's own name
+# for one of these settings is the plugin's to map, not a second field.
+class ModelConfig(GenkitConfig):
+    """Settings every model understands, plus ``extra`` for provider-only ones.
+
+    Unknown keyword arguments raise, so ``ModelConfig(temprature=0.2)`` fails
+    where it was typed instead of being sent or silently dropped. A
+    per-request API key goes in ``context={'secrets': {'api_key': ...}}``, not
+    here.
+    """
+
+    version: str | None = Field(default=None, description='Model version to call, for providers that pin one.')
+    """Model version to call, for providers that pin one per request."""
+
+    temperature: float | None = Field(default=None, description='Sampling temperature. Higher is more random.')
+    """Sampling temperature. Higher is more random."""
+
+    max_output_tokens: int | None = Field(default=None, description='Maximum number of tokens to generate.')
+    """Upper bound on tokens in the reply."""
+
+    top_k: int | None = Field(default=None, description='The maximum number of tokens to consider when sampling.')
+    """Sample only from the k most likely tokens."""
+
+    top_p: float | None = Field(
+        default=None, description='The maximum cumulative probability of tokens to consider when sampling.'
+    )
+    """Sample from the smallest token set whose probability reaches p."""
+
+    stop_sequences: list[str] | None = Field(default=None, description='Strings that end the reply when generated.')
+    """Strings that end the reply when the model emits one."""
+
+    common_field_bounds: ClassVar[Mapping[str, tuple[float, float]]] = {}
+    """Inclusive ``(min, max)`` a provider allows for a numeric common field.
+
+    A plugin narrows a common field here instead of re-declaring it. Values
+    outside the range fail validation, and the Dev UI schema advertises the
+    range as ``minimum``/``maximum``.
+
+    Example:
+        ```python
+        class OpenAIConfig(ModelConfig):
+            common_field_bounds = {'temperature': (0.0, 2.0), 'top_p': (0.0, 1.0)}
+
+
+        OpenAIConfig(temperature=3.0)
+        # => ValidationError: temperature must be between 0.0 and 2.0, got 3.0
+        ```
+    """
+
+    _NUMERIC_COMMON_FIELDS: ClassVar[frozenset[str]] = frozenset({
+        'temperature',
+        'max_output_tokens',
+        'top_k',
+        'top_p',
+    })
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
+        """Reject ``common_field_bounds`` entries that name unknown fields or invert ``(min, max)``."""
+        super().__pydantic_init_subclass__(**kwargs)
+        for name, (low, high) in cls.common_field_bounds.items():
+            if name not in cls._NUMERIC_COMMON_FIELDS:
+                raise ValueError(
+                    f'{cls.__name__}.common_field_bounds key {name!r} must be one of '
+                    f'{sorted(cls._NUMERIC_COMMON_FIELDS)}'
+                )
+            if low > high:
+                raise ValueError(f'{cls.__name__}.common_field_bounds[{name!r}] min {low} > max {high}')
+
+    @field_validator('temperature', 'max_output_tokens', 'top_k', 'top_p')
+    @classmethod
+    def _check_common_field_bounds(cls, value: float | None, info: ValidationInfo) -> float | None:
+        bounds = cls.common_field_bounds.get(info.field_name or '')
+        if value is not None and bounds is not None and not bounds[0] <= value <= bounds[1]:
+            # A custom error type keeps pydantic's 'Value error, ' prefix off the message.
+            raise PydanticCustomError(
+                'common_field_bounds',
+                '{field} must be between {low} and {high}, got {value}',
+                {'field': info.field_name, 'low': bounds[0], 'high': bounds[1], 'value': value},
+            )
+        return value
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        """Advertise ``common_field_bounds`` on the matching schema properties."""
+        json_schema = handler(core_schema)
+        resolved = handler.resolve_ref_schema(json_schema)
+        properties = resolved.get('properties')
+        if isinstance(properties, dict):
+            for name, (low, high) in cls.common_field_bounds.items():
+                field = cls.model_fields.get(name)
+                if field is None:
+                    continue
+                alias = field.alias
+                prop = properties.get(alias) if alias in properties else properties.get(name)
+                if isinstance(prop, dict):
+                    prop['minimum'] = low
+                    prop['maximum'] = high
+        return json_schema
+
+    extra: dict[str, Any] | None = None
+    """Provider settings the model's config class doesn't declare, sent as-is.
+
+    Keys are the provider's wire names. The plugin merges them into its
+    request after the declared fields, so a colliding key wins. Fields Genkit
+    builds from the request (messages, tools) are rejected rather than
+    overwritten. Where the map lands depends on the provider: the request
+    body for Gemini, OpenAI and Anthropic, ``options`` for Ollama, and
+    ``additionalModelRequestFields`` for Bedrock chat models (the InvokeModel
+    body for Bedrock image models).
+
+    Keys aren't validated, except that an API key here raises like one at the
+    top level: config travels with the request into traces. Don't put other
+    secrets here either.
+    """
+
+
+# what callers pass as tool_choice; they type the string, not an enum.
+ToolChoice = Literal['auto', 'required', 'none']
+"""Whether the model may call tools (`auto`), must call one (`required`), or must not (`none`)."""
+
+# A termination known to carry no conforming output. Every path that would
+# parse a response against its output schema consults this first: a schema
+# error on such a response would mask the finish reason the caller needs.
+# The model's own reason stays on the response; output validation is
+# post-processing, so its failure is carried separately on ``error``.
+#
+# UNKNOWN is excluded on purpose: plugins map unrecognized provider reasons
+# to it, so treating it as abnormal would silently drop validation for
+# responses the model may well have completed.
+#
+# Mirrors Go's FinishReason.isAbnormal (go/ai/generate.go). Derived from
+# FinishReason.is_abnormal so the two can't drift.
+ABNORMAL_FINISH_REASONS: Final[frozenset[FinishReason]] = frozenset(
+    reason for reason in FinishReason if reason.is_abnormal()
+)
+"""Finish reasons that skip output-schema validation because the response carries no conforming output."""
+
+logger = get_logger(__name__)
+
+
+class ModelConfigDict(TypedDict, extra_items=Any, total=False):
+    """Common knobs for dict-literal autocomplete on ``config={...}``.
+
+    ``None`` clears a ModelRef default. Other keys have to be declared by the
+    model's own config class, or the call raises before the model runs;
+    provider settings the class doesn't declare go in ``extra``.
+
+    Keys match ``ModelConfig``. If a common knob is added there and not here,
+    autocomplete quietly drops it.
+    """
+
+    version: str | None
+    temperature: float | None
+    max_output_tokens: int | None
+    top_k: int | None
+    top_p: float | None
+    stop_sequences: Sequence[str] | None
+    extra: dict[str, Any] | None
+
+
+SECRETS_HINT = "Pass the key as context={'secrets': {'api_key': ...}}."
+_KEY_SLOTS = ('api_key', 'apiKey')
+
+
+def misplaced_api_key_error() -> GenkitError:
+    """The ``INVALID_ARGUMENT`` error for an API key found in config."""
+    return GenkitError(
+        status='INVALID_ARGUMENT',
+        message=f'API key belongs in context.secrets, not config. {SECRETS_HINT}',
+        reason=ErrorReason.INVALID_INPUT,
+    )
+
+
+def _has_key(bag: Mapping[str, object]) -> bool:
+    return any(bag.get(slot) is not None for slot in _KEY_SLOTS)
+
+
+def reject_config_api_key(config: object) -> None:
+    """Raise when a request config carries an API key.
+
+    Core calls this in generate, in the ``/util/generate`` action, and on every
+    model and background-model action run, so plugins don't need to. Checks
+    ``api_key`` / ``apiKey`` on a config dict or model, on a model's undeclared
+    fields, and inside ``extra``. A key in any of those would be
+    traced, and a key in ``extra`` would also go to the provider as a body
+    field while the call authenticates with the plugin's key.
+
+    Example:
+        ```python
+        reject_config_api_key({'temperature': 0.2})
+        # => None
+        reject_config_api_key({'extra': {'api_key': 'sk-tenant'}})
+        # => GenkitError INVALID_ARGUMENT: API key belongs in context.secrets, not config. ...
+        ```
+
+    Args:
+        config: The request config, as a dict or a config object.
+
+    Raises:
+        GenkitError: ``INVALID_ARGUMENT`` when a key is present.
+    """
+    if config is None:
+        return
+    bags: list[object]
+    if isinstance(config, Mapping):
+        top = cast(Mapping[str, object], config)
+        bags = [top, top.get('extra')]
+    else:
+        if any(getattr(config, slot, None) is not None for slot in _KEY_SLOTS):
+            raise misplaced_api_key_error()
+        bags = [getattr(config, 'model_extra', None), getattr(config, 'extra', None)]
+    for bag in bags:
+        if isinstance(bag, Mapping) and _has_key(cast(Mapping[str, object], bag)):
+            raise misplaced_api_key_error()
+
 
 # TypeVars for generic types
 OutputT = TypeVar('OutputT', default=object)
 ConfigT = TypeVar('ConfigT', bound=ModelConfig, default=ModelConfig)
+# Bound to BaseModel so ModelRef is always parameterized with a concrete Pydantic config schema.
+# Covariant so ModelRef[GeminiConfig] is assignable to ModelRef[BaseModel] or ModelRef[Any].
+ModelRefConfigT = TypeVar('ModelRefConfigT', bound=BaseModel, covariant=True)
+# ModelRequest[X], EmbedRequest[X] and the evaluator requests take a pydantic
+# model class; __class_getitem__ rejects the rest. Not bound to BaseModel: type
+# checkers would then reject the common bare ModelRequest(config={...}), where
+# the config is solved as a dict. Invariant: config is writable, so
+# ModelRequest[GeminiConfig] is not a ModelRequest[ModelConfig] you can assign
+# a ModelConfig into. Defaults to Any so bare ModelRequest means
+# ModelRequest[Any], and Callable[[ModelRequest], ...] accepts a fn typed
+# ModelRequest[GeminiConfig].
+ModelRequestConfigT = TypeVar('ModelRequestConfigT', default=Any)
+# Bare EmbedRequest / evaluator request options are always a dict at runtime, so the
+# default says so. Fn aliases take EmbedRequest[Any] / EvaluatorRequest[Any] so a fn
+# typed EmbedRequest[CrmEmbedConfig] still fits them.
+RequestOptionsT = TypeVar('RequestOptionsT', default=dict[str, Any])
 
 
-class ModelRef(BaseModel):
-    """Reference to a model with configuration."""
+def declared_config_type(cls: type) -> type[BaseModel] | None:
+    """The config class on ``ModelRequest[ThatClass]`` (or the embed / evaluator requests), else None.
+
+    None when unparametrized or ``Any``.
+    """
+    meta = getattr(cls, '__pydantic_generic_metadata__', None)
+    if not meta:
+        return None
+    args = meta.get('args') or ()
+    if not args:
+        return None
+    arg = args[0]
+    return arg if _is_model_class(arg) else None
+
+
+def check_config_type_arg(*, request: str, field: str, typevar_values: object) -> None:
+    """Reject ``ModelRequest[X]`` / ``EmbedRequest[X]`` / evaluator requests unless X is a model class.
+
+    Runs where the annotation is evaluated, so a TypedDict or dict config
+    fails when the fn is defined, with the same error on every Python version.
+    """
+    arg = typevar_values[0] if isinstance(typevar_values, tuple) and typevar_values else typevar_values
+    if arg is Any or isinstance(arg, TypeVar) or _is_model_class(arg):
+        return
+    label = arg.__name__ if isinstance(arg, type) and not get_args(arg) else repr(arg)
+    example = ', e.g. a ModelConfig subclass' if field == 'config' else ''
+    raise GenkitError(
+        status='INVALID_ARGUMENT',
+        message=(
+            f'{request}[{label}]: the {field} type must be a pydantic BaseModel subclass{example}. '
+            f'Use bare {request} to take {field} as a dict.'
+        ),
+    )
+
+
+def check_config_value(cls: type, value: object, *, field: str) -> object:
+    """The before-validator for ``config`` / ``options`` on the request types.
+
+    A mapping is the bag the declared class coerces. A Pydantic instance is
+    only legal if it is that class: OpenAIConfig on a Gemini request is a
+    caller mistake, so pass a mapping instead. None and an untyped request
+    are left to the caller (see EmbedRequest for the options dict).
+    """
+    if value is None:
+        return value
+    if isinstance(value, Mapping) and not isinstance(value, BaseModel):
+        return value
+    if isinstance(value, BaseModel):
+        expected = declared_config_type(cls)
+        if expected is not None and not isinstance(value, expected):
+            raise ValueError(
+                f'{field} must be {config_type_path(expected)} or a mapping, got {config_type_path(type(value))}'
+            )
+        return value
+    raise ValueError(f'{field} must be a BaseModel or mapping, got {type(value).__name__}')
+
+
+def _is_model_class(value: object) -> TypeGuard[type[BaseModel]]:
+    """True for a pydantic model class; False for TypedDicts, dict, unions, Any, and TypeVars."""
+    try:
+        return isinstance(value, type) and issubclass(value, BaseModel)
+    except TypeError:  # dict[str, Any] passes isinstance(_, type) on 3.10
+        return False
+
+
+def config_type_path(cls: type) -> str:
+    """The public import a plugin author would use, else the defining module.
+
+    Walks parent packages from the top and uses the first one that re-exports
+    this class under the same name (``genkit_openai.OpenAIConfig``, not
+    ``genkit_openai._typing.OpenAIConfig``). Nested / test-local classes keep
+    the defining path.
+    """
+    impl = f'{cls.__module__}.{cls.__qualname__}'
+    if '<locals>' in cls.__qualname__ or '.' in cls.__qualname__:
+        return impl
+    parts = cls.__module__.split('.')
+    name = cls.__name__
+    for i in range(1, len(parts) + 1):
+        mod_name = '.'.join(parts[:i])
+        try:
+            mod = import_module(mod_name)
+        except ImportError:
+            continue
+        if getattr(mod, name, None) is not cls:
+            continue
+        public = getattr(mod, '__all__', None)
+        if public is not None and name not in public:
+            continue
+        return f'{mod_name}.{name}'
+    return impl
+
+
+def check_ref_config(*, name: str, schema: object, config: object, schema_required: bool) -> object:
+    """Check a ref's config against its config_schema and return a copy.
+
+    Shared by ModelRef and EmbedderRef. With a schema, config must be an
+    instance of it. Without one (EmbedderRef only), config is a plain
+    mapping. The copy keeps later mutations of the caller's object from
+    changing the ref's layer.
+    """
+    if schema is not None or schema_required:
+        if not _is_model_class(schema):
+            got = (
+                f'{schema.__module__}.{schema.__name__}'
+                if isinstance(schema, type)
+                else f'{type(schema).__module__}.{type(schema).__name__}'
+            )
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config_schema must be a BaseModel subclass, got {got}',
+            )
+        if config is not None and not isinstance(config, schema):
+            expected = config_type_path(schema)
+            actual = config_type_path(type(config))
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'{name}: config must be an instance of {expected}, got {actual}',
+            )
+    elif config is not None and (isinstance(config, BaseModel) or not isinstance(config, Mapping)):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'{name}: config must be a mapping when config_schema is not set, got {type(config).__name__}. '
+                'Pass config_schema= to use a config class.'
+            ),
+        )
+    if isinstance(config, BaseModel):
+        return config.model_copy(deep=True)
+    if isinstance(config, Mapping):
+        return copy_containers(dict(cast(Mapping[str, Any], config)))
+    return config
+
+
+def check_ref_info(*, name: str, info: object, info_type: type[BaseModel]) -> object:
+    """Check a ref's info is ``info_type`` and return a deep copy."""
+    if info is None:
+        return None
+    if not isinstance(info, info_type):
+        actual = f'{type(info).__module__}.{type(info).__name__}'
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'{name}: info must be an instance of {info_type.__module__}.{info_type.__name__}, got {actual}',
+        )
+    return info.model_copy(deep=True)
+
+
+@dataclass(frozen=True, kw_only=True)
+class ModelRef(Generic[ModelRefConfigT]):
+    """Handle for a model tied to a config schema.
+
+    Fields cannot be rebound. config and info are copied at construction so later
+    mutations of the caller's objects don't change the ref; the copies themselves
+    stay ordinary mutable Pydantic models.
+    """
 
     name: str
-    config_schema: object | None = None
-    info: object | None = None
+    config_schema: type[ModelRefConfigT]
+    info: ModelInfo | None = None
     version: str | None = None
-    config: dict[str, object] | None = None
+    config: ModelRefConfigT | None = None
+
+    # Explicitly opt out of hashing: Pydantic configs are unhashable, so an
+    # auto-generated __hash__ would fail once set.
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        # Callers often keep the config/info they passed in. The checks copy
+        # them so later mutations of those objects don't change the ref's defaults.
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=True)
+        object.__setattr__(self, 'config', config)
+        info = check_ref_info(name=self.name, info=self.info, info_type=ModelInfo)
+        object.__setattr__(self, 'info', info)
 
 
-class Message(MessageData):
-    """Message wrapper with utility properties for text and tool requests."""
+# Exclusive kinds. camelCase and snake_case are the same kind so a merged
+# dump of one tool call is not two kinds. custom is the vendor hatch — it
+# may ride on another kind, or be the kind when it's the only payload (a
+# signed thought is still one reasoning part). Metadata rides too. Two
+# exclusive kinds is a validation error so a Message never carries an
+# ambiguous part the model would have to guess at. A wire part with no
+# kind (empty or metadata-only) is dropped when reading a message so a
+# junk {} doesn't fail generate. Constructing Part() with no kind still
+# raises. JSON null is a real data payload, so data: null is a data part.
+PART_KIND_KEYS = frozenset({
+    'text',
+    'media',
+    'toolRequest',
+    'tool_request',
+    'toolResponse',
+    'tool_response',
+    'reasoning',
+    'resource',
+    'data',
+})
+PART_KIND_FIELDS = (
+    'text',
+    'media',
+    'tool_request',
+    'tool_response',
+    'reasoning',
+    'resource',
+    'data',
+)
+PART_KIND_ALIASES = {
+    'tool_request': 'toolRequest',
+    'tool_response': 'toolResponse',
+}
+EXACTLY_ONE_KIND = (
+    'a part must have exactly one of text, media, toolRequest, toolResponse, reasoning, resource, data, or custom'
+)
 
-    def __init__(
+
+def present_part_kinds(raw: dict[str, object]) -> list[str]:
+    seen: set[str] = set()
+    for key in PART_KIND_KEYS:
+        if raw.get(key) is not None:
+            seen.add(PART_KIND_ALIASES.get(key, key))
+    if 'data' in raw and raw.get('data') is None and not seen and raw.get('custom') is None:
+        seen.add('data')
+    return list(seen)
+
+
+def _require_exactly_one_kind(raw: Mapping[str, object]) -> None:
+    kinds = present_part_kinds(dict(raw))
+    if len(kinds) > 1:
+        raise ValueError(EXACTLY_ONE_KIND)
+    if len(kinds) == 1:
+        return
+    if raw.get('custom') is not None:
+        return
+    raise ValueError(EXACTLY_ONE_KIND)
+
+
+class Part(GenkitModel):
+    """A single piece of content in a message or document."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel,
+        extra='forbid',
+        validate_by_name=True,
+        validate_by_alias=True,
+        validate_assignment=True,
+    )
+
+    text: str | None = None
+    media: Media | None = None
+    tool_request: ToolRequest | None = None
+    tool_response: ToolResponse | None = None
+    data: Any | None = Field(default=None)
+    metadata: dict[str, Any] | None = None
+    custom: dict[str, Any] | None = None
+    reasoning: str | None = None
+    resource: Resource | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _exactly_one_kind(cls, value: object) -> object:
+        if isinstance(value, Mapping) and 'root' in value:
+            raise ValueError('Part(root=...) is gone; use Part.from_text or Part(text=...)')
+        if isinstance(value, Part):
+            value = dump_keeping_unknown(value)
+        if isinstance(value, PartData):
+            value = value.root
+        if isinstance(value, BaseModel):
+            value = dump_keeping_unknown(value)
+        if not isinstance(value, dict):
+            return value
+        raw = cast(dict[str, object], value)
+        _require_exactly_one_kind(raw)
+        return value
+
+    @model_validator(mode='after')
+    def _exactly_one_kind_after(self) -> Part:
+        # Construct already checked the incoming dict. This one catches
+        # part.media = ... on an existing text part, and treats data=null
+        # as a real payload so a tool that returned null still has a kind.
+        kinds = [name for name in PART_KIND_FIELDS if getattr(self, name) is not None]
+        if not kinds and self.custom is None and 'data' in self.model_fields_set and self.data is None:
+            kinds.append('data')
+        if len(kinds) > 1:
+            raise ValueError(EXACTLY_ONE_KIND)
+        if len(kinds) == 1:
+            return self
+        if self.custom is not None:
+            return self
+        raise ValueError(EXACTLY_ONE_KIND)
+
+    def _drop_none_fields(self, dumped: dict[str, Any]) -> dict[str, Any]:
+        kept = super()._drop_none_fields(dumped)
+        # Keep data: null when it's the part's only payload so replay still
+        # sees a data part instead of an empty one.
+        if self._is_null_data_part():
+            kept['data'] = None
+        return kept
+
+    def _is_null_data_part(self) -> bool:
+        if 'data' not in self.model_fields_set or self.custom is not None:
+            return False
+        return all(getattr(self, name) is None for name in PART_KIND_FIELDS)
+
+    @classmethod
+    def from_text(cls, text: str, metadata: dict[str, Any] | None = None) -> Part:
+        return cls(text=text, metadata=metadata)
+
+    @classmethod
+    def from_media(
+        cls,
+        url: str,
+        content_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        return cls(media=Media(url=url, content_type=content_type), metadata=metadata)
+
+    @classmethod
+    def from_tool_request(
+        cls,
+        name: str,
+        input: Any | None = None,  # noqa: ANN401
+        ref: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        return cls(tool_request=ToolRequest(name=name, input=input, ref=ref), metadata=metadata)
+
+    @classmethod
+    def from_tool_response(
+        cls,
+        name: str,
+        output: Any | None = None,  # noqa: ANN401
+        ref: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        return cls(tool_response=ToolResponse(name=name, output=output, ref=ref), metadata=metadata)
+
+    @classmethod
+    def from_data(cls, data: Any, metadata: dict[str, Any] | None = None) -> Part:  # noqa: ANN401
+        return cls(data=data, metadata=metadata)
+
+    @classmethod
+    def from_custom(cls, custom: dict[str, Any], metadata: dict[str, Any] | None = None) -> Part:
+        return cls(custom=custom, metadata=metadata)
+
+    @classmethod
+    def from_reasoning(cls, reasoning: str, metadata: dict[str, Any] | None = None) -> Part:
+        return cls(reasoning=reasoning, metadata=metadata)
+
+    def restart(
         self,
-        message: MessageData | None = None,
-        **kwargs: object,
-    ) -> None:
-        """Initialize from MessageData or keyword arguments."""
-        if message is not None:
-            if isinstance(message, dict):
-                role = message.get('role')
-                if role is None:
-                    raise ValueError('Message role is required')
-                super().__init__(
-                    role=role,
-                    content=message.get('content', []),
-                    metadata=message.get('metadata'),
-                )
-            else:
-                super().__init__(
-                    role=message.role,
-                    content=message.content,
-                    metadata=message.metadata,
-                )
+        *,
+        resumed_metadata: dict[str, Any] | None = None,
+        replace_input: Any | None = None,  # noqa: ANN401
+    ) -> Part:
+        """Build the tool-request part that runs this interrupt again.
+
+        ``resumed_metadata`` is what the tool reads as ``ctx.resumed_metadata``.
+        Omit it and the tool still sees a resume (``ctx.is_resumed()`` is true).
+        ``replace_input`` swaps the tool input and keeps the previous input on
+        ``metadata['replacedInput']``.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('restart needs a tool request part')
+        new_meta: dict[str, Any] = dict(self.metadata or {})
+        new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
+        new_input = tool_req.input
+        if replace_input is not None:
+            new_meta['replacedInput'] = tool_req.input
+            new_input = replace_input
+        return Part.from_tool_request(
+            name=tool_req.name,
+            input=new_input,
+            ref=tool_req.ref,
+            metadata=new_meta,
+        )
+
+    def respond(
+        self,
+        output: Any,  # noqa: ANN401
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> Part:
+        """Build the tool-response part that answers this interrupt without running the tool.
+
+        ``metadata`` is stored under ``interruptResponse`` and defaults to true when omitted.
+        """
+        tool_req = self.tool_request
+        if tool_req is None:
+            raise ValueError('respond needs a tool request part')
+        interrupt_metadata = metadata if metadata is not None else True
+        return Part.from_tool_response(
+            name=tool_req.name,
+            output=output,
+            ref=tool_req.ref,
+            metadata={'interruptResponse': interrupt_metadata},
+        )
+
+    @property
+    def is_partial(self) -> bool:
+        """Whether this part is a partial tool response streamed during tool execution."""
+        return self.tool_response is not None and bool(self.metadata and self.metadata.get('partial') is True)
+
+
+def as_part(value: object) -> Part:
+    if isinstance(value, Part):
+        return value
+    if isinstance(value, PartData):
+        return Part.model_validate(value.root)
+    if isinstance(value, BaseModel):
+        return Part.model_validate(dump_keeping_unknown(value))
+    return Part.model_validate(value)
+
+
+def inbound_part_is_empty(value: object) -> bool:
+    """True when a wire part has no kind — empty or metadata-only."""
+    if isinstance(value, Part):
+        kinds = [name for name in PART_KIND_FIELDS if getattr(value, name) is not None]
+        if 'data' in value.model_fields_set and value.data is None:
+            kinds.append('data')
+        return not kinds and value.custom is None
+    if isinstance(value, Mapping):
+        raw = dict(value)
+    elif isinstance(value, PartData):
+        # The generated twin dumps as {root: ...}, which looks like no kind
+        # and would get dropped from the message.
+        root = value.root
+        if isinstance(root, BaseModel):
+            raw = dump_keeping_unknown(root)
+        elif isinstance(root, Mapping):
+            raw = dict(root)
         else:
-            super().__init__(**kwargs)  # type: ignore[arg-type]
+            raw = {}
+    elif isinstance(value, BaseModel):
+        raw = dump_keeping_unknown(value)
+    else:
+        return False
+    return not present_part_kinds(raw) and raw.get('custom') is None
 
-    def __eq__(self, other: object) -> bool:
-        """Compare messages by role, content, and metadata."""
-        if isinstance(other, MessageData):
-            return self.role == other.role and self.content == other.content and self.metadata == other.metadata
-        return super().__eq__(other)
 
-    def __hash__(self) -> int:
-        """Return identity-based hash."""
-        return hash(id(self))
+def parts_from_inbound(value: object) -> object:
+    if not isinstance(value, list):
+        return value
+    return [as_part(item) for item in value if not inbound_part_is_empty(item)]
 
-    @cached_property
+
+def as_message(value: object) -> Message:
+    if isinstance(value, Message):
+        return Message(
+            role=value.role,
+            content=[as_part(p) for p in value.content],
+            metadata=value.metadata,
+        )
+    if isinstance(value, MessageData):
+        return Message.model_validate(dump_keeping_unknown(value))
+    return Message.model_validate(value)
+
+
+def as_document(value: object) -> Document:
+    if isinstance(value, Document):
+        return Document(
+            content=[as_part(p) for p in value.content],
+            metadata=value.metadata,
+        )
+    if isinstance(value, DocumentData):
+        return Document.model_validate(dump_keeping_unknown(value))
+    return Document.model_validate(value)
+
+
+def as_artifact(value: object) -> Artifact:
+    if isinstance(value, Artifact):
+        return Artifact(
+            name=value.name,
+            parts=[as_part(p) for p in value.parts],
+            metadata=value.metadata,
+        )
+    if isinstance(value, ArtifactData):
+        return Artifact.model_validate(dump_keeping_unknown(value))
+    return Artifact.model_validate(value)
+
+
+def as_output_config(value: object) -> OutputConfig:
+    if isinstance(value, OutputConfig):
+        return value
+    if isinstance(value, OutputConfigData):
+        return OutputConfig.model_validate(dump_keeping_unknown(value))
+    return OutputConfig.model_validate(value)
+
+
+def as_resume_respond(value: object) -> Part:
+    part = as_part(value)
+    if part.tool_response is None:
+        raise ValueError('resume_respond needs a tool response part; answer a pause with Part.respond(output)')
+    return part
+
+
+def as_resume_restart(value: object) -> Part:
+    part = as_part(value)
+    if part.tool_request is None:
+        raise ValueError('resume_restart needs a tool request part')
+    return part
+
+
+class Resume(GenkitModel):
+    """Resume payload whose respond/restart lists accept Part."""
+
+    respond: list[Part] | None = None
+    restart: list[Part] | None = None
+    metadata: dict[str, Any] | None = None
+
+    @field_validator('respond', mode='before')
+    @classmethod
+    def _wrap_respond(cls, v: object) -> object:
+        if v is None or not isinstance(v, list):
+            return v
+        return [as_resume_respond(p) for p in v]
+
+    @field_validator('restart', mode='before')
+    @classmethod
+    def _wrap_restart(cls, v: object) -> object:
+        if v is None or not isinstance(v, list):
+            return v
+        return [as_resume_restart(p) for p in v]
+
+
+def as_resume(value: object) -> Resume:
+    if isinstance(value, Resume):
+        return Resume(
+            respond=value.respond,
+            restart=value.restart,
+            metadata=value.metadata,
+        )
+    if isinstance(value, ResumeData):
+        return Resume.model_validate(dump_keeping_unknown(value))
+    return Resume.model_validate(value)
+
+
+def _normalize_resume_parts(value: Part | list[Part] | None) -> list[Part] | None:
+    if value is None:
+        return None
+    return list(value) if isinstance(value, list) else [value]
+
+
+def as_resumed(part: Part) -> dict[str, Any] | None:
+    """The resume bag the tool sees: True → {}, a dict as-is, anything else None."""
+    raw = (part.metadata or {}).get('resumed')
+    if raw is True:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    return None
+
+
+def resume_options_to_resume(
+    *,
+    resume_respond: Part | list[Part] | None = None,
+    resume_restart: Part | list[Part] | None = None,
+    resume_metadata: dict[str, Any] | None = None,
+) -> Resume | None:
+    """Build a Resume payload from flat resume kwargs."""
+    respond = _normalize_resume_parts(resume_respond)
+    restart = _normalize_resume_parts(resume_restart)
+    if respond is None and restart is None and resume_metadata is None:
+        return None
+    # A paused request on resume_respond is INVALID_ARGUMENT naming
+    # Part.respond, which Resume() construction cannot say.
+    reject_unanswered_interrupts(respond=respond, restart=restart)
+    return Resume(respond=respond, restart=restart, metadata=resume_metadata)
+
+
+def unanswered_interrupt(part: Part) -> bool:
+    """True when this is still a pause, not a restart or response."""
+    meta = part.metadata or {}
+    return part.tool_request is not None and bool(meta.get('interrupt')) and as_resumed(part) is None
+
+
+def reject_unanswered_interrupts(
+    resume: Resume | None = None,
+    *,
+    respond: list[Part] | None = None,
+    restart: list[Part] | None = None,
+) -> None:
+    if resume is not None:
+        if respond is None:
+            respond = resume.respond
+        if restart is None:
+            restart = resume.restart
+    for part in restart or []:
+        if unanswered_interrupt(part):
+            name = part.tool_request.name if part.tool_request else 'tool'
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    f'resume part for {name!r} is still an interrupt; '
+                    'use Part.restart(...) or Part.respond(...) before generate.'
+                ),
+            )
+    for part in respond or []:
+        if part.tool_request is not None and part.tool_response is None:
+            name = part.tool_request.name
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(f'resume_respond got the paused request for {name!r}; answer it with Part.respond(output)'),
+            )
+
+
+class Message(GenkitModel):
+    """A single turn in a conversation."""
+
+    role: Role | str
+    content: list[Part]
+    metadata: dict[str, Any] | None = None
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        if args:
+            raise TypeError('Message takes keyword fields; use as_message to unwrap a wire message')
+        super().__init__(**kwargs)
+
+    @field_validator('content', mode='before')
+    @classmethod
+    def _wrap_parts(cls, v: object) -> object:
+        return parts_from_inbound(v)
+
+    @property
     def text(self) -> str:
         """All text parts concatenated into a single string."""
         return text_from_message(self)
 
-    @cached_property
-    def tool_requests(self) -> list[ToolRequestPart]:
+    @property
+    def tool_requests(self) -> list[Part]:
         """All tool request parts in this message."""
-        return [p.root for p in self.content if isinstance(p.root, ToolRequestPart)]
+        return [p for p in self.content if p.tool_request is not None]
 
-    @cached_property
-    def interrupts(self) -> list[ToolRequestPart]:
+    @property
+    def interrupts(self) -> list[Part]:
         """Tool requests marked as interrupted."""
         return [p for p in self.tool_requests if p.metadata and p.metadata.get('interrupt')]
 
 
-class GenerateActionOptions(GenerateActionOptionsData):
+class GenerateActionOptions(GenkitModel):
     """Generate options with messages as list[Message] for type-safe use with ai.generate()."""
 
+    model: str | None = None
     messages: list[Message]
+    docs: list[Document] | None = None
+    tools: list[str] | None = None
+    resources: list[str] | None = None
+    tool_choice: ToolChoice | None = None
+    config: Any | None = Field(default=None)
+    output: GenerateActionOutputConfig | None = None
+    resume: Resume | None = None
+    return_tool_requests: bool | None = None
+    max_turns: float | None = None
+    step_name: str | None = None
+    use: list[MiddlewareRef] | None = None
 
     @field_validator('messages', mode='before')
     @classmethod
-    def _wrap_messages(cls, v: list[MessageData]) -> list[Message]:
-        return [m if isinstance(m, Message) else Message(m) for m in v]
+    def _wrap_messages(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_message(m) for m in v]
+
+    @field_validator('docs', mode='before')
+    @classmethod
+    def _wrap_docs(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_document(d) for d in v]
+
+    @field_validator('resume', mode='before')
+    @classmethod
+    def _wrap_resume(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_resume(v)
 
 
-_TEXT_DATA_TYPE: str = 'text'
-
-
-class Document(DocumentData):
+class Document(GenkitModel):
     """Multi-part document that can be embedded, indexed, or retrieved."""
+
+    content: list[Part]
+    metadata: dict[str, Any] | None = None
+
+    @field_validator('content', mode='before')
+    @classmethod
+    def _wrap_parts(cls, v: object) -> object:
+        return parts_from_inbound(v)
 
     def __init__(
         self,
-        content: list[DocumentPart],
+        content: Sequence[Part],
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Initialize with content parts and optional metadata."""
-        doc_content = deepcopy(content)
-        doc_metadata = deepcopy(metadata)
-        super().__init__(content=doc_content, metadata=doc_metadata)
+        if isinstance(content, (Document, DocumentData)) or (
+            isinstance(content, BaseModel) and not isinstance(content, Sequence)
+        ):
+            raise TypeError('Document(other) is gone; pass content= or use as_document')
+        payload: dict[str, Any] = {'content': deepcopy(content), 'metadata': deepcopy(metadata)}
+        BaseModel.__init__(self, **cast(Any, payload))
 
-    @staticmethod
-    def from_text(text: str, metadata: dict[str, Any] | None = None) -> Document:
-        """Create a document from a text string."""
-        return Document(content=[DocumentPart(root=TextPart(text=text))], metadata=metadata)
+    @classmethod
+    def from_text(cls, text: str, metadata: dict[str, Any] | None = None) -> Self:
+        """Create a document from a text string. ``metadata`` goes on the document."""
+        return cls(content=[Part.from_text(text)], metadata=metadata)
 
-    @staticmethod
+    @classmethod
     def from_media(
+        cls,
         url: str,
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> Document:
-        """Create a document from a media URL."""
-        return Document(
-            content=[DocumentPart(root=MediaPart(media=Media(url=url, content_type=content_type)))],
-            metadata=metadata,
-        )
-
-    @staticmethod
-    def from_data(
-        data: str,
-        data_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
-    ) -> Document:
-        """Create a document from data, inferring text vs media from data_type."""
-        if data_type == _TEXT_DATA_TYPE:
-            return Document.from_text(data, metadata)
-        return Document.from_media(data, data_type, metadata)
+    ) -> Self:
+        """Create a document from a media URL. ``metadata`` goes on the document."""
+        return cls(content=[Part.from_media(url, content_type)], metadata=metadata)
 
     @cached_property
     def text(self) -> str:
         """Concatenate all text parts."""
         texts = []
         for p in self.content:
-            part = p.root if hasattr(p, 'root') else p
-            text_val = getattr(part, 'text', None)
-            if isinstance(text_val, str):
-                texts.append(text_val)
+            if isinstance(p.text, str):
+                texts.append(p.text)
         return ''.join(texts)
 
     @cached_property
     def media(self) -> list[Media]:
         """All media parts."""
-        return [
-            part.root.media for part in self.content if isinstance(part.root, MediaPart) and part.root.media is not None
-        ]
-
-    @cached_property
-    def data(self) -> str:
-        """Primary data: text if available, otherwise first media URL."""
-        if self.text:
-            return self.text
-        if self.media:
-            return self.media[0].url
-        return ''
-
-    @cached_property
-    def data_type(self) -> str | None:
-        """Type of primary data: 'text' or first media's content type."""
-        if self.text:
-            return _TEXT_DATA_TYPE
-        if self.media and self.media[0].content_type:
-            return self.media[0].content_type
-        return None
+        return [part.media for part in self.content if part.media is not None]
 
 
-class ModelRequest(GenkitModel, Generic[ConfigT]):
-    """Hand-written model request with flat output fields and veneer types.
+class Artifact(GenkitModel):
+    """Named session file whose parts are the public Part type."""
 
-    Output config is inlined as flat fields (output_format, output_schema, etc.)
-    instead of a nested OutputConfig object. Messages and docs use veneer types
-    (Message, Document) for convenience methods like .text.
+    name: str | None = None
+    parts: list[Part]
+    metadata: dict[str, Any] | None = None
+
+    @field_validator('parts', mode='before')
+    @classmethod
+    def _wrap_parts(cls, v: object) -> object:
+        return parts_from_inbound(v)
+
+
+def options_dict(value: object) -> dict[str, Any]:
+    """The options dict an untyped embedder receives.
+
+    ``None`` is ``{}``. A mapping is copied. A BaseModel is dumped with only
+    the fields the caller set, the same as an untyped model fn's config, so a
+    ref's value survives a field the call left unset. Fields marked
+    ``exclude=True`` that were set are copied back so a client-only setting
+    still arrives. Anything else raises ValueError.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, BaseModel):
+        dumped = value.model_dump(exclude_unset=True, exclude_none=False, by_alias=False)
+        for name in value.model_fields_set:
+            if name not in dumped:
+                dumped[name] = getattr(value, name)
+        return dumped
+    if isinstance(value, Mapping):
+        return dict(cast(Mapping[str, Any], value))
+    raise ValueError(f'options must be a mapping or BaseModel, got {type(value).__name__}')
+
+
+def check_options_value(cls: type, value: object) -> object:
+    """The before-validator for ``options`` on EmbedRequest.
+
+    Untyped, options is always a dict (see options_dict). Typed, it follows
+    ModelRequest's config rule, and ``None`` is ``{}`` so the fn gets the
+    class with its defaults rather than None.
+    """
+    if declared_config_type(cls) is None:
+        return options_dict(value)
+    if value is None:
+        return {}
+    return check_config_value(cls, value, field='options')
+
+
+def _untyped_options_schema(schema: JsonDict, cls: type) -> None:
+    """Untyped options validate to a dict, so ``EmbedRequest[Any]`` emits object instead of any."""
+    if declared_config_type(cls) is None:
+        properties = cast(dict[str, Any], schema['properties'])
+        properties['options'] = {'additionalProperties': True, 'title': 'Options', 'type': 'object'}
+
+
+class EmbedRequest(GenkitModel, Generic[RequestOptionsT]):
+    """Embed request whose documents are the public Document type.
+
+    Bare ``EmbedRequest`` gives the fn ``options`` as a dict.
+    ``EmbedRequest[CrmEmbedConfig]`` gives it a validated ``CrmEmbedConfig``.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(json_schema_extra=_untyped_options_schema)
+    input: list[Document]
+    # validate_default so EmbedRequest[Cfg]() builds Cfg() instead of keeping {}.
+    options: RequestOptionsT = Field(default_factory=dict, validate_default=True)
+
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``EmbedRequest[Cfg]``, where ``Cfg`` must be a pydantic model class."""
+        check_config_type_arg(request='EmbedRequest', field='options', typevar_values=typevar_values)
+        return super().__class_getitem__(typevar_values)
+
+    @field_validator('input', mode='before')
+    @classmethod
+    def _wrap_docs(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_document(d) for d in v]
+
+    @field_validator('options', mode='before')
+    @classmethod
+    def _check_options_type(cls, v: object) -> object:
+        return check_options_value(cls, v)
+
+
+def count_message_usage(messages: Sequence[Message], response: Message) -> dict[str, int]:
+    """Character and media counts behind ``GenerationUsage.from_messages``."""
+
+    def count_parts(parts: Sequence[Part]) -> tuple[int, int, int, int]:
+        characters = 0
+        images = 0
+        videos = 0
+        audio = 0
+
+        for part in parts:
+            if part.text:
+                characters += len(part.text)
+
+            media = part.media
+            if media:
+                content_type = media.content_type or ''
+                url = media.url or ''
+
+                if content_type.startswith('image') or url.startswith('data:image'):
+                    images += 1
+                elif content_type.startswith('video') or url.startswith('data:video'):
+                    videos += 1
+                elif content_type.startswith('audio') or url.startswith('data:audio'):
+                    audio += 1
+
+        return characters, images, videos, audio
+
+    in_chars, in_imgs, in_vids, in_audio = count_parts([part for msg in messages for part in msg.content])
+    out_chars, out_imgs, out_vids, out_audio = count_parts(response.content)
+    return {
+        'input_characters': in_chars,
+        'input_images': in_imgs,
+        'input_videos': in_vids,
+        'input_audio_files': in_audio,
+        'output_characters': out_chars,
+        'output_images': out_imgs,
+        'output_videos': out_vids,
+        'output_audio_files': out_audio,
+    }
+
+
+class SessionState(GenkitModel):
+    """Session state whose conversation uses Message and Artifact."""
+
+    session_id: str | None = None
+    messages: list[Message] | None = None
+    custom: Any | None = Field(default=None)
+    artifacts: list[Artifact] | None = None
+    usage: GenerationUsage | None = None
+
+    @field_validator('messages', mode='before')
+    @classmethod
+    def _wrap_messages(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_message(m) for m in v]
+
+    @field_validator('artifacts', mode='before')
+    @classmethod
+    def _wrap_artifacts(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_artifact(a) for a in v]
+
+
+def as_session_state(value: object) -> SessionState:
+    if isinstance(value, SessionState):
+        return SessionState(
+            session_id=value.session_id,
+            messages=value.messages,
+            custom=value.custom,
+            artifacts=value.artifacts,
+            usage=value.usage,
+        )
+    return SessionState.model_validate(value)
+
+
+class SessionSnapshot(GenkitModel):
+    """Snapshot whose state uses the public SessionState type."""
+
+    snapshot_id: str
+    session_id: str | None = None
+    parent_id: str | None = None
+    created_at: str
+    updated_at: str | None = None
+    heartbeat_at: str | None = None
+    status: SnapshotStatus | None = None
+    finish_reason: AgentFinishReason | None = None
+    error: Failure | None = None
+    state: SessionState | None = None
+
+    @field_validator('state', mode='before')
+    @classmethod
+    def _wrap_state(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_session_state(v)
+
+
+class AgentInit(GenkitModel):
+    """Init payload whose state uses the public SessionState type."""
+
+    session_id: str | None = None
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+
+    @field_validator('state', mode='before')
+    @classmethod
+    def _wrap_state(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_session_state(v)
+
+
+class AgentInput(GenkitModel):
+    """Turn input whose message is the public Message type."""
+
+    detach: bool | None = None
+    message: Message | None = None
+    resume: Resume | None = None
+
+    @field_validator('message', mode='before')
+    @classmethod
+    def _wrap_message(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_message(v)
+
+    @field_validator('resume', mode='before')
+    @classmethod
+    def _wrap_resume(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_resume(v)
+
+
+class AgentOutput(GenkitModel):
+    """Turn output whose message and artifacts are the public types."""
+
+    session_id: str | None = None
+    snapshot_id: str | None = None
+    state: SessionState | None = None
+    message: Message | None = None
+    artifacts: list[Artifact] | None = None
+    finish_reason: AgentFinishReason | None = None
+    error: Failure | None = None
+    usage: GenerationUsage | None = None
+
+    @field_validator('message', mode='before')
+    @classmethod
+    def _wrap_message(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_message(v)
+
+    @field_validator('artifacts', mode='before')
+    @classmethod
+    def _wrap_artifacts(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_artifact(a) for a in v]
+
+    @field_validator('state', mode='before')
+    @classmethod
+    def _wrap_state(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_session_state(v)
+
+
+class AgentResult(GenkitModel):
+    """Agent result whose message and artifacts are the public types."""
+
+    message: Message | None = None
+    artifacts: list[Artifact] | None = None
+    finish_reason: AgentFinishReason | None = None
+
+    @field_validator('message', mode='before')
+    @classmethod
+    def _wrap_message(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_message(v)
+
+    @field_validator('artifacts', mode='before')
+    @classmethod
+    def _wrap_artifacts(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_artifact(a) for a in v]
+
+
+class OutputConfig(GenkitModel):
+    """Output settings for a model request.
+
+    Construct with ``json_schema=``; the serialized key on the wire is
+    ``schema``.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='forbid', validate_by_name=True, validate_by_alias=True, protected_namespaces=()
+    )
+    format: str | None = None
+    json_schema: dict[str, Any] | None = Field(default=None, validation_alias='schema', serialization_alias='schema')
+    constrained: bool | None = None
+    content_type: str | None = None
+
+
+class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
+    """Hand-written model request with veneer types and flat output accessors.
+
+    Output settings live nested as ``output: OutputConfig`` so dump/validate
+    round-trips the wire shape, while flat properties (``output_format`` etc.)
+    stay the plugin-author convenience surface. Messages and docs use veneer
+    types (Message, Document) for helpers like ``.text``.
 
     Example:
+        from genkit.model import ModelConfig
+
         class GeminiConfig(ModelConfig):
             safety_settings: dict[str, str] | None = None
 
@@ -240,58 +1373,125 @@ class ModelRequest(GenkitModel, Generic[ConfigT]):
                 print(msg.text)  # Message veneer property
             if request.output_format == 'json':
                 schema = request.output_schema
+
+    Note:
+        Pass output settings as ``output=OutputConfig(...)``. The flat
+        names (``output_format`` etc.) are convenience properties you read
+        and write after construction — they are not constructor arguments,
+        so passing them there leaves output unset.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(alias_generator=to_camel, extra='allow', populate_by_name=True)
-    # Veneer types for IDE/typing (validators wrap MessageData->Message, DocumentData->Document)
-    messages: list[Message]  # pyright: ignore[reportIncompatibleVariableOverride]
-    docs: list[Document] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
-    config: ConfigT | None = None
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        alias_generator=to_camel, extra='allow', validate_by_name=True, validate_by_alias=True
+    )
+    messages: list[Message]
+    docs: list[Document] | None = None
+    config: ModelRequestConfigT | None = None
     tools: list[ToolDefinition] | None = None
     tool_choice: ToolChoice | None = Field(default=None)
-    # Flat output fields (no nested OutputConfig)
-    output_format: str | None = None
-    output_schema: dict[str, Any] | None = None
-    output_constrained: bool | None = None
-    output_content_type: str | None = None
+    # Wire-shaped output storage; flat access via the properties below.
+    output: OutputConfig = Field(default_factory=OutputConfig)
+
+    def __class_getitem__(cls, typevar_values: type[Any] | tuple[type[Any], ...]) -> Any:  # noqa: ANN401
+        """``ModelRequest[Cfg]``, where ``Cfg`` must be a pydantic model class.
+
+        Checked here, where the annotation is evaluated, so a TypedDict or
+        dict config fails when the model function is defined, with the same
+        error on every Python version.
+        """
+        check_config_type_arg(request='ModelRequest', field='config', typevar_values=typevar_values)
+        return super().__class_getitem__(typevar_values)
+
+    @field_validator('config', mode='before')
+    @classmethod
+    def _check_config_type(cls, v: object) -> object:
+        """A mapping is the bag the plugin schema coerces.
+
+        A Pydantic instance is only legal if it is that schema. OpenAIConfig
+        on a Gemini request is a caller mistake — pass a mapping instead.
+        """
+        return check_config_value(cls, v, field='config')
 
     @field_validator('messages', mode='before')
     @classmethod
-    def _wrap_messages(cls, v: list[MessageData]) -> list[Message]:
-        """Wrap MessageData in Message veneer for convenience methods."""
-        # pyrefly: ignore[bad-return]
-        return [m if isinstance(m, Message) else Message(m) for m in v]
+    def _wrap_messages(cls, v: object) -> object:
+        if not isinstance(v, list):
+            return v
+        return [as_message(m) for m in v]
 
     @field_validator('docs', mode='before')
     @classmethod
-    def _wrap_docs(cls, v: list[DocumentData] | None) -> list[Document] | None:
-        """Wrap DocumentData in Document veneer for convenience methods."""
+    def _wrap_docs(cls, v: object) -> object:
+        """A dumped request sends docs as dicts.
+
+        Messages already take a mapping; this wrap has to as well or a bad
+        config plus docs= never reaches the GenkitError for the config.
+        """
         if v is None:
             return None
-        # pyrefly: ignore[bad-return]
-        return [d if isinstance(d, Document) else Document(d.content, d.metadata) for d in v]
+        if not isinstance(v, list):
+            return v
+        return [as_document(d) for d in v]
 
-    @model_serializer(mode='wrap')
-    def _serialize_for_spec(self, serializer: Callable[..., dict[str, Any]]) -> dict[str, Any]:
-        """Serialize to spec wire format with nested output (matches JS/Go)."""
-        data = serializer(self)
-        # Build nested output from flat fields - spec expects output key always present
-        output: dict[str, Any] = {}
-        if self.output_format is not None:
-            output['format'] = self.output_format
-        if self.output_schema is not None:
-            output['schema'] = self.output_schema
-        if self.output_constrained is not None:
-            output['constrained'] = self.output_constrained
-        if self.output_content_type is not None:
-            output['contentType'] = self.output_content_type
-        # Remove flat fields, add nested output
-        data.pop('outputFormat', None)
-        data.pop('outputSchema', None)
-        data.pop('outputConstrained', None)
-        data.pop('outputContentType', None)
-        data['output'] = output
-        return data
+    @field_validator('output', mode='before')
+    @classmethod
+    def _wrap_output(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_output_config(v)
+
+    # Flat accessors: the plugin-author convenience surface over nested output.
+
+    @property
+    def output_format(self) -> str | None:
+        """Output format (e.g. 'json'); reads ``output.format``."""
+        return self.output.format
+
+    @output_format.setter
+    def output_format(self, v: str | None) -> None:
+        self.output.format = v
+
+    @property
+    def output_schema(self) -> dict[str, Any] | None:
+        """Output JSON schema; reads ``output.json_schema``."""
+        return self.output.json_schema
+
+    @output_schema.setter
+    def output_schema(self, v: dict[str, Any] | None) -> None:
+        self.output.json_schema = v
+
+    @property
+    def output_constrained(self) -> bool | None:
+        """Whether constrained decoding is requested; reads ``output.constrained``."""
+        return self.output.constrained
+
+    @output_constrained.setter
+    def output_constrained(self, v: bool | None) -> None:
+        self.output.constrained = v
+
+    @property
+    def output_content_type(self) -> str | None:
+        """Output content type; reads ``output.content_type``."""
+        return self.output.content_type
+
+    @output_content_type.setter
+    def output_content_type(self, v: str | None) -> None:
+        self.output.content_type = v
+
+
+def as_model_request(value: object) -> ModelRequest:
+    if isinstance(value, ModelRequest):
+        copied = value.model_copy()
+        copied.messages = [as_message(m) for m in copied.messages]
+        return copied
+    return ModelRequest.model_validate(value)
+
+
+def operation_snapshot(*, operation: Operation | None) -> tuple[object, object, object, object]:
+    """Job id plus the fields that change when a check lands."""
+    if operation is None:
+        return (None, None, None, None)
+    return (operation.id, operation.done, operation.error, operation.output)
 
 
 class ModelResponse(GenkitModel, Generic[OutputT]):
@@ -301,17 +1501,64 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     # when output format parsing or schema validation is needed.
     _message_parser: Callable[[Message], object] | None = PrivateAttr(None)
     _schema_type: type[BaseModel] | None = PrivateAttr(None)
+    _failure: BoxedFailure | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
+    error: Failure | None = None
     finish_reason: FinishReason | None = None
     finish_message: str | None = None
     latency_ms: float | None = None
     usage: GenerationUsage | None = None
+    total_usage: GenerationUsage | None = None
     custom: dict[str, Any] | None = None
     raw: dict[str, Any] | None = None
     request: ModelRequest | None = None
     operation: Operation | None = None
-    candidates: list[Candidate] | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def _drop_candidates(cls, data: object) -> object:
+        # JS responses, stored traces, session snapshots and older plugins may
+        # still carry the deprecated `candidates` list. Drop it instead of
+        # failing on extra='forbid'. When the top-level reply is missing, fill
+        # it from candidate 0, as JS GenerateResponse does.
+        if not isinstance(data, dict) or 'candidates' not in data:
+            return data
+        raw = cast(dict[str, Any], data)
+        fields = {k: v for k, v in raw.items() if k != 'candidates'}
+        candidates: object = raw['candidates']
+        if fields.get('message') is not None or not isinstance(candidates, list) or not candidates:
+            return fields
+        candidate_list = cast(list[Any], candidates)
+        first: object = next(
+            (c for c in candidate_list if isinstance(c, Mapping) and cast(Mapping[str, Any], c).get('index', 0) == 0),
+            candidate_list[0],
+        )
+        if isinstance(first, BaseModel):
+            first = first.model_dump(by_alias=True, exclude_none=True)
+        if not isinstance(first, Mapping):
+            return fields
+        candidate = cast(Mapping[str, Any], first)
+        fields['message'] = candidate.get('message')
+        for camel, snake in (('finishReason', 'finish_reason'), ('finishMessage', 'finish_message')):
+            value = candidate.get(camel, candidate.get(snake))
+            if value is not None and fields.get(camel) is None and fields.get(snake) is None:
+                fields[camel] = value
+        return fields
+
+    @field_validator('message', mode='before')
+    @classmethod
+    def _wrap_message(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_message(v)
+
+    @field_validator('request', mode='before')
+    @classmethod
+    def _wrap_request(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_model_request(v)
 
     def model_post_init(self, __context: object) -> None:
         """Initialize default usage and custom dict if not provided."""
@@ -320,115 +1567,223 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         if self.custom is None:
             self.custom = {}
 
-    def assert_valid(self) -> None:
-        """Validate response structure. (TODO: not yet implemented)."""
-        # TODO(#4343): implement
-        pass
+    def _mark_invalid_output(self, message: str) -> None:
+        self.error = Failure(
+            status='INTERNAL',
+            message=message,
+            details={'reason': ErrorReason.INVALID_OUTPUT.value},
+        )
 
-    def assert_valid_schema(self) -> None:
-        """Validate response conforms to output schema. (TODO: not yet implemented)."""
-        # TODO(#4343): implement
-        pass
+    @property
+    def _wants_structure(self) -> bool:
+        """Whether the caller asked for a schema or a structured output format."""
+        if self._schema_type is not None:
+            return True
+        if self.request is not None:
+            if self.request.output_schema is not None:
+                return True
+            fmt = self.request.output_format
+            if fmt and fmt != 'text':
+                return True
+        return False
+
+    def _assert_valid_schema(self) -> None:
+        """Mark this response as unusable structured output without throwing.
+
+        Raw text or a wrong-shape JSON is not a Recipe. generate()
+        still returns so that text stays on ``.text``; the model's finish
+        reason stays intact and ``error`` records the post-processing failure.
+        ``.output`` is None.
+        A blocked/aborted/interrupted/other finish keeps the model's reason.
+        """
+        if not self._wants_structure:
+            return
+        if self.error is not None:
+            return
+        if self.finish_reason in ABNORMAL_FINISH_REASONS:
+            return
+
+        schema = self.request.output_schema if self.request is not None else None
+        cut_off = self.finish_reason == FinishReason.LENGTH
+
+        try:
+            parsed = self._raw_parsed_output()
+        except Exception as exc:
+            if isinstance(exc, GenkitError) and (exc.message or '').startswith('Invalid output_schema'):
+                raise
+            preview = (self.text or '')[:200]
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                target = 'schema' if schema is not None else 'format'
+                self._mark_invalid_output(f'Model output was not valid JSON for the requested {target}: {preview}')
+            return
+
+        if parsed is None:
+            preview = (self.text or '')[:200]
+            if cut_off:
+                self._mark_invalid_output(
+                    'Model output was cut off at the token limit '
+                    f'(finish_reason=length) before the JSON was complete: {preview}'
+                )
+            else:
+                self._mark_invalid_output(f'Model output was not valid for the requested format: {preview}')
+            return
+
+        if schema is not None:
+            try:
+                parse_schema(data=parsed, json_schema=schema)
+            except GenkitError as error:
+                if error.message.startswith('Invalid output_schema'):
+                    raise
+                self._mark_invalid_output(error.message)
+                return
+
+        # A custom format's parser can return a scalar (e.g. enum string).
+        # Skip Pydantic model validation for scalars.
+        is_custom_scalar = self._message_parser is not None and not isinstance(parsed, (dict, list))
+        if is_custom_scalar or self._schema_type is None:
+            return
+
+        try:
+            _ = self._schema_type.model_validate(parsed)
+        except ValidationError:
+            self._mark_invalid_output('Model output did not match the requested schema.')
+
+    def _raw_parsed_output(self) -> object:
+        if self._message_parser and self.message is not None:
+            return self._message_parser(self.message)
+        return extract_json(self.text)
 
     def __eq__(self, other: object) -> bool:
-        """Compare responses by message and finish_reason."""
+        """Compare responses by message, finish_reason, and poll snapshot.
+
+        Same job id with a later done/error/output is a later check, not
+        the same response. Timing on the handle is not part of the job.
+        """
         if isinstance(other, ModelResponse):
-            return self.message == other.message and self.finish_reason == other.finish_reason
+            return (
+                self.message == other.message
+                and self.finish_reason == other.finish_reason
+                and operation_snapshot(operation=self.operation) == operation_snapshot(operation=other.operation)
+            )
         return super().__eq__(other)
 
     def __hash__(self) -> int:
         """Return identity-based hash."""
         return hash(id(self))
 
-    @cached_property
+    @property
     def text(self) -> str:
         """All text parts concatenated into a single string."""
         if self.message is None:
             return ''
         return self.message.text
 
-    @cached_property
-    def output(self) -> OutputT:
-        """Parsed JSON output from the response text, validated against schema if set."""
-        if self._message_parser and self.message is not None:
-            parsed = self._message_parser(self.message)
-        else:
-            parsed = extract_json(self.text)
+    @property
+    def output(self) -> OutputT | None:
+        """Parsed structured output, or None when the reply is not that shape.
 
-        # If we have a schema type and the parsed output is a dict, validate and
-        # return a proper Pydantic instance. Skip if parsed is already the correct
-        # type or if it's not a dict (e.g., custom formats may return strings).
-        if self._schema_type is not None and parsed is not None and isinstance(parsed, dict):
+        generate() does not throw when the text is not the schema. If you
+        asked for a schema and this is not it, read ``error`` / ``.text``.
+        Only complete JSON counts: a reply cut off mid-object is None (check
+        ``finish_reason == 'length'`` to tell a token cap from bad JSON).
+        """
+        # BLOCKED and FAILED carry no legitimate content at all, so there is
+        # nothing to hand back even when the caller only asked for a format.
+        # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
+        # interrupt carries tool requests), so they only gate the schema path.
+        if self.finish_reason in (FinishReason.BLOCKED, FinishReason.FAILED):
+            return None
+        if self._wants_structure and self.finish_reason in ABNORMAL_FINISH_REASONS:
+            return None
+
+        schema = self.request.output_schema if self.request is not None else None
+
+        try:
+            parsed = self._raw_parsed_output()
+        except Exception:
+            # Text that is not the shape they asked for is still text. Reading
+            # it back is never worth an exception: `.text` holds the raw reply
+            # and `error` carries INVALID_OUTPUT when structure was requested.
+            return None
+
+        if schema is not None:
+            try:
+                parse_schema(data=parsed, json_schema=schema)
+            except GenkitError:
+                return None
+
+        # A custom format's parser can return a scalar (e.g. enum string).
+        # Skip Pydantic model validation for scalars.
+        is_custom_scalar = self._message_parser is not None and not isinstance(parsed, (dict, list))
+        if is_custom_scalar or self._schema_type is None or parsed is None:
+            return cast(OutputT, parsed)
+
+        try:
             return cast(OutputT, self._schema_type.model_validate(parsed))
+        except ValidationError:
+            return None
 
-        return cast(OutputT, parsed)
-
-    @cached_property
+    @property
     def messages(self) -> list[Message]:
-        """All messages including request history and the response message."""
+        """All messages including request history and the response message.
+
+        Recomputed each read so attaching ``request`` later still shows up.
+        """
         if self.message is None:
-            return [Message(m) for m in self.request.messages] if self.request else []
+            return [as_message(m) for m in self.request.messages] if self.request else []
         return [
-            *(Message(m) for m in (self.request.messages if self.request else [])),
+            *(as_message(m) for m in (self.request.messages if self.request else [])),
             self.message,
         ]
 
-    @cached_property
-    def tool_requests(self) -> list[ToolRequestPart]:
-        """All tool request parts in the response message."""
+    @property
+    def tool_requests(self) -> list[Part]:
+        """All tool request parts in the response message.
+
+        Recomputed each read so a later message still shows up.
+        """
         if self.message is None:
             return []
         return self.message.tool_requests
 
-    @cached_property
+    @property
     def media(self) -> list[Media]:
         """All media parts in the response message."""
         if self.message is None:
             return []
-        return [
-            part.root.media
-            for part in self.message.content
-            if isinstance(part.root, MediaPart) and part.root.media is not None
-        ]
+        return [part.media for part in self.message.content if part.media is not None]
 
-    @cached_property
-    def interrupts(self) -> list[ToolRequestPart]:
+    @property
+    def interrupts(self) -> list[Part]:
         """Tool requests marked as interrupted."""
         if self.message is None:
             return []
         return self.message.interrupts
 
 
-class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
+class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     """Streaming chunk with text, accumulated text, and output parsing."""
 
-    # Field(exclude=True) means these fields are not included in serialization
-    previous_chunks: list[ModelResponseChunk[Any]] = Field(default_factory=list, exclude=True)
-    chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = Field(None, exclude=True)
+    role: Any | None = Field(default=None)
+    index: float | None = None
+    content: list[Part]
+    custom: Any | None = Field(default=None)
+    aggregated: bool | None = None
+    # History and the format parser are stamped by the stream helper after
+    # construction so the constructor a plugin types is just the wire fields.
+    _previous_chunks: list[Any] = PrivateAttr(default_factory=list)
+    _chunk_parser: Callable[..., object] | None = PrivateAttr(default=None)
+    _schema_type: type[BaseModel] | None = PrivateAttr(default=None)
 
-    def __init__(
-        self,
-        chunk: ModelResponseChunk[Any] | None = None,
-        previous_chunks: list[ModelResponseChunk[Any]] | None = None,
-        index: int | float | None = None,
-        chunk_parser: Callable[[ModelResponseChunk[Any]], object] | None = None,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> None:
-        """Initialize from a chunk or keyword arguments."""
-        if chunk is not None:
-            # Framework wrapping mode
-            super().__init__(
-                role=chunk.role,
-                index=index,
-                content=chunk.content,
-                custom=chunk.custom,
-                aggregated=chunk.aggregated,
-            )
-        else:
-            # No source chunk — caller passes fields (role, content, etc.) as kwargs directly
-            super().__init__(**kwargs)
-        self.previous_chunks = previous_chunks or []
-        self.chunk_parser = chunk_parser
+    @field_validator('content', mode='before')
+    @classmethod
+    def _wrap_parts(cls, v: object) -> object:
+        return parts_from_inbound(v)
 
     def __eq__(self, other: object) -> bool:
         """Check equality."""
@@ -440,42 +1795,210 @@ class ModelResponseChunk(ModelResponseChunkSchema, Generic[OutputT]):
         """Return hash."""
         return hash(id(self))
 
-    @cached_property
+    @property
     def text(self) -> str:
         """Text content of this chunk."""
-        parts: list[str] = []
-        for p in self.content:
-            text_val = p.root.text
-            if text_val is not None:
-                # Handle Text RootModel (access .root) or plain str
-                if isinstance(text_val, Text):
-                    parts.append(str(text_val.root) if text_val.root is not None else '')
-                else:
-                    parts.append(str(text_val))
-        return ''.join(parts)
+        return ''.join(p.text for p in self.content if p.text is not None)
 
-    @cached_property
+    @property
     def accumulated_text(self) -> str:
         """Text from all previous chunks plus this chunk."""
-        parts: list[str] = []
-        if self.previous_chunks:
-            for chunk in self.previous_chunks:
-                for p in chunk.content:
-                    text_val = p.root.text
-                    if text_val:
-                        # Handle Text RootModel (access .root) or plain str
-                        if isinstance(text_val, Text):
-                            parts.append(str(text_val.root) if text_val.root is not None else '')
-                        else:
-                            parts.append(str(text_val))
-        return ''.join(parts) + self.text
+        prior = ''
+        if self._previous_chunks:
+            prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
+        return prior + self.text
+
+    @property
+    def tool_requests(self) -> list[Part]:
+        """All tool request parts in this chunk."""
+        return [p for p in self.content if p.tool_request is not None]
+
+    @property
+    def tool_responses(self) -> list[Part]:
+        """All tool response parts in this chunk."""
+        return [p for p in self.content if p.tool_response is not None]
 
     @cached_property
-    def output(self) -> OutputT:
-        """Parsed JSON output from accumulated text."""
-        if self.chunk_parser:
-            return cast(OutputT, self.chunk_parser(self))
-        return cast(OutputT, extract_json(self.accumulated_text))
+    def output(self) -> OutputT | None:
+        """The reply so far, parsed as far as it goes. Never raises.
+
+        With ``output_schema=Recipe``, this is a ``Recipe`` filled as far as
+        the JSON goes:
+        - Optional fields populate from their default or ``default_factory``
+          (called fresh per chunk, so non-deterministic factories like ``uuid4``
+          or ``datetime.now`` change per chunk until final validation), and
+          missing required fields are ``None``.
+        - Closed fields and list items run field validation (``@field_validator``
+          and field constraints, while ``@model_validator`` waits until the
+          object closes); closed values that fail validation pass through raw.
+        - Open ``str`` fields stream as prefixes, while open ``str`` values for
+          ``Enum``/``datetime``/``Literal`` and unresolved discriminated unions
+          stay at ``None`` (or their default) until closed. Open numbers still
+          pass through raw for ``datetime`` fields and for numeric ``Literal``
+          values that already match a member (even if more digits may follow).
+
+        ``(await stream.response).output`` is the only fully validated ``Recipe``.
+
+        With no schema class, this is the JSON value so far (dict, list,
+        or scalar). It's ``None`` before an object starts or while the text
+        can't be parsed.
+        """
+        if self.role is not None and self.role != Role.MODEL:
+            return None
+        try:
+            text = self.accumulated_text
+            parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(text)
+            if (
+                self._schema_type is not None
+                and isinstance(parsed, dict)
+                and not issubclass(self._schema_type, RootModel)
+            ):
+                return cast(
+                    'OutputT | None',
+                    construct_partial(
+                        schema_type=self._schema_type,
+                        data=parsed,
+                        closed=is_complete_json(text),
+                    ),
+                )
+            return cast('OutputT | None', parsed)
+        except Exception:
+            # one odd chunk shouldn't end a stream whose final reply may still parse.
+            logger.debug('chunk.output could not be parsed; returning None', exc_info=True)
+            return None
+
+
+def as_model_response_chunk(value: object) -> ModelResponseChunk:
+    if isinstance(value, ModelResponseChunk):
+        copied = value.model_copy()
+        # model_copy keeps stream history / parser so wrapping still has
+        # index and .output. Re-check content so a two-kind part already
+        # on the chunk cannot persist through AgentStreamChunk.
+        copied.content = [Part.model_validate(part) for part in copied.content]
+        return copied
+    return ModelResponseChunk.model_validate(value)
+
+
+def chunk_for_stream(
+    source: ModelResponseChunk[OutputT],
+    *,
+    index: float | None = None,
+    previous_chunks: list[Any] | None = None,
+    chunk_parser: Callable[..., object] | None = None,
+    schema_type: type[BaseModel] | None = None,
+) -> ModelResponseChunk[OutputT]:
+    """Copy a plugin chunk and stamp stream index / parser on the copy.
+
+    Builds a fresh chunk so an already-read ``.output`` on the plugin's
+    chunk cannot override the stream's format parser.
+    """
+    chunk = ModelResponseChunk(
+        role=source.role,
+        index=index,
+        content=source.content,
+        custom=source.custom,
+        aggregated=source.aggregated,
+    )
+    # The snapshot from make is stored as-is so an earlier chunk's
+    # accumulated_text does not grow as later tokens arrive.
+    chunk._previous_chunks = previous_chunks if previous_chunks is not None else []
+    chunk._chunk_parser = chunk_parser
+    chunk._schema_type = schema_type
+    return cast(ModelResponseChunk[OutputT], chunk)
+
+
+class AgentStreamChunk(GenkitModel):
+    """One streamed piece of an agent turn."""
+
+    model_chunk: ModelResponseChunk | None = None
+    custom_patch: JsonPatch | None = None
+    artifact: Artifact | None = None
+    turn_end: TurnEnd | None = None
+
+    @field_validator('model_chunk', mode='before')
+    @classmethod
+    def _wrap_chunk(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_model_response_chunk(v)
+
+    @field_validator('artifact', mode='before')
+    @classmethod
+    def _wrap_artifact(cls, v: object) -> object:
+        if v is None:
+            return v
+        return as_artifact(v)
+
+
+_VENEER_NS = {**vars(typing_mod), **globals()}
+Artifact.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+EmbedRequest.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+SessionState.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+SessionSnapshot.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentInit.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentInput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentOutput.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentResult.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+ModelResponse.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+ModelResponseChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+AgentStreamChunk.model_rebuild(force=True, _types_namespace=_VENEER_NS)
+
+
+class MultipartToolResponse(GenkitModel, Generic[OutputT]):
+    """A tool result with structured output plus media the model can see.
+
+    Return one from a tool when the reply is more than a JSON value, such as
+    a caption and a screenshot. A plain ``return value`` still works and is
+    treated as ``output`` only. Annotate ``MultipartToolResponse[ShotOut]`` so
+    the tool's output schema is ``ShotOut``.
+
+    Example:
+        ```python
+        @ai.tool()
+        async def screenshot(label: str) -> MultipartToolResponse[Shot]:
+            return MultipartToolResponse(output=Shot(label=label), content=[png])
+        ```
+    """
+
+    output: OutputT | None = None
+    content: list[Part] | None = None
+    metadata: dict[str, Any] | None = None
+
+    @field_validator('content', mode='before')
+    @classmethod
+    def _wrap_parts(cls, v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, (str, bytes, Mapping, Part)) or not isinstance(v, Sequence):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'MultipartToolResponse content must be a list of Parts, got {type(v).__name__}.',
+                reason=ErrorReason.INVALID_PART,
+            )
+        out: list[Part] = []
+        for item in v:
+            try:
+                out.append(as_part(item))
+            except (ValidationError, ValueError, TypeError) as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=(
+                        f'MultipartToolResponse content must be a list of Parts, got {type(item).__name__} in the list.'
+                    ),
+                    reason=ErrorReason.INVALID_PART,
+                ) from e
+        return out
+
+    @field_validator('metadata', mode='before')
+    @classmethod
+    def _require_dict_metadata(cls, v: object) -> object:
+        if v is not None and not isinstance(v, dict):
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=f'MultipartToolResponse metadata must be a dict, got {type(v).__name__}.',
+                reason=ErrorReason.INVALID_INPUT,
+            )
+        return v
 
 
 def text_from_message(msg: Message) -> str:
@@ -483,68 +2006,17 @@ def text_from_message(msg: Message) -> str:
     return text_from_content(msg.content)
 
 
-def text_from_content(content: Sequence[Part | DocumentPart]) -> str:
-    """Concatenate text from a list of parts."""
-    return ''.join(str(p.root.text) for p in content if hasattr(p.root, 'text') and p.root.text is not None)
+def text_from_content(content: Sequence[Part]) -> str:
+    """Concatenate text parts.
 
-
-def get_basic_usage_stats(input_: list[Message], response: Message) -> GenerationUsage:
-    """Calculate usage stats (characters, media counts) from messages."""
-    request_parts: list[Part] = []
-    for msg in input_:
-        request_parts.extend(msg.content)
-
-    response_parts = response.content
-
-    def count_parts(parts: list[Part]) -> tuple[int, int, int, int]:
-        """Count characters, images, videos, audio in parts."""
-        characters = 0
-        images = 0
-        videos = 0
-        audio = 0
-
-        for part in parts:
-            text_val = part.root.text
-            if text_val:
-                if isinstance(text_val, Text):
-                    characters += len(str(text_val.root)) if text_val.root else 0
-                else:
-                    characters += len(str(text_val))
-
-            media = part.root.media
-            if media:
-                if isinstance(media, Media):
-                    content_type = media.content_type or ''
-                    url = media.url or ''
-                elif isinstance(media, MediaModel) and hasattr(media.root, 'content_type'):
-                    content_type = getattr(media.root, 'content_type', '') or ''
-                    url = getattr(media.root, 'url', '') or ''
-                else:
-                    content_type = ''
-                    url = ''
-
-                if content_type.startswith('image') or url.startswith('data:image'):
-                    images += 1
-                elif content_type.startswith('video') or url.startswith('data:video'):
-                    videos += 1
-                elif content_type.startswith('audio') or url.startswith('data:audio'):
-                    audio += 1
-
-        return characters, images, videos, audio
-
-    in_chars, in_imgs, in_vids, in_audio = count_parts(request_parts)
-    out_chars, out_imgs, out_vids, out_audio = count_parts(response_parts)
-
-    return GenerationUsage(
-        input_characters=in_chars,
-        input_images=in_imgs,
-        input_videos=in_vids,
-        input_audio_files=in_audio,
-        output_characters=out_chars,
-        output_images=out_imgs,
-        output_videos=out_vids,
-        output_audio_files=out_audio,
-    )
+    Thoughts ride on a reasoning part, so they stay out of ``.text`` —
+    that's the visible reply, not the model's scratch work.
+    """
+    texts: list[str] = []
+    for p in content:
+        if p.text is not None:
+            texts.append(str(p.text))
+    return ''.join(texts)
 
 
 # Rebuild schema after all types (including Message) are fully defined.

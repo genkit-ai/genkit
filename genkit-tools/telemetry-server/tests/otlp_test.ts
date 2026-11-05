@@ -240,6 +240,10 @@ describe('otlp-logs', () => {
                       key: 'genkit:name',
                       value: { stringValue: 'generateContentStream' },
                     },
+                    {
+                      key: 'confidence',
+                      value: { doubleValue: 0.87 },
+                    },
                   ],
                 },
                 {
@@ -267,6 +271,7 @@ describe('otlp-logs', () => {
         body: 'This is a test log message',
         attributes: {
           'genkit:name': 'generateContentStream',
+          confidence: 0.87,
         },
         instrumentationLibrary: {
           name: 'genkit-tracer',

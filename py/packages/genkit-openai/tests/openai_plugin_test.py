@@ -20,13 +20,24 @@
 import asyncio
 import queue
 import threading
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
-from genkit_openai.openai_plugin import OpenAI, openai_model
+from genkit_openai._models._audio import SUPPORTED_STT_MODELS, SUPPORTED_TTS_MODELS
+from genkit_openai._models._handler import OpenAIModelHandler
+from genkit_openai._models._image import SUPPORTED_IMAGE_MODELS
+from genkit_openai._models._model_info import SUPPORTED_OPENAI_MODELS, KnownGpt
+from genkit_openai._openai_plugin import OpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError
 from openai.types import Model
+from openai.types.chat import ChatCompletion
 
-from genkit.plugin_api import ActionKind, ActionMetadata, loop_local_client
+from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.model import ConstrainedSupport, ModelSupports
+from genkit.plugin_api import Action, ActionKind, loop_local_client
 
 
 @pytest.mark.asyncio
@@ -43,6 +54,12 @@ async def test_openai_plugin_init() -> None:
         "All actions should be namespaced with 'openai/'"
     )
 
+    gpt_image = next(a for a in result if a.name == 'openai/gpt-image-1')
+    assert gpt_image.metadata is not None
+    gpt_image_model = cast(dict[str, Any], gpt_image.metadata['model'])
+    assert gpt_image_model['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
+    assert 'configSchema' not in gpt_image_model
+
     # Verify we have both models and embedders
     model_actions = [a for a in result if a.kind == ActionKind.MODEL]
     embedder_actions = [a for a in result if a.kind == ActionKind.EMBEDDER]
@@ -52,18 +69,114 @@ async def test_openai_plugin_init() -> None:
 
 @pytest.mark.parametrize(
     'kind, name',
-    [(ActionKind.MODEL, 'gpt-3.5-turbo')],
+    [
+        (ActionKind.MODEL, 'gpt-3.5-turbo'),
+        # Unlisted ids still resolve when asked for by name.
+        (ActionKind.MODEL, 'codex-mini-latest'),
+    ],
 )
 @pytest.mark.asyncio
 async def test_openai_plugin_resolve_action(kind: ActionKind, name: str) -> None:
     """Unit Tests for resolve method."""
     plugin = OpenAI(api_key='test-key')
 
-    action = await plugin.resolve(kind, f'openai/{name}')
+    action = await plugin.resolve(kind, name)
 
     assert action is not None
     assert action.name == f'openai/{name}'
     assert action.kind == ActionKind.MODEL
+
+
+GPT_6_ASTRA_SUPPORTS = {
+    'multiturn': True,
+    'media': True,
+    'tools': False,
+    'systemRole': True,
+    'output': ['json', 'text'],
+    'constrained': 'all',
+}
+
+
+def test_gpt_6_astra_catalog_entry() -> None:
+    """gpt-6-astra is a catalog entry with media, system role, and json, but no tools."""
+    info = SUPPORTED_OPENAI_MODELS['gpt-6-astra']
+
+    assert info.label == 'OpenAI - gpt-6-astra'
+    assert info.supports == ModelSupports(
+        multiturn=True,
+        media=True,
+        tools=False,
+        system_role=True,
+        output=['json', 'text'],
+        constrained=ConstrainedSupport.ALL,
+    )
+
+
+@pytest.mark.parametrize(
+    ('model', 'constrained'),
+    [
+        ('gpt-4o', ConstrainedSupport.ALL),
+        ('gpt-4.1', ConstrainedSupport.ALL),
+        ('o3-mini', ConstrainedSupport.ALL),
+        ('gpt-5', ConstrainedSupport.ALL),
+        ('gpt-4-turbo', None),
+        ('gpt-4', None),
+        ('gpt-3.5-turbo', None),
+        ('gpt-5-chat-latest', None),
+    ],
+)
+def test_catalog_declares_native_json_only_where_json_schema_works(
+    model: KnownGpt, constrained: ConstrainedSupport | None
+) -> None:
+    """Models with response_format json_schema skip the prompt's schema text; json_object-only models keep it."""
+    supports = SUPPORTED_OPENAI_MODELS[model].supports
+    assert supports is not None
+    assert supports.constrained == constrained
+
+
+@pytest.mark.parametrize(
+    'catalog',
+    [SUPPORTED_OPENAI_MODELS, SUPPORTED_IMAGE_MODELS, SUPPORTED_TTS_MODELS, SUPPORTED_STT_MODELS],
+    ids=['chat', 'image', 'tts', 'stt'],
+)
+def test_catalog_output_names_are_known_formats(catalog: dict[str, Any]) -> None:
+    """supports.output lists Genkit output formats, not OpenAI request options like json_mode."""
+    ai = Genkit()
+    for name, info in catalog.items():
+        outputs = info.supports.output if info.supports else None
+        # Image and audio models list 'media' in addition to the formats Genkit registers.
+        unknown = {o for o in outputs or [] if o != 'media' and ai.lookup_value(kind='format', name=o) is None}
+        assert not unknown, f'{name}: {sorted(unknown)}'
+
+
+@pytest.mark.asyncio
+async def test_gpt_6_astra_registered_without_tools() -> None:
+    """init() and resolve() both register gpt-6-astra with the catalog supports."""
+    plugin = OpenAI(api_key='test-key')
+
+    init_action = next((a for a in await plugin.init() if a.name == 'openai/gpt-6-astra'), None)
+    resolved = await plugin.resolve(ActionKind.MODEL, 'gpt-6-astra')
+
+    assert init_action is not None
+    assert resolved is not None
+    for action in (init_action, resolved):
+        assert action.metadata is not None
+        model_meta = cast(dict[str, Any], action.metadata['model'])
+        assert model_meta['label'] == 'OpenAI - gpt-6-astra'
+        assert model_meta['supports'] == GPT_6_ASTRA_SUPPORTS
+
+
+@pytest.mark.asyncio
+async def test_unlisted_chat_model_resolves_with_default_supports() -> None:
+    """An id outside the catalog is registered with multiturn only, so tools, media, and json stay hidden."""
+    plugin = OpenAI(api_key='test-key')
+
+    action = await plugin.resolve(ActionKind.MODEL, 'gpt-6-nova')
+
+    assert action is not None
+    assert action.metadata is not None
+    model_meta = cast(dict[str, Any], action.metadata['model'])
+    assert model_meta['supports'] == {'multiturn': True}
 
 
 @pytest.mark.asyncio
@@ -73,8 +186,12 @@ async def test_openai_plugin_list_actions() -> None:
         Model(id='gpt-4-0613', created=1686588896, object='model', owned_by='openai'),
         Model(id='gpt-4', created=1687882411, object='model', owned_by='openai'),
         Model(id='gpt-3.5-turbo', created=1677610602, object='model', owned_by='openai'),
+        Model(id='gpt-image-1', created=1744060800, object='model', owned_by='openai'),
         Model(id='o4-mini-deep-research-2025-06-26', created=1750866121, object='model', owned_by='system'),
         Model(id='codex-mini-latest', created=1746673257, object='model', owned_by='system'),
+        Model(id='babbage-002', created=1692634615, object='model', owned_by='system'),
+        Model(id='davinci-002', created=1692634301, object='model', owned_by='system'),
+        Model(id='o3-pro', created=1748475948, object='model', owned_by='system'),
         Model(id='text-embedding-ada-002', created=1671217299, object='model', owned_by='openai-internal'),
     ]
     plugin = OpenAI(api_key='test-key')
@@ -86,22 +203,48 @@ async def test_openai_plugin_list_actions() -> None:
 
     plugin._runtime_client = lambda: mock_client
 
-    actions: list[ActionMetadata] = await plugin.list_actions()
+    actions: list[Action] = await plugin.list_actions()
     mock_client.models.list.assert_called_once()
     _ = await plugin.list_actions()
     # list_actions is cached after the first API fetch.
     assert mock_client.models.list.call_count == 1
 
-    assert len(actions) == len(entries)
+    # Ids Chat Completions does not serve are dropped from the listing.
+    listed = {action.name for action in actions}
+    assert 'openai/codex-mini-latest' not in listed
+    assert 'openai/babbage-002' not in listed
+    assert 'openai/davinci-002' not in listed
+    assert 'openai/o3-pro' not in listed
+    assert len(actions) == len(entries) - 4
     assert actions[0].name == 'openai/gpt-4-0613'
     assert actions[-1].name == 'openai/text-embedding-ada-002'
+
+    chat = next(a for a in actions if a.name == 'openai/gpt-4')
+    assert chat.metadata is not None
+    chat_model = cast(dict[str, Any], chat.metadata['model'])
+    chat_props = chat_model['customOptions']['properties']
+    assert 'frequencyPenalty' in chat_props
+    assert 'maxOutputTokens' in chat_props
+    assert 'maxTokens' not in chat_props
+
+    image = next(a for a in actions if a.name == 'openai/gpt-image-1')
+    assert image.metadata is not None
+    image_model = cast(dict[str, Any], image.metadata['model'])
+    assert image_model['customOptions']['properties']['quality']['enum'] == ['low', 'medium', 'high']
+    assert 'configSchema' not in image_model
+
+    embed = next(a for a in actions if a.name == 'openai/text-embedding-ada-002')
+    assert embed.metadata is not None
+    embed_meta = cast(dict[str, Any], embed.metadata.get('embedder', {}))
+    embed_options = embed_meta.get('customOptions')
+    assert embed_options is None or 'frequencyPenalty' not in (embed_options.get('properties') or {})
 
 
 @pytest.mark.asyncio
 async def test_openai_runtime_clients_are_loop_local() -> None:
     """Runtime OpenAI clients are cached per event loop."""
     plugin = OpenAI(api_key='test-key')
-    plugin._runtime_client = loop_local_client(lambda: object())
+    plugin._runtime_client = loop_local_client(lambda: cast(Any, object()))
 
     first = plugin._runtime_client()
     second = plugin._runtime_client()
@@ -137,13 +280,310 @@ async def test_openai_runtime_clients_are_loop_local() -> None:
 async def test_openai_plugin_resolve_action_not_found(kind: ActionKind, name: str) -> None:
     """Unit Tests for resolve method with non-existent model."""
     plugin = OpenAI(api_key='test-key')
-    action = await plugin.resolve(kind, f'openai/{name}')
+    action = await plugin.resolve(kind, name)
 
     # Should still return an action even for unknown models
     assert action is not None
     assert action.name == f'openai/{name}'
 
 
-def test_openai_model_function() -> None:
-    """Test openai_model function."""
-    assert openai_model('gpt-4') == 'openai/gpt-4'
+_ERROR_MESSAGE = 'OpenAI request failed'
+
+
+def _http_request() -> httpx.Request:
+    """Create the request required by OpenAI SDK errors."""
+    return httpx.Request('POST', 'https://api.openai.com/v1/embeddings')
+
+
+def _status_error(status_code: int, retry_after: str | None = None) -> APIStatusError:
+    """Create a real OpenAI status error."""
+    headers = {'retry-after': retry_after} if retry_after is not None else None
+    response = httpx.Response(status_code, request=_http_request(), headers=headers)
+    return APIStatusError(_ERROR_MESSAGE, response=response, body={'error': {'message': _ERROR_MESSAGE}})
+
+
+def _plugin_with(client: MagicMock) -> OpenAI:
+    """Create a plugin bound to a stub client."""
+    plugin = OpenAI(api_key='test-key')
+    plugin._runtime_client = lambda: client
+    return plugin
+
+
+def _embedder_client(error: Exception) -> MagicMock:
+    """Create a stub client whose embeddings call raises an error."""
+    client = MagicMock()
+    client.embeddings.create = AsyncMock(side_effect=error)
+    return client
+
+
+def _embedding_client(embedding: list[float] | None = None) -> MagicMock:
+    """Create a stub client whose embeddings call returns one vector."""
+    client = MagicMock()
+    item = MagicMock()
+    item.embedding = [0.1, 0.2] if embedding is None else embedding
+    result = MagicMock()
+    result.data = [item]
+    client.embeddings.create = AsyncMock(return_value=result)
+    return client
+
+
+async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> EmbedResponse:
+    """Run the embedder action function against a stub client."""
+    action = _plugin_with(client)._create_embedder_action('text-embedding-3-small')
+    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options or {}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'options',
+    [
+        None,
+        {'dimensions': 256},
+        {'encodingFormat': 'float'},
+        {'dimensions': 256, 'encodingFormat': 'base64'},
+    ],
+    ids=['no-options', 'dimensions', 'encoding-format', 'both'],
+)
+async def test_embedder_maps_status_errors_for_every_option_shape(options: dict[str, Any] | None) -> None:
+    """Each embeddings call variant maps its failures."""
+    api_error = _status_error(401)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _run_embedder(_embedder_client(api_error), options=options)
+
+    assert exc_info.value.status == 'UNAUTHENTICATED'
+    assert exc_info.value.__cause__ is api_error
+
+
+@pytest.mark.asyncio
+async def test_embedder_requesting_base64_omits_the_parameter() -> None:
+    """encodingFormat=base64 is not forwarded, so the SDK decodes the vector itself."""
+    values = [0.1, -0.25, 0.5]
+    client = _embedding_client(embedding=values)
+
+    response = await _run_embedder(client, options={'encodingFormat': 'base64'})
+
+    client.embeddings.create.assert_awaited_once_with(model='text-embedding-3-small', input=['hello'])
+    assert [e.embedding for e in response.embeddings] == [values]
+
+
+@pytest.mark.asyncio
+async def test_embedder_forwards_float_encoding_format() -> None:
+    """encodingFormat=float is a genuinely different request, so it is passed through."""
+    client = _embedding_client()
+
+    await _run_embedder(client, options={'encodingFormat': 'float'})
+
+    client.embeddings.create.assert_awaited_once_with(
+        model='text-embedding-3-small', input=['hello'], encoding_format='float'
+    )
+
+
+@pytest.mark.asyncio
+async def test_429_retry_after_header_sets_retry_delay() -> None:
+    """A 429 with a Retry-After header is RESOURCE_EXHAUSTED and tells retry how long to wait."""
+    api_error = _status_error(429, retry_after='2.5')
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _run_embedder(_embedder_client(api_error))
+
+    assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
+    assert exc_info.value.__cause__ is api_error
+    assert exc_info.value.retry_after_ms == 2500.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'dimensions',
+    ['lots', '256', 256.9, True, [256]],
+    ids=['non-numeric-str', 'numeric-str', 'float', 'bool', 'list'],
+)
+async def test_embedder_classifies_bad_dimensions_option(dimensions: Any) -> None:
+    """A dimensions option that is not an int is INVALID_ARGUMENT, before any API call."""
+    client = MagicMock()
+    client.embeddings.create = AsyncMock()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _run_embedder(client, options={'dimensions': dimensions})
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'dimensions' in str(exc_info.value)
+    client.embeddings.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_embedder_forwards_zero_dimensions() -> None:
+    """A dimensions of 0 reaches the API rather than being dropped as falsy."""
+    client = _embedding_client()
+
+    await _run_embedder(client, options={'dimensions': 0})
+
+    assert client.embeddings.create.await_args.kwargs['dimensions'] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('error', 'expected_status'),
+    [
+        (APITimeoutError(request=_http_request()), 'DEADLINE_EXCEEDED'),
+        (APIConnectionError(request=_http_request()), 'UNAVAILABLE'),
+    ],
+    ids=['timeout', 'connection-error'],
+)
+async def test_embedder_maps_network_errors(error: Exception, expected_status: str) -> None:
+    """An embed that times out or cannot connect gets the same status as a model call."""
+    with pytest.raises(GenkitError) as exc_info:
+        await _run_embedder(_embedder_client(error))
+
+    assert exc_info.value.status == expected_status
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'error',
+    [
+        ValueError('No embedding data received'),
+        RuntimeError('unexpected failure'),
+    ],
+    ids=['sdk-value-error', 'runtime-error'],
+)
+async def test_embedder_propagates_unclassified_errors(error: Exception) -> None:
+    """An error that is not from the OpenAI SDK escapes the embedder unchanged.
+
+    A ValueError from the SDK is a provider-side failure, not caller input,
+    so it must not be reported as INVALID_ARGUMENT."""
+    with pytest.raises(Exception) as exc_info:
+        await _run_embedder(_embedder_client(error))
+
+    assert exc_info.value is error
+    assert not isinstance(exc_info.value, GenkitError)
+
+
+def _list_client(*results: Any) -> MagicMock:
+    """Create a stub client whose model listing yields the given results in order."""
+    client = MagicMock()
+    client.models.list = AsyncMock(side_effect=list(results))
+    return client
+
+
+@pytest.mark.asyncio
+async def test_list_actions_maps_status_errors() -> None:
+    """A failed model listing reports the status the HTTP response carried."""
+    api_error = _status_error(503)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _plugin_with(_list_client(api_error)).list_actions()
+
+    assert exc_info.value.status == 'UNAVAILABLE'
+    assert exc_info.value.__cause__ is api_error
+
+
+@pytest.mark.asyncio
+async def test_list_actions_error_is_not_cached() -> None:
+    """A failed model listing is retried on the next call, not cached."""
+    ok_result = MagicMock()
+    ok_result.data = [Model(id='gpt-4', created=1687882411, object='model', owned_by='openai')]
+    client = _list_client(_status_error(503), ok_result)
+    plugin = _plugin_with(client)
+
+    with pytest.raises(GenkitError):
+        await plugin.list_actions()
+
+    actions = await plugin.list_actions()
+    assert [a.name for a in actions] == ['openai/gpt-4']
+    assert client.models.list.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_list_actions_timeout_is_deadline_exceeded() -> None:
+    """A model listing that times out is DEADLINE_EXCEEDED."""
+    error = APITimeoutError(request=_http_request())
+
+    with pytest.raises(GenkitError) as exc_info:
+        await _plugin_with(_list_client(error)).list_actions()
+
+    assert exc_info.value.status == 'DEADLINE_EXCEEDED'
+    assert exc_info.value.__cause__ is error
+
+
+def _json_completion(content: str = '{"a": 1}') -> ChatCompletion:
+    """A one-choice JSON completion the generate path can parse."""
+    return ChatCompletion.construct(
+        id='1',
+        object='chat.completion',
+        created=1,
+        model='gpt-4o',
+        choices=[
+            {
+                'index': 0,
+                'message': {'role': 'assistant', 'content': content},
+                'finish_reason': 'stop',
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_unlisted_model_json_request_sends_json_object() -> None:
+    """ai.generate(model='openai/ft:gpt-4o:acme', output_format='json') still sends json_object."""
+    captured: dict[str, Any] = {}
+    client = MagicMock()
+
+    async def create(**kwargs: Any) -> ChatCompletion:
+        captured.update(kwargs)
+        return _json_completion()
+
+    client.chat.completions.create = AsyncMock(side_effect=create)
+    ai = Genkit(plugins=[_plugin_with(client)])
+
+    await ai.generate(model='openai/ft:gpt-4o:acme', prompt='give me json', output_format='json')
+
+    assert captured['response_format'] == {'type': 'json_object'}
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_double_prefixed_id_sends_prefixed_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`openai/openai/gpt-4o` sends `openai/gpt-4o` upstream."""
+    seen: list[str] = []
+
+    async def fake_generate(self: OpenAIModelHandler, request: object, ctx: object) -> ModelResponse:
+        seen.append(self._model._model)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(OpenAIModelHandler, 'generate', fake_generate)
+    ai = Genkit(plugins=[OpenAI(api_key='test-key', base_url='https://openrouter.ai/api/v1')])
+
+    response = await ai.generate(model='openai/openai/gpt-4o', prompt='hi')
+
+    assert response.text == 'ok'
+    assert seen == ['openai/gpt-4o']
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_plain_id_sends_plain_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`openai/gpt-4o` still sends `gpt-4o`."""
+    seen: list[str] = []
+
+    async def fake_generate(self: OpenAIModelHandler, request: object, ctx: object) -> ModelResponse:
+        seen.append(self._model._model)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    monkeypatch.setattr(OpenAIModelHandler, 'generate', fake_generate)
+    ai = Genkit(plugins=[OpenAI(api_key='test-key')])
+
+    response = await ai.generate(model='openai/gpt-4o', prompt='hi')
+
+    assert response.text == 'ok'
+    assert seen == ['gpt-4o']
+
+
+@pytest.mark.asyncio
+async def test_embed_openai_double_prefixed_id_sends_prefixed_model() -> None:
+    """`openai/openai/text-embedding-3-small` sends `openai/text-embedding-3-small` upstream."""
+    client = _embedding_client()
+    ai = Genkit(plugins=[_plugin_with(client)])
+
+    await ai.embed(embedder='openai/openai/text-embedding-3-small', content='hi')
+
+    assert client.embeddings.create.call_args.kwargs['model'] == 'openai/text-embedding-3-small'

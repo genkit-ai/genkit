@@ -27,27 +27,47 @@ import {
   logger,
 } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { writeFile } from 'fs/promises';
-import { runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
+import { parsePositiveInt } from '../utils/option-parsers';
 
 interface EvalDatasetOptions {
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   output?: string;
-  maxRows: string;
+  maxRows: number;
   label?: string;
 }
 
 /** Command to extract evaluation data. */
-export const evalExtractData = new Command('eval:extractData')
-  .description('extract evaludation data for a given flow from the trace store')
-  .argument('<flowName>', 'name of the flow to run')
+export const evalExtractData = new Command('eval:extract-data')
+  .allowExcessArguments(true)
+  .alias('eval:extractData')
+  .description('extract evaluation data for a given flow from the trace store')
+  .argument('<flowName>', 'name of the flow to extract data for')
   .option(
     '--output <filename>',
     'name of the output file to store the extracted data'
   )
-  .option('--maxRows <maxRows>', 'maximum number of rows', '100')
-  .option('--label [label]', 'label flow run in this batch')
+  .option(
+    '--max-rows <maxRows>',
+    'maximum number of rows',
+    parsePositiveInt,
+    100
+  )
+  .addOption(
+    new Option('--maxRows <maxRows>', 'maximum number of rows')
+      .argParser(parsePositiveInt)
+      .hideHelp()
+  )
+  .option('--label <label>', 'only extract traces with this batchRun label')
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (flowName: string, options: EvalDatasetOptions) => {
+    const { maxRows } = options;
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
     if (dashDashIndex !== -1) {
@@ -62,9 +82,9 @@ export const evalExtractData = new Command('eval:extractData')
       logger.debug(`Extracting trace data '/flow/${flowName}'...`);
       let dataset: EvalInputDataset = [];
       let continuationToken = undefined;
-      while (dataset.length < Number.parseInt(options.maxRows)) {
+      while (dataset.length < maxRows) {
         const response = await manager.listTraces({
-          limit: Number.parseInt(options.maxRows),
+          limit: maxRows,
           continuationToken,
         });
         continuationToken = response.continuationToken;
@@ -99,8 +119,8 @@ export const evalExtractData = new Command('eval:extractData')
           })
           .filter((result): result is EvalInput => !!result);
         batch.forEach((d) => dataset.push(d));
-        if (dataset.length > Number.parseInt(options.maxRows)) {
-          dataset = dataset.splice(0, Number.parseInt(options.maxRows));
+        if (dataset.length > maxRows) {
+          dataset = dataset.splice(0, maxRows);
           break;
         }
         if (!continuationToken) {
@@ -121,7 +141,10 @@ export const evalExtractData = new Command('eval:extractData')
       }
     };
 
-    await runWithManager(projectRoot, runAction, { runtimeCommand });
+    await runWithManager(projectRoot, runAction, {
+      runtimeCommand,
+      auth: options.experimentalAuth,
+    });
   });
 
 function toArray(input: any) {

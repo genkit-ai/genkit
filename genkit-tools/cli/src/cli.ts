@@ -33,6 +33,7 @@ import { evalRun } from './commands/eval-run';
 import { flowBatchRun } from './commands/flow-batch-run';
 import { flowRun } from './commands/flow-run';
 import { initAiTools } from './commands/init-ai-tools/index';
+import { logList } from './commands/log-list';
 import { mcp } from './commands/mcp';
 import { getPluginCommands, getPluginSubCommand } from './commands/plugins';
 import {
@@ -45,7 +46,7 @@ import { traceGet } from './commands/trace-get';
 import { traceList } from './commands/trace-list';
 import { uiStart } from './commands/ui-start';
 import { uiStop } from './commands/ui-stop';
-import { detectCLIRuntime } from './utils/runtime-detector.js';
+import { detectCLIRuntime } from './utils/runtime-detector';
 import { showUpdateNotification } from './utils/updates';
 import { version } from './utils/version';
 
@@ -72,6 +73,7 @@ const commands: Command[] = [
   docsList,
   docsRead,
   docsSearch,
+  logList,
   traceGet,
   traceList,
 ];
@@ -144,7 +146,12 @@ export async function startCLI(): Promise<void> {
     program.addCommand(serverHarness);
   }
 
-  for (const command of commands) program.addCommand(command);
+  const deprecatedCommands = new Set([uiStart, uiStop]);
+  for (const command of commands) {
+    program.addCommand(command, {
+      hidden: deprecatedCommands.has(command),
+    });
+  }
   for (const command of await getPluginCommands()) program.addCommand(command);
 
   for (const cmd of ToolPluginSubCommandsSchema.keyof().options) {
@@ -153,15 +160,11 @@ export async function startCLI(): Promise<void> {
       program.addCommand(command);
     }
   }
-  program.addCommand(
-    new Command('help').action(() => {
-      logger.info(program.help());
-    })
-  );
   // Handle unknown commands.
   program.on('command:*', (operands) => {
-    logger.error(`error: unknown command '${operands[0]}'`);
-    logger.info(program.help());
+    logger.error(`unknown command '${operands[0]}'`);
+    // helpInformation() returns the help text. help() would exit with code 0.
+    logger.info(program.helpInformation());
     process.exit(1);
   });
 

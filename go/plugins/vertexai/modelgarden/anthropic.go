@@ -27,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
 
+	"github.com/firebase/genkit/go/plugins/internal"
 	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
@@ -50,10 +51,6 @@ func (a *Anthropic) Name() string {
 // Init initializes the VertexAI Model Garden for Anthropic plugin and all its known models.
 // After calling Init, you may call [DefineModel] to create and register any additional models.
 func (a *Anthropic) Init(ctx context.Context) []api.Action {
-	if a == nil {
-		a = &Anthropic{}
-	}
-
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.initted {
@@ -72,8 +69,11 @@ func (a *Anthropic) Init(ctx context.Context) []api.Action {
 	// Models must be defined manually
 	var actions []api.Action
 	for name, opts := range AnthropicModels {
-		model := ant.DefineModel(a.client, provider, name, opts)
-		actions = append(actions, model.(api.Action))
+		// The catalog stores bare display names ("Claude Opus 4.6"). Prefix
+		// the provider so these sit alongside the other Vertex AI models in a
+		// picker instead of looking like they came from somewhere else.
+		opts.Label = internal.ProviderLabel(ant.DisplayName(provider), opts.Label)
+		actions = append(actions, ant.NewModel(a.client, provider, name, opts))
 	}
 
 	return actions
@@ -85,7 +85,11 @@ func AnthropicModel(g *genkit.Genkit, id string) ai.Model {
 	return genkit.LookupModel(g, api.NewName(provider, id))
 }
 
-// DefineModel adds the model to the registry
+// DefineModel builds a Model Garden Claude model and returns it. It does not
+// register the model: generation resolves a model from its name, so passing
+// the result to ai.WithModel contributes only that name and serves the request
+// with a model resolved from it instead. Pass the result to
+// [genkit.RegisterAction] to make these capabilities the ones used.
 func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -95,5 +99,5 @@ func (a *Anthropic) DefineModel(name string, opts *ai.ModelOptions) (ai.Model, e
 	if opts == nil {
 		return nil, fmt.Errorf("DefineModel called with nil ai.ModelOptions")
 	}
-	return ant.DefineModel(a.client, provider, name, *opts), nil
+	return ant.NewModel(a.client, provider, name, *opts), nil
 }

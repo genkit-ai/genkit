@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+#
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unit tests for ModelRef."""
+
+from dataclasses import FrozenInstanceError
+
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from genkit import Genkit, Message, ModelResponse, Part
+from genkit._ai._model import ModelConfigDict
+from genkit._core._error import GenkitError
+from genkit._core._typing import Role
+from genkit.model import ModelConfig, ModelInfo, ModelRef, ModelSupports
+from genkit.testing import define_scripted_model
+
+
+class CustomConfig(BaseModel):
+    """Plugin-specific configuration schema for testing typed ModelRef parameterization."""
+
+    temperature: float | None = None
+    top_p: float | None = None
+    safety_settings: dict[str, str] | None = None
+
+
+def test_model_ref_with_custom_pydantic_schema() -> None:
+    """ModelRef parameterized with a custom Pydantic schema retains typed config_schema and config."""
+    config = CustomConfig(temperature=0.7, top_p=0.9, safety_settings={'HARM': 'BLOCK_NONE'})
+    ref = ModelRef(
+        name='googleai/gemini-pro-latest',
+        config_schema=CustomConfig,
+        config=config,
+    )
+
+    assert isinstance(ref, ModelRef)
+    assert ref.name == 'googleai/gemini-pro-latest'
+    assert ref.config_schema is CustomConfig
+    assert ref.config is not config
+    assert ref.config == config
+    assert ref.config is not None
+    assert ref.config.temperature == 0.7
+    assert ref.config.top_p == 0.9
+
+
+def test_typed_ref_assignable_to_model_ref_base_model() -> None:
+    """A ref built with a plugin config class is still usable as ModelRef[BaseModel]."""
+    ref = ModelRef(name='echo', config_schema=CustomConfig)
+    as_base: ModelRef[BaseModel] = ref
+    assert as_base is ref
+
+
+def test_model_ref_with_bare_base_model_schema() -> None:
+    """ModelRef accepts arbitrary BaseModel schemas, including bare BaseModel itself."""
+    ref = ModelRef(name='generic-model', config_schema=BaseModel)
+
+    assert isinstance(ref, ModelRef)
+    assert ref.name == 'generic-model'
+    assert ref.config_schema is BaseModel
+    assert ref.config is None
+
+
+def test_model_ref_requires_explicit_config_schema() -> None:
+    """ModelRef raises TypeError if config_schema is missing."""
+    with pytest.raises(TypeError):
+        ModelRef(name='googleai/gemini-pro-latest')  # type: ignore[call-arg]
+
+
+def test_model_ref_immutability() -> None:
+    """ModelRef is a frozen dataclass and disallows mutating attributes after creation."""
+    ref = ModelRef(name='custom-model', config_schema=CustomConfig)
+
+    with pytest.raises(FrozenInstanceError):
+        ref.name = 'changed'  # type: ignore[misc]
+
+    with pytest.raises(FrozenInstanceError):
+        ref.config = CustomConfig(temperature=0.1)  # type: ignore[misc]
+
+
+def test_model_ref_dataclass_value_equality() -> None:
+    """ModelRef instances support value-based equality comparison."""
+    ref1 = ModelRef(name='m1', config_schema=CustomConfig, config=CustomConfig(temperature=0.5))
+    ref2 = ModelRef(name='m1', config_schema=CustomConfig, config=CustomConfig(temperature=0.5))
+    ref3 = ModelRef(name='m1', config_schema=CustomConfig, config=CustomConfig(temperature=0.9))
+
+    assert ref1 == ref2
+    assert ref1 != ref3
+    assert ref1 != 'm1'
+
+
+def test_model_ref_version_equality() -> None:
+    """ModelRef instances with different versions compare as not equal."""
+    v1 = ModelRef(name='m1', config_schema=CustomConfig, version='001')
+    v2 = ModelRef(name='m1', config_schema=CustomConfig, version='001')
+    v3 = ModelRef(name='m1', config_schema=CustomConfig, version='002')
+
+    assert v1 == v2
+    assert v1 != v3
+
+
+def test_model_ref_is_unhashable() -> None:
+    """ModelRef opts out of hashing so set/dict use doesn't fail only when config is set."""
+    ref = ModelRef(name='m1', config_schema=CustomConfig, config=CustomConfig(temperature=0.5))
+    with pytest.raises(TypeError, match='unhashable type'):
+        hash(ref)
+
+
+def test_model_ref_invalid_config_type_raises() -> None:
+    """ModelRef raises GenkitError(INVALID_ARGUMENT) when config is not an instance of config_schema."""
+    expected = f'm1: config must be an instance of {CustomConfig.__module__}.CustomConfig, got builtins.dict'
+    with pytest.raises(GenkitError, match=expected):
+        ModelRef(name='m1', config_schema=CustomConfig, config={'temperature': 0.7})  # type: ignore[arg-type]
+
+
+def test_model_ref_invalid_config_schema_raises() -> None:
+    """ModelRef raises GenkitError when config_schema is not a BaseModel subclass."""
+    expected = 'm1: config_schema must be a BaseModel subclass, got builtins.dict'
+    with pytest.raises(GenkitError, match=expected):
+        ModelRef(name='m1', config_schema={'type': 'object'})  # type: ignore[arg-type]
+
+
+def test_model_ref_invalid_config_schema_does_not_leak_isinstance() -> None:
+    """A dict schema fails as config_schema, not as isinstance() arg 2."""
+    with pytest.raises(GenkitError, match='config_schema must be a BaseModel subclass'):
+        ModelRef(
+            name='m1',
+            config_schema={'type': 'object'},  # type: ignore[arg-type]
+            config=CustomConfig(temperature=0.7),
+        )
+
+
+def test_model_ref_invalid_info_type_raises() -> None:
+    """ModelRef raises GenkitError when info is a dict instead of ModelInfo."""
+    expected = f'm1: info must be an instance of {ModelInfo.__module__}.ModelInfo, got builtins.dict'
+    with pytest.raises(GenkitError, match=expected):
+        ModelRef(name='m1', config_schema=CustomConfig, info={'not': 'a ModelInfo'})  # type: ignore[arg-type]
+
+
+def test_model_ref_preserves_version_and_info_metadata() -> None:
+    """ModelRef stamps version and ModelInfo metadata on the ModelRef instance."""
+    info = ModelInfo(supports=ModelSupports(multiturn=True, media=True))
+    ref = ModelRef(
+        name='googleai/veo-2',
+        config_schema=BaseModel,
+        version='001',
+        info=info,
+    )
+
+    assert ref.name == 'googleai/veo-2'
+    assert ref.version == '001'
+    assert ref.info is not info
+    assert ref.info == info
+    assert ref.info is not None
+    assert ref.info.supports is not None
+    assert ref.info.supports.multiturn is True
+
+
+def test_model_config_dict_accepts_common_knobs() -> None:
+    """ModelConfigDict is the typed shape for config={...} literals."""
+    config: ModelConfigDict = {
+        'temperature': 0.5,
+        'max_output_tokens': 256,
+        'top_k': 40,
+        'top_p': 0.9,
+        'stop_sequences': ['END'],
+        'version': '001',
+    }
+
+    assert config['temperature'] == 0.5
+    assert config['max_output_tokens'] == 256
+
+
+def test_model_config_dict_accepts_none_clear() -> None:
+    """None on a common knob is a valid literal (clears a ModelRef default)."""
+    config: ModelConfigDict = {'temperature': None}
+
+    assert config['temperature'] is None
+
+
+def test_model_config_dict_keys_match_generation_common_config() -> None:
+    """Autocomplete knobs stay in lockstep with the runtime schema."""
+    assert set(ModelConfigDict.__annotations__) == set(ModelConfig.model_fields)
+
+
+@pytest.mark.asyncio
+async def test_prompt_call_config_keeps_extra_keys_for_the_plugin() -> None:
+    """`await p(config={'banana': True})` hands the unknown knob to the model so a plugin can read it."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))]
+    p = ai.define_prompt(prompt='hi')
+
+    await p(config={'temperature': 0.5, 'banana': True})
+
+    assert pm.last_request is not None
+    assert pm.last_request.config == {'temperature': 0.5, 'banana': True}
+
+
+def test_model_ref_isolates_caller_config_and_info() -> None:
+    """Mutating the caller's config or info after construction does not change the ref."""
+    config = CustomConfig(temperature=0.5, safety_settings={'HARM': 'BLOCK_NONE'})
+    info = ModelInfo(label='before', supports=ModelSupports(multiturn=True))
+    ref = ModelRef(name='m1', config_schema=CustomConfig, config=config, info=info)
+
+    config.temperature = 0.9
+    assert config.safety_settings is not None
+    config.safety_settings['HARM'] = 'BLOCK_ALL'
+    info.label = 'after'
+    assert info.supports is not None
+    info.supports.multiturn = False
+
+    assert ref.config is not None
+    assert ref.config.temperature == 0.5
+    assert ref.config.safety_settings == {'HARM': 'BLOCK_NONE'}
+    assert ref.info is not None
+    assert ref.info.label == 'before'
+    assert ref.info.supports is not None
+    assert ref.info.supports.multiturn is True
+
+
+def test_model_info_has_no_config_schema() -> None:
+    """Config schemas go on config_schema= and reach the Dev UI as customOptions; ModelInfo has no slot."""
+    with pytest.raises(ValidationError, match='config_schema'):
+        ModelInfo(config_schema={'type': 'object'})  # type: ignore[call-arg]

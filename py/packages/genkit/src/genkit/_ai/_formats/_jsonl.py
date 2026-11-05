@@ -22,17 +22,17 @@ from typing import Any, cast
 import json5
 
 from genkit._ai._formats._schema import resolve_json_schema_refs
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
+from genkit._ai._formats._types import FormatHandler, Formatter, FormatterConfig
 from genkit._ai._model import (
     Message,
     ModelResponseChunk,
 )
 from genkit._core._compat import override
-from genkit._core._error import GenkitError
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._extract_json import extract_json
 
 
-class JsonlFormat(FormatDef):
+class JsonlFormat(Formatter):
     """Defines a JSONL format for use with AI models.
 
     This format instructs the model to output a sequence of JSON objects, one per line (JSONL).
@@ -46,13 +46,11 @@ class JsonlFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(
-                format='jsonl',
-                schema={
-                    'type': 'array',
-                    'items': {'type': 'object', 'properties': ...}
-                }
-            )
+            output_format='jsonl',
+            output_schema={
+                'type': 'array',
+                'items': {'type': 'object', 'properties': ...}
+            }
         )
     """
 
@@ -71,14 +69,14 @@ class JsonlFormat(FormatDef):
         )
 
     @override
-    def handle(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Creates a Formatter for handling JSONL data.
+    def handle(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Creates a FormatHandler for handling JSONL data.
 
         Args:
             schema: The JSON schema. Must be type 'array' containing 'object' items.
 
         Returns:
-            A Formatter configured to parse JSONL.
+            A FormatHandler configured to parse JSONL.
 
         Raises:
             GenkitError: If the schema structure matches expectations for JSONL.
@@ -99,17 +97,18 @@ class JsonlFormat(FormatDef):
                         "Must supply an 'array' schema type containing 'object' items "
                         "when using the 'jsonl' parser format."
                     ),
+                    reason=ErrorReason.INVALID_SCHEMA,
                 )
 
-        def message_parser(msg: Message) -> list[object]:
+        def message_parser(msg: Message) -> list[object] | None:
             """Parses a complete message into a list of objects."""
             lines = [line.strip() for line in msg.text.split('\n') if line.strip().startswith('{')]
             items = []
             for line in lines:
                 extracted = extract_json(line, throw_on_bad_json=False)
-                if extracted:
+                if extracted is not None:
                     items.append(extracted)
-            return items
+            return items or None
 
         def chunk_parser(chunk: ModelResponseChunk) -> list[object]:
             """Parses a streaming chunk into a list of objects found in that chunk."""
@@ -148,7 +147,7 @@ class JsonlFormat(FormatDef):
                 'conforming to the following schema:\n\n'
                 f'```\n{json.dumps(resolved_schema["items"], indent=2)}\n```\n'
             )
-        return Formatter(
+        return FormatHandler(
             chunk_parser=chunk_parser,
             message_parser=message_parser,
             instructions=instructions,

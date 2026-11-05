@@ -183,12 +183,28 @@ describe('Vertex AI Lyria', () => {
     });
 
     it('should call fetch with correct params and return interaction response for lyria-3 models', async () => {
+      // Shape seen live: one `model_output` step per item (lyrics, caption,
+      // audio), no `id` or `usage` (not stored).
       const interactionResponse = {
-        id: '123',
         status: 'completed',
-        outputs: [
-          { type: 'audio', mime_type: 'audio/mpeg', data: 'base64audio1' },
-          { type: 'text', text: 'Lyrics here' },
+        role: 'model',
+        object: 'interaction',
+        model: 'lyria-3-clip-preview',
+        steps: [
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: '[0.0:] Lyrics here' }],
+          },
+          {
+            type: 'model_output',
+            content: [{ type: 'text', text: 'Caption: A folk song' }],
+          },
+          {
+            type: 'model_output',
+            content: [
+              { type: 'audio', mime_type: 'audio/mpeg', data: 'base64audio1' },
+            ],
+          },
         ],
       };
       mockFetchResponse(interactionResponse);
@@ -213,24 +229,31 @@ describe('Vertex AI Lyria', () => {
       });
       assert.strictEqual(url, expectedUrl);
       assert.strictEqual(options.method, 'POST');
-      assert.deepStrictEqual(options.headers, getExpectedHeaders());
+      // The Api-Revision header selects the steps-based schema.
+      assert.deepStrictEqual(options.headers, {
+        ...getExpectedHeaders(),
+        'Api-Revision': '2026-05-20',
+      });
 
       assert.deepStrictEqual(JSON.parse(options.body), {
         model: lyria3ModelName,
         input: [
           {
-            role: 'user',
+            type: 'user_input',
             content: [{ type: 'text', text: prompt }],
           },
         ],
-        response_modalities: ['audio', 'text'],
+        // No response_format: the server's default gives the lyrics,
+        // caption and audio (an audio entry needs a bit_rate here).
       });
-      assert.strictEqual(result.result.message?.content.length, 2);
+      const content = result.result.message?.content;
+      assert.strictEqual(content?.length, 3);
+      assert.strictEqual(content[0].text, '[0.0:] Lyrics here');
+      assert.strictEqual(content[1].text, 'Caption: A folk song');
       assert.strictEqual(
-        result.result.message?.content[0].media?.url,
+        content[2].media?.url,
         'data:audio/mpeg;base64,base64audio1'
       );
-      assert.strictEqual(result.result.message?.content[1].text, 'Lyrics here');
     });
 
     it('should handle location override', async () => {

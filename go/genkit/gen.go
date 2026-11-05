@@ -74,6 +74,10 @@ type ReflectionRegisterParams struct {
 	PID int `json:"pid,omitempty"`
 	// Protocol version for payload compatibility checking.
 	ReflectionApiSpecVersion int `json:"reflectionApiSpecVersion,omitempty"`
+	// Value of GENKIT_REFLECTION_SECRET_TOKEN, when the runtime has one.
+	// The CLI rejects the connection when it requires a secret and this
+	// does not match.
+	Secret string `json:"secret,omitempty"`
 }
 
 // ReflectionRunActionParams is the payload for the "runAction" request

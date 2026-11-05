@@ -18,56 +18,42 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
-// Options follow the standard Go functional-options pattern: pass as many as
-// you like, in any order, and they merge left to right. Two rules govern how
-// repeats combine, so composing a request from several helpers is predictable:
+// PromptFn is a function that generates a prompt from a prompt's input.
 //
-//   - Collection options accumulate. Repeating one, or mixing its variants,
-//     appends in call order: WithMessages(a), WithMessages(b) sends [a, b], and
-//     WithTools, WithResources, WithUse, WithMiddleware, WithDocs, and
-//     WithDataset behave the same.
-//   - Single-value options take the last one set. WithConfig, WithModel /
-//     WithModelName, WithSystem, WithPrompt, the output-schema options, and the
-//     like each fill one slot, so the final call wins and earlier ones are
-//     overwritten rather than rejected.
-//
-// A zero value does not fill a slot: WithMaxTurns(0), WithToolChoice(""), or
-// WithConfig(nil) is a no-op, so an earlier non-zero value cannot be un-set by
-// a later zero one. The rules apply within a single options list; APIs that
-// layer two lists (a prompt's define-time options against Execute-time
-// options) document their own precedence.
-//
-// Applying options therefore never fails on a "set more than once" conflict.
-// The only failures are genuinely invalid arguments (for example a type that
-// WithInputType cannot turn into a schema), which panic at the call site where
-// the mistake is.
-
-// PromptFn is a function that generates a prompt.
+// The input is untyped. [WithPromptFn] and [WithSystemFn] take a function with
+// a concrete input type and convert for you.
 type PromptFn = func(context.Context, any) (string, error)
 
-// MessagesFn is a function that generates messages.
+// MessagesFn is a function that generates messages from a prompt's input.
+//
+// The input is untyped. [WithMessagesFn] takes a function with a concrete input
+// type and converts for you.
 type MessagesFn = func(context.Context, any) ([]*Message, error)
 
-// appendMessagesFn composes two message-producing functions so their outputs
-// concatenate in call order. It backs the accumulate semantics of
-// [WithMessages] and [WithMessagesFn]: passing several of them (in any mix)
-// appends their messages instead of overwriting. Either side may be nil, in
-// which case the other is returned unwrapped.
-func appendMessagesFn(existing, next MessagesFn) MessagesFn {
+// appendFn composes two content-producing functions so their outputs
+// concatenate in call order. It backs the accumulate semantics of the
+// collection options: passing several of them, in any mix, appends instead of
+// overwriting. Either side may be nil, in which case the other is returned
+// unwrapped.
+//
+// [MessagesFn] and [DocsFn] are aliases for this shape, so one helper serves
+// both.
+func appendFn[T any](existing, next func(context.Context, any) ([]T, error)) func(context.Context, any) ([]T, error) {
 	if existing == nil {
 		return next
 	}
 	if next == nil {
 		return existing
 	}
-	return func(ctx context.Context, input any) ([]*Message, error) {
+	return func(ctx context.Context, input any) ([]T, error) {
 		before, err := existing(ctx, input)
 		if err != nil {
 			return nil, err
@@ -81,6 +67,66 @@ func appendMessagesFn(existing, next MessagesFn) MessagesFn {
 		// would write into the spare capacity of the array backing their
 		// history. Concat always allocates a fresh slice.
 		return slices.Concat(before, after), nil
+	}
+}
+
+// PartsFn is a function that generates message content from a prompt's input.
+//
+// The input is untyped. [WithPromptPartsFn] and [WithSystemPartsFn] take a
+// function with a concrete input type and convert for you.
+type PartsFn = func(context.Context, any) ([]*Part, error)
+
+// DocsFn is a function that generates context documents from a prompt's input.
+//
+// The input is untyped. [WithDocsFn] takes a function with a concrete input
+// type and converts for you.
+type DocsFn = func(context.Context, any) ([]*Document, error)
+
+// coerceFn adapts a typed content function to the untyped signature the option
+// structs store. option names the option in the error, since a prompt can fill
+// several slots from functions and only one of them rejected the input.
+//
+// The raw value's Go type depends on how the prompt was invoked: an in-process
+// call with [WithInput] passes the value through as-is, while the reflection
+// API (Dev UI, flows over HTTP) and the default recorded by [WithInputType]
+// both arrive as map[string]any. Converting here means content functions see
+// the same type whichever way they were reached. A nil raw value yields the
+// zero value of In, which is what [Generate] passes.
+func coerceFn[In, Out any](option string, fn func(context.Context, In) (Out, error)) func(context.Context, any) (Out, error) {
+	return func(ctx context.Context, raw any) (Out, error) {
+		in, err := base.ConvertToExact[In](raw)
+		if err != nil {
+			var zero Out
+			// base cannot classify this itself: the same failure is only a
+			// caller's bad input once a content function disagrees with it.
+			return zero, status.Errorf(ErrInputTypeMismatch, "%s input: %w", option, err)
+		}
+		return fn(ctx, in)
+	}
+}
+
+// staticPartsFn adapts fixed parts to a [PartsFn]. It clones per render, so a
+// later append to the message's content cannot reach the parts stored on the
+// prompt.
+func staticPartsFn(parts []*Part) PartsFn {
+	return func(context.Context, any) ([]*Part, error) {
+		return slices.Clone(parts), nil
+	}
+}
+
+// textPartsFn adapts a string-returning content function to a [PartsFn]. An
+// empty string yields no parts and so no message, matching empty template text.
+func textPartsFn[In any](option string, fn func(context.Context, In) (string, error)) PartsFn {
+	coerced := coerceFn(option, fn)
+	return func(ctx context.Context, raw any) ([]*Part, error) {
+		text, err := coerced(ctx, raw)
+		if err != nil {
+			return nil, err
+		}
+		if text == "" {
+			return nil, nil
+		}
+		return []*Part{NewTextPart(text)}, nil
 	}
 }
 
@@ -127,7 +173,8 @@ func WithConfig(config any) ConfigOption {
 type commonGenOptions struct {
 	configOptions
 	Model              ModelArg          // Model to use.
-	MessagesFn         MessagesFn        // Function to generate messages.
+	MessagesFn         MessagesFn        // Function to generate messages. Used verbatim.
+	MessagesText       *string           // Template text for the conversation, rendered as a dotprompt template.
 	Tools              []ToolRef         // References to tools to use.
 	Resources          []Resource        // Resources to be temporarily available during generation.
 	ToolChoice         ToolChoice        // Whether tool calls are required, disabled, or optional.
@@ -149,7 +196,10 @@ type CommonGenOption interface {
 func (o *commonGenOptions) applyCommonGen(opts *commonGenOptions) {
 	o.configOptions.applyConfig(&opts.configOptions)
 
-	opts.MessagesFn = appendMessagesFn(opts.MessagesFn, o.MessagesFn)
+	opts.MessagesFn = appendFn(opts.MessagesFn, o.MessagesFn)
+	if o.MessagesText != nil {
+		opts.MessagesText = o.MessagesText
+	}
 	if o.Model != nil {
 		opts.Model = o.Model
 	}
@@ -180,17 +230,63 @@ func (o *commonGenOptions) applyPromptExecute(opts *promptExecutionOptions) {
 // WithMessages adds messages to the request, placed between the system and
 // user prompts. Repeating this option, or mixing it with [WithMessagesFn],
 // appends: messages accumulate in the order the options are passed.
+//
+// Message text is used verbatim, never compiled as a dotprompt template, so
+// history containing literal braces passes through untouched. To build message
+// text from a prompt's input, use [WithMessagesFn], which receives the typed
+// input, or [WithMessagesTemplate] for a multi-turn template.
+//
+// Declaring the conversation makes the prompt responsible for the messages
+// passed to [Prompt.Execute]: they are not spliced in automatically, because
+// only the prompt knows where its examples end and a real conversation begins.
+// Place them with {{history}} in a [WithMessagesTemplate] or
+// [HistoryFromContext] in a [WithMessagesFn].
 func WithMessages(messages ...*Message) CommonGenOption {
 	return WithMessagesFn(func(context.Context, any) ([]*Message, error) {
 		return messages, nil
 	})
 }
 
+// WithMessagesTemplate sets the conversation to a dotprompt template.
+// Optional args are applied to text with [fmt.Sprintf].
+//
+// This is the multi-turn form: each {{role "..."}} block starts a new message,
+// so one template can express a system preamble, few-shot examples, and the
+// user turn. It is what a .prompt file's body compiles to.
+//
+// Messages passed to [Prompt.Execute] reach the template at {{history}}, or,
+// without an explicit {{history}}, are inserted before its final user message.
+//
+// Unlike [WithMessages], the text here is compiled, so literal braces in it are
+// template syntax. Content from a user or a remote source belongs in
+// [WithMessages] or [WithMessagesFn], which never compile it.
+//
+// The template is the whole conversation, so nothing else can contribute to it:
+// passing this in the same [DefinePrompt] call as [WithMessages] or
+// [WithMessagesFn] panics. Write those messages as {{role}} blocks instead.
+// Repeating this option alone fills one slot, so the last one set wins.
+//
+// Compiling needs a prompt, so this is a [PromptOption]: passing it to
+// [Generate] or [Prompt.Execute] does not compile. Use [WithMessages] there.
+func WithMessagesTemplate(text string, args ...any) PromptOption {
+	text = sprintfText(text, args)
+	return &promptOptions{commonGenOptions: commonGenOptions{MessagesText: &text}}
+}
+
 // WithMessagesFn adds messages produced by fn at request time, placed between
 // the system and user prompts. Like [WithMessages], repeating this option (or
 // mixing the two) appends the produced messages in call order.
-func WithMessagesFn(fn MessagesFn) CommonGenOption {
-	return &commonGenOptions{MessagesFn: fn}
+//
+// fn receives the prompt's input converted to In, or the zero value of In when
+// there is none, as at [Generate]. Its messages are used verbatim, as with
+// [WithMessages].
+//
+// Those messages are the conversation the prompt declares, so messages supplied
+// at execution time are not appended on top of them. fn reads them from
+// [HistoryFromContext] instead, and can summarize or truncate them rather than
+// only prepend to them.
+func WithMessagesFn[In any](fn func(context.Context, In) ([]*Message, error)) CommonGenOption {
+	return &commonGenOptions{MessagesFn: coerceFn("WithMessagesFn", fn)}
 }
 
 // WithTools adds tools to use for the generate request. Repeating this option
@@ -241,6 +337,7 @@ func WithStepName(name string) GenerateOption {
 // WithMaxTurns sets the maximum number of tool call iterations before erroring.
 // A tool call happens when tools are provided in the request and a model decides to call one or more as a response.
 // Each round trip, including multiple tools in parallel, counts as one turn.
+// Defaults to 50.
 func WithMaxTurns(maxTurns int) CommonGenOption {
 	return &commonGenOptions{MaxTurns: maxTurns}
 }
@@ -269,12 +366,20 @@ type inputOptions struct {
 	DefaultInput map[string]any // Default input that will be used if no input is provided.
 }
 
-// InputOption is an option for the input of a prompt or tool.
-// It applies only to DefinePrompt() and DefineTool().
+// InputOption is an option for the input of a prompt.
+// It applies only to DefinePrompt().
 type InputOption interface {
 	PromptOption
-	ToolOption
 	applyInput(*inputOptions)
+}
+
+// InputSchemaOption is an [InputOption] that also applies to the tool
+// constructors, where the input schema it supplies stands in for an In type
+// parameter of 'any'. A tool whose input shape a Go type can express should
+// use the type parameter instead.
+type InputSchemaOption interface {
+	InputOption
+	ToolOption
 }
 
 // applyInput applies the option to the input options. The input configuration
@@ -295,22 +400,16 @@ func (o *inputOptions) applyTool(opts *toolOptions)     { o.applyInput(&opts.inp
 // WithInputType uses the type provided to derive the input schema.
 // The inputted value may serve as the default input if no input is given at generation time depending on the action.
 // Only supports structs and map[string]any.
-func WithInputType(input any) InputOption {
-	var defaultInput map[string]any
-
-	switch v := input.(type) {
-	case map[string]any:
-		defaultInput = v
-	default:
-		data, err := json.Marshal(input)
-		if err != nil {
-			panic(fmt.Errorf("failed to marshal default input (WithInputType): %w", err))
-		}
-
-		err = json.Unmarshal(data, &defaultInput)
-		if err != nil {
-			panic(fmt.Errorf("type %T is not supported, only structs and map[string]any are supported (WithInputType)", input))
-		}
+//
+// It applies to the tool constructors too, where the derived schema stands in
+// for an In type parameter of 'any'. Prefer the type parameter there: it is
+// the same schema plus a typed function signature.
+func WithInputType(input any) InputSchemaOption {
+	// Converting rather than marshaling by hand gives the default input the
+	// same Go types it would have arriving over the wire.
+	defaultInput, err := base.ConvertToExact[map[string]any](input)
+	if err != nil {
+		panic(fmt.Errorf("type %T is not supported, only structs and map[string]any are supported (WithInputType)", input))
 	}
 
 	return &inputOptions{
@@ -319,14 +418,15 @@ func WithInputType(input any) InputOption {
 	}
 }
 
-// WithInputSchema manually provides a schema map for the prompt's input.
-func WithInputSchema(schema map[string]any) InputOption {
+// WithInputSchema manually provides a schema map for the input.
+func WithInputSchema(schema map[string]any) InputSchemaOption {
 	return &inputOptions{InputSchema: schema}
 }
 
 // WithInputSchemaName sets a pre-registered schema by name for the input.
-// The schema will be resolved lazily at execution time using [DefineSchema].
-func WithInputSchemaName(name string) InputOption {
+// The schema is resolved from the registry at execution time; register it with
+// [github.com/firebase/genkit/go/genkit.DefineSchema].
+func WithInputSchemaName(name string) InputSchemaOption {
 	return &inputOptions{InputSchema: core.SchemaRef(name)}
 }
 
@@ -336,6 +436,7 @@ type promptOptions struct {
 	promptingOptions
 	inputOptions
 	outputOptions
+	documentOptions
 	Description string         // Description of the prompt.
 	Metadata    map[string]any // Arbitrary metadata.
 }
@@ -351,6 +452,8 @@ func (o *promptOptions) applyPrompt(opts *promptOptions) {
 	o.promptingOptions.applyPrompt(opts)
 	o.inputOptions.applyPrompt(opts)
 	o.outputOptions.applyPrompt(opts)
+
+	o.documentOptions.applyPrompt(opts)
 
 	if o.Description != "" {
 		opts.Description = o.Description
@@ -373,9 +476,15 @@ func WithMetadata(metadata map[string]any) PromptOption {
 }
 
 // promptingOptions are options for the system and user prompts of a prompt or generate request.
+//
+// Each slot holds either template text or a content function, never both. Text
+// is compiled against the prompt's input; a function's result is used verbatim,
+// since only text the prompt author wrote is compiled.
 type promptingOptions struct {
-	SystemFn PromptFn // Function to generate the system prompt.
-	PromptFn PromptFn // Function to generate the user prompt.
+	SystemText *string // Template text for the system prompt.
+	SystemFn   PartsFn // Function returning system prompt content.
+	PromptText *string // Template text for the user prompt.
+	PromptFn   PartsFn // Function returning user prompt content.
 }
 
 // PromptingOption is an option for the system and user prompts of a prompt or generate request.
@@ -386,15 +495,18 @@ type PromptingOption interface {
 	applyPrompting(*promptingOptions)
 }
 
-// applyPrompting applies the option to the prompting options. The system and
-// user prompts are independent single-value slots, so the last option to set
-// each one wins.
+// applyPrompting merges the two single-message slots, each shared by the four
+// options that fill it, so the last one set wins.
+//
+// Both fields of a slot are assigned together to clear the loser: the renderer
+// consults them in a fixed order, and a leftover value would let that order
+// pick the winner instead of the caller.
 func (o *promptingOptions) applyPrompting(opts *promptingOptions) {
-	if o.SystemFn != nil {
-		opts.SystemFn = o.SystemFn
+	if o.SystemText != nil || o.SystemFn != nil {
+		opts.SystemText, opts.SystemFn = o.SystemText, o.SystemFn
 	}
-	if o.PromptFn != nil {
-		opts.PromptFn = o.PromptFn
+	if o.PromptText != nil || o.PromptFn != nil {
+		opts.PromptText, opts.PromptFn = o.PromptText, o.PromptFn
 	}
 }
 
@@ -403,37 +515,130 @@ func (o *promptingOptions) applyGenerate(opts *generateOptions) {
 	o.applyPrompting(&opts.promptingOptions)
 }
 
-// textPromptFn adapts fmt.Sprintf-style text and args into a [PromptFn].
-func textPromptFn(text string, args []any) PromptFn {
-	return func(context.Context, any) (string, error) {
-		// Avoids a compile-time warning about non-constant text.
-		t := text
-		return fmt.Sprintf(t, args...), nil
+// sprintfText applies args to text, leaving it alone when none were given.
+func sprintfText(text string, args []any) string {
+	if len(args) == 0 {
+		return text
 	}
+	// Assigning avoids a compile-time warning about non-constant text.
+	t := text
+	return fmt.Sprintf(t, args...)
 }
 
 // WithSystem sets the system prompt message.
 // The system prompt is always the first message in the list.
+//
+// With [DefinePrompt], the text is compiled as a dotprompt template against the
+// prompt's input, so it may reference input fields such as {{name}}. args, if
+// given, are applied with [fmt.Sprintf] first.
+//
+// A {{role}} marker in the text is an error: this slot is one system message.
+// [WithMessagesTemplate] is where turns with their own roles belong.
 func WithSystem(text string, args ...any) PromptingOption {
-	return &promptingOptions{SystemFn: textPromptFn(text, args)}
+	text = sprintfText(text, args)
+	return &promptingOptions{SystemText: &text}
 }
 
 // WithSystemFn sets the function that generates the system prompt message.
 // The system prompt is always the first message in the list.
-func WithSystemFn(fn PromptFn) PromptingOption {
-	return &promptingOptions{SystemFn: fn}
+//
+// fn receives the prompt's input converted to In, or the zero value of In when
+// there is none, as at [Generate]. Its string is used verbatim, never compiled
+// as a template, so it may safely hold user content and literal braces. Use
+// [WithSystemPartsFn] to return non-text content.
+//
+// It shares one slot with [WithSystem], [WithSystemParts], and
+// [WithSystemPartsFn]: the last one set wins.
+func WithSystemFn[In any](fn func(context.Context, In) (string, error)) PromptingOption {
+	return &promptingOptions{SystemFn: textPartsFn("WithSystemFn", fn)}
+}
+
+// WithSystemParts sets the content of the system prompt message.
+// The system prompt is always the first message in the list.
+//
+// It is the multi-part form of [WithSystem], for instructions that mix text
+// with media or other non-text parts. The parts are used verbatim, never
+// compiled as a template. Use [WithSystemPartsFn] when the content depends on
+// the prompt's input.
+//
+// It shares one slot with [WithSystem], [WithSystemFn], and
+// [WithSystemPartsFn]: the last one set wins.
+func WithSystemParts(parts ...*Part) PromptingOption {
+	return &promptingOptions{SystemFn: staticPartsFn(parts)}
+}
+
+// WithSystemPartsFn sets the function that generates the content of the system
+// prompt message. The system prompt is always the first message in the list.
+//
+// It is the multi-part form of [WithSystemFn]. The returned parts are used
+// verbatim.
+//
+// It shares one slot with [WithSystem], [WithSystemParts], and [WithSystemFn]:
+// the last one set wins.
+func WithSystemPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) PromptingOption {
+	return &promptingOptions{SystemFn: coerceFn("WithSystemPartsFn", fn)}
 }
 
 // WithPrompt sets the user prompt message.
 // The user prompt is always the last message in the list.
+//
+// With [DefinePrompt], the text is compiled as a dotprompt template against the
+// prompt's input, so it may reference input fields such as {{name}}. args, if
+// given, are applied with [fmt.Sprintf] first.
+//
+// A {{role}} marker in the text is an error: this slot is one user message.
+// [WithMessagesTemplate] is where turns with their own roles belong.
 func WithPrompt(text string, args ...any) PromptingOption {
-	return &promptingOptions{PromptFn: textPromptFn(text, args)}
+	text = sprintfText(text, args)
+	return &promptingOptions{PromptText: &text}
 }
 
 // WithPromptFn sets the function that generates the user prompt message.
 // The user prompt is always the last message in the list.
-func WithPromptFn(fn PromptFn) PromptingOption {
-	return &promptingOptions{PromptFn: fn}
+//
+// fn receives the prompt's input converted to In, or the zero value of In when
+// there is none, as at [Generate]. Its string is used verbatim, never compiled
+// as a template, so it may safely hold user content and literal braces. Use
+// [WithPromptPartsFn] to return non-text content.
+//
+// It shares one slot with [WithPrompt], [WithPromptParts], and
+// [WithPromptPartsFn]: the last one set wins.
+func WithPromptFn[In any](fn func(context.Context, In) (string, error)) PromptingOption {
+	return &promptingOptions{PromptFn: textPartsFn("WithPromptFn", fn)}
+}
+
+// WithPromptParts sets the content of the user prompt message.
+// The user prompt is always the last message in the list.
+//
+// It is the multi-part form of [WithPrompt], for prompts that mix text with
+// media or other non-text parts. The parts are used verbatim, never compiled as
+// a template. Use [WithPromptPartsFn] when the content depends on the prompt's
+// input.
+//
+//	genkit.Generate(ctx, g,
+//		ai.WithModelName("googleai/gemini-flash-latest"),
+//		ai.WithPromptParts(
+//			ai.NewTextPart("What is in this image?"),
+//			ai.NewMediaPart("image/png", imageURL),
+//		),
+//	)
+//
+// It shares one slot with [WithPrompt], [WithPromptFn], and
+// [WithPromptPartsFn]: the last one set wins.
+func WithPromptParts(parts ...*Part) PromptingOption {
+	return &promptingOptions{PromptFn: staticPartsFn(parts)}
+}
+
+// WithPromptPartsFn sets the function that generates the content of the user
+// prompt message. The user prompt is always the last message in the list.
+//
+// It is the multi-part form of [WithPromptFn]. The returned parts are used
+// verbatim.
+//
+// It shares one slot with [WithPrompt], [WithPromptParts], and [WithPromptFn]:
+// the last one set wins.
+func WithPromptPartsFn[In any](fn func(context.Context, In) ([]*Part, error)) PromptingOption {
+	return &promptingOptions{PromptFn: coerceFn("WithPromptPartsFn", fn)}
 }
 
 // outputOptions are options for the output of a prompt or generate request.
@@ -450,6 +655,18 @@ type OutputOption interface {
 	PromptOption
 	GenerateOption
 	applyOutput(*outputOptions)
+}
+
+// OutputSchemaOption is an [OutputOption] that provides an explicit output
+// schema, inline or by name. Unlike the schema-inference and
+// generation-steering options, it also applies to the tool constructors: a
+// tool's output shape is decided by its function, so the only output options
+// that make sense there are explicit schemas standing in for an Out type
+// parameter of 'any'; a tool whose output a Go type can express should use
+// the type parameter instead.
+type OutputSchemaOption interface {
+	OutputOption
+	ToolOption
 }
 
 // applyOutput applies the option to the output options. The schema, format,
@@ -474,6 +691,16 @@ func (o *outputOptions) applyOutput(opts *outputOptions) {
 func (o *outputOptions) applyPrompt(opts *promptOptions)     { o.applyOutput(&opts.outputOptions) }
 func (o *outputOptions) applyGenerate(opts *generateOptions) { o.applyOutput(&opts.outputOptions) }
 
+// applyTool applies the option to the tool options. Only the explicit-schema
+// output options reach here: [OutputSchemaOption] is the sole output option
+// type that satisfies [ToolOption]. The schema is a single-value slot, so the
+// last option to set it wins.
+func (o *outputOptions) applyTool(tOpts *toolOptions) {
+	if o.OutputSchema != nil {
+		tOpts.OutputSchema = o.OutputSchema
+	}
+}
+
 // WithOutputType sets the output format to JSON and the schema derived from the given value.
 func WithOutputType(output any) OutputOption {
 	return &outputOptions{
@@ -482,9 +709,8 @@ func WithOutputType(output any) OutputOption {
 	}
 }
 
-// WithOutputSchema manually provides a schema map for the prompt's output.
-// The outputted value will serve as the default output if no output is given at generation time.
-func WithOutputSchema(schema map[string]any) OutputOption {
+// WithOutputSchema manually provides a schema map for the output.
+func WithOutputSchema(schema map[string]any) OutputSchemaOption {
 	return &outputOptions{
 		OutputSchema: schema,
 		OutputFormat: OutputFormatJSON,
@@ -492,7 +718,8 @@ func WithOutputSchema(schema map[string]any) OutputOption {
 }
 
 // WithOutputSchemaName sets the schema name that will be resolved at execution time.
-func WithOutputSchemaName(name string) OutputOption {
+// Register the schema with [github.com/firebase/genkit/go/genkit.DefineSchema].
+func WithOutputSchemaName(name string) OutputSchemaOption {
 	return &outputOptions{
 		OutputSchema: core.SchemaRef(name),
 		OutputFormat: OutputFormatJSON,
@@ -604,11 +831,14 @@ func withChainedStreaming(callback ModelStreamCallback) ExecutionOption {
 // documentOptions are options for providing context documents to a prompt or generate request or as input to an embedder.
 type documentOptions struct {
 	Documents []*Document // Docs to pass as context or input.
+	DocsFn    DocsFn      // Function to generate docs from a prompt's input.
 }
 
 // DocumentOption is an option for providing context or input documents.
-// It applies to [Generate], [Prompt.Execute], [Embed], and [Retrieve].
+// It applies to [DefinePrompt], [Generate], [Prompt.Execute], [Embed], and
+// [Retrieve].
 type DocumentOption interface {
+	PromptOption
 	GenerateOption
 	PromptExecuteOption
 	EmbedderOption
@@ -616,8 +846,15 @@ type DocumentOption interface {
 	applyDocument(*documentOptions)
 }
 
+// applyDocument accumulates documents: the fixed ones append in call order and
+// the [WithDocsFn] functions compose the same way.
 func (o *documentOptions) applyDocument(opts *documentOptions) {
 	opts.Documents = append(opts.Documents, o.Documents...)
+	opts.DocsFn = appendFn(opts.DocsFn, o.DocsFn)
+}
+
+func (o *documentOptions) applyPrompt(opts *promptOptions) {
+	o.applyDocument(&opts.documentOptions)
 }
 
 func (o *documentOptions) applyGenerate(opts *generateOptions) {
@@ -648,6 +885,19 @@ func WithTextDocs(text ...string) DocumentOption {
 // embedder. Repeating this option (or mixing it with [WithTextDocs]) appends.
 func WithDocs(docs ...*Document) DocumentOption {
 	return &documentOptions{Documents: docs}
+}
+
+// WithDocsFn sets the function that selects the context documents for a prompt,
+// such as by querying a retriever. It applies only to [DefinePrompt], since
+// only a prompt has input to give it.
+//
+// fn receives the prompt's input converted to In.
+//
+// Documents accumulate: repeating this option, or combining it with [WithDocs]
+// or [WithTextDocs], adds to the set rather than replacing it. The fixed
+// documents resolve first, then the computed ones, each in call order.
+func WithDocsFn[In any](fn func(context.Context, In) ([]*Document, error)) PromptOption {
+	return &promptOptions{documentOptions: documentOptions{DocsFn: coerceFn("WithDocsFn", fn)}}
 }
 
 // evaluatorOptions are options for providing a dataset to evaluate.
@@ -778,6 +1028,8 @@ type generateOptions struct {
 	RespondParts []*Part // Tool responses to return from interrupted tool calls.
 	RestartParts []*Part // Tool requests to restart interrupted tools with.
 	StepName     string  // Custom name for the generation step in traces.
+	resume       bool    // Set by WithResume, even with no parts.
+	pausedParts  []*Part // Still-interrupted parts given to WithResume; Generate rejects them.
 }
 
 // GenerateOption is an option for generating a model response. It applies only to Generate().
@@ -794,22 +1046,61 @@ func (o *generateOptions) applyGenerate(genOpts *generateOptions) {
 
 	genOpts.RespondParts = append(genOpts.RespondParts, o.RespondParts...)
 	genOpts.RestartParts = append(genOpts.RestartParts, o.RestartParts...)
+	genOpts.pausedParts = append(genOpts.pausedParts, o.pausedParts...)
+	genOpts.resume = genOpts.resume || o.resume
 	if o.StepName != "" {
 		genOpts.StepName = o.StepName
 	}
 }
 
+// WithResume resumes generation after an interrupt with the parts that
+// resolve it: a restart part re-executes the tool and a response part answers
+// the call outright. Both kinds go in one list, in any order; each part
+// records which it is. Build them from the tool, with
+// [InterruptedCall.Restart] and [InterruptedCall.Respond], or from the part,
+// with [Part.ToToolRestart] and [Part.ToToolResponse]. Repeating this option
+// appends.
+//
+// A part that is still paused, such as one from [ModelResponse.Interrupts]
+// passed as is, fails the call with INVALID_ARGUMENT: resolve it first. With
+// no parts, the call still resumes when the conversation ends on the model's
+// tool requests, so an interrupt left unanswered fails it the same way a
+// partial resume does, rather than reaching the model.
+//
+//	resp, err = genkit.Generate(ctx, g,
+//		ai.WithMessages(resp.History()...),
+//		ai.WithTools(transferMoney),
+//		ai.WithResume(parts...),
+//	)
+func WithResume(parts ...*Part) GenerateOption {
+	o := &generateOptions{resume: true}
+	for _, p := range parts {
+		switch {
+		case p.IsToolResponse():
+			o.RespondParts = append(o.RespondParts, p)
+		case p.IsInterrupt() && !p.IsRestart():
+			o.pausedParts = append(o.pausedParts, p)
+		default:
+			o.RestartParts = append(o.RestartParts, p)
+		}
+	}
+	return o
+}
+
 // WithToolResponses provides resolved responses for interrupted tool calls.
-// Use this when you already have the result and want to skip re-executing the
-// tool. Repeating this option appends.
+// Repeating this option appends.
+//
+// Deprecated: Use [WithResume], which takes response and restart parts
+// in one list.
 func WithToolResponses(parts ...*Part) GenerateOption {
 	return &generateOptions{RespondParts: parts}
 }
 
 // WithToolRestarts re-executes interrupted tool calls with additional metadata.
-// Use this when the original call lacked required context (e.g., auth, user
-// confirmation) that should now allow the tool to complete successfully.
 // Repeating this option appends.
+//
+// Deprecated: Use [WithResume], which takes restart and response parts
+// in one list.
 func WithToolRestarts(parts ...*Part) GenerateOption {
 	return &generateOptions{RestartParts: parts}
 }
@@ -817,15 +1108,30 @@ func WithToolRestarts(parts ...*Part) GenerateOption {
 // toolOptions holds configuration options for defining tools.
 type toolOptions struct {
 	inputOptions
+	OutputSchema map[string]any // JSON schema of the tool's output.
 	StrictSchema *bool
 }
 
-// ToolOption is an option for defining a tool.
+// ToolOption is an option for defining a tool, accepted by every tool
+// constructor ([NewTool], [NewResumableTool], and their genkit
+// counterparts). An explicit schema stands in for a type parameter, so the
+// input options require In to be any and the output options require Out to
+// be any; any other type panics at definition.
+//
+//   - [WithInputSchema]: Provide a JSON schema for the input
+//   - [WithInputSchemaName]: Reference a pre-registered input schema by name
+//   - [WithInputType]: Derive the input schema from a Go value (prefer the In type parameter)
+//   - [WithOutputSchema]: Provide a JSON schema for the output
+//   - [WithOutputSchemaName]: Reference a pre-registered output schema by name
+//   - [WithStrictSchema]: Have the provider enforce the input schema strictly, where supported
 type ToolOption interface {
 	applyTool(*toolOptions)
 }
 
 func (o *toolOptions) applyTool(opts *toolOptions) {
+	if o.OutputSchema != nil {
+		opts.OutputSchema = o.OutputSchema
+	}
 	if o.StrictSchema != nil {
 		opts.StrictSchema = o.StrictSchema
 	}

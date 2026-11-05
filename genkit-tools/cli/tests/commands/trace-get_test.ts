@@ -95,6 +95,7 @@ describe('trace:get', () => {
   });
 
   afterEach(() => {
+    process.exitCode = undefined;
     jest.restoreAllMocks();
   });
 
@@ -192,6 +193,7 @@ describe('trace:get', () => {
     expect(mockedLogger.error).toHaveBeenCalledWith(
       "Trace with ID 'missing-trace-id' not found."
     );
+    expect(process.exitCode).toBe(1);
   });
 
   it('should handle errors thrown by getTrace', async () => {
@@ -208,5 +210,6 @@ describe('trace:get', () => {
     expect(mockedLogger.error).toHaveBeenCalledWith(
       `Error retrieving trace: Error: ${errorMsg}`
     );
+    expect(process.exitCode).toBe(1);
   });
 });

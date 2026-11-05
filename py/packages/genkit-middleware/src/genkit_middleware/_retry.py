@@ -21,24 +21,21 @@ from __future__ import annotations
 import asyncio
 import math
 import random
+import sys
 from collections.abc import Awaitable, Callable
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from genkit import GenkitError
-from genkit._core._model import ModelResponse
-from genkit.middleware import BaseMiddleware, GenerateMiddlewareContext, ModelHookParams
+from genkit import GenkitError, ModelResponse
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.plugin_api import GenkitConfig
+from genkit_middleware._statuses import TRANSIENT_STATUSES
 
-_DEFAULT_RETRY_STATUSES: list[str] = [
-    'UNAVAILABLE',
-    'DEADLINE_EXCEEDED',
-    'RESOURCE_EXHAUSTED',
-    'ABORTED',
-    'INTERNAL',
-]
+_DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
+_sleep = asyncio.sleep
 
 
-class RetryConfig(BaseModel):
+class RetryConfig(GenkitConfig):
     """Knobs for retry backoff and which error statuses are retried."""
 
     max_retries: int = Field(default=3, ge=0)
@@ -49,14 +46,17 @@ class RetryConfig(BaseModel):
     no_jitter: bool = False
 
 
-class Retry(BaseMiddleware[RetryConfig]):
+class Retry(Middleware[RetryConfig]):
     """Retry middleware with exponential backoff for transient failures."""
+
+    name = 'retry'
+    description = 'Retries model calls on transient failures with exponential backoff'
 
     async def wrap_model(
         self,
         params: ModelHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ModelHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Retry the model call up to max_retries times on transient failures."""
         current_delay_ms = float(self.config.initial_delay_ms)
@@ -65,24 +65,27 @@ class Retry(BaseMiddleware[RetryConfig]):
             try:
                 return await next_fn(params, ctx)
             except Exception as e:
+                curr = asyncio.current_task()
+                if curr is not None and sys.version_info >= (3, 11) and curr.cancelling() > 0:
+                    raise
                 if attempt == self.config.max_retries:
                     raise
 
+                # A GenkitError is retried only when its status is listed. Any
+                # other exception is retried.
                 if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise
 
                 delay_ms = current_delay_ms
-                if isinstance(e, GenkitError) and e.response_metadata is not None:
-                    retry_after_ms = e.response_metadata.get('retry_after_ms')
-                    if retry_after_ms is not None:
-                        delay_ms = max(delay_ms, retry_after_ms)
+                if isinstance(e, GenkitError) and e.retry_after_ms is not None:
+                    delay_ms = max(delay_ms, e.retry_after_ms)
 
                 if not self.config.no_jitter:
                     delay_ms += 1000.0 * math.pow(2, attempt) * random.random()
                 # The provider delay is a floor within max_delay_ms, never an override of it.
                 delay_ms = min(delay_ms, self.config.max_delay_ms)
 
-                await asyncio.sleep(delay_ms / 1000.0)
+                await _sleep(delay_ms / 1000.0)
                 current_delay_ms = min(current_delay_ms * self.config.backoff_factor, self.config.max_delay_ms)
 
         raise AssertionError('Retry loop exited without returning or raising')  # noqa: EM101

@@ -31,10 +31,10 @@ func defineInlineAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "pirate"
 	return genkitx.DefineAgent(g, name,
 		aix.InlinePrompt{
-			ai.WithModel(flashModel),
+			ai.WithModel(model),
 			ai.WithSystem("You are a sarcastic pirate. Keep every reply to a sentence or two, sharp and to the point."),
 		},
-		aix.WithSessionStore(mustStore(name)),
+		aix.WithSessionStore(mustStore[any](name)),
 		aix.WithDescription[any]("Sarcastic pirate (inline-defined prompt)"),
 	)
 }

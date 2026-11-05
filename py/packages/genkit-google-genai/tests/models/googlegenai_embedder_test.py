@@ -1,0 +1,1322 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Test the Google-Genai embedder model."""
+
+import asyncio
+import base64
+import json
+from collections.abc import Awaitable, Callable
+from typing import Any, get_args
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+from genkit_google_genai import EmbeddingConfig, GeminiConfig
+from genkit_google_genai._models._embedder import (
+    EMBED_CONCURRENCY_LIMIT,
+    GOOGLEAI_EMBED_BATCH_SIZE,
+    VERTEX_EMBED_BATCH_SIZE,
+    Embedder,
+    EmbeddingTaskType,
+    get_embedder_info,
+)
+from google import genai
+from google.auth.exceptions import DefaultCredentialsError, RefreshError
+from google.genai.errors import APIError
+from pydantic import ValidationError
+from pytest_mock import MockerFixture
+
+from genkit import Document, GenkitError, Part
+from genkit.embedder import EmbedRequest, EmbedResponse
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'version',
+    ['gemini-embedding-2-preview', 'gemini-embedding-2', 'gemini-embedding-001', 'text-embedding-004'],
+)
+async def test_embedding(mocker: MockerFixture, version: str) -> None:
+    """Test the embedding method."""
+    request_text = 'request text'
+    embedding_values = [0.0017063986, -0.044727605, 0.043327782, 0.00044852644]
+
+    request = EmbedRequest(input=[Document.from_text(request_text)])
+    api_response = genai.types.EmbedContentResponse(embeddings=[genai.types.ContentEmbedding(values=embedding_values)])
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.embed_content.return_value = api_response
+
+    embedder = Embedder(version, googleai_client_mock)
+
+    response = await embedder.generate(request)
+
+    googleai_client_mock.assert_has_calls([
+        mocker.call.aio.models.embed_content(
+            model=version,
+            contents=[genai.types.Content(parts=[genai.types.Part.from_text(text=request_text)])],
+            config=None,
+        )
+    ])
+    assert isinstance(response, EmbedResponse)
+    assert len(response.embeddings) == 1
+    assert response.embeddings[0].embedding == embedding_values
+
+
+@pytest.mark.asyncio
+async def test_options_version_is_the_api_model(mocker: MockerFixture) -> None:
+    """options.version overlays the action id as the model sent to embed_content."""
+    request_text = 'request text'
+    embedding_values = [0.1, 0.2]
+    request = EmbedRequest(
+        input=[Document.from_text(request_text)],
+        options={'version': 'vertexai/text-embedding-005'},
+    )
+    api_response = genai.types.EmbedContentResponse(embeddings=[genai.types.ContentEmbedding(values=embedding_values)])
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.embed_content.return_value = api_response
+
+    embedder = Embedder('text-embedding-004', googleai_client_mock)
+    await embedder.generate(request)
+
+    googleai_client_mock.aio.models.embed_content.assert_called_once()
+    assert googleai_client_mock.aio.models.embed_content.call_args.kwargs['model'] == 'text-embedding-005'
+
+
+def _single_embedding_client(mocker: MockerFixture) -> AsyncMock:
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.return_value = genai.types.EmbedContentResponse(
+        embeddings=[genai.types.ContentEmbedding(values=[0.1, 0.2])]
+    )
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'task_type': 'RETRIEVAL_QUERY', 'title': 'doc', 'output_dimensionality': 256},
+        {'taskType': 'RETRIEVAL_QUERY', 'title': 'doc', 'outputDimensionality': 256},
+    ],
+    ids=['snake_case', 'camelCase'],
+)
+async def test_options_map_to_embed_content_config(mocker: MockerFixture, options: dict[str, object]) -> None:
+    """snake_case and camelCase option keys both reach EmbedContentConfig."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('gemini-embedding-001', client)
+
+    await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
+
+    config = client.aio.models.embed_content.call_args.kwargs['config']
+    assert config == genai.types.EmbedContentConfig(task_type='RETRIEVAL_QUERY', title='doc', output_dimensionality=256)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'autoTruncate': False, 'mimeType': 'text/plain'},
+        EmbeddingConfig(auto_truncate=False, mime_type='text/plain'),
+    ],
+    ids=['dict', 'typed'],
+)
+async def test_vertex_only_options_map_to_embed_content_config(mocker: MockerFixture, options: object) -> None:
+    """Vertex embedders forward autoTruncate and mimeType to EmbedContentConfig."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('text-embedding-005', client, is_vertex=True)
+
+    await embedder.generate(
+        EmbedRequest(input=[Document.from_text('text')], options=options)  # pyright: ignore[reportArgumentType]
+    )
+
+    config = client.aio.models.embed_content.call_args.kwargs['config']
+    assert config == genai.types.EmbedContentConfig(auto_truncate=False, mime_type='text/plain')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('options', 'expected_fields'),
+    [
+        ({'mimeType': 'text/plain'}, 'mime_type'),
+        ({'autoTruncate': False}, 'auto_truncate'),
+        ({'mime_type': 'text/plain', 'autoTruncate': False}, 'mime_type, auto_truncate'),
+        (
+            EmbeddingConfig(task_type='CLUSTERING', auto_truncate=False, mime_type='text/plain'),
+            'mime_type, auto_truncate',
+        ),
+    ],
+    ids=['mime_type', 'auto_truncate', 'both_dict', 'both_typed'],
+)
+async def test_gemini_api_rejects_vertex_only_options(
+    mocker: MockerFixture, options: object, expected_fields: str
+) -> None:
+    """Gemini Developer API embedders reject non-None Vertex-only options with INVALID_ARGUMENT."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(
+            EmbedRequest(input=[Document.from_text('text')], options=options)  # pyright: ignore[reportArgumentType]
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.message == (
+        f'gemini-embedding-001: {expected_fields}: Vertex AI only, not supported on the Gemini Developer API'
+    )
+    client.aio.models.embed_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_gemini_api_allows_explicit_none_for_vertex_only_options(mocker: MockerFixture) -> None:
+    """Explicit None for Vertex-only options clears them cleanly without raising on Gemini API."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('gemini-embedding-001', client)
+
+    await embedder.generate(
+        EmbedRequest(
+            input=[Document.from_text('text')],
+            options=EmbeddingConfig(task_type='CLUSTERING', mime_type=None, auto_truncate=None),  # pyright: ignore[reportArgumentType]
+        )
+    )
+
+    config = client.aio.models.embed_content.call_args.kwargs['config']
+    assert config == genai.types.EmbedContentConfig(task_type='CLUSTERING')
+
+
+@pytest.mark.asyncio
+async def test_unknown_option_keys_are_rejected(mocker: MockerFixture) -> None:
+    """An unknown option key raises INVALID_ARGUMENT naming the key, before any request is sent."""
+    client = mocker.AsyncMock()
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(
+            EmbedRequest(input=[Document.from_text('text')], options={'taskType': 'CLUSTERING', 'someFutureFlag': True})
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.message == 'gemini-embedding-001: invalid config field someFutureFlag'
+    client.aio.models.embed_content.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    'options',
+    [
+        {'taskType': 'CLUSTERING', 'task_type': 'RETRIEVAL_QUERY'},
+        {'task_type': 'RETRIEVAL_QUERY', 'taskType': 'CLUSTERING'},
+    ],
+    ids=['camel_case_first', 'snake_case_first'],
+)
+def test_duplicate_spellings_in_one_dict_are_rejected(options: dict[str, str]) -> None:
+    """Both spellings of the same field in a single dict fail GenkitConfig extra='forbid' validation."""
+    with pytest.raises(ValidationError):
+        EmbeddingConfig.model_validate(options)
+
+
+@pytest.mark.asyncio
+async def test_foreign_base_model_options_are_rejected(mocker: MockerFixture) -> None:
+    """Passing a non-EmbeddingConfig BaseModel directly to Embedder.generate raises INVALID_ARGUMENT."""
+    client = mocker.AsyncMock()
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(
+            EmbedRequest.model_construct(
+                input=[Document.from_text('text')],
+                options=GeminiConfig(temperature=0.5),
+            )
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'EmbeddingConfig' in exc_info.value.message
+    client.aio.models.embed_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_typed_options_instance_is_accepted(mocker: MockerFixture) -> None:
+    """An EmbeddingConfig instance on EmbedRequest[EmbeddingConfig] reaches EmbedContentConfig."""
+    client = _single_embedding_client(mocker)
+    embedder = Embedder('gemini-embedding-001', client)
+
+    await embedder.generate(
+        EmbedRequest[EmbeddingConfig](
+            input=[Document.from_text('text')],
+            options=EmbeddingConfig(task_type='CLASSIFICATION'),
+        )
+    )
+
+    config = client.aio.models.embed_content.call_args.kwargs['config']
+    assert config == genai.types.EmbedContentConfig(task_type='CLASSIFICATION')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('options', 'field'),
+    [
+        ({'outputDimensionality': 0}, 'outputDimensionality'),
+        ({'output_dimensionality': -1}, 'output_dimensionality'),
+        ({'autoTruncate': 'maybe'}, 'autoTruncate'),
+    ],
+    ids=['zero_dimensionality', 'negative_dimensionality', 'non_bool_auto_truncate'],
+)
+async def test_invalid_options_are_rejected(mocker: MockerFixture, options: dict[str, object], field: str) -> None:
+    """Invalid option values raise INVALID_ARGUMENT naming the field, before any request is sent."""
+    client = mocker.AsyncMock()
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('text')], options=options))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.message == f'gemini-embedding-001: invalid config field {field}'
+    client.aio.models.embed_content.assert_not_called()
+
+
+def test_task_type_autocompletes_the_api_values_and_accepts_others() -> None:
+    """The known task types are offered for autocomplete; a newer string is still forwarded."""
+    assert 'CODE_RETRIEVAL_QUERY' in get_args(EmbeddingTaskType)
+    assert EmbeddingConfig.model_validate({'taskType': 'CODE_RETRIEVAL_QUERY'}).task_type == 'CODE_RETRIEVAL_QUERY'
+    assert EmbeddingConfig(task_type='SOME_FUTURE_TASK').task_type == 'SOME_FUTURE_TASK'
+
+
+def _indexed_embed_content(
+    *, model: str, contents: list[genai.types.Content], config: object
+) -> genai.types.EmbedContentResponse:
+    """Return one embedding per content whose value is the text of that content."""
+    values: list[float] = []
+    for content in contents:
+        part = (content.parts or [])[0]
+        values.append(float(part.text or 'nan'))
+    return genai.types.EmbedContentResponse(embeddings=[genai.types.ContentEmbedding(values=[v]) for v in values])
+
+
+def _numbered_docs(count: int) -> list[Document]:
+    return [Document.from_text(str(i)) for i in range(count)]
+
+
+def _sent_texts(contents: list[genai.types.Content]) -> list[str | None]:
+    """Texts of the contents one ``embed_content`` call carried, in order."""
+    return [(content.parts or [])[0].text for content in contents]
+
+
+@pytest.mark.asyncio
+async def test_googleai_text_embedding_batches_requests(mocker: MockerFixture) -> None:
+    """Gemini API requests are split into batches of 100 and embeddings kept in input order."""
+    count = GOOGLEAI_EMBED_BATCH_SIZE + 50
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _indexed_embed_content
+    embedder = Embedder('gemini-embedding-001', client)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_docs(count)))
+
+    calls = client.aio.models.embed_content.call_args_list
+    assert [len(call.kwargs['contents']) for call in calls] == [GOOGLEAI_EMBED_BATCH_SIZE, 50]
+    assert [_sent_texts(call.kwargs['contents']) for call in calls] == [
+        [str(i) for i in range(GOOGLEAI_EMBED_BATCH_SIZE)],
+        [str(i) for i in range(GOOGLEAI_EMBED_BATCH_SIZE, count)],
+    ]
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_vertex_text_embedding_batches_requests(mocker: MockerFixture) -> None:
+    """Vertex text-embedding requests are split into batches of 250."""
+    count = VERTEX_EMBED_BATCH_SIZE + 1
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _indexed_embed_content
+    embedder = Embedder('text-embedding-005', client, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_docs(count)))
+
+    calls = client.aio.models.embed_content.call_args_list
+    assert [len(call.kwargs['contents']) for call in calls] == [VERTEX_EMBED_BATCH_SIZE, 1]
+    assert [_sent_texts(call.kwargs['contents']) for call in calls] == [
+        [str(i) for i in range(VERTEX_EMBED_BATCH_SIZE)],
+        [str(VERTEX_EMBED_BATCH_SIZE)],
+    ]
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_vertex_gemini_embedding_sends_one_document_per_request(mocker: MockerFixture) -> None:
+    """Vertex gemini-embedding models accept a single input per request."""
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _indexed_embed_content
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_docs(3)))
+
+    calls = client.aio.models.embed_content.call_args_list
+    assert [len(call.kwargs['contents']) for call in calls] == [1, 1, 1]
+    assert [e.embedding for e in response.embeddings] == [[0.0], [1.0], [2.0]]
+
+
+@pytest.mark.asyncio
+async def test_embedding_count_mismatch_raises(mocker: MockerFixture) -> None:
+    """A response with a different number of embeddings than documents is an error."""
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.return_value = genai.types.EmbedContentResponse(embeddings=[])
+    embedder = Embedder('gemini-embedding-001', client)
+
+    with pytest.raises(GenkitError, match='returned 0 embeddings for 1 documents') as exc_info:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('text')]))
+
+    assert exc_info.value.status == 'INTERNAL'
+
+
+def test_get_embedder_info_exposes_config_schema() -> None:
+    """Gemini API embedders advertise the common camelCase options and no Vertex-only ones."""
+    options = get_embedder_info('gemini-embedding-001', 'Google AI - gemini-embedding-001')
+
+    assert options.config_schema is not None
+    properties = set(options.config_schema['properties'])
+    assert {'taskType', 'title', 'outputDimensionality', 'version'} <= properties
+    assert properties.isdisjoint({'mimeType', 'autoTruncate', 'task_type'})
+
+
+def test_get_embedder_info_exposes_vertex_config_schema() -> None:
+    """Vertex embedders advertise the common options plus mimeType and autoTruncate."""
+    options = get_embedder_info('text-embedding-005', 'Vertex AI - text-embedding-005', is_vertex=True)
+
+    assert options.config_schema is not None
+    properties = set(options.config_schema['properties'])
+    assert {'taskType', 'title', 'outputDimensionality', 'version', 'mimeType', 'autoTruncate'} <= properties
+    assert 'task_type' not in properties
+
+
+@pytest.mark.asyncio
+async def test_embedding_forwards_media_parts(mocker: MockerFixture) -> None:
+    """Multimodal docs forward media parts to the client alongside the text."""
+    text = 'a photo'
+    raw_image = b'fake-image-bytes'
+    data_url = f'data:image/png;base64,{base64.b64encode(raw_image).decode()}'
+    embedding_values = [0.0017063986, -0.044727605, 0.043327782, 0.00044852644]
+
+    doc = Document(
+        content=[
+            Part.from_text(text),
+            Part.from_media(data_url, content_type='image/png'),
+        ]
+    )
+    request = EmbedRequest(input=[doc])
+    api_response = genai.types.EmbedContentResponse(embeddings=[genai.types.ContentEmbedding(values=embedding_values)])
+    googleai_client_mock = mocker.AsyncMock()
+    googleai_client_mock.aio.models.embed_content.return_value = api_response
+
+    embedder = Embedder('gemini-embedding-2', googleai_client_mock)
+
+    response = await embedder.generate(request)
+
+    googleai_client_mock.assert_has_calls([
+        mocker.call.aio.models.embed_content(
+            model='gemini-embedding-2',
+            contents=[
+                genai.types.Content(
+                    parts=[
+                        genai.types.Part.from_text(text=text),
+                        genai.types.Part(inline_data=genai.types.Blob(mime_type='image/png', data=raw_image)),
+                    ]
+                )
+            ],
+            config=None,
+        )
+    ])
+    assert isinstance(response, EmbedResponse)
+    assert len(response.embeddings) == 1
+    assert response.embeddings[0].embedding == embedding_values
+
+
+@pytest.mark.asyncio
+async def test_embedding_rejects_empty_input(mocker: MockerFixture) -> None:
+    """Empty input must not call the API (avoids opaque BatchEmbedContents errors)."""
+    googleai_client_mock = mocker.AsyncMock()
+    embedder = Embedder('gemini-embedding-001', googleai_client_mock)
+    with pytest.raises(GenkitError, match='Embed request input is empty') as raised:
+        await embedder.generate(EmbedRequest(input=[]))
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    googleai_client_mock.aio.models.embed_content.assert_not_called()
+
+
+def test_get_embedder_info_multimodal_and_fallback() -> None:
+    """Gemini embedding 2 models are multimodal while unknown stays text-only."""
+    options = get_embedder_info('gemini-embedding-2', 'Google AI - gemini-embedding-2')
+    assert options.dimensions == 3072
+    assert options.supports is not None
+    assert options.supports.input == ['text', 'image', 'video']
+
+    unknown_options = get_embedder_info('custom-embedder', 'Google AI - custom-embedder')
+    assert unknown_options.dimensions is None
+    assert unknown_options.supports is not None
+    assert unknown_options.supports.input == ['text']
+
+
+@pytest.mark.parametrize('model_name', ['multimodalembedding', 'multimodalembedding@001'])
+def test_get_embedder_info_multimodalembedding_versioned_and_bare(model_name: str) -> None:
+    """The multimodalembedding model is multimodal with or without the '@001' suffix."""
+    options = get_embedder_info(model_name, f'Vertex AI - {model_name}', is_vertex=True)
+    assert options.dimensions == 1408
+    assert options.supports is not None
+    assert options.supports.input == ['text', 'image', 'video']
+
+
+def test_get_embedder_info_scopes_supports_per_backend() -> None:
+    """Each backend advertises only its own multimodal models, defaulting to text."""
+    on_vertex = get_embedder_info('gemini-embedding-2', 'Vertex AI - gemini-embedding-2', is_vertex=True)
+    assert on_vertex.supports is not None
+    assert on_vertex.supports.input == ['text']
+
+    on_googleai = get_embedder_info('multimodalembedding@001', 'Google AI - multimodalembedding@001')
+    assert on_googleai.supports is not None
+    assert on_googleai.supports.input == ['text']
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_uses_predict(mocker: MockerFixture) -> None:
+    """A multimodal embed routes through :predict, not the text embed_content path."""
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2, 0.3]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    response = await embedder.generate(request)
+
+    # The text embed_content path must not be used for multimodal models.
+    client_mock.aio.models.embed_content.assert_not_called()
+
+    call = client_mock._api_client.async_request.call_args
+    assert call.kwargs['http_method'] == 'post'
+    assert call.kwargs['path'] == 'publishers/google/models/multimodalembedding:predict'
+    instances = call.kwargs['request_dict']['instances']
+    assert instances == [{'image': {'gcsUri': 'gs://bucket/cat.png', 'mimeType': 'image/png'}}]
+
+    assert isinstance(response, EmbedResponse)
+    assert len(response.embeddings) == 1
+    assert response.embeddings[0].embedding == [0.1, 0.2, 0.3]
+    assert response.embeddings[0].metadata == {'embedType': 'imageEmbedding'}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_concatenates_text_parts(mocker: MockerFixture) -> None:
+    """Multiple text parts in one document are concatenated into a single instance text."""
+    request = EmbedRequest(
+        input=[
+            Document(
+                content=[
+                    *Document.from_text('hello ').content,
+                    *Document.from_text('world').content,
+                ]
+            )
+        ]
+    )
+    predict_body = {'predictions': [{'textEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    response = await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {'text': 'hello world'}
+    assert response.embeddings[0].embedding == [0.1, 0.2]
+    assert response.embeddings[0].metadata == {'embedType': 'textEmbedding'}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_allows_image_and_video_in_one_instance(mocker: MockerFixture) -> None:
+    """Image and video in one document share a single instance (Vertex supports this)."""
+    request = EmbedRequest(
+        input=[
+            Document(
+                content=[
+                    *Document.from_media('gs://bucket/cat.png', 'image/png').content,
+                    *Document.from_media('gs://bucket/clip.mp4', 'video/mp4').content,
+                ]
+            )
+        ]
+    )
+    predict_body = {
+        'predictions': [
+            {
+                'imageEmbedding': [0.1, 0.2],
+                'videoEmbeddings': [{'startOffsetSec': 0, 'endOffsetSec': 5, 'embedding': [0.3, 0.4]}],
+            }
+        ]
+    }
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    response = await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {
+        'image': {'gcsUri': 'gs://bucket/cat.png', 'mimeType': 'image/png'},
+        'video': {'gcsUri': 'gs://bucket/clip.mp4'},
+    }
+    assert len(response.embeddings) == 2
+    assert response.embeddings[0].metadata == {'embedType': 'imageEmbedding'}
+    assert response.embeddings[1].metadata is not None
+    assert response.embeddings[1].metadata['embedType'] == 'videoEmbedding'
+    # Video chunk offsets are preserved in the embedding metadata.
+    assert response.embeddings[1].metadata['startOffsetSec'] == 0
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_multiple_images(mocker: MockerFixture) -> None:
+    """A document with two images is rejected; Vertex accepts one image per instance."""
+    request = EmbedRequest(
+        input=[
+            Document(
+                content=[
+                    *Document.from_media('gs://bucket/a.png', 'image/png').content,
+                    *Document.from_media('gs://bucket/b.png', 'image/png').content,
+                ]
+            )
+        ]
+    )
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(GenkitError, match='more than one image') as raised:
+        await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_multiple_videos(mocker: MockerFixture) -> None:
+    """A document with two videos is rejected; Vertex accepts one video per instance."""
+    request = EmbedRequest(
+        input=[
+            Document(
+                content=[
+                    *Document.from_media('gs://bucket/a.mp4', 'video/mp4').content,
+                    *Document.from_media('gs://bucket/b.mp4', 'video/mp4').content,
+                ]
+            )
+        ]
+    )
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(GenkitError, match='more than one video') as raised:
+        await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_http_url(mocker: MockerFixture) -> None:
+    """http(s) media URLs are rejected; Vertex gcsUri only accepts gs://."""
+    request = EmbedRequest(input=[Document.from_media('https://example.com/cat.png', 'image/png')])
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(GenkitError, match='http') as raised:
+        await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_sends_one_predict_request_per_document(mocker: MockerFixture) -> None:
+    """Each document becomes its own single-instance :predict call; results keep document order."""
+    request = EmbedRequest(
+        input=[
+            Document.from_media('gs://bucket/a.png', 'image/png'),
+            Document.from_media('gs://bucket/b.png', 'image/png'),
+        ],
+        options={'outputDimensionality': 256},
+    )
+    responses = []
+    for values in ([0.1, 0.2], [0.3, 0.4]):
+        http_response = mocker.Mock()
+        http_response.body = json.dumps({'predictions': [{'imageEmbedding': values}]})
+        responses.append(http_response)
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = responses
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    response = await embedder.generate(request)
+
+    calls = client_mock._api_client.async_request.call_args_list
+    assert [call.kwargs['request_dict']['instances'] for call in calls] == [
+        [{'image': {'gcsUri': 'gs://bucket/a.png', 'mimeType': 'image/png'}}],
+        [{'image': {'gcsUri': 'gs://bucket/b.png', 'mimeType': 'image/png'}}],
+    ]
+    assert all(call.kwargs['request_dict']['parameters'] == {'dimension': 256} for call in calls)
+    assert [e.embedding for e in response.embeddings] == [[0.1, 0.2], [0.3, 0.4]]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_validates_all_documents_before_requesting(mocker: MockerFixture) -> None:
+    """An invalid document anywhere in the batch fails before any :predict call is made."""
+    request = EmbedRequest(
+        input=[
+            Document.from_media('gs://bucket/a.png', 'image/png'),
+            Document.from_media('https://example.com/b.png', 'image/png'),
+        ]
+    )
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(GenkitError, match='http'):
+        await embedder.generate(request)
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_non_vertex_client(mocker: MockerFixture) -> None:
+    """Multimodal embedding is Vertex-only; a Gemini API embedder fails fast, before any request."""
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding@001', client_mock, is_vertex=False)
+    with pytest.raises(GenkitError, match='only available on Vertex AI') as raised:
+        await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_inlines_base64_data_url(mocker: MockerFixture) -> None:
+    """A base64 data: URL is inlined as bytesBase64Encoded, without the data: prefix."""
+    request = EmbedRequest(input=[Document.from_media('data:image/png;base64,AAAA', 'image/png')])
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {'image': {'bytesBase64Encoded': 'AAAA', 'mimeType': 'image/png'}}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_non_base64_data_url(mocker: MockerFixture) -> None:
+    """A data: URL without a ';base64,' marker is rejected; Vertex requires base64 bytes."""
+    request = EmbedRequest(input=[Document.from_media('data:image/png,rawbytes', 'image/png')])
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(GenkitError, match='base64') as raised:
+        await embedder.generate(request)
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_maps_output_dimensionality(mocker: MockerFixture) -> None:
+    """The output_dimensionality option maps to the :predict parameters.dimension field."""
+    request = EmbedRequest(
+        input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
+        options={'output_dimensionality': 512},
+    )
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    assert call.kwargs['request_dict']['parameters'] == {'dimension': 512}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_omits_parameters_without_dimension(mocker: MockerFixture) -> None:
+    """Options without output_dimensionality do not produce a parameters field."""
+    request = EmbedRequest(
+        input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
+        options={'version': 'multimodalembedding@001'},
+    )
+    predict_body = {'predictions': [{'imageEmbedding': [0.1, 0.2]}]}
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    assert 'parameters' not in call.kwargs['request_dict']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('options', 'expected_fields'),
+    [
+        ({'task_type': 'RETRIEVAL_QUERY'}, 'task_type'),
+        ({'title': 'Menu'}, 'title'),
+        ({'mime_type': 'text/plain'}, 'mime_type'),
+        ({'auto_truncate': False}, 'auto_truncate'),
+        (
+            EmbeddingConfig(
+                task_type='RETRIEVAL_DOCUMENT',
+                title='Menu',
+                mime_type='text/plain',
+                auto_truncate=True,
+                output_dimensionality=512,
+            ),
+            'task_type, title, mime_type, auto_truncate',
+        ),
+    ],
+    ids=['task_type', 'title', 'mime_type', 'auto_truncate', 'all_four'],
+)
+async def test_multimodal_embedding_rejects_text_only_options(
+    mocker: MockerFixture, options: object, expected_fields: str
+) -> None:
+    """Vertex multimodalembedding rejects text-embedding-only options with INVALID_ARGUMENT."""
+    request = EmbedRequest(
+        input=[Document.from_media('gs://bucket/cat.png', 'image/png')],
+        options=options,  # pyright: ignore[reportArgumentType]
+    )
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding@001', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as exc_info:
+        await embedder.generate(request)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert exc_info.value.message == (
+        f'multimodalembedding@001: {expected_fields}: not supported by multimodal embedding; '
+        'only output_dimensionality and version apply'
+    )
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_maps_video_segment_config(mocker: MockerFixture) -> None:
+    """Document metadata video_segment_config is forwarded as the instance videoSegmentConfig."""
+    segment_config = {'startOffsetSec': 0, 'endOffsetSec': 10, 'intervalSec': 5}
+    request = EmbedRequest(
+        input=[
+            Document(
+                content=Document.from_media('gs://bucket/clip.mp4', 'video/mp4').content,
+                metadata={'video_segment_config': segment_config},
+            )
+        ]
+    )
+    predict_body = {
+        'predictions': [{'videoEmbeddings': [{'startOffsetSec': 0, 'endOffsetSec': 5, 'embedding': [0.3, 0.4]}]}]
+    }
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = json.dumps(predict_body)
+    client_mock._api_client.async_request.return_value = http_response
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    await embedder.generate(request)
+
+    call = client_mock._api_client.async_request.call_args
+    instances = call.kwargs['request_dict']['instances']
+    assert instances[0] == {'video': {'gcsUri': 'gs://bucket/clip.mp4', 'videoSegmentConfig': segment_config}}
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_guards_missing_private_transport(mocker: MockerFixture) -> None:
+    """A client missing the private _api_client transport fails with an actionable error."""
+    request = EmbedRequest(input=[Document.from_media('gs://bucket/cat.png', 'image/png')])
+    client_mock = mocker.Mock(spec=[])  # no _api_client attribute at all
+
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+    with pytest.raises(GenkitError, match='google-genai>=1.63.0') as raised:
+        await embedder.generate(request)
+    assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+# ---------------------------------------------------------------------------
+# Error classification
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('code', 'status'), [(429, 'RESOURCE_EXHAUSTED'), (503, 'UNAVAILABLE'), (400, 'INVALID_ARGUMENT')]
+)
+async def test_embed_content_api_error_is_classified(mocker: MockerFixture, code: int, status: str) -> None:
+    """A quota or overload error while indexing a menu keeps its status so retry can act on it."""
+    api_error = APIError(code, {'error': {'message': 'embed failed'}})
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = api_error
+    embedder = Embedder('gemini-embedding-001', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == status
+    assert raised.value.__cause__ is api_error
+
+
+@pytest.mark.asyncio
+async def test_embed_content_credential_failure_is_unauthenticated(mocker: MockerFixture) -> None:
+    """Missing ADC on a Vertex embed is UNAUTHENTICATED, not a raw google.auth error."""
+    no_adc = DefaultCredentialsError('Your default credentials were not found.')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = no_adc
+    embedder = Embedder('text-embedding-005', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+    assert raised.value.__cause__ is no_adc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'failure',
+    [
+        httpx.ConnectError('[Errno 61] Connection refused'),
+        ConnectionResetError('Connection reset by peer'),
+    ],
+)
+async def test_embedder_connection_refused_is_unavailable(mocker: MockerFixture, failure: Exception) -> None:
+    """A refused or dropped connection while embedding is UNAVAILABLE so retry and fallback try again."""
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = failure
+    embedder = Embedder('gemini-embedding-001', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'UNAVAILABLE'
+    assert raised.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_embedder_timeout_is_deadline_exceeded(mocker: MockerFixture) -> None:
+    """An embed call that times out is DEADLINE_EXCEEDED, not a raw transport error."""
+    timeout = httpx.ReadTimeout('timed out')
+    client_mock = mocker.AsyncMock()
+    client_mock.aio.models.embed_content.side_effect = timeout
+    embedder = Embedder('gemini-embedding-001', client_mock)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_text('Smoked salmon tartine')]))
+
+    assert raised.value.status == 'DEADLINE_EXCEEDED'
+    assert raised.value.__cause__ is timeout
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_api_error_is_classified(mocker: MockerFixture) -> None:
+    """The :predict call classifies provider HTTP errors like embed_content does."""
+    api_error = APIError(429, {'error': {'message': 'Quota exceeded'}})
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = api_error
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
+
+    assert raised.value.status == 'RESOURCE_EXHAUSTED'
+    assert raised.value.__cause__ is api_error
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_credential_failure_is_unauthenticated(mocker: MockerFixture) -> None:
+    """A revoked token on :predict is UNAUTHENTICATED."""
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = RefreshError('invalid_grant')
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
+
+    assert raised.value.status == 'UNAUTHENTICATED'
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_non_json_body_is_internal(mocker: MockerFixture) -> None:
+    """A 200 whose body isn't JSON is a malformed provider response."""
+    client_mock = mocker.AsyncMock()
+    http_response = mocker.Mock()
+    http_response.body = '<html>502 Bad Gateway</html>'
+    client_mock._api_client.async_request.return_value = http_response
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError) as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/tartine.png', 'image/png')]))
+
+    assert raised.value.status == 'INTERNAL'
+    assert isinstance(raised.value.__cause__, json.JSONDecodeError)
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_unsupported_content_type(mocker: MockerFixture) -> None:
+    """A PDF is caller input the multimodal API cannot take."""
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError, match='Unsupported contentType') as raised:
+        await embedder.generate(EmbedRequest(input=[Document.from_media('gs://menu/menu.pdf', 'application/pdf')]))
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    client_mock._api_client.async_request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_rejects_empty_document(mocker: MockerFixture) -> None:
+    """A document with nothing to embed is caller input, rejected before the call."""
+    client_mock = mocker.AsyncMock()
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(GenkitError, match='no text, image, or video') as raised:
+        await embedder.generate(EmbedRequest(input=[Document(content=[Part.from_text('')])]))
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+class _ConcurrencyTracker:
+    """Records overlap and completion order of mocked embedding requests."""
+
+    def __init__(self, yields: int = 3) -> None:
+        """Initialize the tracker.
+
+        Args:
+            yields: Default number of times a tracked request yields to the
+                event loop before finishing, so siblings can start.
+        """
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.completed: list[int] = []
+        self._yields = yields
+
+    async def track(self, index: int, yields: int | None = None) -> None:
+        """Hold one request in flight across a few event loop iterations.
+
+        Args:
+            index: Index of the batch or document being requested.
+            yields: Overrides the default number of yields for this request.
+        """
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        for _ in range(self._yields if yields is None else yields):
+            await asyncio.sleep(0)
+        self.in_flight -= 1
+        self.completed.append(index)
+
+
+def _tracked_embed_content(
+    tracker: _ConcurrencyTracker,
+    yields_for: Callable[[int], int] | None = None,
+    fail_for: Callable[[int], bool] | None = None,
+) -> Callable[..., Awaitable[genai.types.EmbedContentResponse]]:
+    """Build an embed_content side effect that tracks overlap and can fail."""
+
+    async def side_effect(
+        *, model: str, contents: list[genai.types.Content], config: object
+    ) -> genai.types.EmbedContentResponse:
+        index = int(((contents[0].parts or [])[0].text) or '-1')
+        await tracker.track(index, None if yields_for is None else yields_for(index))
+        if fail_for is not None and fail_for(index):
+            raise RuntimeError(f'batch {index} failed')
+        return _indexed_embed_content(model=model, contents=contents, config=config)
+
+    return side_effect
+
+
+def _numbered_media_docs(count: int) -> list[Document]:
+    """Documents whose gcsUri carries their index, for the multimodal path."""
+    return [Document.from_media(f'gs://bucket/{i}.png', 'image/png') for i in range(count)]
+
+
+def _instance_index(request_dict: dict[str, Any]) -> int:
+    """Document index carried in a single-instance :predict payload's gcsUri."""
+    uri = str(request_dict['instances'][0]['image']['gcsUri'])
+    return int(uri.rsplit('/', 1)[1].removesuffix('.png'))
+
+
+def _tracked_async_request(
+    tracker: _ConcurrencyTracker,
+    mocker: MockerFixture,
+    yields_for: Callable[[int], int] | None = None,
+    fail_for: Callable[[int], bool] | None = None,
+) -> Callable[..., Awaitable[object]]:
+    """Build a :predict side effect that tracks overlap and can fail."""
+
+    async def side_effect(*, http_method: str, path: str, request_dict: dict[str, Any]) -> object:
+        index = _instance_index(request_dict)
+        await tracker.track(index, None if yields_for is None else yields_for(index))
+        if fail_for is not None and fail_for(index):
+            raise RuntimeError(f'document {index} failed')
+        http_response = mocker.Mock()
+        http_response.body = json.dumps({'predictions': [{'imageEmbedding': [float(index)]}]})
+        return http_response
+
+    return side_effect
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_batches_run_concurrently(mocker: MockerFixture) -> None:
+    """Text embedding batches are in flight at the same time, not one after another."""
+    count = 5
+    tracker = _ConcurrencyTracker()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _tracked_embed_content(tracker)
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_docs(count)))
+
+    assert client.aio.models.embed_content.call_count == count
+    assert tracker.max_in_flight > 1
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_concurrency_is_capped(mocker: MockerFixture) -> None:
+    """No more than EMBED_CONCURRENCY_LIMIT text batches are in flight at once."""
+    count = EMBED_CONCURRENCY_LIMIT * 3
+    tracker = _ConcurrencyTracker()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _tracked_embed_content(tracker)
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_docs(count)))
+
+    assert client.aio.models.embed_content.call_count == count
+    assert tracker.max_in_flight == EMBED_CONCURRENCY_LIMIT
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_keeps_input_order_when_batches_finish_first(mocker: MockerFixture) -> None:
+    """Embeddings stay in input order when later batches complete before earlier ones."""
+    count = 5
+    tracker = _ConcurrencyTracker()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _tracked_embed_content(
+        tracker, yields_for=lambda index: (count - index) * 2
+    )
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_docs(count)))
+
+    # The mock really did complete back to front, so input order is not
+    # completion order here.
+    assert tracker.completed == list(reversed(range(count)))
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_failure_leaves_queued_batches_unsent(mocker: MockerFixture) -> None:
+    """A failing batch cancels the batches still queued instead of billing them all."""
+    count = EMBED_CONCURRENCY_LIMIT * 3
+    tracker = _ConcurrencyTracker()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _tracked_embed_content(
+        tracker,
+        yields_for=lambda index: 0 if index == 0 else 3,
+        fail_for=lambda index: index == 0,
+    )
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    with pytest.raises(RuntimeError, match='batch 0 failed'):
+        await embedder.generate(EmbedRequest(input=_numbered_docs(count)))
+
+    assert client.aio.models.embed_content.call_count < count
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_reports_the_first_failure_in_input_order(mocker: MockerFixture) -> None:
+    """The failure raised is the earliest failing batch, not the first one to fail."""
+    tracker = _ConcurrencyTracker()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = _tracked_embed_content(
+        tracker,
+        yields_for=lambda index: 1 if index == 0 else 0,
+        fail_for=lambda index: index in {0, 2},
+    )
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    # Batch 2 fails first, batch 0 fails a loop iteration later.
+    with pytest.raises(RuntimeError, match='batch 0 failed'):
+        await embedder.generate(EmbedRequest(input=_numbered_docs(3)))
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_requests_run_concurrently(mocker: MockerFixture) -> None:
+    """Multimodal :predict requests are in flight at the same time."""
+    count = 5
+    tracker = _ConcurrencyTracker()
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = _tracked_async_request(tracker, mocker)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_media_docs(count)))
+
+    assert client_mock._api_client.async_request.call_count == count
+    assert tracker.max_in_flight > 1
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_concurrency_is_capped(mocker: MockerFixture) -> None:
+    """No more than EMBED_CONCURRENCY_LIMIT :predict requests are in flight at once."""
+    count = EMBED_CONCURRENCY_LIMIT * 3
+    tracker = _ConcurrencyTracker()
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = _tracked_async_request(tracker, mocker)
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_media_docs(count)))
+
+    assert client_mock._api_client.async_request.call_count == count
+    assert tracker.max_in_flight == EMBED_CONCURRENCY_LIMIT
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_keeps_document_order_when_requests_finish_first(mocker: MockerFixture) -> None:
+    """Multimodal embeddings stay in document order when later requests finish first."""
+    count = 5
+    tracker = _ConcurrencyTracker()
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = _tracked_async_request(
+        tracker, mocker, yields_for=lambda index: (count - index) * 2
+    )
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    response = await embedder.generate(EmbedRequest(input=_numbered_media_docs(count)))
+
+    assert tracker.completed == list(reversed(range(count)))
+    assert [e.embedding for e in response.embeddings] == [[float(i)] for i in range(count)]
+
+
+@pytest.mark.asyncio
+async def test_multimodal_embedding_failure_leaves_queued_requests_unsent(mocker: MockerFixture) -> None:
+    """A failing :predict cancels the documents still queued instead of billing them all."""
+    count = EMBED_CONCURRENCY_LIMIT * 3
+    tracker = _ConcurrencyTracker()
+    client_mock = mocker.AsyncMock()
+    client_mock._api_client.async_request.side_effect = _tracked_async_request(
+        tracker,
+        mocker,
+        yields_for=lambda index: 0 if index == 0 else 3,
+        fail_for=lambda index: index == 0,
+    )
+    embedder = Embedder('multimodalembedding', client_mock, is_vertex=True)
+
+    with pytest.raises(RuntimeError, match='document 0 failed'):
+        await embedder.generate(EmbedRequest(input=_numbered_media_docs(count)))
+
+    assert client_mock._api_client.async_request.call_count < count
+
+
+class _BlockedRequests:
+    """Mocked embedding requests that never finish on their own."""
+
+    def __init__(self) -> None:
+        """Initialize the counters and the gate every request waits on."""
+        self.started = 0
+        self.completed = 0
+        self.gate = asyncio.Event()
+
+    async def side_effect(
+        self, *, model: str, contents: list[genai.types.Content], config: object
+    ) -> genai.types.EmbedContentResponse:
+        """Block a request on the gate, counting entry and completion."""
+        self.started += 1
+        await self.gate.wait()
+        self.completed += 1
+        return _indexed_embed_content(model=model, contents=contents, config=config)
+
+
+async def _yield_until(predicate: Callable[[], bool], limit: int = 100) -> None:
+    """Hand the event loop back until the predicate holds, without sleeping."""
+    for _ in range(limit):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_cancellation_cancels_in_flight_requests(mocker: MockerFixture) -> None:
+    """Cancelling the caller cancels the in-flight batches instead of leaving them running."""
+    count = 3
+    blocked = _BlockedRequests()
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = blocked.side_effect
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    task = asyncio.create_task(embedder.generate(EmbedRequest(input=_numbered_docs(count))))
+    await _yield_until(lambda: blocked.started == count)
+    assert blocked.started == count
+
+    task.cancel()
+    results = await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(results[0], asyncio.CancelledError)
+
+    # Releasing the gate must not revive anything: the requests are gone, not
+    # merely unobserved.
+    blocked.gate.set()
+    await _yield_until(lambda: blocked.completed > 0)
+    assert blocked.completed == 0
+    assert [t for t in asyncio.all_tasks() if t is not asyncio.current_task()] == []
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_reraises_a_call_that_cancelled_itself(mocker: MockerFixture) -> None:
+    """A CancelledError raised inside one request surfaces as CancelledError, not as a result."""
+
+    async def cancel_the_second(
+        *, model: str, contents: list[genai.types.Content], config: object
+    ) -> genai.types.EmbedContentResponse:
+        if (contents[0].parts or [])[0].text == '1':
+            raise asyncio.CancelledError()
+        return _indexed_embed_content(model=model, contents=contents, config=config)
+
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = cancel_the_second
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await embedder.generate(EmbedRequest(input=_numbered_docs(3)))
+
+
+@pytest.mark.asyncio
+async def test_text_embedding_ignores_errors_raised_by_the_calls_it_cancelled(mocker: MockerFixture) -> None:
+    """An in-flight call that turns its cancellation into another error does not mask the real failure."""
+    gate = asyncio.Event()
+
+    async def block_the_first(
+        *, model: str, contents: list[genai.types.Content], config: object
+    ) -> genai.types.EmbedContentResponse:
+        index = int((contents[0].parts or [])[0].text or '-1')
+        if index == 0:
+            try:
+                await gate.wait()
+            except asyncio.CancelledError:
+                raise RuntimeError('cleanup failed') from None
+        await asyncio.sleep(0)
+        raise RuntimeError(f'batch {index} failed')
+
+    client = mocker.AsyncMock()
+    client.aio.models.embed_content.side_effect = block_the_first
+    embedder = Embedder('gemini-embedding-001', client, is_vertex=True)
+
+    with pytest.raises(RuntimeError, match='batch 1 failed'):
+        await embedder.generate(EmbedRequest(input=_numbered_docs(2)))

@@ -78,6 +78,9 @@ func newRouteTestGenkit(t *testing.T) *genkit.Genkit {
 
 func TestAllAgentRoutes(t *testing.T) {
 	g := newRouteTestGenkit(t)
+	// A remote agent forwards with this app's credentials, so the layout
+	// must not serve it: it is absent from the want list below.
+	DefineRemoteAgent(g, "billing", "https://billing.internal/agents/billing")
 
 	got := routeKeys(AllAgentRoutes(g))
 	want := []string{
@@ -85,6 +88,7 @@ func TestAllAgentRoutes(t *testing.T) {
 		"POST /agents/serverChat",
 		"POST /agents/serverChat/abort",
 		"POST /agents/serverChat/getSnapshot",
+		"POST /agents/serverChat/waitForSnapshot",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("AllAgentRoutes layout =\n  %v\nwant\n  %v", got, want)
@@ -119,6 +123,7 @@ func TestAgentRoutes_PicksOneAgentAndMirrorsCapabilities(t *testing.T) {
 		"POST /agents/srv",
 		"POST /agents/srv/abort",
 		"POST /agents/srv/getSnapshot",
+		"POST /agents/srv/waitForSnapshot",
 	}; !slices.Equal(got, want) {
 		t.Errorf("AgentRoutes(server) = %v, want %v", got, want)
 	}

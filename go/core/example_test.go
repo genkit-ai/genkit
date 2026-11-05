@@ -26,15 +26,16 @@ import (
 )
 
 // This example demonstrates defining a simple flow.
-func ExampleDefineFlow() {
+func ExampleNewFlow() {
 	r := registry.New()
 
-	// Define a flow that processes input
-	flow := core.DefineFlow(r, "uppercase",
+	// Create a flow that processes input and register it
+	flow := core.NewFlow("uppercase",
 		func(ctx context.Context, input string) (string, error) {
 			return strings.ToUpper(input), nil
 		},
 	)
+	flow.Register(r)
 
 	// Run the flow
 	result, err := flow.Run(context.Background(), "hello")
@@ -47,11 +48,11 @@ func ExampleDefineFlow() {
 }
 
 // This example demonstrates defining a streaming flow.
-func ExampleDefineStreamingFlow() {
+func ExampleNewStreamingFlow() {
 	r := registry.New()
 
-	// Define a streaming flow that counts down
-	flow := core.DefineStreamingFlow(r, "countdown",
+	// Create a streaming flow that counts down and register it
+	flow := core.NewStreamingFlow("countdown",
 		func(ctx context.Context, start int, cb core.StreamCallback[int]) (string, error) {
 			for i := start; i > 0; i-- {
 				if cb != nil {
@@ -63,6 +64,7 @@ func ExampleDefineStreamingFlow() {
 			return "Done!", nil
 		},
 	)
+	flow.Register(r)
 
 	// Use Stream() iterator to receive chunks
 	iter := flow.Stream(context.Background(), 3)
@@ -89,8 +91,8 @@ func ExampleDefineStreamingFlow() {
 func ExampleRun() {
 	r := registry.New()
 
-	// Define a flow that uses Run for traced steps
-	flow := core.DefineFlow(r, "pipeline",
+	// Create a flow that uses Run for traced steps
+	flow := core.NewFlow("pipeline",
 		func(ctx context.Context, input string) (string, error) {
 			// Each Run creates a traced step visible in the Dev UI
 			upper, err := core.Run(ctx, "toUpper", func() (string, error) {
@@ -106,6 +108,7 @@ func ExampleRun() {
 			return result, err
 		},
 	)
+	flow.Register(r)
 
 	result, err := flow.Run(context.Background(), "hello")
 	if err != nil {
@@ -116,8 +119,8 @@ func ExampleRun() {
 	// Output: RESULT: HELLO
 }
 
-// This example demonstrates defining schemas from Go types.
-func ExampleDefineSchemasFor() {
+// This example demonstrates registering a schema inferred from a Go type.
+func ExampleInferSchemaMap() {
 	r := registry.New()
 
 	// Define a struct type
@@ -126,20 +129,19 @@ func ExampleDefineSchemasFor() {
 		Age  int    `json:"age"`
 	}
 
-	// Register the schema
-	core.DefineSchemasFor(r, Person{})
+	// Register the inferred schema; it can then be referenced in .prompt files
+	r.RegisterSchema("Person", core.InferSchemaMap(Person{}))
 
-	// The schema is now registered and can be referenced in .prompt files
 	fmt.Println("Schema registered")
 	// Output: Schema registered
 }
 
-// This example demonstrates defining a schema from a map.
-func ExampleDefineSchema() {
+// This example demonstrates registering a schema from a map.
+func Example_registerSchema() {
 	r := registry.New()
 
-	// Define a JSON schema as a map
-	core.DefineSchema(r, "Address", map[string]any{
+	// Register a JSON schema defined as a map
+	r.RegisterSchema("Address", map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"street": map[string]any{"type": "string"},

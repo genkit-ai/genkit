@@ -14,70 +14,52 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model protocol types for plugin authors."""
+"""Model protocol types for plugin authors; application code should call :class:`genkit.Genkit` ``generate``."""
 
+from genkit._ai._background_model import BackgroundModel
 from genkit._ai._model import (
-    ModelConfig,
-    model_action_metadata,
-    model_ref,
+    Model,
 )
-from genkit._core._background import BackgroundAction
+from genkit._core._action import ModelContext
 from genkit._core._model import (
     GenerateActionOptions,
-    Message,
+    GenerationUsage,
+    ModelConfig,
     ModelRef,
     ModelRequest,
-    ModelResponse,
-    ModelResponseChunk,
-    ModelUsage,
-    get_basic_usage_stats,
+    OutputConfig,
 )
 from genkit._core._typing import (
-    Candidate,
-    Constrained,
-    Error,
-    FinishReason,
+    ConstrainedSupport,
     ModelInfo,
-    Operation,
-    Stage,
-    Supports,
+    ModelStage,
+    ModelSupports,
     ToolDefinition,
     ToolRequest,
     ToolResponse,
 )
 
 __all__ = [
-    # Request/Response types
-    'BackgroundAction',
-    'ModelRequest',
-    'ModelResponse',
-    'ModelResponseChunk',
-    # Usage and metadata
-    'ModelUsage',
-    'Candidate',
-    'FinishReason',
+    # Models, request and context types
+    'Model',
+    'BackgroundModel',
     'GenerateActionOptions',
-    # Error and operation
-    'Error',
-    'Operation',
+    'ModelContext',
+    'ModelRequest',
+    'OutputConfig',
+    # Usage and metadata
+    'GenerationUsage',
     # Tool types
     'ToolRequest',
     'ToolDefinition',
     'ToolResponse',
     # Model info
     'ModelInfo',
-    'Supports',
-    'Constrained',
-    'Stage',
-    # Factory functions and metadata
-    'model_action_metadata',
-    'model_ref',
+    'ModelSupports',
+    'ConstrainedSupport',
+    'ModelStage',
     # Reference types
     'ModelRef',
     # Config
     'ModelConfig',
-    # Message
-    'Message',
-    # Usage
-    'get_basic_usage_stats',
 ]

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { detectRuntimeSync } from '@genkit-ai/tools-common/utils';
 import {
   existsSync,
   mkdirSync,
@@ -27,9 +28,27 @@ import os from 'os';
 import path from 'path';
 import { version } from './version';
 
+export const SUPPORTED_DOC_LANGUAGES = ['js', 'go', 'python', 'dart'] as const;
+export type SupportedDocLanguage = (typeof SUPPORTED_DOC_LANGUAGES)[number];
+
+/**
+ * Auto-detects the default Genkit documentation/usage language from project
+ * marker files in `projectRoot` (defaulting to `process.cwd()`). Falls back to
+ * `'js'` when no recognized language marker is found.
+ */
+export function detectProjectLanguage(
+  projectRoot: string = process.cwd()
+): SupportedDocLanguage {
+  const runtime = detectRuntimeSync(projectRoot || process.cwd());
+  if (runtime === 'go' || runtime === 'python' || runtime === 'dart') {
+    return runtime;
+  }
+  return 'js';
+}
+
 export const DOCS_URL =
   process.env.GENKIT_DOCS_BUNDLE_URL ??
-  'http://genkit.dev/docs-bundle-experimental.json';
+  'https://genkit.dev/docs-bundle-experimental.json';
 
 export const DOCS_BUNDLE_FILE_PATH = path.resolve(
   os.homedir(),

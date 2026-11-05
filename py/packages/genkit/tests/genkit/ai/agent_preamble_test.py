@@ -15,31 +15,31 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
+from genkit import Part
 from genkit._ai._agents._preamble import (
     HISTORY_TAG,
     PREAMBLE_KEY,
     apply_preamble_tags,
     tag_history_for_render,
 )
-from genkit._ai._aio import Genkit
-from genkit._ai._testing import define_programmable_model
 from genkit._core._model import Message, ModelResponse
 from genkit._core._typing import (
+    AgentFinishReason,
     FinishReason,
-    MessageData,
-    Part,
     Role,
-    TextPart,
+    SnapshotStatus,
     ToolRequest,
-    ToolRequestPart,
     ToolResponse,
-    ToolResponsePart,
 )
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
+from genkit.testing import define_scripted_model
 
 
 def test_tag_history_for_render_copies_messages() -> None:
-    original = Message(role=Role.USER, content=[Part(TextPart(text='hi'))], metadata={'keep': True})
+    original = Message(role=Role.USER, content=[Part.from_text('hi')], metadata={'keep': True})
     tagged = tag_history_for_render([original])[0]
 
     assert tagged.metadata is not None
@@ -49,8 +49,8 @@ def test_tag_history_for_render_copies_messages() -> None:
 
 
 def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() -> None:
-    history = Message(role=Role.USER, content=[Part(TextPart(text='turn 1'))], metadata={HISTORY_TAG: True})
-    system = Message(role=Role.SYSTEM, content=[Part(TextPart(text='be helpful'))])
+    history = Message(role=Role.USER, content=[Part.from_text('turn 1')], metadata={HISTORY_TAG: True})
+    system = Message(role=Role.SYSTEM, content=[Part.from_text('be helpful')])
 
     tagged = apply_preamble_tags([system, history])
 
@@ -59,7 +59,7 @@ def test_apply_preamble_tags_tags_template_messages_and_strips_history_marker() 
 
 
 def test_apply_preamble_tags_does_not_mutate_shared_prompt_messages() -> None:
-    shared = Message(role=Role.SYSTEM, content=[Part(TextPart(text='static system'))])
+    shared = Message(role=Role.SYSTEM, content=[Part.from_text('static system')])
     tagged = apply_preamble_tags([shared])[0]
 
     assert tagged.metadata == {PREAMBLE_KEY: True}
@@ -69,15 +69,15 @@ def test_apply_preamble_tags_does_not_mutate_shared_prompt_messages() -> None:
 @pytest.mark.asyncio
 async def test_prompt_agent_does_not_persist_system_preamble() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='preambleAgent', model='programmableModel', system='You are terse.')
+    ai.define_prompt(name='preambleAgent', model='scriptedModel', system='You are terse.')
     agent = ai.define_prompt_agent(name='preambleAgent')
 
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='ok'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         )
     )
 
@@ -95,19 +95,19 @@ async def test_prompt_agent_does_not_persist_system_preamble() -> None:
 @pytest.mark.asyncio
 async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> None:
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='preambleAgent', model='programmableModel', system='You are terse.')
+    ai.define_prompt(name='preambleAgent', model='scriptedModel', system='You are terse.')
     agent = ai.define_prompt_agent(name='preambleAgent')
 
     pm.responses.extend([
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='first'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('first')]),
         ),
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(TextPart(text='second'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('second')]),
         ),
     ])
 
@@ -134,6 +134,36 @@ async def test_prompt_agent_multi_turn_session_has_no_accumulated_preamble() -> 
 
 
 @pytest.mark.asyncio
+async def test_agent_system_renders_as_template_without_input() -> None:
+    """`define_agent(system=...)` is a template even though agents pass no input.
+
+    `{{@auth.name}}` fills from context and `{{table}}` renders empty. The
+    `chat.send` text reaches the model as written.
+    """
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+    waiter = ai.define_agent('waiter', model='scriptedModel', system='Guest: {{@auth.name}}. Table {{table}}.')
+
+    @ai.flow()
+    async def take_order(_: str) -> None:
+        await waiter.chat().send('Return {"dish": {{dish}}}')
+
+    await take_order.run('', context={'auth': {'name': 'Ana'}})
+
+    assert pm.last_request is not None
+    assert [(m.role, [p.text for p in m.content]) for m in pm.last_request.messages] == [
+        (Role.SYSTEM, ['Guest: Ana. Table .']),
+        (Role.USER, ['Return {"dish": {{dish}}}']),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     """Verifies that explicit {{history}} tags work correctly with preamble marking.
 
@@ -143,11 +173,11 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     and model responses are persisted.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     ai.define_prompt(
         name='explicitHistory',
-        model='programmableModel',
+        model='scriptedModel',
         messages="""
         {{role "system"}}
         Prefix system instruction.
@@ -161,7 +191,7 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='response'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('response')]),
         )
     )
 
@@ -177,13 +207,13 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     req_msgs = pm.last_request.messages
     assert len(req_msgs) == 3
     assert req_msgs[0].role == Role.SYSTEM
-    t0 = req_msgs[0].content[0].root.text
+    t0 = req_msgs[0].content[0].text
     assert t0 is not None
     assert 'Prefix' in t0
     assert req_msgs[1].role == Role.USER
-    assert req_msgs[1].content[0].root.text == 'turn 1'
+    assert req_msgs[1].content[0].text == 'turn 1'
     assert req_msgs[2].role == Role.USER
-    t2 = req_msgs[2].content[0].root.text
+    t2 = req_msgs[2].content[0].text
     assert t2 is not None
     assert 'Suffix' in t2
 
@@ -191,8 +221,8 @@ async def test_prompt_agent_explicit_history_tag_preamble() -> None:
     roles = [m.role for m in session.messages]
     assert Role.SYSTEM not in roles
     assert roles == [Role.USER, Role.MODEL]
-    assert session.messages[0].content[0].root.text == 'turn 1'
-    assert session.messages[1].content[0].root.text == 'response'
+    assert session.messages[0].content[0].text == 'turn 1'
+    assert session.messages[1].content[0].text == 'response'
 
 
 @pytest.mark.asyncio
@@ -204,11 +234,11 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     from the session store at the end of the turn.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
     ai.define_prompt(
         name='fewShotAgent',
-        model='programmableModel',
+        model='scriptedModel',
         messages="""
         {{role "system"}}
         System help.
@@ -224,7 +254,7 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='response'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('response')]),
         )
     )
 
@@ -239,18 +269,18 @@ async def test_prompt_agent_few_shot_preamble() -> None:
     assert pm.last_request is not None
     req_msgs = pm.last_request.messages
     assert len(req_msgs) == 4
-    t1 = req_msgs[1].content[0].root.text
+    t1 = req_msgs[1].content[0].text
     assert t1 is not None
     assert 'Q: 1+1' in t1
-    t2 = req_msgs[2].content[0].root.text
+    t2 = req_msgs[2].content[0].text
     assert t2 is not None
     assert 'A: 2' in t2
 
     # Verify few-shots are stripped, and only runtime history & response are saved
     assert len(session.messages) == 2
     assert [m.role for m in session.messages] == [Role.USER, Role.MODEL]
-    assert session.messages[0].content[0].root.text == 'turn 1'
-    assert session.messages[1].content[0].root.text == 'response'
+    assert session.messages[0].content[0].text == 'turn 1'
+    assert session.messages[1].content[0].text == 'response'
 
 
 @pytest.mark.asyncio
@@ -262,38 +292,35 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     as preambles, ensuring tool traces are successfully saved to the database.
     """
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
+    pm, _ = define_scripted_model(ai)
 
-    ai.define_prompt(name='toolHistoryAgent', model='programmableModel', system='You are helpful.')
+    ai.define_prompt(name='toolHistoryAgent', model='scriptedModel', system='You are helpful.')
     agent = ai.define_prompt_agent(name='toolHistoryAgent')
 
     pm.responses.append(
         ModelResponse(
             finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part(root=TextPart(text='done'))]),
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
         )
     )
 
     # Pre-seed tool call and tool response history
     tool_request_msg = Message(
         role=Role.MODEL,
-        content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='myTool', ref='r1', input={'x': 1})))],
+        content=[Part(tool_request=ToolRequest(name='myTool', ref='r1', input={'x': 1}))],
     )
     tool_response_msg = Message(
         role=Role.TOOL,
-        content=[
-            Part(root=ToolResponsePart(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'})))
-        ],
+        content=[Part(tool_response=ToolResponse(name='myTool', ref='r1', output={'result': 'ok'}))],
     )
 
     history = [
-        Message(role=Role.USER, content=[Part(root=TextPart(text='run tool'))]),
+        Message(role=Role.USER, content=[Part.from_text('run tool')]),
         tool_request_msg,
         tool_response_msg,
     ]
 
-    seed_messages = [MessageData.model_validate(m.model_dump()) for m in history]
-    session = agent.chat(messages=seed_messages)
+    session = agent.chat(messages=history)
     turn = session.send_stream('continue')
     async for _chunk in turn.stream:
         pass
@@ -312,6 +339,139 @@ async def test_prompt_agent_tool_messages_preserved_verbatim() -> None:
     # Verify that tool request/responses are present in the session messages
     assert len(session.messages) == 5
     assert session.messages[1].role == Role.MODEL
-    assert isinstance(session.messages[1].content[0].root, ToolRequestPart)
+    assert session.messages[1].content[0].tool_request is not None
     assert session.messages[2].role == Role.TOOL
-    assert isinstance(session.messages[2].content[0].root, ToolResponsePart)
+    assert session.messages[2].content[0].tool_response is not None
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_schema_miss_keeps_the_model_text() -> None:
+    """Bad JSON is not a dead turn: send() returns the model text like generate()."""
+
+    class Recipe(BaseModel):
+        title: str
+
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='cook', model='scriptedModel', output_schema=Recipe)
+    agent = ai.define_prompt_agent(name='cook')
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('not json')]),
+        )
+    )
+
+    out = await agent.chat().send('give me a recipe')
+    assert out.finish_reason == AgentFinishReason.STOP
+    assert out.text == 'not json'
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_blocked_snapshot_is_not_resumable() -> None:
+    """A safety refusal is not a completed turn resume can continue from."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    store = InMemorySessionStore()
+    ai.define_prompt(name='blocked', model='scriptedModel')
+    agent = ai.define_prompt_agent(name='blocked', store=store)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
+        )
+    )
+
+    chat = agent.chat()
+    out = await chat.send('hi')
+    assert out.finish_reason == AgentFinishReason.BLOCKED
+    assert out.snapshot_id
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None
+    assert snap.status == SnapshotStatus.COMPLETED
+    assert snap.error is None
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+    resumed = await agent.chat(snapshot_id=out.snapshot_id).send('again')
+    assert resumed.finish_reason == AgentFinishReason.STOP
+    assert resumed.text == 'ok'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+    again = await chat.send('try again')
+    assert again.finish_reason == AgentFinishReason.STOP
+    assert again.text == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_client_managed_blocked_is_not_next_turn_history() -> None:
+    """A safety refusal is this turn's reply, not the next generate's history."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    ai.define_prompt(name='blocked', model='scriptedModel')
+    agent = ai.define_prompt_agent(name='blocked')
+    pm.responses.extend([
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        ),
+    ])
+
+    chat = agent.chat()
+    out = await chat.send('hi')
+    assert out.finish_reason == AgentFinishReason.BLOCKED
+    again = await chat.send('try again')
+    assert again.finish_reason == AgentFinishReason.STOP
+    assert again.text == 'ok'
+    assert pm.last_request is not None
+    model_texts = [m.text for m in pm.last_request.messages if m.role == Role.MODEL]
+    assert 'nope' in model_texts
+
+
+@pytest.mark.asyncio
+async def test_detach_blocked_keeps_blocked_finish_reason() -> None:
+    """A detached safety refusal stays blocked on the snapshot."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    store = InMemorySessionStore()
+    ai.define_prompt(name='blockedDetach', model='scriptedModel')
+    agent = ai.define_prompt_agent(name='blockedDetach', store=store)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.BLOCKED,
+            finish_message='safety',
+            message=Message(role=Role.MODEL, content=[Part.from_text('nope')]),
+        )
+    )
+
+    chat = agent.chat()
+    task = await chat.detach('hi')
+    snap = await task.wait(interval=0.05)
+    assert snap.status == SnapshotStatus.COMPLETED
+    assert snap.finish_reason == AgentFinishReason.BLOCKED
+    assert snap.error is None
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    )
+    resumed = await agent.chat(snapshot_id=task.snapshot_id).send('again')
+    assert resumed.finish_reason == AgentFinishReason.STOP
+    assert resumed.text == 'ok'

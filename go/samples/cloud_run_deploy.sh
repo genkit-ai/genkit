@@ -20,10 +20,10 @@
 # Run it from this directory (go/samples).
 # For example
 #
-#    cloud_run_deploy.sh coffee-shop
+#    cloud_run_deploy.sh basic
 #
-# will deploy the coffee-shop sample as a Cloud Run service
-# named genkit-coffee-shop.
+# will deploy the basic sample as a Cloud Run service
+# named genkit-basic.
 
 sample="$1"
 

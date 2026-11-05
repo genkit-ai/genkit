@@ -15,74 +15,27 @@
 package kimi_test
 
 import (
-	"context"
-	"os"
-	"strings"
 	"testing"
 
-	"github.com/firebase/genkit/go/ai"
-	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
+	"github.com/firebase/genkit/go/plugins/internal/livetest"
+	"github.com/firebase/genkit/go/plugins/internal/oailive"
 )
 
 func TestPluginLive(t *testing.T) {
-	apiKey := os.Getenv("KIMI_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("MOONSHOT_API_KEY")
-	}
-	if apiKey == "" {
-		t.Skip("KIMI_API_KEY and MOONSHOT_API_KEY are not set")
-	}
+	livetest.Env(t, "KIMI_API_KEY", "MOONSHOT_API_KEY")
+	g := livetest.Init(t, &kimi.Kimi{})
 
-	ctx := context.Background()
-	plugin := &kimi.Kimi{}
-	g := genkit.Init(
-		ctx,
-		genkit.WithPlugins(plugin),
-		genkit.WithDefaultModel("kimi/"+kimi.ModelKimiK3),
-	)
-
-	t.Run("kimi k3 complete", func(t *testing.T) {
-		resp, err := genkit.Generate(
-			ctx,
-			g,
-			ai.WithPrompt("What is the capital of France? Answer with the city only."),
-		)
-		if err != nil {
-			t.Fatalf("Generate() error = %v", err)
-		}
-		if !strings.Contains(strings.ToLower(resp.Text()), "paris") {
-			t.Fatalf("Text() = %q, want Paris", resp.Text())
-		}
-	})
-
-	t.Run("kimi k2.6 streaming reasoning", func(t *testing.T) {
-		var streamedReasoning, streamedText strings.Builder
-		resp, err := genkit.Generate(
-			ctx,
-			g,
-			ai.WithModel(plugin.Model(g, kimi.ModelKimiK26)),
-			ai.WithPrompt("Explain briefly why the sky appears blue."),
-			ai.WithStreaming(func(_ context.Context, chunk *ai.ModelResponseChunk) error {
-				streamedReasoning.WriteString(chunk.Reasoning())
-				streamedText.WriteString(chunk.Text())
-				return nil
-			}),
-		)
-		if err != nil {
-			t.Fatalf("Generate() error = %v", err)
-		}
-		if streamedReasoning.String() == "" {
-			t.Fatal("streamed reasoning is empty")
-		}
-		if streamedText.String() == "" {
-			t.Fatal("streamed text is empty")
-		}
-		if resp.Reasoning() != streamedReasoning.String() {
-			t.Fatalf("final reasoning = %q, want streamed %q", resp.Reasoning(), streamedReasoning.String())
-		}
-		if resp.Text() != streamedText.String() {
-			t.Fatalf("final text = %q, want streamed %q", resp.Text(), streamedText.String())
-		}
+	oailive.Run(t, g, oailive.Suite{
+		Suite: livetest.Suite{
+			Model:            kimi.ModelRef("kimi-k3", nil),
+			ReasoningModel:   kimi.ModelRef("kimi-k2.6", nil),
+			ReasoningContent: true,
+			LimitConfig:      &kimi.ChatConfig{MaxOutputTokens: 16},
+			BadKeyPlugin:     &kimi.Kimi{APIKey: "invalid"},
+		},
+		ExtraConfig: map[string]any{
+			"extra": map[string]any{"thinking": map[string]any{"type": "disabled"}},
+		},
 	})
 }

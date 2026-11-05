@@ -1,0 +1,536 @@
+# Copyright 2025 Google LLC
+# SPDX-License-Identifier: Apache-2.0
+
+"""``MultipartToolResponse`` construction, schema stamping, registry keys, and wrap_tool.
+
+What ``await tool()`` and ``ai.generate`` hand back is pinned in
+``tool_response_contract_test.py``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from datetime import datetime
+
+import pytest
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic.alias_generators import to_camel
+
+from genkit import Genkit, Message, ModelResponse, Part
+from genkit._ai._generate import CallScope, generate_action, to_tool_definition
+from genkit._ai._tools import (
+    ORIGINAL_OUTPUT_SCHEMA_KEY,
+    MultipartToolResponse,
+    as_multipart_tool_response,
+    envelope_output_type,
+    parts_to_wire,
+)
+from genkit._core._action import Action, create_action_key, parse_action_key
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._model import GenerateActionOptions
+from genkit._core._schema import to_json_schema
+from genkit._core._tool import Tool
+from genkit._core._typing import (
+    FinishReason,
+    MiddlewareRef,
+    MultipartToolResponse as MultipartToolResponseData,
+)
+from genkit.middleware import Middleware, MiddlewareContext, ToolHookParams
+from genkit.plugin_api import ActionKind
+from genkit.testing import define_scripted_model
+
+
+def _png() -> Part:
+    return Part.from_media('data:image/png;base64,abc', content_type='image/png')
+
+
+WIRE_PNG = {'media': {'contentType': 'image/png', 'url': 'data:image/png;base64,abc'}}
+
+
+def _wire(tool: Tool) -> Action:
+    """The ``tool.v2`` envelope action the Dev UI runs for this tool."""
+    wire = tool.wire_action
+    assert wire is not None
+    return wire
+
+
+def test_response_text_part_is_live() -> None:
+    env = MultipartToolResponse(output={'ok': True}, content=[Part.from_text('lab camera')])
+    assert parts_to_wire(env.content) == [{'text': 'lab camera'}]
+
+
+def test_response_data_and_reasoning_parts_are_live() -> None:
+    data = MultipartToolResponse(output={'ok': True}, content=[Part.from_data({'rows': [1]})])
+    assert parts_to_wire(data.content) == [{'data': {'rows': [1]}}]
+    thought = MultipartToolResponse(output={'ok': True}, content=[Part.from_reasoning('checking the label')])
+    assert parts_to_wire(thought.content) == [{'reasoning': 'checking the label'}]
+    res = MultipartToolResponse(
+        output={'ok': True}, content=[Part.model_validate({'resource': {'uri': 'file://shot.png'}})]
+    )
+    assert parts_to_wire(res.content) == [{'resource': {'uri': 'file://shot.png'}}]
+
+
+def test_returning_hollow_parts_is_invalid_part_naming_the_tool() -> None:
+    hollow = MultipartToolResponse(output={'ok': True}, content=[Part.from_media('')])
+    with pytest.raises(GenkitError) as ei:
+        as_multipart_tool_response(hollow, tool_name='shot')
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is ErrorReason.INVALID_PART
+    assert ei.value.message == "Tool 'shot' content includes a part with no live payload."
+
+
+def test_response_builds_the_envelope() -> None:
+    env = MultipartToolResponse(output={'ok': True}, content=[_png()], metadata={'src': 'test'})
+    assert isinstance(env, MultipartToolResponse)
+    assert env.output == {'ok': True}
+    assert env.content is not None
+    assert env.metadata == {'src': 'test'}
+
+
+def test_response_without_parts_is_output_only() -> None:
+    env = MultipartToolResponse(output={'ok': True})
+    assert env.output == {'ok': True}
+    assert env.content is None
+
+
+def test_response_wraps_a_bare_media_part() -> None:
+    env = MultipartToolResponse(output={'ok': True}, content=[_png()])
+    assert env.content is not None
+    assert len(env.content) == 1
+    assert parts_to_wire(env.content) == [WIRE_PNG]
+
+
+def test_response_rejects_bare_part() -> None:
+    with pytest.raises(GenkitError) as ei:
+        MultipartToolResponse(output={'ok': True}, content=_png())  # type: ignore[arg-type]
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is ErrorReason.INVALID_PART
+    assert ei.value.message == 'MultipartToolResponse content must be a list of Parts, got Part.'
+    assert 'INVALID_PART' not in ei.value.message
+
+
+def test_response_rejects_non_part_parts() -> None:
+    with pytest.raises(GenkitError) as ei:
+        MultipartToolResponse(output={'ok': True}, content='not-a-part')  # type: ignore[arg-type]
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.reason is ErrorReason.INVALID_PART
+    assert ei.value.message == 'MultipartToolResponse content must be a list of Parts, got str.'
+    assert 'INVALID_PART' not in ei.value.message
+
+
+class CamelOut(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    content_type: str
+    taken_at: datetime
+
+
+class Camera:
+    pass
+
+
+def test_returning_unserializable_part_data_is_invalid_argument_naming_the_tool() -> None:
+    bad = MultipartToolResponse(output={'ok': True}, content=[Part.from_data({'cam': Camera()})])
+    with pytest.raises(GenkitError) as ei:
+        as_multipart_tool_response(bad, tool_name='shot')
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert ei.value.message == "Tool 'shot' content is not JSON-serializable."
+    assert 'content' in ei.value.message
+
+
+def test_define_tool_stamps_envelope_and_declared_schema() -> None:
+    """The tool advertises its return type; its tool.v2 action (Dev UI) advertises the envelope."""
+    ai = Genkit()
+
+    @ai.tool(name='weather')
+    async def weather(city: str) -> str:
+        return f'Sunny in {city}'
+
+    envelope = TypeAdapter(MultipartToolResponseData).json_schema()
+    assert weather.kind == ActionKind.TOOL
+    assert create_action_key(weather.kind, weather.name) == '/tool/weather'
+    assert weather.output_schema == {'type': 'string'}
+    assert weather.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == {'type': 'string'}
+
+    wire = _wire(weather)
+    assert wire.kind == ActionKind.TOOL_V2
+    assert create_action_key(wire.kind, wire.name) == '/tool.v2/weather'
+    assert wire.input_schema == weather.input_schema
+    assert wire.output_schema == envelope
+    assert wire.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == {'type': 'string'}
+
+
+def test_bare_envelope_annotation_has_no_inner_schema() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return MultipartToolResponse(output={'ok': True})
+
+    envelope = TypeAdapter(MultipartToolResponseData).json_schema()
+    assert shot.output_schema == TypeAdapter(MultipartToolResponse).json_schema()
+    assert shot.metadata['outputSchema'] == shot.output_schema
+    assert shot.model_output_schema is None
+    assert _wire(shot).output_schema == envelope
+    assert _wire(shot).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+    assert shot.metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+    assert shot.definition().output_schema is None
+
+
+def test_model_output_schema_leaves_action_output_schema_intact() -> None:
+    """Setting ``model_output_schema`` updates model binding without altering ``output_schema``."""
+    ai = Genkit()
+
+    @ai.tool(name='typed_shot')
+    async def typed_shot() -> MultipartToolResponse[CamelOut]:
+        return MultipartToolResponse(
+            output=CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0)),
+        )
+
+    typed_envelope = TypeAdapter(MultipartToolResponse[CamelOut]).json_schema()
+    camel_schema = to_json_schema(CamelOut)
+    assert typed_shot.output_schema == typed_envelope
+    assert typed_shot.model_output_schema == camel_schema
+    assert typed_shot.definition().output_schema == camel_schema
+
+    @ai.tool(name='mcp_like')
+    async def mcp_like() -> MultipartToolResponse:
+        return MultipartToolResponse(output={'temperature_c': 21.5})
+
+    bare_envelope = TypeAdapter(MultipartToolResponse).json_schema()
+    declared: dict[str, object] = {
+        'type': 'object',
+        'properties': {'temperature_c': {'type': 'number'}},
+        'required': ['temperature_c'],
+    }
+    mcp_like.model_output_schema = declared
+    assert mcp_like.output_schema == bare_envelope
+    assert mcp_like.metadata['outputSchema'] == bare_envelope
+    assert mcp_like.model_output_schema == declared
+    assert mcp_like.definition().output_schema == declared
+    assert _wire(mcp_like).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] == declared
+
+    # Clearing model_output_schema to None keeps the /tool/ action's outputSchema metadata intact.
+    mcp_like.model_output_schema = None
+    assert mcp_like.output_schema == bare_envelope
+    assert mcp_like.metadata['outputSchema'] == bare_envelope
+    assert mcp_like.model_output_schema is None
+    assert mcp_like.definition().output_schema is None
+    assert _wire(mcp_like).metadata[ORIGINAL_OUTPUT_SCHEMA_KEY] is None
+
+    async def echo_fn(x: str) -> str:
+        return x
+
+    raw_handle = Tool.from_action(Action(name='echo', kind=ActionKind.TOOL, fn=echo_fn))
+    assert raw_handle.output_schema == {'type': 'string'}
+    assert raw_handle.model_output_schema == {'type': 'string'}
+    raw_handle.model_output_schema = None
+    assert raw_handle.output_schema == {'type': 'string'}
+    assert raw_handle.metadata['outputSchema'] == {'type': 'string'}
+    assert raw_handle.model_output_schema is None
+    assert raw_handle.definition().output_schema is None
+
+
+def test_to_tool_definition_sends_original_schema_not_envelope() -> None:
+    """The model sees originalOutputSchema. Dev UI / run still see the envelope."""
+    ai = Genkit()
+
+    @ai.tool(name='weather')
+    async def weather(city: str) -> str:
+        return f'Sunny in {city}'
+
+    defined = to_tool_definition(weather)
+    assert defined.output_schema == {'type': 'string'}
+    assert _wire(weather).output_schema == TypeAdapter(MultipartToolResponseData).json_schema()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return MultipartToolResponse(output={'ok': True})
+
+    assert to_tool_definition(shot).output_schema is None
+
+    async def echo_fn(x: str) -> str:
+        return x
+
+    raw = Action(name='echo', kind=ActionKind.TOOL, fn=echo_fn, metadata={'name': 'echo'})
+    assert ORIGINAL_OUTPUT_SCHEMA_KEY not in (raw.metadata or {})
+    assert to_tool_definition(raw).output_schema == {'type': 'string'}
+
+
+@pytest.mark.asyncio
+async def test_pydantic_return_dumps_json_aliases() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot')
+    async def shot() -> CamelOut:
+        return CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0))
+
+    out = (await _wire(shot).run()).response
+    assert out.output == {'contentType': 'image/png', 'takenAt': '2026-08-25T12:00:00'}
+
+
+@pytest.mark.asyncio
+async def test_response_metadata_datetime_is_json() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return MultipartToolResponse(output={'ok': True}, metadata={'when': datetime(2026, 8, 25, 12, 0)})
+
+    out = (await _wire(shot).run()).response
+    assert out.metadata == {'when': '2026-08-25T12:00:00'}
+
+
+@pytest.mark.asyncio
+async def test_response_pydantic_output_plus_media() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return MultipartToolResponse(
+            output=CamelOut(content_type='image/png', taken_at=datetime(2026, 8, 25, 12, 0)),
+            content=[_png()],
+        )
+
+    out = (await _wire(shot).run()).response
+    assert out.output == {'contentType': 'image/png', 'takenAt': '2026-08-25T12:00:00'}
+    assert parts_to_wire(out.content) == [WIRE_PNG]
+
+
+@pytest.mark.asyncio
+async def test_unserializable_metadata_is_invalid_argument() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot')
+    async def shot() -> MultipartToolResponse:
+        return MultipartToolResponse(output={'ok': True}, metadata={'cam': Camera()})
+
+    with pytest.raises(GenkitError) as ei:
+        await shot()
+    assert ei.value.status == 'INVALID_ARGUMENT'
+    assert 'shot' in ei.value.message
+    assert 'metadata' in ei.value.message
+
+
+async def _tools_sent_to_model(ai: Genkit, tool_name: str, *, tool_input: dict | None = None) -> list:
+    pm, _ = define_scripted_model(ai)
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 't1', 'name': tool_name, 'input': tool_input or {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+    await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'go'}]})],
+            tools=[tool_name],
+        ),
+    )
+    assert pm.last_request is not None
+    assert pm.last_request.tools
+    return pm.last_request.tools
+
+
+class ShotIn(BaseModel):
+    city: str
+
+
+class ShotOut(BaseModel):
+    ok: bool
+    label: str
+
+
+def test_envelope_output_type_reads_pydantic_generic_args() -> None:
+    from typing import Any
+
+    assert envelope_output_type(MultipartToolResponse[ShotOut]) is ShotOut
+    assert envelope_output_type(MultipartToolResponse) is Any
+
+
+@pytest.mark.asyncio
+async def test_input_schema_override_is_what_the_model_sees() -> None:
+    ai = Genkit()
+
+    @ai.tool(name='shot', input_schema=ShotIn)
+    async def shot(inp: dict) -> dict:  # noqa: ARG001
+        return {'ok': True}
+
+    tools = await _tools_sent_to_model(ai, 'shot', tool_input={'city': 'Austin'})
+    assert tools[0].input_schema == to_json_schema(ShotIn)
+
+
+@pytest.mark.asyncio
+async def test_unserializable_tool_output_is_invalid_argument() -> None:
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    ran = False
+
+    @ai.tool(name='screenshot')
+    async def screenshot(_: dict) -> object:  # noqa: ARG001
+        nonlocal ran
+        ran = True
+        return Camera()
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 's1', 'name': 'screenshot', 'input': {}}}],
+            }),
+        )
+    )
+
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
+            tools=['screenshot'],
+        ),
+    )
+    assert ran
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message is not None
+    assert 'screenshot' in response.finish_message
+    assert 'not JSON-serializable' in response.finish_message
+    assert response.message is None
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.error.reason is ErrorReason.TOOL_FAILED
+    assert [message.role for message in response.messages] == ['user']
+
+
+@pytest.mark.asyncio
+async def test_tool_registers_under_tool_and_tool_v2() -> None:
+    """``@ai.tool`` stores the tool at /tool/<name> and its envelope action at /tool.v2/<name>."""
+    ai = Genkit()
+
+    @ai.tool(name='weather')
+    async def weather(city: str) -> str:
+        return f'Sunny in {city}'
+
+    assert parse_action_key('/tool/weather') == (ActionKind.TOOL, 'weather')
+    assert parse_action_key('/tool.v2/weather') == (ActionKind.TOOL_V2, 'weather')
+
+    assert await ai._registry.resolve_action(ActionKind.TOOL, 'weather') is weather
+    assert await ai._registry.resolve_action_by_key('/tool/weather') is weather
+    assert await ai._registry.resolve_action_by_key('/tool.v2/weather') is _wire(weather)
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_can_substitute_a_response() -> None:
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.middleware(name='deny_mw')
+    class DenyMW(Middleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            return MultipartToolResponse(output='denied')
+
+    @ai.tool(name='weather')
+    async def weather(_: dict) -> str:  # noqa: ARG001
+        return 'Sunny'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'w1', 'name': 'weather', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+
+    res = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
+            tools=['weather'],
+            use=[MiddlewareRef(name='deny_mw')],
+        ),
+    )
+    tool_msg = next(m for m in res.messages if m.role == 'tool')
+    denied = tool_msg.content[0].tool_response
+    assert denied is not None
+    assert denied.output == 'denied'
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_receives_the_model_tool_request_part() -> None:
+    """wrap_tool sees the same Part the model put on the message."""
+    seen: list[Part] = []
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.middleware(name='capture_mw')
+    class CaptureMW(Middleware):
+        async def wrap_tool(
+            self,
+            params: ToolHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
+        ) -> MultipartToolResponse:
+            seen.append(params.tool_request_part)
+            return await next_fn(params, ctx)
+
+    @ai.tool(name='weather')
+    async def weather(_: dict) -> str:  # noqa: ARG001
+        return 'Sunny'
+
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({
+                'role': 'model',
+                'content': [{'toolRequest': {'ref': 'w1', 'name': 'weather', 'input': {}}}],
+            }),
+        )
+    )
+    pm.responses.append(
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message.model_validate({'role': 'model', 'content': [{'text': 'ok'}]}),
+        )
+    )
+
+    res = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'wx'}]})],
+            tools=['weather'],
+            use=[MiddlewareRef(name='capture_mw')],
+        ),
+    )
+    assert len(seen) == 1
+    assert type(seen[0]) is Part
+    assert seen[0].tool_request is not None
+    assert seen[0].tool_request.name == 'weather'
+    assert seen[0].tool_request.ref == 'w1'
+    assert res.message is not None
+    assert res.messages[-1] == res.message
+    assert [m.role for m in res.messages] == ['user', 'model', 'tool', 'model']
+    assert res.text == 'ok'

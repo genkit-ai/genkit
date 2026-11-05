@@ -19,6 +19,7 @@ import {
   type AgentAPI,
   type AgentTransport,
   type SnapshotLookup,
+  type WaitForSnapshotOptions,
 } from '@genkit-ai/ai/agent-core';
 
 import type {
@@ -28,19 +29,25 @@ import type {
   AgentStreamChunk,
 } from '@genkit-ai/ai';
 import type { SessionSnapshot } from '@genkit-ai/ai/session';
-import { runFlow, streamFlow } from './client.js';
+import { HttpStatusError, runFlow, streamFlow } from './client.js';
 
-// Re-export the transport-agnostic agent-client surface so existing imports
-// from `genkit/beta/client` keep working.
+// Re-export the transport-agnostic agent-client surface, including the pieces
+// needed to build an `AgentAPI` over a custom transport (`createAgentAPI`,
+// `AgentTransport`, `SnapshotLookup`).
 export {
   AgentError,
+  createAgentAPI,
   type AgentAPI,
   type AgentChat,
   type AgentChunk,
   type AgentInterrupt,
   type AgentResponse,
+  type AgentTransport,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
+  type SnapshotLookup,
+  type WaitForSnapshotOptions,
 } from '@genkit-ai/ai/agent-core';
 
 // Re-export the JSON Patch helper so apps can apply a chunk's `customPatch` to
@@ -55,6 +62,13 @@ export interface RemoteAgentOptions {
   url: string;
   /** Optional. Defaults to `${url}/getSnapshot`. */
   getSnapshotUrl?: string;
+  /**
+   * Optional. Defaults to `${url}/waitForSnapshot`. Where the agent's
+   * `waitForSnapshotAction` is mounted, `waitForSnapshot` and
+   * `DetachedTask.wait` follow a background task server-side; where nothing
+   * is mounted (the route answers 404), they poll `getSnapshotUrl` instead.
+   */
+  waitForSnapshotUrl?: string;
   /** Optional. Defaults to `${url}/abort`. */
   abortUrl?: string;
   /** Optional. Static headers, or a function called per request. */
@@ -70,6 +84,20 @@ export interface RemoteAgentOptions {
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a request failed because nothing is mounted at its URL, as opposed
+ * to the action there reporting an error: a 404 whose body is not a Genkit
+ * error (an action's NOT_FOUND carries its `status` in a JSON body).
+ */
+function isMissingRoute(e: unknown): boolean {
+  if (!(e instanceof HttpStatusError) || e.httpStatus !== 404) return false;
+  try {
+    return typeof JSON.parse(e.body)?.status !== 'string';
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Creates a typed client for talking to a Genkit agent over HTTP.
  *
  * ```ts
@@ -79,16 +107,45 @@ export interface RemoteAgentOptions {
  *   url: '/api/weatherAgent',
  * });
  * const chat = agent.chat();
- * const res = await chat.send('Weather in Tokyo?').response;
+ * const res = await chat.send('Weather in Tokyo?');
  * console.log(res.text);
  * ```
+ *
+ * Unlike in-process agents, the returned API takes no `context` option: over
+ * HTTP the action context is derived server-side from the request (ex. from
+ * the `headers` option).
  */
 export function remoteAgent<State = unknown>(
   options: RemoteAgentOptions
 ): AgentAPI<State> {
+  return createAgentAPI<State>(remoteAgentTransport(options));
+}
+
+/**
+ * The HTTP {@link AgentTransport} behind {@link remoteAgent}. Useful for
+ * decorating the HTTP transport (logging, retries, ...) before wrapping it
+ * with {@link createAgentAPI}:
+ *
+ * ```ts
+ * const http = remoteAgentTransport({ url: '/api/weatherAgent' });
+ * const agent = createAgentAPI<WeatherState>({
+ *   ...http,
+ *   runTurn(input, init, opts) {
+ *     console.log('turn from', init.snapshotId ?? 'new session');
+ *     return http.runTurn(input, init, opts);
+ *   },
+ * });
+ * ```
+ */
+export function remoteAgentTransport(
+  options: RemoteAgentOptions
+): AgentTransport {
   const { url } = options;
   const getSnapshotUrl = options.getSnapshotUrl ?? `${url}/getSnapshot`;
+  const waitForSnapshotUrl =
+    options.waitForSnapshotUrl ?? `${url}/waitForSnapshot`;
   const abortUrl = options.abortUrl ?? `${url}/abort`;
+  let waitRouteMissing = false;
 
   const resolveHeaders = async (): Promise<
     Record<string, string> | undefined
@@ -100,7 +157,7 @@ export function remoteAgent<State = unknown>(
     return options.headers;
   };
 
-  const transport: AgentTransport = {
+  return {
     stateManagement: options.stateManagement,
 
     runTurn(
@@ -135,11 +192,38 @@ export function remoteAgent<State = unknown>(
 
     async getSnapshot(lookup: SnapshotLookup) {
       const headers = await resolveHeaders();
-      return runFlow<SessionSnapshot<State> | undefined>({
+      return runFlow<SessionSnapshot<unknown> | undefined>({
         url: getSnapshotUrl,
         input: lookup,
         headers,
       });
+    },
+
+    // The server blocks next to its store and answers once the snapshot
+    // settles, or once its wait limit passes (the API then asks again), so a
+    // client neither picks a cadence nor pays a round trip per tick. Aborting
+    // the signal drops the request. A server without the wait route (one
+    // deployed before it existed) is remembered, and the API polls
+    // getSnapshot for it instead.
+    async waitForSnapshot(snapshotId: string, opts?: WaitForSnapshotOptions) {
+      if (!waitRouteMissing) {
+        const headers = await resolveHeaders();
+        try {
+          return await runFlow<SessionSnapshot<unknown> | undefined>({
+            url: waitForSnapshotUrl,
+            input: { snapshotId },
+            headers,
+            abortSignal: opts?.abortSignal,
+          });
+        } catch (e) {
+          if (!isMissingRoute(e)) throw e;
+          waitRouteMissing = true;
+        }
+      }
+      throw Object.assign(
+        new Error(`No waitForSnapshot route at ${waitForSnapshotUrl}.`),
+        { status: 'UNIMPLEMENTED' }
+      );
     },
 
     async abort(snapshotId: string) {
@@ -155,6 +239,4 @@ export function remoteAgent<State = unknown>(
       return result?.status;
     },
   };
-
-  return createAgentAPI<State>(transport);
 }

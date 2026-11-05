@@ -19,6 +19,8 @@ package exp
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 )
 
 // --- AgentOption ---
@@ -29,7 +31,7 @@ import (
 //
 // Every AgentOption is also a [PromptAgentOption]: the shared options
 // ([WithSessionStore], [WithStateTransform], [WithStreamTransform],
-// [WithDescription]) configure all three constructors. The converse does not
+// [WithDescription], [WithMaxSnapshotWait]) configure all three constructors. The converse does not
 // hold. A prompt-source option such as [WithNamedPrompt] is a
 // [PromptAgentOption] but not an AgentOption, so passing it to [DefineAgent] or
 // [DefineCustomAgent] is a compile-time error.
@@ -111,6 +113,12 @@ type agentOptions[State any] struct {
 	transform       StateTransform[State]
 	streamTransform StreamTransform
 	description     string
+	// maxSnapshotWait bounds one waitForSnapshot companion request; see
+	// [WithMaxSnapshotWait]. Zero means the default.
+	maxSnapshotWait time.Duration
+	// maxSnapshotWaitSet records that WithMaxSnapshotWait was used, so a
+	// non-positive value is rejected rather than read as the default.
+	maxSnapshotWaitSet bool
 	// contextFunc decorates each invocation's context once before the turn
 	// loop runs. It has no public option: the registry-level constructors set
 	// it internally to seed the genkit instance (see genkitContextSeed in
@@ -119,29 +127,26 @@ type agentOptions[State any] struct {
 }
 
 func (o *agentOptions[State]) applyAgent(opts *agentOptions[State]) error {
+	// Options merge last-wins, like the ai package's: a later option of the
+	// same kind replaces an earlier one, and an unset field leaves the
+	// accumulator alone.
 	if o.store != nil {
-		if opts.store != nil {
-			return errors.New("cannot set session store more than once (WithSessionStore)")
-		}
 		opts.store = o.store
 	}
 	if o.transform != nil {
-		if opts.transform != nil {
-			return errors.New("cannot set state transform more than once (WithStateTransform)")
-		}
 		opts.transform = o.transform
 	}
 	if o.streamTransform != nil {
-		if opts.streamTransform != nil {
-			return errors.New("cannot set stream transform more than once (WithStreamTransform)")
-		}
 		opts.streamTransform = o.streamTransform
 	}
 	if o.description != "" {
-		if opts.description != "" {
-			return errors.New("cannot set description more than once (WithDescription)")
-		}
 		opts.description = o.description
+	}
+	if o.maxSnapshotWaitSet {
+		if o.maxSnapshotWait <= 0 {
+			return fmt.Errorf("snapshot wait limit must be positive, got %v (WithMaxSnapshotWait)", o.maxSnapshotWait)
+		}
+		opts.maxSnapshotWait = o.maxSnapshotWait
 	}
 	if o.contextFunc != nil {
 		// Seeded internally by the registry-level constructors
@@ -168,7 +173,7 @@ type promptAgentOptions[State any] struct {
 	agentOptions[State]
 	promptName  string // referenced prompt; "" resolves to the agent's own name
 	promptInput any    // render input for the referenced prompt
-	promptSet   bool   // WithNamedPrompt was used (guards against duplicates)
+	promptSet   bool   // WithNamedPrompt was used
 }
 
 // applyPromptAgent merges the base agent options and the prompt source. It
@@ -179,12 +184,8 @@ func (o *promptAgentOptions[State]) applyPromptAgent(opts *promptAgentOptions[St
 		return err
 	}
 	if o.promptSet {
-		if opts.promptSet {
-			return errors.New("cannot set prompt source more than once (WithNamedPrompt)")
-		}
 		opts.promptName = o.promptName
 		opts.promptInput = o.promptInput
-		opts.promptSet = true
 	}
 	return nil
 }
@@ -216,10 +217,51 @@ func WithStreamTransform[State any](transform StreamTransform) AgentOption[State
 	return &agentOptions[State]{streamTransform: transform}
 }
 
-// WithDescription sets a human-readable description of the agent, stored on its
-// action descriptor (read back via [Agent.Desc] and shown in the Dev UI).
-func WithDescription[State any](description string) AgentOption[State] {
-	return &agentOptions[State]{description: description}
+// WithDescription sets a human-readable description of the agent. For an
+// agent defined in this process it is stored on the action descriptor (read
+// back via [Agent.Desc] and shown in the Dev UI); for a remote agent
+// ([NewRemoteAgent]) it is what [AgentHandle.Ref] and the registered agent's
+// descriptor carry. A remote agent has no State, so any type argument does,
+// e.g. WithDescription[any]("...").
+func WithDescription[State any](description string) DescriptionOption[State] {
+	return descriptionOption[State](description)
+}
+
+// DescriptionOption is the option [WithDescription] returns: it describes an
+// agent defined in this process (an [AgentOption]) or a remote one (a
+// [RemoteAgentOption]).
+type DescriptionOption[State any] interface {
+	AgentOption[State]
+	RemoteAgentOption
+}
+
+// descriptionOption is a [DescriptionOption]. Its remote method does not
+// mention State, which is what lets one value serve both kinds of agent.
+type descriptionOption[State any] string
+
+func (d descriptionOption[State]) applyAgent(opts *agentOptions[State]) error {
+	opts.description = string(d)
+	return nil
+}
+
+func (d descriptionOption[State]) applyPromptAgent(opts *promptAgentOptions[State]) error {
+	return d.applyAgent(&opts.agentOptions)
+}
+
+func (d descriptionOption[State]) applyRemoteAgent(opts *remoteAgentOptions) {
+	opts.description = string(d)
+}
+
+// WithMaxSnapshotWait bounds how long one request to the agent's
+// waitForSnapshot companion action ([Agent.WaitForSnapshotAction]) holds. When
+// d passes, the action returns the snapshot as it stands, still pending or
+// aborting, and [AgentHandle.WaitForSnapshot] asks again, so its callers still
+// get the settled snapshot. Keep d under the shortest request or idle timeout
+// between clients and this server. d must be positive; without this option the
+// limit is 25 seconds. A wait in process ([Agent.WaitForSnapshot]) is not
+// limited.
+func WithMaxSnapshotWait[State any](d time.Duration) AgentOption[State] {
+	return &agentOptions[State]{maxSnapshotWait: d, maxSnapshotWaitSet: true}
 }
 
 // WithNamedPrompt points a [DefinePromptAgent] at the prompt registered under
@@ -262,29 +304,19 @@ type invocationOptions[State any] struct {
 	sessionIDSet bool
 }
 
-// applyInvocation merges o into opts, rejecting duplicate options.
-// Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
+// applyInvocation merges o into opts, last-wins per option. Mutual exclusivity (WithState versus WithSessionID/WithSnapshotID) is
 // checked once, after all options are applied, in
-// [Agent.resolveOptions].
+// resolveInvocationInit.
 func (o *invocationOptions[State]) applyInvocation(opts *invocationOptions[State]) error {
 	if o.state != nil {
-		if opts.state != nil {
-			return errors.New("cannot set state more than once (WithState)")
-		}
 		opts.state = o.state
 	}
 	if o.snapshotID != "" {
-		if opts.snapshotID != "" {
-			return errors.New("cannot set snapshot ID more than once (WithSnapshotID)")
-		}
 		opts.snapshotID = o.snapshotID
 	}
 	if o.sessionIDSet {
 		if o.sessionID == "" {
 			return errors.New("session ID is empty (WithSessionID); an empty AgentOutput.SessionID means the invocation had no session, check before resuming")
-		}
-		if opts.sessionIDSet {
-			return errors.New("cannot set session ID more than once (WithSessionID)")
 		}
 		opts.sessionID = o.sessionID
 		opts.sessionIDSet = true
@@ -323,11 +355,92 @@ func WithSnapshotID[State any](id string) InvocationOption[State] {
 // state). Combined with [WithSnapshotID], the snapshot picks the resume point
 // and the session ID is validated against it.
 //
-// The resume is rejected if the latest snapshot is a failed, aborted, or
-// pending dead end; a pending tip means a detached invocation is still running,
-// so wait for it to finalize or abort it. If history was forked, the most
-// recently updated branch wins; use [WithSnapshotID] for a specific branch. An
-// empty ID is an error, not a no-op.
+// The resume is rejected only if the latest snapshot is pending, meaning a
+// detached invocation is still writing to it: wait for it to finalize, or
+// abort it. A failed or aborted tip resumes with what the last turn to finish
+// committed, and an input with no payload of its own re-attempts from there.
+// If history was forked, the most recently created
+// branch wins; use [WithSnapshotID] for a specific branch. An empty ID is an
+// error, not a no-op.
 func WithSessionID[State any](id string) InvocationOption[State] {
 	return &invocationOptions[State]{sessionID: id, sessionIDSet: true}
+}
+
+// resolveInvocationInit merges opts into the invocation's [AgentInit],
+// enforcing the empty-session-ID check and the mutual-exclusivity rules:
+// WithState excludes both WithSessionID and WithSnapshotID (a client-managed
+// conversation's identity rides inside the state itself), while WithSessionID
+// and WithSnapshotID compose as an assertion. Shared by [Agent.Connect] and
+// [AgentHandle.Run], so typed and untyped callers reject the same inputs with
+// the same wording; name is the agent's, woven into the errors.
+//
+// It returns (nil, nil) when no option set anything: "no init" is decided
+// here, next to the merge a new option must extend, so a caller-side field
+// check cannot silently drop a future [AgentInit] field. A nil init runs the
+// invocation with a fresh session, identical to a zero-valued one.
+func resolveInvocationInit[State any](name string, opts []InvocationOption[State]) (*AgentInit[State], error) {
+	invOpts := &invocationOptions[State]{}
+	for _, opt := range opts {
+		if err := opt.applyInvocation(invOpts); err != nil {
+			return nil, fmt.Errorf("Agent %q: %w", name, err)
+		}
+	}
+
+	if invOpts.state != nil && invOpts.snapshotID != "" {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSnapshotID are mutually exclusive", name)
+	}
+	if invOpts.state != nil && invOpts.sessionIDSet {
+		return nil, fmt.Errorf("Agent %q: WithState and WithSessionID are mutually exclusive; the conversation's identity rides inside the state (SessionState.SessionID)", name)
+	}
+
+	if invOpts.state == nil && invOpts.snapshotID == "" && !invOpts.sessionIDSet {
+		return nil, nil
+	}
+
+	return &AgentInit[State]{
+		SessionID:  invOpts.sessionID,
+		SnapshotID: invOpts.snapshotID,
+		State:      invOpts.state,
+	}, nil
+}
+
+// --- SnapshotReadOption ---
+
+// SnapshotReadOption configures how a snapshot read projects its result. It
+// applies to the reads that answer at once: [Agent.GetSnapshot],
+// [Agent.GetLatestSnapshot], their [AgentHandle] twins, and [DetachedTask.Poll].
+type SnapshotReadOption interface {
+	applySnapshotRead(*GetSnapshotRequest)
+}
+
+type snapshotReadOptions struct {
+	metadataOnly bool
+}
+
+func (o snapshotReadOptions) applySnapshotRead(req *GetSnapshotRequest) {
+	if o.metadataOnly {
+		req.MetadataOnly = true
+	}
+}
+
+// WithMetadataOnly reads a snapshot's metadata only: the returned snapshot
+// carries the shaped status, finish reason, parent, session, timestamps, and
+// error, and its State is nil. The shaping is identical to a full read (status
+// defaulting and heartbeat expiry need only the metadata), and a store that
+// implements [SnapshotMetadataReader] answers without loading the state at
+// all; any other store is read in full and the state dropped. Use it to
+// dispatch on where a task stands without serializing a potentially large
+// conversation history; the state transform does not run, exactly as on a
+// full read of a stateless row.
+func WithMetadataOnly() SnapshotReadOption {
+	return snapshotReadOptions{metadataOnly: true}
+}
+
+// resolveSnapshotRead applies opts to req and returns it, for the handle
+// methods that answer a read with one wire request.
+func resolveSnapshotRead(req *GetSnapshotRequest, opts []SnapshotReadOption) *GetSnapshotRequest {
+	for _, opt := range opts {
+		opt.applySnapshotRead(req)
+	}
+	return req
 }

@@ -14,258 +14,168 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tool-specific types and utilities for the Genkit framework."""
+"""Tool registration, interruption, and request execution helpers for the Genkit framework."""
 
-import inspect
-import json
-from collections.abc import Callable
-from contextvars import ContextVar
-from typing import Any, cast
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Any, NoReturn, TypeVar, cast, overload
 
-from opentelemetry import trace as trace_api
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from genkit._core._action import Action, ActionKind, ActionRunContext
-from genkit._core._error import GenkitError, GenkitInterrupt
-from genkit._core._middleware import GenerateMiddlewareContext
+from genkit._core._action import Action
+from genkit._core._error import ErrorReason, GenkitError, Interrupt as Interrupt
+from genkit._core._logger import get_logger
+from genkit._core._middleware import MiddlewareContext
+from genkit._core._model import MultipartToolResponse as MultipartToolResponse, Part, as_part, as_resumed
 from genkit._core._registry import Registry
-from genkit._core._typing import ToolDefinition, ToolRequest, ToolRequestPart, ToolResponse, ToolResponsePart
+from genkit._core._tool import (
+    ORIGINAL_OUTPUT_SCHEMA_KEY as ORIGINAL_OUTPUT_SCHEMA_KEY,
+    Tool as _Tool,
+    ToolContext as ToolContext,
+    _tool_original_input as _tool_original_input,
+    _tool_resumed_metadata as _tool_resumed_metadata,
+    as_multipart_tool_response as as_multipart_tool_response,
+    dump_part,
+    dump_tool_metadata as dump_tool_metadata,
+    dump_tool_output as dump_tool_output,
+    envelope_output_type as envelope_output_type,
+    live_payload_error,
+    wire_part_is_live,
+)
+from genkit._core._typing import ToolResponse
+
+ToolInputT = TypeVar('ToolInputT')
+ToolOutputT = TypeVar('ToolOutputT')
+ToolChunkT = TypeVar('ToolChunkT')
 
 
-class Tool:
-    """A registered tool: a callable handle backed by an :class:`~genkit._core._action.Action`.
-
-    Obtain instances via :func:`define_tool`, :func:`define_interrupt`, :func:`tool`, or the
-    ``@ai.tool`` decorator rather than constructing directly.
-    """
-
-    def __init__(self, action: Action) -> None:
-        self._action = action
-
-    @property
-    def name(self) -> str:
-        """Tool name (registry key)."""
-        return self._action.name
-
-    @property
-    def description(self) -> str:
-        """Human-readable description sent to the model."""
-        return self._action.description or ''
-
-    @property
-    def input_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the tool's input, as sent on the wire."""
-        return self._action.input_schema
-
-    @property
-    def output_schema(self) -> dict[str, object] | None:
-        """JSON Schema for the tool's output."""
-        return self._action.output_schema
-
-    def definition(self) -> ToolDefinition:
-        """Return the wire-format ToolDefinition for this tool."""
-        return ToolDefinition(
-            name=self.name,
-            description=self.description,
-            input_schema=self.input_schema,
-            output_schema=self.output_schema,
+def normalize_pending_content(pending_content: object, *, tool_name: str) -> list[dict[str, Any]] | None:
+    """Validate a resume stash as the same part list ``MultipartToolResponse.content`` accepts."""
+    if pending_content is None:
+        return None
+    if not isinstance(pending_content, list):
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'Tool {tool_name!r} pendingContent must be a list of parts, got {type(pending_content).__name__}.'
+            ),
+            reason=ErrorReason.INVALID_PART,
         )
-
-    def action(self) -> Action:
-        """Return the underlying :class:`~genkit._core._action.Action` registered for this tool."""
-        return self._action
-
-    async def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        """Run the tool and return the unwrapped response value."""
-        return (await self._action.run(*args, **kwargs)).response
-
-
-# Context variables for propagating resumed metadata to tools
-_tool_resumed_metadata: ContextVar[dict[str, Any] | None] = ContextVar('tool_resumed_metadata', default=None)
-# Stashed copy of tool_request.input when restart replaces input (JSON; shape is per tool).
-_tool_original_input: ContextVar[Any | None] = ContextVar('tool_original_input', default=None)  # noqa: ANN401
-
-
-class ToolRunContext(ActionRunContext):
-    """Tool execution context with interrupt support."""
-
-    def __init__(
-        self,
-        ctx: ActionRunContext,
-        resumed_metadata: dict[str, Any] | None = None,
-        original_input: Any = None,  # noqa: ANN401 - prior tool_request.input when replacing on restart
-    ) -> None:
-        """Initialize from parent ActionRunContext.
-
-        Args:
-            ctx: Parent action context
-            resumed_metadata: Metadata from previous interrupt (if resumed)
-            original_input: Original tool input before replacement (if resumed)
-        """
-        super().__init__(
-            context=ctx.context,
-            streaming_callback=ctx.streaming_callback,
-            abort_signal=ctx.abort_signal,
-        )
-        self.resumed_metadata = resumed_metadata
-        self.original_input = original_input
-
-    def is_resumed(self) -> bool:
-        """Return True if this execution is resuming after an interrupt."""
-        return self.resumed_metadata is not None
+    out: list[dict[str, Any]] = []
+    for i, item in enumerate(pending_content):
+        if isinstance(item, Part):
+            part = item
+        else:
+            try:
+                part = as_part(item)
+            except ValidationError as e:
+                detail = e.errors()[0]['msg'] if e.errors() else f'must be a part, got {type(item).__name__}'
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Tool {tool_name!r} pendingContent[{i}]: {detail}',
+                    cause=e,
+                    reason=ErrorReason.INVALID_PART,
+                ) from e
+            except (ValueError, TypeError) as e:
+                raise GenkitError(
+                    status='INVALID_ARGUMENT',
+                    message=f'Tool {tool_name!r} pendingContent[{i}] must be a part, got {type(item).__name__}.',
+                    cause=e,
+                    reason=ErrorReason.INVALID_PART,
+                ) from e
+        dumped = dump_part(part, tool_name=tool_name, what=f'pendingContent[{i}]')
+        if not wire_part_is_live(dumped):
+            raise live_payload_error(tool_name=tool_name, where=f'pendingContent[{i}]')
+        out.append(dumped)
+    return out
 
 
-class Interrupt(GenkitInterrupt):  # noqa: N818 - public Genkit name; not renamed *Error for style
-    """Exception for interrupting tool execution with user-facing API.
+def parts_to_wire(parts: Sequence[Part] | None, *, tool_name: str | None = None) -> list[dict[str, Any]] | None:
+    """Dump parts the way a model plugin expects them on the tool message.
 
-    Raise ``Interrupt(metadata)`` from a tool or from tool middleware (e.g. ``wrap_tool``).
-    Exceptions from ``tool.run`` are wrapped in GenkitError
-    with ``cause=Interrupt``; generation attaches interrupt metadata to the pending tool
-    request.
-
-    To resume, use ``respond_to_interrupt`` or ``restart_tool``.
+    A bare dump keeps unused fields as null and uses snake_case names. The
+    model request — and anything that later re-parses that history — wants
+    only the live fields, in camelCase.
     """
-
-    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
-        """Initialize an Interrupt exception.
-
-        Args:
-            metadata: Attached to the tool request on the wire. Use a plain dict; for a
-                Pydantic model, pass ``m.model_dump(mode="json")``.
-        """
-        super().__init__()
-        self.metadata: dict[str, Any] = {} if metadata is None else metadata
-        if self.metadata:
-            span = trace_api.get_current_span()
-            if span.is_recording():
-                try:
-                    span.set_attribute('genkit:metadata:interrupt', json.dumps(self.metadata))
-                except Exception:
-                    span.set_attribute('genkit:metadata:interrupt', str(self.metadata))
+    if not parts:
+        return None
+    out: list[dict[str, Any]] = []
+    name = tool_name if tool_name is not None else 'tool'
+    for part in parts:
+        dumped = dump_part(part, tool_name=name, what='content')
+        if not wire_part_is_live(dumped):
+            raise live_payload_error(tool_name=name, where='content')
+        out.append(dumped)
+    return out
 
 
-def _tool_response_part(
-    interrupt: ToolRequestPart,
-    output: Any,  # noqa: ANN401 - arbitrary tool/interrupt reply payload (JSON)
-    metadata: dict[str, Any] | None = None,
-) -> ToolResponsePart:
-    """Build a ``ToolResponsePart`` for an interrupted tool request (interrupt reply channel)."""
-    interrupt_metadata = metadata if metadata is not None else True
-    tool_req = interrupt.tool_request
-    return ToolResponsePart(
-        tool_response=ToolResponse(
-            ref=tool_req.ref,
-            name=tool_req.name,
-            output=output,
-        ),
-        metadata={'interruptResponse': interrupt_metadata},
-    )
-
-
-def respond_to_interrupt(
-    response: Any,  # noqa: ANN401 - user reply or tool output for resume_respond
-    *,
-    interrupt: ToolRequestPart,
-    metadata: dict[str, Any] | None = None,
-) -> ToolResponsePart:
-    """Build a ``ToolResponsePart`` for a pending tool interrupt.
-
-    Pass the return value to ``generate(..., resume_respond=interrupt_response)``.
-
-    Args:
-        response: Tool output / user reply for this interrupt.
-        interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
-        metadata: Optional metadata for the interrupt response channel.
-    """
-    return _tool_response_part(interrupt, response, metadata)
-
-
-def restart_tool(
-    *,
-    interrupt: ToolRequestPart,
-    replace_input: Any | None = None,  # noqa: ANN401 - new tool input; shape is per tool
-    resumed_metadata: dict[str, Any] | None = None,
-) -> ToolRequestPart:
-    """Build a restart ``ToolRequestPart`` for a pending tool interrupt.
-
-    Pass the return value to ``generate(..., resume_restart=...)``.
-
-    Args:
-        interrupt: The interrupted ``ToolRequestPart`` (e.g. from ``response.interrupts``).
-        replace_input: Optional new ``tool_request.input`` for this run (previous input is
-            stored in ``metadata.replacedInput`` when this is set).
-        resumed_metadata: Passed to the tool as ``ToolRunContext.resumed_metadata``.
-
-    Returns:
-        A ``ToolRequestPart`` for ``resume_restart`` / message history.
-
-    Example:
-        ``restart_tool(interrupt=trp, resumed_metadata={"tool_approved": True})``
-    """
-    tool_req = interrupt.tool_request
-    new_meta: dict[str, Any] = dict(interrupt.metadata or {})
-
-    new_meta['resumed'] = resumed_metadata if resumed_metadata is not None else True
-
-    new_input = tool_req.input
-    if replace_input is not None:
-        new_meta['replacedInput'] = tool_req.input
-        new_input = replace_input
-
-    return ToolRequestPart(
-        tool_request=ToolRequest(
-            name=tool_req.name,
-            ref=tool_req.ref,
-            input=new_input,
-        ),
-        metadata=new_meta,
-    )
+logger = get_logger(__name__)
 
 
 def _resume_context_from_tool_request_part(
-    tool_request_part: ToolRequestPart,
+    tool_request_part: Part,
 ) -> tuple[dict[str, Any] | None, Any | None]:
     """Read resume/restart fields from a tool request part's metadata."""
     meta = tool_request_part.metadata or {}
-    raw_resumed = meta.get('resumed')
-    if raw_resumed is True:
-        resumed_meta: dict[str, Any] | None = {}
-    elif isinstance(raw_resumed, dict):
-        resumed_meta = raw_resumed
-    else:
-        resumed_meta = None
+    return as_resumed(tool_request_part), meta.get('replacedInput')
 
-    original_input = meta.get('replacedInput')
-    return resumed_meta, original_input
+
+class _ScopedToolChunkSink:
+    """Callable chunk sink bound to a single ``run_tool_request`` lifetime."""
+
+    __slots__ = ('_tool_request_part', '_on_tool_chunk')
+
+    def __init__(
+        self,
+        tool_request_part: Part,
+        on_tool_chunk: Callable[[Part, object], None] | None,
+    ) -> None:
+        self._tool_request_part = tool_request_part
+        self._on_tool_chunk = on_tool_chunk
+
+    def __call__(self, chunk: object) -> None:
+        callback = self._on_tool_chunk
+        if callback is not None:
+            callback(self._tool_request_part, chunk)
+
+    def close(self) -> None:
+        self._on_tool_chunk = None
 
 
 async def run_tool_request(
     *,
     tool: Action,
-    tool_request_part: ToolRequestPart,
-    ctx: GenerateMiddlewareContext | None = None,
+    tool_request_part: Part,
+    ctx: MiddlewareContext | None = None,
+    on_tool_chunk: Callable[[Part, object], None] | None = None,
 ) -> Any:  # noqa: ANN401 - tool output follows registered handler
     """Execute a tool request with generate-scoped context and resume metadata.
 
-    Pipes ``GenerateMiddlewareContext.custom_context`` and ``telemetry_labels``
-    into ``tool.run``, and sets resume ContextVars from ``tool_request_part``
-    metadata so ``ToolRunContext`` reflects ``resumed`` / ``replacedInput``.
+    Pipes ``on_tool_chunk`` (as ``on_chunk``), ``MiddlewareContext.context``,
+    and ``telemetry_labels`` into ``tool._run``, and sets resume ContextVars
+    from ``tool_request_part`` metadata so ``ToolContext`` reflects
+    ``resumed`` / ``replacedInput``.
     """
+    tool_req = tool_request_part.tool_request
+    if tool_req is None:
+        raise ValueError('run_tool_request needs a tool request part')
     resumed_meta, original_input = _resume_context_from_tool_request_part(tool_request_part)
     token_meta = _tool_resumed_metadata.set(resumed_meta)
     token_input = _tool_original_input.set(original_input)
-    run_context = dict(ctx.custom_context) if ctx and ctx.custom_context else None
+    sink = _ScopedToolChunkSink(tool_request_part, on_tool_chunk) if on_tool_chunk is not None else None
+    run_context = dict(ctx.context) if ctx and ctx.context else None
     telemetry_labels = cast(dict[str, object], dict(ctx.telemetry_labels)) if ctx and ctx.telemetry_labels else None
     try:
         return (
-            await tool.run(
-                tool_request_part.tool_request.input,
+            await tool._run(
+                tool_req.input,
+                on_chunk=sink,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
-                abort_signal=ctx.abort_signal if ctx else None,
             )
         ).response
     finally:
+        if sink is not None:
+            sink.close()
         _tool_resumed_metadata.reset(token_meta)
         _tool_original_input.reset(token_input)
 
@@ -273,7 +183,7 @@ async def run_tool_request(
 def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
     """Build the FAILED_PRECONDITION error for an Interrupt raised during tool restart.
 
-    Nested interrupts during restart are not supported yet. Include the underlying
+    A tool cannot raise another interrupt while it is being restarted. Include the underlying
     interrupt reason (e.g. ToolApproval's ``Tool not in approved list: ...``) so the
     error points at missing approval metadata instead of sounding like a missing SDK feature.
     """
@@ -289,49 +199,64 @@ def restart_interrupt_error(interrupt: Interrupt) -> GenkitError:
     if isinstance(reason, str) and reason.strip():
         message = f'Tool interrupted again during restart: {reason}'
     else:
-        message = 'Tool interrupted again during a restart execution; not supported yet.'
-    return GenkitError(status='FAILED_PRECONDITION', message=message, cause=interrupt)
+        message = 'Tool interrupted again during restart.'
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=message,
+        cause=interrupt,
+        reason=ErrorReason.INVALID_RESUME,
+    )
 
 
 async def run_tool_after_restart(
     *,
     tool: Action,
-    restart_trp: ToolRequestPart,
-    ctx: GenerateMiddlewareContext | None = None,
-) -> ToolResponsePart:
+    restart_trp: Part,
+    ctx: MiddlewareContext | None = None,
+    on_tool_chunk: Callable[[Part, object], None] | None = None,
+) -> Part:
     """Run a tool for ``resume_restart``: applies ``resumed`` / ``replacedInput`` from metadata.
 
-    Sets the same context variables as the tool wrapper so ToolRunContext reflects
-    a resumed run. Nested interrupts during restart are not supported and raise GenkitError.
+    Sets the same context variables as the tool wrapper so ToolContext reflects
+    a resumed run. A tool cannot raise another interrupt while it is being restarted.
     """
     try:
-        tool_response = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx)
-    except (GenkitError, Interrupt) as e:
-        intr = (
-            e.cause
-            if isinstance(e, GenkitError) and isinstance(e.cause, Interrupt)
-            else (e if isinstance(e, Interrupt) else None)
+        return await run_restarted_tool(tool=tool, restart_trp=restart_trp, ctx=ctx, on_tool_chunk=on_tool_chunk)
+    except Interrupt as e:
+        logger.debug(
+            'restarted tool triggered an interrupt',
+            tool=restart_trp.tool_request.name if restart_trp.tool_request else tool.name,
         )
-        if intr is not None:
-            raise restart_interrupt_error(intr) from e
-        raise
+        raise restart_interrupt_error(e) from e
 
-    return ToolResponsePart(
+
+async def run_restarted_tool(
+    *,
+    tool: Action,
+    restart_trp: Part,
+    ctx: MiddlewareContext | None = None,
+    on_tool_chunk: Callable[[Part, object], None] | None = None,
+) -> Part:
+    """Like ``run_tool_after_restart``, but a second Interrupt propagates as is.
+
+    run_restart calls this inside the wrap_tool chain. Converting the Interrupt
+    there would hand middleware an Exception its catch-all could swallow,
+    skipping the approval the restart is asking for.
+    """
+    tool_req = restart_trp.tool_request
+    if tool_req is None:
+        raise ValueError('run_tool_after_restart needs a tool request part')
+    raw = await run_tool_request(tool=tool, tool_request_part=restart_trp, ctx=ctx, on_tool_chunk=on_tool_chunk)
+    envelope = as_multipart_tool_response(raw, tool_name=tool_req.name)
+    return Part(
         tool_response=ToolResponse(
-            name=restart_trp.tool_request.name,
-            ref=restart_trp.tool_request.ref,
-            output=tool_response.model_dump() if isinstance(tool_response, BaseModel) else tool_response,
-        )
+            name=tool_req.name,
+            ref=tool_req.ref,
+            output=envelope.output,
+            content=parts_to_wire(envelope.content, tool_name=tool_req.name),
+        ),
+        metadata=envelope.metadata,
     )
-
-
-def _get_func_description(func: Callable[..., Any], description: str | None = None) -> str:
-    """Return description if provided, otherwise use the function's docstring."""
-    if description is not None:
-        return description
-    if func.__doc__ is not None:
-        return func.__doc__
-    return ''
 
 
 def _define_tool(
@@ -341,67 +266,103 @@ def _define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
-    """Register a function as a tool.
+) -> _Tool[Any, Any, Any]:
+    """Build a tool and register it (``/tool/<name>`` and its ``/tool.v2/<name>`` envelope).
 
-    Normally, the input_schema and output_schema are inferred from func. However,
-    in some cases, like define_interrupt, the app developer doesn't have a way to
-    express the input schema in the func signature.
-
-    In that case, the app developer can pass in an input_schema to override the inferred schema.
-    This will ensure that the model requesting the tool will see the correct input shape.
+    The return annotation is what the model binds. ``input_schema=`` is for
+    cases like define_interrupt where the handler signature cannot express
+    the input shape.
     """
-    if not inspect.iscoroutinefunction(func):
-        raise TypeError(f'Tool function must be async. Got sync function: {getattr(func, "__name__", repr(func))}')
+    built: _Tool[Any, Any, Any] = _Tool(func, name=name, description=description, input_schema=input_schema)
+    registry.register_action_from_instance(built)
+    return built
 
-    tool_name = name if name is not None else getattr(func, '__name__', None)
-    if tool_name is None:
-        raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
-    tool_description = _get_func_description(func, description)
 
-    input_spec = inspect.getfullargspec(func)
+# Overload order matters: type checkers pick the first shape that fits.
+# - ``(ctx, x: Any)`` fits ``[InputT, ToolContext]`` with the ctx as the input,
+#   and ``(x: Any)`` / ``(x: object)`` fit the ctx-only shape. The ``object``
+#   shapes come first and catch them; a real ``ToolContext`` param can't take
+#   an ``object``, so it skips them.
+# - The context-only shape comes before input-only because a ``ctx`` function
+#   also fits ``[InputT]``. It still returns ``Tool[Any, ...]`` so that shape
+#   keeps accepting an input.
+# - ty types ``(ctx, x: Any)`` as Unknown: the typing spec's overload rule for
+#   Any arguments makes it ambiguous, and no order fixes that.
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolContext[ToolChunkT], object], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
 
-    async def tool_fn_wrapper(*args: Any) -> Any:  # noqa: ANN401 - arity dispatch; args/return follow registered tool
-        # Record resumed metadata on the current span for observability.
-        resumed_meta = _tool_resumed_metadata.get()
-        if resumed_meta:
-            span = trace_api.get_current_span()
-            if span.is_recording():
-                try:
-                    span.set_attribute('genkit:metadata:resumed', json.dumps(resumed_meta))
-                except Exception:
-                    span.set_attribute('genkit:metadata:resumed', str(resumed_meta))
 
-        # Dynamic dispatch by arity; payload types follow the registered tool (not expressible here).
-        match len(input_spec.args):
-            case 0:
-                return await func()
-            case 1:
-                return await func(args[0])
-            case 2:
-                original_input = _tool_original_input.get()
-                return await func(
-                    args[0],
-                    ToolRunContext(
-                        cast(ActionRunContext, args[1]),
-                        resumed_metadata=resumed_meta,
-                        original_input=original_input,
-                    ),
-                )
-            case _:
-                raise ValueError('tool must have 0-2 args...')
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolInputT, ToolContext[ToolChunkT]], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT, ToolChunkT]: ...
 
-    action = registry.register_action(
-        name=tool_name,
-        kind=ActionKind.TOOL,
-        description=tool_description,
-        fn=tool_fn_wrapper,
-        metadata_fn=func,
-    )
-    if input_schema is not None:
-        action._override_input_schema(input_schema)
 
-    return Tool(action)
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolContext[ToolChunkT], ToolInputT], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT, ToolChunkT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[object], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolContext[ToolChunkT]], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[ToolInputT], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[ToolInputT, ToolOutputT]: ...
+
+
+@overload
+def define_tool(
+    registry: Registry,
+    func: Callable[[], Awaitable[ToolOutputT]],
+    name: str | None = None,
+    description: str | None = None,
+    *,
+    input_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> _Tool[None, ToolOutputT]: ...
 
 
 def define_tool(
@@ -411,50 +372,30 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool[Any, Any, Any]:
     """Register a function as a tool.
 
-    Tool input/output JSON Schemas are inferred from ``func`` (first parameter and return type).
+    The model sees the handler's return annotation as ``outputSchema``.
+    ``await tool(x)`` returns what the function returned. The registry also
+    stores ``/tool.v2/<name>``, which returns the ``MultipartToolResponse``
+    envelope; that's the one the Dev UI runs.
 
     Args:
         registry: The registry to register the tool in.
         func: The async function to register as a tool. Must be a coroutine function.
+            It takes at most one input, annotated with a type that has a JSON
+            schema (``Any`` accepts anything), plus an optional parameter
+            annotated ``ToolContext`` in any position.
         name: Optional name for the tool. Defaults to the function name.
         description: Optional description. Defaults to the function's docstring.
         input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
 
     Raises:
-        TypeError: If func is not an async function.
+        TypeError: If func is not an async function, has more than one input,
+            has an input with no annotation or no JSON schema, or has more than
+            one ``ToolContext`` parameter.
     """
     return _define_tool(registry, func, name, description, input_schema=input_schema)
-
-
-def tool(
-    func: Callable[..., Any],
-    *,
-    name: str | None = None,
-    description: str | None = None,
-    input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
-    """Dynamically define a tool that can passed into a `generate` call.
-
-    Compared to `define_tool`, the `tool` constructor doesn't register the tool.
-    The Tool instance cannot be referenced by name later.
-
-    Use when there are dynamic or ephemeral tools that need to be available
-    for a particular `generate` call.
-
-    Args:
-        func: Async tool implementation (same 0–2 argument rules as :func:`define_tool`).
-        name: Tool name for the model. Defaults to ``func.__name__``.
-        description: Sent to the model. Defaults to the function docstring.
-        input_schema: Optional input schema override (Pydantic model or JSON-schema dict).
-
-    Raises:
-        TypeError: If ``func`` is not a coroutine function.
-        ValueError: If no ``name`` is given and ``func`` has no ``__name__``.
-    """
-    return _define_tool(Registry(), func, name, description, input_schema=input_schema)
 
 
 def define_interrupt(
@@ -464,13 +405,13 @@ def define_interrupt(
     description: str | None = None,
     request_metadata: dict[str, Any] | Callable[[Any], dict[str, Any]] | None = None,  # noqa: ANN401
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> Tool:
+) -> _Tool[Any, NoReturn]:
     """Register a tool that always interrupts execution.
 
     An interrupt tool is a special tool that always raises ``Interrupt`` with
     optional metadata. This is useful for explicit human-in-the-loop checkpoints.
     For tools that sometimes run logic and sometimes interrupt, use ``define_tool``
-    and raise ``Interrupt`` from the handler (or use ``ToolRunContext``).
+    and raise ``Interrupt`` from the handler (or use ``ToolContext``).
 
     Args:
         registry: The registry to register the interrupt tool in
@@ -481,7 +422,8 @@ def define_interrupt(
             interrupt handler is typed as ``Any``; pass this so the model sees a concrete shape.
 
     Returns:
-        The registered tool callable (same shape as ``define_tool``).
+        The registered tool. Awaiting it directly raises ``Interrupt``; it
+        never returns a value.
 
     Example:
         def get_meta(input: dict) -> dict:
@@ -504,10 +446,14 @@ def define_interrupt(
             meta = request_metadata
         raise Interrupt(meta)
 
-    return _define_tool(
-        registry,
-        interrupt_wrapper,
-        name=name,
-        description=description,
-        input_schema=input_schema,
+    # The handler stays annotated ``Any`` so the model is told it may return anything.
+    return cast(
+        _Tool[Any, NoReturn],
+        _define_tool(
+            registry,
+            interrupt_wrapper,
+            name=name,
+            description=description,
+            input_schema=input_schema,
+        ),
     )

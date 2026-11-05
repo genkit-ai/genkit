@@ -2,16 +2,26 @@
 
 A collection of middleware implementations for Genkit Python.
 
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Overview
 
-This plugin provides six concrete middleware implementations for common use cases:
+This plugin provides concrete middleware implementations for common use cases:
 
 - **Retry**: Retries model API calls on transient errors with exponential backoff
 - **Fallback**: Falls back to alternative models when the primary model fails
 - **ToolApproval**: Requires explicit approval before executing tool calls
 - **Skills**: Exposes a library of skills as system prompts and tools
 - **Filesystem**: Provides sandboxed filesystem operations
-- **Artifacts**: Session artifact listing plus read/write artifact tools
+- **Artifacts** (experimental, `genkit_middleware.exp`): Session artifact listing plus read/write artifact tools
 
 ## Quick start
 
@@ -25,16 +35,18 @@ from genkit_middleware import Retry, Fallback, Middleware
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Hello!',
     use=[
         Retry(max_retries=5),
-        Fallback(models=['googleai/gemini-2.5-pro']),
+        Fallback(models=['googleai/gemini-3.1-pro-preview']),
     ],
 )
 ```
 
-These pre-packaged middlewares will be available to play with in the Dev UI by default.
+Every middleware works when you pass an instance in `use=[]`; no plugin
+registration is needed. Registering `Middleware()` lists the stable middleware
+in the Dev UI and lets a `.prompt` file name them in `use:`.
 
 ## Installation
 
@@ -49,6 +61,7 @@ uv add genkit-middleware genkit-google-genai
 Automatically retries model calls on transient failures with configurable exponential backoff:
 
 ```python
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Retry
 
 retry = Retry(
@@ -61,7 +74,7 @@ retry = Retry(
 )
 
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Hello!',
     use=[retry],
 )
@@ -72,15 +85,19 @@ response = await ai.generate(
 Falls back to alternative models on retryable errors:
 
 ```python
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Fallback
 
 fallback = Fallback(
-    models=['googleai/gemini-2.5-pro', 'googleai/gemini-flash-latest'],
+    models=[
+        'googleai/gemini-3.1-pro-preview',
+        'googleai/gemini-flash-latest',
+    ],
     statuses=['UNAVAILABLE', 'DEADLINE_EXCEEDED'],
 )
 
 response = await ai.generate(
-    model='googleai/gemini-pro-latest',
+    model=GoogleAI.gemini('gemini-pro-latest'),
     prompt='Hello!',
     use=[fallback],
 )
@@ -93,7 +110,7 @@ Requires approval before executing tools (useful for sensitive operations):
 ```python
 from pydantic import BaseModel, Field
 
-from genkit import restart_tool
+from genkit_google_genai import GoogleAI
 from genkit_middleware import ToolApproval
 
 
@@ -111,7 +128,7 @@ approval = ToolApproval(
 )
 
 first = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Delete the database',
     tools=['delete_database'],
     use=[approval],
@@ -123,15 +140,12 @@ tool by restarting it with ``resumed_metadata`` that includes ``tool_approved``:
 
 ```python
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Delete the database',
     messages=list(first.messages),
     tools=['delete_database'],
     use=[approval],
-    resume_restart=restart_tool(
-        interrupt=first.interrupts[0],
-        resumed_metadata={'tool_approved': True},
-    ),
+    resume_restart=first.interrupts[0].restart(resumed_metadata={'tool_approved': True}),
 )
 ```
 
@@ -140,6 +154,7 @@ response = await ai.generate(
 Scans directories for SKILL.md files and exposes them as loadable instructions:
 
 ```python
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Skills
 
 skills = Skills(
@@ -147,7 +162,7 @@ skills = Skills(
 )
 
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='Help me with Python',
     use=[skills],
 )
@@ -169,6 +184,7 @@ You are an expert Python programmer...
 Provides sandboxed file operations confined to a root directory:
 
 ```python
+from genkit_google_genai import GoogleAI
 from genkit_middleware import Filesystem
 
 fs = Filesystem(
@@ -178,7 +194,7 @@ fs = Filesystem(
 )
 
 response = await ai.generate(
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     prompt='List files in the current directory',
     use=[fs],
 )
@@ -193,20 +209,23 @@ Provides four tools:
 ### Artifacts
 
 Exposes `read_artifact` / `write_artifact` tools and lists session artifacts in the
-system prompt. Intended for agent sessions:
+system prompt. It only works inside an agent, so it's experimental and lives in
+`genkit_middleware.exp`. Pass it straight to the agent; `Middleware()` doesn't
+register it, so it isn't listed in the Dev UI and a `.prompt` file can't name it:
 
 ```python
-from genkit_middleware import Artifacts, Middleware
+from genkit_middleware import Middleware
+from genkit_middleware.exp import Artifacts
 
-from genkit import Genkit
-from genkit.agent import InMemorySessionStore
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore
 from genkit_google_genai import GoogleAI
 
 ai = Genkit(plugins=[GoogleAI(), Middleware()])
 
 agent = ai.define_agent(
     name='workspaceAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     use=[Artifacts()],
     store=InMemorySessionStore(),
 )

@@ -20,17 +20,17 @@ import json
 from typing import Any, cast
 
 from genkit._ai._formats._schema import resolve_json_schema_refs
-from genkit._ai._formats._types import FormatDef, Formatter, FormatterConfig
+from genkit._ai._formats._types import FormatHandler, Formatter, FormatterConfig
 from genkit._ai._model import (
     Message,
     ModelResponseChunk,
 )
 from genkit._core._compat import override
-from genkit._core._error import GenkitError
-from genkit._core._extract_json import extract_json_array_from_text
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._extract_json import extract_json, extract_json_array_from_text
 
 
-class ArrayFormat(FormatDef):
+class ArrayFormat(Formatter):
     """Defines an Array format for use with AI models.
 
     This format instructs the model to output a JSON array of items matching a specified schema.
@@ -44,16 +44,14 @@ class ArrayFormat(FormatDef):
 
     Usage:
         ai.generate(
-            output=OutputConfig(
-                format='array',
-                schema={
-                    'type': 'array',
-                    'items': {
-                        'type': 'object',
-                        'properties': {'name': {'type': 'string'}}
-                    }
+            output_format='array',
+            output_schema={
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {'name': {'type': 'string'}}
                 }
-            )
+            }
         )
     """
 
@@ -74,14 +72,14 @@ class ArrayFormat(FormatDef):
         )
 
     @override
-    def handle(self, schema: dict[str, object] | None) -> Formatter[Any, Any]:
-        """Creates a Formatter for handling JSON array data.
+    def handle(self, schema: dict[str, object] | None) -> FormatHandler[Any, Any]:
+        """Creates a FormatHandler for handling JSON array data.
 
         Args:
             schema: The JSON schema for the array. Must be of type 'array'.
 
         Returns:
-            A Formatter configured to parse JSON arrays.
+            A FormatHandler configured to parse JSON arrays.
 
         Raises:
             GenkitError: If the schema is missing or not of type 'array'.
@@ -92,12 +90,27 @@ class ArrayFormat(FormatDef):
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message="Must supply an 'array' schema type when using the 'items' parser format.",
+                reason=ErrorReason.INVALID_SCHEMA,
             )
 
-        def message_parser(msg: Message) -> list[object]:
-            """Parses a complete message into a list of items."""
-            result = extract_json_array_from_text(msg.text, 0)
-            return result.items
+        def message_parser(msg: Message) -> list[object] | None:
+            """Parses a complete message into a list of items.
+
+            A finished reply like ``["a", "b"]`` is read as one JSON array.
+            A token-capped array keeps the items that finished and drops a
+            half-written last item; ``finish_reason='length'`` is how the
+            caller tells the list is short.
+            """
+            try:
+                parsed = extract_json(msg.text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            if '[' not in msg.text:
+                return None
+            items = extract_json_array_from_text(msg.text).items
+            return items or None
 
         def chunk_parser(chunk: ModelResponseChunk) -> list[object]:
             """Parses a streaming chunk into a list of items."""
@@ -120,7 +133,7 @@ class ArrayFormat(FormatDef):
 {json.dumps(resolved_schema, indent=2)}
 ```
 """
-        return Formatter(
+        return FormatHandler(
             chunk_parser=chunk_parser,
             message_parser=message_parser,
             instructions=instructions,

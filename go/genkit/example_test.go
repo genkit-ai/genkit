@@ -152,8 +152,8 @@ func ExampleDefineTool() {
 	_ = genkit.DefineTool(g, "add",
 		"Adds two numbers together",
 		func(ctx *ai.ToolContext, input struct {
-			A float64 `json:"a" jsonschema:"description=First number"`
-			B float64 `json:"b" jsonschema:"description=Second number"`
+			A float64 `json:"a" jsonschema_description:"First number"`
+			B float64 `json:"b" jsonschema_description:"Second number"`
 		}) (float64, error) {
 			return input.A + input.B, nil
 		},
@@ -195,8 +195,8 @@ func ExampleDefineSchemasFor() {
 
 	// Define a struct type
 	type Person struct {
-		Name string `json:"name" jsonschema:"description=The person's name"`
-		Age  int    `json:"age" jsonschema:"description=The person's age"`
+		Name string `json:"name" jsonschema_description:"The person's name"`
+		Age  int    `json:"age" jsonschema_description:"The person's age"`
 	}
 
 	// Register the schema - this makes it available for .prompt files

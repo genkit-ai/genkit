@@ -23,13 +23,11 @@ from pydantic import BaseModel
 
 from genkit._ai._agents._runtime import load_session, validate_custom_state
 from genkit._core._error import GenkitError
+from genkit._core._model import AgentInit, SessionSnapshot, SessionState
 from genkit._core._typing import (
-    AgentInit,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
 )
-from genkit.agent import InMemorySessionStore
+from genkit.exp.agent import InMemorySessionStore
 
 INVALID_ARGUMENT = 'INVALID_ARGUMENT'
 

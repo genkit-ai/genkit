@@ -130,6 +130,14 @@ func TestGetUser(t *testing.T) {
 			wantIAMAuth: true,
 			wantErr:     false,
 		},
+		{
+			name: "service account email loses its suffix",
+			cfg: engineConfig{
+				iamAccountEmail: "runner@my-project.iam.gserviceaccount.com",
+			},
+			wantUser:    "runner@my-project.iam",
+			wantIAMAuth: true,
+		},
 	}
 
 	for _, tc := range testCases {

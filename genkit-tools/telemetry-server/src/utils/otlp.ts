@@ -24,6 +24,7 @@ interface OtlpValue {
   stringValue?: string;
   intValue?: number;
   boolValue?: boolean;
+  doubleValue?: number;
   arrayValue?: {
     values: OtlpValue[];
   };
@@ -105,6 +106,7 @@ export function fromOtlpValue(value: OtlpValue): any {
   if (value.stringValue !== undefined) return value.stringValue;
   if (value.intValue !== undefined) return value.intValue;
   if (value.boolValue !== undefined) return value.boolValue;
+  if (value.doubleValue !== undefined) return value.doubleValue;
   if (value.arrayValue !== undefined)
     return value.arrayValue.values.map(fromOtlpValue);
   return undefined;

@@ -21,4 +21,13 @@ export {
   ProcessManagerStartOptions,
   ProcessStatus,
 } from './process-manager';
+export {
+  DEFAULT_REFLECTION_V2_HOST,
+  REFLECTION_AUTH_ERROR_CODE,
+  REFLECTION_SECRET_ENV,
+  REFLECTION_SECRET_HEADER,
+  generateReflectionSecret,
+  isLoopbackHost,
+  reflectionV2Url,
+} from './reflection-auth';
 export * from './types';

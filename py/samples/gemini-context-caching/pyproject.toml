@@ -5,9 +5,6 @@ requires-python = ">=3.10"
 dependencies = [
   "genkit",
   "genkit-google-genai",
-  "httpx",
-  "pydantic>=2.10.5",
-  "structlog>=25.2.0",
 ]
 
 [build-system]

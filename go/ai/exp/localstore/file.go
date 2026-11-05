@@ -34,6 +34,15 @@ import (
 	"github.com/firebase/genkit/go/core/status"
 )
 
+// Compile-time checks that the store has the capabilities it documents. The
+// conformance suite skips the checks for a capability a store lacks, so losing
+// one would otherwise go unnoticed.
+var (
+	_ exp.SessionStore[any]           = (*FileSessionStore[any])(nil)
+	_ exp.SnapshotMetadataReader[any] = (*FileSessionStore[any])(nil)
+	_ exp.SnapshotSubscriber          = (*FileSessionStore[any])(nil)
+)
+
 // FileSessionStore is a snapshot store that persists snapshots as JSON files on
 // the local filesystem. Each snapshot is written to its own file named
 // "<snapshotID>.json", under a per-call subdirectory ("prefix"):
@@ -127,8 +136,8 @@ const pointersSubdir = ".pointers"
 
 // NewFileSessionStore creates a file-based snapshot store rooted at dir.
 // The directory is created (mode 0o700) if it does not already exist.
-// Returns an error if dir is empty, cannot be created, or an option is set
-// more than once. See [WithMaxPersistedChainLength] and
+// Returns an error if dir is empty, cannot be created, or an option value is
+// invalid. A repeated option replaces the earlier one. See [WithMaxPersistedChainLength] and
 // [WithSnapshotPathPrefix].
 func NewFileSessionStore[State any](dir string, opts ...FileStoreOption) (*FileSessionStore[State], error) {
 	if dir == "" {
@@ -172,6 +181,23 @@ func (s *FileSessionStore[State]) GetSnapshot(ctx context.Context, snapshotID st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.readAt(s.pathFor(prefix, snapshotID))
+}
+
+// GetSnapshotMetadata retrieves a snapshot by ID without its state, per
+// [exp.SnapshotMetadataReader]. The file is still read whole,
+// but its state payload is skipped rather than decoded into messages.
+// Returns nil if not found.
+func (s *FileSessionStore[State]) GetSnapshotMetadata(ctx context.Context, snapshotID string) (*exp.SessionSnapshot[State], error) {
+	if err := validateSnapshotID(snapshotID); err != nil {
+		return nil, err
+	}
+	prefix, err := s.derivePrefix(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readMetadataAt(s.pathFor(prefix, snapshotID))
 }
 
 // SaveSnapshot atomically reads, applies fn, and persists. See
@@ -296,6 +322,21 @@ type pointerDoc struct {
 // A file that fails to parse or vanishes mid-scan is skipped, so one corrupted
 // row cannot hide every other session.
 func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
+	return s.latest(ctx, sessionID, s.readAt)
+}
+
+// GetLatestSnapshotMetadata is [FileSessionStore.GetLatestSnapshot] without
+// the state, per [exp.SnapshotMetadataReader]: the same
+// resolution, with the winning row decoded the way
+// [FileSessionStore.GetSnapshotMetadata] decodes one.
+func (s *FileSessionStore[State]) GetLatestSnapshotMetadata(ctx context.Context, sessionID string) (*exp.SessionSnapshot[State], error) {
+	return s.latest(ctx, sessionID, s.readMetadataAt)
+}
+
+// latest resolves the session's most recently created row and decodes it
+// with read: the pointer fast path first, then the directory scan that
+// rebuilds the pointer.
+func (s *FileSessionStore[State]) latest(ctx context.Context, sessionID string, read func(path string) (*exp.SessionSnapshot[State], error)) (*exp.SessionSnapshot[State], error) {
 	if sessionID == "" {
 		return nil, errors.New("FileSessionStore: session ID is empty")
 	}
@@ -321,7 +362,7 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	s.mu.Lock()
 	var fast *exp.SessionSnapshot[State]
 	if ptr := s.loadPointerLocked(prefix, sessionID); ptr != nil && validateSnapshotID(ptr.CurrentSnapshotID) == nil {
-		fast, _ = s.readAt(s.pathFor(prefix, ptr.CurrentSnapshotID))
+		fast, _ = read(s.pathFor(prefix, ptr.CurrentSnapshotID))
 	}
 	s.mu.Unlock()
 	if fast != nil && fast.SessionID == sessionID {
@@ -372,7 +413,7 @@ func (s *FileSessionStore[State]) GetLatestSnapshot(ctx context.Context, session
 	// right snapshot (with possibly fresher state). A parse failure here is
 	// treated like a vanished row: report no tip rather than erroring.
 	s.mu.Lock()
-	snap, _ := s.readAt(filepath.Join(dir, bestName))
+	snap, _ := read(filepath.Join(dir, bestName))
 	if snap != nil {
 		// Refresh the pointer to the scanned winner so later lookups take the fast
 		// path. Best-effort: a write failure leaves the next lookup to rescan.
@@ -482,18 +523,52 @@ func (s *FileSessionStore[State]) derivePrefix(ctx context.Context) (string, err
 // readAt reads and parses the snapshot file at path. Returns (nil, nil) if the
 // file does not exist. Caller must hold s.mu.
 func (s *FileSessionStore[State]) readAt(path string) (*exp.SessionSnapshot[State], error) {
+	var snap exp.SessionSnapshot[State]
+	if ok, err := readJSONAt(path, &snap); !ok {
+		return nil, err
+	}
+	return &snap, nil
+}
+
+// snapshotWithoutState decodes a snapshot file without materializing its state:
+// the outer State field shadows the embedded row's under the same JSON key,
+// so the payload is handed to skipJSON and never decoded or copied.
+type snapshotWithoutState[State any] struct {
+	exp.SessionSnapshot[State]
+	State skipJSON `json:"state,omitempty"`
+}
+
+// skipJSON is a JSON value that decodes to nothing. encoding/json hands an
+// Unmarshaler the value's bytes as a sub-slice of the input, so the payload is
+// skipped without the copy a json.RawMessage would take.
+type skipJSON struct{}
+
+func (skipJSON) UnmarshalJSON([]byte) error { return nil }
+
+// readMetadataAt is readAt without the state: the row at path with State
+// nil, or nil if the file does not exist. Caller must hold s.mu.
+func (s *FileSessionStore[State]) readMetadataAt(path string) (*exp.SessionSnapshot[State], error) {
+	var m snapshotWithoutState[State]
+	if ok, err := readJSONAt(path, &m); !ok {
+		return nil, err
+	}
+	return &m.SessionSnapshot, nil
+}
+
+// readJSONAt reads the file at path and decodes it into v. It reports
+// (false, nil) when the file does not exist.
+func readJSONAt(path string, v any) (bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return false, nil
 		}
-		return nil, fmt.Errorf("FileSessionStore: read %s: %w", path, err)
+		return false, fmt.Errorf("FileSessionStore: read %s: %w", path, err)
 	}
-	var snap exp.SessionSnapshot[State]
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return nil, fmt.Errorf("FileSessionStore: unmarshal %s: %w", path, err)
+	if err := json.Unmarshal(data, v); err != nil {
+		return false, fmt.Errorf("FileSessionStore: unmarshal %s: %w", path, err)
 	}
-	return &snap, nil
+	return true, nil
 }
 
 // writeAt atomically writes snap to <prefix>/<id>.json via a temp file +

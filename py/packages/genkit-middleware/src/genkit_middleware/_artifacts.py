@@ -22,17 +22,17 @@ from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, Field
 
-from genkit._ai._model import Message
-from genkit._ai._tools import tool
-from genkit._core._action import Action
-from genkit._core._model import GenerateActionOptions, ModelResponse
-from genkit._core._typing import Artifact, Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit import Message, ModelResponse, Part, Role, Tool
+from genkit.exp import current_session
+from genkit.exp.agent import Artifact
+from genkit.middleware import GenerateHookParams, Middleware, MiddlewareContext
+from genkit.model import GenerateActionOptions
+from genkit.plugin_api import GenkitConfig
 
 ARTIFACTS_LISTING_MARKER = 'artifacts-middleware-listing'
 
 
-class ArtifactsConfig(BaseModel):
+class ArtifactsConfig(GenkitConfig):
     """Options for session artifact tools and prompt injection."""
 
     readonly: bool = Field(
@@ -63,9 +63,8 @@ class WriteArtifactOutput(BaseModel):
 def extract_artifact_text(artifact: Artifact) -> str:
     parts: list[str] = []
     for part in artifact.parts:
-        root = part.root
-        if isinstance(root, TextPart) and root.text:
-            parts.append(root.text)
+        if part.text:
+            parts.append(part.text)
     return '\n'.join(parts)
 
 
@@ -103,17 +102,14 @@ def inject_artifact_listing_messages(messages: list[Message], listing: str) -> l
     for i, msg in enumerate(out):
         filtered: list[Part] = []
         for part in msg.content or []:
-            root = part.root
-            meta = root.metadata if isinstance(root, TextPart) else None
+            meta = part.metadata if part.text is not None else None
             if isinstance(meta, dict) and meta.get(ARTIFACTS_LISTING_MARKER):
                 continue
             filtered.append(part)
         if len(filtered) != len(msg.content or []):
             out[i] = Message(role=msg.role, content=filtered)
 
-    listing_part = Part(
-        root=TextPart(text=listing, metadata={ARTIFACTS_LISTING_MARKER: True}),
-    )
+    listing_part = Part.from_text(listing, metadata={ARTIFACTS_LISTING_MARKER: True})
 
     system_idx: int | None = None
     for i, msg in enumerate(out):
@@ -139,14 +135,17 @@ def inject_artifact_listing(options: GenerateActionOptions, listing: str) -> Gen
     return new_options
 
 
-class Artifacts(BaseMiddleware[ArtifactsConfig]):
+class Artifacts(Middleware[ArtifactsConfig]):
     """Session artifact tools plus an injected artifact listing in the system prompt."""
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
-        tools: list[Action] = []
+    name = 'artifacts'
+    description = 'Session artifact tools plus an injected artifact listing in the system prompt'
+
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
+        tools: list[Tool] = []
 
         async def read_artifact(input: ReadArtifactInput) -> ReadArtifactOutput:
-            session = ctx.ai.current_session()
+            session = current_session()
             if session is None:
                 return ReadArtifactOutput(
                     name=input.name,
@@ -173,7 +172,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
             )
 
         tools.append(
-            tool(
+            Tool(
                 read_artifact,
                 name='read_artifact',
                 description=(
@@ -181,21 +180,21 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                     'Use this to inspect artifacts produced by sub-agents or '
                     'previously created artifacts.'
                 ),
-            ).action()
+            )
         )
 
         if not self.config.readonly:
 
             async def write_artifact(input: WriteArtifactInput) -> WriteArtifactOutput:
-                session = ctx.ai.current_session()
+                session = current_session()
                 if session is None:
                     return WriteArtifactOutput(status='Error: no active session.')
 
-                await session.add_artifacts([Artifact(name=input.name, parts=[Part(TextPart(text=input.content))])])
+                await session.add_artifacts([Artifact(name=input.name, parts=[Part.from_text(input.content)])])
                 return WriteArtifactOutput(status=f'Artifact "{input.name}" saved successfully.')
 
             tools.append(
-                tool(
+                Tool(
                     write_artifact,
                     name='write_artifact',
                     description=(
@@ -204,7 +203,7 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
                         'replaced. Use this to produce files, reports, code, or other '
                         'deliverables.'
                     ),
-                ).action()
+                )
             )
 
         return tools
@@ -212,10 +211,10 @@ class Artifacts(BaseMiddleware[ArtifactsConfig]):
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
-        session = ctx.ai.current_session()
+        session = current_session()
         artifacts = await session.get_artifacts() if session is not None else []
         listing = build_artifact_listing(artifacts)
         params.options = inject_artifact_listing(params.options, listing)

@@ -29,20 +29,31 @@ export async function startMcpServer(params: {
   projectRoot: string;
   explicitProjectRoot: boolean;
   timeout?: number;
+  /** `--experimental-auth`. */
+  auth?: boolean;
 }) {
-  const { projectRoot, explicitProjectRoot, timeout } = params;
+  const { projectRoot, explicitProjectRoot, timeout, auth } = params;
   logger.info(`Starting MCP server in: ${projectRoot}`);
 
-  const server = new McpServer({
-    name: 'Genkit MCP',
-    version: '0.0.2',
-  });
+  const server = new McpServer(
+    {
+      name: 'Genkit MCP',
+      version: '0.0.2',
+      title: 'Genkit MCP Server',
+      description:
+        'Provides Genkit documentation, usage guides, runtime process management, flow discovery/execution, and execution trace inspection.',
+    },
+    {
+      instructions:
+        'Use this server to look up Genkit documentation and API guides (`get_usage_guide`, `search_genkit_docs`, `list_genkit_docs`, `read_genkit_docs`), manage the local Genkit runtime (`start_runtime`, `restart_runtime`, `kill_runtime`), discover and run Genkit flows (`list_flows`, `run_flow`), and inspect execution traces (`get_trace`). Always check `get_usage_guide` or search Genkit docs before implementing Genkit features.',
+    }
+  );
 
-  await defineDocsTool(server);
-  await defineUsageGuideTool(server);
+  await defineDocsTool(server, projectRoot);
+  await defineUsageGuideTool(server, projectRoot);
   defineInitPrompt(server);
 
-  const manager = new McpRuntimeManager();
+  const manager = new McpRuntimeManager(auth);
   const options: McpToolOptions = {
     projectRoot,
     explicitProjectRoot,

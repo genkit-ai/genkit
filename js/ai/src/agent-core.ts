@@ -22,7 +22,8 @@
  * no Node-specific APIs. Both the in-process server agent (`ai.defineAgent`)
  * and the HTTP `remoteAgent` client compose the same {@link AgentChatImpl} /
  * {@link createAgentAPI} core over a transport that implements
- * {@link AgentTransport}.
+ * {@link AgentTransport}. Custom transports plug in the same way (both are
+ * re-exported from `genkit/beta/client`).
  *
  * @module agent-core
  */
@@ -32,6 +33,7 @@ import type {
   AgentInput,
   AgentOutput,
   AgentStreamChunk,
+  TurnEnd,
 } from './agent.js';
 import { applyPatch, type JsonPatch } from './json-patch.js';
 import type { MessageData } from './model-types.js';
@@ -59,21 +61,41 @@ import type {
 export type SnapshotLookup = { snapshotId: string } | { sessionId: string };
 
 /**
+ * Per-turn options: `abortSignal` plus any transport-specific options `Opts`
+ * (ex. `context` for in-process agents).
+ *
+ * `Opts` defaults to `never`, meaning "no transport-specific options". We use
+ * `never` rather than `{}` because TypeScript skips excess-property checks
+ * against empty object types, so `{}` would silently accept (and drop)
+ * options the transport cannot honor, like `context` on `remoteAgent`.
+ */
+export type AgentTurnOptions<Opts extends object = never> = {
+  abortSignal?: AbortSignal;
+} & ([Opts] extends [never] ? unknown : Opts);
+
+/**
  * The transport-agnostic surface for talking to an agent. The same shape is
  * returned by `ai.defineAgent(...)` on the server and by `remoteAgent(...)` on
  * the client.
+ *
+ * `Opts` are transport-specific call options. Options passed to `chat` /
+ * `loadChat` are bound to the returned chat and apply to all of its calls
+ * (including {@link DetachedTask} polling); a per-call value replaces the
+ * bound one key by key.
  */
-
-export interface AgentAPI<State = unknown> {
+export interface AgentAPI<State = unknown, Opts extends object = never> {
   /** Starts a new chat, or attaches to one via init. */
-  chat(init?: AgentInit<State>): AgentChat<State>;
+  chat(init?: AgentInit<State>, opts?: Opts): AgentChat<State, Opts>;
 
   /**
    * Loads a server snapshot and returns a chat with history restored. Accepts
    * either a `snapshotId` (an exact snapshot) or a `sessionId` (the session's
    * latest snapshot).
    */
-  loadChat(opts: SnapshotLookup): Promise<AgentChat<State>>;
+  loadChat(
+    lookup: SnapshotLookup,
+    opts?: Opts
+  ): Promise<AgentChat<State, Opts>>;
 
   /**
    * Reads a snapshot without starting a chat. Requires a server store. Accepts
@@ -81,26 +103,78 @@ export interface AgentAPI<State = unknown> {
    * `{ sessionId }`).
    */
   getSnapshot(
-    lookup: string | SnapshotLookup
+    lookup: string | SnapshotLookup,
+    opts?: Opts
+  ): Promise<SessionSnapshot<State> | undefined>;
+
+  /**
+   * Blocks until a snapshot settles (`completed`, `failed`, `aborted`, or
+   * `expired`) and returns it, or `undefined` when no such snapshot exists.
+   * Requires a server store. The blocking counterpart of {@link getSnapshot}:
+   * the waiting happens next to the store, so a caller follows a detached turn
+   * in one call instead of a read per tick. Bound the wait with
+   * `abortSignal` (e.g. `AbortSignal.timeout(ms)`); on abort the promise
+   * rejects with the signal's reason and {@link getSnapshot} then reports where
+   * the snapshot stands.
+   */
+  waitForSnapshot(
+    snapshotId: string,
+    opts?: WaitForSnapshotOptions<Opts>
   ): Promise<SessionSnapshot<State> | undefined>;
 
   /** Aborts a running snapshot. Requires a server store. */
-  abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined>;
+  abort(
+    snapshotId: string,
+    opts?: Opts
+  ): Promise<SessionSnapshot['status'] | undefined>;
 }
+
+/**
+ * Options for waiting on a snapshot ({@link AgentAPI.waitForSnapshot},
+ * {@link DetachedTask.wait}), plus any transport-specific options `Opts`
+ * (ex. `context` for in-process agents), as with {@link AgentTurnOptions}.
+ */
+export type WaitForSnapshotOptions<Opts extends object = never> = {
+  /**
+   * Ends the wait early. The promise rejects with the signal's reason (an
+   * `AbortError`, or a `TimeoutError` from `AbortSignal.timeout`), and the
+   * snapshot keeps whatever status it has.
+   */
+  abortSignal?: AbortSignal;
+  /**
+   * How often (ms) the wait re-reads the snapshot. In process it is the
+   * cadence at which a wait re-reads a pending snapshot to notice a stale
+   * heartbeat or, on a store without change notifications, a settled row;
+   * over a transport that cannot wait server-side it is the polling interval.
+   * It has no effect on a transport that waits server-side, such as
+   * `remoteAgent` against a server that mounts the wait action. Defaults to
+   * the transport's own cadence.
+   */
+  intervalMs?: number;
+} & ([Opts] extends [never] ? unknown : Opts);
 
 /**
  * A stateful conversation with an agent. Tracks state across turns so callers
  * do not have to thread `snapshotId`/`state` by hand.
  */
-export interface AgentChat<State = unknown> {
+export interface AgentChat<State = unknown, Opts extends object = never> {
   /**
    * Runs a single turn and resolves with the completed {@link AgentResponse}.
    * The non-streaming analog of {@link generate}; for incremental chunks use
    * {@link sendStream}.
+   *
+   * A failed turn rejects with an {@link AgentError} naming the resume point,
+   * which the chat has already adopted. A turn the caller stopped resolves
+   * with `finishReason: 'aborted'` and the same kind of resume point: the
+   * chat keeps the message when the turn committed it and rolls it back when
+   * it did not. An input with neither a message nor
+   * `resume` (`send({})`) runs the turn again on the conversation as it
+   * stands, which re-attempts a failed turn without repeating the tool calls
+   * it completed; a new message continues from that point like any other.
    */
   send(
     input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): Promise<AgentResponse<State>>;
 
   /**
@@ -109,26 +183,32 @@ export interface AgentChat<State = unknown> {
    */
   sendStream(
     input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): AgentTurn<State>;
 
   /** Resumes after an interrupt. Sugar for `send({ resume })`. */
   resume(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): Promise<AgentResponse<State>>;
 
   /** Streaming resume. Sugar for `sendStream({ resume })`. */
   resumeStream(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): AgentTurn<State>;
 
-  /** Submits a detached (background) turn. */
-  detach(input: string | AgentInput): Promise<DetachedTask<State>>;
+  /**
+   * Submits a detached (background) turn. The returned task keeps using the
+   * resolved options for polling and aborting.
+   */
+  detach(
+    input: string | AgentInput,
+    opts?: Opts
+  ): Promise<DetachedTask<State, Opts>>;
 
   /** Aborts the current snapshot. */
-  abort(): Promise<SessionSnapshot['status'] | undefined>;
+  abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined>;
 
   readonly snapshotId?: string;
   /** Stable identifier correlating snapshots/turns of this conversation. */
@@ -222,22 +302,44 @@ export interface AgentInterrupt<Input = unknown, Output = unknown> {
 /**
  * A handle to a background (detached) task.
  */
-export interface DetachedTask<State = unknown> {
+export interface DetachedTask<State = unknown, Opts extends object = never> {
   readonly snapshotId: string;
 
-  /** Yields status until a terminal state. */
+  /**
+   * Yields the snapshot on every poll until it settles: a terminal status.
+   * An aborted task passes through `aborting` while its worker winds down,
+   * and settles as `aborted` once the state the run kept is recorded.
+   */
   poll(opts?: { intervalMs?: number }): AsyncIterable<SessionSnapshot<State>>;
 
-  /** Resolves when the task reaches a terminal state. */
-  wait(opts?: { intervalMs?: number }): Promise<SessionSnapshot<State>>;
+  /**
+   * Resolves with the settled snapshot once the task settles. A task that
+   * failed, aborted, or expired still resolves with its snapshot (inspect
+   * `status` and `error`); an aborted one carries the turns the run finished,
+   * so the row it resolves with is the one to resume from. An `aborting` row
+   * is not settled, so the wait goes on until its finalize lands. A rejection
+   * means the wait itself could not proceed: the snapshot is gone, or
+   * `abortSignal` ended the wait. The wait runs server-side where the
+   * transport supports it and falls back to polling
+   * {@link AgentTransport.getSnapshot} otherwise. Per-call transport options
+   * override the ones resolved at detach time key by key, as with
+   * {@link abort}.
+   */
+  wait(opts?: WaitForSnapshotOptions<Opts>): Promise<SessionSnapshot<State>>;
 
-  /** Aborts the task. */
-  abort(): Promise<SessionSnapshot['status'] | undefined>;
+  /**
+   * Aborts the task. Per-call options override the ones resolved at detach
+   * time key by key (ex. to abort under an operator's identity).
+   */
+  abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined>;
 }
 
 /**
- * Thrown when a turn fails. Carries the last-good state so the session is
- * recoverable.
+ * Thrown when a turn fails. Carries the resume point (`snapshotId` when
+ * server-managed, `state` when client-managed): the failed turn's own snapshot
+ * or state when the turn committed what it had done, otherwise the last
+ * committed turn's. Whether the failure is worth another attempt is the
+ * caller's decision, taken from `status`.
  */
 export class AgentError<State = unknown> extends Error {
   readonly status: string;
@@ -271,46 +373,229 @@ export class AgentError<State = unknown> extends Error {
 // ---------------------------------------------------------------------------
 
 /**
- * The pluggable backend the agent-client core runs over. Implementations exist
- * for the in-process server agent (driving the agent action directly) and for
- * the HTTP `remoteAgent` (driving `streamFlow`/`runFlow`).
+ * The pluggable backend the agent-client core runs over. Genkit ships two: the
+ * in-process one behind `ai.defineAgent` (drives the agent action directly)
+ * and the HTTP one behind `remoteAgent` (drives `streamFlow`/`runFlow`).
+ * Implement it to talk to an agent over anything else (WebSocket, a callable
+ * function, a queue, ...) and wrap it with {@link createAgentAPI}.
+ *
+ * `Opts` are the transport-specific call options it accepts (see
+ * {@link AgentAPI}). The core passes them through untouched.
+ *
+ * ```ts
+ * const transport: AgentTransport<{ traceId?: string }> = {
+ *   runTurn(input, init, { abortSignal, traceId }) {
+ *     const call = socket.startTurn({ input, init, traceId, abortSignal });
+ *     return { stream: call.chunks, output: call.result };
+ *   },
+ *   getSnapshot: (lookup, opts) => socket.getSnapshot(lookup, opts?.traceId),
+ *   abort: (snapshotId, opts) => socket.abort(snapshotId, opts?.traceId),
+ * };
+ * const agent = createAgentAPI<MyState, { traceId?: string }>(transport);
+ * ```
+ *
+ * Error contract: a turn the agent itself failed should resolve `output` with
+ * `finishReason: 'failed'` (and `error`), which surfaces as an
+ * {@link AgentError}. Transport-level failures (network, auth, ...) may reject
+ * `output` / throw from `stream`; an error message of the form
+ * `STATUS: message` (ex. `UNAUTHENTICATED: bad token`) populates
+ * `AgentError.status`.
  */
-export interface AgentTransport {
-  /** Declares server- vs client-managed state; auto-detected when omitted. */
-  stateManagement?: 'server' | 'client';
+export interface AgentTransport<Opts extends object = never> {
+  /**
+   * Declares server- vs client-managed state. Advisory metadata: the core
+   * derives each turn's `init` from what the previous turn returned
+   * (`snapshotId` or `state`), so it never reads (or writes) this field.
+   */
+  readonly stateManagement?: 'server' | 'client';
 
   /**
    * Runs a single turn. Returns the streamed chunks plus a promise for the
-   * final, non-throwing {@link AgentOutput} (failures resolve with
-   * `finishReason: 'failed'`).
+   * final {@link AgentOutput}.
+   *
+   * - `init` is always an object: `{ snapshotId }`, `{ state }`, or the chat's
+   *   initial init (`{}` for a fresh session).
+   * - `opts.abortSignal` is always present; stop the turn when it fires.
+   * - `stream` MUST deliver chunks in order without loss: `customPatch` chunks
+   *   are applied positionally to the chat's tracked state.
    */
   runTurn(
     input: AgentInput,
     init: AgentInit,
-    opts: { abortSignal: AbortSignal }
+    opts: AgentTurnOptions<Opts> & { abortSignal: AbortSignal }
   ): {
     stream: AsyncIterable<AgentStreamChunk>;
     output: Promise<AgentOutput>;
   };
 
-  /** Reads a snapshot. Requires a server store. */
+  /**
+   * Reads a snapshot, or resolves `undefined` if it does not exist. Requires a
+   * server store.
+   */
   getSnapshot(
-    lookup: SnapshotLookup
+    lookup: SnapshotLookup,
+    opts?: Opts
+  ): Promise<SessionSnapshot<unknown> | undefined>;
+
+  /**
+   * Blocks until a snapshot settles and returns it (`undefined` when it does
+   * not exist). Optional: a transport that cannot wait server-side omits it,
+   * and {@link AgentAPI.waitForSnapshot} / {@link DetachedTask.wait} then poll
+   * {@link getSnapshot} instead.
+   *
+   * The server may limit how long one wait holds and answer with a snapshot
+   * that has not settled; the API then waits again. A transport that finds it
+   * cannot wait server-side after all (the server has no wait route) rejects
+   * with an error whose `status` is `UNIMPLEMENTED`, and the API polls.
+   */
+  waitForSnapshot?(
+    snapshotId: string,
+    opts?: WaitForSnapshotOptions<Opts>
   ): Promise<SessionSnapshot<any> | undefined>;
 
   /** Aborts a running snapshot. Requires a server store. */
-  abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined>;
+  abort(
+    snapshotId: string,
+    opts?: Opts
+  ): Promise<SessionSnapshot['status'] | undefined>;
 }
 
-const TERMINAL_STATUSES = new Set([
-  'completed',
-  'failed',
-  'aborted',
-  'expired',
-]);
+/**
+ * Whether a snapshot has settled into a state the client can act on. An
+ * `aborting` row is not settled: its finalize has yet to stamp the state
+ * the run committed, which is what makes the settled `aborted` row a resume
+ * point. An absent status is the documented `completed` default, so it is
+ * settled.
+ */
+function isSettled(snap: SessionSnapshot<unknown>): boolean {
+  return snap.status !== 'pending' && snap.status !== 'aborting';
+}
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Sleeps for `ms`, rejecting with the signal's reason if `signal` aborts
+ * first.
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal!.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Waits for a snapshot to settle through `transport`: server-side where the
+ * transport supports it, asking again while the server answers with a
+ * snapshot that has not settled, otherwise by polling
+ * {@link AgentTransport.getSnapshot} every `intervalMs` (default 1s).
+ * Resolves `undefined` when the snapshot does not exist, and rejects with the
+ * signal's reason when `abortSignal` ends the wait first. The transport
+ * options in `opts` ride along on every request, the polling reads included.
+ */
+async function waitForSnapshotViaTransport<State, Opts extends object>(
+  transport: AgentTransport<Opts>,
+  snapshotId: string,
+  opts?: WaitForSnapshotOptions<Opts>
+): Promise<SessionSnapshot<State> | undefined> {
+  if (transport.waitForSnapshot) {
+    try {
+      while (true) {
+        const snap = (await transport.waitForSnapshot(snapshotId, opts)) as
+          | SessionSnapshot<State>
+          | undefined;
+        if (!snap || isSettled(snap)) {
+          return snap;
+        }
+        opts?.abortSignal?.throwIfAborted();
+      }
+    } catch (e) {
+      if ((e as { status?: unknown } | undefined)?.status !== 'UNIMPLEMENTED') {
+        throw e;
+      }
+      // The server cannot wait; poll below.
+    }
+  }
+  const intervalMs = opts?.intervalMs ?? 1000;
+  const transportOpts = transportOptsOf(opts);
+  while (true) {
+    opts?.abortSignal?.throwIfAborted();
+    const snap = (await transport.getSnapshot(
+      { snapshotId },
+      transportOpts
+    )) as SessionSnapshot<State> | undefined;
+    if (!snap || isSettled(snap)) {
+      return snap;
+    }
+    await sleep(intervalMs, opts?.abortSignal);
+  }
+}
+
+/**
+ * The transport options carried by wait options: everything but the wait's
+ * own fields. The cast is safe because what remains is exactly the `Opts`
+ * half of {@link WaitForSnapshotOptions}; TypeScript cannot narrow its
+ * deferred conditional for a generic `Opts`.
+ */
+function transportOptsOf<Opts extends object>(
+  opts: WaitForSnapshotOptions<Opts> | undefined
+): Opts | undefined {
+  if (!opts) return undefined;
+  const { abortSignal: _abortSignal, intervalMs: _intervalMs, ...rest } = opts;
+  return rest as unknown as Opts;
+}
+
+/**
+ * The queue a turn's stream reads from. `sendStream` drains the transport's
+ * stream into it eagerly, so what the stream carried is known independently
+ * of whether the caller reads it.
+ */
+class ChunkQueue<T> implements AsyncIterable<T> {
+  private buffer: T[] = [];
+  private closed = false;
+  private failed = false;
+  private error: unknown;
+  private wake?: () => void;
+
+  push(value: T): void {
+    this.buffer.push(value);
+    this.wake?.();
+  }
+
+  close(): void {
+    this.closed = true;
+    this.wake?.();
+  }
+
+  fail(error: unknown): void {
+    this.failed = true;
+    this.error = error;
+    this.wake?.();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (true) {
+      if (this.buffer.length) {
+        yield this.buffer.shift()!;
+        continue;
+      }
+      if (this.failed) throw this.error;
+      if (this.closed) return;
+      await new Promise<void>((resolve) => {
+        this.wake = resolve;
+      });
+      this.wake = undefined;
+    }
+  }
 }
 
 function toAgentInput(input: string | AgentInput): AgentInput {
@@ -557,10 +842,39 @@ class AgentChunkImpl<State = unknown> implements AgentChunk<State> {
 // DetachedTask
 // ---------------------------------------------------------------------------
 
-class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
+/**
+ * Merges transport options: `bound` shallowly overridden by `perCall`.
+ *
+ * Shallow on purpose, so a per-call `context` replaces the bound one rather
+ * than merging into it (merging auth objects would be surprising and easy to
+ * get wrong). `undefined` per-call values are skipped so that ex.
+ * `{ context: req.ctx }` with `ctx` unset does not silently drop the bound
+ * identity.
+ */
+function mergeOpts<B extends object, P extends object>(
+  bound: B | undefined,
+  perCall: P | undefined
+): (B & Partial<P>) | undefined {
+  if (!bound && !perCall) {
+    return undefined;
+  }
+  const defined: Partial<P> = { ...perCall };
+  for (const key in defined) {
+    if (defined[key] === undefined) {
+      delete defined[key];
+    }
+  }
+  return Object.assign({}, bound, defined);
+}
+
+class DetachedTaskImpl<State = unknown, Opts extends object = never>
+  implements DetachedTask<State, Opts>
+{
   constructor(
     readonly snapshotId: string,
-    private readonly transport: AgentTransport
+    private readonly transport: AgentTransport<Opts>,
+    /** Transport options resolved at detach time, reused for every call. */
+    private readonly transportOpts?: Opts
   ) {}
 
   async *poll(opts?: {
@@ -568,13 +882,14 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
   }): AsyncIterable<SessionSnapshot<State>> {
     const intervalMs = opts?.intervalMs ?? 1000;
     while (true) {
-      const snap = (await this.transport.getSnapshot({
-        snapshotId: this.snapshotId,
-      })) as SessionSnapshot<State> | undefined;
+      const snap = (await this.transport.getSnapshot(
+        { snapshotId: this.snapshotId },
+        this.transportOpts
+      )) as SessionSnapshot<State> | undefined;
 
       if (snap) {
         yield snap;
-        if (snap.status && TERMINAL_STATUSES.has(snap.status)) {
+        if (isSettled(snap)) {
           return;
         }
       }
@@ -582,21 +897,25 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
     }
   }
 
-  async wait(opts?: { intervalMs?: number }): Promise<SessionSnapshot<State>> {
-    let last: SessionSnapshot<State> | undefined;
-    for await (const snap of this.poll(opts)) {
-      last = snap;
+  async wait(
+    opts?: WaitForSnapshotOptions<Opts>
+  ): Promise<SessionSnapshot<State>> {
+    const snap = await waitForSnapshotViaTransport<State, Opts>(
+      this.transport,
+      this.snapshotId,
+      mergeOpts(this.transportOpts, opts)
+    );
+    if (!snap) {
+      throw new Error(`Snapshot ${this.snapshotId} not found.`);
     }
-    if (!last) {
-      throw new Error(
-        `Detached task ${this.snapshotId} did not produce a snapshot.`
-      );
-    }
-    return last;
+    return snap;
   }
 
-  abort(): Promise<SessionSnapshot['status'] | undefined> {
-    return this.transport.abort(this.snapshotId);
+  abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined> {
+    return this.transport.abort(
+      this.snapshotId,
+      mergeOpts(this.transportOpts, opts)
+    );
   }
 }
 
@@ -604,7 +923,9 @@ class DetachedTaskImpl<State = unknown> implements DetachedTask<State> {
 // AgentChat
 // ---------------------------------------------------------------------------
 
-export class AgentChatImpl<State = unknown> implements AgentChat<State> {
+export class AgentChatImpl<State = unknown, Opts extends object = never>
+  implements AgentChat<State, Opts>
+{
   snapshotId?: string;
   sessionId?: string;
   messages: MessageData[] = [];
@@ -613,8 +934,10 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
   private clientState?: SessionState<State>;
 
   constructor(
-    private readonly transport: AgentTransport,
-    private readonly connectInit?: AgentInit<State>
+    private readonly transport: AgentTransport<Opts>,
+    private readonly connectInit?: AgentInit<State>,
+    /** Transport options bound to this chat (see {@link AgentAPI}). */
+    private readonly boundOpts?: Opts
   ) {
     if (connectInit?.snapshotId) {
       this.snapshotId = connectInit.snapshotId;
@@ -629,6 +952,11 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   get state(): State | undefined {
     return this.clientState?.custom as State | undefined;
+  }
+
+  /** The chat's bound options, overridden by the per-call ones. */
+  private resolveOpts(opts?: Opts): Opts | undefined {
+    return mergeOpts(this.boundOpts, opts);
   }
 
   /**
@@ -677,13 +1005,6 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     if (raw.state !== undefined) {
       this.clientState = raw.state;
     }
-    if (this.transport.stateManagement === undefined) {
-      if (raw.snapshotId !== undefined) {
-        this.transport.stateManagement = 'server';
-      } else if (raw.state !== undefined) {
-        this.transport.stateManagement = 'client';
-      }
-    }
     if (raw.state?.messages !== undefined) {
       this.messages = [...raw.state.messages];
     } else if (raw.message) {
@@ -707,28 +1028,36 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   /**
    * Wires an optional external abort signal to a fresh {@link AbortController}
-   * and returns it alongside a getter for whether the turn was aborted.
+   * and returns it alongside a getter for whether the turn was aborted, and
+   * `release`, which unhooks the caller's signal once the turn has settled so
+   * a signal reused across turns does not keep every turn's controller alive.
    */
   private setupAbort(opts?: { abortSignal?: AbortSignal }): {
     controller: AbortController;
     isAborted: () => boolean;
+    release: () => void;
   } {
     const controller = new AbortController();
     let aborted = false;
-    if (opts?.abortSignal) {
-      if (opts.abortSignal.aborted) {
+    let release = () => {};
+    const signal = opts?.abortSignal;
+    if (signal) {
+      if (signal.aborted) {
         controller.abort();
         aborted = true;
       } else {
-        opts.abortSignal.addEventListener('abort', () => {
+        const onAbort = () => {
           aborted = true;
           controller.abort();
-        });
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        release = () => signal.removeEventListener('abort', onAbort);
       }
     }
     return {
       controller,
       isAborted: () => aborted || controller.signal.aborted,
+      release,
     };
   }
 
@@ -741,7 +1070,9 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
   private buildResponse(
     output: Promise<AgentOutput>,
     isAborted: () => boolean,
-    messageCountBeforeTurn: number
+    messageCountBeforeTurn: number,
+    snapshotIdBeforeTurn: string | undefined,
+    turnEnd: Promise<TurnEnd | undefined>
   ): Promise<AgentResponse<State>> {
     return (async (): Promise<AgentResponse<State>> => {
       let raw: AgentOutput<State>;
@@ -756,13 +1087,30 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
       }
       // A failed/aborted turn that returns no authoritative messages leaves the
       // eagerly-pushed user message (see `sendStream`) orphaned in `this.messages`
-      // with no reply. Roll it back so it isn't re-sent on the next turn. When the
-      // turn returns authoritative `state.messages`, `applyOutput` replaces the
-      // array wholesale, so this rollback is a no-op for the success path.
+      // with no reply. Roll it back so it isn't re-sent on the next turn, unless
+      // the turn committed: a server-managed turn that advanced the snapshot
+      // persisted the message as part of its resume point, and the next turn
+      // continues from it. When the turn returns authoritative `state.messages`,
+      // `applyOutput` replaces the array wholesale, so this rollback is a no-op.
+      const terminal =
+        raw.finishReason === 'failed' || raw.finishReason === 'aborted';
+      let committed =
+        raw.snapshotId !== undefined && raw.snapshotId !== snapshotIdBeforeTurn;
+      if (terminal && committed && snapshotIdBeforeTurn === undefined) {
+        // The resume point is a row this chat had no baseline for (a chat
+        // opened on a `sessionId`), so it may be the previous turn's row
+        // rather than this one's. The turn-end chunk settles it: a committed
+        // turn names its snapshot there and a rolled-back one names none.
+        const end = await turnEnd;
+        if (end) {
+          committed = end.snapshotId !== undefined;
+        }
+      }
       if (
-        (raw.finishReason === 'failed' || raw.finishReason === 'aborted') &&
+        terminal &&
         raw.state?.messages === undefined &&
-        !raw.message
+        !raw.message &&
+        !committed
       ) {
         this.messages.length = messageCountBeforeTurn;
       }
@@ -789,7 +1137,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   async send(
     input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): Promise<AgentResponse<State>> {
     // `send()` is a non-streaming veneer over the streaming path: we run the
     // turn via `sendStream` and drain its stream internally before resolving.
@@ -813,7 +1161,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   sendStream(
     input: string | AgentInput,
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): AgentTurn<State> {
     const agentInput = toAgentInput(input);
 
@@ -843,23 +1191,53 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     // does not guard against overlapping `send`/`sendStream` calls on the same
     // chat (they would race on `messages`/`snapshotId`/`clientState`).
     const messageCountBeforeTurn = this.messages.length;
+    const snapshotIdBeforeTurn = this.snapshotId;
     if (agentInput.message) {
       this.messages.push(agentInput.message);
     }
     const init = this.buildInit();
 
-    const { controller, isAborted } = this.setupAbort(opts);
+    const { controller, isAborted, release } = this.setupAbort(opts);
 
+    // Transport-specific options (bound + per-call) ride along untouched; the
+    // caller's `abortSignal` is replaced by the controller wired to it above.
+    const turnOpts: AgentTurnOptions<Opts> & { abortSignal: AbortSignal } =
+      Object.assign({}, mergeOpts(this.boundOpts, opts), {
+        abortSignal: controller.signal,
+      });
     const { stream: rawStream, output } = this.transport.runTurn(
       agentInput,
       init,
-      { abortSignal: controller.signal }
+      turnOpts
     );
+    output.then(release, release);
+
+    // The transport's stream is drained eagerly into the queue the turn's
+    // stream reads from, so what it carried is known whether or not the
+    // caller reads it: `buildResponse` may need the turn-end chunk to tell a
+    // committed failed turn from a rolled-back one. `turnEnd` resolves with
+    // the last one the stream carried once it has been drained.
+    const queue = new ChunkQueue<AgentStreamChunk>();
+    const turnEnd = (async () => {
+      let end: TurnEnd | undefined;
+      try {
+        for await (const raw of rawStream) {
+          if (raw.turnEnd) end = raw.turnEnd;
+          queue.push(raw);
+        }
+        queue.close();
+      } catch (e) {
+        queue.fail(e);
+      }
+      return end;
+    })();
 
     const responsePromise = this.buildResponse(
       output,
       isAborted,
-      messageCountBeforeTurn
+      messageCountBeforeTurn,
+      snapshotIdBeforeTurn,
+      turnEnd
     );
     // Avoid unhandled-rejection warnings when only the stream is consumed.
     responsePromise.catch(() => {});
@@ -868,7 +1246,7 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     const stream = (async function* (): AsyncIterable<AgentChunk<State>> {
       let previousText = '';
       try {
-        for await (const raw of rawStream) {
+        for await (const raw of queue) {
           const chunk = new AgentChunkImpl<State>(raw, previousText);
           previousText = chunk.accumulatedText;
           // Keep the locally tracked custom state live mid-stream by applying
@@ -905,14 +1283,14 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
   resume(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): Promise<AgentResponse<State>> {
     return this.send({ resume }, opts);
   }
 
   resumeStream(
     resume: AgentInput['resume'],
-    opts?: { abortSignal?: AbortSignal }
+    opts?: AgentTurnOptions<Opts>
   ): AgentTurn<State> {
     return this.sendStream({ resume }, opts);
   }
@@ -940,29 +1318,37 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
     }
   }
 
-  async detach(input: string | AgentInput): Promise<DetachedTask<State>> {
+  async detach(
+    input: string | AgentInput,
+    opts?: Opts
+  ): Promise<DetachedTask<State, Opts>> {
     const agentInput: AgentInput = { ...toAgentInput(input), detach: true };
     if (agentInput.message) {
       this.messages.push(agentInput.message);
     }
     const init = this.buildInit();
     const controller = new AbortController();
-    const { output } = this.transport.runTurn(agentInput, init, {
-      abortSignal: controller.signal,
-    });
+    const resolved = this.resolveOpts(opts);
+    const turnOpts: AgentTurnOptions<Opts> & { abortSignal: AbortSignal } =
+      Object.assign({}, resolved, { abortSignal: controller.signal });
+    const { output } = this.transport.runTurn(agentInput, init, turnOpts);
     const raw = (await output) as AgentOutput<State>;
     this.applyOutput(raw);
     if (!raw.snapshotId) {
       throw new Error('detach did not return a snapshotId.');
     }
-    return new DetachedTaskImpl<State>(raw.snapshotId, this.transport);
+    return new DetachedTaskImpl<State, Opts>(
+      raw.snapshotId,
+      this.transport,
+      resolved
+    );
   }
 
-  async abort(): Promise<SessionSnapshot['status'] | undefined> {
+  async abort(opts?: Opts): Promise<SessionSnapshot['status'] | undefined> {
     if (!this.snapshotId) {
       return undefined;
     }
-    return this.transport.abort(this.snapshotId);
+    return this.transport.abort(this.snapshotId, this.resolveOpts(opts));
   }
 
   private toAgentError(e: unknown): AgentError<State> {
@@ -999,43 +1385,72 @@ export class AgentChatImpl<State = unknown> implements AgentChat<State> {
 
 /**
  * Composes the {@link AgentAPI} surface (`chat`/`loadChat`/`getSnapshot`/
- * `abort`) over a {@link AgentTransport}. Shared by the in-process server agent
- * and the HTTP `remoteAgent`.
+ * `waitForSnapshot`/`abort`) over a {@link AgentTransport}. Shared by the
+ * in-process server agent, the HTTP `remoteAgent`, and any custom transport.
+ *
+ * When passing type arguments, pass both: `createAgentAPI<MyState>(t)` resets
+ * `Opts` to `never` (TypeScript does not infer the remaining ones), which
+ * rejects the transport's options.
+ *
+ * ```ts
+ * const agent = createAgentAPI<MyState, MyOpts>(myTransport);
+ * const chat = agent.chat({}, { traceId: 'abc' });
+ * ```
  */
-export function createAgentAPI<State = unknown>(
-  transport: AgentTransport
-): AgentAPI<State> {
+export function createAgentAPI<State = unknown, Opts extends object = never>(
+  transport: AgentTransport<Opts>
+): AgentAPI<State, Opts> {
   return {
-    chat(init?: AgentInit<State>): AgentChat<State> {
-      return new AgentChatImpl<State>(transport, init);
+    chat(init?: AgentInit<State>, opts?: Opts): AgentChat<State, Opts> {
+      return new AgentChatImpl<State, Opts>(transport, init, opts);
     },
 
-    async loadChat(opts: SnapshotLookup): Promise<AgentChat<State>> {
-      const snapshot = (await transport.getSnapshot(opts)) as
+    async loadChat(
+      lookup: SnapshotLookup,
+      opts?: Opts
+    ): Promise<AgentChat<State, Opts>> {
+      const snapshot = (await transport.getSnapshot(lookup, opts)) as
         | SessionSnapshot<State>
         | undefined;
       if (!snapshot) {
         const id =
-          'snapshotId' in opts ? opts.snapshotId : `session ${opts.sessionId}`;
+          'snapshotId' in lookup
+            ? lookup.snapshotId
+            : `session ${lookup.sessionId}`;
         throw new Error(`Snapshot ${id} not found.`);
       }
-      const chat = new AgentChatImpl<State>(transport);
+      const chat = new AgentChatImpl<State, Opts>(transport, undefined, opts);
       chat._loadFromSnapshot(snapshot);
       return chat;
     },
 
     getSnapshot(
-      lookup: string | SnapshotLookup
+      lookup: string | SnapshotLookup,
+      opts?: Opts
     ): Promise<SessionSnapshot<State> | undefined> {
       const normalized: SnapshotLookup =
         typeof lookup === 'string' ? { snapshotId: lookup } : lookup;
-      return transport.getSnapshot(normalized) as Promise<
+      return transport.getSnapshot(normalized, opts) as Promise<
         SessionSnapshot<State> | undefined
       >;
     },
 
-    abort(snapshotId: string): Promise<SessionSnapshot['status'] | undefined> {
-      return transport.abort(snapshotId);
+    waitForSnapshot(
+      snapshotId: string,
+      opts?: WaitForSnapshotOptions<Opts>
+    ): Promise<SessionSnapshot<State> | undefined> {
+      return waitForSnapshotViaTransport<State, Opts>(
+        transport,
+        snapshotId,
+        opts
+      );
+    },
+
+    abort(
+      snapshotId: string,
+      opts?: Opts
+    ): Promise<SessionSnapshot['status'] | undefined> {
+      return transport.abort(snapshotId, opts);
     },
   };
 }

@@ -25,12 +25,8 @@ from typing import Any, Protocol
 from genkit._ai._agents._types import StateManagement
 from genkit._core._action import BidiConnection
 from genkit._core._channel import CloseableQueue
+from genkit._core._model import AgentInit, AgentInput, AgentOutput, AgentStreamChunk, SessionSnapshot
 from genkit._core._typing import (
-    AgentInit,
-    AgentInput,
-    AgentOutput,
-    AgentStreamChunk,
-    SessionSnapshot,
     SnapshotStatus,
 )
 

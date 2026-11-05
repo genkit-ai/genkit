@@ -18,6 +18,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/firebase/genkit/go/core"
@@ -26,7 +27,10 @@ import (
 	"github.com/firebase/genkit/go/internal/registry"
 )
 
-// BackgroundModel represents a model that can run operations in the background.
+// BackgroundModel represents a model that can run operations in the
+// background. It is the type to accept as an argument and to look up by name;
+// implementations are created with [NewBackgroundModelAction], or
+// [genkit.DefineBackgroundModelAction] in an application.
 type BackgroundModel interface {
 	// Name returns the registry name of the background model.
 	Name() string
@@ -42,9 +46,91 @@ type BackgroundModel interface {
 	SupportsCancel() bool
 }
 
-// backgroundModel is the concrete implementation of BackgroundModel interface.
-type backgroundModel struct {
-	core.BackgroundActionDef[*ModelRequest, *ModelResponse]
+// backgroundAction is an unexported alias of [core.BackgroundAction] used as
+// the embedded field in [BackgroundModelAction]; see the action alias in
+// generate.go for why, including why the promoted methods are redeclared
+// below.
+type backgroundAction[In, Out any] = core.BackgroundAction[In, Out]
+
+// BackgroundModelAction is a background model backed by registry actions. It
+// is the concrete type returned by [NewBackgroundModelAction]; return it from
+// a plugin's Init for the framework to register.
+//
+// It implements [BackgroundModel] and [api.Action], so it can be passed
+// anywhere either is accepted. The [api.Action] side is what lets a plugin
+// resolver return the whole model as the resolved action (googlegenai's
+// resolveAction does this), and the three component actions register
+// together through [BackgroundModelAction.Register].
+type BackgroundModelAction struct {
+	backgroundAction[*ModelRequest, *ModelResponse]
+}
+
+// Pinned here so that breaking either interface fails the build at the type
+// rather than during plugin resolution.
+var (
+	_ api.Action      = (*BackgroundModelAction)(nil)
+	_ BackgroundModel = (*BackgroundModelAction)(nil)
+)
+
+// Name returns the registry name of the background model.
+func (b *BackgroundModelAction) Name() string { return b.backgroundAction.Name() }
+
+// Register registers the model's start, check, and cancel actions with r. The
+// cancel action is registered only if the model supports cancellation. A
+// plugin that returns the model from its Init does not need to call this.
+func (b *BackgroundModelAction) Register(r api.Registry) { b.backgroundAction.Register(r) }
+
+// Desc returns the start action's descriptor: its name, schemas, and metadata.
+func (b *BackgroundModelAction) Desc() api.ActionDesc { return b.backgroundAction.Desc() }
+
+// Start starts a background operation and returns it without waiting for
+// completion. Poll it with [BackgroundModelAction.Check].
+func (b *BackgroundModelAction) Start(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.Start: start called on a nil background model; check that all background models are defined")
+	}
+	return b.backgroundAction.Start(ctx, req)
+}
+
+// Check returns the current state of a background operation.
+func (b *BackgroundModelAction) Check(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.Check: check called on a nil background model; check that all background models are defined")
+	}
+	return b.backgroundAction.Check(ctx, op)
+}
+
+// Cancel cancels a running background operation. It fails with UNAVAILABLE if
+// the model does not support cancellation; see
+// [BackgroundModelAction.SupportsCancel].
+func (b *BackgroundModelAction) Cancel(ctx context.Context, op *ModelOperation) (*ModelOperation, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.Cancel: cancel called on a nil background model; check that all background models are defined")
+	}
+	return b.backgroundAction.Cancel(ctx, op)
+}
+
+// SupportsCancel reports whether the model was defined with a cancel
+// function.
+func (b *BackgroundModelAction) SupportsCancel() bool { return b.backgroundAction.SupportsCancel() }
+
+// RunJSON starts an operation from a JSON-encoded [ModelRequest] and returns
+// the JSON-encoded operation. The framework uses it to serve reflection and
+// registry-driven calls; prefer [BackgroundModelAction.Start].
+func (b *BackgroundModelAction) RunJSON(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (json.RawMessage, error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.RunJSON: model called on a nil background model; check that all background models are defined")
+	}
+	return b.backgroundAction.RunJSON(ctx, input, cb)
+}
+
+// RunJSONWithTelemetry is [BackgroundModelAction.RunJSON] with the run's
+// telemetry returned alongside the output.
+func (b *BackgroundModelAction) RunJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb core.StreamCallback[json.RawMessage]) (*api.ActionRunResult[json.RawMessage], error) {
+	if b == nil {
+		return nil, status.Errorf(status.ErrInvalidArgument, "BackgroundModel.RunJSONWithTelemetry: model called on a nil background model; check that all background models are defined")
+	}
+	return b.backgroundAction.RunJSONWithTelemetry(ctx, input, cb)
 }
 
 // ModelOperation is a background operation for a model.
@@ -53,20 +139,36 @@ type ModelOperation = core.Operation[*ModelResponse]
 // StartModelOpFunc starts a background model operation.
 type StartModelOpFunc = func(ctx context.Context, req *ModelRequest) (*ModelOperation, error)
 
+// BackgroundModelActionFunc is a [StartModelOpFunc] that additionally
+// receives the request's typed Config: the framework deserializes the
+// request's raw config into it before calling the function (see
+// [NewBackgroundModelAction]).
+type BackgroundModelActionFunc[Config any] = func(ctx context.Context, req *ModelRequest, config Config) (*ModelOperation, error)
+
 // CheckModelOpFunc checks the status of a background model operation.
 type CheckModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
 // CancelModelOpFunc cancels a background model operation.
 type CancelModelOpFunc = func(ctx context.Context, op *ModelOperation) (*ModelOperation, error)
 
-// BackgroundModelOptions holds configuration for defining a background model
+// BackgroundModelOptions configures a background model created with
+// [NewBackgroundModelAction]. It extends [ModelOptions] with the operation
+// lifecycle hooks a background model needs; the required start and check
+// functions are constructor arguments.
 type BackgroundModelOptions struct {
 	ModelOptions
-	Cancel   CancelModelOpFunc // Function that cancels a background model operation.
-	Metadata map[string]any    // Additional metadata.
+
+	// Cancel cancels a running operation. Optional: nil means the model does
+	// not support canceling operations.
+	Cancel CancelModelOpFunc
+
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	// It is merged over [ModelOptions.Metadata]; this field wins on key
+	// conflicts.
+	Metadata map[string]any
 }
 
-// LookupBackgroundModel looks up a BackgroundAction registered by [DefineBackgroundModel].
+// LookupBackgroundModel looks up a registered [BackgroundModel] by name.
 // It returns nil if the background model was not found.
 func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 	key := api.KeyFromName(api.ActionTypeBackgroundModel, name)
@@ -74,66 +176,69 @@ func LookupBackgroundModel(r api.Registry, name string) BackgroundModel {
 	if action == nil {
 		return nil
 	}
-	return &backgroundModel{*action}
+	return &BackgroundModelAction{*action}
 }
 
-// NewBackgroundModel defines a new model that runs in the background.
-func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
+// NewBackgroundModelAction creates an unregistered [BackgroundModelAction]:
+// return it from a plugin's Init for the framework to register, or call
+// [BackgroundModelAction.Register] directly. Applications should define
+// background models with [genkit.DefineBackgroundModelAction].
+//
+// Config is the model's typed configuration; it is usually inferred from
+// startFn's signature. See [NewModelAction] for how the request's config
+// is deserialized.
+func NewBackgroundModelAction[Config any](
+	name string,
+	opts *BackgroundModelOptions,
+	startFn BackgroundModelActionFunc[Config],
+	checkFn CheckModelOpFunc,
+) *BackgroundModelAction {
 	if name == "" {
-		panic("ai.NewBackgroundModel: name is required")
+		panic("ai.NewBackgroundModelAction: name is required")
 	}
 	if startFn == nil {
-		panic("ai.NewBackgroundModel: startFn is required")
+		panic("ai.NewBackgroundModelAction: startFn is required")
 	}
 	if checkFn == nil {
-		panic("ai.NewBackgroundModel: checkFn is required")
+		panic("ai.NewBackgroundModelAction: checkFn is required")
 	}
 
-	if opts == nil {
-		opts = &BackgroundModelOptions{}
+	o := BackgroundModelOptions{}
+	if opts != nil {
+		o = *opts
 	}
-	if opts.Label == "" {
-		opts.Label = name
+	labelExplicit := o.Label != ""
+	if !labelExplicit {
+		o.Label = name
 	}
-	if opts.Supports == nil {
-		opts.Supports = &ModelSupports{}
-	}
+	o.Supports = cloneModelSupports(o.Supports)
 
-	metadata := map[string]any{
-		"type": api.ActionTypeBackgroundModel,
-		"model": map[string]any{
-			"label": opts.Label,
-			"supports": map[string]any{
-				"media":       opts.Supports.Media,
-				"context":     opts.Supports.Context,
-				"multiturn":   opts.Supports.Multiturn,
-				"systemRole":  opts.Supports.SystemRole,
-				"tools":       opts.Supports.Tools,
-				"toolChoice":  opts.Supports.ToolChoice,
-				"constrained": opts.Supports.Constrained,
-				"output":      opts.Supports.Output,
-				"contentType": opts.Supports.ContentType,
-				"longRunning": opts.Supports.LongRunning,
-			},
-			"versions":      opts.Versions,
-			"stage":         opts.Stage,
-			"customOptions": opts.ConfigSchema,
-		},
-	}
+	configSchema, inputSchema := modelConfigSchemas[Config](o.ConfigSchema, o.Versions)
 
-	inputSchema := core.InferSchemaMap(ModelRequest{})
-	if inputSchema != nil && opts.ConfigSchema != nil {
-		if props, ok := inputSchema["properties"].(map[string]any); ok {
-			props["config"] = opts.ConfigSchema
+	// The top-level Metadata wins over the embedded ModelOptions.Metadata on
+	// key conflicts.
+	metadata := modelActionMetadata(api.ActionTypeBackgroundModel, &o.ModelOptions, configSchema, o.ModelOptions.Metadata, o.Metadata)
+
+	typedStartFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
+		// req.Config was normalized to the exact Config type by
+		// normalizeConfig below, so this hits the fast path.
+		cfg, err := resolveConfig[Config](req.Config)
+		if err != nil {
+			return nil, err
 		}
+		return startFn(ctx, req, cfg)
 	}
 
-	mws := []ModelMiddleware{
-		simulateSystemPrompt(&opts.ModelOptions, nil),
-		augmentWithContext(&opts.ModelOptions, nil),
-		validateSupport(name, &opts.ModelOptions),
-	}
-	fn := core.ChainMiddleware(mws...)(backgroundModelToModelFn(startFn))
+	mopts := &o.ModelOptions
+
+	// normalizeConfig runs outermost so that the built-in wrappers and the
+	// start function all see the typed, converted config on the request.
+	fn := core.ChainMiddleware(
+		normalizeConfig[Config](name, o.Versions),
+		simulateSystemPrompt(mopts, nil),
+		augmentWithContext(mopts, nil),
+		validateSupport(name, mopts),
+	)(backgroundModelToModelFn(typedStartFn))
 
 	wrappedFn := func(ctx context.Context, req *ModelRequest) (*ModelOperation, error) {
 		resp, err := fn(ctx, req, nil)
@@ -144,14 +249,44 @@ func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn Start
 		return modelOpFromResponse(resp)
 	}
 
-	return &backgroundModel{*core.NewBackgroundAction(name, api.ActionTypeBackgroundModel, metadata, wrappedFn, checkFn, opts.Cancel)}
+	// The label doubles as the description on all three component actions,
+	// matching the JS background model surface. A label that was only
+	// defaulted from the name yields to an explicit caller
+	// Metadata["description"]: leaving Description empty lets core's
+	// metadata fallback apply it.
+	description := o.Label
+	if !labelExplicit {
+		if _, ok := metadata["description"].(string); ok {
+			description = ""
+		}
+	}
+	return &BackgroundModelAction{*core.NewBackgroundActionOf(api.ActionTypeBackgroundModel, name, &core.BackgroundActionOptions[*ModelRequest, *ModelResponse]{
+		Description: description,
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+		Check:       checkFn,
+		Cancel:      o.Cancel,
+	}, wrappedFn)}
 }
 
-// DefineBackgroundModel defines and registers a new model that runs in the background.
-func DefineBackgroundModel(r *registry.Registry, name string, opts *BackgroundModelOptions, fn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
-	m := NewBackgroundModel(name, opts, fn, checkFn)
-	m.Register(r)
-	return m
+// NewBackgroundModel defines a new model that runs in the background.
+//
+// Deprecated: Use [NewBackgroundModelAction], which passes the request's
+// config to startFn as a typed value instead of leaving it type-erased on the
+// request.
+func NewBackgroundModel(name string, opts *BackgroundModelOptions, startFn StartModelOpFunc, checkFn CheckModelOpFunc) BackgroundModel {
+	if name == "" {
+		panic("ai.NewBackgroundModel: name is required")
+	}
+	if startFn == nil {
+		panic("ai.NewBackgroundModel: startFn is required")
+	}
+	if checkFn == nil {
+		panic("ai.NewBackgroundModel: checkFn is required")
+	}
+	return NewBackgroundModelAction(name, opts, func(ctx context.Context, req *ModelRequest, _ any) (*ModelOperation, error) {
+		return startFn(ctx, req)
+	}, checkFn)
 }
 
 // GenerateOperation generates a model response as a long-running operation based on the provided options.

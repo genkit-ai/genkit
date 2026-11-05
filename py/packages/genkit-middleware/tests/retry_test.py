@@ -16,6 +16,11 @@
 
 """Tests for Retry middleware."""
 
+import asyncio
+import contextlib
+import sys
+import time
+from collections.abc import Awaitable, Callable
 from typing import NoReturn
 from unittest.mock import AsyncMock, patch
 
@@ -23,9 +28,21 @@ import pytest
 from genkit_middleware import Retry
 from pydantic import ValidationError
 
-from genkit import ModelRequest, ModelResponse
-from genkit._core._error import GenkitError
-from genkit.middleware import GenerateMiddlewareContext, ModelHookParams
+from genkit import (
+    ErrorReason,
+    FinishReason,
+    Genkit,
+    GenkitError,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    Part,
+    Role,
+)
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit.model import ModelContext, ModelRequest
+from genkit.plugin_api import provider_error
+from genkit.testing import define_scripted_model
 
 
 def _make_params() -> ModelHookParams:
@@ -33,7 +50,7 @@ def _make_params() -> ModelHookParams:
 
 
 @pytest.mark.asyncio
-async def test_retry_success_on_first_attempt(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_success_on_first_attempt(ctx: MiddlewareContext) -> None:
     """Test that successful calls pass through without retry."""
     retry = Retry(max_retries=3)
 
@@ -45,7 +62,7 @@ async def test_retry_success_on_first_attempt(ctx: GenerateMiddlewareContext) ->
 
 
 @pytest.mark.asyncio
-async def test_retry_on_retryable_error(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_on_retryable_error(ctx: MiddlewareContext) -> None:
     """Test that retryable errors trigger retry."""
     retry = Retry(max_retries=2, initial_delay_ms=10, no_jitter=True)
 
@@ -64,7 +81,7 @@ async def test_retry_on_retryable_error(ctx: GenerateMiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_exhausted(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_exhausted(ctx: MiddlewareContext) -> None:
     """Test that errors are raised after max retries."""
     retry = Retry(max_retries=1, initial_delay_ms=10, no_jitter=True)
 
@@ -76,7 +93,7 @@ async def test_retry_exhausted(ctx: GenerateMiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_non_retryable_error(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_non_retryable_error(ctx: MiddlewareContext) -> None:
     """Test that non-retryable errors fail immediately."""
     retry = Retry(max_retries=3)
 
@@ -104,7 +121,7 @@ def test_retry_rejects_negative_max_retries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_non_genkit_error(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_non_genkit_error(ctx: MiddlewareContext) -> None:
     """Test that non-GenkitError exceptions are retried."""
     retry = Retry(max_retries=2, initial_delay_ms=10, no_jitter=True)
 
@@ -123,9 +140,10 @@ async def test_retry_non_genkit_error(ctx: GenerateMiddlewareContext) -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> None:
-    """Provider retry delay overrides a smaller local delay."""
+async def test_retry_waits_at_least_provider_retry_after(ctx: MiddlewareContext) -> None:
+    """A provider_error with `headers={'Retry-After': '5'}` is retried after 5s, not the 0.1s local delay."""
     retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=10000, no_jitter=True)
+    success = ModelResponse(message=None)
 
     call_count = 0
 
@@ -133,23 +151,39 @@ async def test_retry_after_is_delay_floor(ctx: GenerateMiddlewareContext) -> Non
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            raise GenkitError(
-                message='Rate limited',
-                status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 5000},
-            )
-        return ModelResponse(message=None)
+            raise provider_error(RuntimeError('Rate limited'), http_status=429, headers={'Retry-After': '5'})
+        return success
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
-    assert result is not None
+    assert result is success
     assert call_count == 2
     sleep.assert_awaited_once_with(5.0)
 
 
 @pytest.mark.asyncio
-async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_does_not_retry_unmapped_4xx(ctx: MiddlewareContext) -> None:
+    """A model raising `provider_error(e, http_status=413)` is called once and its UNKNOWN error is raised."""
+    retry = Retry(max_retries=3, initial_delay_ms=0, no_jitter=True)
+    error = provider_error(RuntimeError('Request too large'), http_status=413)
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        raise error
+
+    with pytest.raises(GenkitError) as exc_info:
+        await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert exc_info.value is error
+    assert exc_info.value.status == 'UNKNOWN'
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_local_delay_wins_when_larger_than_retry_after(ctx: MiddlewareContext) -> None:
     """Computed local delay is retained when it exceeds provider guidance."""
     retry = Retry(max_retries=1, initial_delay_ms=500, no_jitter=True)
 
@@ -162,11 +196,11 @@ async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddle
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 10},
+                retry_after_ms=10,
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -175,7 +209,7 @@ async def test_local_delay_wins_when_larger_than_retry_after(ctx: GenerateMiddle
 
 
 @pytest.mark.asyncio
-async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareContext) -> None:
+async def test_zero_retry_after_preserves_local_delay(ctx: MiddlewareContext) -> None:
     """A zero provider delay is handled as metadata while the local delay wins."""
     retry = Retry(max_retries=1, initial_delay_ms=100, no_jitter=True)
 
@@ -188,11 +222,11 @@ async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareCon
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 0},
+                retry_after_ms=0,
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -201,7 +235,7 @@ async def test_zero_retry_after_preserves_local_delay(ctx: GenerateMiddlewareCon
 
 
 @pytest.mark.asyncio
-async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_after_floor_is_applied_before_jitter(ctx: MiddlewareContext) -> None:
     """Apply jitter after the provider floor, matching the JavaScript middleware."""
     retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=10000)
 
@@ -214,13 +248,13 @@ async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewar
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 5000},
+                retry_after_ms=5000,
             )
         return ModelResponse(message=None)
 
     with (
         patch('genkit_middleware._retry.random.random', return_value=0.5),
-        patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep,
     ):
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
@@ -230,7 +264,7 @@ async def test_retry_after_floor_is_applied_before_jitter(ctx: GenerateMiddlewar
 
 
 @pytest.mark.asyncio
-async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_after_is_capped_by_max_delay(ctx: MiddlewareContext) -> None:
     """A provider delay beyond the configured ceiling does not extend the wait."""
     retry = Retry(max_retries=1, initial_delay_ms=100, max_delay_ms=60000, no_jitter=True)
 
@@ -243,11 +277,11 @@ async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': 86_400_000},
+                retry_after_ms=86_400_000,
             )
         return ModelResponse(message=None)
 
-    with patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep:
+    with patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep:
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert result is not None
@@ -258,7 +292,7 @@ async def test_retry_after_is_capped_by_max_delay(ctx: GenerateMiddlewareContext
 @pytest.mark.asyncio
 @pytest.mark.parametrize('retry_after_ms', [0, 1])
 async def test_small_retry_after_preserves_local_delay_cap(
-    ctx: GenerateMiddlewareContext,
+    ctx: MiddlewareContext,
     retry_after_ms: float,
 ) -> None:
     """A small provider floor does not disable the configured local delay cap."""
@@ -273,13 +307,13 @@ async def test_small_retry_after_preserves_local_delay_cap(
             raise GenkitError(
                 message='Rate limited',
                 status='RESOURCE_EXHAUSTED',
-                response_metadata={'retry_after_ms': retry_after_ms},
+                retry_after_ms=retry_after_ms,
             )
         return ModelResponse(message=None)
 
     with (
         patch('genkit_middleware._retry.random.random', return_value=0.5),
-        patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep,
     ):
         result = await retry.wrap_model(_make_params(), ctx, next_fn)
 
@@ -289,7 +323,7 @@ async def test_small_retry_after_preserves_local_delay_cap(
 
 
 @pytest.mark.asyncio
-async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewareContext) -> None:
+async def test_retry_does_not_retry_unauthenticated_error(ctx: MiddlewareContext) -> None:
     """Provider delay metadata does not make authentication errors retryable."""
     retry = Retry(max_retries=3, no_jitter=True)
 
@@ -301,14 +335,428 @@ async def test_retry_does_not_retry_unauthenticated_error(ctx: GenerateMiddlewar
         raise GenkitError(
             message='Invalid API key',
             status='UNAUTHENTICATED',
-            response_metadata={'retry_after_ms': 5000},
+            retry_after_ms=5000,
         )
 
     with (
-        patch('genkit_middleware._retry.asyncio.sleep', new_callable=AsyncMock) as sleep,
+        patch('genkit_middleware._retry._sleep', new_callable=AsyncMock) as sleep,
         pytest.raises(GenkitError),
     ):
         await retry.wrap_model(_make_params(), ctx, next_fn)
 
     assert call_count == 1
     sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_retry_retries_connection_error() -> None:
+    """With `Retry(max_retries=2)`, a model raising ConnectionError once is called again and its answer comes back."""
+    ai = Genkit()
+    calls = 0
+
+    async def flaky(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ConnectionError('connection reset')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('second try')]),
+        )
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    response = await ai.generate(
+        model='flaky',
+        prompt='hi',
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'second try'
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_with_failing_model_and_retry_retries_unclassified_error_regardless_of_statuses() -> None:
+    """`statuses=['UNAVAILABLE']` still retries a raw ConnectionError; it fails after 1 + max_retries calls."""
+    ai = Genkit()
+    calls = 0
+
+    async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        raise ConnectionError('connection refused')
+
+    ai.define_model(name='down', fn=down)
+
+    response = await ai.generate(
+        model='down',
+        prompt='hi',
+        use=[Retry(max_retries=2, statuses=['UNAVAILABLE'], initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'internal error'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.message is None
+    assert calls == 3
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_when_caller_on_chunk_raises() -> None:
+    """`await prompt(on_chunk=raises, use=[Retry()])` calls the model once and fails with the callback's message."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
+    prompt = ai.define_prompt(model='scriptedModel', prompt='hi')
+
+    def on_chunk(_: object) -> None:
+        raise ValueError('model sink closed')
+
+    response = await prompt(
+        on_chunk=on_chunk,
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+    )
+
+    assert pm.request_count == 1
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.finish_message == 'model sink closed'
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert response.message is None
+
+
+class _RaisingChunkRewriter(Middleware):
+    """Forwards the first chunk, then its own chunk callback hits a bug."""
+
+    seen: int = 0
+
+    async def wrap_model(
+        self,
+        params: ModelHookParams,
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+    ) -> ModelResponse:
+        self.seen = 0
+        previous = ctx.on_chunk
+
+        def rewrite(chunk: ModelResponseChunk) -> None:
+            self.seen += 1
+            if self.seen == 2:
+                raise KeyError('dish_id')
+            if previous is not None:
+                previous(chunk)
+
+        ctx.replace_on_chunk(rewrite)
+        try:
+            return await next_fn(params, ctx)
+        finally:
+            ctx.replace_on_chunk(previous)
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_when_inner_middleware_chunk_callback_raises() -> None:
+    """Retry outside a middleware whose replaced on_chunk raises: one model call, STREAM_CALLBACK_FAILED."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon Tartine')]),
+        )
+    ] * 3
+    pm.chunks = [
+        [
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')]),
+            ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Salmon')]),
+        ]
+    ] * 3
+
+    stream = ai.generate_stream(
+        prompt='Suggest a dish.',
+        use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True), _RaisingChunkRewriter()],
+    )
+    chunks = [chunk.text async for chunk in stream]
+    response = await stream.response
+
+    assert pm.request_count == 1
+    assert chunks == ['Smoked ']
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.status == 'INTERNAL'
+    assert response.error.message == "'dish_id'"
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_wait_ends_when_task_cancelled(ctx: MiddlewareContext) -> None:
+    """Cancelling the task during a 30s backoff interrupts the wait immediately without a second model call."""
+    retry = Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)
+    first_failed = asyncio.Event()
+    call_count = 0
+
+    async def next_fn(params, ctx) -> NoReturn:
+        nonlocal call_count
+        call_count += 1
+        first_failed.set()
+        raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
+
+    started = time.monotonic()
+    task = asyncio.create_task(retry.wrap_model(_make_params(), ctx, next_fn))
+    await asyncio.wait_for(first_failed.wait(), timeout=2.0)
+    await asyncio.sleep(0.01)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert time.monotonic() - started < 2
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_generate_stream_break_during_backoff_stops_immediately() -> None:
+    """Exiting `async with ai.generate_stream(..., use=[Retry(...)])` during a 30s backoff aborts right away."""
+    ai = Genkit()
+    first_failed = asyncio.Event()
+    call_count = 0
+
+    async def flaky(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
+        first_failed.set()
+        raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    started = time.monotonic()
+    seen: list[str] = []
+    async with ai.generate_stream(
+        model='flaky',
+        prompt='hi',
+        use=[Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)],
+    ) as stream:
+        async for chunk in stream:
+            seen.append(chunk.text)
+            await asyncio.wait_for(first_failed.wait(), timeout=2.0)
+            await asyncio.sleep(0.01)
+            break
+
+    response = await asyncio.wait_for(stream.response, timeout=2.0)
+    assert time.monotonic() - started < 2
+    assert seen == ['partial']
+    assert call_count == 1
+    assert response.finish_reason == FinishReason.ABORTED
+
+
+@pytest.mark.asyncio
+async def test_retry_waits_out_the_backoff_when_caller_has_not_stopped(
+    ctx: MiddlewareContext,
+) -> None:
+    """UNAVAILABLE then success: Retry waits the full backoff, then returns the second answer."""
+    retry = Retry(max_retries=1, initial_delay_ms=200, no_jitter=True)
+    success = ModelResponse(message=None)
+    call_count = 0
+
+    async def next_fn(params, ctx) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise GenkitError(message='Service unavailable', status='UNAVAILABLE')
+        return success
+
+    started = time.monotonic()
+    result = await retry.wrap_model(_make_params(), ctx, next_fn)
+
+    assert time.monotonic() - started >= 0.2
+    assert result is success
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_retry_when_model_wraps_the_callers_on_chunk_failure() -> None:
+    """A model that re-raises the caller's on_chunk failure as UNAVAILABLE is still called once."""
+    ai = Genkit()
+    calls = 0
+
+    async def wraps_stream_errors(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        try:
+            ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
+        except Exception as e:
+            raise GenkitError(status='UNAVAILABLE', message='stream broke') from e
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
+        )
+
+    ai.define_model(name='wraps', fn=wraps_stream_errors)
+
+    def on_chunk(_: object) -> None:
+        raise ValueError('model sink closed')
+
+    prompt = ai.define_prompt(model='wraps', prompt='hi')
+    response = await prompt(on_chunk=on_chunk, use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)])
+
+    assert calls == 1
+    assert response.finish_reason == FinishReason.FAILED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'sdk_error_factory',
+    [
+        lambda: GenkitError(status='UNAVAILABLE', message='sdk stream closed'),
+        lambda: GenkitError(status='ABORTED', message='sdk aborted'),
+        lambda: ConnectionError('sdk socket closed'),
+    ],
+)
+async def test_retry_generate_stream_aclose_when_sdk_turns_cancel_into_error_skips_backoff(
+    sdk_error_factory: Callable[[], Exception],
+) -> None:
+    """When a model SDK turns `CancelledError` into its own error, `aclose()` aborts without waiting out backoff."""
+    ai = Genkit()
+    calls = 0
+
+    async def sdk_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as cancel_err:
+            raise sdk_error_factory() from cancel_err
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('never')]),
+        )
+
+    ai.define_model(name='sdk_model', fn=sdk_model)
+
+    started = time.monotonic()
+    stream = ai.generate_stream(
+        model='sdk_model',
+        prompt='hi',
+        use=[Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)],
+    )
+    async with contextlib.aclosing(stream.stream) as chunks:
+        async for _ in chunks:
+            break
+
+    response = await asyncio.wait_for(stream.response, timeout=2.0)
+    assert time.monotonic() - started < 2
+    assert calls == 1
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+
+
+@pytest.mark.asyncio
+async def test_retry_generate_stream_immediate_aclose_does_not_retry() -> None:
+    """Immediate `aclose()` before model entry raises `CANCELLED` (not transient `ABORTED`) so `Retry` skips backoff."""
+    ai = Genkit()
+    calls = 0
+
+    async def never_called(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+
+    ai.define_model(name='never_called', fn=never_called)
+
+    started = time.monotonic()
+    stream = ai.generate_stream(
+        model='never_called',
+        prompt='hi',
+        use=[Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)],
+    )
+    await asyncio.wait_for(stream.stream.aclose(), timeout=2.0)
+    response = await asyncio.wait_for(stream.response, timeout=2.0)
+
+    assert time.monotonic() - started < 2
+    assert calls == 0
+    assert response.finish_reason == FinishReason.ABORTED
+    assert response.error is not None
+    assert response.error.status == 'CANCELLED'
+
+
+@pytest.mark.asyncio
+async def test_retry_wait_for_timeout_when_model_fails_same_tick_does_not_retry() -> None:
+    """Cancelling `ai.generate(..., use=[Retry(...)])` in the same tick the model fails preserves `CancelledError`."""
+    ai = Genkit()
+    calls = 0
+    gen_task: asyncio.Task[ModelResponse] | None = None
+
+    async def flaky(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(0)
+            assert gen_task is not None
+            gen_task.cancel()
+            raise GenkitError(status='UNAVAILABLE', message='transient outage')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('retried success')]),
+        )
+
+    ai.define_model(name='flaky', fn=flaky)
+
+    gen_task = asyncio.create_task(
+        ai.generate(
+            model='flaky',
+            prompt='hi',
+            use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+        )
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(gen_task, timeout=2.0)
+
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.version_info < (3, 11), reason='Task.cancelling() requires Python 3.11+')
+async def test_retry_direct_task_cancel_when_model_turns_cancel_into_error_skips_backoff(
+    ctx: MiddlewareContext,
+) -> None:
+    """Direct `retry.wrap_model` skips backoff on 3.11+ when a cancelled task's `next_fn` raises a retryable error."""
+    retry = Retry(max_retries=3, initial_delay_ms=30_000, no_jitter=True)
+    entered = asyncio.Event()
+    call_count = 0
+
+    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
+        nonlocal call_count
+        call_count += 1
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as cancel_err:
+            raise GenkitError(status='UNAVAILABLE', message='sdk wrapped cancel') from cancel_err
+        return ModelResponse(message=None)
+
+    started = time.monotonic()
+    task = asyncio.create_task(retry.wrap_model(_make_params(), ctx, next_fn))
+    await asyncio.wait_for(entered.wait(), timeout=2.0)
+    task.cancel()
+
+    with pytest.raises(GenkitError) as err:
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert time.monotonic() - started < 2
+    assert call_count == 1
+    assert err.value.status == 'UNAVAILABLE'

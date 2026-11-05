@@ -17,6 +17,19 @@
 import * as assert from 'assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { AgentError, remoteAgent } from '../src/client/agent';
+// Custom-transport tests import from the public entry point on purpose, to
+// verify everything needed is exported from `genkit/beta/client`.
+import {
+  createAgentAPI,
+  remoteAgentTransport,
+  type AgentInit,
+  type AgentInput,
+  type AgentOutput,
+  type AgentStreamChunk,
+  type AgentTransport,
+  type SessionSnapshot,
+  type SnapshotLookup,
+} from '../src/client/index';
 
 // ---------------------------------------------------------------------------
 // Test transport: a fake `fetch` that drives the streamFlow/runFlow protocol.
@@ -26,6 +39,7 @@ interface RecordedRequest {
   url: string;
   body: any;
   headers: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 /** Builds a streaming (SSE) Response from a list of chunk objects. */
@@ -57,10 +71,14 @@ function jsonResponse(obj: any): Response {
 /** A scriptable fetch mock. */
 class FetchMock {
   requests: RecordedRequest[] = [];
-  private handlers: Array<(req: RecordedRequest) => Response> = [];
+  private handlers: Array<
+    (req: RecordedRequest) => Response | Promise<Response>
+  > = [];
 
   /** Queues a response for the next matching request. */
-  onNext(handler: (req: RecordedRequest) => Response): void {
+  onNext(
+    handler: (req: RecordedRequest) => Response | Promise<Response>
+  ): void {
     this.handlers.push(handler);
   }
 
@@ -70,6 +88,7 @@ class FetchMock {
         url: String(url),
         body: init?.body ? JSON.parse(init.body) : undefined,
         headers: init?.headers ?? {},
+        signal: init?.signal,
       };
       this.requests.push(req);
       const handler = this.handlers.shift();
@@ -468,19 +487,154 @@ describe('remoteAgent', () => {
     const task = await chat.detach('long job');
     assert.equal(task.snapshotId, 'bg-1');
 
-    // wait() polls /getSnapshot until terminal.
-    mock.onNext(() =>
-      jsonResponse({
+    // wait() is one request to /waitForSnapshot, which answers once the
+    // snapshot settles; the client never polls /getSnapshot.
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      assert.deepEqual(req.body.data, { snapshotId: 'bg-1' });
+      return jsonResponse({
         result: {
           snapshotId: 'bg-1',
           createdAt: '2026',
           state: {},
           status: 'completed',
         },
+      });
+    });
+    const snap = await task.wait();
+    assert.equal(snap.status, 'completed');
+    assert.equal(mock.requests.length, 2);
+  });
+
+  it('waitForSnapshot posts to the waitForSnapshot endpoint', async () => {
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      assert.deepEqual(req.body.data, { snapshotId: 'snap-1' });
+      return jsonResponse({
+        result: {
+          snapshotId: 'snap-1',
+          createdAt: '2026',
+          state: {},
+          status: 'failed',
+          error: { message: 'boom' },
+        },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    // A settled-but-failed snapshot is a result, not an error.
+    const snap = await agent.waitForSnapshot('snap-1');
+    assert.equal(snap?.status, 'failed');
+    assert.equal(snap?.error?.message, 'boom');
+  });
+
+  it('asks again while the server answers a wait with a snapshot still running', async () => {
+    // The server's wait limit passed with the task still running.
+    mock.onNext(() =>
+      jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'pending' },
       })
     );
-    const snap = await task.wait({ intervalMs: 1 });
-    assert.equal(snap.status, 'completed');
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'completed' },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    const snap = await agent.waitForSnapshot('bg-1');
+    assert.equal(snap?.status, 'completed');
+    assert.equal(mock.requests.length, 2);
+  });
+
+  it('polls getSnapshot when the server has no wait route', async () => {
+    mock.onNext(
+      () => new Response('Cannot POST /api/a/waitForSnapshot', { status: 404 })
+    );
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'pending' },
+      });
+    });
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'completed' },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    const snap = await agent.waitForSnapshot('bg-1', { intervalMs: 1 });
+    assert.equal(snap?.status, 'completed');
+
+    // The missing route is remembered: the next wait polls straight away.
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-2', createdAt: '2026', status: 'failed' },
+      });
+    });
+    assert.equal((await agent.waitForSnapshot('bg-2'))?.status, 'failed');
+    assert.equal(mock.requests.length, 4);
+  });
+
+  it("rejects with the wait action's own NOT_FOUND rather than polling", async () => {
+    mock.onNext(
+      () =>
+        new Response(
+          JSON.stringify({ status: 'NOT_FOUND', message: 'no such snapshot' }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    const agent = remoteAgent({ url: '/api/a' });
+    await assert.rejects(agent.waitForSnapshot('nope'), /no such snapshot/);
+    assert.equal(mock.requests.length, 1);
+  });
+
+  it('honors a custom waitForSnapshotUrl and forwards the abort signal', async () => {
+    mock.onNext((req) => {
+      assert.equal(req.url, '/wait-here');
+      return jsonResponse({
+        result: {
+          snapshotId: 'snap-1',
+          createdAt: '2026',
+          state: {},
+          status: 'completed',
+        },
+      });
+    });
+    const agent = remoteAgent({
+      url: '/api/a',
+      waitForSnapshotUrl: '/wait-here',
+    });
+    const snap = await agent.waitForSnapshot('snap-1', {
+      abortSignal: AbortSignal.timeout(5_000),
+    });
+    assert.equal(snap?.status, 'completed');
+  });
+
+  it('rejects a wait whose abort signal fires before the server answers', async () => {
+    mock.onNext(async (req) => {
+      // Behave like fetch: reject with the signal's reason once it aborts.
+      await new Promise((_, reject) =>
+        req.signal?.addEventListener('abort', () => reject(req.signal!.reason))
+      );
+      throw new Error('unreachable');
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    // AbortSignal.timeout's timer does not hold the event loop open, and the
+    // mocked fetch has no socket that would, so Node 20's test runner can see
+    // an empty loop and cancel the test before the signal fires. Hold it open.
+    const keepAlive = setTimeout(() => {}, 1_000);
+    try {
+      await assert.rejects(
+        agent.waitForSnapshot('snap-1', {
+          abortSignal: AbortSignal.timeout(10),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+    } finally {
+      clearTimeout(keepAlive);
+    }
   });
 
   it('applies static and async headers', async () => {
@@ -493,5 +647,189 @@ describe('remoteAgent', () => {
       headers: async () => ({ Authorization: 'Bearer xyz' }),
     });
     await agent.chat().send('hi');
+  });
+});
+
+describe('custom transport', () => {
+  interface TagOptions {
+    tag?: string;
+  }
+
+  interface RecordedTurn {
+    input: AgentInput;
+    init: AgentInit;
+    tag?: string;
+  }
+
+  /**
+   * An in-memory server-managed transport: each turn echoes the input text and
+   * returns a new snapshotId; getSnapshot/abort serve from a map.
+   */
+  function fakeTransport() {
+    const turns: RecordedTurn[] = [];
+    const snapshotCalls: Array<{ lookup: SnapshotLookup; tag?: string }> = [];
+    const abortCalls: Array<{ snapshotId: string; tag?: string }> = [];
+    const snapshots = new Map<string, SessionSnapshot<{ count: number }>>();
+    let n = 0;
+
+    const transport: AgentTransport<TagOptions> = {
+      stateManagement: 'server',
+      runTurn(input, init, { tag }) {
+        turns.push({ input, init, tag });
+        const snapshotId = `snap-${++n}`;
+        const text = input.message?.content[0]?.text ?? '';
+        snapshots.set(snapshotId, {
+          snapshotId,
+          createdAt: new Date(0).toISOString(),
+          status: input.detach ? 'completed' : undefined,
+          state: { custom: { count: n }, messages: [], artifacts: [] },
+        });
+        const chunk: AgentStreamChunk = {
+          modelChunk: { role: 'model', content: [{ text }] },
+        };
+        const output: AgentOutput = {
+          snapshotId,
+          message: { role: 'model', content: [{ text: `echo: ${text}` }] },
+          finishReason: 'stop',
+        };
+        return {
+          stream: (async function* () {
+            yield chunk;
+          })(),
+          output: Promise.resolve(output),
+        };
+      },
+      async getSnapshot(lookup, opts) {
+        snapshotCalls.push({ lookup, tag: opts?.tag });
+        return 'snapshotId' in lookup
+          ? snapshots.get(lookup.snapshotId)
+          : undefined;
+      },
+      async abort(snapshotId, opts) {
+        abortCalls.push({ snapshotId, tag: opts?.tag });
+        return 'aborted';
+      },
+    };
+    return { transport, turns, snapshotCalls, abortCalls };
+  }
+
+  it('runs multi-turn chats, threading snapshotId through init', async () => {
+    const { transport, turns } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const chat = agent.chat();
+    const turn = chat.sendStream('one');
+    const chunks: string[] = [];
+    for await (const c of turn.stream) chunks.push(c.text);
+    const res1 = await turn.response;
+    const res2 = await chat.send('two');
+
+    assert.deepEqual(chunks, ['one']);
+    assert.equal(res1.text, 'echo: one');
+    assert.equal(res2.text, 'echo: two');
+    assert.equal(chat.snapshotId, 'snap-2');
+    assert.deepEqual(
+      turns.map((t) => t.init),
+      [{}, { snapshotId: 'snap-1' }]
+    );
+  });
+
+  it('passes bound and per-call options to the transport', async () => {
+    const { transport, turns, snapshotCalls, abortCalls } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const chat = agent.chat({}, { tag: 'bound' });
+    await chat.send('a');
+    await chat.send('b', { tag: 'per-call' });
+    await chat.abort();
+    assert.deepEqual(
+      turns.map((t) => t.tag),
+      ['bound', 'per-call']
+    );
+    assert.deepEqual(abortCalls, [{ snapshotId: 'snap-2', tag: 'bound' }]);
+
+    const loaded = await agent.loadChat(
+      { snapshotId: 'snap-2' },
+      { tag: 'load' }
+    );
+    assert.deepEqual(loaded.state, { count: 2 });
+    await loaded.send('c');
+    assert.equal(turns[2].tag, 'load');
+    assert.deepEqual(turns[2].init, { snapshotId: 'snap-2' });
+
+    // Detached tasks keep the chat's bound options for polling.
+    const task = await loaded.detach('d');
+    const snap = await task.wait({ intervalMs: 1 });
+    assert.equal(snap.status, 'completed');
+    assert.deepEqual(
+      snapshotCalls.map((c) => c.tag),
+      ['load', 'load']
+    );
+  });
+
+  it('does not mutate the transport', async () => {
+    const { transport } = fakeTransport();
+    // Frozen: any write by the core would throw (modules run in strict mode).
+    const agent = createAgentAPI<{ count: number }, TagOptions>(
+      Object.freeze({ ...transport, stateManagement: undefined })
+    );
+    const res = await agent.chat().send('hi');
+    assert.equal(res.snapshotId, 'snap-1');
+  });
+
+  it('skips undefined per-call options instead of clearing bound ones', async () => {
+    const { transport, turns, abortCalls } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const chat = agent.chat({}, { tag: 'bound' });
+    await chat.send('a', { tag: undefined });
+    await chat.abort({ tag: undefined });
+    assert.deepEqual(
+      turns.map((t) => t.tag),
+      ['bound']
+    );
+    assert.deepEqual(abortCalls, [{ snapshotId: 'snap-1', tag: 'bound' }]);
+  });
+
+  it('lets a detached task abort with overridden options', async () => {
+    const { transport, abortCalls } = fakeTransport();
+    const agent = createAgentAPI<{ count: number }, TagOptions>(transport);
+
+    const task = await agent.chat({}, { tag: 'user' }).detach('job');
+    await task.abort();
+    await task.abort({ tag: 'operator' });
+    assert.deepEqual(
+      abortCalls.map((c) => c.tag),
+      ['user', 'operator']
+    );
+  });
+
+  // Type-level checks (ex. rejecting undeclared options) live in
+  // `tests/types/`, checked by `tsconfig.types-test.json`.
+
+  it('can decorate the HTTP transport', async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return sseResponse([{ result: { finishReason: 'stop' } }]);
+    };
+    try {
+      const http = remoteAgentTransport({ url: '/api/a' });
+      const inits: AgentInit[] = [];
+      const agent = createAgentAPI({
+        ...http,
+        runTurn(input, init, opts) {
+          inits.push(init);
+          return http.runTurn(input, init, opts);
+        },
+      });
+      const res = await agent.chat().send('hi');
+      assert.equal(res.finishReason, 'stop');
+      assert.deepEqual(inits, [{}]);
+      assert.deepEqual(urls, ['/api/a']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

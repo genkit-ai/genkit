@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/firebase/genkit/go/ai"
 	aix "github.com/firebase/genkit/go/ai/exp"
@@ -31,19 +32,29 @@ import (
 // dynamically, or wire up custom tool plumbing).
 //
 // Even with full control over the loop, the framework still owns session
-// state, snapshot writes, and the detach lifecycle.
+// state, snapshot writes, and the detach lifecycle. What a custom loop does
+// own is whether a turn that failed is worth keeping; see the error arm
+// below.
 func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 	const name = "coder"
 	return genkitx.DefineCustomAgent(g, name,
 		func(ctx context.Context, resp aix.Responder, sess *aix.SessionRunner[any]) (*aix.AgentResult, error) {
 			if err := sess.Run(ctx, func(ctx context.Context, input *aix.AgentInput) (*aix.TurnResult, error) {
 				for chunk, err := range genkit.GenerateStream(ctx, g,
-					ai.WithModel(flashModel),
+					ai.WithModel(model),
 					ai.WithSystem("You are a senior software engineer. Answer in as few words as possible. Use fenced code blocks for any code."),
 					ai.WithMessages(sess.Messages()...),
 				) {
 					if err != nil {
-						return nil, err
+						// Commit the turn rather than discard it: sess.Run
+						// already stored this turn's input, so the session
+						// holds a conversation ending on the user's message,
+						// which is a turn seam. Returning a TurnResult beside
+						// the error is what says so, and it makes the failed
+						// snapshot a resume point that re-runs the turn on
+						// the same message. A bare error would roll the turn
+						// back and the user would have to type it again.
+						return &aix.TurnResult{}, fmt.Errorf("could not answer the question: %w", err)
 					}
 					if chunk.Done {
 						sess.AddMessages(chunk.Response.Message)
@@ -62,7 +73,7 @@ func defineCustomAgent(g *genkit.Genkit) *aix.Agent[any] {
 			}
 			return sess.Result(), nil
 		},
-		aix.WithSessionStore(mustStore(name)),
+		aix.WithSessionStore(mustStore[any](name)),
 		aix.WithDescription[any]("Concise code helper (custom per-turn loop)"),
 	)
 }

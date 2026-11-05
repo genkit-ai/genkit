@@ -40,7 +40,7 @@ var fetchInstruments = sync.OnceValue(func() *metricInstruments {
 	insts, err := initInstruments()
 	if err != nil {
 		// Do not stop the program because we can't collect metrics.
-		slog.Default().Error("metric initialization failed; no metrics will be collected", "err", err)
+		slog.Error("metric initialization failed, no metrics will be collected", "error", err)
 		return nil
 	}
 	return insts

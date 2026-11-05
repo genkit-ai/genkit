@@ -16,18 +16,19 @@
 
 """Embedding types and utilities for Genkit."""
 
-from collections.abc import Awaitable, Callable
-from typing import Any, ClassVar, cast
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, ClassVar, Generic, cast
 
 from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
-from typing_extensions import Never
+from typing_extensions import Never, TypeVar
 
-from genkit._core._action import Action, ActionKind, get_func_description
-from genkit._core._model import Document
+from genkit._core._action import Action, ActionKind, FlowContext, get_func_description, with_request_annotation
+from genkit._core._model import EmbedRequest, check_ref_config, check_ref_info
 from genkit._core._registry import Registry
-from genkit._core._schema import to_json_schema
-from genkit._core._typing import ActionMetadata, EmbedRequest, EmbedResponse
+from genkit._core._schema import custom_options_schema, fixed_json_schema
+from genkit._core._typing import EmbedResponse
 
 
 class EmbedderSupports(BaseModel):
@@ -39,8 +40,8 @@ class EmbedderSupports(BaseModel):
     multilingual: bool | None = None
 
 
-class EmbedderOptions(BaseModel):
-    """Configuration options for an embedder."""
+class EmbedderInfo(BaseModel):
+    """Catalog card for an embedder: label, vector width, and input kinds."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True, alias_generator=to_camel)
 
@@ -50,105 +51,130 @@ class EmbedderOptions(BaseModel):
     dimensions: int | None = None
 
 
-class EmbedderRef(BaseModel):
-    """Reference to an embedder with configuration."""
+# Covariant so EmbedderRef[CrmEmbedConfig] is assignable to EmbedderRef[BaseModel].
+EmbedderRefConfigT = TypeVar('EmbedderRefConfigT', bound=BaseModel, covariant=True, default=BaseModel)
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='forbid', populate_by_name=True)
+
+@dataclass(frozen=True, kw_only=True)
+class EmbedderRef(Generic[EmbedderRefConfigT]):
+    """Handle for an embedder, shaped like ModelRef.
+
+    ``config_schema`` is optional: embedders have no generic base config the
+    way models have ModelConfig. Without it, ``config`` is a plain mapping
+    and the call is not checked against a class. With it, ``config`` must be
+    an instance, and ``ai.embed`` requires the embedder to declare the same
+    class. ``version`` is the lowest caller layer, below ``config`` and the
+    call's config, the same as ModelRef.version.
+
+    Fields cannot be rebound. config and info are copied at construction.
+    """
 
     name: str
-    config: Any | None = None
+    config_schema: type[EmbedderRefConfigT] | None = None
+    info: EmbedderInfo | None = None
     version: str | None = None
+    config: EmbedderRefConfigT | Mapping[str, Any] | None = None
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        config = check_ref_config(name=self.name, schema=self.config_schema, config=self.config, schema_required=False)
+        object.__setattr__(self, 'config', config)
+        object.__setattr__(self, 'info', check_ref_info(name=self.name, info=self.info, info_type=EmbedderInfo))
 
 
-class Embedder:
-    """Runtime embedder wrapper around an embedder Action."""
+EmbedderFn = (
+    Callable[[EmbedRequest[Any]], Awaitable[EmbedResponse]]
+    | Callable[[EmbedRequest[Any], FlowContext[Any]], Awaitable[EmbedResponse]]
+)
 
-    def __init__(self, name: str, action: Action[EmbedRequest, EmbedResponse, Never]) -> None:
-        """Initialize with embedder name and backing action."""
-        self.name: str = name
-        self._action: Action[EmbedRequest, EmbedResponse, Never] = action
 
-    async def embed(
+class Embedder(Action[EmbedRequest, EmbedResponse, Never]):
+    """An embedder action that converts documents into vector embeddings.
+
+    Plugin ``init`` / ``resolve`` return this without registering it.
+    ``define_embedder`` constructs and registers it on the registry.
+
+    The options class comes from ``config_schema`` or the fn's
+    ``EmbedRequest[Cfg]`` annotation; given both, they must be the same class.
+    An unannotated fn still gets an ``EmbedRequest``.
+    """
+
+    def __init__(
         self,
-        documents: list[Document],
-        options: dict[str, Any] | None = None,
-    ) -> EmbedResponse:
-        """Generate embeddings for a list of documents."""
-        # Document veneer is compatible with DocumentData at runtime
-        return (
-            await self._action.run(EmbedRequest(input=documents, options=options))  # type: ignore[arg-type]
-        ).response
+        name: str,
+        fn: EmbedderFn,
+        *,
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        info: EmbedderInfo | None = None,
+        description: str | None = None,
+    ) -> None:
+        embedder_info: dict[str, object] = {}
 
+        if metadata and 'embedder' in metadata:
+            existing = metadata['embedder']
+            if isinstance(existing, dict):
+                existing_dict = cast(dict[str, object], existing)
+                for key, value in existing_dict.items():
+                    if isinstance(key, str) and key not in embedder_info:
+                        embedder_info[key] = value
 
-EmbedderFn = Callable[[EmbedRequest], Awaitable[EmbedResponse]]
+        if info:
+            if info.label:
+                embedder_info['label'] = info.label
+            embedder_info['dimensions'] = info.dimensions
+            if info.supports:
+                embedder_info['supports'] = info.supports.model_dump(exclude_none=True, by_alias=True)
+            embedder_info['customOptions'] = info.config_schema if info.config_schema else None
 
+        if 'label' not in embedder_info or not embedder_info['label']:
+            embedder_info['label'] = name
 
-def embedder_action_metadata(
-    name: str,
-    options: EmbedderOptions | None = None,
-) -> ActionMetadata:
-    """Create ActionMetadata for an embedder action."""
-    options = options if options is not None else EmbedderOptions()
-    embedder_metadata_dict: dict[str, object] = {'embedder': {}}
-    embedder_info = cast(dict[str, object], embedder_metadata_dict['embedder'])
+        if embedder_info.get('customOptions') is None and isinstance(config_schema, dict):
+            embedder_info['customOptions'] = config_schema
 
-    if options.label:
-        embedder_info['label'] = options.label
+        if 'dimensions' not in embedder_info:
+            embedder_info['dimensions'] = None
+        if 'customOptions' not in embedder_info:
+            embedder_info['customOptions'] = None
 
-    embedder_info['dimensions'] = options.dimensions
+        embedder_meta: dict[str, object] = metadata.copy() if metadata else {}
+        embedder_meta['embedder'] = embedder_info
 
-    if options.supports:
-        embedder_info['supports'] = options.supports.model_dump(exclude_none=True, by_alias=True)
-
-    embedder_info['customOptions'] = options.config_schema if options.config_schema else None
-
-    return ActionMetadata(
-        action_type=ActionKind.EMBEDDER,
-        name=name,
-        input_json_schema=to_json_schema(EmbedRequest),
-        output_json_schema=to_json_schema(EmbedResponse),
-        metadata=embedder_metadata_dict,
-    )
-
-
-def create_embedder_ref(name: str, config: dict[str, Any] | None = None, version: str | None = None) -> EmbedderRef:
-    """Creates an EmbedderRef instance."""
-    return EmbedderRef(name=name, config=config, version=version)
+        super().__init__(
+            kind=ActionKind.EMBEDDER,
+            name=name,
+            fn=with_request_annotation(fn, EmbedRequest, kind=ActionKind.EMBEDDER),
+            metadata=embedder_meta,
+            description=get_func_description(fn, description),
+            config_schema=config_schema,
+            # Every embedder publishes EmbedRequest/EmbedResponse.
+            _io_schemas=(fixed_json_schema(EmbedRequest), fixed_json_schema(EmbedResponse)),
+        )
+        # EmbedderInfo.config_schema is an explicit Dev UI override; else the class.
+        if embedder_info.get('customOptions') is None and self.config_schema is not None:
+            embedder_info['customOptions'] = custom_options_schema(self.config_schema)
 
 
 def define_embedder(
     registry: Registry,
     name: str,
     fn: EmbedderFn,
-    options: EmbedderOptions | None = None,
+    info: EmbedderInfo | None = None,
     metadata: dict[str, object] | None = None,
     description: str | None = None,
-) -> Action:
+    *,
+    config_schema: type[BaseModel] | dict[str, object] | None = None,
+) -> Embedder:
     """Register a custom embedder action."""
-    embedder_meta: dict[str, object] = dict(metadata) if metadata else {}
-    embedder_info: dict[str, object]
-    existing_embedder = embedder_meta.get('embedder')
-    if isinstance(existing_embedder, dict):
-        embedder_info = {str(key): value for key, value in existing_embedder.items()}
-    else:
-        embedder_info = {}
-    embedder_meta['embedder'] = embedder_info
-
-    if options:
-        if options.label:
-            embedder_info['label'] = options.label
-        if options.dimensions:
-            embedder_info['dimensions'] = options.dimensions
-        if options.supports:
-            embedder_info['supports'] = options.supports.model_dump(exclude_none=True, by_alias=True)
-        if options.config_schema:
-            embedder_info['customOptions'] = to_json_schema(options.config_schema)
-
-    embedder_description = get_func_description(fn, description)
-    return registry.register_action(
-        name=name,
-        kind=ActionKind.EMBEDDER,
-        fn=fn,
-        metadata=embedder_meta,
-        description=embedder_description,
+    action = Embedder(
+        name,
+        fn,
+        metadata=metadata,
+        info=info,
+        description=description,
+        config_schema=config_schema,
     )
+    registry.register_action_from_instance(action)
+    return action

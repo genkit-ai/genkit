@@ -1,0 +1,337 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tests for the raw HTTP Interactions client."""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import quote
+
+import httpx
+import pytest
+from genkit_google_genai._interactions import _client as interactions_client
+from genkit_google_genai._interactions._client import (
+    API_REVISION,
+    cancel_interaction,
+    create_interaction,
+    get_interaction,
+    google_ai_url,
+    headers,
+    timeout_seconds,
+)
+from genkit_google_genai._interactions._options import ClientOptions
+from google.genai.interactions import Interaction
+
+from genkit import GenkitError
+from genkit.plugin_api import GENKIT_USER_AGENT
+from genkit.web import error_body, error_status
+
+
+def test_google_ai_url_defaults() -> None:
+    assert google_ai_url('interactions') == ('https://generativelanguage.googleapis.com/v1beta/interactions')
+
+
+def test_google_ai_url_respects_overrides() -> None:
+    url = google_ai_url(
+        'interactions/abc',
+        client_options=ClientOptions(base_url='https://example.test/', api_version='v1alpha'),
+    )
+    assert url == 'https://example.test/v1alpha/interactions/abc'
+
+
+def test_headers_set_api_revision_and_strip_reserved_custom() -> None:
+    result = headers(
+        api_key='k',
+        client_options=ClientOptions(
+            custom_headers={
+                'x-custom': '1',
+                'x-goog-api-key': 'stolen',
+                'x-goog-api-client': 'wrapper',
+            }
+        ),
+    )
+    built = httpx.Headers(result)
+    assert built['Api-Revision'] == API_REVISION
+    assert built['x-goog-api-key'] == 'k'
+    assert built['x-goog-api-client'] == GENKIT_USER_AGENT
+    assert built['x-custom'] == '1'
+
+
+def test_headers_strip_api_key_case_insensitive() -> None:
+    result = headers(
+        api_key='k',
+        client_options=ClientOptions(custom_headers={'X-Goog-Api-Key': 'stolen'}),
+    )
+    built = httpx.Headers(result)
+    assert built['x-goog-api-key'] == 'k'
+    assert sum(1 for key in result if key.lower() == 'x-goog-api-key') == 1
+
+
+def test_default_timeout_keeps_connect_budget() -> None:
+    timeout = interactions_client.NO_TIMEOUT
+    assert timeout.read is None
+    assert timeout.connect == 10.0
+
+
+def test_timeout_seconds_converts_milliseconds() -> None:
+    assert timeout_seconds(ClientOptions(timeout=1500)) == 1.5
+    assert timeout_seconds(ClientOptions()) is None
+
+
+def mock_response(
+    *,
+    status_code: int = 200,
+    json_body: dict[str, Any] | None = None,
+    text: str = '',
+    headers_map: dict[str, str] | None = None,
+    content: bytes | None = None,
+) -> httpx.Response:
+    if json_body is not None:
+        return httpx.Response(status_code, json=json_body, headers=headers_map or {})
+    if content is not None:
+        return httpx.Response(status_code, content=content, headers=headers_map or {})
+    return httpx.Response(status_code, text=text, headers=headers_map or {})
+
+
+@pytest.fixture
+def http_client() -> MagicMock:
+    client = MagicMock()
+    client.request = AsyncMock()
+    return client
+
+
+@pytest.mark.asyncio
+async def test_create_interaction_posts_body(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        json_body={'id': 'ix-1', 'status': 'in_progress'},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        result = await create_interaction(
+            'key',
+            {'agent': 'deep-research', 'background': True},
+            ClientOptions(base_url='https://example.test'),
+        )
+
+    assert isinstance(result, Interaction)
+    assert result.id == 'ix-1'
+    method, url = http_client.request.call_args.args[:2]
+    assert method == 'POST'
+    assert url == 'https://example.test/v1beta/interactions'
+    kwargs = http_client.request.call_args.kwargs
+    assert kwargs['json'] == {'agent': 'deep-research', 'background': True}
+    sent = httpx.Headers(kwargs['headers'])
+    assert sent['Api-Revision'] == API_REVISION
+    assert sent['x-goog-api-key'] == 'key'
+
+
+@pytest.mark.asyncio
+async def test_get_interaction_gets_by_id(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        json_body={'id': 'ix-9', 'status': 'completed', 'steps': []},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        result = await get_interaction('key', 'ix-9')
+
+    assert result.id == 'ix-9'
+    method, url = http_client.request.call_args.args[:2]
+    assert method == 'GET'
+    assert url.endswith('/interactions/ix-9')
+
+
+@pytest.mark.asyncio
+async def test_cancel_interaction_normalizes_http_cancelled(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        status_code=499,
+        json_body={'error': {'message': 'cancelled'}},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        result = await cancel_interaction('key', 'ix-cancel')
+
+    assert result.id == 'ix-cancel'
+    assert result.status == 'cancelled'
+
+
+@pytest.mark.asyncio
+async def test_cancel_interaction_normalizes_success_as_cancelled(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        json_body={'id': 'ix-cancel', 'status': 'completed'},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        result = await cancel_interaction('key', 'ix-cancel')
+
+    assert result.status == 'cancelled'
+
+
+@pytest.mark.asyncio
+async def test_cancel_interaction_empty_success_body_is_cancelled(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(content=b'')
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        result = await cancel_interaction('key', 'ix-cancel')
+
+    assert result.id == 'ix-cancel'
+    assert result.status == 'cancelled'
+    http_client.request.return_value = mock_response(
+        status_code=404,
+        json_body={'error': {'message': 'missing'}},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await cancel_interaction('key', 'ix-missing')
+    assert exc_info.value.status == 'NOT_FOUND'
+
+
+@pytest.mark.asyncio
+async def test_429_retry_after_header_sets_retry_delay(http_client: MagicMock) -> None:
+    """An Interactions 429 with Retry-After 1.5 tells retry to wait 1500 ms."""
+    http_client.request.return_value = mock_response(
+        status_code=429,
+        json_body={'error': {'message': 'slow down'}},
+        headers_map={'Retry-After': '1.5'},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+    assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
+    assert exc_info.value.retry_after_ms == 1500.0
+    assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
+    assert exc_info.value.details['error'] == {'message': 'slow down'}
+
+
+@pytest.mark.asyncio
+async def test_empty_success_body_is_internal_error(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(content=b'')
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError, match='empty response') as exc_info:
+            await get_interaction('key', 'ix-1')
+    assert exc_info.value.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_deadline_exceeded(http_client: MagicMock) -> None:
+    """An Interactions call that times out is DEADLINE_EXCEEDED and keeps the httpx timeout as its cause."""
+    late = httpx.TimeoutException('late')
+    http_client.request.side_effect = late
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'}, ClientOptions(timeout=1000))
+    assert exc_info.value.status == 'DEADLINE_EXCEEDED'
+    assert exc_info.value.__cause__ is late
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'failure',
+    [httpx.ConnectError('connection refused'), httpx.ReadError('connection reset by peer')],
+)
+async def test_connection_refused_is_unavailable(http_client: MagicMock, failure: Exception) -> None:
+    """A refused or reset connection to the Interactions API is UNAVAILABLE so retry tries again."""
+    http_client.request.side_effect = failure
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+    assert exc_info.value.status == 'UNAVAILABLE'
+    assert exc_info.value.__cause__ is failure
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_converted_from_ms(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        json_body={'id': 'ix-1', 'status': 'completed', 'steps': []},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        await create_interaction('key', {'model': 'lyria'}, ClientOptions(timeout=2500))
+
+    assert http_client.request.call_args.kwargs['timeout'] == 2.5
+
+
+@pytest.mark.asyncio
+async def test_shared_client_has_no_read_timeout() -> None:
+    client = interactions_client._http_client()
+    try:
+        assert client.timeout == interactions_client.NO_TIMEOUT
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_interaction_quotes_path_traversal_id(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        json_body={'id': '../evil', 'status': 'completed', 'steps': []},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        await get_interaction('key', '../evil')
+
+    url = http_client.request.call_args.args[1]
+    encoded = quote('../evil', safe='')
+    assert '../' not in url
+    assert url.endswith(f'/interactions/{encoded}')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('status_code', 'expected_status'),
+    [
+        (502, 'INTERNAL'),
+        (504, 'DEADLINE_EXCEEDED'),
+        (418, 'UNKNOWN'),
+    ],
+)
+async def test_http_errors_mapped_to_status(
+    http_client: MagicMock,
+    status_code: int,
+    expected_status: str,
+) -> None:
+    http_client.request.return_value = mock_response(
+        status_code=status_code,
+        text='Gateway error',
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await get_interaction('key', 'ix-1')
+    assert exc_info.value.status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_error_without_retry_after_has_no_retry_after_ms(http_client: MagicMock) -> None:
+    http_client.request.return_value = mock_response(
+        status_code=429,
+        json_body={'error': {'message': 'slow down'}},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+    assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
+    assert exc_info.value.retry_after_ms is None
+
+
+@pytest.mark.asyncio
+async def test_interactions_http_error_is_served_as_internal_error(http_client: MagicMock) -> None:
+    """An Interactions HTTP 401 stays UNAUTHENTICATED in-process and serves as 500 Internal Error."""
+    http_client.request.return_value = mock_response(
+        status_code=401,
+        json_body={'error': {'message': 'API key not valid'}},
+    )
+    with patch.object(interactions_client, '_http_client', return_value=http_client):
+        with pytest.raises(GenkitError) as exc_info:
+            await create_interaction('key', {'model': 'lyria'})
+
+    error = exc_info.value
+    assert error.status == 'UNAUTHENTICATED'
+    assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
+    assert error_status(error) == 500
+    assert 'API key not valid' not in str(error_body(error))

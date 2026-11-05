@@ -39,15 +39,21 @@ export {
 export { Session, type Artifact } from '@genkit-ai/ai/session';
 export {
   AgentError,
+  createAgentAPI,
   remoteAgent,
+  remoteAgentTransport,
   type AgentAPI,
   type AgentChat,
   type AgentChunk,
   type AgentInterrupt,
   type AgentResponse,
+  type AgentTransport,
   type AgentTurn,
+  type AgentTurnOptions,
   type DetachedTask,
   type RemoteAgentOptions,
+  type SnapshotLookup,
+  type WaitForSnapshotOptions,
 } from './client/agent.js';
 
 export type { AgentFinishReason } from './client/types.js';
@@ -62,6 +68,7 @@ export {
 export { AsyncTaskQueue, lazy } from '@genkit-ai/core/async';
 export * from './common.js';
 export {
+  CommittedTurnError,
   FileSessionStore,
   GenkitBeta,
   InMemorySessionStore,
@@ -76,10 +83,12 @@ export {
   type GenkitBetaOptions,
   type JsonPatch,
   type JsonPatchOperation,
+  type LocalAgentOptions,
   type SessionSnapshot,
   type SessionSnapshotInput,
   type SessionState,
   type SessionStore,
   type SessionStoreOptions,
   type SnapshotMutator,
+  type TurnResult,
 } from './genkit-beta.js';

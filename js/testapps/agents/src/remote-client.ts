@@ -22,6 +22,9 @@
  * Usage:
  *   1. In one terminal: `pnpm start` (starts the Express server on :8080).
  *   2. In another:      `npx tsx src/remote-client.ts`
+ *
+ * See `custom-transport-client.ts` for building the same client over a custom
+ * transport.
  */
 
 import { randomUUID } from 'crypto';

@@ -7,7 +7,6 @@ dependencies = [
   "genkit",
   "genkit-flask",
   "genkit-google-genai",
-  "pydantic",
 ]
 
 [build-system]

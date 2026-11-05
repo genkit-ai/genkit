@@ -38,26 +38,24 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import AliasChoices, BaseModel as PydanticBaseModel, Field
 
-from genkit._ai._tools import Interrupt, define_tool
-from genkit._core._action import Action
-from genkit._core._model import Message, ModelResponse, ModelResponseChunk
-from genkit._core._registry import Registry
-from genkit._core._typing import (
-    Media,
-    MediaPart,
+from genkit import (
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    MultipartToolResponse,
     Part,
     Role,
-    TextPart,
+    Tool,
 )
 from genkit.middleware import (
-    BaseMiddleware,
     GenerateHookParams,
-    GenerateMiddlewareContext,
-    MultipartToolResponse,
+    Middleware,
+    MiddlewareContext,
     ToolHookParams,
 )
+from genkit.plugin_api import GenkitConfig
 
 # ---------------------------------------------------------------------------
 # Tool input schemas (module-level so Pydantic can resolve annotations)
@@ -105,21 +103,29 @@ _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB — absolute ceiling for readin
 _MAX_READ_SLICE_BYTES = 256 * 1024  # 256 KB — max bytes returned per slice
 
 
-class FilesystemConfig(PydanticBaseModel):
+class FilesystemConfig(GenkitConfig):
     """Sandbox root and write/tool naming options."""
 
-    root_dir: str
+    # The wire key is rootDirectory (matches JS and Go); Python keeps root_dir.
+    # alias= would rename the kwarg for type checkers, so use the split aliases.
+    root_dir: str = Field(
+        validation_alias=AliasChoices('rootDirectory', 'root_dir'),
+        serialization_alias='rootDirectory',
+    )
     allow_write_access: bool = False
     tool_name_prefix: str = ''
 
 
-class Filesystem(BaseMiddleware[FilesystemConfig]):
+class Filesystem(Middleware[FilesystemConfig]):
     """Filesystem middleware with sandboxed file operations.
 
     Contributes ``list_files``, ``read_file``, and optionally ``write_file``
     and ``edit_file``. Tool errors are queued as user messages so the model
     can self-correct on the next turn.
     """
+
+    name = 'filesystem'
+    description = 'Sandboxed filesystem operations'
 
     def __init__(self, **kwargs: Any) -> None:  # noqa: ANN401
         super().__init__(**kwargs)
@@ -213,7 +219,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 raise ValueError(f'Image too large ({len(raw):,} bytes; max {_MAX_READ_SLICE_BYTES:,}).')
             b64 = base64.b64encode(raw).decode('ascii')
             data_uri = f'data:{mime_type};base64,{b64}'
-            self._enqueue_parts([Part(root=MediaPart(media=Media(url=data_uri, content_type=mime_type)))])
+            self._enqueue_parts([Part.from_media(data_uri, content_type=mime_type)])
             return f'Image {file_path} queued as media part.'
 
         with open(abs_path, encoding='utf-8', errors='replace') as fh:
@@ -232,7 +238,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
         else:
             wrapped = f'<read_file path="{file_path}" totalLines="{total}">\n{sliced}\n</read_file>'
 
-        self._enqueue_parts([Part(root=TextPart(text=wrapped))])
+        self._enqueue_parts([Part.from_text(wrapped)])
         return f'File {file_path} read successfully. Content queued as user message.'
 
     def _write_file_impl(self, file_path: str, content: str) -> str:
@@ -269,9 +275,8 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
             fh.write(content)
         return f'File {file_path} edited successfully.'
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
-        """Return filesystem tool actions for this generate() call."""
-        scratch = Registry()
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
+        """Return filesystem tools for this generate() call."""
 
         async def list_files(input: _ListFilesInput) -> list[dict[str, Any]]:
             return await asyncio.to_thread(self._list_files, input.dir_path, input.recursive)
@@ -284,19 +289,18 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                 input.limit,
             )
 
-        t_list = define_tool(
-            scratch,
-            list_files,
-            name=self._tool_name('list_files'),
-            description='List files and directories under a path (optional recursive).',
-        )
-        t_read = define_tool(
-            scratch,
-            read_file,
-            name=self._tool_name('read_file'),
-            description='Read a text file, optionally from an offset/limit in lines.',
-        )
-        tools_out = [t_list.action(), t_read.action()]
+        tools_out = [
+            Tool(
+                list_files,
+                name=self._tool_name('list_files'),
+                description='List files and directories under a path (optional recursive).',
+            ),
+            Tool(
+                read_file,
+                name=self._tool_name('read_file'),
+                description='Read a text file, optionally from an offset/limit in lines.',
+            ),
+        ]
 
         if self.config.allow_write_access:
 
@@ -310,27 +314,26 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
                     [e.model_dump() for e in input.edits],
                 )
 
-            t_write = define_tool(
-                scratch,
-                write_file,
-                name=self._tool_name('write_file'),
-                description='Create or overwrite a text file with the given content.',
-            )
-            t_edit = define_tool(
-                scratch,
-                edit_file,
-                name=self._tool_name('edit_file'),
-                description='Apply search/replace edits to an existing text file.',
-            )
-            tools_out += [t_write.action(), t_edit.action()]
+            tools_out += [
+                Tool(
+                    write_file,
+                    name=self._tool_name('write_file'),
+                    description='Create or overwrite a text file with the given content.',
+                ),
+                Tool(
+                    edit_file,
+                    name=self._tool_name('edit_file'),
+                    description='Apply search/replace edits to an existing text file.',
+                ),
+            ]
 
         return tools_out
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         """Drain queued user messages into the request before the next model turn."""
         if not self._message_queue:
@@ -357,8 +360,8 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
     async def wrap_tool(
         self,
         params: ToolHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[ToolHookParams, GenerateMiddlewareContext], Awaitable[MultipartToolResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
         """Catch filesystem tool errors and enqueue them as user messages."""
         if params.tool.name not in self._filesystem_tool_names():
@@ -366,9 +369,7 @@ class Filesystem(BaseMiddleware[FilesystemConfig]):
 
         try:
             return await next_fn(params, ctx)
-        except Interrupt:
-            raise
         except Exception as exc:
             error_msg = f'Tool "{params.tool.name}" failed: {exc}'
-            self._enqueue_parts([Part(root=TextPart(text=error_msg))])
+            self._enqueue_parts([Part.from_text(error_msg)])
             return MultipartToolResponse(output='Tool call failed; see user message below for details.')

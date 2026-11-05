@@ -15,10 +15,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-"""Google Cloud Plugin for Genkit.
+"""Google Cloud plugin for Genkit.
 
-This plugin provides Google Cloud observability integration for Genkit,
-enabling telemetry export to Cloud Trace, Cloud Monitoring, and Cloud Logging.
+Exports Genkit telemetry to Cloud Trace, Cloud Monitoring, and Cloud Logging.
+
+Durable agent sessions are experimental — import
+:class:`FirestoreSessionStore` from ``genkit_google_cloud.exp``.
 
 Example:
     ```python
@@ -27,38 +29,26 @@ Example:
     from genkit_google_cloud import enable_google_cloud_telemetry
 
 
-    # 1. Enable Google Cloud Trace and Monitoring export
-    enable_google_cloud_telemetry(project_id='my-project')
+    # Enable Google Cloud Trace and Monitoring export
+    enable_google_cloud_telemetry(project='my-project')
 
-    # 2. All subsequent Genkit actions automatically export telemetry
-    ai = Genkit(plugins=[GoogleAI()], model='googleai/gemini-flash-latest')
+    # All subsequent Genkit actions automatically export telemetry
+    ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
     await ai.generate(prompt='Hello, world!')
     # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
     ```
 
 Requirements:
-    - Requires Google Cloud Application Default Credentials (ADC) or explicit credentials.
-    - Telemetry export is disabled by default in local dev environments unless explicitly configured.
+    - Google Cloud Application Default Credentials (ADC), or explicit credentials.
+    - Telemetry export is disabled by default in local dev unless explicitly configured.
 
 See Also:
     - Cloud Trace: https://cloud.google.com/trace
     - Cloud Monitoring: https://cloud.google.com/monitoring
 """
 
-from .telemetry import add_gcp_telemetry, enable_google_cloud_telemetry
-
-
-def package_name() -> str:
-    """Get the package name for the Google Cloud plugin.
-
-    Returns:
-        The fully qualified package name as a string.
-    """
-    return 'genkit_google_cloud'
-
+from genkit_google_cloud._telemetry._tracing import enable_google_cloud_telemetry
 
 __all__ = [
-    'add_gcp_telemetry',
     'enable_google_cloud_telemetry',
-    'package_name',
 ]

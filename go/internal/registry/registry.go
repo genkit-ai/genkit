@@ -108,7 +108,7 @@ func (r *Registry) RegisterPlugin(name string, p api.Plugin) {
 		panic(fmt.Sprintf("plugin %q is already registered", name))
 	}
 	r.plugins[name] = p
-	slog.Debug("RegisterPlugin", "name", name)
+	slog.Debug("registered plugin", "plugin", name)
 }
 
 // RegisterAction records the action in the registry.
@@ -121,7 +121,7 @@ func (r *Registry) RegisterAction(key string, action api.Action) {
 		panic(fmt.Sprintf("action %q is already registered", key))
 	}
 	r.actions[key] = action
-	slog.Debug("RegisterAction", "key", key)
+	slog.Debug("registered action", "key", key)
 }
 
 // RegisterSchema records a JSON schema (as a map[string]any) in the registry.
@@ -133,7 +133,7 @@ func (r *Registry) RegisterSchema(name string, schema map[string]any) {
 		panic(fmt.Sprintf("schema %q is already registered", name))
 	}
 	r.schemas[name] = schema
-	slog.Debug("RegisterSchema", "name", name)
+	slog.Debug("registered schema", "schema", name)
 }
 
 // LookupSchema returns a JSON schema (as a map[string]any) for the given name.
@@ -181,7 +181,23 @@ func (r *Registry) RegisterValue(name string, value any) {
 		panic(fmt.Sprintf("value %q is already registered", name))
 	}
 	r.values[name] = value
-	slog.Debug("RegisterValue", "name", name)
+	slog.Debug("registered value", "name", name)
+}
+
+// RegisterValueIfAbsent records value under name only if name is not already
+// present in this registry (it does not consult parents). It returns true if
+// the value was stored, false if an entry already existed. Unlike
+// [Registry.RegisterValue] it never panics on a duplicate, so it is safe for
+// concurrent register-if-absent callers racing on the same key.
+func (r *Registry) RegisterValueIfAbsent(name string, value any) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.values[name]; ok {
+		return false
+	}
+	r.values[name] = value
+	slog.Debug("RegisterValueIfAbsent", "name", name)
+	return true
 }
 
 // LookupValue returns the value for the given name.
@@ -222,6 +238,9 @@ func (r *Registry) LookupAction(key string) api.Action {
 // ResolveAction looks up an action by key. If the action is not found, it attempts dynamic resolution.
 // Returns the action if found, or nil if not found.
 // This method is safe to call concurrently and uses a single mutex to serialize all resolution operations.
+// The resolved action is registered and then the requested key is looked up
+// again, so a plugin may return an action bundle whose Register covers the
+// requested key among others (see [api.DynamicPlugin]).
 func (r *Registry) ResolveAction(key string) api.Action {
 	action := r.LookupAction(key)
 	if action != nil {
@@ -238,7 +257,7 @@ func (r *Registry) ResolveAction(key string) api.Action {
 
 	typ, provider, name := api.ParseKey(key)
 	if typ == "" || name == "" {
-		slog.Debug("ResolveAction: failed to parse action key", "key", key)
+		slog.Debug("cannot resolve action with malformed key", "key", key)
 		return nil
 	}
 

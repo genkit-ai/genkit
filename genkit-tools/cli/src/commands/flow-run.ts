@@ -17,29 +17,45 @@
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { writeFile } from 'fs/promises';
-import { runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
+import { parseJson } from '../utils/option-parsers';
 
 interface FlowRunOptions {
-  wait?: boolean;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   output?: string;
   stream?: boolean;
-  context?: string;
+  context?: any;
 }
 
 /** Command to run a flow. */
 export const flowRun = new Command('flow:run')
+  .allowExcessArguments(true)
+  .usage('[options] <flowName> [data] [-- <command...>]')
   .description('run a flow using provided data as input')
   .argument('<flowName>', 'name of the flow to run')
   .argument('[data]', 'JSON data to use to start the flow')
-  .option('-w, --wait', 'Wait for the flow to complete', false)
+  // Deprecated no-op option kept for backward compatibility; flows always run to completion.
+  .addOption(
+    new Option(
+      '-w, --wait',
+      'Wait for the flow to complete (deprecated: flows always run to completion)'
+    )
+      .default(false)
+      .hideHelp()
+  )
   .option('-s, --stream', 'Stream output', false)
-  .option('-c, --context <JSON>', 'JSON object passed to context', '')
+  .option('-c, --context <JSON>', 'JSON object passed to context', parseJson)
   .option(
     '--output <filename>',
-    'name of the output file to store the extracted data'
+    'name of the output file to write the flow result'
   )
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (flowName: string, data: string, options: FlowRunOptions) => {
     const dashDashIndex = process.argv.indexOf('--');
     let runtimeCommand: string[] | undefined;
@@ -62,6 +78,17 @@ export const flowRun = new Command('flow:run')
       }
     }
 
+    let parsedInput: any;
+    if (actualData) {
+      try {
+        parsedInput = parseJson(actualData);
+      } catch (e: any) {
+        logger.error(`Invalid JSON in [data]: ${e?.message ?? String(e)}`);
+        process.exitCode = 1;
+        return;
+      }
+    }
+
     const projectRoot = await findProjectRoot();
 
     const runAction = async (manager: BaseRuntimeManager) => {
@@ -69,8 +96,8 @@ export const flowRun = new Command('flow:run')
       const response = await manager.runAction(
         {
           key: `/flow/${flowName}`,
-          input: actualData ? JSON.parse(actualData) : undefined,
-          context: options.context ? JSON.parse(options.context) : undefined,
+          input: parsedInput,
+          context: options.context,
         },
         options.stream
           ? (chunk) => console.log(JSON.stringify(chunk, undefined, '  '))
@@ -92,7 +119,7 @@ export const flowRun = new Command('flow:run')
         logger.info(`${clc.cyan('Trace ID:')} ${traceId}`);
       }
 
-      if (options.output && result) {
+      if (options.output && result !== undefined) {
         await writeFile(options.output, JSON.stringify(result, undefined, ' '));
       }
     };
@@ -100,5 +127,6 @@ export const flowRun = new Command('flow:run')
     await runWithManager(projectRoot, runAction, {
       runtimeCommand,
       waitForActionKeys: [`/flow/${flowName}`],
+      auth: options.experimentalAuth,
     });
   });

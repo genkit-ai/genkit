@@ -2,6 +2,16 @@
 
 See [Genkit MCP documentation](https://genkit.dev/docs/model-context-protocol/).
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 This plugin provides integration between Genkit and the [Model Context Protocol](https://modelcontextprotocol.io) (MCP). MCP is an open standard allowing developers to build "servers" which provide tools, resources, and prompts to clients. Genkit MCP allows Genkit developers to:
 - Consume MCP tools, prompts, and resources as a client using `createMcpHost` or `createMcpClient`.
 - Provide Genkit tools and prompts as an MCP server using `createMcpServer`.
@@ -45,7 +55,7 @@ const ai = genkit({
 (async () => {
   // Provide MCP tools to the model of your choice.
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: `Analyze all files in ${process.cwd()}.`,
     tools: await mcpHost.getActiveTools(ai),
     resources: await mcpHost.getActiveResources(ai),
@@ -107,7 +117,7 @@ const ai = genkit({
   const fsTools = await myFsClient.getActiveTools(ai);
 
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'), // Replace with your model
+    model: googleAI.model('gemini-flash-latest'), // Replace with your model
     prompt: 'List files in ' + process.cwd(),
     tools: fsTools,
   });

@@ -18,14 +18,20 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 
-	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
+	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 // --- counter: a config whose BuildMiddleware tracks hook invocations ---
@@ -121,6 +127,133 @@ func TestPluginStateCarriedThroughPrototype(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&shared); got != 3 {
 		t.Errorf("shared counter = %d, want 3 (plugin state should persist across JSON dispatches)", got)
+	}
+}
+
+// --- per-call isolation: JSON dispatch never writes through to the prototype ---
+
+// isolationLog records the config each New() was built with. Dispatches in
+// these tests are sequential, so no locking.
+type isolationLog struct {
+	seen []isolationConfig
+}
+
+func (l *isolationLog) at(t *testing.T, i int) isolationConfig {
+	t.Helper()
+	if i >= len(l.seen) {
+		t.Fatalf("wanted config %d, only %d recorded", i, len(l.seen))
+	}
+	return l.seen[i]
+}
+
+// isolationConfig mirrors the built-in middleware shape: exported fields are
+// per-call user config, unexported fields are plugin state.
+type isolationConfig struct {
+	Label    string            `json:"label,omitempty"`
+	Statuses []string          `json:"statuses,omitempty"`
+	Tags     map[string]string `json:"tags,omitempty"`
+
+	log *isolationLog
+}
+
+func (isolationConfig) Name() string { return "test/isolation" }
+
+func (c isolationConfig) New(ctx context.Context) (*Hooks, error) {
+	if c.log != nil {
+		c.log.seen = append(c.log.seen, c)
+	}
+	return &Hooks{}, nil
+}
+
+// Registering by value is the documented shape, but [NewMiddleware] accepts
+// any [Middleware], so a pointer prototype has to isolate just the same.
+func forEachPrototypeShape(t *testing.T, run func(t *testing.T, desc *MiddlewareDesc, log *isolationLog, snapshot func() isolationConfig)) {
+	t.Helper()
+	for _, tc := range []struct {
+		name  string
+		build func(isolationConfig) (*MiddlewareDesc, func() isolationConfig)
+	}{
+		{"value prototype", func(p isolationConfig) (*MiddlewareDesc, func() isolationConfig) {
+			return NewMiddleware("desc", p), func() isolationConfig { return p }
+		}},
+		{"pointer prototype", func(p isolationConfig) (*MiddlewareDesc, func() isolationConfig) {
+			ptr := &p
+			return NewMiddleware("desc", ptr), func() isolationConfig { return *ptr }
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &isolationLog{}
+			desc, snapshot := tc.build(isolationConfig{log: log})
+			run(t, desc, log, snapshot)
+		})
+	}
+}
+
+func TestBuildFromJSON_ConfigDoesNotLeakBetweenCalls(t *testing.T) {
+	forEachPrototypeShape(t, func(t *testing.T, desc *MiddlewareDesc, log *isolationLog, _ func() isolationConfig) {
+		buildOrFail(t, desc, `{"label":"first","statuses":["a","b"],"tags":{"k":"v"}}`)
+		buildOrFail(t, desc, `{}`)
+
+		second := log.at(t, 1)
+		if second.Label != "" {
+			t.Errorf("Label = %q, want empty (leaked from the previous call)", second.Label)
+		}
+		if second.Statuses != nil {
+			t.Errorf("Statuses = %v, want nil (leaked from the previous call)", second.Statuses)
+		}
+		if second.Tags != nil {
+			t.Errorf("Tags = %v, want nil (leaked from the previous call)", second.Tags)
+		}
+	})
+}
+
+func TestBuildFromJSON_PrototypeNotMutated(t *testing.T) {
+	forEachPrototypeShape(t, func(t *testing.T, desc *MiddlewareDesc, _ *isolationLog, snapshot func() isolationConfig) {
+		buildOrFail(t, desc, `{"label":"first","statuses":["a","b"],"tags":{"k":"v"}}`)
+
+		got := snapshot()
+		if got.Label != "" || got.Statuses != nil || got.Tags != nil {
+			t.Errorf("prototype mutated by dispatch: %+v", got)
+		}
+	})
+}
+
+// ptrRecvConfig takes pointer receivers, so Name() survives being read off a
+// nil prototype during registration.
+type ptrRecvConfig struct {
+	Label string `json:"label,omitempty"`
+}
+
+func (*ptrRecvConfig) Name() string { return "test/ptr-recv" }
+
+func (c *ptrRecvConfig) New(context.Context) (*Hooks, error) {
+	return &Hooks{
+		WrapModel: func(ctx context.Context, p *ModelParams, next ModelNext) (*ModelResponse, error) {
+			_ = c.Label // A nil receiver surfaces here, not in New.
+			return next(ctx, p)
+		},
+	}, nil
+}
+
+// A nil pointer prototype is a programming error, but it must not panic the
+// process. A call that sends no config has nothing to unmarshal, so nothing
+// allocates through the pointer and New would otherwise get a nil receiver.
+func TestBuildFromJSON_NilPrototype(t *testing.T) {
+	desc := NewMiddleware("desc", (*ptrRecvConfig)(nil))
+	h, err := desc.buildFromJSON(testCtx, nil)
+	if err != nil {
+		t.Fatalf("buildFromJSON failed: %v", err)
+	}
+	next := func(context.Context, *ModelParams) (*ModelResponse, error) { return &ModelResponse{}, nil }
+	if _, err := h.WrapModel(testCtx, &ModelParams{}, next); err != nil {
+		t.Fatalf("WrapModel failed: %v", err)
+	}
+}
+
+func buildOrFail(t *testing.T, desc *MiddlewareDesc, configJSON string) {
+	t.Helper()
+	if _, err := desc.buildFromJSON(testCtx, []byte(configJSON)); err != nil {
+		t.Fatalf("buildFromJSON(%s) failed: %v", configJSON, err)
 	}
 }
 
@@ -321,6 +454,45 @@ func TestMiddlewareFunc(t *testing.T) {
 	}
 }
 
+func TestMiddlewareFuncSerializedRequest(t *testing.T) {
+	r := newTestRegistry(t)
+	m := defineFakeModel(t, r, fakeModelConfig{})
+
+	opts := &GenerateActionOptions{
+		Model:    m.Name(),
+		Messages: []*Message{NewUserTextMessage("hi")},
+		Use: []*MiddlewareRef{{
+			Name:   "inline",
+			Config: MiddlewareFunc(func(ctx context.Context) (*Hooks, error) { return &Hooks{}, nil }),
+		}},
+	}
+	// Trace spans record the request as JSON; a closure must not fail that.
+	b, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	// Replayed from that JSON, the ref has no closure behind it, and a
+	// middleware registered under the same name must not stand in for it.
+	NewMiddleware("impostor", inlineNamedConfig{}).Register(r)
+	var replayed GenerateActionOptions
+	if err := json.Unmarshal(b, &replayed); err != nil {
+		t.Fatalf("unmarshal request: %v", err)
+	}
+	_, err = GenerateWithRequest(testCtx, r, &replayed, nil, nil)
+	if got := status.Of(err); got != status.FailedPrecondition {
+		t.Errorf("status = %v, want FAILED_PRECONDITION (err: %v)", got, err)
+	}
+}
+
+// inlineNamedConfig is registered middleware that claims the name reserved
+// for [MiddlewareFunc].
+type inlineNamedConfig struct{}
+
+func (inlineNamedConfig) Name() string { return "inline" }
+
+func (inlineNamedConfig) New(context.Context) (*Hooks, error) { return &Hooks{}, nil }
+
 func TestMiddlewareFuncCoexist(t *testing.T) {
 	// Two MiddlewareFunc adapter instances should be able to coexist in a
 	// single WithUse call.
@@ -456,6 +628,67 @@ func TestMiddlewareContributesTool(t *testing.T) {
 	assertNoError(t, err)
 }
 
+// Middleware-contributed tools are registered before their definitions are
+// captured, so schema names (WithInputSchemaName/WithOutputSchemaName) reach
+// the model resolved rather than as raw {"$ref": "genkit:..."} maps.
+func TestMiddlewareToolSchemaNamesResolve(t *testing.T) {
+	r := newTestRegistry(t)
+	r.RegisterSchema("Answer", map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+	})
+
+	var captured *ModelRequest
+	defineFakeModel(t, r, fakeModelConfig{
+		name: "test/refModel",
+		handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			captured = req
+			return &ModelResponse{Request: req, Message: NewModelTextMessage("done")}, nil
+		},
+	})
+
+	inject := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			Tools: []Tool{NewTool("mw/schemaTool", "named schemas",
+				func(tc *ToolContext, in any) (any, error) { return "ok", nil },
+				WithInputSchemaName("Answer"), WithOutputSchemaName("Answer"))},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/refModel"),
+		WithPrompt("hi"),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+
+	if captured == nil {
+		t.Fatal("model was never called")
+	}
+	var def *ToolDefinition
+	for _, td := range captured.Tools {
+		if td.Name == "mw/schemaTool" {
+			def = td
+		}
+	}
+	if def == nil {
+		t.Fatalf("middleware tool not sent to the model: %v", captured.Tools)
+	}
+	for slot, schema := range map[string]map[string]any{
+		"InputSchema":  def.InputSchema,
+		"OutputSchema": def.OutputSchema,
+	} {
+		if _, ok := schema["$ref"]; ok {
+			t.Errorf("%s = %v, want the resolved Answer schema, not a $ref", slot, schema)
+		}
+		if props, ok := schema["properties"].(map[string]any); !ok || props["answer"] == nil {
+			t.Errorf("%s = %v, want the registered Answer schema", slot, schema)
+		}
+	}
+}
+
 // --- duplicate tool collision: two middleware with same tool name ---
 
 func TestDuplicateMiddlewareToolRejected(t *testing.T) {
@@ -494,6 +727,53 @@ func TestBuildMiddlewareErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestBuildMiddlewareErrorWrapping(t *testing.T) {
+	t.Run("unclassified error becomes INVALID_ARGUMENT and names the middleware", func(t *testing.T) {
+		err := wrapBuildError("vectorstore", errors.New("boom"))
+		if got := status.Of(err); got != status.InvalidArgument {
+			t.Errorf("status = %v, want %v", got, status.InvalidArgument)
+		}
+		if got, want := status.Convert(err).Message, `ai: failed to build middleware "vectorstore": boom`; got != want {
+			t.Errorf("wire message = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("classified error keeps its status", func(t *testing.T) {
+		// A network-backed New reporting UNAVAILABLE is not a caller mistake,
+		// so it must not be rebranded as one.
+		inner := status.Errorf(status.ErrUnavailable, "dial vectors.internal: connection refused")
+		err := wrapBuildError("vectorstore", inner)
+		if got := status.Of(err); got != status.Unavailable {
+			t.Errorf("status = %v, want %v", got, status.Unavailable)
+		}
+		if !errors.Is(err, status.ErrUnavailable) {
+			t.Error("errors.Is(err, ErrUnavailable) = false, want the cause to stay matchable")
+		}
+	})
+
+	t.Run("classified error still names the middleware on the wire", func(t *testing.T) {
+		// Serialization resolves to the outermost status error, so wrapping
+		// with fmt.Errorf would leave a client holding the inner message with
+		// nothing saying which middleware failed to build.
+		inner := status.Errorf(status.ErrUnavailable, "dial vectors.internal: connection refused")
+		got := status.Convert(wrapBuildError("vectorstore", inner)).Message
+		want := `ai: failed to build middleware "vectorstore": dial vectors.internal: connection refused`
+		if got != want {
+			t.Errorf("wire message = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a New's public message is not republished", func(t *testing.T) {
+		// Building the envelope here is what keeps it non-public: a New that
+		// chose to publish its own text did not choose to publish it through
+		// the middleware-build path.
+		inner := status.PublicErrorf(status.ErrUnavailable, "internal detail")
+		if msg, public := status.PublicMessage(wrapBuildError("vectorstore", inner)); public {
+			t.Errorf("PublicMessage = %q, public = true, want the wrapper to withhold it", msg)
+		}
+	})
+}
+
 // --- tool interrupt from WrapTool ---
 
 func TestWrapToolInterrupts(t *testing.T) {
@@ -507,7 +787,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 	interrupter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 		}, nil
 	})
@@ -533,7 +813,7 @@ func TestWrapToolInterrupts(t *testing.T) {
 // body ran, so a test can tell a short-circuited call from a real one.
 func defineCountingTool(t *testing.T, r api.Registry, name string, calls *int32) Tool {
 	t.Helper()
-	return DefineTool(r, name, "A test tool",
+	return defineTool(r, name, "A test tool",
 		func(ctx *ToolContext, input struct {
 			Value string `json:"value"`
 		}) (string, error) {
@@ -565,7 +845,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 		{
 			name: "interrupt",
 			hook: func(ctx context.Context, p *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
-				return nil, NewToolInterruptError(map[string]any{"reason": "blocked"})
+				return nil, &base.ToolInterruptError{Data: map[string]any{"reason": "blocked"}}
 			},
 			wantState: "error",
 		},
@@ -588,7 +868,7 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 			})
 			var toolCalls int32
 			tool := defineCountingTool(t, r, "myTool", &toolCalls)
-			spans := collectSpans(t)
+			spans := tracingtest.Capture(t)
 
 			shortCircuit := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 				return &Hooks{WrapTool: tt.hook}, nil
@@ -612,13 +892,13 @@ func TestWrapToolShortCircuitEmitsToolSpan(t *testing.T) {
 				t.Errorf("tool ran %d times, want 0 (hook short-circuited)", got)
 			}
 
-			toolSpans := spans.allByName(tool.Name())
+			toolSpans := spans.ByName(tool.Name())
 			if len(toolSpans) != 1 {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
 			span := toolSpans[0]
 			assertSpanAttr(t, span, "genkit:type", "action")
-			assertSpanAttr(t, span, "genkit:metadata:subtype", "tool")
+			assertSpanAttr(t, span, "genkit:metadata:subtype", string(api.ActionTypeToolV2))
 			assertSpanAttr(t, span, "genkit:state", tt.wantState)
 			assertSpanAttr(t, span, "genkit:input", `{"value":"x"}`)
 		})
@@ -664,7 +944,7 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 			})
 			var toolCalls int32
 			tool := defineCountingTool(t, r, "myTool", &toolCalls)
-			spans := collectSpans(t)
+			spans := tracingtest.Capture(t)
 
 			rewriter := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
 				return &Hooks{WrapTool: tt.hook}, nil
@@ -681,11 +961,15 @@ func TestWrapToolPassThroughEmitsSingleToolSpan(t *testing.T) {
 			if got := atomic.LoadInt32(&toolCalls); got != 1 {
 				t.Errorf("tool ran %d times, want 1", got)
 			}
-			toolSpans := spans.allByName(tool.Name())
+			toolSpans := spans.ByName(tool.Name())
 			if len(toolSpans) != 1 {
 				t.Fatalf("got %d spans named %q, want exactly 1", len(toolSpans), tool.Name())
 			}
 			assertSpanAttr(t, toolSpans[0], "genkit:input", `{"value":"rewritten"}`)
+			// The short-circuit span is meant to be indistinguishable from
+			// this one, so pin them to the same shape from both sides.
+			assertSpanAttr(t, toolSpans[0], "genkit:type", "action")
+			assertSpanAttr(t, toolSpans[0], "genkit:metadata:subtype", string(api.ActionTypeToolV2))
 		})
 	}
 }
@@ -731,7 +1015,7 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		handler: modelHandler,
 	})
 
-	DefineTool(r, "validateMe", "A tool that requires a numeric value",
+	defineTool(r, "validateMe", "A tool that requires a numeric value",
 		func(ctx *ToolContext, input any) (string, error) {
 			m := input.(map[string]any)
 			return fmt.Sprintf("success: %v", m["value"]), nil
@@ -751,10 +1035,9 @@ func TestWrapToolValidationErrorReturnedToModel(t *testing.T) {
 		return &Hooks{
 			WrapTool: func(ctx context.Context, params *ToolParams, next ToolNext) (*MultipartToolResponse, error) {
 				resp, err := next(ctx, params)
-				var sve *core.SchemaValidationError
-				if errors.As(err, &sve) {
+				if errors.Is(err, status.ErrInvalidInput) {
 					return &MultipartToolResponse{
-						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", sve))},
+						Content: []*Part{NewTextPart(fmt.Sprintf("Validation error: %v", err))},
 						Output:  "tool call failed; see content for details",
 					}, nil
 				}
@@ -859,7 +1142,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		Interrupt bool `json:"interrupt"`
 	}
 
-	tool := DefineTool(r, "restartable", "interrupts, then runs on resume",
+	tool := defineTool(r, "restartable", "interrupts, then runs on resume",
 		func(ctx *ToolContext, in restartInput) (string, error) {
 			if in.Interrupt {
 				return "", ctx.Interrupt(&InterruptOptions{})
@@ -870,7 +1153,7 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 
 	// Requests the tool on the first turn, returns a final text response once a
 	// tool response is present in history.
-	model := DefineModel(r, "test/restartModel", &ModelOptions{
+	model := defineModel(r, "test/restartModel", &ModelOptions{
 		Supports: &ModelSupports{Multiturn: true, Tools: true},
 	}, func(ctx context.Context, req *ModelRequest, _ ModelStreamCallback) (*ModelResponse, error) {
 		for _, msg := range req.Messages {
@@ -928,14 +1211,17 @@ func TestMiddlewareHookOrderOnToolRestart(t *testing.T) {
 		}, nil
 	})
 
-	restartPart, err := tool.RestartWith(interruptedPart, WithNewInput[restartInput](restartInput{Interrupt: false}))
-	assertNoError(t, err)
+	call, ok := tool.Interrupted(interruptedPart)
+	if !ok {
+		t.Fatal("Interrupted did not claim the tool's own interrupt")
+	}
+	restartPart := call.RestartWithInput(restartInput{Interrupt: false}, nil)
 
 	resumed, err := Generate(testCtx, r,
 		WithModel(model),
 		WithMessages(first.History()...),
 		WithTools(tool),
-		WithToolRestarts(restartPart),
+		WithResume(restartPart),
 		WithUse(tracker),
 	)
 	assertNoError(t, err)
@@ -991,5 +1277,204 @@ func TestMiddlewareRefArg_NewErrors(t *testing.T) {
 	// of silently producing nil hooks.
 	if _, err := (middlewareRefArg{name: "x"}).New(testCtx); err == nil {
 		t.Fatal("expected middlewareRefArg.New to return an error")
+	}
+}
+
+// --- hook logging: runs are attributed and short-circuits flagged ---
+
+// hookLogRecorder is a slog.Handler that captures records at or above min.
+type hookLogRecorder struct {
+	min     slog.Level
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *hookLogRecorder) Enabled(_ context.Context, l slog.Level) bool { return l >= h.min }
+
+func (h *hookLogRecorder) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *hookLogRecorder) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *hookLogRecorder) WithGroup(string) slog.Handler      { return h }
+
+func TestMiddlewareHookLogging(t *testing.T) {
+	base := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		return &ModelResponse{}, nil
+	}
+	passThrough := namedHooks{name: "test/outer", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return next(ctx, params)
+		},
+	}}
+	shortCircuit := namedHooks{name: "test/inner", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return &ModelResponse{}, nil // resolves the call without invoking next
+		},
+	}}
+	chain := buildModelChain([]namedHooks{passThrough, shortCircuit}, base)
+
+	rec := &hookLogRecorder{min: slog.LevelDebug}
+	ctx := logger.WithContext(context.Background(), slog.New(rec))
+	if _, err := chain(ctx, &ModelRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	type entry struct {
+		msg, mw        string
+		shortCircuited bool
+	}
+	var got []entry
+	for _, r := range rec.records {
+		e := entry{msg: r.Message}
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "middleware":
+				e.mw = a.Value.String()
+			case "shortCircuited":
+				e.shortCircuited = a.Value.Bool()
+			}
+			return true
+		})
+		got = append(got, e)
+	}
+	want := []entry{
+		{msg: "middleware hook started", mw: "test/outer"},
+		{msg: "middleware hook started", mw: "test/inner"},
+		{msg: "middleware hook finished", mw: "test/inner", shortCircuited: true},
+		{msg: "middleware hook finished", mw: "test/outer"},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("hook log entries = %v, want %v", got, want)
+	}
+}
+
+func TestMiddlewareHookLoggingDisabled(t *testing.T) {
+	ran := false
+	base := func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+		ran = true
+		return &ModelResponse{}, nil
+	}
+	chain := buildModelChain([]namedHooks{{name: "test/mw", hooks: &Hooks{
+		WrapModel: func(ctx context.Context, params *ModelParams, next ModelNext) (*ModelResponse, error) {
+			return next(ctx, params)
+		},
+	}}}, base)
+
+	rec := &hookLogRecorder{min: slog.LevelInfo}
+	ctx := logger.WithContext(context.Background(), slog.New(rec))
+	if _, err := chain(ctx, &ModelRequest{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !ran {
+		t.Fatal("base model fn did not run")
+	}
+	if len(rec.records) != 0 {
+		t.Errorf("got %d log records with debug disabled, want 0", len(rec.records))
+	}
+}
+
+// TestWrapGenerateOptionsAreIsolatedPerIteration checks that a WrapGenerate
+// hook writing to its Options disturbs neither later turns nor their spans.
+func TestWrapGenerateOptionsAreIsolatedPerIteration(t *testing.T) {
+	r := newTestRegistry(t)
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/toolModel",
+		handler: toolCallingModelHandler("myTool", map[string]any{"value": "x"}, "done"),
+	})
+	var toolCalls int32
+	tool := defineCountingTool(t, r, "myTool", &toolCalls)
+	spans := tracingtest.Capture(t)
+
+	var seen []int
+	clobber := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{
+			WrapGenerate: func(ctx context.Context, p *GenerateParams, next GenerateNext) (*ModelResponse, error) {
+				seen = append(seen, len(p.Options.Messages))
+				p.Options.Messages = nil
+				p.Options.StepName = "clobbered"
+				return next(ctx, p)
+			},
+		}, nil
+	})
+
+	_, err := Generate(testCtx, r,
+		WithModelName("test/toolModel"),
+		WithPrompt("use it"),
+		WithTools(tool),
+		WithUse(clobber),
+	)
+	assertNoError(t, err)
+
+	// One tool call and a final answer; each turn sees the call's own message.
+	want := []int{1, 1}
+	if !slices.Equal(seen, want) {
+		t.Errorf("hook saw %v messages per iteration, want %v", seen, want)
+	}
+	if got := len(spans.ByName("clobbered")); got != 0 {
+		t.Errorf("got %d spans named %q, want 0: a hook's step name must not rename the loop's spans", got, "clobbered")
+	}
+	if got := len(spans.ByName("generate")); got != len(want) {
+		t.Errorf("got %d generate spans, want %d (one per iteration)", got, len(want))
+	}
+}
+
+// A middleware can contribute a resumable tool: it is a Tool like any
+// other. The application holds only the part, so it resolves the interrupt
+// with Part.ToToolRestart, and the typed resume still reaches the tool.
+func TestMiddlewareContributesResumableTool(t *testing.T) {
+	r := newTestRegistry(t)
+	defineFakeModel(t, r, fakeModelConfig{
+		name:    "test/askModel",
+		handler: toolCallingModelHandler("mw/askUser", map[string]any{"question": "proceed?"}, "done"),
+	})
+
+	type askInput struct {
+		Question string `json:"question"`
+	}
+	type answer struct {
+		Text string `json:"text"`
+	}
+	var got *answer
+	askUser := NewResumableTool("mw/askUser", "asks the person a question",
+		func(ctx context.Context, in askInput, a *answer) (string, error) {
+			if a == nil {
+				return "", &base.ToolInterruptError{Data: in}
+			}
+			got = a
+			return a.Text, nil
+		})
+	inject := MiddlewareFunc(func(ctx context.Context) (*Hooks, error) {
+		return &Hooks{Tools: []Tool{askUser}}, nil
+	})
+
+	resp, err := Generate(testCtx, r,
+		WithModelName("test/askModel"),
+		WithPrompt("go"),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+	interrupts := resp.Interrupts()
+	if len(interrupts) != 1 {
+		t.Fatalf("got %d interrupts, want 1 (finish=%s)", len(interrupts), resp.FinishReason)
+	}
+
+	restart, err := interrupts[0].ToToolRestart(answer{Text: "yes"})
+	assertNoError(t, err)
+	resp, err = Generate(testCtx, r,
+		WithModelName("test/askModel"),
+		WithMessages(resp.History()...),
+		WithResume(restart),
+		WithUse(inject),
+	)
+	assertNoError(t, err)
+	if got == nil || got.Text != "yes" {
+		t.Errorf("resumed tool saw %+v, want the typed answer", got)
+	}
+	if resp.Text() != "done" {
+		t.Errorf("got %q, want %q", resp.Text(), "done")
 	}
 }

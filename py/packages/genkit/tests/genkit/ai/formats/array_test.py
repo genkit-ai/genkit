@@ -8,10 +8,10 @@
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
-from genkit import Message, ModelResponseChunk
+from genkit import Message, ModelResponseChunk, Part
 from genkit._ai._formats._array import ArrayFormat
-from genkit._core._error import GenkitError
-from genkit._core._typing import Part, TextPart
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._model import chunk_for_stream
 
 
 class TestArrayFormatStreaming:
@@ -23,18 +23,18 @@ class TestArrayFormatStreaming:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         # Chunk 1: [{"id": 1,
-        chunk1 = ModelResponseChunk(content=[Part(root=TextPart(text='[{"id": 1,'))])
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        chunk1 = ModelResponseChunk(content=[Part.from_text('[{"id": 1,')])
+        result1 = fmt.parse_chunk(chunk_for_stream(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: "name": "first"}
-        chunk2 = ModelResponseChunk(content=[Part(root=TextPart(text='"name": "first"}'))])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        chunk2 = ModelResponseChunk(content=[Part.from_text('"name": "first"}')])
+        result2 = fmt.parse_chunk(chunk_for_stream(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'first'}]
 
         # Chunk 3: , {"id": 2, "name": "second"}]
-        chunk3 = ModelResponseChunk(content=[Part(root=TextPart(text=', {"id": 2, "name": "second"}]'))])
-        result3 = fmt.parse_chunk(ModelResponseChunk(chunk3, index=0, previous_chunks=[chunk1, chunk2]))
+        chunk3 = ModelResponseChunk(content=[Part.from_text(', {"id": 2, "name": "second"}]')])
+        result3 = fmt.parse_chunk(chunk_for_stream(chunk3, index=0, previous_chunks=[chunk1, chunk2]))
         assert result3 == [{'id': 2, 'name': 'second'}]
 
     def test_handles_single_item_arrays(self) -> None:
@@ -42,8 +42,8 @@ class TestArrayFormatStreaming:
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        chunk = ModelResponseChunk(content=[Part(root=TextPart(text='[{"id": 1, "name": "single"}]'))])
-        result = fmt.parse_chunk(ModelResponseChunk(chunk, index=0, previous_chunks=[]))
+        chunk = ModelResponseChunk(content=[Part.from_text('[{"id": 1, "name": "single"}]')])
+        result = fmt.parse_chunk(chunk_for_stream(chunk, index=0, previous_chunks=[]))
         assert result == [{'id': 1, 'name': 'single'}]
 
     def test_handles_preamble_with_code_fence(self) -> None:
@@ -52,15 +52,13 @@ class TestArrayFormatStreaming:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         # Chunk 1: preamble with code fence start
-        chunk1 = ModelResponseChunk(
-            content=[Part(root=TextPart(text='Here is the array you requested:\n\n```json\n['))]
-        )
-        result1 = fmt.parse_chunk(ModelResponseChunk(chunk1, index=0, previous_chunks=[]))
+        chunk1 = ModelResponseChunk(content=[Part.from_text('Here is the array you requested:\n\n```json\n[')])
+        result1 = fmt.parse_chunk(chunk_for_stream(chunk1, index=0, previous_chunks=[]))
         assert result1 == []
 
         # Chunk 2: the actual data
-        chunk2 = ModelResponseChunk(content=[Part(root=TextPart(text='{"id": 1, "name": "item"}]\n```'))])
-        result2 = fmt.parse_chunk(ModelResponseChunk(chunk2, index=0, previous_chunks=[chunk1]))
+        chunk2 = ModelResponseChunk(content=[Part.from_text('{"id": 1, "name": "item"}]\n```')])
+        result2 = fmt.parse_chunk(chunk_for_stream(chunk2, index=0, previous_chunks=[chunk1]))
         assert result2 == [{'id': 1, 'name': 'item'}]
 
 
@@ -72,17 +70,23 @@ class TestArrayFormatMessage:
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        result = fmt.parse_message(
-            Message(Message(role='model', content=[Part(root=TextPart(text='[{"id": 1, "name": "test"}]'))]))
-        )
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('[{"id": 1, "name": "test"}]')]))
         assert result == [{'id': 1, 'name': 'test'}]
+
+    def test_parses_array_of_scalars(self) -> None:
+        """A finished reply of strings is the list, not an empty object extract."""
+        array_fmt = ArrayFormat()
+        fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'string'}})
+
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('["a", "b"]')]))
+        assert result == ['a', 'b']
 
     def test_parses_empty_array(self) -> None:
         """Test parsing an empty array."""
         array_fmt = ArrayFormat()
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
-        result = fmt.parse_message(Message(Message(role='model', content=[Part(root=TextPart(text='[]'))])))
+        result = fmt.parse_message(Message(role='model', content=[Part.from_text('[]')]))
         assert result == []
 
     def test_parses_array_with_preamble_and_code_fence(self) -> None:
@@ -91,11 +95,7 @@ class TestArrayFormatMessage:
         fmt = array_fmt.handle({'type': 'array', 'items': {'type': 'object'}})
 
         result = fmt.parse_message(
-            Message(
-                Message(
-                    role='model', content=[Part(root=TextPart(text='Here is the array:\n\n```json\n[{"id": 1}]\n```'))]
-                )
-            )
+            Message(role='model', content=[Part.from_text('Here is the array:\n\n```json\n[{"id": 1}]\n```')])
         )
         assert result == [{'id': 1}]
 
@@ -110,6 +110,8 @@ class TestArrayFormatErrors:
         with pytest.raises(GenkitError) as exc_info:
             array_fmt.handle({'type': 'string'})
         assert "Must supply an 'array' schema type" in str(exc_info.value)
+        assert exc_info.value.reason is ErrorReason.INVALID_SCHEMA
+        assert 'INVALID_SCHEMA' not in exc_info.value.message
 
     def test_throws_error_for_object_schema_type(self) -> None:
         """Test that object schema type raises error."""
@@ -118,6 +120,8 @@ class TestArrayFormatErrors:
         with pytest.raises(GenkitError) as exc_info:
             array_fmt.handle({'type': 'object'})
         assert "Must supply an 'array' schema type" in str(exc_info.value)
+        assert exc_info.value.reason is ErrorReason.INVALID_SCHEMA
+        assert 'INVALID_SCHEMA' not in exc_info.value.message
 
 
 class TestArrayFormatInstructions:

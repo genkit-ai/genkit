@@ -18,12 +18,14 @@ package exp
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // TestStreamTransform_RedactsModelChunksOnWire verifies a stream transform that
@@ -277,7 +279,7 @@ func TestStreamTransform_ReshapesTurnEnd(t *testing.T) {
 func TestStreamTransform_ErrorFailsInvocationClosed(t *testing.T) {
 	transform := func(_ context.Context, c *AgentStreamChunk) (*AgentStreamChunk, error) {
 		if c.ModelChunk != nil {
-			return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape chunk")
+			return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape chunk")
 		}
 		return c, nil
 	}
@@ -349,19 +351,25 @@ func assertStreamTransformFailsClosed(t *testing.T, transform StreamTransform, w
 	}
 }
 
-// TestStreamTransform_RejectsSecondOption verifies WithStreamTransform, like the
-// other agent options, may be set only once.
-func TestStreamTransform_RejectsSecondOption(t *testing.T) {
+// TestStreamTransform_LaterOptionWins verifies a second WithStreamTransform
+// replaces the first, as every agent option does.
+func TestStreamTransform_LaterOptionWins(t *testing.T) {
 	reg := newTestRegistry(t)
-	noop := func(_ context.Context, c *AgentStreamChunk) (*AgentStreamChunk, error) { return c, nil }
-	noopFn := func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
-		return nil, nil
+	first := func(_ context.Context, c *AgentStreamChunk) (*AgentStreamChunk, error) {
+		return nil, errors.New("the first transform must not run")
 	}
-	defer func() {
-		if recover() == nil {
-			t.Error("expected a panic when WithStreamTransform is set twice")
-		}
-	}()
-	DefineCustomAgent(reg, "twice", noopFn,
-		WithStreamTransform[testState](noop), WithStreamTransform[testState](noop))
+	second := func(_ context.Context, c *AgentStreamChunk) (*AgentStreamChunk, error) { return c, nil }
+	af := DefineCustomAgent(reg, "twice",
+		func(ctx context.Context, resp Responder, sess *SessionRunner[testState]) (*AgentResult, error) {
+			resp.SendArtifact(&Artifact{Name: "a", Parts: []*ai.Part{ai.NewTextPart("x")}})
+			return &AgentResult{}, nil
+		},
+		WithStreamTransform[testState](first), WithStreamTransform[testState](second))
+	out, err := af.RunText(context.Background(), "go")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if out.FinishReason == AgentFinishReasonFailed {
+		t.Fatalf("the first transform ran: %+v", out.Error)
+	}
 }

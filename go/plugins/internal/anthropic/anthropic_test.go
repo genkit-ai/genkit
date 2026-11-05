@@ -17,14 +17,23 @@
 package anthropic
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 func TestAnthropic(t *testing.T) {
@@ -62,79 +71,127 @@ func TestAnthropic(t *testing.T) {
 type modelRequestTestCase struct {
 	name        string
 	req         *ai.ModelRequest
+	config      anthropic.MessageNewParams
 	expected    *anthropic.MessageNewParams
 	expectedErr string
 }
 
-func TestAnthropicConfig(t *testing.T) {
-	emptyConfig := anthropic.MessageNewParams{}
-	expectedConfig := anthropic.MessageNewParams{
+// validateConfig runs a config through the same check the action boundary
+// performs: the config schema the model advertises is enforced on every call.
+func validateConfig(t *testing.T, inputSchema map[string]any, config any) error {
+	t.Helper()
+	return base.ValidateValue(&ai.ModelRequest{
+		Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hello"))},
+		Config:   config,
+	}, inputSchema)
+}
+
+// TestModelConfig pins the contract between the schema a model advertises and
+// the SDK type the framework deserializes into: every config form the action
+// boundary accepts must convert to [anthropic.MessageNewParams], and the
+// wrapper types the SDK uses for optional primitives must survive the trip.
+// The schema is enforced on every request, so a form that the two disagree on
+// is either a request rejected for no reason or a value silently dropped.
+func TestModelConfig(t *testing.T) {
+	desc := NewModel(anthropic.Client{}, "anthropic", "claude-opus-4-5", ai.ModelOptions{}).Desc()
+
+	sampled := anthropic.MessageNewParams{
 		Temperature: anthropic.Float(1.0),
 		TopK:        anthropic.Int(1),
 	}
 
-	tests := []modelRequestTestCase{
-		{
-			name: "Input is anthropic.MessageNewParams struct",
-			req: &ai.ModelRequest{
-				Config: anthropic.MessageNewParams{
-					Temperature: anthropic.Float(1.0),
-					TopK:        anthropic.Int(1),
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is *anthropic.MessageNewParams struct",
-			req: &ai.ModelRequest{
-				Config: &anthropic.MessageNewParams{
-					Temperature: anthropic.Float(1.0),
-					TopK:        anthropic.Int(1),
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is map[string]any",
-			req: &ai.ModelRequest{
-				Config: map[string]any{
-					"temperature": 1.0,
-					"top_k":       1,
-				},
-			},
-			expected: &expectedConfig,
-		},
-		{
-			name: "Input is map[string]any (empty)",
-			req: &ai.ModelRequest{
-				Config: map[string]any{},
-			},
-			expected: &emptyConfig,
-		},
-		{
-			name: "Input is nil",
-			req: &ai.ModelRequest{
-				Config: nil,
-			},
-			expected: &emptyConfig,
-		},
-		{
-			name: "Input is an unexpected type",
-			req: &ai.ModelRequest{
-				Config: 123,
-			},
-			expectedErr: "unexpected config type: int",
-		},
+	accepted := []struct {
+		name   string
+		config any
+		want   anthropic.MessageNewParams
+	}{
+		{"struct config", sampled, sampled},
+		{"pointer config", &sampled, sampled},
+		{"map config", map[string]any{"temperature": 1.0, "top_k": 1}, sampled},
+		{"empty map config", map[string]any{}, anthropic.MessageNewParams{}},
+		{"nil config", nil, anthropic.MessageNewParams{}},
+		// A typed nil marshals to JSON null, which the config slot tolerates.
+		{"typed nil config", (*anthropic.MessageNewParams)(nil), anthropic.MessageNewParams{}},
+		{"thinking union", map[string]any{"thinking": map[string]any{"type": "enabled", "budget_tokens": 1024}}, anthropic.MessageNewParams{
+			Thinking: anthropic.ThinkingConfigParamOfEnabled(1024),
+		}},
+	}
+	for _, tt := range accepted {
+		t.Run("accepts "+tt.name, func(t *testing.T) {
+			if err := validateConfig(t, desc.InputSchema, tt.config); err != nil {
+				t.Fatalf("config rejected at the action boundary: %v", err)
+			}
+			got, err := base.ConvertToExact[anthropic.MessageNewParams](tt.config)
+			if err != nil {
+				t.Fatalf("config accepted by the schema but not deserializable: %v", err)
+			}
+			// Compared as JSON: the SDK's param structs carry the raw
+			// message they were deserialized from, so two values that send
+			// the same request are not deeply equal.
+			if diff := cmp.Diff(wireJSON(t, tt.want), wireJSON(t, got)); diff != "" {
+				t.Errorf("deserialized config mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	rejected := []struct {
+		name   string
+		config any
+	}{
+		{"unknown field", map[string]any{"nope": 1}},
+		// The SDK's wire names are snake_case; camelCase would deserialize to
+		// nothing at all.
+		{"camelCase field name", map[string]any{"maxTokens": 10}},
+		{"mistyped value", map[string]any{"temperature": "hot"}},
+		// The SDK's params struct decodes a bare scalar into a zero value
+		// rather than failing, so the schema is what refuses one.
+		{"scalar config", 123},
+	}
+	for _, tt := range rejected {
+		t.Run("rejects "+tt.name, func(t *testing.T) {
+			if err := validateConfig(t, desc.InputSchema, tt.config); err == nil {
+				t.Error("expected the action boundary to reject this config")
+			}
+		})
+	}
+
+	// Another provider's config never reaches the model function. Its fields
+	// are omitempty and the ones it sets overlap with Claude's, so it marshals
+	// to an object the schema accepts; the deserialization step is what refuses
+	// it, and without that the model function would run on an all-zero config.
+	type otherProviderConfig struct {
+		Temperature float64 `json:"temperature,omitempty"`
+	}
+	other := otherProviderConfig{Temperature: 1.0}
+	if err := validateConfig(t, desc.InputSchema, other); err != nil {
+		t.Fatalf("premise no longer holds, the schema rejects it on its own: %v", err)
+	}
+	if _, err := base.ConvertToExact[anthropic.MessageNewParams](other); !errors.Is(err, base.ErrTypeMismatch) {
+		t.Errorf("ConvertToExact(%T) error = %v, want one wrapping ErrTypeMismatch", other, err)
+	}
+}
+
+// TestModelLabel covers the label a model advertises: the caller's when set,
+// otherwise one derived from the provider and the model name.
+func TestModelLabel(t *testing.T) {
+	tests := []struct {
+		provider string
+		name     string
+		opts     ai.ModelOptions
+		want     string
+	}{
+		{"anthropic", "claude-opus-4-5", ai.ModelOptions{Label: "Anthropic - Claude Opus 4.5"}, "Anthropic - Claude Opus 4.5"},
+		{"anthropic", "claude-something-new", ai.ModelOptions{}, "Anthropic - claude-something-new"},
+		{"vertexai", "claude-opus-4-5", ai.ModelOptions{Label: "Claude Opus 4.5"}, "Claude Opus 4.5"},
+		{"vertexai", "claude-something-new", ai.ModelOptions{}, "Vertex AI - claude-something-new"},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := configFromRequest(tt.req)
-			if checkError(t, err, tt.expectedErr) {
-				return
-			}
-			if !reflect.DeepEqual(tt.expected, got) {
-				t.Errorf("configFromRequest() got = %+v, want %+v", got, tt.expected)
+		t.Run(tt.provider+"/"+tt.name, func(t *testing.T) {
+			desc := NewModel(anthropic.Client{}, tt.provider, tt.name, tt.opts).Desc()
+			got := desc.Metadata["model"].(map[string]any)["label"]
+			if got != tt.want {
+				t.Errorf("label = %v, want %q", got, tt.want)
 			}
 		})
 	}
@@ -297,7 +354,7 @@ func TestToAnthropicTools(t *testing.T) {
 					Description: "my tool description",
 				},
 			},
-			expectedErr: "tool name must match regex",
+			expectedErr: "must match regex",
 		},
 	}
 
@@ -411,6 +468,22 @@ func TestToAnthropicParts(t *testing.T) {
 			},
 		},
 		{
+			name: "tool error response sets is_error",
+			parts: []*ai.Part{
+				{
+					Kind: ai.PartToolResponse,
+					ToolResponse: &ai.ToolResponse{
+						Ref:    "ref1",
+						Output: map[string]any{"error": "no such city"},
+					},
+					Metadata: map[string]any{"isError": true},
+				},
+			},
+			expected: []anthropic.ContentBlockParamUnion{
+				anthropic.NewToolResultBlock("ref1", `{"error":"no such city"}`, true),
+			},
+		},
+		{
 			name: "multipart tool response keeps output and content parts",
 			parts: []*ai.Part{
 				ai.NewToolResponsePart(&ai.ToolResponse{
@@ -517,10 +590,8 @@ func TestToAnthropicRequest(t *testing.T) {
 						Content: []*ai.Part{ai.NewTextPart("hello")},
 					},
 				},
-				Config: map[string]any{
-					"max_tokens": 10,
-				},
 			},
+			config: anthropic.MessageNewParams{MaxTokens: 10},
 			expected: &anthropic.MessageNewParams{
 				MaxTokens: 10,
 				System:    []anthropic.TextBlockParam{},
@@ -542,10 +613,8 @@ func TestToAnthropicRequest(t *testing.T) {
 						Content: []*ai.Part{ai.NewTextPart("hello")},
 					},
 				},
-				Config: map[string]any{
-					"max_tokens": 10,
-				},
 			},
+			config: anthropic.MessageNewParams{MaxTokens: 10},
 			expected: &anthropic.MessageNewParams{
 				MaxTokens: 10,
 				System: []anthropic.TextBlockParam{
@@ -579,7 +648,7 @@ func TestToAnthropicRequest(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := toAnthropicRequest("anthropic", tt.req)
+			got, err := toAnthropicRequest("anthropic", tt.req, tt.config)
 			if checkError(t, err, tt.expectedErr) {
 				return
 			}
@@ -612,9 +681,6 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 				Content: []*ai.Part{ai.NewTextPart("hello")},
 			},
 		},
-		Config: map[string]any{
-			"max_tokens": 100,
-		},
 		Output: &ai.ModelOutputConfig{
 			Format:      "json",
 			Schema:      schema,
@@ -622,7 +688,7 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 		},
 	}
 
-	got, err := toAnthropicRequest("anthropic", req)
+	got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -646,10 +712,30 @@ func TestToAnthropicRequest_StructuredOutput(t *testing.T) {
 	}
 }
 
-// userRequest builds a minimal request carrying a single user message.
-func userRequest(config any) *ai.ModelRequest {
+// The array and enum formats ask for a constraint too. Without one their
+// request would reach the API with neither a constraint nor, since the model
+// claims constrained output, the format instructions.
+func TestToAnthropicRequest_StructuredOutputNonObjectRoot(t *testing.T) {
+	for format, schema := range map[string]map[string]any{
+		"array": {"type": "array", "items": map[string]any{"type": "string"}},
+		"enum":  {"type": "string", "enum": []any{"red", "green"}},
+	} {
+		req := userRequest()
+		req.Output = &ai.ModelOutputConfig{Format: format, Schema: schema, Constrained: true}
+		got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{MaxTokens: 100})
+		if err != nil {
+			t.Fatalf("%s: unexpected error: %v", format, err)
+		}
+		if got.OutputConfig.Format.Schema["type"] != schema["type"] {
+			t.Errorf("%s: OutputConfig schema = %v, want the %s schema", format, got.OutputConfig.Format.Schema, format)
+		}
+	}
+}
+
+// userRequest builds a minimal request carrying a single user message. The
+// config travels beside the request now, so it is not part of it.
+func userRequest() *ai.ModelRequest {
 	return &ai.ModelRequest{
-		Config:   config,
 		Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
 	}
 }
@@ -745,15 +831,17 @@ func TestToAnthropicPartsReasoningSignature(t *testing.T) {
 
 func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 	// Server-side tools can only be expressed through the config, so the
-	// genkit tool list must merge with them rather than replace them.
+	// genkit tool list must merge with them rather than replace them. The same
+	// config value is reused across both calls, which also pins that a request
+	// amends its own copy rather than the caller's.
 	t.Run("config tools survive", func(t *testing.T) {
-		config := &anthropic.MessageNewParams{
+		config := anthropic.MessageNewParams{
 			MaxTokens: 100,
 			Tools: []anthropic.ToolUnionParam{
 				{OfWebSearchTool20250305: &anthropic.WebSearchTool20250305Param{}},
 			},
 		}
-		got, err := toAnthropicRequest("anthropic", userRequest(config))
+		got, err := toAnthropicRequest("anthropic", userRequest(), config)
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -761,13 +849,13 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 			t.Fatalf("got %d tools, want the config tool preserved", len(got.Tools))
 		}
 
-		req := userRequest(config)
+		req := userRequest()
 		req.Tools = []*ai.ToolDefinition{{
 			Name:        "my_tool",
 			Description: "d",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
 		}}
-		got, err = toAnthropicRequest("anthropic", req)
+		got, err = toAnthropicRequest("anthropic", req, config)
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -776,12 +864,51 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 		}
 	})
 
+	// The request's config is a shallow copy, so its Tools header still points
+	// at the caller's backing array. Appending in place would write the genkit
+	// tools into that array's spare capacity, which concurrent requests over a
+	// hoisted config race over. Length alone does not catch it: an in-place
+	// append leaves the caller's length untouched while overwriting the slots
+	// past it.
+	t.Run("appending tools leaves the caller's array alone", func(t *testing.T) {
+		configTools := make([]anthropic.ToolUnionParam, 1, 4)
+		configTools[0] = anthropic.ToolUnionParam{OfWebSearchTool20250305: &anthropic.WebSearchTool20250305Param{}}
+		config := anthropic.MessageNewParams{MaxTokens: 100, Tools: configTools}
+
+		req := userRequest()
+		req.Tools = []*ai.ToolDefinition{{
+			Name:        "my_tool",
+			Description: "d",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+		}}
+
+		got, err := toAnthropicRequest("anthropic", req, config)
+		if err != nil {
+			t.Fatalf("toAnthropicRequest: %v", err)
+		}
+		if len(got.Tools) != 2 {
+			t.Fatalf("got %d tools, want the config tool plus the genkit tool", len(got.Tools))
+		}
+		if &got.Tools[0] == &configTools[0] {
+			t.Error("the request's tools share the caller's backing array")
+		}
+		for i, tool := range configTools[:cap(configTools)] {
+			if i == 0 {
+				continue
+			}
+			if tool.OfTool != nil {
+				t.Errorf("the caller's spare capacity was written at index %d", i)
+			}
+		}
+	})
+
 	// Assigning a fresh OutputConfig would drop a config-provided effort.
 	t.Run("output config effort survives structured output", func(t *testing.T) {
-		req := userRequest(&anthropic.MessageNewParams{
+		config := anthropic.MessageNewParams{
 			MaxTokens:    100,
 			OutputConfig: anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort("high")},
-		})
+		}
+		req := userRequest()
 		req.Output = &ai.ModelOutputConfig{
 			Format:      "json",
 			Constrained: true,
@@ -790,7 +917,7 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 				"properties": map[string]any{"a": map[string]any{"type": "string"}},
 			},
 		}
-		got, err := toAnthropicRequest("anthropic", req)
+		got, err := toAnthropicRequest("anthropic", req, config)
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -804,10 +931,10 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 	})
 
 	t.Run("config tool choice survives when unset", func(t *testing.T) {
-		got, err := toAnthropicRequest("anthropic", userRequest(&anthropic.MessageNewParams{
+		got, err := toAnthropicRequest("anthropic", userRequest(), anthropic.MessageNewParams{
 			MaxTokens:  100,
 			ToolChoice: anthropic.ToolChoiceUnionParam{OfTool: &anthropic.ToolChoiceToolParam{Name: "pinned"}},
-		}))
+		})
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -819,7 +946,7 @@ func TestToAnthropicRequestPreservesConfig(t *testing.T) {
 	// Anthropic rejects an empty content array, and an empty tools array
 	// conflicts with a config-provided tool_choice.
 	t.Run("no empty arrays on the wire", func(t *testing.T) {
-		got, err := toAnthropicRequest("anthropic", userRequest(nil))
+		got, err := toAnthropicRequest("anthropic", userRequest(), anthropic.MessageNewParams{})
 		if err != nil {
 			t.Fatalf("toAnthropicRequest: %v", err)
 		}
@@ -842,9 +969,9 @@ func TestToAnthropicRequestToolChoice(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt.choice), func(t *testing.T) {
-			req := userRequest(nil)
+			req := userRequest()
 			req.ToolChoice = tt.choice
-			got, err := toAnthropicRequest("anthropic", req)
+			got, err := toAnthropicRequest("anthropic", req, anthropic.MessageNewParams{})
 			if err != nil {
 				t.Fatalf("toAnthropicRequest: %v", err)
 			}
@@ -858,12 +985,11 @@ func TestToAnthropicRequestToolChoice(t *testing.T) {
 // A message whose content is empty must be skipped rather than indexed into.
 func TestToAnthropicRequestSkipsEmptyMessages(t *testing.T) {
 	got, err := toAnthropicRequest("anthropic", &ai.ModelRequest{
-		Config: &anthropic.MessageNewParams{MaxTokens: 100},
 		Messages: []*ai.Message{
 			{Role: ai.RoleModel, Content: nil},
 			ai.NewUserMessage(ai.NewTextPart("hi")),
 		},
-	})
+	}, anthropic.MessageNewParams{MaxTokens: 100})
 	if err != nil {
 		t.Fatalf("toAnthropicRequest: %v", err)
 	}
@@ -887,4 +1013,254 @@ func checkError(t *testing.T, err error, expectedErr string) bool {
 		return true
 	}
 	return false
+}
+
+// TestGenerateReportsUsage pins how Anthropic's usage maps onto the
+// [ai.GenerationUsage] convention, from usage the API returned live.
+// Anthropic's input_tokens leaves out cache reads and writes, and its
+// output_tokens includes thinking, which it also reports apart. A stream's
+// final counts arrive on message_delta, of which the SDK's accumulator keeps
+// only output_tokens, so the stream case pins that the rest is not lost.
+func TestGenerateReportsUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		body   string
+		want   *ai.GenerationUsage
+	}{
+		{
+			name: "cache write",
+			body: `{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[{"type":"text","text":"0.05"}],"stop_reason":"end_turn","usage":{"input_tokens":75,"cache_creation_input_tokens":12608,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":12608,"ephemeral_1h_input_tokens":0},"output_tokens":214,"output_tokens_details":{"thinking_tokens":206},"service_tier":"standard"}}`,
+			want: &ai.GenerationUsage{
+				InputTokens:      12683,
+				CacheWriteTokens: 12608,
+				OutputTokens:     8,
+				ThoughtsTokens:   206,
+				TotalTokens:      12897,
+				Custom:           map[string]float64{"cacheWrite5mTokens": 12608},
+			},
+		},
+		{
+			name:   "stream cache read",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"cache_creation_input_tokens":0,"cache_read_input_tokens":12608,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":3,"service_tier":"standard"}}}` + "\n\n" +
+				"event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+				"event: content_block_delta\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"0.05"}}` + "\n\n" +
+				"event: content_block_stop\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":75,"cache_creation_input_tokens":0,"cache_read_input_tokens":12608,"output_tokens":256,"output_tokens_details":{"thinking_tokens":248},"server_tool_use":{"web_search_requests":1}}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:         12683,
+				CachedContentTokens: 12608,
+				OutputTokens:        8,
+				ThoughtsTokens:      248,
+				TotalTokens:         12939,
+				Custom:              map[string]float64{"webSearchRequests": 1},
+			},
+		},
+		{
+			// A later delta that leaves the thinking breakdown out does not
+			// fold the thinking back into the output.
+			name:   "stream second delta without thinking",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"output_tokens":3}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":256,"output_tokens_details":{"thinking_tokens":248}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":256}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:    75,
+				OutputTokens:   8,
+				ThoughtsTokens: 248,
+				TotalTokens:    331,
+			},
+		},
+		{
+			// A delta's counts are cumulative, so a zeroed input count does
+			// not lower the start's, and cache writes added after the start
+			// with no split by lifetime drop the start's partial split.
+			name:   "stream delta below start",
+			stream: true,
+			body: "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-4-5","content":[],"stop_reason":null,"usage":{"input_tokens":75,"cache_creation_input_tokens":100,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":0},"output_tokens":1}}}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":0,"cache_creation_input_tokens":300,"output_tokens":50,"server_tool_use":{"web_search_requests":1}}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n",
+			want: &ai.GenerationUsage{
+				InputTokens:      375,
+				CacheWriteTokens: 300,
+				OutputTokens:     50,
+				TotalTokens:      425,
+				Custom:           map[string]float64{"webSearchRequests": 1},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+
+			client := anthropic.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("stub"))
+			var cb func(context.Context, *ai.ModelResponseChunk) error
+			if tc.stream {
+				cb = func(context.Context, *ai.ModelResponseChunk) error { return nil }
+			}
+			resp, err := Generate(t.Context(), client, "anthropic", "claude-haiku-4-5",
+				&ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}},
+				anthropic.MessageNewParams{}, cb)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if diff := cmp.Diff(tc.want, resp.Usage); diff != "" {
+				t.Errorf("Usage mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestGenerateStreamsWhenSDKRefuses pins when a request without a stream
+// callback goes out as a streaming one: exactly when the SDK would refuse it
+// as non-streaming, which is a max_tokens past ten minutes of expected output,
+// or past the model's non-streaming cap, with no request timeout set. Either
+// way the caller gets the same response.
+func TestGenerateStreamsWhenSDKRefuses(t *testing.T) {
+	const (
+		jsonBody = `{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[{"type":"text","text":"Paris"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":20,"output_tokens_details":{"thinking_tokens":15}}}`
+		sseBody  = "event: message_start\n" +
+			`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"usage":{"input_tokens":10,"cache_read_input_tokens":4,"output_tokens":1}}}` + "\n\n" +
+			"event: content_block_start\n" +
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+			"event: content_block_delta\n" +
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Paris"}}` + "\n\n" +
+			"event: content_block_stop\n" +
+			`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+			"event: message_delta\n" +
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20,"output_tokens_details":{"thinking_tokens":15}}}` + "\n\n" +
+			"event: message_stop\n" +
+			`data: {"type":"message_stop"}` + "\n\n"
+	)
+	for _, tc := range []struct {
+		name       string
+		model      string
+		maxTokens  int64
+		opts       []option.RequestOption
+		wantStream bool
+	}{
+		{name: "small max_tokens", model: "claude-haiku-4-5", maxTokens: 1024},
+		{name: "at the ten-minute bound", model: "claude-haiku-4-5", maxTokens: 21333},
+		{name: "past the ten-minute bound", model: "claude-haiku-4-5", maxTokens: 21334, wantStream: true},
+		{name: "past the model's non-streaming cap", model: "claude-opus-4-0", maxTokens: 8193, wantStream: true},
+		{
+			name:      "request timeout set",
+			model:     "claude-haiku-4-5",
+			maxTokens: 64000,
+			opts:      []option.RequestOption{option.WithRequestTimeout(time.Hour)},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotStream bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Stream bool `json:"stream"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decoding request body: %v", err)
+				}
+				gotStream = body.Stream
+				if body.Stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, sseBody)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, jsonBody)
+			}))
+			defer server.Close()
+
+			opts := append([]option.RequestOption{option.WithBaseURL(server.URL), option.WithAPIKey("stub")}, tc.opts...)
+			client := anthropic.NewClient(opts...)
+			input := &ai.ModelRequest{Messages: []*ai.Message{ai.NewUserTextMessage("hi")}}
+			resp, err := Generate(t.Context(), client, "anthropic", tc.model, input,
+				anthropic.MessageNewParams{MaxTokens: tc.maxTokens}, nil)
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if gotStream != tc.wantStream {
+				t.Errorf("request stream = %v, want %v", gotStream, tc.wantStream)
+			}
+			want := &ai.ModelResponse{
+				Message:      ai.NewModelTextMessage("Paris"),
+				FinishReason: ai.FinishReasonStop,
+				Request:      input,
+				Usage: &ai.GenerationUsage{
+					InputTokens:         14,
+					CachedContentTokens: 4,
+					OutputTokens:        5,
+					ThoughtsTokens:      15,
+					TotalTokens:         34,
+				},
+			}
+			if diff := cmp.Diff(want, resp, cmpopts.IgnoreUnexported(ai.ModelResponse{}), cmpopts.IgnoreFields(ai.ModelResponse{}, "Raw")); diff != "" {
+				t.Errorf("Generate() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// A redacted_thinking block is thinking the API encrypted for safety reasons.
+// It must not fail the response, and the next turn must send it back
+// unchanged, after the history has gone through JSON as a stored session does.
+func TestRedactedThinkingRoundTrip(t *testing.T) {
+	var m anthropic.Message
+	if err := json.Unmarshal([]byte(`{
+		"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5",
+		"stop_reason": "end_turn",
+		"content": [
+			{"type": "thinking", "thinking": "Let me think.", "signature": "sig"},
+			{"type": "redacted_thinking", "data": "EmwKAhgB"},
+			{"type": "text", "text": "Done."}
+		],
+		"usage": {"input_tokens": 1, "output_tokens": 2}
+	}`), &m); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	resp, err := toGenkitResponse(&m, 0)
+	if err != nil {
+		t.Fatalf("toGenkitResponse() error = %v", err)
+	}
+	if got := resp.Reasoning(); got != "Let me think." {
+		t.Errorf("Reasoning() = %q, want only the readable thinking", got)
+	}
+
+	var stored ai.Message
+	b, err := json.Marshal(resp.Message)
+	if err != nil {
+		t.Fatalf("marshal message: %v", err)
+	}
+	if err := json.Unmarshal(b, &stored); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	blocks, err := toAnthropicParts(stored.Content)
+	if err != nil {
+		t.Fatalf("toAnthropicParts() error = %v", err)
+	}
+	if got, want := wireJSON(t, blocks[1]), `{"data":"EmwKAhgB","type":"redacted_thinking"}`; got != want {
+		t.Errorf("block = %s, want %s", got, want)
+	}
 }

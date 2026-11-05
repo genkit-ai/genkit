@@ -20,28 +20,62 @@ import asyncio
 import os
 import queue
 import threading
-from unittest.mock import MagicMock, patch
+from collections.abc import AsyncIterator, Callable
+from typing import cast, get_args, get_type_hints
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_google_genai import (
-    EmbeddingTaskType,
-    GeminiConfigSchema,
-    GeminiEmbeddingModels,
+    EmbeddingConfig,
+    GeminiConfig,
+    GeminiImageConfig,
+    GeminiTtsConfig,
+    GemmaConfig,
     GoogleAI,
-    GoogleAIGeminiVersion,
     VertexAI,
-    VertexAIGeminiVersion,
-    VertexEmbeddingModels,
 )
-from genkit_google_genai.google import (
+from genkit_google_genai._evaluators._evaluation import VertexAIEvaluationMetricType
+from genkit_google_genai._google import (
     GOOGLEAI_PLUGIN_NAME,
     VERTEXAI_PLUGIN_NAME,
     GenaiModels,
+    _list_genai_models,
+    _new_gemini,
     googleai_name,
     vertexai_name,
 )
+from genkit_google_genai._models._veo import VeoConfig, VeoModel
+from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
+from google.genai import types as genai_types
 
-from genkit import ActionKind
+from genkit import Document, Genkit, GenkitError, Message, Operation, Part, Role
+
+# TID251: whitebox check that the advertised `customOptions` matches core's
+# null-default-stripping schema helper, which has no public export.
+from genkit._core._schema import custom_options_schema  # noqa: TID251
+from genkit.embedder import EmbedRequest, EmbedResponse
+from genkit.evaluator import BaseDataPoint
+from genkit.model import BackgroundModel, ModelRequest
+from genkit.plugin_api import Action, ActionKind, to_json_schema
+
+
+def _custom_options(action: Action) -> object:
+    """Return the advertised config schema from an action's model metadata."""
+    model_meta = cast('dict[str, object]', action.metadata['model'])
+    return model_meta['customOptions']
+
+
+def _request_config_type(action: Action) -> type:
+    """Return the ModelRequest[T] config parameter from an action fn."""
+    hints = get_type_hints(action._fn)  # noqa: SLF001
+    request_type = hints['request']
+    args = get_args(request_type)
+    if args:
+        return args[0]
+    metadata = getattr(request_type, '__pydantic_generic_metadata__', None) or {}
+    args = metadata.get('args') or ()
+    assert args, f'expected ModelRequest[T], got {request_type!r}'
+    return args[0]
 
 
 def test_googleai_name() -> None:
@@ -53,7 +87,7 @@ def test_googleai_name() -> None:
 def test_vertexai_name() -> None:
     """Test vertexai_name helper function."""
     assert vertexai_name('gemini-2.0-flash') == 'vertexai/gemini-2.0-flash'
-    assert vertexai_name('imagen-3.0-generate-001') == 'vertexai/imagen-3.0-generate-001'
+    assert vertexai_name('gemini-2.5-flash-image') == 'vertexai/gemini-2.5-flash-image'
 
 
 def test_plugin_names() -> None:
@@ -64,7 +98,7 @@ def test_plugin_names() -> None:
 
 def test_googleai_initialization_with_api_key() -> None:
     """Test GoogleAI plugin initializes with API key parameter."""
-    with patch('genkit_google_genai.google.genai.client.Client'):
+    with patch('genkit_google_genai._google.genai.client.Client'):
         plugin = GoogleAI(api_key='test-key')
         assert plugin.name == 'googleai'
         assert plugin._vertexai is False
@@ -73,7 +107,7 @@ def test_googleai_initialization_with_api_key() -> None:
 def test_googleai_initialization_from_env() -> None:
     """Test GoogleAI plugin reads API key from environment."""
     with patch.dict(os.environ, {'GEMINI_API_KEY': 'env-key'}):
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = GoogleAI()
             assert plugin.name == 'googleai'
 
@@ -91,7 +125,7 @@ def test_googleai_initialization_without_api_key() -> None:
 
 def test_vertexai_initialization() -> None:
     """Test VertexAI plugin initializes correctly."""
-    with patch('genkit_google_genai.google.genai.client.Client'):
+    with patch('genkit_google_genai._google.genai.client.Client'):
         plugin = VertexAI(project='test-project', location='us-central1')
         assert plugin.name == 'vertexai'
         assert plugin._vertexai is True
@@ -100,12 +134,100 @@ def test_vertexai_initialization() -> None:
 def test_vertexai_initialization_from_env() -> None:
     """Test VertexAI plugin reads project from environment."""
     with patch.dict(os.environ, {'GCLOUD_PROJECT': 'env-project'}):
-        with patch('genkit_google_genai.google.genai.client.Client'):
+        with patch('genkit_google_genai._google.genai.client.Client'):
             plugin = VertexAI()
             assert plugin.name == 'vertexai'
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_init_skips_evaluators(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """VertexAI(api_key=...) with no project: init() returns no evaluator actions."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        actions = await VertexAI(api_key='k').init()
+    assert not [a for a in actions if a.kind == ActionKind.EVALUATOR]
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_evaluate_says_project_needed(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """ai.evaluate('vertexai/fluency') with no project raises FAILED_PRECONDITION naming the fix."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        ai = Genkit(plugins=[VertexAI(api_key='k')])
+        with pytest.raises(GenkitError) as exc_info:
+            await ai.evaluate(
+                evaluator='vertexai/fluency',
+                dataset=[BaseDataPoint(input='hi', output='hello')],
+            )
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+    assert 'VertexAI(project=...)' in str(exc_info.value)
+    assert 'GOOGLE_CLOUD_PROJECT' in str(exc_info.value)
+    assert 'Application Default Credentials' in str(exc_info.value)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_evaluate_unknown_name_says_not_found(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """ai.evaluate('vertexai/not-a-metric') with no project still says not found."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        ai = Genkit(plugins=[VertexAI(api_key='k')])
+        with pytest.raises(GenkitError) as exc_info:
+            await ai.evaluate(
+                evaluator='vertexai/not-a-metric',
+                dataset=[BaseDataPoint(input='hi', output='hello')],
+            )
+        assert exc_info.value.status == 'NOT_FOUND'
+        assert 'vertexai/not-a-metric' in str(exc_info.value)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_with_api_key_and_no_project_lists_no_evaluators(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """The Dev UI action list for VertexAI(api_key=...) with no project has no evaluators."""
+    mock_list_models.return_value = GenaiModels()
+    with patch.dict(os.environ, {'GCLOUD_PROJECT': '', 'GOOGLE_CLOUD_PROJECT': ''}):
+        plugin = VertexAI(api_key='k')
+        actions = await plugin.list_actions()
+    assert not [a for a in actions if a.kind == ActionKind.EVALUATOR]
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertex_init_does_not_create_a_second_app(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Starting VertexAI(project='p') builds its evaluators without constructing another Genkit app."""
+    mock_list_models.return_value = GenaiModels()
+    plugin = VertexAI(project='p', location='us-central1')
+
+    with patch.object(Genkit, '__init__', side_effect=AssertionError('plugin constructed a second Genkit app')):
+        actions = await plugin.init()
+        resolved = await plugin.resolve(ActionKind.EVALUATOR, 'fluency')
+
+    evaluators = [a for a in actions if a.kind == ActionKind.EVALUATOR]
+    assert sorted(a.name for a in evaluators) == sorted(f'vertexai/{m.lower()}' for m in VertexAIEvaluationMetricType)
+    fluency = next(a for a in evaluators if a.name == 'vertexai/fluency')
+    assert cast('dict[str, object]', fluency.metadata['evaluator'])['evaluatorDisplayName'] == 'Fluency'
+    assert resolved is not None
+    assert resolved.kind == ActionKind.EVALUATOR
+    assert resolved.name == 'vertexai/fluency'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
 @pytest.mark.asyncio
 async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMock) -> None:
     """GoogleAI runtime clients should be cached per event loop."""
@@ -123,10 +245,10 @@ async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMo
     second = plugin._runtime_client()
     assert first is second
 
-    q: queue.Queue[MagicMock] = queue.Queue()
+    q: queue.Queue[object] = queue.Queue()
 
     def _other_thread() -> None:
-        async def _get_client() -> MagicMock:
+        async def _get_client() -> object:
             return plugin._runtime_client()
 
         loop = asyncio.new_event_loop()
@@ -145,97 +267,498 @@ async def test_googleai_runtime_clients_are_loop_local(mock_client_ctor: MagicMo
     assert other_loop_client is not first
 
 
+@patch('genkit_google_genai._google.genai.client.Client')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [None, False, True])
+async def test_googleai_legacy_response_schema_threads_to_gemini_model(
+    mock_client_ctor: MagicMock, legacy_response_schema: bool | None
+) -> None:
+    """The plugin option reaches every GeminiModel GoogleAI constructs, and is off when left out.
+
+    Runs under the event loop because _new_gemini fetches the loop-local client.
+    """
+    plugin = (
+        GoogleAI(api_key='test-key')
+        if legacy_response_schema is None
+        else GoogleAI(api_key='test-key', legacy_response_schema=legacy_response_schema)
+    )
+
+    assert _new_gemini(plugin, 'gemini-2.5-flash')._legacy_response_schema is bool(legacy_response_schema)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('legacy_response_schema', [None, False, True])
+async def test_vertexai_legacy_response_schema_threads_to_gemini_model(
+    mock_client_ctor: MagicMock, legacy_response_schema: bool | None
+) -> None:
+    """The plugin option reaches every GeminiModel VertexAI constructs, and is off when left out.
+
+    Runs under the event loop because _new_gemini fetches the loop-local client.
+    """
+    plugin = (
+        VertexAI(project='test-project')
+        if legacy_response_schema is None
+        else VertexAI(project='test-project', legacy_response_schema=legacy_response_schema)
+    )
+
+    assert _new_gemini(plugin, 'gemini-2.5-flash')._legacy_response_schema is bool(legacy_response_schema)
+
+
 def test_genai_models_container() -> None:
     """Test GenaiModels container initialization."""
     models = GenaiModels()
     assert models.gemini == []
-    assert models.imagen == []
     assert models.embedders == []
     assert models.veo == []
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin resolves model actions."""
     mock_list_models.return_value = GenaiModels()
 
     plugin = GoogleAI(api_key='test-key')
-    action = await plugin.resolve(ActionKind.MODEL, 'googleai/gemini-2.0-flash')
+    action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.0-flash')
 
-    assert action is not None
+    assert isinstance(action, Action)
     assert action.kind == ActionKind.MODEL
     assert action.name == 'googleai/gemini-2.0-flash'
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+def _null_defaults(node: object, path: str = '') -> list[str]:
+    """Paths in a JSON schema that publish ``"default": null``."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in cast('dict[str, object]', node).items():
+            if key == 'default' and value is None:
+                found.append(path)
+            found.extend(_null_defaults(value, f'{path}/{key}'))
+    elif isinstance(node, list):
+        for i, item in enumerate(cast('list[object]', node)):
+            found.extend(_null_defaults(item, f'{path}/{i}'))
+    return found
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
-async def test_googleai_resolve_imagen_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI plugin resolves Imagen image generation models."""
+async def test_gemini_custom_options_publish_no_null_defaults(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """A Dev UI form that prefills defaults must not send every optional field back as null."""
     mock_list_models.return_value = GenaiModels()
 
     plugin = GoogleAI(api_key='test-key')
-    action = await plugin.resolve(ActionKind.MODEL, 'googleai/imagen-3.0-generate-002')
+    action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash')
 
     assert action is not None
-    assert action.kind == ActionKind.MODEL
-    assert action.name == 'googleai/imagen-3.0-generate-002'
+    custom_options = _custom_options(action)
+    assert cast('dict[str, object]', custom_options)['properties']
+    assert _null_defaults(custom_options) == []
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
-async def test_googleai_init_registers_imagen_models(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI init registers Imagen models from dynamic discovery."""
-    models = GenaiModels()
-    models.imagen = ['imagen-3.0-generate-002']
-    mock_list_models.return_value = models
+async def test_googleai_resolve_gemini_image_uses_image_config(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Native Gemini image models validate the image config schema."""
+    mock_list_models.return_value = GenaiModels()
 
     plugin = GoogleAI(api_key='test-key')
-    actions = await plugin.init()
+    action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash-image')
 
-    imagen_actions = [a for a in actions if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
-    assert imagen_actions[0].kind == ActionKind.MODEL
+    assert isinstance(action, Action)
+    assert _custom_options(action) == custom_options_schema(GeminiImageConfig)
+    assert _request_config_type(action) is GeminiImageConfig
+    assert action.config_schema is GeminiImageConfig
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
-async def test_googleai_list_actions_includes_imagen(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI list_actions includes Imagen models."""
-    models = GenaiModels()
-    models.imagen = ['imagen-3.0-generate-002']
-    mock_list_models.return_value = models
+@pytest.mark.parametrize(
+    ('model_name', 'config_type'),
+    [
+        ('gemini-2.0-flash', GeminiConfig),
+        ('gemini-2.5-flash-preview-tts', GeminiTtsConfig),
+        ('gemini-2.5-flash-image', GeminiImageConfig),
+        ('gemma-3-12b-it', GemmaConfig),
+    ],
+)
+async def test_googleai_resolve_types_family_config(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    model_name: str,
+    config_type: type,
+) -> None:
+    """Each family action opts into ModelRequest[FamilyConfig]."""
+    mock_list_models.return_value = GenaiModels()
 
     plugin = GoogleAI(api_key='test-key')
-    actions_list = await plugin.list_actions()
+    action = await plugin.resolve(ActionKind.MODEL, model_name)
 
-    imagen_actions = [a for a in actions_list if 'imagen' in a.name]
-    assert len(imagen_actions) == 1
-    assert imagen_actions[0].name == 'googleai/imagen-3.0-generate-002'
+    assert isinstance(action, Action)
+    assert _request_config_type(action) is config_type
+    assert action._config_schema is config_type
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model_name', 'config_type'),
+    [
+        ('gemini-2.0-flash', GeminiConfig),
+        ('gemini-2.5-flash-preview-tts', GeminiTtsConfig),
+        ('gemini-2.5-flash-image', GeminiImageConfig),
+        ('gemma-3-12b-it', GemmaConfig),
+    ],
+)
+async def test_vertexai_resolve_types_family_config(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    model_name: str,
+    config_type: type,
+) -> None:
+    """Vertex family actions opt into ModelRequest[FamilyConfig] the same way."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.MODEL, model_name)
+
+    assert isinstance(action, Action)
+    assert _request_config_type(action) is config_type
+    assert action._config_schema is config_type
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_gemma_action_accepts_temperature_3(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Gemma's schema accepts temperature=3.0; falling through to Gemini would reject it."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.MODEL, 'gemma-3-12b-it')
+    assert action is not None
+    assert isinstance(action, Action)
+
+    with patch('genkit_google_genai._google.GeminiModel.generate', new_callable=AsyncMock) as mock_generate:
+        await action.run({
+            'messages': [{'role': 'user', 'content': [{'text': 'hi'}]}],
+            'config': {'temperature': 3.0},
+        })
+        called = mock_generate.await_args
+        assert called is not None
+        request = called.args[0]
+        assert request.config.temperature == 3.0
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_start_types_family_config(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Veo start is ModelRequest[VeoConfig] so Action keeps aspectRatio / durationSeconds."""
+    mock_list_models.return_value = GenaiModels()
+
+    for plugin, name in (
+        (GoogleAI(api_key='test-key'), 'veo-3.1-generate-preview'),
+        (VertexAI(project='test-project'), 'veo-3.1-generate-001'),
+    ):
+        action_model = await plugin.resolve(ActionKind.BACKGROUND_MODEL, name)
+        assert isinstance(action_model, BackgroundModel)
+        action = action_model.start_action
+        assert _request_config_type(action) is VeoConfig
+        assert action._config_schema is VeoConfig
+
+        with patch('genkit_google_genai._google.VeoModel.start', new_callable=AsyncMock) as mock_start:
+            await action.run({
+                'messages': [{'role': 'user', 'content': [{'text': 'a cat walking'}]}],
+                'config': {
+                    'aspectRatio': '16:9',
+                    'durationSeconds': 5,
+                    'baseUrl': 'https://request.example',
+                    'apiVersion': 'v1',
+                    'location': 'eu',
+                },
+            })
+            called = mock_start.await_args
+            assert called is not None
+            request = called.args[0]
+            assert isinstance(request.config, VeoConfig)
+            assert request.config.aspect_ratio == '16:9'
+            assert request.config.duration_seconds == 5
+            assert request.config.base_url == 'https://request.example'
+            assert request.config.api_version == 'v1'
+            assert request.config.location == 'eu'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_action_run_dumps_leftover_and_stamps(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Action.run camelCase + extra reaches generate_videos; start stamps the action key."""
+    mock_list_models.return_value = GenaiModels()
+    op = MagicMock()
+    op.name = 'operations/1'
+    op.done = False
+    mock_client.return_value.aio.models.generate_videos = AsyncMock(return_value=op)
+
+    plugin = VertexAI(project='test-project')
+    action_model = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'veo-3.1-generate-001')
+    assert isinstance(action_model, BackgroundModel)
+    action = action_model.start_action
+
+    started = await action.run({
+        'messages': [{'role': 'user', 'content': [{'text': 'a cat walking'}]}],
+        'config': {'aspectRatio': '16:9', 'durationSeconds': 5, 'extra': {'parameters': {'fooBar': 1}}},
+    })
+
+    called = mock_client.return_value.aio.models.generate_videos.await_args
+    assert called is not None
+    cfg = called.kwargs['config']
+    assert cfg.aspect_ratio == '16:9'
+    assert cfg.duration_seconds == 5
+    assert cfg.http_options is not None
+    assert cfg.http_options.extra_body == {'parameters': {'fooBar': 1}}
+    assert started.response.action == '/background-model/vertexai/veo-3.1-generate-001'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_action_run_rejects_bad_duration(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Action rejects durationSeconds='nope' before generate_videos."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action_model = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'veo-3.1-generate-001')
+    assert isinstance(action_model, BackgroundModel)
+    action = action_model.start_action
+
+    with pytest.raises(GenkitError) as exc_info:
+        await action.run({
+            'messages': [{'role': 'user', 'content': [{'text': 'a clip'}]}],
+            'config': {'durationSeconds': 'nope'},
+        })
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    mock_client.return_value.aio.models.generate_videos.assert_not_called()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_check_is_typed(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Check is Operation in, Operation out — no config to coerce."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    # The registry files check with the start action; the plugin resolves only the start key.
+    action = await Genkit(plugins=[plugin])._registry.resolve_action_by_key(
+        '/check-operation/vertexai/veo-3.1-generate-001/check'
+    )
+    assert action is not None
+    hints = get_type_hints(action._fn)  # noqa: SLF001
+    assert hints['op'] is Operation
+    assert hints['return'] is Operation
+
+
+@pytest.mark.asyncio
+async def test_list_genai_models_googleai_skips_imagen() -> None:
+    """A predict-only ``imagen-`` entry lands in no bucket."""
+
+    def _model(name: str, actions: list[str]) -> MagicMock:
+        item = MagicMock()
+        item.name = name
+        item.supported_actions = actions
+        item.description = ''
+        return item
+
+    async def model_pager() -> AsyncIterator[MagicMock]:
+        for model in [
+            _model('models/gemini-2.5-flash', ['generateContent']),
+            _model('models/imagen-4.0-generate-001', ['predict']),
+            _model('models/imagen-4.0-ultra-generate-001', ['predict', 'generateContent']),
+        ]:
+            yield model
+
+    client = MagicMock()
+    client.aio.models.list = AsyncMock(return_value=model_pager())
+    catalog = await _list_genai_models(client, is_vertex=False)
+    assert vars(catalog) == {'gemini': ['gemini-2.5-flash'], 'embedders': [], 'veo': []}
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('backend', ['googleai', 'vertexai'])
+async def test_list_actions_never_advertise_imagen(mock_client: MagicMock, backend: str) -> None:
+    """An ``imagen-`` id served by the API reaches neither list_actions nor init."""
+
+    def _model(name: str, actions: list[str] | None) -> MagicMock:
+        item = MagicMock()
+        item.name = name
+        item.supported_actions = actions
+        item.description = ''
+        return item
+
+    if backend == 'googleai':
+        plugin: GoogleAI | VertexAI = GoogleAI(api_key='test-key')
+        listing = [
+            _model('models/gemini-2.5-flash', ['generateContent']),
+            _model('models/imagen-4.0-generate-001', ['predict']),
+        ]
+    else:
+        plugin = VertexAI(project='test-project')
+        listing = [
+            _model('publishers/google/models/gemini-2.5-flash', None),
+            _model('publishers/google/models/imagen-4.0-generate-001', None),
+        ]
+
+    async def model_pager() -> AsyncIterator[MagicMock]:
+        for model in listing:
+            yield model
+
+    mock_client.return_value.aio.models.list = AsyncMock(side_effect=model_pager)
+
+    listed = await plugin.list_actions()
+    registered = await plugin.init()
+
+    # The Gemini id proves the listing reached discovery, so the imagen
+    # assertions below are not passing on an empty catalog.
+    assert any('gemini-2.5-flash' in a.name for a in listed)
+    assert any('gemini-2.5-flash' in a.name for a in registered)
+    assert not any('imagen' in a.name for a in listed)
+    assert not any('imagen' in a.name for a in registered)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_veo_listing_has_input_schema(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """A listed Veo model carries ModelRequest[VeoConfig] as input_schema and Operation as output_schema."""
+    catalog = GenaiModels()
+    catalog.veo = ['veo-3.1-generate-001']
+    mock_list_models.return_value = catalog
+
+    listed = await VertexAI(project='test-project').list_actions()
+
+    [veo] = [a for a in listed if a.name == 'vertexai/veo-3.1-generate-001']
+    assert veo.kind == ActionKind.BACKGROUND_MODEL
+    assert veo.input_schema == to_json_schema(ModelRequest[VeoConfig])
+    assert veo.output_schema == to_json_schema(Operation)
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_embedder(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
-    """Test GoogleAI plugin resolves embedder actions."""
+    """GoogleAI and VertexAI embedder actions declare EmbeddingConfig and backend-specific Dev UI customOptions."""
     mock_list_models.return_value = GenaiModels()
 
-    plugin = GoogleAI(api_key='test-key')
-    action = await plugin.resolve(ActionKind.EMBEDDER, 'googleai/gemini-embedding-001')
+    google_plugin = GoogleAI(api_key='test-key')
+    google_action = await google_plugin.resolve(ActionKind.EMBEDDER, 'gemini-embedding-001')
 
-    assert action is not None
-    assert action.kind == ActionKind.EMBEDDER
-    assert action.name == 'googleai/gemini-embedding-001'
+    assert isinstance(google_action, Action)
+    assert google_action.kind == ActionKind.EMBEDDER
+    assert google_action.name == 'googleai/gemini-embedding-001'
+    assert google_action.config_schema is EmbeddingConfig
+    assert _request_config_type(google_action) is EmbeddingConfig
+    google_embed_meta = cast('dict[str, object]', google_action.metadata['embedder'])
+    google_schema = cast('dict[str, object]', google_embed_meta['customOptions'])
+    google_props = cast('dict[str, dict[str, object]]', google_schema['properties'])
+    assert 'taskType' in google_props
+    assert 'mimeType' not in google_props
+    assert 'autoTruncate' not in google_props
+    assert all('default' not in prop for prop in google_props.values())
+
+    vertex_plugin = VertexAI(project='test-project', location='us-central1')
+    vertex_action = await vertex_plugin.resolve(ActionKind.EMBEDDER, 'text-embedding-005')
+
+    assert isinstance(vertex_action, Action)
+    assert vertex_action.config_schema is EmbeddingConfig
+    assert _request_config_type(vertex_action) is EmbeddingConfig
+    vertex_embed_meta = cast('dict[str, object]', vertex_action.metadata['embedder'])
+    vertex_schema = cast('dict[str, object]', vertex_embed_meta['customOptions'])
+    vertex_props = cast('dict[str, dict[str, object]]', vertex_schema['properties'])
+    assert 'mimeType' in vertex_props
+    assert 'autoTruncate' in vertex_props
+    assert all('default' not in prop for prop in vertex_props.values())
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_applies_a_typed_ref_config(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """ai.embed() merges a typed ref config (including version) into the API call."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    ref = GoogleAI.embedder(
+        'gemini-embedding-001',
+        config=EmbeddingConfig(
+            task_type='RETRIEVAL_QUERY',
+            output_dimensionality=256,
+            version='gemini-embedding-2',
+        ),
+    )
+
+    embeddings = await ai.embed(embedder=ref, content='hello')
+
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['model'] == 'gemini-embedding-2'
+    assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
+    assert call.kwargs['config'].output_dimensionality == 256
+    assert [e.embedding for e in embeddings] == [[0.5]]
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'call_config',
+    [
+        EmbeddingConfig(task_type='RETRIEVAL_QUERY'),
+        {'task_type': 'RETRIEVAL_QUERY'},
+        {'taskType': 'RETRIEVAL_QUERY'},
+    ],
+    ids=['typed_call', 'snake_dict_call', 'camel_dict_call'],
+)
+async def test_embed_call_config_overrides_the_ref_config_in_either_spelling(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    call_config: EmbeddingConfig | dict[str, object],
+) -> None:
+    """A per-call EmbeddingConfig or dict (snake_case or camelCase) overrides the ref's EmbeddingConfig."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    ref = GoogleAI.embedder(
+        'gemini-embedding-001',
+        config=EmbeddingConfig(task_type='RETRIEVAL_DOCUMENT'),
+    )
+
+    await ai.embed(embedder=ref, content='hello', config=call_config)
+
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_googleai_resolve_non_model_returns_none(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test GoogleAI plugin returns None for unsupported action kinds."""
@@ -246,79 +769,764 @@ async def test_googleai_resolve_non_model_returns_none(mock_list_models: MagicMo
     assert action is None
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_vertexai_resolve_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test VertexAI plugin resolves model actions."""
     mock_list_models.return_value = GenaiModels()
 
     plugin = VertexAI(project='test-project')
-    action = await plugin.resolve(ActionKind.MODEL, 'vertexai/gemini-2.0-flash')
+    action = await plugin.resolve(ActionKind.MODEL, 'gemini-2.0-flash')
 
-    assert action is not None
+    assert isinstance(action, Action)
     assert action.kind == ActionKind.MODEL
     assert action.name == 'vertexai/gemini-2.0-flash'
 
 
-@patch('genkit_google_genai.google.genai.client.Client')
-@patch('genkit_google_genai.google._list_genai_models')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_resolve_virtual_try_on_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Virtual Try-On resolves to its own MODEL action, not the Gemini path."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.MODEL, 'virtual-try-on-001')
+
+    assert isinstance(action, Action)
+    assert action.kind == ActionKind.MODEL
+    assert action.name == 'vertexai/virtual-try-on-001'
+    assert _request_config_type(action) is VirtualTryOnConfig
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_virtual_try_on_is_vertex_only(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Google AI has no Virtual Try-On backend, so it neither resolves nor lists it."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+
+    assert await plugin.resolve(ActionKind.MODEL, 'virtual-try-on-001') is None
+    assert not [a for a in await plugin.list_actions() if 'virtual-try-on' in a.name]
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_registers_virtual_try_on_without_discovery(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """The curated catalog registers and advertises the model even when discovery is empty."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    actions = await plugin.init()
+    metadata = await plugin.list_actions()
+
+    registered = [a for a in actions if 'virtual-try-on' in a.name]
+    assert [a.name for a in registered] == ['vertexai/virtual-try-on-001']
+    assert registered[0].kind == ActionKind.MODEL
+
+    advertised = [a for a in metadata if 'virtual-try-on' in a.name]
+    assert [a.name for a in advertised] == ['vertexai/virtual-try-on-001']
+    assert isinstance(advertised[0], Action)
+    assert advertised[0].kind == ActionKind.MODEL
+
+
+@patch('genkit_google_genai._models._virtual_try_on.genai.Client')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_virtual_try_on_generate_applies_context_secret(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    mock_try_on_client: MagicMock,
+) -> None:
+    """A tenant key on context.secrets reaches a request-scoped Vertex client, not the plugin one."""
+    mock_list_models.return_value = GenaiModels()
+    request_client = mock_try_on_client.return_value
+    request_client.aio.models.recontext_image = AsyncMock(
+        return_value=genai_types.RecontextImageResponse(
+            generated_images=[
+                genai_types.GeneratedImage(image=genai_types.Image(gcs_uri='gs://out/1.png', mime_type='image/png'))
+            ]
+        )
+    )
+    ai = Genkit(plugins=[VertexAI(project='plugin-project')])
+
+    response = await ai.generate(
+        model='vertexai/virtual-try-on-001',
+        messages=[
+            Message(
+                role=Role.USER,
+                content=[
+                    Part.from_media('gs://in/person.png', metadata={'type': 'personImage'}),
+                    Part.from_media('gs://in/shirt.png', metadata={'type': 'productImage'}),
+                ],
+            )
+        ],
+        context={'secrets': {'api_key': 'tenant-key'}},
+    )
+
+    kwargs = mock_try_on_client.call_args.kwargs
+    assert kwargs['api_key'] == 'tenant-key'
+    assert kwargs['vertexai'] is True
+    assert 'project' not in kwargs
+    mock_client.return_value.aio.models.recontext_image.assert_not_called()
+    request_client.aio.models.recontext_image.assert_awaited_once()
+    assert response.message is not None
+    media = response.message.content[0].media
+    assert media is not None
+    assert media.url == 'gs://out/1.png'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'model_id',
+    [
+        'imagegeneration@006',
+        'imagetext@001',
+        'imagen-3.0-generate-002',
+        'imagen-4.0-generate-001',
+        'lyria-002',
+        'deep-research-pro-preview',
+        'gemini-embedding-001',
+        'models/deep-research-pro-preview',
+        'publishers/google/models/deep-research-pro-preview',
+    ],
+)
+async def test_vertexai_unroutable_ids_fail_closed(
+    mock_list_models: MagicMock, mock_client: MagicMock, model_id: str
+) -> None:
+    """Ids with no generate path here resolve to nothing, not to Gemini."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.MODEL, model_id)
+
+    assert action is None
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'model_id',
+    [
+        'virtual-try-on-001',
+        'imagegeneration@006',
+        'imagetext@001',
+        'imagen-3.0-generate-002',
+        'imagen-4.0-generate-001',
+        'deep-research-pro-preview',
+        'gemini-embedding-001',
+        'models/deep-research-pro-preview',
+        'publishers/google/models/deep-research-pro-preview',
+    ],
+)
+async def test_googleai_unroutable_ids_fail_closed(
+    mock_list_models: MagicMock, mock_client: MagicMock, model_id: str
+) -> None:
+    """Ids with no generate path here resolve to nothing, not to Gemini."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.MODEL, model_id)
+
+    assert action is None
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_googleai_resolve_veo_as_model_returns_none(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Veo is background-only; resolving it as MODEL must not build a Gemini action."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.MODEL, 'veo-3.1-generate-preview')
+
+    assert action is None
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_resolve_veo_as_model_returns_none(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Veo is background-only; resolving it as MODEL must not build a Gemini action."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    action = await plugin.resolve(ActionKind.MODEL, 'veo-3.1-generate-001')
+
+    assert action is None
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_resolve_model_finds_veo_as_background(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """resolve(MODEL, veo) is None so resolve_model can see the background start action."""
+    mock_list_models.return_value = GenaiModels()
+
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    action = await ai._registry.resolve_model('googleai/veo-3.1-generate-preview')
+
+    assert action is not None
+    assert action.kind == ActionKind.BACKGROUND_MODEL
+    assert action.name == 'googleai/veo-3.1-generate-preview'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('make_plugin', 'name'),
+    [
+        (lambda: GoogleAI(api_key='test-key'), 'googleai/veo-2.0-generate-001'),
+        (lambda: VertexAI(project='test-project'), 'vertexai/veo-3.0-generate-001'),
+    ],
+)
+async def test_resolve_model_finds_veo_outside_the_catalog(
+    mock_list_models: MagicMock, mock_client: MagicMock, make_plugin: Callable[[], GoogleAI | VertexAI], name: str
+) -> None:
+    """Veo routing is the ``veo-`` prefix, so an id the catalog no longer lists still resolves."""
+    mock_list_models.return_value = GenaiModels()
+
+    ai = Genkit(plugins=[make_plugin()])
+    action = await ai._registry.resolve_model(name)
+
+    assert action is not None
+    assert action.kind == ActionKind.BACKGROUND_MODEL
+    assert action.name == name
+
+
+@patch('genkit_google_genai._models._veo.genai.Client')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_generate_and_check_operation_apply_veo_context_and_config(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    mock_veo_client: MagicMock,
+) -> None:
+    """The public background calls keep tenant auth and routing on both requests."""
+    mock_list_models.return_value = GenaiModels()
+    sdk_op = MagicMock()
+    sdk_op.name = 'operations/1'
+    sdk_op.done = False
+    sdk_op.error = None
+    sdk_op.response = None
+    request_client = mock_veo_client.return_value
+    request_client.aio.models.generate_videos = AsyncMock(return_value=sdk_op)
+    request_client.aio.operations.get = AsyncMock(return_value=sdk_op)
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    context = {'secrets': {'api_key': 'tenant-key'}}
+
+    operation = await ai.generate_operation(
+        model='googleai/veo-3.1-generate-preview',
+        prompt='a cat walking',
+        config={'aspectRatio': '16:9', 'baseUrl': 'https://request.example', 'apiVersion': 'v1'},
+        context=context,
+    )
+
+    start_kwargs = mock_veo_client.call_args.kwargs
+    assert start_kwargs['api_key'] == 'tenant-key'
+    assert start_kwargs['http_options'].base_url == 'https://request.example'
+    assert start_kwargs['http_options'].api_version == 'v1'
+    start_call = request_client.aio.models.generate_videos.await_args
+    assert start_call is not None
+    start_config = start_call.kwargs['config']
+    assert start_config.aspect_ratio == '16:9'
+    assert start_config.http_options is None
+
+    await ai.check_operation(
+        operation,
+        context=context,
+        config={'base_url': 'https://poll.example', 'api_version': 'v1beta'},
+    )
+
+    check_kwargs = mock_veo_client.call_args.kwargs
+    assert check_kwargs['api_key'] == 'tenant-key'
+    assert check_kwargs['http_options'].base_url == 'https://poll.example'
+    assert check_kwargs['http_options'].api_version == 'v1beta'
+    request_client.aio.operations.get.assert_awaited_once()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_resolve_veo_background_model(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Vertex Veo resolves as a background model with a check action."""
+    mock_list_models.return_value = GenaiModels()
+
+    plugin = VertexAI(project='test-project')
+    start = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'veo-3.1-generate-001')
+    check = await Genkit(plugins=[plugin])._registry.resolve_action_by_key(
+        '/check-operation/vertexai/veo-3.1-generate-001/check'
+    )
+
+    assert start is not None
+    assert start.kind == ActionKind.BACKGROUND_MODEL
+    assert start.name == 'vertexai/veo-3.1-generate-001'
+    model_meta = cast('dict[str, object]', start.metadata['model'])
+    supports = cast('dict[str, object]', model_meta['supports'])
+    assert supports['longRunning'] is True
+    assert check is not None
+    assert check.kind == ActionKind.CHECK_OPERATION
+    assert check.name == 'vertexai/veo-3.1-generate-001/check'
+
+
+@patch('genkit_google_genai._google.create_vertex_evaluators')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_vertexai_init_registers_veo_as_background(
+    mock_list_models: MagicMock, mock_client: MagicMock, mock_evaluators: MagicMock
+) -> None:
+    """Vertex init registers Veo start/check, never a blocking MODEL action."""
+    models = GenaiModels()
+    models.veo = ['veo-3.1-generate-001']
+    mock_list_models.return_value = models
+    mock_evaluators.return_value = []
+
+    plugin = VertexAI(project='test-project')
+    actions = await plugin.init()
+
+    # init returns the BackgroundModel itself; the registry files start + check.
+    veo = [a for a in actions if 'veo' in a.name]
+    assert len(veo) == 1
+    assert isinstance(veo[0], BackgroundModel)
+    assert {a.kind for a in veo[0].actions} == {ActionKind.BACKGROUND_MODEL, ActionKind.CHECK_OPERATION}
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('backend', 'veo_id'),
+    [
+        ('googleai', 'veo-3.1-generate-preview'),
+        ('vertexai', 'veo-3.1-generate-001'),
+    ],
+)
+async def test_list_actions_advertises_veo_as_background(
+    mock_list_models: MagicMock, mock_client: MagicMock, backend: str, veo_id: str
+) -> None:
+    """Each plugin lists its own Veo id with the kind that resolve() actually serves."""
+    models = GenaiModels()
+    models.veo = [veo_id]
+    mock_list_models.return_value = models
+
+    if backend == 'googleai':
+        plugin: GoogleAI | VertexAI = GoogleAI(api_key='test-key')
+    else:
+        plugin = VertexAI(project='test-project')
+    actions = await plugin.list_actions()
+
+    veo_entries = [a for a in actions if 'veo' in a.name]
+    assert len(veo_entries) == 1
+    assert veo_entries[0].name == f'{backend}/{veo_id}'
+    assert veo_entries[0].kind == ActionKind.BACKGROUND_MODEL
+
+
+@pytest.mark.asyncio
+async def test_list_genai_models_vertex_skips_substring_veo_and_retired_image() -> None:
+    """Discovery buckets on the ``veo-`` prefix, not a ``veo`` substring, and skips ids served from curated lists."""
+
+    def _model(name: str) -> MagicMock:
+        item = MagicMock()
+        item.name = name
+        item.supported_actions = None
+        item.description = ''
+        return item
+
+    async def model_pager() -> AsyncIterator[MagicMock]:
+        for model in [
+            _model('publishers/google/models/gemini-2.5-flash'),
+            _model('publishers/google/models/veo-3.1-generate-001'),
+            _model('publishers/google/models/braveo-lab'),
+            _model('publishers/google/models/imagegeneration@006'),
+            _model('publishers/google/models/virtual-try-on-001'),
+            _model('publishers/google/models/imagetext@001'),
+            _model('publishers/google/models/imagen-3.0-generate-002'),
+            _model('publishers/google/models/imagen-4.0-generate-001'),
+        ]:
+            yield model
+
+    client = MagicMock()
+    client.aio.models.list = AsyncMock(return_value=model_pager())
+    catalog = await _list_genai_models(client, is_vertex=True)
+    assert vars(catalog) == {
+        'gemini': ['gemini-2.5-flash'],
+        'embedders': [],
+        'veo': ['veo-3.1-generate-001'],
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_genai_models_async_does_not_block_event_loop() -> None:
+    """Model discovery uses the SDK's asynchronous client surface."""
+
+    async def empty_models() -> AsyncIterator[MagicMock]:
+        if False:
+            yield MagicMock()
+
+    client = MagicMock()
+    client.aio.models.list = AsyncMock(return_value=empty_models())
+
+    result = await _list_genai_models(client, is_vertex=False)
+
+    client.aio.models.list.assert_awaited_once_with()
+    assert result.gemini == []
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_veo_start_stamps_operation_action_key(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """Start and check stamp ``/background-model/{name}`` so a later check can resolve."""
+    mock_list_models.return_value = GenaiModels()
+    plugin = VertexAI(project='test-project')
+    start_model = await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'veo-3.1-generate-001')
+    assert isinstance(start_model, BackgroundModel)
+    start = start_model.start_action
+    check = await Genkit(plugins=[plugin])._registry.resolve_action_by_key(
+        '/check-operation/vertexai/veo-3.1-generate-001/check'
+    )
+    assert check is not None
+
+    request = ModelRequest(messages=[Message(role=Role.USER, content=[Part.from_text('a clip')])])
+    with patch.object(VeoModel, 'start', new=AsyncMock(return_value=Operation(id='ops/1'))):
+        started = await start.run(request)
+    assert started.response.action == '/background-model/vertexai/veo-3.1-generate-001'
+
+    with patch.object(VeoModel, 'check', new=AsyncMock(return_value=Operation(id='ops/1'))):
+        checked = await check.run(Operation(id='ops/1'))
+    assert checked.response.action == '/background-model/vertexai/veo-3.1-generate-001'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
 @pytest.mark.asyncio
 async def test_vertexai_resolve_embedder(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
     """Test VertexAI plugin resolves embedder actions."""
     mock_list_models.return_value = GenaiModels()
 
     plugin = VertexAI(project='test-project')
-    action = await plugin.resolve(ActionKind.EMBEDDER, 'vertexai/gemini-embedding-001')
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'gemini-embedding-001')
 
     assert action is not None
     assert action.kind == ActionKind.EMBEDDER
     assert action.name == 'vertexai/gemini-embedding-001'
 
 
-def test_embedding_task_types() -> None:
-    """Test EmbeddingTaskType enum values."""
-    assert EmbeddingTaskType.RETRIEVAL_QUERY is not None
-    assert EmbeddingTaskType.RETRIEVAL_DOCUMENT is not None
-    assert EmbeddingTaskType.SEMANTIC_SIMILARITY is not None
-    assert EmbeddingTaskType.CLASSIFICATION is not None
-    assert EmbeddingTaskType.CLUSTERING is not None
+def test_importing_embedding_task_type_raises() -> None:
+    """from genkit_google_genai import EmbeddingTaskType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import EmbeddingTaskType  # type: ignore[attr-defined]  # noqa: F401
 
 
-def test_gemini_embedding_models_enum() -> None:
-    """Test GeminiEmbeddingModels enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(GeminiEmbeddingModels)) > 0
+def test_importing_vertex_ai_evaluation_metric_type_raises() -> None:
+    """from genkit_google_genai import VertexAIEvaluationMetricType raises ImportError."""
+    with pytest.raises(ImportError):
+        from genkit_google_genai import VertexAIEvaluationMetricType  # type: ignore[attr-defined]  # noqa: F401
 
 
-def test_vertex_embedding_models_enum() -> None:
-    """Test VertexEmbeddingModels enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(VertexEmbeddingModels)) > 0
-
-
-def test_googleai_gemini_version_enum() -> None:
-    """Test GoogleAIGeminiVersion enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(GoogleAIGeminiVersion)) > 0
-
-
-def test_vertexai_gemini_version_enum() -> None:
-    """Test VertexAIGeminiVersion enum has values."""
-    # Check that the enum has at least one value
-    assert len(list(VertexAIGeminiVersion)) > 0
-
-
-def test_gemini_config_schema() -> None:
-    """Test GeminiConfigSchema can be instantiated."""
-    config = GeminiConfigSchema(temperature=0.7, max_output_tokens=1000)
+def test_gemini_config() -> None:
+    """Test GeminiConfig can be instantiated."""
+    config = GeminiConfig(temperature=0.7, max_output_tokens=1000)
     assert config.temperature == 0.7
     assert config.max_output_tokens == 1000
 
 
-def test_gemini_config_schema_defaults() -> None:
-    """Test GeminiConfigSchema has proper defaults."""
-    config = GeminiConfigSchema()
+def test_gemini_config_defaults() -> None:
+    """Test GeminiConfig has proper defaults."""
+    config = GeminiConfig()
     # All fields should be optional with None defaults
     assert config.temperature is None
     assert config.max_output_tokens is None
+
+
+def _gemini_reply(text: str) -> genai_types.GenerateContentResponse:
+    return genai_types.GenerateContentResponse(
+        candidates=[
+            genai_types.Candidate(
+                content=genai_types.Content(parts=[genai_types.Part(text=text)], role='model'),
+                finish_reason=genai_types.FinishReason.STOP,
+            )
+        ]
+    )
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_generate_googleai_model_resolves_unchanged(mock_list_models: MagicMock, mock_client: MagicMock) -> None:
+    """`googleai/gemini-2.5-flash` still resolves and sends `gemini-2.5-flash` to Gemini (control)."""
+    mock_list_models.return_value = GenaiModels()
+    mock_client.return_value.aio.models.generate_content = AsyncMock(return_value=_gemini_reply('hello'))
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+
+    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='hi')
+    action = await ai.lookup_model('googleai/gemini-2.5-flash')
+
+    assert response.text == 'hello'
+    sent = mock_client.return_value.aio.models.generate_content.await_args
+    assert sent is not None
+    assert sent.kwargs['model'] == 'gemini-2.5-flash'
+    assert action is not None
+    assert action.name == 'googleai/gemini-2.5-flash'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_googleai_init_and_resolve_build_the_same_action_name(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """`googleai/gemini-2.5-flash` from init and resolve is the same name and sends the bare id."""
+    listed = GenaiModels()
+    listed.gemini = ['gemini-2.5-flash']
+    mock_list_models.return_value = listed
+    mock_client.return_value.aio.models.generate_content = AsyncMock(return_value=_gemini_reply('hello'))
+    plugin = GoogleAI(api_key='test-key')
+
+    init_action = next(a for a in await plugin.init() if a.name == 'googleai/gemini-2.5-flash')
+    resolved = await plugin.resolve(ActionKind.MODEL, 'gemini-2.5-flash')
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='hi')
+
+    assert init_action.name == 'googleai/gemini-2.5-flash'
+    assert resolved is not None
+    assert resolved.name == 'googleai/gemini-2.5-flash'
+    assert response.text == 'hello'
+    sent = mock_client.return_value.aio.models.generate_content.await_args
+    assert sent is not None
+    assert sent.kwargs['model'] == 'gemini-2.5-flash'
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_generate_vertexai_tuned_endpoint_keeps_endpoints_segment(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """`vertexai/endpoints/123` registers as `vertexai/endpoints/123` and calls endpoint 123."""
+    mock_list_models.return_value = GenaiModels()
+    mock_client.return_value.vertexai = True
+    mock_client.return_value.aio.models.generate_content = AsyncMock(return_value=_gemini_reply('tuned'))
+    ai = Genkit(plugins=[VertexAI(project='test-project', location='us-central1')])
+
+    response = await ai.generate(model='vertexai/endpoints/123', prompt='hi')
+    action = await ai.lookup_model('vertexai/endpoints/123')
+
+    assert response.text == 'tuned'
+    sent = mock_client.return_value.aio.models.generate_content.await_args
+    assert sent is not None
+    assert sent.kwargs['model'].endswith('endpoints/123')
+    assert action is not None
+    assert action.name == 'vertexai/endpoints/123'
+
+
+def _pending_veo_client(mock_veo_client: MagicMock) -> MagicMock:
+    sdk_op = MagicMock()
+    sdk_op.name = 'operations/1'
+    sdk_op.done = False
+    sdk_op.error = None
+    sdk_op.response = None
+    request_client = mock_veo_client.return_value
+    request_client.aio.models.generate_videos = AsyncMock(return_value=sdk_op)
+    request_client.aio.operations.get = AsyncMock(return_value=sdk_op)
+    return request_client
+
+
+@patch('genkit_google_genai._models._veo.genai.Client')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_generate_operation_googleai_veo_handle_has_one_prefix(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    mock_veo_client: MagicMock,
+) -> None:
+    """A Veo job's handle is `/background-model/googleai/veo-…` after start and check, never doubled."""
+    mock_list_models.return_value = GenaiModels()
+    _pending_veo_client(mock_veo_client)
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+    context = {'secrets': {'api_key': 'tenant-key'}}
+
+    operation = await ai.generate_operation(model='googleai/veo-3.1-generate-preview', prompt='a cat', context=context)
+    checked = await ai.check_operation(operation, context=context)
+
+    assert operation.action == '/background-model/googleai/veo-3.1-generate-preview'
+    assert checked.action == '/background-model/googleai/veo-3.1-generate-preview'
+    assert checked.id == 'operations/1'
+
+
+@patch('genkit_google_genai._models._veo.genai.Client')
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_check_operation_saved_veo_handle_checks_on_a_fresh_app(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    mock_veo_client: MagicMock,
+) -> None:
+    """A Veo handle saved as `/background-model/googleai/veo-…` checks on a new `Genkit` that never started it."""
+    mock_list_models.return_value = GenaiModels()
+    request_client = _pending_veo_client(mock_veo_client)
+    saved = Operation(id='operations/1', done=False, action='/background-model/googleai/veo-3.1-generate-preview')
+    ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
+
+    checked = await ai.check_operation(saved, context={'secrets': {'api_key': 'tenant-key'}})
+
+    assert checked.id == 'operations/1'
+    assert checked.action == '/background-model/googleai/veo-3.1-generate-preview'
+    request_client.aio.operations.get.assert_awaited_once()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_call_config_keeps_the_ref_fields_it_does_not_set(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """A per-call config overrides only the fields it names; the ref's other settings still reach the call."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    ref = GoogleAI.embedder(
+        'gemini-embedding-001',
+        config=EmbeddingConfig(output_dimensionality=256, version='gemini-embedding-2'),
+    )
+
+    await ai.embed(embedder=ref, content='hello', config={'taskType': 'RETRIEVAL_QUERY'})
+
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['model'] == 'gemini-embedding-2'
+    assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
+    assert call.kwargs['config'].output_dimensionality == 256
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'call_config',
+    [
+        {'task_type': None},
+        {'taskType': None},
+        EmbeddingConfig(task_type=None),
+    ],
+    ids=['snake_dict_none', 'camel_dict_none', 'typed_none'],
+)
+async def test_embed_call_config_explicit_none_clears_ref_field(
+    mock_list_models: MagicMock,
+    mock_client: MagicMock,
+    call_config: EmbeddingConfig | dict[str, object],
+) -> None:
+    """An explicit None in call config clears the field from the ref while preserving untouched ref fields."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+    ref = GoogleAI.embedder(
+        'gemini-embedding-001',
+        config=EmbeddingConfig(task_type='RETRIEVAL_DOCUMENT', output_dimensionality=256),
+    )
+
+    await ai.embed(embedder=ref, content='hello', config=call_config)
+
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['config'].task_type is None
+    assert call.kwargs['config'].output_dimensionality == 256
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_rejects_duplicate_spellings_in_one_call_dict(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Passing both snake_case and camelCase for the same setting in one call dict raises INVALID_ARGUMENT."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock()
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+
+    with pytest.raises(GenkitError, match='are the same setting; pass one') as exc_info:
+        await ai.embed(
+            embedder=GoogleAI.embedder('gemini-embedding-001'),
+            content='hello',
+            config={'task_type': 'RETRIEVAL_QUERY', 'taskType': 'CLUSTERING'},
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    embed_content.assert_not_awaited()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embed_rejects_wrong_config_class_at_call_time(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Passing a non-EmbeddingConfig BaseModel to ai.embed(config=...) raises INVALID_ARGUMENT."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock()
+    mock_client.return_value.aio.models.embed_content = embed_content
+    ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
+
+    with pytest.raises(GenkitError, match='EmbeddingConfig') as exc_info:
+        await ai.embed(
+            embedder=GoogleAI.embedder('gemini-embedding-001'),
+            content='hello',
+            config=GeminiConfig(temperature=0.5),
+        )
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    embed_content.assert_not_awaited()
+
+
+@patch('genkit_google_genai._google.genai.client.Client')
+@patch('genkit_google_genai._google._list_genai_models')
+@pytest.mark.asyncio
+async def test_embedder_action_run_validates_embed_request_options(
+    mock_list_models: MagicMock, mock_client: MagicMock
+) -> None:
+    """Calling embed_action.run(EmbedRequest(...)) directly validates options into EmbeddingConfig."""
+    mock_list_models.return_value = GenaiModels()
+    embed_content = AsyncMock(
+        return_value=genai_types.EmbedContentResponse(embeddings=[genai_types.ContentEmbedding(values=[0.5])])
+    )
+    mock_client.return_value.aio.models.embed_content = embed_content
+    plugin = GoogleAI(api_key='test-key')
+    action = await plugin.resolve(ActionKind.EMBEDDER, 'gemini-embedding-001')
+    assert isinstance(action, Action)
+
+    result = await action.run(
+        EmbedRequest(
+            input=[Document.from_text('hello')],
+            options={'taskType': 'RETRIEVAL_QUERY', 'outputDimensionality': 128},
+        )
+    )
+
+    assert isinstance(result.response, EmbedResponse)
+    assert [e.embedding for e in result.response.embeddings] == [[0.5]]
+    call = embed_content.await_args
+    assert call is not None
+    assert call.kwargs['config'].task_type == 'RETRIEVAL_QUERY'
+    assert call.kwargs['config'].output_dimensionality == 128

@@ -49,10 +49,7 @@ func (c *GenkitMCPClient) GetPrompt(ctx context.Context, g *genkit.Genkit, promp
 // fetchMCPPrompt retrieves a prompt from the MCP server
 func (c *GenkitMCPClient) fetchMCPPrompt(ctx context.Context, promptName string, args map[string]string) (*mcp.GetPromptResult, error) {
 	req := mcp.GetPromptRequest{
-		Params: struct {
-			Name      string            `json:"name"`
-			Arguments map[string]string `json:"arguments,omitempty"`
-		}{
+		Params: mcp.GetPromptParams{
 			Name:      promptName,
 			Arguments: args,
 		},
@@ -143,9 +140,7 @@ func (c *GenkitMCPClient) getPrompts(ctx context.Context) ([]mcp.Prompt, error) 
 func (c *GenkitMCPClient) fetchPromptsPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Prompt, mcp.Cursor, error) {
 	listReq := mcp.ListPromptsRequest{
 		PaginatedRequest: mcp.PaginatedRequest{
-			Params: struct {
-				Cursor mcp.Cursor `json:"cursor,omitempty"`
-			}{
+			Params: mcp.PaginatedParams{
 				Cursor: cursor,
 			},
 		},

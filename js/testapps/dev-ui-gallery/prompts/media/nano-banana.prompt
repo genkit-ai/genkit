@@ -1,0 +1,15 @@
+---
+model: googleai/gemini-nano-banana-2.1
+config:
+  imageConfig:
+    aspectRatio: "16:9"
+input:
+  schema:
+    prompt: string
+  default:
+    prompt: A penguin strapped to a jetpack from the side profile, flying through the Earth's atmosphere.
+---
+
+Generate an image using the following description:
+
+{{prompt}}

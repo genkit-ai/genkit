@@ -20,118 +20,124 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import logging
-import os
 import signal
 import socket
+import sys
 import threading
 import uuid
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from pathlib import Path
-from typing import Any, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar, cast, overload
 
 import anyio
 import uvicorn
 from pydantic import BaseModel
+from typing_extensions import Never
 
-from genkit._ai._agents._base import (
-    Agent,
-    define_agent,
-    define_custom_agent,
-    define_prompt_agent,
+from genkit._ai._background_model import (
+    BackgroundModel,
+    CancelModelOpFn,
+    CheckModelOpFn,
+    StartModelOpFn,
+    as_model_operation,
+    cancel_operation,
+    check_operation,
+    define_background_model,
 )
-from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore, StateT, get_current_session
-from genkit._ai._agents._types import ChunkTransform, StateTransform
-from genkit._ai._embedding import EmbedderFn, EmbedderOptions, EmbedderRef, define_embedder
+from genkit._ai._embedding import Embedder, EmbedderFn, EmbedderInfo, EmbedderRef, EmbedderRefConfigT, define_embedder
 from genkit._ai._evaluator import (
+    BatchEvaluator,
     BatchEvaluatorFn,
+    Evaluator,
     EvaluatorFn,
     EvaluatorRef,
     define_batch_evaluator,
     define_evaluator,
 )
-from genkit._ai._formats import built_in_formats
-from genkit._ai._formats._types import FormatDef
+from genkit._ai._formats._builtin import built_in_formats
+from genkit._ai._formats._types import Formatter
 from genkit._ai._generate import (
+    CallScope,
     define_generate_action,
     generate_action,
     register_middleware,
     register_tools,
+    start_generate_stream,
 )
 from genkit._ai._model import (
     Message,
-    ModelConfig,
+    Model,
+    ModelArg,
     ModelFn,
     ModelResponse,
     ModelResponseChunk,
+    background_model_name,
+    call_config_class,
+    check_call_config,
     define_model,
+    python_config_schema,
+    resolve_for_generate,
 )
 from genkit._ai._prompt import (
-    ExecutablePrompt,
+    GenerateCall,
     ModelStreamResponse,
-    PromptConfig,
+    Prompt,
     define_helper,
     define_partial,
     define_schema,
     load_prompt_folder,
+    parts_from_prompt,
     register_prompt_actions,
-    to_generate_action_options,
+    to_generate_options,
 )
-from genkit._ai._resource import (
-    ResourceFn,
-    ResourceOptions,
-    define_resource,
-)
-from genkit._ai._tools import Tool, define_interrupt, define_tool
-from genkit._core._action import Action, ActionKind, get_current_context
-from genkit._core._background import (
-    BackgroundAction,
-    CancelModelOpFn,
-    CheckModelOpFn,
-    StartModelOpFn,
-    check_operation,
-    define_background_model,
-    lookup_background_action,
-)
-from genkit._core._channel import Channel, run_loop
-from genkit._core._dap import (
-    DapFn,
-    DynamicActionProvider,
-    define_dynamic_action_provider as define_dap_block,
-)
+from genkit._ai._tools import define_interrupt
+from genkit._core._action import Action, ActionKind, FlowContext, get_current_context
+from genkit._core._background import missing_operation_error
+from genkit._core._channel import run_loop
+from genkit._core._config_check import layer_call_config
+from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
-from genkit._core._error import GenkitError
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._flow import Flow
 from genkit._core._logger import configure_logging, get_logger, resolve_level
-from genkit._core._middleware import (
-    BaseMiddleware,
-    GenerateMiddleware,
-    _validate_middleware_key_segment,
+from genkit._core._middleware import Middleware
+from genkit._core._model import (
+    Document,
+    EmbedRequest,
+    ModelConfigDict,
+    ModelRef,
+    ModelRefConfigT,
+    ModelRequest,
+    Part,
+    ToolChoice,
 )
-from genkit._core._model import Document
+from genkit._core._operation import Operation
 from genkit._core._plugin import Plugin
-from genkit._core._protocols import SessionLike
 from genkit._core._reflection import ReflectionServer, ServerSpec, create_reflection_asgi_app
+from genkit._core._reflection_config import (
+    ReflectionConfig,
+    advertised_reflection_host,
+    is_loopback_host,
+    resolve_reflection_config,
+)
 from genkit._core._reflection_v2 import ReflectionServerV2
-from genkit._core._registry import Registry
-from genkit._core._tracing import SpanMetadata, run_in_new_span
+from genkit._core._registry import Registry, define_dynamic_action_provider as define_dap_block
+from genkit._core._telemetry._attrs import metadata_key
+from genkit._core._telemetry._http import maybe_inject_dev_instrumentation
+from genkit._core._telemetry._instrumentation import run_in_new_span
+from genkit._core._tool import Tool, ToolContext
 from genkit._core._typing import (
     BaseDataPoint,
     Embedding,
-    EmbedRequest,
-    EvalRequest,
-    EvalResponse,
-    MiddlewareRef,
+    EmbedResponse,
+    EvaluatorRequest,
+    EvaluatorResponse,
     ModelInfo,
-    Operation,
-    Part,
-    ToolChoice,
-    ToolRequestPart,
-    ToolResponsePart,
+    Role,
 )
 
-from ._decorators import _FlowDecorator, _FlowDecoratorWithChunk
+from ._decorators import _FlowDecorator, _ToolDecorator
 from ._runtime import RuntimeManager, setup_signal_handlers
 
 logger = get_logger(__name__)
@@ -143,64 +149,154 @@ ChunkT = TypeVar('ChunkT')
 
 R = TypeVar('R')
 T = TypeVar('T')
-MiddlewareT = TypeVar('MiddlewareT', bound=BaseMiddleware)
+MiddlewareT = TypeVar('MiddlewareT', bound=Middleware)
+
+# Value kinds core reads with a fixed type, and the API that registers each.
+_CORE_VALUE_KINDS: dict[str, str] = {
+    'middleware': 'define_middleware',
+    'format': 'define_format',
+    'defaultModel': 'Genkit(model=...)',
+}
+
+_DOCUMENT_METADATA_CONFLICT = (
+    'metadata= applies to string content only. A Document carries its own metadata; set it on the Document instead.'
+)
 
 
-def _model_supports_long_running(model_action: Action) -> bool:
-    """Check if a model action supports long-running operations."""
-    model_info = model_action.metadata.get('model') if model_action.metadata else None
-    if not model_info:
-        return False
-    # Handle ModelInfo object
-    if hasattr(model_info, 'supports'):
-        supports = getattr(model_info, 'supports', None)
-        return bool(getattr(supports, 'long_running', False)) if supports else False
-    # Handle dict (cast needed because isinstance narrows too much for type checkers)
-    if isinstance(model_info, dict):
-        model_dict = cast(dict[str, Any], model_info)
-        supports = model_dict.get('supports')
-        return bool(supports.get('longRunning', False)) if isinstance(supports, dict) else False
-    return False
+def init_keyword_example(value: object) -> str:
+    # Suggest model= only for a provider/name id or a ModelRef. A path like
+    # './prompts' is not a model, so don't put it on model=.
+    if isinstance(value, ModelRef):
+        return f'Genkit(model={value!r})'
+    if isinstance(value, str) and '/' in value and not value.startswith(('.', '/', '\\', '~')) and '\\' not in value:
+        parts = value.split('/')
+        if all(part and part not in ('.', '..') for part in parts):
+            return f'Genkit(model={value!r})'
+    return 'Genkit(plugins=[...], model="...")'
 
 
 class Genkit:
-    """Genkit asyncio user-facing API."""
+    """The main entry point for building AI-powered applications.
 
-    def __init__(
-        self,
-        plugins: list[Plugin] | None = None,
-        model: str | None = None,
-        prompt_dir: str | Path | None = None,
-        reflection_server_spec: ServerSpec | None = None,
-    ) -> None:
-        self.registry: Registry = Registry()
-        self._reflection_server_spec: ServerSpec | None = reflection_server_spec
-        self._reflection_ready = threading.Event()
-        self._initialize_registry(model, plugins)
-        # Ensure the default generate action is registered for async usage.
-        define_generate_action(self.registry)
-        self._register_plugin_middleware(plugins)
-        configure_logging()
-        # In dev mode, start the reflection server immediately in a background
-        # daemon thread so it's available regardless of which web framework (or
-        # none) the user chooses.
-        if is_dev_environment():
-            # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
-            # run_main wait loop is stolen by anyio (clean exit → atexit);
-            # elsewhere SIGTERM also goes through handle_signal. Both paths
-            # remove the runtime discovery files.
-            setup_signal_handlers()
-            self._start_reflection_background()
+    Registers plugins, defines flows and tools, and runs generation. Both
+    ``Genkit(model=...)`` and ``ai.generate(model=...)`` accept a typed
+    ``ModelRef`` from a plugin constructor (recommended, e.g.
+    ``GoogleAI.gemini_model('gemini-flash-latest')``) or a plugin-prefixed
+    string (``'googleai/gemini-flash-latest'``). Plugins resolve models lazily
+    on demand when ``ai.generate()`` is called, without needing pre-registration
+    or SDK updates.
 
-        # Load prompts
-        load_path = prompt_dir
-        if load_path is None:
-            default_prompts_path = Path('./prompts')
-            if default_prompts_path.is_dir():
-                load_path = default_prompts_path
+    Example:
+        from genkit import Genkit
+        from genkit_google_genai import GoogleAI
 
-        if load_path:
-            load_prompt_folder(self.registry, dir_path=load_path)
+        ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+        @ai.tool()
+        async def current_weather(city: str) -> str:
+            return f'Sunny in {city}'
+
+        @ai.flow()
+        async def my_flow(prompt: str) -> str:
+            res = await ai.generate(prompt=prompt, tools=['current_weather'])
+            return res.text
+
+        if __name__ == '__main__':
+            ai.run_main(my_flow('Weather in Paris?'))
+    """
+
+    _registry: Registry
+    _reflection_server_spec: ServerSpec | None
+    _reflection_config: ReflectionConfig
+    _reflection_ready: threading.Event
+    _reflection_stopped: threading.Event
+    _reflection_bound_addr: str | None
+
+    if TYPE_CHECKING:
+
+        def __init__(
+            self,
+            *,
+            plugins: list[Plugin] | None = None,
+            model: ModelArg | None = None,
+            prompt_dir: str | Path | None = None,
+        ) -> None: ...
+
+    else:
+        # Type checkers see the keyword-only signature above. Runtime still
+        # accepts *args so we can raise a TypeError that names the keyword they
+        # probably meant, instead of silently binding a model id as plugins.
+        def __init__(  # noqa: D417
+            self,
+            *args: object,
+            plugins: list[Plugin] | None = None,
+            model: ModelArg | None = None,
+            prompt_dir: str | Path | None = None,
+        ) -> None:
+            """Initialize a Genkit instance.
+
+            Args:
+                plugins: Plugins to register (e.g. ``[GoogleAI()]``). Plugins resolve
+                    models lazily on demand when ``ai.generate()`` is called.
+                model: Default model for ``ai.generate()``. Accepts a typed ``ModelRef``
+                    (recommended, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``) or
+                    a plugin-prefixed string (``'googleai/gemini-flash-latest'``).
+                prompt_dir: Optional directory for loading ``.prompt`` files.
+            """
+            if args:
+                raise TypeError(
+                    f'Genkit() takes no positional arguments, got {len(args)}. '
+                    f'Pass keyword arguments instead, e.g. {init_keyword_example(args[0])}.'
+                )
+            # Before anything that logs, so plugin initialization is covered too.
+            configure_logging()
+            self._registry = Registry()
+            self._reflection_server_spec = None
+            # The reflection API runs under GENKIT_ENV=dev, or in any environment
+            # with GENKIT_REFLECTION_ENABLED=true. Resolving here keeps an invalid
+            # setting a constructor-time error.
+            self._reflection_config = resolve_reflection_config()
+            self._reflection_ready = threading.Event()
+            # Set when the reflection thread exits for any reason (v2 auth
+            # rejection, server crash), so run_main stops waiting on nothing.
+            self._reflection_stopped = threading.Event()
+            # host:port the v1 socket is bound to, set in the constructor so
+            # run_main can log it without waiting on the server thread.
+            self._reflection_bound_addr = None
+            self._initialize_registry(model, plugins)
+            # Ensure the default generate action is registered for async usage.
+            define_generate_action(self)
+            self._register_plugin_middleware(plugins)
+            maybe_inject_dev_instrumentation()
+            # When reflection is on, start the server immediately in a background
+            # daemon thread so it's available regardless of which web framework (or
+            # none) the user chooses.
+            if self._reflection_config.enabled:
+                # SIGINT (Ctrl+C) always hits handle_signal. SIGTERM inside the
+                # run_main wait loop is stolen by anyio (clean exit → atexit);
+                # elsewhere SIGTERM also goes through handle_signal. Both paths
+                # remove the runtime discovery files.
+                setup_signal_handlers()
+                self._start_reflection_background()
+
+            # Load prompts
+            load_path = prompt_dir
+            if load_path is None:
+                default_prompts_path = Path('./prompts')
+                if default_prompts_path.is_dir():
+                    load_path = default_prompts_path
+
+            if load_path:
+                load_prompt_folder(self, dir_path=load_path)
+
+        # help(Genkit) should show the keyword-only constructor, not a phantom *args.
+        __init__.__signature__ = inspect.signature(__init__).replace(
+            parameters=[
+                parameter
+                for parameter in inspect.signature(__init__).parameters.values()
+                if parameter.kind != inspect.Parameter.VAR_POSITIONAL
+            ]
+        )
 
     # -------------------------------------------------------------------------
     # Registry methods
@@ -212,63 +308,122 @@ class Genkit:
         name: str | None = None,
         *,
         description: str | None = None,
-        chunk_type: None = None,
     ) -> _FlowDecorator: ...
+
+    # Overload order matters; see _FlowDecorator.__call__ for why the
+    # `object` shapes come before the context shapes.
+    @overload
+    def flow(
+        self,
+        func: Callable[[FlowContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def flow(
         self,
-        name: str | None = None,
-        *,
-        description: str | None = None,
-        chunk_type: type[ChunkT],
-    ) -> _FlowDecoratorWithChunk[ChunkT]: ...
+        func: Callable[[InputT, FlowContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[FlowContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[FlowContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT, ChunkT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Flow[InputT, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Flow[None, OutputT]: ...
+
+    @overload
+    def flow(
+        self,
+        func: Callable[..., Awaitable[OutputT]],
+        /,
+    ) -> Flow[Any, OutputT, Any]: ...
 
     def flow(
         self,
-        name: str | None = None,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
         *,
         description: str | None = None,
-        chunk_type: type[Any] | None = None,
-    ) -> _FlowDecorator | _FlowDecoratorWithChunk[Any]:
+    ) -> _FlowDecorator | Flow[Any, Any, Any]:
         """Decorator to register an async function as a flow.
 
+        Can be used bare (``@ai.flow``) or with arguments (``@ai.flow()``,
+        ``@ai.flow('custom_name', description='...')``).
+
+        A flow takes at most one input. To read the request context or stream
+        chunks, add a parameter annotated ``FlowContext``, in any position.
+        Any other second parameter raises ``TypeError`` when the flow is defined.
+
         Args:
-            name: Optional name for the flow. Defaults to the function name.
+            name: Optional name for the flow (or the function itself when used
+                as ``@ai.flow``). Defaults to the function name.
             description: Optional description for the flow.
-            chunk_type: Optional type for streaming chunks. When provided,
-                the returned Action will be typed as Action[InputT, OutputT, ChunkT].
 
         Example:
-            @ai.flow()
-            async def my_flow(x: str) -> int: ...  # Action[str, int]
+            from genkit import FlowContext, Genkit
+            from genkit_google_genai import GoogleAI
 
-            @ai.flow(chunk_type=str)
-            async def streaming_flow(x: int, ctx: ActionRunContext) -> str:
-                ctx.send_chunk("progress")
-                return "done"
-            # Action[int, str, str]
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+            @ai.flow
+            async def my_flow(prompt: str) -> str:
+                res = await ai.generate(prompt=prompt)
+                return res.text
+
+            @ai.flow
+            async def streaming_flow(x: int, ctx: FlowContext[str]) -> str:
+                ctx.send_chunk('progress')
+                return 'done'
         """
-        if chunk_type is not None:
-            return _FlowDecoratorWithChunk(self.registry, name, description, chunk_type)
-        return _FlowDecorator(self.registry, name, description)
+        if not isinstance(name, str) and name is not None:
+            return _FlowDecorator(self._registry, None, description)(name)
+        return _FlowDecorator(self._registry, name, description)
 
     def define_helper(self, name: str, fn: Callable[..., Any]) -> None:
         """Register a Handlebars helper function."""
-        define_helper(self.registry, name, fn)
+        define_helper(self._registry, name, fn)
 
     def define_partial(self, name: str, source: str) -> None:
         """Register a Handlebars partial template."""
-        define_partial(self.registry, name, source)
+        define_partial(self._registry, name, source)
 
     def define_schema(self, name: str, schema: type[BaseModel]) -> type[BaseModel]:
         """Register a Pydantic schema for use in prompts."""
-        define_schema(self.registry, name, schema)
+        define_schema(self._registry, name, schema)
         return schema
 
     def define_json_schema(self, name: str, json_schema: dict[str, object]) -> dict[str, object]:
         """Register a JSON schema for use in prompts."""
-        self.registry.register_schema(name, json_schema)
+        self._registry.register_schema(name, json_schema)
         return json_schema
 
     def define_dynamic_action_provider(
@@ -282,7 +437,7 @@ class Genkit:
     ) -> DynamicActionProvider:
         """Register a Dynamic Action Provider (DAP)."""
         return define_dap_block(
-            self.registry,
+            self._registry,
             name,
             fn,
             description=description,
@@ -290,41 +445,147 @@ class Genkit:
             metadata=metadata,
         )
 
-    def tool(self, name: str | None = None, description: str | None = None) -> Callable[[Callable[..., Any]], Tool]:
-        """Decorator to register a function as a tool."""
+    @overload
+    def tool(
+        self,
+        name: str | None = None,
+        *,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> _ToolDecorator: ...
 
-        def wrapper(func: Callable[..., Any]) -> Tool:
-            return define_tool(self.registry, func, name, description)
+    # Same order as Genkit.flow: the `object` shapes catch `(ctx, x: Any)` and
+    # `(x: Any)` / `(x: object)` before a ctx shape can claim them.
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT, ChunkT]: ...
 
-        return wrapper
+    @overload
+    def tool(
+        self,
+        func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[object], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]],
+        /,
+    ) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[InputT], Awaitable[OutputT]],
+        /,
+    ) -> Tool[InputT, OutputT]: ...
+
+    @overload
+    def tool(
+        self,
+        func: Callable[[], Awaitable[OutputT]],
+        /,
+    ) -> Tool[None, OutputT]: ...
+
+    def tool(
+        self,
+        name: str | Callable[..., Awaitable[Any]] | None = None,
+        *,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> _ToolDecorator | Tool[Any, Any, Any]:
+        """Decorator to register a function as a tool.
+
+        Can be used bare (``@ai.tool``) or with arguments (``@ai.tool()``,
+        ``@ai.tool('custom_name', description='...')``).
+
+        The return annotation is what the model binds as ``outputSchema``.
+        Awaiting the tool directly returns what the function returned.
+
+        A tool takes at most one input, and that input's type is the schema the
+        model fills in. For several fields, use one Pydantic model. To read the
+        request context or interrupt, add a parameter annotated
+        ``ToolContext``, in any position. Any other second parameter raises
+        ``TypeError`` when the tool is defined.
+
+        Example:
+            @ai.tool
+            async def current_weather(city: str) -> str:
+                return f'Sunny in {city}'
+
+            class Forecast(BaseModel):
+                city: str
+                days: int = 3
+
+            @ai.tool
+            async def forecast(input: Forecast, ctx: ToolContext) -> str:
+                user = ctx.context.get('user_id')
+                return f'{input.days}-day forecast for {input.city} ({user})'
+
+            res = await ai.generate(prompt='Weather in Paris?', tools=['current_weather', 'forecast'])
+        """
+        if not isinstance(name, str) and name is not None:
+            return _ToolDecorator(self._registry, None, description, input_schema)(name)
+        return _ToolDecorator(self._registry, name, description, input_schema)
 
     def define_middleware(
         self,
-        cls: type[BaseMiddleware],
+        cls: type[MiddlewareT],
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
-    ) -> GenerateMiddleware:
-        """Register a middleware class on this app's registry under ``name``."""
-        res = _validate_middleware_key_segment(name)
-        if res.errored:
-            raise ValueError(f'middleware name {res.error_message}')
-        desc = GenerateMiddleware(cls=cls, name=name, description=description)
-        self.registry.register_value('middleware', name, desc)
-        return desc
+    ) -> type[MiddlewareT]:
+        """Register a middleware class on this app's registry."""
+        desc = cls._middleware_metadata(name, description=description)
+        self._registry.register_value('middleware', desc.name, desc)
+        return cls
 
+    @overload
+    def middleware(
+        self,
+        cls: type[MiddlewareT],
+    ) -> type[MiddlewareT]: ...
+
+    @overload
     def middleware(
         self,
         *,
-        name: str,
+        name: str | None = None,
         description: str | None = None,
-    ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]:
+    ) -> Callable[[type[MiddlewareT]], type[MiddlewareT]]: ...
+
+    def middleware(
+        self,
+        cls: type[MiddlewareT] | None = None,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> type[MiddlewareT] | Callable[[type[MiddlewareT]], type[MiddlewareT]]:
         """Decorator that registers a custom middleware on this app's registry."""
 
-        def decorator(cls: type[MiddlewareT]) -> type[MiddlewareT]:
-            self.define_middleware(cls, name=name, description=description)
-            return cls
+        def decorator(target: type[MiddlewareT]) -> type[MiddlewareT]:
+            return self.define_middleware(target, name=name, description=description)
 
+        if cls is not None:
+            return decorator(cls)
         return decorator
 
     def define_interrupt(
@@ -333,7 +594,7 @@ class Genkit:
         *,
         input_schema: type[BaseModel] | dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Tool:
+    ) -> Tool[Any, NoReturn]:
         """Register an interrupt tool that always pauses for user input.
 
         Args:
@@ -342,7 +603,7 @@ class Genkit:
             description: Tool description
 
         Returns:
-            The registered interrupt tool
+            The registered interrupt tool. Awaiting it directly raises ``Interrupt``.
 
         Example:
             ask_user = ai.define_interrupt(
@@ -352,7 +613,7 @@ class Genkit:
             )
         """
         return define_interrupt(
-            self.registry,
+            self._registry,
             name,
             description=description,
             input_schema=input_schema,
@@ -360,19 +621,41 @@ class Genkit:
 
     def define_evaluator(
         self,
-        *,
         name: str,
+        fn: EvaluatorFn[Any],
+        *,
         display_name: str,
         definition: str,
-        fn: EvaluatorFn[Any],
         is_billed: bool = False,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Action:
-        """Register an evaluator action."""
+    ) -> Evaluator:
+        """Register an evaluator that scores one dataset row at a time.
+
+        Example:
+            ```python
+            # 1. Score whether the answer mentions the expected dish
+            async def mentions_dish(row: BaseDataPoint, options: object | None) -> EvaluatorResponse:
+                hit = row.reference.lower() in str(row.output).lower()
+                return EvaluatorResponse(test_case_id=row.test_case_id or '', evaluation=[Score(score=hit)])
+
+
+            # 2. Register it under a name
+            ai.define_evaluator(
+                'mentions_dish',
+                mentions_dish,
+                display_name='Mentions dish',
+                definition='Whether the answer names the expected dish.',
+            )
+
+            # 3. Run it over a dataset
+            rows = await ai.evaluate(evaluator='mentions_dish', dataset=dataset)
+            # => [EvaluatorResponse(test_case_id='...', evaluation=[Score(score=True)]), ...]
+            ```
+        """
         return define_evaluator(
-            self.registry,
+            self._registry,
             name=name,
             display_name=display_name,
             definition=definition,
@@ -385,19 +668,23 @@ class Genkit:
 
     def define_batch_evaluator(
         self,
-        *,
         name: str,
+        fn: BatchEvaluatorFn,
+        *,
         display_name: str,
         definition: str,
-        fn: BatchEvaluatorFn[Any],
         is_billed: bool = False,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Action:
-        """Register a batch evaluator action."""
+    ) -> BatchEvaluator:
+        """Register a batch evaluator.
+
+        The function takes one ``EvaluatorRequest`` and returns ``list[EvaluatorResponse]``.
+        Read options from ``req.options``. A second parameter raises ``TypeError`` when defined.
+        """
         return define_batch_evaluator(
-            self.registry,
+            self._registry,
             name=name,
             display_name=display_name,
             definition=definition,
@@ -412,34 +699,34 @@ class Genkit:
         self,
         name: str,
         fn: ModelFn,
+        *,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         info: ModelInfo | None = None,
         description: str | None = None,
-    ) -> Action:
+    ) -> Model:
         """Register a custom model action."""
-        return define_model(self.registry, name, fn, config_schema, metadata, info, description)
+        return define_model(self._registry, name, fn, config_schema, metadata, info, description)
 
     def define_background_model(
         self,
         name: str,
+        *,
         start: StartModelOpFn,
         check: CheckModelOpFn,
         cancel: CancelModelOpFn | None = None,
-        label: str | None = None,
         info: ModelInfo | None = None,
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
-    ) -> BackgroundAction:
+    ) -> BackgroundModel:
         """Register a background model for long-running AI operations."""
         return define_background_model(
-            registry=self.registry,
+            registry=self._registry,
             name=name,
             start=start,
             check=check,
             cancel=cancel,
-            label=label,
             info=info,
             config_schema=config_schema,
             metadata=metadata,
@@ -450,26 +737,87 @@ class Genkit:
         self,
         name: str,
         fn: EmbedderFn,
-        options: EmbedderOptions | None = None,
+        *,
+        info: EmbedderInfo | None = None,
         metadata: dict[str, object] | None = None,
         description: str | None = None,
-    ) -> Action:
-        """Register a custom embedder action."""
-        return define_embedder(self.registry, name, fn, options, metadata, description)
+        config_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Embedder:
+        """Register a custom embedder action.
 
-    def define_format(self, format: FormatDef) -> None:
-        """Register a custom output format."""
-        self.registry.register_value('format', format.name, format)
+        The options class comes from ``config_schema`` or the fn's
+        ``EmbedRequest[Cfg]`` annotation; given both, they must be the same class.
+        """
+        return define_embedder(self._registry, name, fn, info, metadata, description, config_schema=config_schema)
 
-    # Overload 1: Both input_schema and output_schema typed -> ExecutablePrompt[InputT, OutputT]
+    def define_format(self, formatter: Formatter) -> None:
+        """Register a custom output format. See `genkit.formats.Formatter`."""
+        self._registry.register_value('format', formatter.name, formatter)
+
+    async def lookup_model(self, name: str) -> Action[ModelRequest, ModelResponse, ModelResponseChunk] | None:
+        """Return the model action registered under ``name``, or None.
+
+        Plugin models that haven't been used yet are resolved through the
+        plugin, so ``'googleai/gemini-flash-latest'`` works before any
+        generate call. Background models aren't included; they run through
+        ``generate_operation``.
+        """
+        action = await self._registry.resolve_action(ActionKind.MODEL, name)
+        return cast(Action[ModelRequest, ModelResponse, ModelResponseChunk], action) if action is not None else None
+
+    async def lookup_tool(self, name: str) -> Tool | None:
+        """Return the tool registered under ``name``, or None.
+
+        The same handle ``@ai.tool()`` returns, so a tool defined in one module
+        can be called or passed in ``tools=[...]`` from another without
+        importing it.
+
+        Example:
+            ```python
+            # 1. Define a tool in one module
+            @ai.tool()
+            async def menu_price(dish: str) -> float:
+                return 14.5
+
+
+            # 2. Find it by name somewhere else
+            price_tool = await ai.lookup_tool('menu_price')
+            response = await ai.generate(prompt='How much is the ramen?', tools=[price_tool])
+            # => The ramen is $14.50.
+            ```
+        """
+        action = await self._registry.resolve_action(ActionKind.TOOL, name)
+        if action is None:
+            return None
+        return Tool.from_action(action)
+
+    def lookup_value(self, *, kind: str, name: str) -> object | None:
+        """Return the value defined under ``kind`` and ``name``, or None."""
+        return self._registry.lookup_value(kind, name)
+
+    def define_value(self, *, kind: str, name: str, value: object) -> None:
+        """Store ``value`` under ``kind`` and ``name`` for later ``lookup_value``.
+
+        Raises:
+            ValueError: ``kind`` is one Genkit owns (use ``define_middleware``,
+                ``define_format``, or ``Genkit(model=...)``), ``value`` is None,
+                or a value is already defined under this kind and name.
+        """
+        if kind in _CORE_VALUE_KINDS:
+            raise ValueError(f'define_value kind {kind!r} is reserved; use {_CORE_VALUE_KINDS[kind]} instead.')
+        if value is None:
+            raise ValueError('define_value value must not be None; lookup_value returns None for "not defined".')
+        self._registry.register_value(kind, name, value)
+
+    # Overload 1: Both input_schema and output_schema typed -> Prompt[InputT, OutputT]
     @overload
     def define_prompt(
         self,
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelConfigDict,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -483,21 +831,20 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[InputT, OutputT]: ...
+    ) -> Prompt[InputT, OutputT]: ...
 
-    # Overload 2: Only input_schema typed -> ExecutablePrompt[InputT, Any]
     @overload
     def define_prompt(
         self,
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -511,21 +858,48 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+        input_schema: type[InputT],
+        output_schema: type[OutputT],
+    ) -> Prompt[InputT, OutputT]: ...
+
+    # Overload 2: Only input_schema typed -> Prompt[InputT, Any]
+    @overload
+    def define_prompt(
+        self,
+        name: str | None = None,
+        *,
+        variant: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelConfigDict,
+        description: str | None = None,
+        system: str | list[Part] | None = None,
+        prompt: str | list[Part] | None = None,
+        messages: str | list[Message] | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        max_turns: int | None = None,
+        return_tool_requests: bool | None = None,
+        metadata: dict[str, object] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type[InputT],
         output_schema: dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[InputT, Any]: ...
+    ) -> Prompt[InputT, Any]: ...
 
-    # Overload 3: Only output_schema typed -> ExecutablePrompt[Any, OutputT]
     @overload
     def define_prompt(
         self,
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -539,21 +913,48 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+        input_schema: type[InputT],
+        output_schema: dict[str, object] | str | None = None,
+    ) -> Prompt[InputT, Any]: ...
+
+    # Overload 3: Only output_schema typed -> Prompt[Any, OutputT]
+    @overload
+    def define_prompt(
+        self,
+        name: str | None = None,
+        *,
+        variant: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelConfigDict,
+        description: str | None = None,
+        system: str | list[Part] | None = None,
+        prompt: str | list[Part] | None = None,
+        messages: str | list[Message] | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        max_turns: int | None = None,
+        return_tool_requests: bool | None = None,
+        metadata: dict[str, object] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: dict[str, object] | str | None = None,
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[Any, OutputT]: ...
+    ) -> Prompt[Any, OutputT]: ...
 
-    # Overload 4: Neither typed -> ExecutablePrompt[Any, Any]
     @overload
     def define_prompt(
         self,
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -567,19 +968,74 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+        input_schema: dict[str, object] | str | None = None,
+        output_schema: type[OutputT],
+    ) -> Prompt[Any, OutputT]: ...
+
+    # Overload 4: Neither typed -> Prompt[Any, Any]
+    @overload
+    def define_prompt(
+        self,
+        name: str | None = None,
+        *,
+        variant: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelConfigDict,
+        description: str | None = None,
+        system: str | list[Part] | None = None,
+        prompt: str | list[Part] | None = None,
+        messages: str | list[Message] | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        max_turns: int | None = None,
+        return_tool_requests: bool | None = None,
+        metadata: dict[str, object] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[Any, Any]: ...
+    ) -> Prompt[Any, Any]: ...
+
+    @overload
+    def define_prompt(
+        self,
+        name: str | None = None,
+        *,
+        variant: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
+        description: str | None = None,
+        system: str | list[Part] | None = None,
+        prompt: str | list[Part] | None = None,
+        messages: str | list[Message] | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        max_turns: int | None = None,
+        return_tool_requests: bool | None = None,
+        metadata: dict[str, object] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+        input_schema: type | dict[str, object] | str | None = None,
+        output_schema: type | dict[str, object] | str | None = None,
+    ) -> Prompt[Any, Any]: ...
 
     def define_prompt(
         self,
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
+        config: Mapping[str, Any] | BaseModel | ModelConfigDict | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
         prompt: str | list[Part] | None = None,
@@ -593,14 +1049,20 @@ class Genkit:
         metadata: dict[str, object] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
         input_schema: type | dict[str, object] | str | None = None,
         output_schema: type | dict[str, object] | str | None = None,
-    ) -> ExecutablePrompt[Any, Any]:
-        """Register a prompt template."""
-        executable_prompt = ExecutablePrompt(
-            self.registry,
+    ) -> Prompt[Any, Any]:
+        """Register a prompt template.
+
+        Example:
+            joke = ai.define_prompt(name='joke', prompt='Tell a joke about {{topic}}.')
+            res = await joke(input={'topic': 'cats'})
+            print(res.text)
+        """
+        executable_prompt = Prompt(
+            self,
             variant=variant,
             model=model,
             config=config,
@@ -624,10 +1086,10 @@ class Genkit:
             name=name,
         )
         if name:
-            register_prompt_actions(self.registry, executable_prompt, name, variant)
+            register_prompt_actions(self._registry, executable_prompt, name, variant)
         return executable_prompt
 
-    # Overload 1: Neither typed -> ExecutablePrompt[Any, Any]
+    # Overload 1: Neither typed -> Prompt[Any, Any]
     @overload
     def prompt(
         self,
@@ -636,7 +1098,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: None = None,
         output_schema: None = None,
-    ) -> ExecutablePrompt[Any, Any]: ...
+    ) -> Prompt[Any, Any]: ...
 
     # Overload 2: Only input_schema typed
     @overload
@@ -647,7 +1109,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: type[InputT],
         output_schema: None = None,
-    ) -> ExecutablePrompt[InputT, Any]: ...
+    ) -> Prompt[InputT, Any]: ...
 
     # Overload 3: Only output_schema typed
     @overload
@@ -658,7 +1120,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: None = None,
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[Any, OutputT]: ...
+    ) -> Prompt[Any, OutputT]: ...
 
     # Overload 4: Both input_schema and output_schema typed
     @overload
@@ -669,7 +1131,7 @@ class Genkit:
         variant: str | None = None,
         input_schema: type[InputT],
         output_schema: type[OutputT],
-    ) -> ExecutablePrompt[InputT, OutputT]: ...
+    ) -> Prompt[InputT, OutputT]: ...
 
     def prompt(
         self,
@@ -678,162 +1140,58 @@ class Genkit:
         variant: str | None = None,
         input_schema: type[InputT] | None = None,
         output_schema: type[OutputT] | None = None,
-    ) -> ExecutablePrompt[InputT, OutputT] | ExecutablePrompt[Any, Any]:
+    ) -> Prompt[InputT, OutputT] | Prompt[Any, Any]:
         """Look up a prompt by name and optional variant."""
-        return ExecutablePrompt(
-            registry=self.registry,
+        return Prompt(
+            self,
             name=name,
             variant=variant,
             input_schema=input_schema,
             output_schema=output_schema,
         )
 
-    async def agent(self, name: str) -> Agent:
-        """Look up a registered agent by name."""
-        resolved = await self.registry.resolve_action(ActionKind.AGENT, name)
-        if resolved is None:
-            raise GenkitError(
-                status='NOT_FOUND',
-                message=f"Agent '{name}' not found in registry.",
-            )
-        if not isinstance(resolved, Agent):
-            raise GenkitError(
-                status='INTERNAL',
-                message=f"Registry entry '{name}' is not an Agent.",
-            )
-        return resolved
-
-    def define_custom_agent(
-        self,
-        name: str,
-        fn: AgentFn,
-        *,
-        store: SessionStore[StateT] | None = None,
-        state_transform: StateTransform | None = None,
-        chunk_transform: ChunkTransform | None = None,
-        state_schema: type[StateT] | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Agent[StateT]:
-        """Define and register an agent with full control over the turn loop.
-
-        fn receives (SessionRunner, ActionRunContext) and must call sess.run(handle_turn)
-        to process inputs, then return an AgentResult.
-
-        Pass ``state_schema`` (a Pydantic model) to type the custom state, so the
-        chat's ``state``, ``response.state``, and streamed ``chunk.custom`` come
-        back as that model instead of a dict.
-        """
-        return define_custom_agent(
-            registry=self.registry,
-            name=name,
-            fn=fn,
-            store=store,
-            state_transform=state_transform,
-            chunk_transform=chunk_transform,
-            state_schema=state_schema,
-            description=description,
-            metadata=metadata,
-        )
-
-    def define_agent(
-        self,
-        name: str,
-        *,
-        model: str | None = None,
-        system: str | list[Part] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
-        max_turns: int | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-        store: SessionStore[StateT] | None = None,
-        state_transform: StateTransform | None = None,
-        chunk_transform: ChunkTransform | None = None,
-        state_schema: type[StateT] | None = None,
-    ) -> Agent[StateT]:
-        """Define a prompt-backed agent.
-
-        Each turn: attaches session history, calls generate with streaming,
-        updates session. Pass resume in AgentInput to resume from an interrupt.
-
-        Pass ``state_schema`` (a Pydantic model) to type the custom state tools
-        read and write — the chat's ``state``, ``response.state``, and streamed
-        ``chunk.custom`` come back as that model instead of a dict.
-        """
-        return define_agent(
-            registry=self.registry,
-            name=name,
-            model=model,
-            system=system,
-            tools=tools,
-            use=use,
-            config=config,
-            max_turns=max_turns,
-            description=description,
-            metadata=metadata,
-            store=store,
-            state_transform=state_transform,
-            chunk_transform=chunk_transform,
-            state_schema=state_schema,
-        )
-
-    def define_prompt_agent(
-        self,
-        name: str,
-        *,
-        store: SessionStore[StateT] | None = None,
-        state_transform: StateTransform | None = None,
-        chunk_transform: ChunkTransform | None = None,
-        state_schema: type[StateT] | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Agent[StateT]:
-        """Wire an already-registered prompt as an agent.
-
-        Looks up the prompt named `name` from the registry. Use when the prompt
-        is defined via ai.define_prompt() or loaded from a .prompt file.
-        """
-        return define_prompt_agent(
-            registry=self.registry,
-            name=name,
-            store=store,
-            state_transform=state_transform,
-            chunk_transform=chunk_transform,
-            state_schema=state_schema,
-            description=description,
-            metadata=metadata,
-        )
-
-    def define_resource(
-        self,
-        *,
-        fn: ResourceFn,
-        name: str | None = None,
-        uri: str | None = None,
-        template: str | None = None,
-        description: str | None = None,
-        metadata: dict[str, object] | None = None,
-    ) -> Action:
-        """Register a resource action."""
-        opts: ResourceOptions = {}
-        if name:
-            opts['name'] = name
-        if uri:
-            opts['uri'] = uri
-        if template:
-            opts['template'] = template
-        if description:
-            opts['description'] = description
-        if metadata:
-            opts['metadata'] = metadata
-
-        return define_resource(self.registry, opts, fn)
-
     # -------------------------------------------------------------------------
     # Server infrastructure methods
     # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _bind_reflection_socket(host: str, port: int, *, pinned: bool) -> socket.socket:
+        """Bind and listen on the v1 reflection socket.
+
+        A pinned port is bound exactly. Otherwise the next free port at or above
+        ``port`` is used. The address family follows ``host``, so IPv6 hosts
+        such as ``::1`` work.
+
+        Raises:
+            OSError: If the pinned port is taken, or no port in the probe range
+                is free.
+        """
+        candidates = [port] if pinned else range(port, min(port + 100, 65536))
+        last: OSError | None = None
+        for candidate in candidates:
+            # Resolve per candidate: bind needs the family-specific sockaddr (an
+            # IPv6 one is a 4-tuple). Prefer IPv4 when the host has both, so
+            # 'localhost' keeps binding 127.0.0.1 rather than ::1.
+            infos = socket.getaddrinfo(host, candidate, type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)
+            family, socktype, proto, _, sockaddr = next((info for info in infos if info[0] == socket.AF_INET), infos[0])
+            sock = socket.socket(family, socktype, proto)
+            # POSIX: SO_REUSEADDR only allows rebinding a port in TIME_WAIT
+            # (fast restarts). Windows: it allows binding a port that is
+            # already in use, which would break probing and pinned-port
+            # failure, so claim the port exclusively instead.
+            if sys.platform == 'win32':
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(sockaddr)
+            except OSError as e:
+                sock.close()
+                last = e
+                continue
+            sock.listen(2048)
+            return sock
+        raise last or OSError(f'no available port in range {port}-{port + 99}')
 
     def _start_reflection_background(self) -> None:
         """Start the Dev UI reflection server in a background daemon thread.
@@ -841,30 +1199,50 @@ class Genkit:
         If GENKIT_REFLECTION_V2_SERVER is set (the CLI launches the runtime in
         v2 mode and provides a WebSocket URL), run the v2 JSON-RPC client.
         Otherwise start the v1 HTTP server.
+
+        Raises:
+            OSError: If the v1 socket cannot be bound. It is bound here, on the
+                calling thread, so a busy pinned port fails ``Genkit()`` rather
+                than a background thread nobody is watching.
         """
+        config = self._reflection_config
+
+        sock: socket.socket | None = None
+        if config.mode == 'v1':
+            sock = self._bind_reflection_socket(config.host, config.port, pinned=config.pinned)
+            bound_host, bound_port = sock.getsockname()[:2]
+            if ':' in bound_host:
+                bound_host = f'[{bound_host}]'
+            self._reflection_bound_addr = f'{bound_host}:{bound_port}'
+            # Bound already, so the spec is known before the thread starts.
+            # spec.url goes into the runtime file, so advertise a reachable,
+            # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
+            host, port = sock.getsockname()[:2]
+            self._reflection_server_spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
 
         async def _run_server() -> None:
-            v2_url = os.environ.get('GENKIT_REFLECTION_V2_SERVER')
-            if v2_url:
-                await logger.adebug(f'Genkit Dev UI reflection v2 client connecting to {v2_url}')
-                server_v2 = ReflectionServerV2(self.registry, v2_url)
+            if config.mode == 'v2':
+                assert config.v2_url is not None
+                logger.debug(f'Genkit Dev UI reflection v2 client connecting to {config.v2_url}')
+                server_v2 = ReflectionServerV2(self._registry, config.v2_url, secret=config.secret)
                 self._reflection_ready.set()
                 await server_v2.run_forever()
                 return
 
-            sockets: list[socket.socket] | None = None
+            assert sock is not None
             spec = self._reflection_server_spec
-            if spec is None:
-                # Bind to port 0 to let OS choose available port, pass socket to uvicorn
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.bind(('127.0.0.1', 0))
-                sock.listen(2048)
-                host, port = sock.getsockname()
-                spec = ServerSpec(scheme='http', host=host, port=port)
-                self._reflection_server_spec = spec
-                sockets = [sock]
+            assert spec is not None
+            sockets = [sock]
 
-            app = create_reflection_asgi_app(registry=self.registry)
+            if not config.secret and not is_loopback_host(config.host):
+                logger.warning(
+                    'Reflection API is listening on %s without authentication. Anyone who can reach '
+                    'this port can run any registered action. Set GENKIT_REFLECTION_SECRET_TOKEN, '
+                    'or front it with your own auth.',
+                    config.host,
+                )
+
+            app = create_reflection_asgi_app(registry=self._registry, secret=config.secret)
             level = resolve_level()
             is_debug = level <= logging.DEBUG
             if level <= logging.DEBUG:
@@ -877,7 +1255,7 @@ class Genkit:
                 log_level = 'critical'
 
             # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
-            config = uvicorn.Config(
+            uvicorn_config = uvicorn.Config(
                 app,
                 host=spec.host,
                 port=spec.port,
@@ -885,8 +1263,21 @@ class Genkit:
                 access_log=is_debug,
                 log_level=log_level,
             )
-            server = ReflectionServer(config, ready=self._reflection_ready)
-            async with RuntimeManager(spec, lazy_write=True) as runtime_manager:
+            server = ReflectionServer(uvicorn_config, ready=self._reflection_ready)
+            # Dev only: the runtime file exists so a local CLI watching the
+            # same filesystem can discover this runtime. Nothing is watching in
+            # a container, and the working directory is frequently read-only.
+            if not is_dev_environment():
+                server_task = asyncio.create_task(server.serve(sockets=sockets))
+                await asyncio.to_thread(self._reflection_ready.wait)
+                if server.should_exit:
+                    logger.warning(f'Reflection server at {spec.url} failed to start.')
+                    return
+                logger.debug(f'Genkit reflection server running at {spec.url}')
+                await server_task
+                return
+
+            async with RuntimeManager(spec, lazy_write=True, secret=config.secret) as runtime_manager:
                 server_task = asyncio.create_task(server.serve(sockets=sockets))
                 await asyncio.to_thread(self._reflection_ready.wait)
 
@@ -895,19 +1286,25 @@ class Genkit:
                     return
 
                 runtime_manager.write_runtime_file()
-                await logger.adebug(f'Genkit Dev UI reflection server running at {spec.url}')
+                logger.debug(f'Genkit Dev UI reflection server running at {spec.url}')
                 await server_task
 
+        def _thread_main() -> None:
+            try:
+                asyncio.run(_run_server())
+            finally:
+                self._reflection_stopped.set()
+
         threading.Thread(
-            target=lambda: asyncio.run(_run_server()),
+            target=_thread_main,
             daemon=True,
             name='genkit-reflection-server',
         ).start()
 
-    def _initialize_registry(self, model: str | None, plugins: list[Plugin] | None) -> None:
+    def _initialize_registry(self, model: ModelArg | None, plugins: list[Plugin] | None) -> None:
         """Initialize the registry with default model and plugins."""
         if model:
-            self.registry.register_value('defaultModel', 'defaultModel', model)
+            self._registry.register_value('defaultModel', 'defaultModel', model)
         for fmt in built_in_formats:
             self.define_format(fmt)
 
@@ -916,24 +1313,67 @@ class Genkit:
         else:
             for plugin in plugins:
                 if isinstance(plugin, Plugin):  # pyright: ignore[reportUnnecessaryIsInstance]
-                    self.registry.register_plugin(plugin)
+                    self._registry.register_plugin(plugin)
                 else:
                     raise ValueError(f'Invalid {plugin=} provided to Genkit: must be of type `genkit.ai.Plugin`')
 
     def _register_plugin_middleware(self, plugins: list[Plugin] | None) -> None:
-        """Register middleware descriptors returned by ``Plugin.list_middleware``."""
+        """Register middleware classes returned by ``Plugin.list_middleware``."""
         if not plugins:
             return
         for plugin in plugins:
-            for desc in plugin.list_middleware():
-                self.registry.register_value('middleware', desc.name, desc)
+            for mw_cls in plugin.list_middleware():
+                self.define_middleware(mw_cls)
 
-    def run_main(self, coro: Coroutine[Any, Any, T]) -> T | None:
-        """Run the user's main coroutine, blocking in dev mode for the reflection server."""
-        if not is_dev_environment():
+    def run_main(self, coro: Coroutine[Any, Any, T]) -> T:
+        """Run your ``main`` coroutine and return its result, like ``asyncio.run``.
+
+        With reflection on (``GENKIT_ENV=dev``, which ``genkit start`` sets, or
+        ``GENKIT_REFLECTION_ENABLED=true``), it keeps the process alive after
+        ``main`` returns, so the Dev UI can keep running your flows, until
+        Ctrl+C, SIGTERM, or the reflection server stops on its own. With
+        reflection off, it returns as soon as ``main`` does.
+
+        If ``main`` raises while reflection is on, the error is logged and the
+        Dev UI stays up. The error is raised once the process stops. Ctrl+C
+        after a successful ``main`` raises ``KeyboardInterrupt``, and SIGTERM
+        returns ``main``'s result.
+
+        Example:
+            ```python
+            from genkit import Genkit
+            from genkit_google_genai import GoogleAI
+
+            # 1. Initialize Genkit and define a flow
+            ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+
+
+            @ai.flow()
+            async def suggest_dish(cuisine: str) -> str:
+                response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
+                return response.text
+
+
+            # 2. Run a quick check from your script's entry point
+            async def main() -> None:
+                print(await suggest_dish('Thai'))
+
+
+            # 3. Start it
+            ai.run_main(main())
+            # => Green curry with chicken
+            #    `python main.py` exits here. Under `genkit start`, the process
+            #    stays up for the Dev UI until you press Ctrl+C.
+            ```
+        """
+        if not self._reflection_config.enabled:
             return run_loop(coro)
 
-        async def dev_runner() -> T | None:
+        user_error: Exception | None = None
+        stop_signal: signal.Signals | None = None
+
+        async def reflection_runner() -> T | None:
+            nonlocal user_error, stop_signal
             user_result: T | None = None
             try:
                 user_result = await coro
@@ -943,28 +1383,68 @@ class Genkit:
                 # so keep a headline + a debug traceback.
                 logger.error('Startup failed: %s: %s', type(e).__name__, e)
                 logger.debug('Startup failure details', exc_info=True)
+                user_error = e
 
-            # Block until Ctrl+C (SIGINT handled by anyio) or SIGTERM, keeping
-            # the daemon reflection thread alive.
-            logger.info('Dev UI ready. Press Ctrl+C to stop.')
+            # Block until Ctrl+C, SIGTERM, or the reflection server stops,
+            # keeping the daemon reflection thread alive. The receiver is open
+            # before the ready line, so a signal sent once it prints is ours,
+            # not asyncio's default SIGINT handling.
             try:
-                async with anyio.create_task_group() as tg:
+                with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as sigs:
+                    logger.info(self._reflection_ready_message())
+                    async with anyio.create_task_group() as tg:
 
-                    async def _handle_sigterm(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
-                        with anyio.open_signal_receiver(signal.SIGTERM) as sigs:
-                            async for _ in sigs:
+                        async def _handle_signal(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                            nonlocal stop_signal
+                            async for sig in sigs:
+                                stop_signal = sig
                                 tg_.cancel_scope.cancel()
                                 return
 
-                    tg.start_soon(_handle_sigterm, tg)
-                    await anyio.sleep_forever()
+                        async def _handle_reflection_stopped(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
+                            # Poll rather than park a worker thread in Event.wait:
+                            # anyio worker threads are non-daemon, so a parked one
+                            # keeps the process alive after run_main returns.
+                            while not self._reflection_stopped.is_set():  # noqa: ASYNC110 - threading.Event, set off-loop
+                                await anyio.sleep(0.25)
+                            logger.warning('Reflection server stopped; returning from run_main.')
+                            tg_.cancel_scope.cancel()
+
+                        tg.start_soon(_handle_signal, tg)
+                        tg.start_soon(_handle_reflection_stopped, tg)
+                        await anyio.sleep_forever()
             except anyio.get_cancelled_exc_class():
                 pass
 
-            logger.debug('Dev UI server stopped.')
+            logger.debug('Reflection server stopped.')
             return user_result
 
-        return anyio.run(dev_runner)
+        # Decide out here, after the loop has shut down cleanly, so neither the
+        # coroutine's error nor KeyboardInterrupt is raised during asyncio shutdown.
+        try:
+            result = anyio.run(reflection_runner)
+        except KeyboardInterrupt:
+            # Ctrl+C before the receiver opened (main still running).
+            if user_error is None:
+                raise
+            raise user_error from None
+        if user_error is not None:
+            raise user_error
+        if stop_signal == signal.SIGINT:
+            raise KeyboardInterrupt
+        # main returned normally (user_error is None), so result holds its value.
+        return cast(T, result)
+
+    def _reflection_ready_message(self) -> str:
+        """The line run_main logs once it starts waiting on the reflection server."""
+        config = self._reflection_config
+        # Only dev writes the runtime file the Dev UI discovers, so only dev
+        # can promise the Dev UI will find this runtime.
+        if is_dev_environment():
+            return 'Dev UI ready. Press Ctrl+C to stop.'
+        if config.mode == 'v2':
+            return f'Reflection API connecting to {config.v2_url}. Press Ctrl+C to stop.'
+        return f'Reflection API listening on {self._reflection_bound_addr}. Press Ctrl+C to stop.'
 
     # -------------------------------------------------------------------------
     # Genkit-specific methods (generation, embedding, retrieval, etc.)
@@ -972,29 +1452,63 @@ class Genkit:
 
     def _resolve_embedder_name(self, embedder: str | EmbedderRef | None) -> str:
         """Resolve embedder name from string or EmbedderRef."""
-        if isinstance(embedder, EmbedderRef):
-            return embedder.name
-        elif isinstance(embedder, str):
-            return embedder
-        else:
+        if embedder is None:
             raise ValueError('Embedder must be specified as a string name or an EmbedderRef.')
+        return embedder.name if isinstance(embedder, EmbedderRef) else embedder
 
-    # Overload: output_schema=type[T] -> ModelResponse[T]
+    async def _embedder_and_options(
+        self,
+        *,
+        embedder: str | EmbedderRef[BaseModel] | None,
+        config: object,
+    ) -> tuple[Action[EmbedRequest, EmbedResponse, Never], dict[str, Any]]:
+        """Resolve the embedder, check the call config, and layer the options.
+
+        Same steps as generate: pick the class (call_config_class), check the
+        caller's keys, then ``ref.version < ref.config < call`` folded to that
+        class. A required field left out is checked at the action boundary,
+        where the embedder's own defaults go underneath.
+        """
+        name = self._resolve_embedder_name(embedder)
+        action = await self._registry.resolve_embedder(name)
+        if action is None:
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Embedder '{name}' not found.",
+                reason=ErrorReason.ACTION_NOT_FOUND,
+            )
+        ref = embedder if isinstance(embedder, EmbedderRef) else None
+        schema = call_config_class(
+            name=name,
+            kind='embedder',
+            ref_schema=ref.config_schema if ref else None,
+            action_schema=python_config_schema(action.config_schema),
+        )
+        check_call_config(config=config, schema=schema, model=name)
+        options = layer_call_config(
+            call=config,
+            version=ref.version if ref else None,
+            ref_config=ref.config if ref else None,
+            schema=schema,
+        )
+        return action, options
+
+    # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelResponse[T]
     @overload
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelConfigDict,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1002,26 +1516,53 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[OutputT]: ...
 
-    # Overload: no output_schema, dict, or union -> ModelResponse[Any]
+    # Overload: config=ModelRefConfigT | Mapping, output_schema=type[T] -> ModelResponse[T]
     @overload
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type[OutputT],
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+    ) -> ModelResponse[OutputT]: ...
+
+    # Overload: config=ModelConfigDict, no output_schema -> ModelResponse[Any]
+    @overload
+    async def generate(
+        self,
+        *,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: ModelConfigDict,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1029,24 +1570,51 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+    ) -> ModelResponse[Any]: ...
+
+    # Overload: config=ModelRefConfigT | Mapping, no output_schema -> ModelResponse[Any]
+    @overload
+    async def generate(
+        self,
+        *,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type | dict | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]: ...
 
     async def generate(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1054,21 +1622,52 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
     ) -> ModelResponse[Any]:
         """Generate text or structured data using a language model.
 
+        ``model`` accepts a typed ``ModelRef`` from a plugin constructor
+        (recommended, e.g. ``GoogleAI.gemini_model('gemini-flash-latest')``,
+        which takes the bare model ID, stamps the ``'googleai/'`` namespace
+        prefix, and type-checks ``config``), a plugin-prefixed string
+        (``'googleai/gemini-flash-latest'``), a registered model ``Action``, or
+        ``None`` to use the default ``model=`` passed to ``Genkit(...)``. When
+        passing a plain ``str`` for a plugin model, the ``<plugin>/`` prefix
+        (such as ``'googleai/'`` or ``'vertexai/'``) is required; passing an
+        unprefixed string raises ``GenkitError`` with ``NOT_FOUND``. Any model
+        ID served by the provider (including newly released models) is resolved
+        lazily on demand at call time without needing pre-registration or SDK
+        updates.
+
         ``tools`` is typed as ``Sequence`` rather than ``list`` because ``Sequence``
         is covariant: ``list[Tool]`` or ``list[str]`` are both assignable to
         ``Sequence[str | Tool]``, but not to ``list[str | Tool]``.
+
+        Example:
+            from pydantic import BaseModel
+
+            class Weather(BaseModel):
+                city: str
+                forecast: str
+
+            res = await ai.generate(
+                prompt='Weather in Paris?',
+                tools=['current_weather'],
+                output_schema=Weather,
+            )
+            print(res.text)
+            print(res.output)
+
+        ``prompt`` and ``system`` strings are sent exactly as written. Braces
+        are content (JSON, code, or another template), not Handlebars. If a
+        generate string used to rely on a registered partial (``{{> persona}}``),
+        a ``define_helper`` helper, or ``{{media url=...}}``, move it into
+        ``define_prompt`` (or a ``.prompt`` file), or build the text /
+        ``Part.from_media(...)`` yourself. ``{{role}}`` in a generate string
+        already raised; it now goes to the model as written too.
         """
-        # One call-scoped registry layer holds anything inline (tools +
-        # middleware) so it dies with the call and stays out of self.registry.
-        child_registry = self.registry.new_child()
-        await register_tools(child_registry, tools)
-        refs = register_middleware(child_registry, use)
-        prompt_config = PromptConfig(
+        return await self._generate(
             model=model,
             prompt=prompt,
             system=system,
@@ -1081,37 +1680,32 @@ class Genkit:
             resume_metadata=resume_metadata,
             config=config,
             max_turns=max_turns,
+            context=context,
+            output_schema=output_schema,
             output_format=output_format,
             output_content_type=output_content_type,
             output_instructions=output_instructions,
-            output_schema=output_schema,
             output_constrained=output_constrained,
+            use=use,
             docs=docs,
-            use=refs,
-        )
-        gen_options = await to_generate_action_options(child_registry, prompt_config)
-        return await generate_action(
-            child_registry,
-            gen_options,
-            context=context if context else get_current_context(),
         )
 
-    # Overload: output_schema=type[T] -> ModelStreamResponse[T]
+    # Overload: config=ModelConfigDict, output_schema=type[T] -> ModelStreamResponse[T]
     @overload
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelConfigDict,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type[OutputT],
@@ -1119,27 +1713,53 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[OutputT]: ...
 
-    # Overload: no output_schema, dict, or union -> ModelStreamResponse[Any]
+    # Overload: config=ModelRefConfigT | Mapping, output_schema=type[T] -> ModelStreamResponse[T]
     @overload
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type[OutputT],
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+    ) -> ModelStreamResponse[OutputT]: ...
+
+    # Overload: config=ModelConfigDict, no output_schema -> ModelStreamResponse[Any]
+    @overload
+    def generate_stream(
+        self,
+        *,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: ModelConfigDict,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1147,25 +1767,51 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
+    ) -> ModelStreamResponse[Any]: ...
+
+    # Overload: config=ModelRefConfigT | Mapping, no output_schema -> ModelStreamResponse[Any]
+    @overload
+    def generate_stream(
+        self,
+        *,
+        model: ModelRef[ModelRefConfigT] | Action | str | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type | dict | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
     ) -> ModelStreamResponse[Any]: ...
 
     def generate_stream(
         self,
         *,
-        model: str | None = None,
+        model: str | ModelRef[BaseModel] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         return_tool_requests: bool | None = None,
         tool_choice: ToolChoice | None = None,
-        resume_respond: ToolResponsePart | list[ToolResponsePart] | None = None,
-        resume_restart: ToolRequestPart | list[ToolRequestPart] | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         max_turns: int | None = None,
         context: dict[str, object] | None = None,
         output_schema: type | dict | None = None,
@@ -1173,20 +1819,43 @@ class Genkit:
         output_content_type: str | None = None,
         output_instructions: bool | str | None = None,
         output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-        timeout: float | None = None,
     ) -> ModelStreamResponse[Any]:
-        """Stream generated text, returning a ModelStreamResponse with .stream and .response."""
-        channel: Channel[ModelResponseChunk, ModelResponse[Any]] = Channel(timeout=timeout)
+        """Stream generated text, returning a ModelStreamResponse with .stream and .response.
 
-        async def _run_generate() -> ModelResponse[Any]:
-            # One call-scoped registry layer holds anything inline (tools +
-            # middleware) so it dies with the call and stays out of self.registry.
-            child_registry = self.registry.new_child()
-            await register_tools(child_registry, tools)
-            refs = register_middleware(child_registry, use)
-            prompt_config = PromptConfig(
+        With ``output_schema=Recipe``, each ``chunk.output`` is a partial of
+        that type: same attributes, any field may still be ``None`` or a
+        prefix. Guard the field you are about to use. The finished
+        ``Recipe`` is only ``(await result.response).output``, and it's ``None``
+        when the reply isn't a ``Recipe``.
+
+        If the model fails partway through, the ``async for`` still ends
+        normally. The final response has ``finish_reason == FAILED``,
+        ``error`` set, ``text == ''``, ``message is None``, and ``messages``
+        ending at the last complete turn, so it's safe to send back. The
+        chunks you already received are the record of what was shown.
+
+        Example:
+            result = ai.generate_stream(prompt='Write a haiku about rain.')
+            async for chunk in result.stream:
+                print(chunk.text)
+            final = await result.response
+        """
+        initial_msgs: list[Message] = []
+        if not isinstance(messages, str):
+            if system:
+                initial_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
+            if messages:
+                initial_msgs.extend(messages)
+            if prompt:
+                initial_msgs.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
+
+        async def _run_generate(
+            send_chunk: Callable[[ModelResponseChunk], None],
+            caller_stopped: asyncio.Event,
+        ) -> ModelResponse[Any]:
+            return await self._generate(
                 model=model,
                 prompt=prompt,
                 system=system,
@@ -1199,61 +1868,142 @@ class Genkit:
                 resume_metadata=resume_metadata,
                 config=config,
                 max_turns=max_turns,
+                context=context,
+                output_schema=output_schema,
+                output_format=output_format,
+                output_content_type=output_content_type,
+                output_instructions=output_instructions,
+                output_constrained=output_constrained,
+                use=use,
+                docs=docs,
+                on_chunk=send_chunk,
+                caller_stopped=caller_stopped,
+            )
+
+        stream, task = start_generate_stream(initial_messages=initial_msgs, run=_run_generate)
+        return ModelStreamResponse[Any](stream=stream, response=task)
+
+    async def _generate(
+        self,
+        *,
+        model: str | ModelRef[BaseModel] | Action | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        return_tool_requests: bool | None = None,
+        tool_choice: ToolChoice | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, object] | None = None,
+        output_schema: type | dict | None = None,
+        output_format: str | None = None,
+        output_content_type: str | None = None,
+        output_instructions: bool | str | None = None,
+        output_constrained: bool | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+        on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+        caller_stopped: asyncio.Event | None = None,
+    ) -> ModelResponse[Any]:
+        """Fold ``ai.generate`` kwargs into engine ``options`` and run generate_action.
+
+        Inline tools and middleware live on a child registry so they die
+        with the call and stay out of ``self._registry``.
+        """
+        if isinstance(messages, str):
+            raise TypeError('messages must be a list of Message; pass text with prompt=')
+
+        scope = CallScope(self)
+        registry = scope.registry
+        await register_tools(registry, tools)
+        use_refs = register_middleware(registry, use)
+        resolved = await resolve_for_generate(model=model, config=config, registry=registry)
+        check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
+        # strings passed at call time are content, not templates: braces may be
+        # JSON, code, or another template. templates are what you define up
+        # front (define_prompt, .prompt files, define_agent's system).
+        resolved_msgs: list[Message] = []
+        if system:
+            resolved_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
+        if messages:
+            resolved_msgs.extend(messages)
+        if prompt:
+            resolved_msgs.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
+        options = await to_generate_options(
+            registry=registry,
+            call=GenerateCall(
+                model=resolved.name,
+                prompt=None,
+                system=None,
+                messages=resolved_msgs,
+                tools=tools,
+                return_tool_requests=return_tool_requests,
+                tool_choice=tool_choice,
+                resume_respond=resume_respond,
+                resume_restart=resume_restart,
+                resume_metadata=resume_metadata,
+                config=resolved.config,
+                max_turns=max_turns,
                 output_format=output_format,
                 output_content_type=output_content_type,
                 output_instructions=output_instructions,
                 output_schema=output_schema,
                 output_constrained=output_constrained,
                 docs=docs,
-                use=refs,
-            )
-            gen_options = await to_generate_action_options(child_registry, prompt_config)
-            return await generate_action(
-                child_registry,
-                gen_options,
-                on_chunk=lambda c: channel.send(c),
-                context=context if context else get_current_context(),
-            )
-
-        response_future: asyncio.Future[ModelResponse[Any]] = asyncio.create_task(_run_generate())
-        channel.set_close_future(response_future)
-
-        return ModelStreamResponse[Any](channel=channel, response_future=response_future)
+                use=use_refs,
+            ),
+        )
+        return await generate_action(
+            scope,
+            options,
+            on_chunk=on_chunk,
+            context=context,
+            caller_stopped=caller_stopped,
+        )
 
     async def embed(
         self,
         *,
-        embedder: str | EmbedderRef | None = None,
-        content: str | Document | None = None,
+        embedder: str | EmbedderRef[EmbedderRefConfigT],
+        content: str | Document,
         metadata: dict[str, object] | None = None,
-        options: dict[str, object] | None = None,
+        config: EmbedderRefConfigT | Mapping[str, Any] | None = None,
     ) -> list[Embedding]:
-        """Generate vector embeddings for a single document or string."""
-        embedder_name = self._resolve_embedder_name(embedder)
-        embedder_config: dict[str, object] = {}
+        """Generate vector embeddings for a single document or string.
 
-        # Extract config and version from EmbedderRef (not done for embed_many per JS behavior)
-        if isinstance(embedder, EmbedderRef):
-            embedder_config = embedder.config or {}
-            if embedder.version:
-                embedder_config['version'] = embedder.version  # Handle version from ref
+        ``config`` is layered over the ``EmbedderRef``'s version and config
+        (the call wins per key) and reaches the embedder as
+        ``request.options``. A config object must be the embedder's options
+        class. An embedder name that isn't registered raises ``GenkitError``
+        with ``NOT_FOUND``.
 
-        # Merge options passed to embed() with config from EmbedderRef
-        final_options = {**(embedder_config or {}), **(options or {})}
+        ``metadata`` is attached to a string ``content``. A ``Document``
+        already carries its own metadata, so passing both raises ``TypeError``.
 
-        embed_action = await self.registry.resolve_embedder(embedder_name)
-        if embed_action is None:
-            raise ValueError(f'Embedder "{embedder_name}" not found')
+        Example:
+            from genkit_google_genai import GoogleAI
 
-        if content is None:
-            raise ValueError('Content must be specified for embedding.')
+            embeddings = await ai.embed(
+                embedder=GoogleAI.embedder('gemini-embedding-001'),
+                content='Hello world',
+            )
+            vector = embeddings[0].embedding
+        """
+        if metadata is not None and isinstance(content, Document):
+            raise TypeError(_DOCUMENT_METADATA_CONFLICT)
+
+        embed_action, final_options = await self._embedder_and_options(embedder=embedder, config=config)
 
         documents = [Document.from_text(content, metadata)] if isinstance(content, str) else [content]
 
         response = (
             await embed_action.run(
                 EmbedRequest(
-                    input=documents,  # pyright: ignore[reportArgumentType]
+                    input=documents,
                     options=final_options,
                 )
             )
@@ -1263,80 +2013,98 @@ class Genkit:
     async def embed_many(
         self,
         *,
-        embedder: str | EmbedderRef | None = None,
-        content: list[str] | list[Document] | None = None,
+        embedder: str | EmbedderRef[EmbedderRefConfigT],
+        content: list[str] | list[Document],
         metadata: dict[str, object] | None = None,
-        options: dict[str, object] | None = None,
+        config: EmbedderRefConfigT | Mapping[str, Any] | None = None,
     ) -> list[Embedding]:
-        """Generate vector embeddings for multiple documents in a single batch call."""
-        if content is None:
-            raise ValueError('Content must be specified for embedding.')
+        """Generate vector embeddings for multiple documents in a single batch call.
+
+        ``config`` and ``metadata`` work the same as on ``embed``.
+        """
+        if metadata is not None and any(isinstance(item, Document) for item in content):
+            raise TypeError(_DOCUMENT_METADATA_CONFLICT)
 
         # Convert strings to Documents if needed
         documents: list[Document] = [
             Document.from_text(item, metadata) if isinstance(item, str) else item for item in content
         ]
 
-        # Resolve embedder name (JS embedMany does not extract config/version from ref)
-        embedder_name = self._resolve_embedder_name(embedder)
+        embed_action, final_options = await self._embedder_and_options(embedder=embedder, config=config)
 
-        embed_action = await self.registry.resolve_embedder(embedder_name)
-        if embed_action is None:
-            raise ValueError(f'Embedder "{embedder_name}" not found')
-
-        response = (await embed_action.run(EmbedRequest(input=documents, options=options))).response  # type: ignore[arg-type]
+        response = (
+            await embed_action.run(EmbedRequest(input=documents, options=final_options))  # type: ignore[arg-type]
+        ).response
         return response.embeddings
 
     async def evaluate(
         self,
-        evaluator: str | EvaluatorRef | None = None,
-        dataset: list[BaseDataPoint] | None = None,
-        options: dict[str, object] | None = None,
+        *,
+        evaluator: str | EvaluatorRef,
+        dataset: list[BaseDataPoint],
+        config: dict[str, object] | None = None,
         eval_run_id: str | None = None,
-    ) -> EvalResponse:
-        """Evaluate a dataset using the specified evaluator."""
-        evaluator_name: str = ''
-        evaluator_config: dict[str, object] = {}
+    ) -> list[EvaluatorResponse]:
+        """Evaluate a dataset using the specified evaluator.
 
+        Returns a list of rows. A per-row evaluator gives one row per
+        datapoint, in dataset order. A batch evaluator gives the rows its
+        function returned, as returned. Each row's ``evaluation`` is a list of
+        scores.
+
+        ``config`` is merged over the ``EvaluatorRef``'s config (the call
+        wins per key) and handed to the evaluator as its second argument. When
+        neither sets anything, the evaluator gets ``None``. An evaluator name
+        that isn't registered raises ``GenkitError`` with ``NOT_FOUND``.
+
+        Example:
+            from genkit.evaluator import BaseDataPoint
+
+            results = await ai.evaluate(
+                evaluator='my_eval',
+                dataset=[BaseDataPoint(input='What is 2+2?', output='4')],
+            )
+            for row in results:
+                for score in row.evaluation:
+                    print(row.test_case_id, score.score)
+        """
         if isinstance(evaluator, EvaluatorRef):
             evaluator_name = evaluator.name
-            evaluator_config = evaluator.config_schema or {}
-        elif isinstance(evaluator, str):
-            evaluator_name = evaluator
+            ref_config = evaluator.config
         else:
-            raise ValueError('Evaluator must be specified as a string name or an EvaluatorRef.')
+            evaluator_name = evaluator
+            ref_config = None
 
-        final_options = {**(evaluator_config or {}), **(options or {})}
+        # same rule as _embedder_options: None when nothing was set, matching
+        # what the CLI / Dev UI send, so `options is None` is the one check.
+        final_options: dict[str, object] | None = None
+        if ref_config is not None or config is not None:
+            final_options = {**(ref_config or {}), **(config or {})}
 
-        eval_action = await self.registry.resolve_evaluator(evaluator_name)
+        eval_action = await self._registry.resolve_evaluator(evaluator_name)
         if eval_action is None:
-            raise ValueError(f'Evaluator "{evaluator_name}" not found')
+            raise GenkitError(
+                status='NOT_FOUND',
+                message=f"Evaluator '{evaluator_name}' not found.",
+                reason=ErrorReason.ACTION_NOT_FOUND,
+            )
 
         if not eval_run_id:
             eval_run_id = str(uuid.uuid4())
 
-        if dataset is None:
-            raise ValueError('Dataset must be specified for evaluation.')
-
-        return (
-            await eval_action.run(
-                EvalRequest(
-                    dataset=dataset,
-                    options=final_options,
-                    eval_run_id=eval_run_id,
-                ),
-            )
-        ).response
+        response = await eval_action.run(
+            EvaluatorRequest(
+                dataset=dataset,
+                options=final_options,
+                eval_run_id=eval_run_id,
+            ),
+        )
+        return response.response.root
 
     @staticmethod
     def current_context() -> dict[str, Any] | None:
         """Get the current execution context, or None if not in an action."""
         return get_current_context()
-
-    @staticmethod
-    def current_session() -> SessionLike | None:
-        """Return the active agent session, or None if not inside a session."""
-        return get_current_session()
 
     async def run(
         self,
@@ -1349,109 +2117,218 @@ class Genkit:
         if not inspect.iscoroutinefunction(fn):
             raise TypeError('fn must be a coroutine function')
 
-        span_metadata = SpanMetadata(name=name, type='flowStep', metadata=metadata)
-        with run_in_new_span(span_metadata) as span:
-            try:
-                result = await fn()
-                output = (
-                    result.model_dump_json(by_alias=True, exclude_none=True)
-                    if isinstance(result, BaseModel)
-                    else json.dumps(result)
-                )
-                span.set_attribute('genkit:output', output)
-                return result
-            except Exception:
-                # We catch all exceptions here to ensure they are captured by
-                # the trace span context manager before being re-raised.
-                # The run_in_new_span context manager handles recording
-                # the exception details.
-                raise
+        async def body(_span: object) -> T:
+            return await fn()
 
-    async def check_operation(self, operation: Operation) -> Operation:
-        """Check the status of a long-running background operation."""
-        return await check_operation(self.registry, operation)
+        attributes = {metadata_key(k): str(v) for k, v in (metadata or {}).items()}
+        return await run_in_new_span(name, body, action_type='flowStep', attributes=attributes)
 
-    async def cancel_operation(self, operation: Operation) -> Operation:
-        """Cancel a long-running background operation."""
-        if not operation.action:
-            raise ValueError('Provided operation is missing original request information')
+    @overload
+    async def check_operation(
+        self,
+        operation: Operation[T],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[T]: ...
 
-        background_action = await lookup_background_action(self.registry, operation.action)
-        if background_action is None:
-            raise ValueError(f'Failed to resolve background action from original request: {operation.action}')
+    @overload
+    async def check_operation(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]: ...
 
-        return await background_action.cancel(operation)
+    async def check_operation(
+        self,
+        operation: Operation[Any] | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]:
+        """Poll a background job.
+
+        Generic like JS ``checkOperation<T>``: an ``Operation[T]`` comes back
+        as ``Operation[T]``, a stored dict as ``Operation[Any]``. The handle's
+        ``action`` key finds the job. For a background model the handle is
+        validated as ``Operation[ModelResponse]`` before anything runs: an
+        unknown key, a missing ``id``, or an ``output`` that isn't a
+        ModelResponse is INVALID_ARGUMENT.
+
+        Pass ``context={'secrets': {'api_key': ...}}`` again when start used a
+        per-request key. ``config`` is client knobs (``base_url``,
+        ``location``, ``api_version``), not video settings.
+
+        Example:
+            ```python
+            # 1. Start a job and store the handle as JSON
+            op = await ai.generate_operation(
+                model='googleai/veo-3.1-generate-preview',
+                prompt='A chef plating risotto.',
+            )
+            saved = op.model_dump_json()
+
+            # 2. Later, reload it typed and poll
+            op = await ai.check_operation(Operation[ModelResponse].model_validate_json(saved))
+            print(op.done)
+            # => False
+
+            # 3. Poll until done; output is a ModelResponse
+            while not op.done:
+                op = await ai.check_operation(op)
+            print(op.output.media[0].url)
+            # => https://storage.googleapis.com/.../risotto.mp4
+            ```
+        """
+        return await check_operation(self._registry, operation, context=context, config=config)
+
+    @overload
+    async def cancel_operation(
+        self,
+        operation: Operation[T],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[T]: ...
+
+    @overload
+    async def cancel_operation(
+        self,
+        operation: Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]: ...
+
+    async def cancel_operation(
+        self,
+        operation: Operation[Any] | Mapping[str, Any],
+        *,
+        context: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+    ) -> Operation[Any]:
+        """Cancel a background job.
+
+        Same input and return types as ``check_operation``: ``Operation[T]``
+        in, ``Operation[T]`` out; a stored dict in, ``Operation[Any]`` out.
+        Same ``context`` / ``config`` pockets.
+
+        Example:
+            ```python
+            # 1. Reload the stored handle and cancel it
+            op = await ai.cancel_operation(json.loads(saved))
+
+            # 2. The returned handle reflects the cancel attempt
+            print(op.id)
+            # => operations/risotto-123
+            ```
+        """
+        return await cancel_operation(self._registry, operation, context=context, config=config)
+
+    @overload
+    async def generate_operation(
+        self,
+        *,
+        model: ModelRef[ModelRefConfigT] | BackgroundModel | str | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        config: ModelConfigDict,
+        context: dict[str, object] | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+    ) -> Operation[ModelResponse]: ...
+
+    @overload
+    async def generate_operation(
+        self,
+        *,
+        model: ModelRef[ModelRefConfigT] | BackgroundModel | str | None = None,
+        prompt: str | list[Part] | None = None,
+        system: str | list[Part] | None = None,
+        messages: list[Message] | None = None,
+        config: ModelRefConfigT | Mapping[str, Any] | None = None,
+        context: dict[str, object] | None = None,
+        use: Sequence[Middleware] | None = None,
+        docs: list[Document] | None = None,
+    ) -> Operation[ModelResponse]: ...
 
     async def generate_operation(
         self,
         *,
-        model: str | None = None,
+        model: ModelRef[ModelRefConfigT] | BackgroundModel | str | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
-        tools: Sequence[str | Tool] | None = None,
-        return_tool_requests: bool | None = None,
-        tool_choice: ToolChoice | None = None,
-        config: dict[str, object] | ModelConfig | None = None,
-        max_turns: int | None = None,
+        config: BaseModel | ModelConfigDict | Mapping[str, Any] | None = None,
         context: dict[str, object] | None = None,
-        output_schema: type | dict | None = None,
-        output_format: str | None = None,
-        output_content_type: str | None = None,
-        output_instructions: bool | str | None = None,
-        output_constrained: bool | None = None,
-        use: Sequence[BaseMiddleware | MiddlewareRef] | None = None,
+        use: Sequence[Middleware] | None = None,
         docs: list[Document] | None = None,
-    ) -> Operation:
-        """Generate content using a long-running model, returning an Operation to poll."""
-        # Resolve the model and check for long_running support
-        resolved_model = model or cast(str | None, self.registry.lookup_value('defaultModel', 'defaultModel'))
-        if not resolved_model:
-            raise GenkitError(
-                status='INVALID_ARGUMENT',
-                message='No model specified for generate_operation.',
-            )
+    ) -> Operation[ModelResponse]:
+        """Generate content using a long-running model, returning an Operation to poll.
 
-        model_action = await self.registry.resolve_action(ActionKind.MODEL, resolved_model)
+        A background start is one request that returns a job handle. There is
+        no tool loop and no output parsing on ``check_operation``, so tools,
+        ``max_turns``, and the ``output_*`` options are not accepted here.
+
+        Example:
+            op = await ai.generate_operation(
+                model='googleai/veo-3.1-generate-preview',
+                prompt='A timelapse of a flower blooming.',
+            )
+            while not op.done:
+                op = await ai.check_operation(op)
+        """
+        if isinstance(model, BackgroundModel):
+            # Same as its name, once we know this registry holds that object.
+            model = background_model_name(model=model, registry=self._registry)
+        resolved = await resolve_for_generate(
+            model=model,
+            config=config,
+            registry=self._registry,
+            message='No model specified for generate_operation.',
+        )
+        check_call_config(config=config, schema=resolved.config_schema, model=resolved.name)
+
+        model_action = await self._registry.resolve_model(resolved.name)
         if not model_action:
             raise GenkitError(
                 status='NOT_FOUND',
-                message=f"Model '{resolved_model}' not found.",
+                message=f"Model '{resolved.name}' not found.",
+                reason=ErrorReason.MODEL_NOT_FOUND,
             )
 
-        # Check if model supports long-running operations
-        if not _model_supports_long_running(model_action):
+        if model_action.kind != ActionKind.BACKGROUND_MODEL:
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=f"Model '{model_action.name}' does not support long running operations.",
+                reason=ErrorReason.UNSUPPORTED_BY_MODEL,
             )
 
-        # Call generate
+        # Call generate with already-resolved wire name + config.
         response = await self.generate(
-            model=model,
+            model=resolved.name,
             prompt=prompt,
             system=system,
             messages=messages,
-            tools=tools,
-            return_tool_requests=return_tool_requests,
-            tool_choice=tool_choice,
-            config=config,
-            max_turns=max_turns,
+            config=resolved.config,
             context=context,
-            output_schema=output_schema,
-            output_format=output_format,
-            output_content_type=output_content_type,
-            output_instructions=output_instructions,
-            output_constrained=output_constrained,
             use=use,
             docs=docs,
         )
 
-        # Extract operation from response
-        if not hasattr(response, 'operation') or not response.operation:
+        if response.error is not None:
+            # This call is "give me the ticket." A start that already
+            # failed is not that ticket — while-not-done would poll it
+            # as a live job.
             raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message=f"Model '{model_action.name}' did not return an operation.",
+                status=response.error.status or 'INTERNAL',
+                message=response.error.message,
+                details=response.error.details,
+                reason=response.error.reason,
             )
-
-        return response.operation
+        if not response.operation:
+            raise missing_operation_error(name=model_action.name)
+        return as_model_operation(response.operation, name=model_action.name, status='INTERNAL')

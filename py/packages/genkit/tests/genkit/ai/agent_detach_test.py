@@ -19,34 +19,36 @@ import asyncio
 import pytest
 
 import genkit._ai._agents._runtime as runtime_mod
+from genkit import Part
 from genkit._ai._agents._runtime import AgentRuntime, SessionRunner, agent_input_has_payload
 from genkit._ai._agents._session import Session
 from genkit._ai._agents._session_stores._inmemory_store import InMemorySessionStore
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
 from genkit._ai._agents._types import TurnContext
-from genkit._ai._aio import Genkit
-from genkit._ai._generate import generate_action
-from genkit._ai._testing import define_programmable_model
-from genkit._ai._tools import ToolRunContext
-from genkit._core._action import ActionRunContext
+from genkit._ai._generate import CallScope, generate_action
+from genkit._ai._tools import ToolContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError
-from genkit._core._model import GenerateActionOptions, Message, ModelResponse
-from genkit._core._typing import (
-    AgentFinishReason,
+from genkit._core._compat import cancelling
+from genkit._core._model import (
     AgentInput,
     AgentResult,
     AgentStreamChunk,
-    MessageData,
+    FinishReason,
+    GenerateActionOptions,
+    Message,
+    ModelResponse,
     ModelResponseChunk,
-    Part,
-    Role,
     SessionState,
-    SnapshotStatus,
-    TextPart,
-    ToolRequest,
-    ToolRequestPart,
 )
+from genkit._core._typing import (
+    AgentFinishReason,
+    Role,
+    SnapshotStatus,
+    ToolRequest,
+)
+from genkit.exp import Genkit
+from genkit.exp.agent import AgentContext
+from genkit.testing import define_scripted_model
 
 
 async def _wait_for_snapshot_status(
@@ -85,7 +87,7 @@ _NO_ABORT = asyncio.Event()
 @pytest.mark.asyncio
 async def test_agent_input_has_payload() -> None:
     assert agent_input_has_payload(
-        AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))]), detach=True),
+        AgentInput(message=Message(role=Role.USER, content=[Part.from_text('x')]), detach=True),
     )
     assert not agent_input_has_payload(AgentInput(detach=True))
 
@@ -99,7 +101,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
     seen_inputs: list[AgentInput] = []
 
-    async def agent_fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             seen_inputs.append(inp)
             return None
@@ -110,7 +112,7 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
     in_queue = CloseableQueue()
     await in_queue.put(
         AgentInput(
-            message=MessageData(role=Role.USER, content=[Part(TextPart(text='appended message'))]),
+            message=Message(role=Role.USER, content=[Part.from_text('appended message')]),
             detach=True,
         )
     )
@@ -127,11 +129,11 @@ async def test_detach_forwards_message_payload_in_same_input() -> None:
 
     assert len(seen_inputs) == 1
     assert seen_inputs[0].message is not None
-    assert seen_inputs[0].message.content[0].root.text == 'appended message'
+    assert seen_inputs[0].message.content[0].text == 'appended message'
 
     msgs = await session.get_messages()
     assert len(msgs) == 1
-    assert msgs[0].content[0].root.text == 'appended message'
+    assert msgs[0].content[0].text == 'appended message'
 
     snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
     assert snap is not None
@@ -150,12 +152,10 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
     release = asyncio.Event()
     chunks: list[AgentStreamChunk] = []
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             ctx.send_chunk(
-                AgentStreamChunk(
-                    model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part(TextPart(text='working'))])
-                )
+                AgentStreamChunk(model_chunk=ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('working')]))
             )
             await release.wait()
 
@@ -163,7 +163,7 @@ async def test_detach_mid_turn_finalizes_snapshot_when_work_completes() -> None:
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('slow')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -213,7 +213,7 @@ async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest
 
     release = asyncio.Event()
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
+    async def agent_fn(session_runner: SessionRunner, ctx: AgentContext) -> AgentResult:
         async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
             await release.wait()
 
@@ -221,7 +221,7 @@ async def test_detach_stamps_and_refreshes_pending_heartbeat(monkeypatch: pytest
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='slow'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('slow')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -262,15 +262,15 @@ async def test_detach_without_store_raises() -> None:
     rt, _ = _runtime(session, None)
     await rt.session_runner.seed_last_good_state()
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
-            await ctx.abort_signal.wait()
+    async def agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
+            await asyncio.Event().wait()
 
         await session_runner.run(handle_turn)
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='x'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('x')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
@@ -285,29 +285,33 @@ async def test_abort_snapshot_stops_detached_work() -> None:
     rt, _ = _runtime(session, store)
     await rt.session_runner.seed_last_good_state()
 
+    started = asyncio.Event()
     aborted = asyncio.Event()
 
-    async def agent_fn(session_runner: SessionRunner, ctx: ActionRunContext) -> AgentResult:
-        async def handle_turn(inp: AgentInput, _: TurnContext) -> None:
-            for _i in range(100):
-                if ctx.abort_signal.is_set():
-                    aborted.set()
-                    return
-                await asyncio.sleep(0.02)
+    async def agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                aborted.set()
+                raise
 
         await session_runner.run(handle_turn)
         return await session_runner.result()
 
     in_queue = CloseableQueue()
-    await in_queue.put(AgentInput(message=MessageData(role=Role.USER, content=[Part(TextPart(text='long'))])))
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('long')])))
     await in_queue.put(AgentInput(detach=True))
     in_queue.close()
 
     out = await rt.run(fn=agent_fn, client_inputs=in_queue)
     assert out.snapshot_id is not None
 
+    await asyncio.wait_for(started.wait(), timeout=2.0)
     prev = await abort_snapshot_in_store(store=store, snapshot_id=out.snapshot_id)
-    assert prev == SnapshotStatus.ABORTED
+    # Previous-status semantics: the snapshot was pending when we aborted it.
+    assert prev == SnapshotStatus.PENDING
 
     await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.ABORTED, timeout_s=2.0)
     await asyncio.wait_for(aborted.wait(), timeout=2.0)
@@ -318,24 +322,21 @@ async def test_abort_snapshot_stops_detached_work() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_tool_respects_abort_signal() -> None:
-    """Tools invoked during generate see the same abort_signal as the agent runtime."""
+async def test_generate_tool_cancelled_on_caller_stop() -> None:
+    """Cancelling generate_action with caller_stopped cancels an in-flight tool via CancelledError."""
     ai = Genkit()
-    pm, _ = define_programmable_model(ai)
-    abort_signal = asyncio.Event()
-    tool_saw_abort = asyncio.Event()
+    pm, _ = define_scripted_model(ai)
+    caller_stopped = asyncio.Event()
+    tool_started = asyncio.Event()
+    tool_cancelled = asyncio.Event()
 
     @ai.tool(name='slowWork')
-    async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+    async def slow_work(_: dict, _ctx: ToolContext) -> dict:
+        tool_started.set()
         try:
-            for _i in range(200):
-                if ctx.abort_signal.is_set():
-                    tool_saw_abort.set()
-                    raise GenkitError(status='ABORTED', message='Task aborted')
-                await asyncio.sleep(0.01)
+            await asyncio.Event().wait()
         except asyncio.CancelledError:
-            if ctx.abort_signal.is_set():
-                tool_saw_abort.set()
+            tool_cancelled.set()
             raise
         return {'done': True}
 
@@ -343,26 +344,189 @@ async def test_generate_tool_respects_abort_signal() -> None:
         ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=ToolRequestPart(tool_request=ToolRequest(name='slowWork', input={}, ref='r1')))],
+                content=[Part(tool_request=ToolRequest(name='slowWork', input={}, ref='r1'))],
             ),
         )
     )
 
     async def run_generate() -> None:
-        with pytest.raises(GenkitError) as exc_info:
-            await generate_action(
-                ai.registry,
-                GenerateActionOptions(
-                    model='programmableModel',
-                    messages=[Message(role=Role.USER, content=[Part(TextPart(text='go'))])],
-                    tools=['slowWork'],
-                ),
-                abort_signal=abort_signal,
-            )
-        assert exc_info.value.status == 'ABORTED'
+        response = await generate_action(
+            CallScope(ai),
+            GenerateActionOptions(
+                model='scriptedModel',
+                messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
+                tools=['slowWork'],
+            ),
+            caller_stopped=caller_stopped,
+        )
+        assert response.finish_reason == FinishReason.ABORTED
+        assert response.message is None
+        assert [m.role for m in response.messages] == [Role.USER]
+        curr = asyncio.current_task()
+        assert curr is not None
+        assert cancelling(curr) == 0
 
     task = asyncio.create_task(run_generate())
-    await asyncio.sleep(0.05)
-    abort_signal.set()
+    await asyncio.wait_for(tool_started.wait(), timeout=2.0)
+    caller_stopped.set()
+    task.cancel()
     await asyncio.wait_for(task, timeout=2.0)
-    assert tool_saw_abort.is_set()
+    assert tool_cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_finalizer_on_shutdown_leaves_snapshot_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cancelling `rt.background_tasks` on server shutdown cancels the turn without marking the snapshot COMPLETED."""
+    monkeypatch.setattr(runtime_mod, 'DEFAULT_HEARTBEAT_INTERVAL_MS', 10)
+
+    store = InMemorySessionStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
+    rt, _ = _runtime(session, store)
+    await rt.session_runner.seed_last_good_state()
+
+    started = asyncio.Event()
+    turn_cancelled = asyncio.Event()
+
+    async def agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                turn_cancelled.set()
+                raise
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    in_queue = CloseableQueue()
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('long')])))
+    await in_queue.put(AgentInput(detach=True))
+    in_queue.close()
+
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
+    assert out.finish_reason == AgentFinishReason.DETACHED
+    assert out.snapshot_id is not None
+
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+    # Let finalize_detach and refresh_heartbeat enter their await points before shutdown cancels them.
+    await asyncio.sleep(0.03)
+    bg_tasks = list(rt.background_tasks)
+    assert len(bg_tasks) == 3
+
+    for bg_task in bg_tasks:
+        bg_task.cancel()
+    for bg_task in bg_tasks:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(bg_task, timeout=2.0)
+
+    await asyncio.wait_for(turn_cancelled.wait(), timeout=2.0)
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None
+    assert snap.status == SnapshotStatus.PENDING
+    assert snap.finish_reason is None
+    beat_after_shutdown = snap.heartbeat_at
+
+    await asyncio.sleep(0.05)
+    snap_later = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap_later is not None
+    assert snap_later.status == SnapshotStatus.PENDING
+    assert snap_later.heartbeat_at == beat_after_shutdown
+
+
+@pytest.mark.asyncio
+async def test_detach_swallowed_turn_error_finalizes_failed() -> None:
+    """A turn that raises inside SessionRunner.run must finalize as failed.
+
+    run() swallows the exception into last_turn_error and returns. The AgentFn
+    here does not re-raise — that is the documented / user-shaped path. Detached
+    finalize must consult last_turn_error, not only an exception escaping fn.
+    """
+    store = InMemorySessionStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
+    rt, _out_queue = _runtime(session, store)
+    await rt.session_runner.seed_last_good_state()
+
+    async def agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
+            raise RuntimeError('intentional failure')
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    in_queue = CloseableQueue()
+    await in_queue.put(
+        AgentInput(
+            message=Message(role=Role.USER, content=[Part.from_text('fail')]),
+            detach=True,
+        )
+    )
+    in_queue.close()
+
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
+    assert out.finish_reason == AgentFinishReason.DETACHED
+    assert out.snapshot_id is not None
+
+    await _wait_for_snapshot_status(store, out.snapshot_id, SnapshotStatus.FAILED)
+
+    snap = await store.get_snapshot(snapshot_id=out.snapshot_id)
+    assert snap is not None
+    assert snap.status == SnapshotStatus.FAILED
+    assert snap.finish_reason == AgentFinishReason.FAILED
+    assert snap.error is not None
+    assert 'intentional failure' in (snap.error.message or '')
+
+
+@pytest.mark.asyncio
+async def test_cancelling_finalizer_after_snapshot_abort_still_reraises_on_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling `finalize_detach` during shutdown re-raises `CancelledError` even if `snapshot_aborted` is set."""
+    monkeypatch.setattr(runtime_mod, 'DEFAULT_HEARTBEAT_INTERVAL_MS', 10)
+
+    store = InMemorySessionStore()
+    session = Session(SessionState(session_id='test-session', messages=[]))
+    rt, _ = _runtime(session, store)
+    await rt.session_runner.seed_last_good_state()
+
+    started = asyncio.Event()
+    allow_cleanup_exit = asyncio.Event()
+
+    async def agent_fn(session_runner: SessionRunner, _ctx: AgentContext) -> AgentResult:
+        async def handle_turn(_inp: AgentInput, _: TurnContext) -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await allow_cleanup_exit.wait()
+
+        await session_runner.run(handle_turn)
+        return await session_runner.result()
+
+    in_queue = CloseableQueue()
+    await in_queue.put(AgentInput(message=Message(role=Role.USER, content=[Part.from_text('long')])))
+    await in_queue.put(AgentInput(detach=True))
+    in_queue.close()
+
+    out = await rt.run(fn=agent_fn, client_inputs=in_queue)
+    assert out.snapshot_id is not None
+
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+    # 1. User aborts snapshot first -> sets snapshot_aborted while turn blocks in cleanup.
+    await abort_snapshot_in_store(store=store, snapshot_id=out.snapshot_id)
+    await asyncio.sleep(0.03)
+
+    # 2. Server shutdown cancels remaining background tasks (including finalize_detach).
+    bg_tasks = list(rt.background_tasks)
+    assert len(bg_tasks) >= 1
+    for bg_task in bg_tasks:
+        bg_task.cancel()
+
+    allow_cleanup_exit.set()
+    saw_cancelled = False
+    for bg_task in bg_tasks:
+        try:
+            await asyncio.wait_for(bg_task, timeout=2.0)
+        except asyncio.CancelledError:
+            saw_cancelled = True
+    assert saw_cancelled is True

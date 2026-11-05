@@ -49,7 +49,7 @@ type flowContext struct {
 
 // NewFlow creates a Flow that runs fn without registering it. fn takes an input of type In and returns an output of type Out.
 func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	return &Flow[In, Out, struct{}]{NewAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In) (Out, error) {
+	return &Flow[In, Out, struct{}]{NewActionOf(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -60,7 +60,7 @@ func NewFlow[In, Out any](name string, fn Func[In, Out]) *Flow[In, Out, struct{}
 
 // NewStreamingFlow creates a streaming Flow that runs fn without registering it.
 func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	return &Flow[In, Out, Stream]{NewStreamingAction(name, api.ActionTypeFlow, nil, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
+	return &Flow[In, Out, Stream]{NewStreamingActionOf(api.ActionTypeFlow, name, nil, func(ctx context.Context, input In, cb func(context.Context, Stream) error) (Out, error) {
 		fc := &flowContext{
 			flowName: name,
 		}
@@ -72,28 +72,6 @@ func NewStreamingFlow[In, Out, Stream any](name string, fn StreamingFunc[In, Out
 	})}
 }
 
-// DefineFlow creates a Flow that runs fn, and registers it as an action. fn takes an input of type In and returns an output of type Out.
-func DefineFlow[In, Out any](r api.Registry, name string, fn Func[In, Out]) *Flow[In, Out, struct{}] {
-	f := NewFlow(name, fn)
-	f.Register(r)
-	return f
-}
-
-// DefineStreamingFlow creates a streaming Flow that runs fn, and registers it as an action.
-//
-// fn takes an input of type In and returns an output of type Out, optionally
-// streaming values of type Stream incrementally by invoking a callback.
-//
-// If the function supports streaming and the callback is non-nil, it should
-// stream the results by invoking the callback periodically, ultimately returning
-// with a final return value that includes all the streamed data.
-// Otherwise, it should ignore the callback and just return a result.
-func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn StreamingFunc[In, Out, Stream]) *Flow[In, Out, Stream] {
-	f := NewStreamingFlow(name, fn)
-	f.Register(r)
-	return f
-}
-
 // Run runs the function f in the context of the current flow
 // and returns what f returns.
 // It returns an error if no flow is active.
@@ -101,11 +79,40 @@ func DefineStreamingFlow[In, Out, Stream any](r api.Registry, name string, fn St
 // Each call to Run results in a new step in the flow.
 // A step has its own span in the trace, and its result is cached so that if the flow
 // is restarted, f will not be called a second time.
+//
+// The step's context is not available to fn, so anything inside it that takes a
+// context and traces its own work, such as an HTTP client or a database call,
+// reports against the enclosing flow rather than against this step. Use
+// [RunWithContext] for those; keep Run for pure work that traces nothing.
 func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out, error) {
+	return runStep(ctx, "flow.Run", name, func(context.Context) (Out, error) { return fn() })
+}
+
+// RunWithContext is [Run] with the step's own context passed to fn.
+//
+// Work that fn starts with that context nests under the step in the trace
+// instead of under the flow, which is what makes a step's span cover the calls
+// it is timing:
+//
+//	file, err := core.RunWithContext(ctx, "upload-image", func(ctx context.Context) (*File, error) {
+//		return client.Files.Upload(ctx, path) // its spans nest under "upload-image"
+//	})
+//
+// Passing the enclosing context instead of the one supplied here is the whole
+// difference, and it is silent: the step still records the right duration while
+// the calls it made appear beside it rather than beneath it.
+func RunWithContext[Out any](ctx context.Context, name string, fn func(context.Context) (Out, error)) (Out, error) {
+	return runStep(ctx, "flow.RunWithContext", name, fn)
+}
+
+// runStep is the body shared by [Run] and [RunWithContext]. The caller name is
+// passed in so the "must be called from a flow" error names the function the
+// user actually called.
+func runStep[Out any](ctx context.Context, caller, name string, fn func(context.Context) (Out, error)) (Out, error) {
 	fc := flowContextKey.FromContext(ctx)
 	if fc == nil {
 		var z Out
-		return z, fmt.Errorf("flow.Run(%q): must be called from a flow", name)
+		return z, fmt.Errorf("%s(%q): must be called from a flow", caller, name)
 	}
 	spanMetadata := &tracing.SpanMetadata{
 		Name:    name,
@@ -113,7 +120,7 @@ func Run[Out any](ctx context.Context, name string, fn func() (Out, error)) (Out
 		Subtype: "flowStep",
 	}
 	return tracing.RunInNewSpan(ctx, spanMetadata, nil, func(ctx context.Context, _ any) (Out, error) {
-		o, err := fn()
+		o, err := fn(ctx)
 		if err != nil {
 			return base.Zero[Out](), err
 		}
@@ -179,7 +186,7 @@ func FlowNameFromContext(ctx context.Context) string {
 
 // WithFlowContext attaches flow-context metadata to ctx so that [Run] and
 // [FlowNameFromContext] work from within. Use it when wiring a custom
-// flow-like action (e.g. via [NewBidiAction] / [DefineBidiAction]) that
+// flow-like action (e.g. via [NewBidiActionOf]) that
 // should behave like a flow from the user's perspective — letting them
 // call [Run] for sub-step tracking and see the flow name in spans —
 // without going through the flow constructors.

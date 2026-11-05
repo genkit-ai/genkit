@@ -17,6 +17,7 @@
 import { GenkitError } from './error.js';
 import { logger } from './logging.js';
 import type { TelemetryConfig } from './telemetryTypes.js';
+import { flushTelemetryServerPosts } from './tracing/exporter.js';
 
 export * from './tracing/exporter.js';
 export * from './tracing/instrumentation.js';
@@ -27,16 +28,26 @@ const instrumentationKey = '__GENKIT_TELEMETRY_INSTRUMENTED';
 const telemetryProviderKey = '__GENKIT_TELEMETRY_PROVIDER';
 
 /**
+ * Ensures telemetry setup has settled before a span is opened: runs the
+ * flag-gated Firebase auto-init and waits for any pending `enableTelemetry`
+ * config.
+ *
+ * The wait matters because plugins like `enableFirebaseTelemetry()` resolve
+ * their config asynchronously (credentials lookup) and are typically called
+ * without `await`. Without it, spans opened before the SDK starts (e.g. the
+ * first request after a cold start) go to the no-op tracer and are dropped.
+ *
+ * Historically this also booted a NodeSDK (`enableTelemetry({})`) when nothing
+ * was configured. That no longer happens: the Developer UI is fed by
+ * `DirectTelemetryInstrumentation`, so collection stays opt-in.
+ *
  * @hidden
  */
 export async function ensureBasicTelemetryInstrumentation() {
   await checkFirebaseMonitoringAutoInit();
-
   if (global[instrumentationKey]) {
-    return await global[instrumentationKey];
+    await global[instrumentationKey];
   }
-
-  await enableTelemetry({});
 }
 
 /**
@@ -111,7 +122,13 @@ export async function enableTelemetry(
  * @hidden
  */
 export async function flushTracing() {
-  return getTelemetryProvider().flushTracing();
+  // Also await DirectTelemetryInstrumentation's posts, which bypass the OTel
+  // processors. The reflection server relies on this so a trace is saved
+  // before its traceId is returned to the Dev UI.
+  await Promise.all([
+    getTelemetryProvider().flushTracing(),
+    flushTelemetryServerPosts(),
+  ]);
 }
 
 function isOTelInitializationDisabled(): boolean {

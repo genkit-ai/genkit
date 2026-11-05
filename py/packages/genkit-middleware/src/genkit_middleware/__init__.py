@@ -26,59 +26,29 @@ Provides concrete middleware implementations:
   ``use_skill`` tool.
 * ``Filesystem`` — sandboxed filesystem operations (list / read / write /
   edit).
-* ``Artifacts`` — ``read_artifact`` / ``write_artifact`` plus artifact listing in the system prompt.
 
-Import the classes you need and pass instances into ``use=[...]``.
-See below for an example.
+Import the classes you need and pass instances into ``use=[...]``; that works
+without registering anything. Register the ``Middleware()`` plugin to list
+them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
+
+``Artifacts`` only works inside an agent, so it lives in
+``genkit_middleware.exp`` alongside the other experimental agent APIs.
 """
 
-from genkit.plugin_api import MiddlewarePlugin, new_middleware
-from genkit_middleware._artifacts import Artifacts
+from genkit.middleware import Middleware as GenkitMiddleware
+from genkit.plugin_api import Action, ActionKind, Plugin
 from genkit_middleware._fallback import Fallback
 from genkit_middleware._filesystem import Filesystem
 from genkit_middleware._retry import Retry
 from genkit_middleware._skills import Skills
 from genkit_middleware._tool_approval import ToolApproval
 
-_MIDDLEWARE_DESCS = [
-    new_middleware(
-        Retry,
-        name='retry',
-        description='Retries model calls on transient failures with exponential backoff',
-    ),
-    new_middleware(
-        Fallback,
-        name='fallback',
-        description='Falls back to alternative models on failure',
-    ),
-    new_middleware(
-        ToolApproval,
-        name='tool_approval',
-        description='Requires approval before executing tools',
-    ),
-    new_middleware(
-        Skills,
-        name='skills',
-        description='Provides access to skill library for specialized instructions',
-    ),
-    new_middleware(
-        Filesystem,
-        name='filesystem',
-        description='Sandboxed filesystem operations',
-    ),
-    new_middleware(
-        Artifacts,
-        name='artifacts',
-        description='read_artifact and write_artifact tools with session artifact listing in system prompt',
-    ),
-]
 
+class Middleware(Plugin):
+    """Plugin that registers Retry, Fallback, ToolApproval, Skills, and Filesystem.
 
-class Middleware(MiddlewarePlugin):
-    """Plugin that registers Retry, Fallback, ToolApproval, Skills, Filesystem, and Artifacts.
-
-    Registers all six middleware descriptors so they show up in the Dev
-    UI.
+    Registering lists them in the Dev UI and lets a ``.prompt`` file name them
+    in ``use:``. Passing an instance in ``use=[...]`` works either way.
 
     ``Filesystem`` has no default root — supply ``root_dir`` when
     constructing an instance, for example
@@ -95,7 +65,7 @@ class Middleware(MiddlewarePlugin):
 
         # 2. Generate with automatic retry resilience
         res = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini('gemini-flash-latest'),
             prompt='Summarize quantum computing.',
             use=[Retry(max_retries=3)],
         )
@@ -107,11 +77,25 @@ class Middleware(MiddlewarePlugin):
     """
 
     name = 'genkit-middleware'
-    middleware = list(_MIDDLEWARE_DESCS)
+
+    async def init(self) -> list[Action]:
+        """No actions; this plugin only contributes middleware."""
+        return []
+
+    async def resolve(self, action_type: ActionKind, name: str) -> Action | None:
+        """Resolves nothing."""
+        return None
+
+    async def list_actions(self) -> list[Action]:
+        """Lists nothing."""
+        return []
+
+    def list_middleware(self) -> list[type[GenkitMiddleware]]:
+        """Retry, Fallback, ToolApproval, Skills and Filesystem."""
+        return [Retry, Fallback, ToolApproval, Skills, Filesystem]
 
 
 __all__ = [
-    'Artifacts',
     'Fallback',
     'Filesystem',
     'Middleware',

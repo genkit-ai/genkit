@@ -6,6 +6,16 @@ The Firebase plugin integrates Genkit with Firebase and Google Cloud. It provide
   * **Durable Streaming (Beta)** - persist flow stream state in Firestore or the Realtime Database so streams can be resumed.
   * **Session Store (Beta)** - persist agent session snapshots in Firestore, sharded and scalable to arbitrarily long sessions.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 See also the official docs for [deploying Genkit with Firebase](https://genkit.dev/docs/js/deployment/firebase/).
 
 ## Installing the plugin
@@ -115,7 +125,7 @@ const ai = genkit({
 
 const myAgent = ai.defineAgent({
   name: 'myAgent',
-  model: 'googleai/gemini-2.5-flash',
+  model: 'googleai/gemini-flash-latest',
   system: 'You are a helpful assistant.',
   store: new FirestoreSessionStore({ firebaseApp: fApp }),
 });

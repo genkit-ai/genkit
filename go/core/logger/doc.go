@@ -17,94 +17,85 @@
 /*
 Package logger provides context-scoped structured logging for Genkit.
 
-This package wraps the standard library's [log/slog] package to provide
-context-aware logging throughout Genkit operations. Logs are automatically
-associated with the current action or flow context.
+This package wraps the standard library's [log/slog] package. Genkit itself
+logs through it, and application code inside flows and tools can use it to get
+the same behavior: logs flow through the process default logger, carry any
+attributes bound to the context's logger, and, during local development, are
+streamed to the Genkit Dev UI attached to the trace span that emitted them.
 
 # Usage
 
-Retrieve the logger from context within action or flow handlers:
+Log with the package-level functions, passing the context:
 
 	func myFlow(ctx context.Context, input string) (string, error) {
-		log := logger.FromContext(ctx)
-
-		log.Info("Processing input", "size", len(input))
-		log.Debug("Input details", "value", input)
+		logger.Info(ctx, "processing input", "size", len(input))
 
 		result, err := process(input)
 		if err != nil {
-			log.Error("Processing failed", "error", err)
+			logger.Error(ctx, "processing failed", "error", err)
 			return "", err
 		}
 
-		log.Info("Processing complete", "resultSize", len(result))
+		logger.Debug(ctx, "processing complete", "resultSize", len(result))
 		return result, nil
 	}
 
-# Log Levels
+Passing the context is what ties a record to its surroundings: the context
+carries the active trace span (for Dev UI and Cloud Logging correlation) and
+optionally a logger with pre-bound attributes. Equivalent behavior is
+available from any standard logger via the *Context methods, e.g.
+slog.InfoContext(ctx, ...).
 
-Control the global log level to filter output:
+# Log levels
 
-	// Show debug logs (verbose)
+The default minimum level for the console is Info, and the level only ever
+governs the console: during development the Dev UI receives every record at
+debug level and above regardless, so the terminal stays quiet while the full
+debug narrative lands in the trace viewer. To also see Genkit's per-request
+detail (action runs, model calls, tool loops) in the terminal, run with:
+
+	GENKIT_LOG_LEVEL=debug go run .
+
+or set the level programmatically:
+
 	logger.SetLevel(slog.LevelDebug)
 
-	// Show info and above (default)
-	logger.SetLevel(slog.LevelInfo)
+For an interactive CLI app whose terminal should stay pristine, run with
+GENKIT_LOG_LEVEL=warn to silence the startup info lines too; the Dev UI still
+receives everything.
 
-	// Show only warnings and errors
-	logger.SetLevel(slog.LevelWarn)
+[SetLevel] installs Genkit's console handler as the process default.
+Applications that configure their own [slog] handler should set that handler's
+level instead: Genkit respects a custom default handler, so both SetLevel and
+GENKIT_LOG_LEVEL warn and leave it alone rather than replacing it.
 
-	// Show only errors
-	logger.SetLevel(slog.LevelError)
+# The Dev UI
 
-	// Get the current log level
-	level := logger.GetLevel()
+In the dev environment (GENKIT_ENV=dev, as set by `genkit start`), Genkit
+tees every record at debug level and above to the Dev UI's telemetry server
+in addition to the console, independent of the console level. Records logged
+with a context are attached to the trace span active at that moment and
+appear in the span's Logs panel in the trace viewer. Set
+GENKIT_OTEL_ENABLE_LOGS=false to turn this off.
 
-# Context Integration
+# Context integration
 
-The logger is automatically available in action and flow contexts. It
-inherits from the context passed to [genkit.Init] and flows through
-all nested operations.
+[FromContext] returns the context's logger (or the process default) bound to
+that context, so records logged even through its plain methods (Info, Error,
+...) still carry the span that was active when the logger was obtained. Store
+a derived logger with [WithContext] to bind attributes to everything logged
+downstream:
 
-For custom operations outside of actions/flows, attach a logger to context:
+	ctx = logger.WithContext(ctx, logger.FromContext(ctx).With("requestId", id))
 
-	log := slog.Default()
-	ctx = logger.WithContext(ctx, log)
+The package-level logging functions use the context's logger automatically,
+so code below the WithContext call needs no extra plumbing for its records to
+carry requestId.
 
-# slog Compatibility
+# Additional destinations
 
-The logger returned by [FromContext] is a standard [*slog.Logger] and
-supports all slog methods:
-
-	log := logger.FromContext(ctx)
-
-	// Structured logging with attributes
-	log.Info("User action",
-		"userId", userID,
-		"action", "login",
-		"duration", elapsed,
-	)
-
-	// Grouped attributes
-	log.Info("Request completed",
-		slog.Group("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-		),
-		slog.Group("response",
-			"status", status,
-			"bytes", written,
-		),
-	)
-
-	// With pre-set attributes
-	requestLog := log.With("requestId", requestID)
-	requestLog.Info("Starting")
-	// ... later ...
-	requestLog.Info("Finished")
-
-This package is primarily used by Genkit internals but is useful for
-plugin developers who need consistent logging that integrates with
-Genkit's observability features.
+[AddHandler] tees the default logger's records to another [slog.Handler]
+without disturbing console output. Genkit uses it internally for the Dev UI
+export; applications can use it to mirror logs to a file or a test recorder.
 */
 package logger

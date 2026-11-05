@@ -387,7 +387,9 @@ function toAnthropicContent(
   | ThinkingBlockParam
 > {
   return content.map((p) => {
-    if (p.reasoning) {
+    // Claude can return signed thinking blocks with empty text, so check the
+    // type rather than truthiness.
+    if (typeof p.reasoning === 'string') {
       const signature = p.metadata?.thoughtSignature;
       return {
         type: 'thinking',

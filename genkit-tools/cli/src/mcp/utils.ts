@@ -14,9 +14,33 @@
  * limitations under the License.
  */
 
-import { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
+import {
+  BaseRuntimeManager,
+  GenkitToolsError,
+} from '@genkit-ai/tools-common/manager';
 import { z } from 'zod';
+import {
+  SUPPORTED_DOC_LANGUAGES,
+  detectProjectLanguage,
+  type SupportedDocLanguage,
+} from '../utils/docs';
 import { startDevProcessManager, startManager } from '../utils/manager-utils';
+
+export {
+  SUPPORTED_DOC_LANGUAGES,
+  detectProjectLanguage,
+  type SupportedDocLanguage,
+};
+
+export function formatMcpError(err: unknown): string {
+  if (err instanceof GenkitToolsError) {
+    return err.formatError();
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return typeof err === 'string' ? err : (JSON.stringify(err) ?? String(err));
+}
 
 export interface McpToolOptions {
   projectRoot: string;
@@ -65,6 +89,9 @@ export class McpRuntimeManager {
   private manager: BaseRuntimeManager | undefined;
   private currentProjectRoot: string | undefined;
 
+  /** @param auth `--experimental-auth`. */
+  constructor(private readonly auth?: boolean) {}
+
   async getManager(projectRoot: string) {
     if (this.manager && this.currentProjectRoot === projectRoot) {
       return this.manager;
@@ -72,10 +99,9 @@ export class McpRuntimeManager {
     if (this.manager) {
       await this.manager.stop();
     }
-    this.manager = await startManager({
-      projectRoot,
-      manageHealth: true,
-    });
+    // No auth here: attaching to existing runtimes never generates a secret.
+    // `this.auth` applies when a runtime is spawned (getManagerWithDevProcess).
+    this.manager = await startManager({ projectRoot, manageHealth: true });
     this.currentProjectRoot = projectRoot;
     return this.manager;
   }
@@ -100,6 +126,7 @@ export class McpRuntimeManager {
         healthCheck: timeout !== 0,
         timeout,
         cwd: explicitProjectRoot ? projectRoot : undefined,
+        auth: this.auth,
       }
     );
     this.manager = devManager.manager;

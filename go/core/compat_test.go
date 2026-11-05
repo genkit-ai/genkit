@@ -184,16 +184,13 @@ func TestV1ConstructorsPreserveV1Behaviour(t *testing.T) {
 		}
 	})
 
-	t.Run("SchemaValidationError still matches and now classifies", func(t *testing.T) {
+	t.Run("an invalid-input error classifies and keeps its cause", func(t *testing.T) {
 		cause := errors.New("field x: expected string")
-		err := error(core.NewSchemaValidationError("/flow/foo", cause))
+		err := error(status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", "/flow/foo", cause))
 
-		var sve *core.SchemaValidationError
-		if !errors.As(err, &sve) {
-			t.Fatal("errors.As(*core.SchemaValidationError) = false")
-		}
-		if sve.GenkitError == nil {
-			t.Error("embedded GenkitError is nil")
+		var ge *core.GenkitError
+		if !errors.As(err, &ge) {
+			t.Fatal("errors.As(*core.GenkitError) = false")
 		}
 		if !errors.Is(err, cause) {
 			t.Error("errors.Is(cause) = false")

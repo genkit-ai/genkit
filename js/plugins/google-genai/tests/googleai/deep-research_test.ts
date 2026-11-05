@@ -18,11 +18,14 @@ import * as assert from 'assert';
 import { GenerateRequest } from 'genkit/model';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
+import { GeminiInteraction } from '../../src/common/interaction-types.js';
 import {
   DeepResearchConfigSchema,
+  TEST_ONLY,
   defineModel,
+  listKnownModels,
+  model,
 } from '../../src/googleai/deep-research.js';
-import { GeminiInteraction } from '../../src/googleai/interaction-types.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
 
 describe('Deep Research', () => {
@@ -76,8 +79,38 @@ describe('Deep Research', () => {
     ],
   };
 
+  describe('hidden models', () => {
+    it('keeps deep-research-pro-preview-12-2025 usable, with a stage', () => {
+      const ref = model('deep-research-pro-preview-12-2025');
+      assert.strictEqual(
+        ref.name,
+        'googleai/deep-research-pro-preview-12-2025'
+      );
+      assert.strictEqual(ref.info?.stage, 'deprecated');
+      assert.deepStrictEqual(
+        ref.info?.supports,
+        TEST_ONLY.GENERIC_MODEL.info?.supports
+      );
+      assert.ok(
+        !Object.keys(TEST_ONLY.KNOWN_MODELS).includes(
+          'deep-research-pro-preview-12-2025'
+        )
+      );
+    });
+
+    it('still registers hidden models', () => {
+      const names = listKnownModels(defaultPluginOptions).map(
+        (m) => m.__action.name
+      );
+      assert.ok(names.includes('googleai/deep-research-pro-preview-12-2025'));
+      for (const name of Object.keys(TEST_ONLY.KNOWN_MODELS)) {
+        assert.ok(names.includes(`googleai/${name}`), name);
+      }
+    });
+  });
+
   describe('defineModel', () => {
-    it('passes responseModalities to the API', async () => {
+    it('sends responseModalities as response_format entries', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -98,7 +131,11 @@ describe('Deep Research', () => {
       const options = fetchArgs[1];
       const body = JSON.parse(options.body);
 
-      assert.deepStrictEqual(body.response_modalities, ['text', 'image']);
+      assert.deepStrictEqual(body.response_format, [
+        { type: 'text' },
+        { type: 'image' },
+      ]);
+      assert.strictEqual(body.response_modalities, undefined);
     });
 
     it('passes agent_config options to the API', async () => {
@@ -263,7 +300,7 @@ describe('Deep Research', () => {
       assert.strictEqual(body.tools[0].name, 'myFunc');
     });
 
-    it('persists client options to metadata', async () => {
+    it('applies request-level apiKey and baseUrl overrides to start', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -278,18 +315,16 @@ describe('Deep Research', () => {
         },
       };
 
-      const operation = await model.start(request);
+      await model.start(request);
 
-      assert.deepStrictEqual(operation.metadata?.clientOptions, {
-        apiVersion: undefined,
-        apiKey: 'request-api-key',
-        baseUrl: 'https://custom.url',
-        customHeaders: undefined,
-        experimental_debugTraces: undefined,
-      });
+      sinon.assert.calledOnce(fetchStub);
+      const url = fetchStub.lastCall.args[0] as string;
+      const options = fetchStub.lastCall.args[1];
+      assert.ok(url.startsWith('https://custom.url'));
+      assert.strictEqual(options.headers['x-goog-api-key'], 'request-api-key');
     });
 
-    it('uses persisted options in check', async () => {
+    it('applies apiKey override from options.context on check', async () => {
       const model = defineModel(
         'deep-research-pro-preview-12-2025',
         defaultPluginOptions
@@ -297,42 +332,18 @@ describe('Deep Research', () => {
       mockFetchResponse(mockInteractionResponse); // For start
       mockFetchResponse(mockInteractionResponse); // For check
 
-      const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
-        ...minimalRequest,
-        config: {
-          apiKey: 'request-api-key',
-          baseUrl: 'https://custom.url',
-        },
-      };
+      const operation = await model.start(minimalRequest);
 
-      const operation = await model.start(request);
-
-      // Now call check with the operation that has metadata
-      await model.check!(operation);
+      await model.check!(operation, {
+        context: { secrets: { apiKey: 'context-api-key' } },
+      });
 
       // fetchStub should be called twice: once for start, once for check
       sinon.assert.calledTwice(fetchStub);
 
       const checkCall = fetchStub.getCall(1);
-      const url = checkCall.args[0] as string;
       const options = checkCall.args[1];
-
-      // Check URL uses custom base URL
-      assert.ok(url.startsWith('https://custom.url'));
-
-      // Check API Key header
-      // The client usually adds it to x-goog-api-key or key query param.
-      // We need to know how `client.ts` implements `getInteraction`.
-      // Assuming it adds it to headers or query params.
-      // Based on googleai/client.ts (which I haven't read, but assuming standard behavior):
-      // The `fetch` mock args[1] contains headers.
-      const headers = options.headers as any;
-      if (headers['x-goog-api-key']) {
-        assert.strictEqual(headers['x-goog-api-key'], 'request-api-key');
-      } else {
-        // Check query param if not in header (though likely in header)
-        assert.ok(url.includes('key=request-api-key'));
-      }
+      assert.strictEqual(options.headers['x-goog-api-key'], 'context-api-key');
     });
 
     it('maps usage statistics', async () => {
@@ -368,10 +379,12 @@ describe('Deep Research', () => {
         totalTokens: 300,
         cachedContentTokens: 60,
         thoughtsTokens: 10,
-        inputCharacters: 80,
-        inputImages: 20,
-        outputCharacters: 150,
-        outputAudioFiles: 50,
+        custom: {
+          inputTextTokens: 80,
+          inputImageTokens: 20,
+          outputTextTokens: 150,
+          outputAudioTokens: 50,
+        },
       });
     });
 
@@ -449,7 +462,43 @@ describe('Deep Research', () => {
           name: 'MyServer',
           url: 'http://localhost:8080',
           headers: { Authorization: 'Bearer token' },
-          allowed_tools: ['tool1', 'tool2'],
+          allowed_tools: [{ tools: ['tool1', 'tool2'] }],
+        },
+      ]);
+    });
+
+    it('supports allowedTools with mode in mcpServers', async () => {
+      const model = defineModel(
+        'deep-research-pro-preview-12-2025',
+        defaultPluginOptions
+      );
+      mockFetchResponse(mockInteractionResponse);
+
+      const request: GenerateRequest<typeof DeepResearchConfigSchema> = {
+        ...minimalRequest,
+        config: {
+          mcpServers: [
+            {
+              name: 'MyServer',
+              url: 'http://localhost:8080',
+              allowedTools: [{ mode: 'validated', tools: ['tool1'] }],
+            },
+          ],
+        },
+      };
+
+      await model.start(request);
+
+      sinon.assert.calledOnce(fetchStub);
+      const options = fetchStub.lastCall.args[1];
+      const body = JSON.parse(options.body);
+
+      assert.deepStrictEqual(body.tools, [
+        {
+          type: 'mcp_server',
+          name: 'MyServer',
+          url: 'http://localhost:8080',
+          allowed_tools: [{ mode: 'validated', tools: ['tool1'] }],
         },
       ]);
     });

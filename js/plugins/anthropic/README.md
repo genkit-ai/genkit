@@ -3,6 +3,16 @@
 `@genkit-ai/anthropic` is Anthropic plugin for [Genkit](https://github.com/genkit-ai/genkit).
 It supersedes the earlier community package `genkitx-anthropic` and is now maintained by Google.
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 ## Supported models
 
 The plugin supports the most recent Anthropic models like **Claude Haiku 4.5**,

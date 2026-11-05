@@ -17,42 +17,43 @@
 """Test tool calling."""
 
 import json
+from collections.abc import Callable
 from functools import reduce
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from genkit_openai.models import OpenAIModel
+from genkit_openai._models._model import OpenAIModel
+from openai.types.chat import ChatCompletion
 
-from genkit import ModelRequest, ModelResponseChunk, TextPart, ToolRequestPart
+from genkit import ModelResponseChunk
+from genkit.model import ModelRequest
 
 
 @pytest.mark.asyncio
-async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequest) -> None:
+async def test_generate_with_tool_calls_executes_tools(
+    sample_request: ModelRequest, make_completion: Callable[..., ChatCompletion]
+) -> None:
     """Test generate with tool calls executes tools."""
-    mock_tool_call = MagicMock()
-    mock_tool_call.id = 'tool123'
-    mock_tool_call.function.name = 'tool_fn'
-    mock_tool_call.function.arguments = '{"a": 1}'
-
     # First call triggers tool execution
-    first_message = MagicMock()
-    first_message.role = 'assistant'
-    first_message.tool_calls = [mock_tool_call]
-    first_message.content = None
-    first_message.reasoning_content = None
-
-    first_response = MagicMock()
-    first_response.choices = [MagicMock(finish_reason='tool_calls', message=first_message)]
+    first_response = make_completion(
+        choice={
+            'finish_reason': 'tool_calls',
+            'message': {
+                'role': 'assistant',
+                'content': None,
+                'tool_calls': [
+                    {
+                        'id': 'tool123',
+                        'type': 'function',
+                        'function': {'name': 'tool_fn', 'arguments': '{"a": 1}'},
+                    }
+                ],
+            },
+        }
+    )
 
     # Second call is the model response
-    second_message = MagicMock()
-    second_message.role = 'model'
-    second_message.tool_calls = None
-    second_message.content = 'final response'
-    second_message.reasoning_content = None
-
-    second_response = MagicMock()
-    second_response.choices = [MagicMock(finish_reason='stop', message=second_message)]
+    second_response = make_completion(content='final response')
 
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(
@@ -67,9 +68,9 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequ
     response = await model._generate(sample_request)
 
     assert response.message is not None
-    part = response.message.content[0].root
+    part = response.message.content[0]
 
-    assert isinstance(part, ToolRequestPart)
+    assert part.tool_request is not None
     assert part.tool_request.input == {'a': 1}
     assert part.tool_request.name == 'tool_fn'
     assert part.tool_request.ref == 'tool123'
@@ -77,9 +78,9 @@ async def test_generate_with_tool_calls_executes_tools(sample_request: ModelRequ
     response = await model._generate(sample_request)
 
     assert response.message is not None
-    part = response.message.content[0].root
+    part = response.message.content[0]
 
-    assert isinstance(part, TextPart)
+    assert part.text is not None
     assert part.text == 'final response'
 
     assert mock_client.chat.completions.create.call_count == 2
@@ -116,11 +117,12 @@ async def test_generate_stream_with_tool_calls(sample_request: ModelRequest) -> 
             delta_mock.role = None
             delta_mock.tool_calls = [MockToolCall(id, index, name, args_chunk)]
             delta_mock.reasoning_content = None
+            delta_mock.refusal = None
 
             choice_mock = MagicMock()
             choice_mock.delta = delta_mock
 
-            return MagicMock(choices=[choice_mock])
+            return MagicMock(choices=[choice_mock], usage=None)
 
         def __aiter__(self) -> 'MockStream':
             return self
@@ -138,15 +140,14 @@ async def test_generate_stream_with_tool_calls(sample_request: ModelRequest) -> 
     collected_chunks = []
 
     def callback(chunk: ModelResponseChunk) -> None:
-        collected_chunks.append(chunk.content[0].root)
+        collected_chunks.append(chunk.content[0])
 
     await model._generate_stream(sample_request, callback)
 
     assert len(collected_chunks) == 3
-    assert all(isinstance(part, ToolRequestPart) for part in collected_chunks)
+    assert all(part.tool_request is not None for part in collected_chunks)
 
     tool_part = collected_chunks[0]
-    assert isinstance(tool_part, ToolRequestPart)
     assert tool_part.tool_request is not None
     tool_request = tool_part.tool_request
     assert tool_request.name == 'tool_fn'

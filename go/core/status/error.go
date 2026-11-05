@@ -179,18 +179,31 @@ func (e *Error) Unwrap() error {
 //
 //	errors.Is(err, ai.ErrMaxTurnsExceeded) // the specific sentinel
 //	errors.Is(err, status.ErrAborted)      // the base it derives from
+//
+// An Error with no sentinel, one decoded from the wire or built as a struct
+// literal, matches the base sentinel of its status, because the status is all
+// it carries: a NOT_FOUND from another process matches [ErrNotFound], and
+// matches no domain sentinel derived from it.
 func (e *Error) Is(target error) bool {
 	// errors.Is calls this whenever the interface is non-nil, including when it
 	// holds a nil *Error, so the nil check has to be here rather than at the
 	// call site.
-	if e == nil || e.sentinel == nil {
+	if e == nil {
 		return false
 	}
-	return errors.Is(e.sentinel, target)
+	s := e.sentinel
+	if s == nil {
+		// Nil for a status that is not canonical, which matches nothing.
+		if s = baseSentinels[e.Status]; s == nil {
+			return false
+		}
+	}
+	return errors.Is(s, target)
 }
 
 // Sentinel returns the sentinel that classified e, or nil if it was decoded
-// from the wire rather than constructed in this process.
+// from the wire rather than constructed in this process. [Error.Is] still
+// matches such an error against the base sentinel of its status.
 func (e *Error) Sentinel() *Sentinel {
 	if e == nil {
 		return nil
@@ -223,26 +236,46 @@ func (e *Error) Stack() string {
 //
 // Of(nil) is OK.
 func Of(err error) Name {
+	s, _ := Classified(err)
+	return s
+}
+
+// Classified returns err's status and whether anything in its chain actually
+// carries one. It is [Of] with the one distinction Of cannot make: an
+// unclassified failure and one deliberately classified Internal both report
+// Internal, and only the second is a decision someone made.
+//
+// Middleware that acts on a status needs that distinction, since the action it
+// takes on an unclassified error (a network blip from a provider SDK, say)
+// should not follow from INTERNAL happening to be in a configured list:
+//
+//	if s, ok := status.Classified(err); ok && slices.Contains(retryOn, s) { ... }
+//
+// Cancellation and deadline expiry count as classified. Classified(nil) is
+// (OK, false).
+func Classified(err error) (Name, bool) {
 	if err == nil {
-		return OK
+		return OK, false
 	}
 	if e := firstError(err); e != nil {
-		return e.Status
+		return e.Status, true
 	}
 	if e, ok := err.(*Error); ok && e == nil {
-		return OK // a non-nil interface holding a nil *Error is not a failure
+		return OK, false // a non-nil interface holding a nil *Error is not a failure
 	}
+	// A typed-nil *Sentinel matches errors.As but carries nothing; skip it the
+	// way firstError skips a typed-nil *Error.
 	var s *Sentinel
-	if errors.As(err, &s) {
-		return s.status
+	if errors.As(err, &s) && s != nil {
+		return s.status, true
 	}
 	switch {
 	case errors.Is(err, context.Canceled):
-		return Cancelled
+		return Cancelled, true
 	case errors.Is(err, context.DeadlineExceeded):
-		return DeadlineExceeded
+		return DeadlineExceeded, true
 	}
-	return Internal
+	return Internal, false
 }
 
 // firstError returns the first non-nil [Error] in err's chain, or nil. It is

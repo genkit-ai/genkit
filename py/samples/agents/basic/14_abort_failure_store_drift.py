@@ -27,14 +27,20 @@ store, which is the source of truth:
      prompt. The client view drifts ahead of (really, behind) the store.
 
   2. task.abort() — a *server-side* cancel of a detached turn. The snapshot
-     settles ABORTED and never becomes the session's resume point. Your chat is
-     left holding the optimistic prompt (drift again), so you reload from the
-     store to resync — which skips the dead aborted leaf back to the last
-     completed turn.
+     settles ABORTED and never becomes the session's resume point. abort()
+     returns the snapshot's status from *before* this call (``pending`` when
+     it cancelled in-flight work). The in-memory chat keeps the prompt (it
+     was still asked) and still points at that aborted leaf, so a send
+     returns res.error (that snapshot isn't resumable). chat(session_id=)
+     continues from the last completed turn.
+     load_chat(session_id=) would show the aborted row.
 
-  3. a real server error (e.g. the model is exhausted) — the chat client raises
-     AgentError, the optimistic prompt is rolled back, and the resume handle stays
-     pinned to the last good turn, so the next send picks up from there.
+  3. a real server error (e.g. the model is exhausted) — the chat returns
+     the turn with res.error set, the optimistic prompt is rolled back, and
+     the resume handle stays pinned to the last good turn, so the next send
+     picks up from there. A call that never produces a turn result (e.g. a
+     dropped connection or an invalid init) raises GenkitError, so wrap send
+     in try/except GenkitError for those.
 
 And a fourth, related point: a detached turn that *succeeds* still never streams
 its reply back to your in-memory chat, so before continuing you reload from the
@@ -48,10 +54,13 @@ deterministically with no API key.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
-from genkit import ActionRunContext, Genkit, GenkitError, Message, Part, TextPart
-from genkit.agent import (
-    AgentError,
+from genkit import GenkitError, Message, Part
+from genkit.exp import Genkit
+from genkit.exp.agent import (
+    AgentChat,
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -67,12 +76,10 @@ store = InMemorySessionStore()
 
 
 def _text(content: list[Part] | None) -> str:
-    return ''.join(
-        root.text for p in (content or []) if isinstance((root := getattr(p, 'root', p)), TextPart) and root.text
-    )
+    return ''.join(p.text for p in (content or []) if p.text)
 
 
-async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def flaky_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, _: TurnContext) -> TurnResult | None:
         text = _text(inp.message.content if inp.message else None).lower()
         if 'fail' in text:
@@ -80,7 +87,7 @@ async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
         if 'slow' in text:
             await asyncio.sleep(1.0)  # leaves a window to abort while the turn runs
         msgs = await sess.get_messages()
-        await sess.set_messages(msgs + [Message(role='model', content=[Part(TextPart(text='reply'))])])
+        await sess.set_messages(msgs + [Message(role='model', content=[Part.from_text('reply')])])
         return TurnResult(finish_reason=AgentFinishReason.STOP)
 
     await sess.run(handle_turn)
@@ -90,9 +97,9 @@ async def flaky_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
 agent = ai.define_custom_agent(name='flakyAgent', fn=flaky_fn, store=store)
 
 
-def turns(chat: object) -> list[str]:
+def turns(chat: AgentChat[Any]) -> list[str]:
     """A compact 'text/role' view of the chat's running history."""
-    return [f'{_text(m.content or [])}/{m.role}' for m in chat.messages]  # type: ignore[attr-defined]
+    return [f'{_text(m.content or [])}/{m.role}' for m in chat.messages]
 
 
 async def client_side_abort() -> None:
@@ -127,20 +134,24 @@ async def server_side_task_abort() -> None:
     assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
     status = await task.abort()
-    assert status == SnapshotStatus.ABORTED
-    # Aborting drops the optimistic 'slow a2' prompt the chat was holding for the
-    # killed turn, so the local view rolls back to the last completed turn.
-    assert turns(chat) == ['a1/user', 'reply/model']
+    # abort() returns the *previous* status: pending, because the turn was still running.
+    assert status == SnapshotStatus.PENDING
+    # The prompt stays — it was still asked. The chat still points at the
+    # aborted leaf, so a send returns res.error until you reload.
+    assert turns(chat) == ['a1/user', 'reply/model', 'slow a2/user']
 
-    # Still reload from the store before continuing — it's the authoritative
-    # state, and a detached turn's work never streams back to this chat object,
-    # so load_chat is the way to pick up whatever actually landed server-side.
-    chat = await agent.load_chat(session_id=session_id)
-    assert turns(chat) == ['a1/user', 'reply/model']
+    # The store's session leaf is that aborted row; chat(session_id=) is how
+    # you continue from the last completed turn.
+    leaf = await agent.get_snapshot(session_id=session_id)
+    assert leaf is not None
+    assert leaf.status == SnapshotStatus.ABORTED
 
+    chat = agent.chat(session_id=session_id)
     out = await chat.send('a3')
     assert out.finish_reason == AgentFinishReason.STOP
-    assert turns(chat) == ['a1/user', 'reply/model', 'a3/user', 'reply/model']
+    # This chat only saw the new turn. Read the store for the full history.
+    synced = await agent.load_chat(session_id=session_id)
+    assert turns(synced) == ['a1/user', 'reply/model', 'a3/user', 'reply/model']
 
 
 async def server_side_failure() -> None:
@@ -150,10 +161,13 @@ async def server_side_failure() -> None:
     last_good = chat.snapshot_id
 
     try:
-        await chat.send('please fail')
-        raise AssertionError('expected AgentError')
-    except AgentError as err:
-        assert 'model exhausted' in err.message
+        failed = await chat.send('please fail')
+        assert failed.finish_reason == AgentFinishReason.FAILED
+        assert failed.error is not None
+        assert 'model exhausted' in failed.error.message
+    except GenkitError as err:
+        raise AssertionError('turn ran, expected res.error rather than a raise') from err
+
     # No reply landed, so the prompt is dropped and the resume handle holds.
     assert turns(chat) == ['b1/user', 'reply/model']
     assert chat.snapshot_id == last_good
@@ -180,9 +194,9 @@ async def detached_turn_reload_to_resync() -> None:
     # optimistic prompt — it never saw the model's answer.
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user']
 
-    # Reload from the store to pick up the authoritative history (reply included)
-    # before continuing; sending on the stale chat would build on a view missing
-    # the detached turn's reply.
+    # The detached turn completed, so load_chat(session_id=) hydrates that
+    # leaf — reply included — and send() can continue from it. Sending on
+    # the stale in-memory chat would build on a view missing the reply.
     chat = await agent.load_chat(session_id=session_id)
     assert turns(chat) == ['c1/user', 'reply/model', 'c2/user', 'reply/model']
 

@@ -14,13 +14,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""URL config for the django-hello sample."""
+"""The flow is just another view on urlpatterns."""
 
 from django.urls import path
-
-# pyrefly resolves imports from py/ root, so it can't see this sibling sample
-# package; at runtime uvicorn is launched from samples/django-hello/ and finds it.
-from recipes.views import say_hi  # pyrefly: ignore[missing-import]
+from recipes.views import say_hi
 
 urlpatterns = [
     path('chat', say_hi),

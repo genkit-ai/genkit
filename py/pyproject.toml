@@ -17,8 +17,8 @@
 [project]
 authors = [{ name = "Google" }]
 dependencies = [
-  "dotpromptz==0.1.5",
   "genkit",
+  "genkit-amazon-bedrock",
   "genkit-anthropic",
   "genkit-openai",
   "genkit-django",
@@ -27,7 +27,10 @@ dependencies = [
   "genkit-flask",
   "genkit-google-cloud",
   "genkit-google-genai",
+  "genkit-mcp",
   "genkit-middleware",
+  "genkit-otel",
+  "genkit-a2ui",
   "genkit-ollama",
   "genkit-vertexai",
 ]
@@ -44,13 +47,12 @@ dev = [
   "ipython~=8.22; python_version <= '3.10'",
   "ipython~=9.0.2; python_version >= '3.11'",
   "jupyter>=1.1.1",
-  "mcp>=1.25.0",
   "pytest-asyncio>=0.25.3",
   "pytest>=8.3.4",
   "pytest-cov>=6.0.0",
   "datamodel-code-generator>=0.27.3",
   "pytest-mock>=3.14.0",
-  "twine>=6.1.0",
+  "twine>=7.0.0",
   "pip>=25.0.1",
   "nox>=2025.2.9",
   "nox-uv>=0.2.2",
@@ -77,10 +79,12 @@ lint = [
   "grpcio-reflection>=1.68.0",
   "gunicorn>=22.0.0",
   "hypercorn>=0.17.0",
+  "opentelemetry-exporter-otlp>=1.29.0",
   "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
   "opentelemetry-instrumentation-asgi>=0.41b0",
   "opentelemetry-instrumentation-fastapi>=0.41b0",
   "opentelemetry-instrumentation-grpc>=0.41b0",
+  "opentelemetry-sdk>=1.29.0",
   "quart>=0.19.0",
   "secure>=1.0.0",
   "sentry-sdk>=2.0.0",
@@ -136,6 +140,7 @@ default = true
 [tool.uv.sources]
 # Samples (alphabetical by package name from pyproject.toml)
 agents               = { workspace = true }
+amazon-bedrock-sample = { workspace = true }
 anthropic-sample     = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }
@@ -146,18 +151,22 @@ fastapi-bugbot       = { workspace = true }
 flask-hello          = { workspace = true }
 gemini-code-execution = { workspace = true }
 gemini-context-caching = { workspace = true }
+google-genai-deep-research = { workspace = true }
 google-genai-media   = { workspace = true }
+mcp-hello            = { workspace = true }
 middleware           = { workspace = true }
 middleware-coding-agent = { workspace = true }
 ollama-sample        = { workspace = true }
+otel-jaeger          = { workspace = true }
 output-formats       = { workspace = true }
 prompts              = { workspace = true }
 tool-interrupts      = { workspace = true }
 tracing              = { workspace = true }
-vertexai-imagen      = { workspace = true }
+vertexai-image       = { workspace = true }
 
 # Core packages
 genkit = { workspace = true }
+genkit-amazon-bedrock = { workspace = true }
 genkit-anthropic    = { workspace = true }
 genkit-openai       = { workspace = true }
 genkit-django       = { workspace = true }
@@ -166,7 +175,10 @@ genkit-fastapi      = { workspace = true }
 genkit-flask        = { workspace = true }
 genkit-google-cloud  = { workspace = true }
 genkit-google-genai     = { workspace = true }
+genkit-mcp          = { workspace = true }
 genkit-middleware   = { workspace = true }
+genkit-otel         = { workspace = true }
+genkit-a2ui         = { workspace = true }
 genkit-ollama       = { workspace = true }
 genkit-vertexai     = { workspace = true }
 
@@ -224,7 +236,28 @@ select = [
   "S",     # flake8-bandit (security)
   "ASYNC", # flake8-async (async best practices)
   "T20",   # flake8-print (no print statements)
+  "TD",    # flake8-todos (TODO comment formatting and issue links)
+  "TID251", # banned-api (see flake8-tidy-imports.banned-api below)
 ]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Ruff groups every banned-api entry under one rule code (TID251), enforcing two
+# distinct boundaries across workspace packages and samples:
+#   1. Public SDK surface: plugins and samples cannot import `genkit._ai`,
+#      `genkit._core`, `genkit.exp._api`, `genkit.web._sse`, or
+#      `genkit.testing._models`. (`packages/genkit/ruff.toml` replaces this table
+#      inside core `genkit` so internal modules can import each other while keeping
+#      the logger ban in (2). Copy any new non-private entry there too.)
+#   2. Dev UI log routing: code inside flows and plugins uses `genkit.get_logger`
+#      instead of `structlog.get_logger` or `logging.getLogger` so `ExportTee`
+#      streams log records to the Dev UI trace panel.
+"genkit._ai".msg = "genkit._ai is private; import from a public genkit module (genkit, genkit.model, genkit.plugin_api, ...)."
+"genkit._core".msg = "genkit._core is private; import from a public genkit module (genkit, genkit.model, genkit.plugin_api, ...)."
+"genkit.exp._api".msg = "genkit.exp._api is private; import from genkit.exp."
+"genkit.web._sse".msg = "genkit.web._sse is private; import from genkit.web."
+"genkit.testing._models".msg = "genkit.testing._models is private; import from genkit.testing."
+"structlog.get_logger".msg = "Use genkit.get_logger; structlog.get_logger lines never reach the Dev UI trace panel."
+"logging.getLogger".msg = "Use genkit.get_logger; stdlib logger lines never reach the Dev UI trace panel."
 
 [tool.ruff.lint.per-file-ignores]
 # Auto-generated file from schema
@@ -234,20 +267,29 @@ select = [
 # JSON Patch diff/apply operations require manipulating arbitrary Any JSON structures
 "packages/genkit/src/genkit/_ai/_json_patch.py" = ["ANN401"]
 # HTTP client uses **httpx_kwargs: Any to forward arbitrary options
-"packages/genkit/src/genkit/_core/_http_client.py" = ["ANN401"]
 # Span wrapper uses __getattr__ -> Any for dynamic delegation
-"packages/genkit/src/genkit/_core/trace/_adjusting_exporter.py" = ["ANN401"]
+"packages/genkit-google-cloud/src/genkit_google_cloud/_telemetry/_adjusting_exporter.py" = ["ANN401"]
+# Private telemetry folder; helpers here are not a public docstring surface
+"packages/genkit/src/genkit/_core/_telemetry/*.py" = ["D"]
 # Re-export modules (F401 would flag imports used only for re-export)
-"packages/genkit/src/genkit/_ai/__init__.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_document.py" = ["F401"]
 "packages/genkit/src/genkit/_ai/_model.py" = ["F401"]
-"packages/genkit/src/genkit/_ai/_formats/__init__.py" = ["F401"]
-"packages/genkit/src/genkit/_core/trace/__init__.py" = ["F401"]
+"packages/genkit/src/genkit/_ai/_testing.py" = ["F401"]
 # Test files don't need docstrings or type ceremony; test names/bodies are self-documenting
 "**/tests/**/*.py" = ["D", "ANN"]
 "packages/genkit/tests/typing/*.py" = ["D", "F821", "F841", "B018", "ANN"]
 # Samples are demo code and can use blocking I/O, prints, top-level execution
 "samples/**/*.py" = ["ANN", "D", "E402", "ASYNC", "T201"]
+# TID251 per-file ignores belong ONLY on core `genkit` files. Never add a plugin
+# path here: ignoring TID251 file-wide in a plugin would also disable the
+# `genkit._*` private-import ban, so legitimate plugin logger or whitebox-test
+# exceptions must use line-scoped `# noqa: TID251` instead.
+# Defines get_logger (wrapping structlog.get_logger) and quiets stdlib loggers
+"packages/genkit/src/genkit/_core/_logger.py" = ["TID251"]
+# Served-failure logs go to the host web server's stdlib logging config
+"packages/genkit/src/genkit/web/_sse.py" = ["TID251"]
+# Core unit tests directly exercise `genkit._*` internals and stdlib loggers
+"packages/genkit/tests/**" = ["TID251"]
 
 
 [tool.ruff.lint.isort]
@@ -339,7 +381,7 @@ aiohappyeyeballs      = "2.6.1"    # Python Software Foundation (transitive dep 
 aiohttp               = "3.13.3"   # Apache-2.0 AND MIT (transitive dep of xai-sdk)
 certifi               = "2026.1.4" # TODO: Verify.
 dependencies          = true
-dotpromptz-handlebars = "0.1.8"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
+dotpromptz-handlebars = "0.2.0"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
 google-crc32c         = "1.8.0"    # Apache-2.0
 mistralai             = ">=1.9.11" # Apache-2.0 "https://github.com/mistralai/client-python/blob/main/LICENSE"
 multidict             = "6.7.0"    # Apache-2.0
@@ -360,6 +402,7 @@ root = [
   # Core package
   "packages/genkit/src",
   # Integration packages
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -368,7 +411,10 @@ root = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-otel/src",
+  "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
   ".",  # For samples.shared and other root-level imports
@@ -376,6 +422,12 @@ root = [
 
 # Pyright type checking configuration.
 [tool.pyright]
+# Typing contracts live in packages/*/tests/typecheck/: snake_case kwargs and
+# typed values that pyright, pyrefly and ty must all accept with no
+# suppressions. The only ignores are on lines that assert a type error.
+# pyrefly project_includes and the ty override below list the same
+# directory, so a new contract file is checked by all three.
+include = ["packages/**/src", "packages/**/tests/typecheck"]
 exclude = [
   "**/__pycache__",
   ".git",
@@ -389,6 +441,7 @@ exclude = [
 ]
 extraPaths = [
   "packages/genkit/src",
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -397,7 +450,10 @@ extraPaths = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-otel/src",
+  "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
 ]
@@ -425,12 +481,18 @@ project_excludes = [
 project_includes = [
   # Core package
   "packages/genkit/src/**/*.py",
+  "packages/genkit-mcp/src/**/*.py",
+  "packages/genkit-otel/src/**/*.py",
+  # Typing contracts (see [tool.pyright])
+  "packages/*/tests/typecheck/**/*.py",
 ]
 
-# Search path for first-party code import resolution.
+# Search path for first-party code import resolution. "." comes last so
+# package modules keep their import names (genkit._ai._aio), not their file
+# paths (packages.genkit.src.genkit._ai._aio).
 search-path = [
-  ".",
   "packages/genkit/src",
+  "packages/genkit-amazon-bedrock/src",
   "packages/genkit-anthropic/src",
   "packages/genkit-openai/src",
   "packages/genkit-django/src",
@@ -439,9 +501,13 @@ search-path = [
   "packages/genkit-flask/src",
   "packages/genkit-google-cloud/src",
   "packages/genkit-google-genai/src",
+  "packages/genkit-mcp/src",
   "packages/genkit-middleware/src",
+  "packages/genkit-otel/src",
+  "packages/genkit-a2ui/src",
   "packages/genkit-ollama/src",
   "packages/genkit-vertexai/src",
+  ".",
 ]
 python_version = "3.10"
 
@@ -449,6 +515,15 @@ python_version = "3.10"
 [tool.pyrefly.errors]
 deprecated     = "error"
 redundant-cast = "error"
+
+# Contract files that assert a type error keep a `pyrefly: ignore` on that
+# line; an unused one means the error went away, so it fails.
+[[tool.pyrefly.sub-config]]
+matches = "packages/*/tests/typecheck/**"
+[tool.pyrefly.sub-config.errors]
+deprecated     = "error"
+redundant-cast = "error"
+unused-ignore  = "error"
 
 # Downgrade unused-type-ignore to avoid noise from comments that pyright needed but ty doesn't.
 [tool.ty.rules]
@@ -461,11 +536,17 @@ include = ["**/tests/**", "**/*_test.py", "samples/**", "tools/**"]
 invalid-argument-type = "ignore"
 no-matching-overload = "ignore"
 
-# Vertex AI model_garden has relative imports ty struggles to resolve (PEP 420 / namespace).
+# tests/typecheck/ also matches **/tests/** above, which mutes these two rules.
+# Contract files exist to fail on them, so turn them back on. ty applies
+# overrides in order, so this block must stay after the tests/** one.
+# A contract that asserts a type error keeps a `ty: ignore` on that line; an
+# unused one means the error went away, so it fails too.
 [[tool.ty.overrides]]
-include = ["packages/genkit-vertexai/**"]
+include = ["**/tests/typecheck/**"]
 [tool.ty.overrides.rules]
-unresolved-import = "ignore"
+invalid-argument-type = "error"
+no-matching-overload = "error"
+unused-ignore-comment = "error"
 
 # genkit._ai._formats._schema: dict.get with str keys from JSON schema traversal.
 [[tool.ty.overrides]]

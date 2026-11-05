@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -32,7 +33,11 @@ import (
 
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
+	"github.com/firebase/genkit/go/internal/tracingtest"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func inc(_ context.Context, x int) (int, error) {
@@ -43,12 +48,50 @@ func dec(_ context.Context, x int) (int, error) {
 	return x - 1, nil
 }
 
+// isolateReflectionEnv clears reflection settings a developer may have
+// exported, so tests that call Init get the server (or no server) they expect
+// regardless of the shell. Empty counts as unset.
+func isolateReflectionEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"GENKIT_ENV",
+		"GENKIT_REFLECTION_ENABLED",
+		"GENKIT_REFLECTION_PORT",
+		"GENKIT_REFLECTION_HOST",
+		"GENKIT_REFLECTION_V2_SERVER",
+		"GENKIT_REFLECTION_SECRET_TOKEN",
+	} {
+		t.Setenv(k, "")
+	}
+}
+
+// devEnvWithoutInitServer sets GENKIT_ENV=dev, which the runtime file needs,
+// while keeping Init from starting its own server: these tests start one
+// directly, and one started by Init (with its own context) would outlive the
+// test and leave a stale runtime file behind.
+func devEnvWithoutInitServer(t *testing.T) {
+	t.Helper()
+	isolateReflectionEnv(t)
+	t.Setenv("GENKIT_ENV", "dev")
+	t.Setenv("GENKIT_REFLECTION_ENABLED", "false")
+}
+
+// TestMain routes every test's spans through a Direct instrumentation over an
+// in-memory client, so runs carry real trace ids without an OpenTelemetry SDK.
+// Configured package-wide (rather than per test) because the instrumentation
+// registry is a global and TestServeMux runs parallel; per-test reset would
+// race it. TestRunActionWithoutProviderIDs swaps it out temporarily; it is not
+// parallel.
+func TestMain(m *testing.M) {
+	tracingtest.InstallDefault()
+	os.Exit(m.Run())
+}
+
 func TestReflectionServer(t *testing.T) {
 	t.Run("server startup and shutdown", func(t *testing.T) {
+		// The runtime file is dev-only now, and this case asserts on it.
+		devEnvWithoutInitServer(t)
 		g := Init(context.Background())
-
-		tc := tracing.NewTestOnlyTelemetryClient()
-		tracing.WriteTelemetryImmediate(tc)
 
 		errCh := make(chan error, 1)
 		serverStartCh := make(chan struct{})
@@ -56,7 +99,11 @@ func TestReflectionServer(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		srv := startReflectionServer(ctx, g, errCh, serverStartCh)
+		srv := startReflectionServer(ctx, g, reflectionConfig{
+			mode: reflectionV1,
+			host: defaultReflectionHost,
+			port: defaultReflectionPort,
+		}, errCh, serverStartCh)
 		if srv == nil {
 			t.Fatal("failed to start reflection server")
 		}
@@ -81,16 +128,120 @@ func TestReflectionServer(t *testing.T) {
 			t.Error("runtime file was not cleaned up")
 		}
 	})
+
+	t.Run("OS-assigned port is written to the runtime file", func(t *testing.T) {
+		devEnvWithoutInitServer(t)
+		g := Init(context.Background())
+
+		errCh := make(chan error, 1)
+		serverStartCh := make(chan struct{})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		srv := startReflectionServer(ctx, g, reflectionConfig{
+			mode:   reflectionV1,
+			host:   defaultReflectionHost,
+			port:   0,
+			pinned: true,
+		}, errCh, serverStartCh)
+		if srv == nil {
+			t.Fatalf("failed to start reflection server: %v", <-errCh)
+		}
+		<-serverStartCh
+
+		data, err := os.ReadFile(srv.RuntimeFilePath)
+		if err != nil {
+			t.Fatalf("reading runtime file: %v", err)
+		}
+		var rf runtimeFileData
+		if err := json.Unmarshal(data, &rf); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(rf.ReflectionServerURL, ":0") {
+			t.Fatalf("runtime file advertises port 0: %s", rf.ReflectionServerURL)
+		}
+		res, err := http.Get(rf.ReflectionServerURL + "/api/__health")
+		if err != nil {
+			t.Fatalf("advertised URL %s is not reachable: %v", rf.ReflectionServerURL, err)
+		}
+		res.Body.Close()
+	})
+
+	t.Run("a taken pinned port fails instead of shifting", func(t *testing.T) {
+		taken, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer taken.Close()
+		port := taken.Addr().(*net.TCPAddr).Port
+
+		isolateReflectionEnv(t)
+		g := Init(context.Background())
+		errCh := make(chan error, 1)
+		srv := startReflectionServer(context.Background(), g, reflectionConfig{
+			mode:   reflectionV1,
+			host:   defaultReflectionHost,
+			port:   port,
+			pinned: true,
+		}, errCh, make(chan struct{}))
+		if srv != nil {
+			t.Fatal("expected startup to fail on a taken pinned port")
+		}
+		if err := <-errCh; err == nil {
+			t.Fatal("expected an error")
+		}
+	})
+}
+
+func TestWithReflectionPort(t *testing.T) {
+	t.Run("rejects being set twice", func(t *testing.T) {
+		opts := &genkitOptions{}
+		if err := WithReflectionPort(3200).apply(opts); err != nil {
+			t.Fatal(err)
+		}
+		if err := WithReflectionPort(3300).apply(opts); err == nil {
+			t.Fatal("expected an error when set twice")
+		}
+	})
+
+	t.Run("Init binds the chosen port exactly", func(t *testing.T) {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+
+		isolateReflectionEnv(t)
+		t.Setenv("GENKIT_ENV", "dev")
+		// Cancelling the Init context shuts the server down and removes its
+		// runtime file, so nothing outlives the test.
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		Init(ctx, WithReflectionPort(port))
+
+		res, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/__health", port))
+		if err != nil {
+			t.Fatalf("reflection server not on port %d: %v", port, err)
+		}
+		res.Body.Close()
+	})
+
+	t.Run("Init panics on an invalid port", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected Init to panic")
+			}
+		}()
+		Init(context.Background(), WithReflectionPort(-1))
+	})
 }
 
 func TestServeMux(t *testing.T) {
 	g := Init(context.Background())
 
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
-
-	core.DefineAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
-	core.DefineAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
+	defineTestAction(g.reg, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	defineTestAction(g.reg, "test/dec", api.ActionTypeCustom, nil, nil, dec)
 
 	s := &reflectionServer{
 		Server:        &http.Server{},
@@ -154,13 +305,13 @@ func TestServeMux(t *testing.T) {
 	})
 
 	t.Run("list actions resolves schema references", func(t *testing.T) {
-		core.DefineSchema(g.reg, "AgentRequest", map[string]any{
+		g.reg.RegisterSchema("AgentRequest", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"query": map[string]any{"type": "string"},
 			},
 		})
-		core.DefineAction(g.reg, "test/withRef", api.ActionTypeCustom, nil,
+		defineTestAction(g.reg, "test/withRef", api.ActionTypeCustom, nil,
 			core.SchemaRef("AgentRequest"),
 			func(ctx context.Context, in any) (any, error) { return nil, nil })
 
@@ -188,7 +339,7 @@ func TestServeMux(t *testing.T) {
 	})
 
 	t.Run("run action", func(t *testing.T) {
-		core.DefineAction(g.reg, "test/checkLabels", api.ActionTypeCustom, nil,
+		defineTestAction(g.reg, "test/checkLabels", api.ActionTypeCustom, nil,
 			nil,
 			func(ctx context.Context, in any) (any, error) {
 				labels := tracing.TelemetryLabelsFromContext(ctx)
@@ -276,7 +427,7 @@ func TestServeMux(t *testing.T) {
 			}
 			return x, nil
 		}
-		core.DefineStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamingInc)
+		defineTestStreamingAction(g.reg, "test/streaming", api.ActionTypeCustom, nil, nil, streamingInc)
 
 		body := `{"key": "/custom/test/streaming", "input": 3}`
 		req, err := http.NewRequest("POST", ts.URL+"/api/runAction?stream=true", strings.NewReader(body))
@@ -347,8 +498,6 @@ func TestServeMux(t *testing.T) {
 // This allows clients to get the trace ID immediately for cancellation or logging.
 func TestEarlyTraceIDTransmission(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
 	ts := httptest.NewServer(serveMux(g, s))
@@ -362,7 +511,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 		// goroutine, not with the httptest server's request goroutine.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-		core.DefineAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
+		defineTestAction(g.reg, "test/slow", api.ActionTypeCustom, nil, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
 				<-actionCanProceed
@@ -429,7 +578,7 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 		// previous subtest.
 		actionStarted := make(chan struct{})
 		actionCanProceed := make(chan struct{})
-		core.DefineAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
+		defineTestAction(g.reg, "test/slow2", api.ActionTypeCustom, nil, nil,
 			func(ctx context.Context, input any) (any, error) {
 				close(actionStarted)
 				<-actionCanProceed
@@ -489,14 +638,12 @@ func TestEarlyTraceIDTransmission(t *testing.T) {
 //  3. Verify: cancel endpoint returns 200, action's ctx.Done() fires, response has error code 1 (gRPC CANCELLED)
 func TestActionCancellation(t *testing.T) {
 	g := Init(context.Background())
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
 
 	gotTraceID := make(chan string, 1)
 	gotCancelled := make(chan struct{})
 
 	// Long-running action that respects cancellation
-	core.DefineStreamingAction(g.reg, "test/cancellable", api.ActionTypeCustom, nil, nil,
+	defineTestStreamingAction(g.reg, "test/cancellable", api.ActionTypeCustom, nil, nil,
 		func(ctx context.Context, input any, cb func(context.Context, any) error) (any, error) {
 			// Send trace ID so test can cancel us
 			gotTraceID <- tracing.SpanTraceInfo(ctx).TraceID
@@ -566,6 +713,80 @@ func TestActionCancellation(t *testing.T) {
 	}
 	if !strings.Contains(responseBody, "Action was cancelled") {
 		t.Errorf("Expected 'Action was cancelled' message in response, got: %s", responseBody)
+	}
+}
+
+// TestRunActionWithoutProviderIDs covers a chain where no provider supplies
+// ids: the default OTel instrumentation over OTel's no-op provider (e.g. under
+// `genkit start --experimental-use-otel` with no OTel SDK configured). The trace headers
+// and cancellation must still work, on the ids the dispatcher mints.
+func TestRunActionWithoutProviderIDs(t *testing.T) {
+	prevTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(noop.NewTracerProvider())
+	tracing.SetInstrumentation()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(prevTP)
+		tracingtest.InstallDefault()
+	})
+
+	g := Init(context.Background())
+	gotTraceID := make(chan string, 1)
+	defineTestAction(g.reg, "test/blocking", api.ActionTypeCustom, nil, nil,
+		func(ctx context.Context, _ any) (any, error) {
+			gotTraceID <- tracing.SpanTraceInfo(ctx).TraceID
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+
+	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
+	ts := httptest.NewServer(serveMux(g, s))
+	defer ts.Close()
+
+	type result struct {
+		traceID string
+		body    string
+	}
+	done := make(chan result, 1)
+	go func() {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/runAction",
+			strings.NewReader(`{"key":"/custom/test/blocking","input":null}`))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- result{}
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		done <- result{resp.Header.Get("X-Genkit-Trace-Id"), string(body)}
+	}()
+	traceID := <-gotTraceID
+	if traceID == "" {
+		t.Fatal("span has no trace id")
+	}
+	if _, ok := s.activeActions.Get(traceID); !ok {
+		t.Fatal("running action is not registered for cancellation")
+	}
+	cancelResp, err := http.Post(ts.URL+"/api/cancelAction", "application/json",
+		strings.NewReader(fmt.Sprintf(`{"traceId":%q}`, traceID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelResp.Body.Close()
+	if cancelResp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel status = %d, want 200", cancelResp.StatusCode)
+	}
+
+	select {
+	case r := <-done:
+		if r.traceID != traceID {
+			t.Errorf("X-Genkit-Trace-Id = %q, want %q", r.traceID, traceID)
+		}
+		if !strings.Contains(r.body, "Action was cancelled") {
+			t.Errorf("response body = %s, want a cancellation error", r.body)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("action did not finish after cancel")
 	}
 }
 
@@ -671,13 +892,10 @@ func TestCancelActionEndpoint(t *testing.T) {
 func TestRunActionWithInit(t *testing.T) {
 	g := Init(context.Background())
 
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
-
 	type initConfig struct {
 		Prefix string `json:"prefix"`
 	}
-	core.DefineBidiAction(g.reg, "test/bidi-prefix", api.ActionTypeCustom, nil,
+	defineTestBidiAction(g.reg, api.ActionTypeCustom, "test/bidi-prefix", nil,
 		func(ctx context.Context, cfg initConfig, inCh <-chan string, outCh chan<- string) (string, error) {
 			var out string
 			for chunk := range inCh {
@@ -685,7 +903,7 @@ func TestRunActionWithInit(t *testing.T) {
 			}
 			return out, nil
 		})
-	core.DefineAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, nil, inc)
+	defineTestAction(g.reg, "test/no-init", api.ActionTypeCustom, nil, nil, inc)
 
 	s := &reflectionServer{
 		Server:        &http.Server{},
@@ -729,7 +947,7 @@ func TestRunActionWithInit(t *testing.T) {
 		// The v1 handler reports action errors as an error JSON body
 		// (matching the TS runtime), not via the HTTP status.
 		var resp struct {
-			Error *core.ReflectionError `json:"error"`
+			Error *reflectionError `json:"error"`
 		}
 		if err := json.NewDecoder(res.Body).Decode(&resp); err != nil {
 			t.Fatal(err)
@@ -741,4 +959,220 @@ func TestRunActionWithInit(t *testing.T) {
 			t.Errorf("error message = %q, want mention of init rejection", resp.Error.Message)
 		}
 	})
+}
+
+// TestToReflectionError covers the envelope the reflection API answers a
+// failed run with: the code is the canonical status code (the numbering the
+// dev UI's Status schema validates, not an HTTP status) taken from the error's
+// status however deeply it is wrapped, and the details ride along only when
+// the error carried them.
+func TestToReflectionError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		wantCode  int
+		wantMsg   string
+		wantStack bool
+	}{
+		{
+			"classified error carries its stack",
+			status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", "/tool/test", errors.New("value must be a number")),
+			status.InvalidArgument.Code(),
+			`invalid input to action "/tool/test": value must be a number`,
+			true,
+		},
+		{
+			"plain error is internal",
+			errors.New("plain error"),
+			status.Internal.Code(),
+			"plain error",
+			false,
+		},
+		{
+			"status survives one fmt.Errorf",
+			fmt.Errorf("context: %w", status.Errorf(status.ErrNotFound, "not found")),
+			status.NotFound.Code(),
+			"not found",
+			true,
+		},
+		{
+			"status survives two",
+			fmt.Errorf("layer2: %w", fmt.Errorf("layer1: %w", status.Errorf(status.ErrPermissionDenied, "denied"))),
+			status.PermissionDenied.Code(),
+			"denied",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			re := toReflectionError(tt.err)
+			if re.Code != tt.wantCode {
+				t.Errorf("Code = %d, want %d", re.Code, tt.wantCode)
+			}
+			if re.Message != tt.wantMsg {
+				t.Errorf("Message = %q, want %q", re.Message, tt.wantMsg)
+			}
+			gotStack := re.Details != nil && re.Details.Stack != nil
+			if gotStack != tt.wantStack {
+				t.Errorf("stack present = %v, want %v", gotStack, tt.wantStack)
+			}
+		})
+	}
+
+	t.Run("carries a traceId the error already had", func(t *testing.T) {
+		err := status.Errorf(status.ErrInternal, "boom").WithDetails(map[string]any{"traceId": "trace-123"})
+		re := toReflectionError(err)
+		if re.Details == nil || re.Details.TraceID == nil {
+			t.Fatal("expected traceId in details")
+		}
+		if *re.Details.TraceID != "trace-123" {
+			t.Errorf("TraceID = %q, want %q", *re.Details.TraceID, "trace-123")
+		}
+	})
+
+	// setTraceID is what the handler uses to stamp the run's trace onto an
+	// error that arrived without details of its own.
+	t.Run("setTraceID allocates missing details", func(t *testing.T) {
+		re := toReflectionError(errors.New("plain"))
+		if re.Details != nil {
+			t.Fatalf("precondition failed, a plain error now carries details: %+v", re.Details)
+		}
+		re.setTraceID("trace-abc")
+		if re.Details == nil || re.Details.TraceID == nil || *re.Details.TraceID != "trace-abc" {
+			t.Errorf("setTraceID did not record the trace: %+v", re.Details)
+		}
+	})
+
+	t.Run("setTraceID ignores an empty trace", func(t *testing.T) {
+		re := toReflectionError(errors.New("plain"))
+		re.setTraceID("")
+		if re.Details != nil {
+			t.Errorf("an empty trace allocated details: %+v", re.Details)
+		}
+	})
+}
+
+// TestReflectionErrorCodeYieldsValidHTTPStatus pins the split between the two
+// numbering schemes the error envelope touches. The body's code is canonical
+// (INVALID_ARGUMENT is 3), while wrapReflectionHandler still has to put an HTTP
+// status on the response, which it derives from that code. Feeding a canonical
+// code straight to WriteHeader would panic, since 3 is not a valid HTTP status.
+func TestReflectionErrorCodeYieldsValidHTTPStatus(t *testing.T) {
+	tests := []struct {
+		err      error
+		wantHTTP int
+	}{
+		{status.Errorf(status.ErrInvalidArgument, "bad"), http.StatusBadRequest},
+		{status.Errorf(status.ErrNotFound, "missing"), http.StatusNotFound},
+		{status.Errorf(status.ErrPermissionDenied, "denied"), http.StatusForbidden},
+		{status.Errorf(status.ErrUnauthenticated, "who"), http.StatusUnauthorized},
+		{status.Errorf(status.ErrResourceExhausted, "slow down"), http.StatusTooManyRequests},
+		{errors.New("plain"), http.StatusInternalServerError},
+	}
+	for _, tt := range tests {
+		re := toReflectionError(tt.err)
+		if re.Code < 0 || re.Code > 16 {
+			t.Errorf("Code = %d, want a canonical status code the dev UI's enum accepts", re.Code)
+		}
+		got := status.FromCode(re.Code).HTTPCode()
+		if got != tt.wantHTTP {
+			t.Errorf("HTTP status for code %d = %d, want %d", re.Code, got, tt.wantHTTP)
+		}
+		if got < 100 || got > 999 {
+			t.Errorf("HTTP status %d is outside the range WriteHeader accepts", got)
+		}
+	}
+}
+
+// TestRunActionPlainErrorResponse pins that an action failing with an error the
+// framework never classified still produces an error response.
+//
+// toReflectionError fills in the details envelope only from a stack or trace
+// the error itself carried, and leaves the pointer nil otherwise. A plain error
+// returned by a plugin or a user's own function hits that case, and the handler
+// then wrote the run's trace ID into the nil envelope, panicking the reflection
+// server mid-response. That is every unclassified failure, which is the common
+// one: a provider SDK rejecting a request reaches here as its own error type.
+func TestRunActionPlainErrorResponse(t *testing.T) {
+
+	g := Init(context.Background())
+	defineTestAction(g.reg, "test/boom", api.ActionTypeCustom, nil, nil,
+		func(_ context.Context, x int) (int, error) {
+			// Deliberately unclassified, as a provider SDK's error would be.
+			return 0, errors.New("provider rejected the request")
+		})
+
+	s := &reflectionServer{Server: &http.Server{}, activeActions: newActiveActionsMap()}
+	ts := httptest.NewServer(serveMux(g, s))
+	s.Addr = strings.TrimPrefix(ts.URL, "http://")
+	defer ts.Close()
+
+	for _, tt := range []struct {
+		name string
+		path string
+	}{
+		{"non-streaming", "/api/runAction"},
+		{"streaming", "/api/runAction?stream=true"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := http.Post(ts.URL+tt.path, "application/json",
+				strings.NewReader(`{"key":"/custom/test/boom","input":3}`))
+			if err != nil {
+				// A panic in the handler closes the connection mid-response,
+				// so it surfaces here rather than as a 500.
+				t.Fatalf("request failed, the handler likely panicked: %v", err)
+			}
+			defer res.Body.Close()
+
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatalf("reading body: %v", err)
+			}
+
+			var got struct {
+				Error struct {
+					Message string `json:"message"`
+					Code    int    `json:"code"`
+					Details *struct {
+						TraceID *string `json:"traceId"`
+					} `json:"details"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatalf("response is not the error envelope: %v\nbody: %s", err, body)
+			}
+			if !strings.Contains(got.Error.Message, "provider rejected the request") {
+				t.Errorf("message = %q, want the action's error", got.Error.Message)
+			}
+			// The trace ID is why the envelope gets written to at all, so an
+			// error that arrived without one must still come back carrying it.
+			if got.Error.Details == nil || got.Error.Details.TraceID == nil {
+				t.Errorf("no trace ID on the error response: %s", body)
+			}
+		})
+	}
+}
+
+// defineTestBidiAction creates and registers a bidi action in one call for
+// the reflection and server tests in this package.
+func defineTestBidiAction[In, Out, Stream, Init any](r api.Registry, atype api.ActionType, name string, opts *core.BidiActionOptions, fn core.BidiFunc[In, Out, Stream, Init]) *core.BidiAction[In, Out, Stream, Init] {
+	b := core.NewBidiActionOf(atype, name, opts, fn)
+	b.Register(r)
+	return b
+}
+
+// defineTestAction and defineTestStreamingAction register actions in one
+// call for the tests in this package, mirroring the removed registry-taking
+// core.Define* helpers.
+func defineTestAction[In, Out any](r api.Registry, name string, atype api.ActionType, metadata map[string]any, inputSchema map[string]any, fn core.Func[In, Out]) *core.Action[In, Out, struct{}] {
+	a := core.NewActionOf(atype, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn)
+	a.Register(r)
+	return a
+}
+
+func defineTestStreamingAction[In, Out, Stream any](r api.Registry, name string, atype api.ActionType, metadata map[string]any, inputSchema map[string]any, fn core.StreamingFunc[In, Out, Stream]) *core.Action[In, Out, Stream] {
+	a := core.NewStreamingActionOf(atype, name, &core.ActionOptions{Metadata: metadata, InputSchema: inputSchema}, fn)
+	a.Register(r)
+	return a
 }

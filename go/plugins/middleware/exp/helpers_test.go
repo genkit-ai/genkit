@@ -18,10 +18,13 @@ package exp
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/genkit"
+	genkitx "github.com/firebase/genkit/go/genkit/exp"
 )
 
 var ctx = context.Background()
@@ -40,4 +43,18 @@ func findSystem(msgs []*ai.Message) *ai.Message {
 		}
 	}
 	return nil
+}
+
+// serveAgents serves every agent registered with g over HTTP with the
+// AllAgentRoutes layout and returns the server's base URL, so a test can
+// reach those agents from another Genkit instance as remote agents.
+func serveAgents(t *testing.T, g *genkit.Genkit) string {
+	t.Helper()
+	mux := http.NewServeMux()
+	for _, r := range genkitx.AllAgentRoutes(g) {
+		mux.HandleFunc(r.Pattern(), r.Handler())
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv.URL
 }

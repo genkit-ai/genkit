@@ -19,7 +19,14 @@ import {
   logger,
   stackTraceSpans,
 } from '@genkit-ai/tools-common/utils';
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import { traceList } from '../../src/commands/trace-list';
 import { runWithManager } from '../../src/utils/manager-utils';
 
@@ -31,6 +38,13 @@ describe('trace:list command', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    process.exitCode = undefined;
+    traceList.setOptionValue('limit', 15);
+    traceList.setOptionValue('status', undefined);
+    traceList.setOptionValue('type', undefined);
+    traceList.setOptionValue('name', undefined);
+    traceList.setOptionValue('sessionId', undefined);
+    traceList.setOptionValue('continuationToken', undefined);
 
     mockManager = {
       listTraces: jest.fn(),
@@ -47,6 +61,10 @@ describe('trace:list command', () => {
     jest.spyOn(logger, 'info').mockImplementation((() => {}) as any);
     jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
     jest.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.exitCode = undefined;
   });
 
   it('should list traces with default limit', async () => {
@@ -81,7 +99,7 @@ describe('trace:list command', () => {
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
     });
-    expect(console.log).toHaveBeenCalledWith('Found 1 traces:\n');
+    expect(console.log).toHaveBeenCalledWith('Found 1 trace:\n');
     expect(console.log).toHaveBeenCalledWith('ID:       trace-1');
     expect(console.log).toHaveBeenCalledWith('Status:   success');
     expect(console.log).toHaveBeenCalledWith('Input:    my input string');
@@ -110,6 +128,8 @@ describe('trace:list command', () => {
       'Flow',
       '--name',
       'myFlow',
+      '--session-id',
+      'session-123',
     ]);
 
     expect(mockManager.listTraces).toHaveBeenCalledWith({
@@ -120,6 +140,7 @@ describe('trace:list command', () => {
           status: [2],
           type: ['Flow'],
           name: ['myFlow'],
+          sessionId: ['session-123'],
         },
         neq: { 'genkitx:ignore-trace': ['true'] },
       },
@@ -136,36 +157,9 @@ describe('trace:list command', () => {
       continuationToken: 'next-page-token',
     });
 
-    // Reset commander's options cache or create a fresh parse to avoid inheriting state from previous test
-    const cmd = require('../../src/commands/trace-list').traceList;
-
-    // Create a fresh command instance to isolate state
-    jest.isolateModules(() => {
-      const freshTraceList = require('../../src/commands/trace-list').traceList;
-
-      return freshTraceList.parseAsync([
-        'node',
-        'trace:list',
-        '--continuation-token',
-        'some-token',
-      ]);
-    });
-
-    // Wait a tick for promises if needed, but since we are mocking anyway...
-    // Actually, commander mutates process.argv state sometimes, the issue was traceList
-    // holding onto previous options. Let's just parse the options properly.
     await traceList.parseAsync([
       'node',
       'trace:list',
-      // override previous args if commander caches them
-      '--limit',
-      '15',
-      '--status',
-      '',
-      '--type',
-      '',
-      '--name',
-      '',
       '--continuation-token',
       'some-token',
     ]);
@@ -201,5 +195,34 @@ describe('trace:list command', () => {
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('Error listing traces: Error: API failure')
     );
+    expect(process.exitCode).toBe(1);
   });
+
+  it.each(['0', '-1', '1.5', '10abc'])(
+    'should reject invalid limit "%s" before starting manager',
+    async (limit) => {
+      const cmd = traceList
+        .exitOverride()
+        .configureOutput({ writeOut: () => {}, writeErr: () => {} });
+      await expect(
+        cmd.parseAsync(['node', 'trace:list', '--limit', limit])
+      ).rejects.toThrow(
+        /option '-l, --limit <number>' argument '.*' is invalid/
+      );
+      expect(runWithManager).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['invalid-status', '1.5', ' ', '-1'])(
+    'should reject invalid status "%s" before starting manager',
+    async (status) => {
+      const cmd = traceList
+        .exitOverride()
+        .configureOutput({ writeOut: () => {}, writeErr: () => {} });
+      await expect(
+        cmd.parseAsync(['node', 'trace:list', '--status', status])
+      ).rejects.toThrow(/option '--status <status>' argument '.*' is invalid/);
+      expect(runWithManager).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -19,6 +19,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"reflect"
 	"time"
 
@@ -61,10 +62,72 @@ type Action[In, Out, Stream any] struct {
 // Deprecated: use [Action].
 type ActionDef[In, Out, Stream any] = Action[In, Out, Stream]
 
+// ActionOptions configures the optional attributes of an [Action]. A nil
+// options value is valid: schemas are inferred from the action's type
+// parameters and the descriptor carries no metadata.
+//
+// Options structs in this package hold descriptor data (schemas, metadata),
+// so a constructor reads as: identity, descriptor, implementation. An
+// action's primary function is always a positional constructor argument, and
+// typed customization of a single-function action composes by wrapping that
+// function, which is why this struct stays non-generic. A bundle with
+// separately-invoked lifecycle functions (a background action's check and
+// cancel) carries them as typed options fields instead; holding those is
+// what makes such an options struct generic. See [BackgroundActionOptions].
+type ActionOptions struct {
+	// Description is the action's human-readable description and is the field
+	// tooling reads. When empty, Metadata["description"] is used if present,
+	// which is how the deprecated flat constructors supply one. The fallback
+	// is one-way: Metadata reaches the descriptor exactly as given, so a
+	// caller setting both to different strings gets Description on the
+	// descriptor and its own value left in the metadata map.
+	Description string
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any
+	// InputSchema is the JSON schema for the action's input. Inferred from In if nil.
+	InputSchema map[string]any
+	// OutputSchema is the JSON schema for the action's output. Inferred from Out if nil.
+	OutputSchema map[string]any
+	// StreamSchema is the JSON schema for outgoing stream chunks. Inferred
+	// from Stream if nil; when nil, non-streaming actions advertise none. An
+	// explicit schema is always advertised as given.
+	StreamSchema map[string]any
+}
+
 type noStream = func(context.Context, struct{}) error
 
+// NewActionOf creates a new non-streaming [Action] without
+// registering it.
+func NewActionOf[In, Out any](
+	atype api.ActionType,
+	name string,
+	opts *ActionOptions,
+	fn Func[In, Out],
+) *Action[In, Out, struct{}] {
+	return NewStreamingActionOf(atype, name, opts,
+		func(ctx context.Context, in In, _ noStream) (Out, error) {
+			return fn(ctx, in)
+		})
+}
+
+// NewStreamingActionOf creates a new streaming [Action] without
+// registering it.
+func NewStreamingActionOf[In, Out, Stream any](
+	atype api.ActionType,
+	name string,
+	opts *ActionOptions,
+	fn StreamingFunc[In, Out, Stream],
+) *Action[In, Out, Stream] {
+	a := newAction[In, Out, Stream](atype, name, opts)
+	a.fn = fn
+	return a
+}
+
 // NewAction creates a new non-streaming [Action] without registering it.
-// If inputSchema is nil, it is inferred from the function's input api.
+// If inputSchema is nil, it is inferred from the function's input type.
+//
+// Deprecated: Use [NewActionOf], which takes the action type first
+// and an [ActionOptions] struct covering all schema slots.
 func NewAction[In, Out any](
 	name string,
 	atype api.ActionType,
@@ -72,14 +135,17 @@ func NewAction[In, Out any](
 	inputSchema map[string]any,
 	fn Func[In, Out],
 ) *Action[In, Out, struct{}] {
-	return newStreamingAction(name, atype, metadata, inputSchema,
-		func(ctx context.Context, in In, cb noStream) (Out, error) {
-			return fn(ctx, in)
-		})
+	return NewActionOf(atype, name, &ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, fn)
 }
 
 // NewStreamingAction creates a new streaming [Action] without registering it.
-// If inputSchema is nil, it is inferred from the function's input api.
+// If inputSchema is nil, it is inferred from the function's input type.
+//
+// Deprecated: Use [NewStreamingActionOf], which takes the action
+// type first and an [ActionOptions] struct covering all schema slots.
 func NewStreamingAction[In, Out, Stream any](
 	name string,
 	atype api.ActionType,
@@ -87,91 +153,24 @@ func NewStreamingAction[In, Out, Stream any](
 	inputSchema map[string]any,
 	fn StreamingFunc[In, Out, Stream],
 ) *Action[In, Out, Stream] {
-	return newStreamingAction(name, atype, metadata, inputSchema, fn)
+	return NewStreamingActionOf(atype, name, &ActionOptions{
+		Metadata:    metadata,
+		InputSchema: inputSchema,
+	}, fn)
 }
 
-// DefineAction creates a new non-streaming Action and registers it.
-// If inputSchema is nil, it is inferred from the function's input api.
-func DefineAction[In, Out any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-	fn Func[In, Out],
-) *Action[In, Out, struct{}] {
-	return defineStreamingAction(r, name, atype, metadata, inputSchema,
-		func(ctx context.Context, in In, cb noStream) (Out, error) {
-			return fn(ctx, in)
-		})
-}
-
-// DefineStreamingAction creates a new streaming action and registers it.
-// If inputSchema is nil, it is inferred from the function's input api.
-func DefineStreamingAction[In, Out, Stream any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream] {
-	return defineStreamingAction(r, name, atype, metadata, inputSchema, fn)
-}
-
-// defineStreamingAction creates a streaming action and registers it.
-func defineStreamingAction[In, Out, Stream any](
-	r api.Registry,
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream] {
-	a := newStreamingAction(name, atype, metadata, inputSchema, fn)
-	a.Register(r)
-	return a
-}
-
-// newStreamingAction constructs an action with the given implementation.
-// It is the common helper for NewAction, NewStreamingAction, and
-// DefineStreamingAction.
-func newStreamingAction[In, Out, Stream any](
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-	fn StreamingFunc[In, Out, Stream],
-) *Action[In, Out, Stream] {
-	a := newAction[In, Out, Stream](name, atype, metadata, inputSchema)
-	a.fn = fn
-	return a
-}
-
-// newAction populates an Action's descriptor with inferred schemas and metadata.
-// The caller is expected to assign a.fn.
-func newAction[In, Out, Stream any](
-	name string,
-	atype api.ActionType,
-	metadata map[string]any,
-	inputSchema map[string]any,
-) *Action[In, Out, Stream] {
-	if inputSchema == nil {
-		inputSchema = inferSchema[In]()
+// newAction builds an Action's descriptor from opts, inferring any schema not
+// explicitly provided. The caller is expected to assign a.fn.
+func newAction[In, Out, Stream any](atype api.ActionType, name string, opts *ActionOptions) *Action[In, Out, Stream] {
+	if opts == nil {
+		opts = &ActionOptions{}
 	}
 
-	outputSchema := inferSchema[Out]()
-
-	// Stream is struct{} for non-streaming actions; inferring a schema from
-	// the sentinel would make every action advertise a bogus streamSchema.
-	var streamSchema map[string]any
-	if !isUnitType[Stream]() {
-		streamSchema = inferSchema[Stream]()
-	}
-
-	var description string
-	if desc, ok := metadata["description"].(string); ok {
-		description = desc
+	description := opts.Description
+	if description == "" {
+		if d, ok := opts.Metadata["description"].(string); ok {
+			description = d
+		}
 	}
 
 	return &Action[In, Out, Stream]{
@@ -180,12 +179,30 @@ func newAction[In, Out, Stream any](
 			Key:          api.KeyFromName(atype, name),
 			Name:         name,
 			Description:  description,
-			InputSchema:  inputSchema,
-			OutputSchema: outputSchema,
-			StreamSchema: streamSchema,
-			Metadata:     metadata,
+			InputSchema:  schemaFor[In](opts.InputSchema, false),
+			OutputSchema: schemaFor[Out](opts.OutputSchema, false),
+			// Stream is struct{} for non-streaming actions; inferring a schema
+			// from the sentinel would make every action advertise a bogus
+			// streamSchema.
+			StreamSchema: schemaFor[Stream](opts.StreamSchema, true),
+			Metadata:     opts.Metadata,
 		},
 	}
+}
+
+// schemaFor returns the JSON schema describing values of type T: the explicit
+// override when non-nil, otherwise a schema inferred from T. When
+// unitMeansNone is true, the struct{} sentinel type ("no value") yields no
+// schema at all; the stream and init slots use it so that actions without
+// streaming or init don't advertise a schema for the sentinel.
+func schemaFor[T any](override map[string]any, unitMeansNone bool) map[string]any {
+	if override != nil {
+		return override
+	}
+	if unitMeansNone && isUnitType[T]() {
+		return nil
+	}
+	return base.SchemaMapFor[T]()
 }
 
 // isUnitType reports whether T is exactly struct{}, the sentinel type
@@ -210,27 +227,19 @@ func isNilValue(v any) bool {
 	}
 }
 
-// inferSchema returns the JSON schema inferred from T's zero value, or nil
-// for interface types, whose zero value carries no type information to infer
-// from.
-func inferSchema[T any]() map[string]any {
-	var v T
-	if reflect.ValueOf(v).Kind() == reflect.Invalid {
-		return nil
-	}
-	return InferSchemaMap(v)
-}
-
 // Name returns the Action's Name.
 func (a *Action[In, Out, Stream]) Name() string { return a.desc.Name }
 
 // Run executes the Action's function in a new trace span.
+//
+// A failure returns whatever the function produced alongside its error rather
+// than a zero value: the generate loop returns the conversation it completed,
+// and an output that failed its own schema is still the output. The value is
+// the function's, so an action that returns nothing on error still yields the
+// zero one, and a caller that checks err first sees no difference.
 func (a *Action[In, Out, Stream]) Run(ctx context.Context, input In, cb StreamCallback[Stream]) (output Out, err error) {
 	r, err := a.runWithTelemetry(ctx, input, cb, a.fn, nil)
-	if err != nil {
-		return base.Zero[Out](), err
-	}
-	return r.Result, nil
+	return r.Result, err
 }
 
 // runWithTelemetry executes fn in a new trace span and returns telemetry
@@ -238,13 +247,6 @@ func (a *Action[In, Out, Stream]) Run(ctx context.Context, input In, cb StreamCa
 // inject a per-call one-shot adapter; spanInit, when non-nil, is recorded as
 // the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In, cb StreamCallback[Stream], fn StreamingFunc[In, Out, Stream], spanInit any) (output api.ActionRunResult[Out], err error) {
-	logger.FromContext(ctx).Debug("Action.Run", "name", a.Name())
-	defer func() {
-		logger.FromContext(ctx).Debug("Action.Run",
-			"name", a.Name(),
-			"err", err)
-	}()
-
 	var traceID string
 	var spanID string
 	o, err := tracing.RunInNewSpan(ctx, a.spanMetadata(ctx, spanInit), input,
@@ -259,7 +261,7 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 			var inputSchema map[string]any
 			inputSchema, err = ResolveSchema(a.registry, a.desc.InputSchema)
 			if err != nil {
-				return base.Zero[Out](), status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %v", a.desc.Key, err)
+				return base.Zero[Out](), status.Errorf(status.ErrInvalidSchema, "invalid input schema for action %q: %w", a.desc.Key, err)
 			}
 
 			var outputSchema map[string]any
@@ -269,7 +271,7 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 			}
 
 			if err = base.ValidateValue(input, inputSchema); err != nil {
-				return base.Zero[Out](), NewSchemaValidationError(a.desc.Key, err)
+				return base.Zero[Out](), status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", a.desc.Key, err)
 			}
 
 			output, err = fn(ctx, input, cb)
@@ -287,18 +289,16 @@ func (a *Action[In, Out, Stream]) runWithTelemetry(ctx context.Context, input In
 	}, err
 }
 
-// spanMetadata builds the trace span metadata for one run of this action,
-// injecting the flow name when ctx carries one. spanInit, when non-nil, is
-// recorded as the span's genkit:init attribute. IsRoot is determined later by
-// the tracing package from parent span presence.
+// spanMetadata builds the trace span metadata for one run of this action.
+// spanInit, when non-nil, is recorded as the span's genkit:init attribute.
 func (a *Action[In, Out, Stream]) spanMetadata(ctx context.Context, spanInit any) *tracing.SpanMetadata {
 	sm := &tracing.SpanMetadata{
 		Name:            a.desc.Name,
 		Type:            "action",
 		Subtype:         string(a.desc.Type), // The actual action type becomes the subtype.
+		Init:            spanInit,
 		Metadata:        make(map[string]string),
 		TelemetryLabels: tracing.TelemetryLabelsFromContext(ctx),
-		Init:            spanInit,
 	}
 	if flowName := FlowNameFromContext(ctx); flowName != "" {
 		sm.Metadata["flow:name"] = flowName
@@ -321,7 +321,7 @@ func recordActionMetrics(ctx context.Context, name string, start time.Time, err 
 func (a *Action[In, Out, Stream]) resolveOutputSchema() (map[string]any, error) {
 	schema, err := ResolveSchema(a.registry, a.desc.OutputSchema)
 	if err != nil {
-		return nil, status.Errorf(status.ErrInvalidSchema, "invalid output schema for action %q: %v", a.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidSchema, "invalid output schema for action %q: %w", a.desc.Key, err)
 	}
 	return schema, nil
 }
@@ -330,18 +330,19 @@ func (a *Action[In, Out, Stream]) resolveOutputSchema() (map[string]any, error) 
 // schema.
 func (a *Action[In, Out, Stream]) validateOutput(out Out, schema map[string]any) error {
 	if err := base.ValidateValue(out, schema); err != nil {
-		return status.Errorf(status.ErrInvalidOutput, "invalid output from action %q: %v", a.desc.Key, err)
+		return status.Errorf(status.ErrInvalidOutput, "invalid output from action %q: %w", a.desc.Key, err)
 	}
 	return nil
 }
 
-// RunJSON runs the action with a JSON input, and returns a JSON result.
+// RunJSON runs the action with a JSON input, and returns a JSON result. Like
+// [Action.Run], a failure carries whatever the function produced.
 func (a *Action[In, Out, Stream]) RunJSON(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage]) (json.RawMessage, error) {
 	r, err := a.RunJSONWithTelemetry(ctx, input, cb)
-	if err != nil {
+	if r == nil {
 		return nil, err
 	}
-	return r.Result, nil
+	return r.Result, err
 }
 
 // RunJSONWithTelemetry runs the action with a JSON input, and returns a JSON result along with telemetry info.
@@ -354,7 +355,7 @@ func (a *Action[In, Out, Stream]) RunJSONWithTelemetry(ctx context.Context, inpu
 func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, input json.RawMessage, cb StreamCallback[json.RawMessage], fn StreamingFunc[In, Out, Stream], spanInit any) (*api.ActionRunResult[json.RawMessage], error) {
 	i, err := base.UnmarshalAndNormalize[In](input, a.desc.InputSchema)
 	if err != nil {
-		return nil, NewSchemaValidationError(a.desc.Key, err)
+		return nil, status.Errorf(status.ErrInvalidInput, "invalid input to action %q: %w", a.desc.Key, err)
 	}
 
 	var scb StreamCallback[Stream]
@@ -370,10 +371,23 @@ func (a *Action[In, Out, Stream]) runJSONWithTelemetry(ctx context.Context, inpu
 
 	r, err := a.runWithTelemetry(ctx, i, scb, fn, spanInit)
 	if err != nil {
-		return &api.ActionRunResult[json.RawMessage]{
+		res := &api.ActionRunResult[json.RawMessage]{
 			TraceId: r.TraceId,
 			SpanId:  r.SpanId,
-		}, err
+		}
+		// Carry the partial result the way [Action.Run] does. Guarded, since
+		// a function that returns nothing on error would otherwise put a null
+		// result on every failure; a marshal that fails is logged and dropped
+		// rather than replacing the error the caller is waiting for.
+		if !base.IsNil(r.Result) {
+			if bytes, merr := json.Marshal(r.Result); merr != nil {
+				logger.Error(ctx, "failed to marshal partial action result",
+					"action", a.desc.Key, "error", merr)
+			} else {
+				res.Result = json.RawMessage(bytes)
+			}
+		}
+		return res, err
 	}
 
 	bytes, err := json.Marshal(r.Result)
@@ -405,9 +419,42 @@ func (a *Action[In, Out, Stream]) Desc() api.ActionDesc {
 }
 
 // Register registers the action with the given registry.
+//
+// Register writes the action's registry reference (and, on definition-time
+// registration, its metadata) without synchronization, like the constructors
+// it composes with. Register an action before sharing it across goroutines;
+// registering one that is concurrently in use is a data race.
 func (a *Action[In, Out, Stream]) Register(r api.Registry) {
+	if shouldStripDynamicMarker(a.desc.Metadata, r) {
+		a.desc.Metadata = withoutDynamicMarker(a.desc.Metadata)
+	}
 	a.registry = r
 	r.RegisterAction(a.desc.Key, a)
+}
+
+// shouldStripDynamicMarker reports whether registering into r makes the
+// "dynamic" metadata marker stale. The marker means "created at runtime,
+// outside any registry" (constructors for detached actions, e.g. ai.NewTool,
+// stamp it). Definition-time registration makes that untrue, so the marker is
+// dropped. Registration into a per-request child registry (e.g. Generate
+// registering detached tools for one call) does not change what the action
+// is, so the marker survives; that path must also never write to the
+// metadata: detached actions are shared across concurrent requests.
+func shouldStripDynamicMarker(metadata map[string]any, r api.Registry) bool {
+	if r.IsChild() {
+		return false
+	}
+	_, ok := metadata["dynamic"]
+	return ok
+}
+
+// withoutDynamicMarker returns a copy of metadata without the "dynamic"
+// marker. It copies rather than deletes in place: the map may be caller-owned
+// or shared with another action.
+func withoutDynamicMarker(metadata map[string]any) map[string]any {
+	m := maps.Clone(metadata)
+	delete(m, "dynamic")
+	return m
 }
 
 // ResolveActionFor returns the action for the given key in the global registry,

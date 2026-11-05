@@ -88,6 +88,25 @@ func (mt ModelType) DefaultSupports() *ai.ModelSupports {
 	}
 }
 
+// configSchema returns the JSON schema advertised for this model type's
+// config. It is the schema of the type parameter the model is constructed
+// with, so the framework validates and deserializes requests against the same
+// shape the model function receives.
+func (mt ModelType) configSchema() map[string]any {
+	switch mt {
+	case ModelTypeImagen:
+		return imagenConfigSchema
+	case ModelTypeVeo:
+		return veoConfigSchema
+	default:
+		// Gemini models and unrecognized names speak generateContent, and so
+		// does an embedding-classified name defined as a model. Embedder
+		// actions never consult this: their schema is inferred by the
+		// framework from the embedder's config type.
+		return geminiConfigSchema
+	}
+}
+
 // DefaultConfig returns the default config struct for this model type.
 func (mt ModelType) DefaultConfig() any {
 	switch mt {

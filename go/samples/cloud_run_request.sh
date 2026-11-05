@@ -20,12 +20,12 @@
 # to cloud run.
 # Run it from this directory.
 #
-# For example, after deploying the coffee-shop example (see
+# For example, after deploying the basic example (see
 # cloud_run_deploy.sh):
 #
-#    cloud_run_request.sh coffee-shop simpleGreeting '{"customerName": "Pat"}'   
+#    cloud_run_request.sh basic jokesFlow '{"topic": "airplane food"}'
 #
-# will request the genkit-coffee-shop Cloud Run service to invoke the simpleGreeting flow
+# will request the genkit-basic Cloud Run service to invoke the jokesFlow flow
 # with the third argument as input.
 
 if [ $# -ne 3 ]; then 

@@ -32,7 +32,7 @@ import pytest
 from anthropic import BadRequestError
 from genkit_anthropic import Anthropic
 
-from genkit import Genkit, GenkitError, Message, ReasoningPart
+from genkit import Genkit, GenkitError, Message, Part
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -43,7 +43,8 @@ pytestmark = [
 ]
 
 _ENABLED_THINKING_CONFIG: dict[str, Any] = {
-    'thinking': {'enabled': True, 'budgetTokens': 1024},
+    'thinking': 'enabled',
+    'thinkingBudget': 1024,
     'maxOutputTokens': 2048,
 }
 
@@ -54,8 +55,8 @@ def ai() -> Genkit:
     return Genkit(plugins=[Anthropic()])
 
 
-def _reasoning_of(message: Message) -> list[ReasoningPart]:
-    return [part.root for part in message.content if isinstance(part.root, ReasoningPart)]
+def _reasoning_of(message: Message) -> list[Part]:
+    return [part for part in message.content if part.reasoning is not None]
 
 
 async def test_thinking_enabled_budget(ai: Genkit) -> None:
@@ -85,8 +86,8 @@ async def test_thinking_enabled_budget_streaming(ai: Genkit) -> None:
     streamed_text: list[str] = []
     async for chunk in stream_response.stream:
         for part in chunk.content:
-            if isinstance(part.root, ReasoningPart):
-                streamed_reasoning.append(part.root.reasoning)
+            if part.reasoning is not None:
+                streamed_reasoning.append(part.reasoning)
         if chunk.text:
             streamed_text.append(chunk.text)
     response = await stream_response.response
@@ -107,7 +108,7 @@ async def test_thinking_adaptive(ai: Genkit) -> None:
     response = await ai.generate(
         model='anthropic/claude-opus-4-8',
         prompt='Write a one-sentence story about a robot.',
-        config={'thinking': {'adaptive': True, 'display': 'summarized'}},
+        config={'thinking': 'adaptive', 'thinkingDisplay': 'summarized'},
     )
 
     assert response.message is not None
@@ -119,7 +120,7 @@ async def test_thinking_disabled(ai: Genkit) -> None:
     response = await ai.generate(
         model='anthropic/claude-haiku-4-5',
         prompt='What is 2 + 2? Answer with just the number.',
-        config={'thinking': {'enabled': False}},
+        config={'thinking': 'disabled'},
     )
 
     assert response.message is not None
@@ -138,5 +139,5 @@ async def test_thinking_budget_rejected_on_adaptive_only_model(ai: Genkit) -> No
 
     cause: BaseException | None = excinfo.value
     while isinstance(cause, GenkitError):
-        cause = cause.cause
+        cause = cause.__cause__
     assert isinstance(cause, BadRequestError)

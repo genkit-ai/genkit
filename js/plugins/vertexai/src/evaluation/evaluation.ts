@@ -14,40 +14,15 @@
  * limitations under the License.
  */
 
+import type { protos } from '@google-cloud/aiplatform';
 import { z, type Action, type Genkit } from 'genkit';
 import type { GoogleAuth } from 'google-auth-library';
 import { EvaluatorFactory } from './evaluator_factory.js';
-
-/**
- * Vertex AI Evaluation metrics. See API documentation for more information.
- * https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/evaluation#parameter-list
- */
-export enum VertexAIEvaluationMetricType {
-  // Update genkit/docs/plugins/vertex-ai.md when modifying the list of enums
-  BLEU = 'BLEU',
-  ROUGE = 'ROUGE',
-  FLUENCY = 'FLEUNCY',
-  SAFETY = 'SAFETY',
-  GROUNDEDNESS = 'GROUNDEDNESS',
-  SUMMARIZATION_QUALITY = 'SUMMARIZATION_QUALITY',
-  SUMMARIZATION_HELPFULNESS = 'SUMMARIZATION_HELPFULNESS',
-  SUMMARIZATION_VERBOSITY = 'SUMMARIZATION_VERBOSITY',
-}
-
-/**
- * Evaluation metric config. Use `metricSpec` to define the behavior of the metric.
- * The value of `metricSpec` will be included in the request to the API. See the API documentation
- * for details on the possible values of `metricSpec` for each metric.
- * https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/evaluation#parameter-list
- */
-export type VertexAIEvaluationMetricConfig = {
-  type: VertexAIEvaluationMetricType;
-  metricSpec: any;
-};
-
-export type VertexAIEvaluationMetric =
-  | VertexAIEvaluationMetricType
-  | VertexAIEvaluationMetricConfig;
+import {
+  VertexAIEvaluationMetricType,
+  type VertexAIEvaluationMetric,
+  type VertexAIEvaluationMetricConfig,
+} from './types.js';
 
 function stringify(input: unknown) {
   return typeof input === 'string' ? input : JSON.stringify(input);
@@ -62,8 +37,9 @@ export function vertexEvaluators(
 ): Action[] {
   const factory = new EvaluatorFactory(auth, location, projectId);
   return metrics.map((metric) => {
-    const metricType = isConfig(metric) ? metric.type : metric;
-    const metricSpec = isConfig(metric) ? metric.metricSpec : {};
+    const { type: metricType, metricSpec } = isConfig(metric)
+      ? metric
+      : { type: metric, metricSpec: {} };
 
     switch (metricType) {
       case VertexAIEvaluationMetricType.BLEU: {
@@ -110,7 +86,7 @@ const BleuResponseSchema = z.object({
 function createBleuEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.IBleuSpec
 ): Action {
   return factory.create(
     ai,
@@ -122,13 +98,16 @@ function createBleuEvaluator(
       responseSchema: BleuResponseSchema,
     },
     (datapoint) => {
+      if (datapoint.reference === undefined) {
+        throw new Error('Reference is required for BLEU evaluation.');
+      }
       return {
         bleuInput: {
           metricSpec,
           instances: [
             {
               prediction: stringify(datapoint.output),
-              reference: datapoint.reference,
+              reference: datapoint.reference as string,
             },
           ],
         },
@@ -152,7 +131,7 @@ const RougeResponseSchema = z.object({
 function createRougeEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.IRougeSpec
 ): Action {
   return factory.create(
     ai,
@@ -164,13 +143,18 @@ function createRougeEvaluator(
       responseSchema: RougeResponseSchema,
     },
     (datapoint) => {
+      if (datapoint.reference === undefined) {
+        throw new Error('Reference is required for ROUGE evaluation.');
+      }
       return {
         rougeInput: {
           metricSpec,
-          instances: {
-            prediction: stringify(datapoint.output),
-            reference: datapoint.reference,
-          },
+          instances: [
+            {
+              prediction: stringify(datapoint.output),
+              reference: datapoint.reference as string,
+            },
+          ],
         },
       };
     },
@@ -193,7 +177,7 @@ const FluencyResponseSchema = z.object({
 function createFluencyEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.IFluencySpec
 ): Action {
   return factory.create(
     ai,
@@ -235,7 +219,7 @@ const SafetyResponseSchema = z.object({
 function createSafetyEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.ISafetySpec
 ): Action {
   return factory.create(
     ai,
@@ -277,7 +261,7 @@ const GroundednessResponseSchema = z.object({
 function createGroundednessEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.IGroundednessSpec
 ): Action {
   return factory.create(
     ai,
@@ -321,7 +305,7 @@ const SummarizationQualityResponseSchema = z.object({
 function createSummarizationQualityEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationQualitySpec
 ): Action {
   return factory.create(
     ai,
@@ -365,7 +349,7 @@ const SummarizationHelpfulnessResponseSchema = z.object({
 function createSummarizationHelpfulnessEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationHelpfulnessSpec
 ): Action {
   return factory.create(
     ai,
@@ -410,7 +394,7 @@ const SummarizationVerbositySchema = z.object({
 function createSummarizationVerbosityEvaluator(
   ai: Genkit,
   factory: EvaluatorFactory,
-  metricSpec: any
+  metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationVerbositySpec
 ): Action {
   return factory.create(
     ai,

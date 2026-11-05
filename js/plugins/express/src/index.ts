@@ -145,6 +145,15 @@ export function expressHandler<
         abortController.signal
       );
     } else {
+      // `request` emits `close` once its body has been read, which happened
+      // before this handler ran, so it cannot report the client going away.
+      // `response` closes with the connection, so a premature close is what
+      // ends a long-running action (an agent wait, say) when the client hangs
+      // up. Streaming responses stay out of this: a durable stream must
+      // survive a disconnect so the client can resubscribe.
+      response.on('close', () => {
+        if (!response.writableFinished) abortController.abort();
+      });
       try {
         const result = await action.run(input, {
           context,

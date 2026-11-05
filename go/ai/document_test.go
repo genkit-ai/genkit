@@ -19,9 +19,11 @@ package ai
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/goccy/go-yaml"
 	"github.com/google/go-cmp/cmp"
 )
 
@@ -55,7 +57,7 @@ func TestDocumentJSON(t *testing.T) {
 			},
 			&Part{
 				Kind: PartData,
-				Text: "somedata\x00string",
+				Data: map[string]any{"some": "data", "n": 3.3},
 			},
 			&Part{
 				Kind: PartToolRequest,
@@ -95,7 +97,7 @@ func TestDocumentJSON(t *testing.T) {
 		case PartMedia:
 			return a.ContentType == b.ContentType && a.Text == b.Text
 		case PartData:
-			return a.Text == b.Text
+			return reflect.DeepEqual(a.Data, b.Data)
 		case PartToolRequest:
 			return reflect.DeepEqual(a.ToolRequest, b.ToolRequest)
 		case PartToolResponse:
@@ -141,30 +143,259 @@ func TestReasoningPartJSON(t *testing.T) {
 	if unmarshaledPart.ContentType != "plain/text" {
 		t.Errorf("unmarshaled reasoning content type = %q, want %q", unmarshaledPart.ContentType, "plain/text")
 	}
+
+	if got := unmarshaledPart.Metadata["signature"]; got == nil {
+		t.Errorf("unmarshaled reasoning part lost its signature, metadata = %v", unmarshaledPart.Metadata)
+	}
+}
+
+func TestReasoningPartWithoutSignature(t *testing.T) {
+	// A part with no signature carries no metadata at all. A metadata map
+	// holding only a nil signature reads as "this part has metadata" to
+	// consumers, which stops adjacent reasoning parts from being merged.
+	p := NewReasoningPart("thinking", nil)
+	if p.Metadata != nil {
+		t.Errorf("Metadata = %v, want nil", p.Metadata)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+	if got, want := string(b), `{"reasoning":"thinking"}`; got != want {
+		t.Errorf("marshaled = %s, want %s", got, want)
+	}
+}
+
+func TestReasoningPartClonesSignature(t *testing.T) {
+	// A caller reusing a buffer across streamed chunks must not be able to
+	// rewrite a signature it has already handed off.
+	buf := []byte("sig123")
+	p := NewReasoningPart("thinking", buf)
+	copy(buf, "XXXXXX")
+
+	got, ok := p.Metadata["signature"].([]byte)
+	if !ok {
+		t.Fatalf("signature = %#v, want []byte", p.Metadata["signature"])
+	}
+	if string(got) != "sig123" {
+		t.Errorf("signature = %q, want %q: the caller's buffer is aliased", got, "sig123")
+	}
+}
+
+func TestEmptyReasoningPartRoundTrip(t *testing.T) {
+	// The reasoning key marks the kind, so it has to survive an empty text:
+	// dropping it turns the part into an empty text part on the way back, and
+	// the wire schema lists reasoning as required.
+	p := NewReasoningPart("", []byte("sig123"))
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("failed to marshal reasoning part: %v", err)
+	}
+
+	var got Part
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("failed to unmarshal reasoning part: %v", err)
+	}
+
+	if !got.IsReasoning() {
+		t.Errorf("empty reasoning part became kind %v, want %v (marshaled as %s)", got.Kind, PartReasoning, b)
+	}
+	if got.Text != "" {
+		t.Errorf("Text = %q, want empty", got.Text)
+	}
 }
 
 func TestNewDataPart(t *testing.T) {
-	t.Run("creates data part with content", func(t *testing.T) {
+	t.Run("creates data part with string content", func(t *testing.T) {
 		p := NewDataPart("some binary data")
 
 		if p.Kind != PartData {
 			t.Errorf("Kind = %v, want %v", p.Kind, PartData)
 		}
-		if p.Text != "some binary data" {
-			t.Errorf("Text = %q, want %q", p.Text, "some binary data")
+		if p.Data != "some binary data" {
+			t.Errorf("Data = %v, want %q", p.Data, "some binary data")
 		}
 	})
 
-	t.Run("creates data part with empty content", func(t *testing.T) {
-		p := NewDataPart("")
+	t.Run("creates data part with structured content", func(t *testing.T) {
+		data := map[string]any{"name": "Alice", "age": 30}
+		p := NewDataPart(data)
 
 		if p.Kind != PartData {
 			t.Errorf("Kind = %v, want %v", p.Kind, PartData)
 		}
-		if p.Text != "" {
-			t.Errorf("Text = %q, want empty string", p.Text)
+		if !reflect.DeepEqual(p.Data, data) {
+			t.Errorf("Data = %v, want %v", p.Data, data)
 		}
 	})
+
+	t.Run("round-trips structured data through JSON", func(t *testing.T) {
+		p := NewDataPart(map[string]any{"envelopes": []any{map[string]any{"x": 1.0}}})
+		p.Metadata = map[string]any{"mimeType": "application/a2ui+json"}
+
+		b, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"data":{"envelopes":[{"x":1}]},"metadata":{"mimeType":"application/a2ui+json"}}`
+		if string(b) != want {
+			t.Errorf("marshaled = %s, want %s", string(b), want)
+		}
+
+		var p2 Part
+		if err := json.Unmarshal(b, &p2); err != nil {
+			t.Fatal(err)
+		}
+		if p2.Kind != PartData {
+			t.Errorf("Kind = %v, want %v", p2.Kind, PartData)
+		}
+		if !reflect.DeepEqual(p2.Data, p.Data) {
+			t.Errorf("Data = %v, want %v", p2.Data, p.Data)
+		}
+	})
+}
+
+func TestDataPartRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		data any
+		json string
+	}{
+		{"nil", nil, "null"},
+		{"nil map", map[string]any(nil), "null"},
+		{"nil slice", []any(nil), "null"},
+		{"nil pointer", (*string)(nil), "null"},
+		{"false", false, "false"},
+		{"zero", 0, "0"},
+		{"empty string", "", `""`},
+		{"empty map", map[string]any{}, "{}"},
+		{"empty slice", []any{}, "[]"},
+		{"object", map[string]any{"answer": 42}, `{"answer":42}`},
+		{"array", []any{1, "two", nil}, `[1,"two",null]`},
+	}
+	formats := []struct {
+		name      string
+		marshal   func(any) ([]byte, error)
+		unmarshal func([]byte, any) error
+	}{
+		{"JSON", json.Marshal, json.Unmarshal},
+		{"YAML", func(v any) ([]byte, error) {
+			return yaml.MarshalWithOptions(v, yaml.UseJSONMarshaler())
+		}, yaml.Unmarshal},
+	}
+	for _, tt := range tests {
+		for _, format := range formats {
+			t.Run(tt.name+"/"+format.name, func(t *testing.T) {
+				p := NewDataPart(tt.data)
+				p.Metadata = map[string]any{"source": "test"}
+				b, err := format.marshal(p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got Part
+				if err := format.unmarshal(b, &got); err != nil {
+					t.Fatal(err)
+				}
+				if got.Kind != PartData {
+					t.Fatalf("decoded part = %+v, want PartData (wire: %s)", got, b)
+				}
+				data, err := json.Marshal(got.Data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(data) != tt.json {
+					t.Errorf("Data = %s, want %s", data, tt.json)
+				}
+				if diff := cmp.Diff(p.Metadata, got.Metadata); diff != "" {
+					t.Errorf("metadata mismatch (-want +got):\n%s", diff)
+				}
+				// Re-encoding must also retain the data key, including null.
+				b2, err := format.marshal(&got)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(b, b2) {
+					t.Errorf("round trip changed encoding:\n%s\n%s", b, b2)
+				}
+			})
+		}
+	}
+}
+
+func TestDataPartJSONPresence(t *testing.T) {
+	tests := []struct {
+		input string
+		kind  PartKind
+		data  string
+	}{
+		{`{}`, PartText, "null"},
+		{`{"metadata":{"data":null}}`, PartText, "null"},
+		{`{"data":null}`, PartData, "null"},
+		{`{"text":"hi","data":null}`, PartText, "null"},
+		{`{"text":"","data":null}`, PartText, "null"},
+		{`{"text":null,"data":null}`, PartData, "null"},
+		{`{"text":"hi","data":1}`, PartData, "1"},
+		{`{"custom":{},"data":null}`, PartCustom, "null"},
+		{`{"reasoning":"","data":null}`, PartReasoning, "null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			var got Part
+			if err := json.Unmarshal([]byte(tt.input), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Kind != tt.kind {
+				t.Errorf("Kind = %v, want %v", got.Kind, tt.kind)
+			}
+			data, err := json.Marshal(got.Data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != tt.data {
+				t.Errorf("Data = %s, want %s", data, tt.data)
+			}
+		})
+	}
+}
+
+func TestDataPartYAMLPresence(t *testing.T) {
+	tests := []struct {
+		input string
+		kind  PartKind
+	}{
+		{"{}", PartText},
+		{"metadata:\n  data: null\n", PartText},
+		{"data: null\n", PartData},
+		{"data: ~\n", PartData},
+		{"data:\n", PartData},
+		{"text: hi\ndata: null\n", PartText},
+		{"text: ''\ndata: null\n", PartText},
+		{"text: null\ndata: null\n", PartData},
+		{"custom: {}\ndata: null\n", PartCustom},
+		{"reasoning: ''\ndata: null\n", PartReasoning},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			var got Part
+			if err := yaml.Unmarshal([]byte(tt.input), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Kind != tt.kind {
+				t.Errorf("Kind = %v, want %v", got.Kind, tt.kind)
+			}
+		})
+	}
+}
+
+func ExampleNewDataPart_null() {
+	b, err := json.Marshal(NewDataPart(nil))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+	// Output: {"data":null}
 }
 
 func TestNewCustomPart(t *testing.T) {
@@ -225,9 +456,7 @@ func TestPartIsInterrupt(t *testing.T) {
 				Name:  "test",
 				Input: map[string]any{},
 			},
-			Metadata: map[string]any{
-				"interrupt": true,
-			},
+			Interrupt: &ToolInterrupt{},
 		}
 
 		if !p.IsInterrupt() {
@@ -421,12 +650,15 @@ func TestPartClone(t *testing.T) {
 		Kind:        PartToolRequest,
 		ContentType: "application/json",
 		Text:        "body",
+		Data:        map[string]any{"dk": "dv"},
 		ToolRequest: &ToolRequest{Name: "tool", Input: map[string]any{"a": 1}},
 		// Normally a Part wouldn't have both ToolRequest and ToolResponse,
 		// but we populate everything to catch missing fields.
 		ToolResponse: &ToolResponse{Name: "tool", Output: "ok"},
 		Resource:     &ResourcePart{Uri: "res://x"},
 		Custom:       map[string]any{"ck": "cv"},
+		Interrupt:    &ToolInterrupt{Data: map[string]any{"reason": "confirm"}},
+		Restart:      &ToolRestart{Resume: map[string]any{"approved": true}, OriginalInput: map[string]any{"a": 0}},
 		Metadata:     map[string]any{"sig": []byte{1, 2, 3}, "key": "val"},
 	}
 
@@ -456,6 +688,29 @@ func TestPartClone(t *testing.T) {
 	cp.Custom["extra"] = true
 	if _, ok := orig.Custom["extra"]; ok {
 		t.Error("mutating clone Custom affected original")
+	}
+
+	// A map-shaped Data value is cloned too, so mutating the clone's top-level
+	// keys must not affect the original (data parts, e.g. A2UI envelopes, are
+	// commonly map[string]any and shared by reference before this).
+	cpData, _ := cp.Data.(map[string]any)
+	if cpData == nil {
+		t.Fatalf("clone Data type = %T, want map[string]any", cp.Data)
+	}
+	cpData["extra"] = true
+	if _, ok := orig.Data.(map[string]any)["extra"]; ok {
+		t.Error("mutating clone Data affected original")
+	}
+
+	// Interrupt and Restart are pointers; the clone must own its own, so
+	// resolving an interrupt on a copy doesn't reach back into the original.
+	cp.Interrupt.Resolved = true
+	if orig.Interrupt.Resolved {
+		t.Error("mutating clone Interrupt affected original")
+	}
+	cp.Restart.Resume = "other"
+	if orig.Restart.Resume == "other" {
+		t.Error("mutating clone Restart affected original")
 	}
 
 	// Go types in metadata (e.g. []byte) must be preserved, not string-ified.
@@ -515,5 +770,436 @@ func TestMessageClone(t *testing.T) {
 	var nilMsg *Message
 	if nilMsg.Clone() != nil {
 		t.Error("nil Message.Clone() should return nil")
+	}
+}
+
+// A []any Data value gets the same top-level isolation as a map, so switching a
+// payload from an object to an array doesn't silently lose Clone's guarantee.
+func TestPartCloneSliceData(t *testing.T) {
+	orig := NewDataPart([]any{"a", "b"})
+	cp := orig.Clone()
+	cpData, ok := cp.Data.([]any)
+	if !ok {
+		t.Fatalf("clone Data type = %T, want []any", cp.Data)
+	}
+	cpData[0] = "mutated"
+	if orig.Data.([]any)[0] != "a" {
+		t.Error("mutating clone's slice Data affected the original")
+	}
+}
+
+func TestPartDataString(t *testing.T) {
+	tests := []struct {
+		name string
+		part *Part
+		want string
+	}{
+		{"string payload as-is", NewDataPart("data:image/png;base64,aGVsbG8="), "data:image/png;base64,aGVsbG8="},
+		{"map payload as JSON", NewDataPart(map[string]any{"k": "v"}), `{"k":"v"}`},
+		{"slice payload as JSON", NewDataPart([]any{1.0, 2.0}), `[1,2]`},
+		{"nil data", NewDataPart(nil), ""},
+		{"nil part", (*Part)(nil), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.part.DataString(); got != tt.want {
+				t.Errorf("DataString() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPartInterruptWireRoundTrip pins the wire contract for the typed interrupt
+// and restart state: it must fold into the metadata keys the JS runtime reads,
+// and lift back out on the way in, so a message can cross runtimes unchanged.
+func TestPartInterruptWireRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		part      func() *Part
+		wantWire  map[string]any
+		wantLifts func(t *testing.T, p *Part)
+	}{
+		{
+			name: "interrupt with data",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer", Ref: "r1"})
+				p.Interrupt = &ToolInterrupt{Data: map[string]any{"reason": "large"}}
+				p.Metadata = map[string]any{"keep": "me"}
+				return p
+			},
+			wantWire: map[string]any{
+				"interrupt": map[string]any{"reason": "large"},
+				"keep":      "me",
+			},
+			wantLifts: func(t *testing.T, p *Part) {
+				if !p.IsInterrupt() {
+					t.Error("lifted part is not an interrupt")
+				}
+				data, _ := p.Interrupt.Data.(map[string]any)
+				if data["reason"] != "large" {
+					t.Errorf("lifted interrupt data = %v, want reason=large", p.Interrupt.Data)
+				}
+				if p.Metadata["keep"] != "me" {
+					t.Errorf("unrelated metadata lost: %v", p.Metadata)
+				}
+			},
+		},
+		{
+			name: "bare interrupt",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+				p.Interrupt = &ToolInterrupt{}
+				return p
+			},
+			wantWire: map[string]any{"interrupt": true},
+			wantLifts: func(t *testing.T, p *Part) {
+				if p.Interrupt == nil || p.Interrupt.Data != nil {
+					t.Errorf("lifted interrupt = %+v, want no data", p.Interrupt)
+				}
+			},
+		},
+		{
+			name: "interrupt a hook raised",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer", Ref: "r1"})
+				p.Interrupt = &ToolInterrupt{RaisedBy: "genkit-middleware/toolApproval"}
+				return p
+			},
+			wantWire: map[string]any{
+				"interrupt":     true,
+				"interruptedBy": "genkit-middleware/toolApproval",
+			},
+			wantLifts: func(t *testing.T, p *Part) {
+				if !p.IsInterrupt() || p.Interrupt.RaisedBy != "genkit-middleware/toolApproval" {
+					t.Errorf("lifted interrupt = %+v, want a bare one raised by the middleware", p.Interrupt)
+				}
+			},
+		},
+		{
+			name: "resolved interrupt",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+				p.Interrupt = &ToolInterrupt{Data: map[string]any{"reason": "large"}, Resolved: true}
+				return p
+			},
+			wantWire: map[string]any{
+				"resolvedInterrupt": map[string]any{"reason": "large"},
+			},
+			wantLifts: func(t *testing.T, p *Part) {
+				if p.Interrupt == nil || !p.Interrupt.Resolved {
+					t.Errorf("lifted interrupt = %+v, want resolved", p.Interrupt)
+				}
+				if p.IsInterrupt() {
+					t.Error("a resolved interrupt must not still await resolution")
+				}
+			},
+		},
+		{
+			name: "restart with resume and replaced input",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer", Input: map[string]any{"amount": 50.0}})
+				p.Restart = &ToolRestart{
+					Resume:        map[string]any{"approved": true},
+					OriginalInput: map[string]any{"amount": 200.0},
+				}
+				return p
+			},
+			wantWire: map[string]any{
+				"resumed":       map[string]any{"approved": true},
+				"replacedInput": map[string]any{"amount": 200.0},
+			},
+			wantLifts: func(t *testing.T, p *Part) {
+				if p.Restart == nil {
+					t.Fatal("restart state was not lifted")
+				}
+				resume, _ := p.Restart.Resume.(map[string]any)
+				if resume["approved"] != true {
+					t.Errorf("lifted resume = %v, want approved=true", p.Restart.Resume)
+				}
+				orig, _ := p.Restart.OriginalInput.(map[string]any)
+				if orig["amount"] != 200.0 {
+					t.Errorf("lifted original input = %v, want amount=200", p.Restart.OriginalInput)
+				}
+			},
+		},
+		{
+			name: "bare restart",
+			part: func() *Part {
+				p := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+				p.Restart = &ToolRestart{}
+				return p
+			},
+			wantWire: map[string]any{"resumed": true},
+			wantLifts: func(t *testing.T, p *Part) {
+				if p.Restart == nil || p.Restart.Resume != nil {
+					t.Errorf("lifted restart = %+v, want no resume payload", p.Restart)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := tt.part()
+			b, err := json.Marshal(orig)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			if diff := cmp.Diff(tt.wantWire, wireMetadataOf(t, orig)); diff != "" {
+				t.Errorf("wire metadata mismatch (-want +got):\n%s", diff)
+			}
+
+			// The source part keeps its own metadata: folding is not mutation.
+			if _, ok := orig.Metadata["interrupt"]; ok {
+				t.Error("marshaling must not write wire keys back onto the part")
+			}
+
+			var lifted Part
+			if err := json.Unmarshal(b, &lifted); err != nil {
+				t.Fatalf("unmarshal part: %v", err)
+			}
+			tt.wantLifts(t, &lifted)
+			if _, ok := lifted.Metadata["resumed"]; ok {
+				t.Error("lifted wire keys must be removed from the metadata map")
+			}
+		})
+	}
+}
+
+// TestPartWireMetadata_TypedStateWinsOverStaleKey pins that folding the typed
+// interrupt state into the wire keys drops the key of the other resolution
+// state: a part assembled with the raw "interrupt" key and then resolved on
+// the field marshals as resolved only, so it does not read back as pending
+// after a wire hop.
+func TestPartWireMetadata_TypedStateWinsOverStaleKey(t *testing.T) {
+	p := NewToolRequestPart(&ToolRequest{Name: "transfer"})
+	p.Metadata = map[string]any{"interrupt": map[string]any{"reason": "old"}}
+	p.Interrupt = &ToolInterrupt{Data: map[string]any{"reason": "old"}, Resolved: true}
+
+	wire := wireMetadataOf(t, p)
+	if _, ok := wire["interrupt"]; ok {
+		t.Errorf("wire metadata = %v, want the stale interrupt key dropped", wire)
+	}
+	if _, ok := wire["resolvedInterrupt"]; !ok {
+		t.Errorf("wire metadata = %v, want resolvedInterrupt", wire)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var lifted Part
+	if err := json.Unmarshal(b, &lifted); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if lifted.IsInterrupt() || lifted.Interrupt == nil || !lifted.Interrupt.Resolved {
+		t.Errorf("after a wire hop the part reads as %+v, want a resolved interrupt", lifted.Interrupt)
+	}
+}
+
+// TestPartWireMarkersReadByTruthiness pins how the wire keys are read when a
+// part arrives from a peer: the JS runtime tests them by truthiness, so null
+// false, "" and 0 mean no state, true means state with no payload, and any
+// other value is the payload as sent, even one Go cannot deliver to a tool.
+func TestPartWireMarkersReadByTruthiness(t *testing.T) {
+	tests := []struct {
+		name          string
+		wire          string
+		wantInterrupt bool
+		wantRestart   bool
+		wantResume    any
+	}{
+		{"interrupt null", `{"toolRequest":{"name":"t"},"metadata":{"interrupt":null}}`, false, false, nil},
+		{"interrupt false", `{"toolRequest":{"name":"t"},"metadata":{"interrupt":false}}`, false, false, nil},
+		{"interrupt true", `{"toolRequest":{"name":"t"},"metadata":{"interrupt":true}}`, true, false, nil},
+		{"interrupt empty string", `{"toolRequest":{"name":"t"},"metadata":{"interrupt":""}}`, false, false, nil},
+		{"interrupt zero", `{"toolRequest":{"name":"t"},"metadata":{"interrupt":0}}`, false, false, nil},
+		{"resumed null", `{"toolRequest":{"name":"t"},"metadata":{"resumed":null}}`, false, false, nil},
+		{"resumed false", `{"toolRequest":{"name":"t"},"metadata":{"resumed":false}}`, false, false, nil},
+		{"resumed true", `{"toolRequest":{"name":"t"},"metadata":{"resumed":true}}`, false, true, nil},
+		{"resumed zero", `{"toolRequest":{"name":"t"},"metadata":{"resumed":0}}`, false, false, nil},
+		{"resumed scalar", `{"toolRequest":{"name":"t"},"metadata":{"resumed":"approved"}}`, false, true, "approved"},
+		{"interrupt and resumed", `{"toolRequest":{"name":"t"},"metadata":{"interrupt":{"why":"x"},"resumed":{"ok":true}}}`, true, true, map[string]any{"ok": true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var p Part
+			if err := json.Unmarshal([]byte(tt.wire), &p); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got := p.IsInterrupt(); got != tt.wantInterrupt {
+				t.Errorf("IsInterrupt() = %v, want %v", got, tt.wantInterrupt)
+			}
+			if got := p.IsRestart(); got != tt.wantRestart {
+				t.Errorf("IsRestart() = %v, want %v", got, tt.wantRestart)
+			}
+			if tt.wantRestart {
+				if diff := cmp.Diff(tt.wantResume, p.Restart.Resume); diff != "" {
+					t.Errorf("Restart.Resume mismatch (-want +got):\n%s", diff)
+				}
+			}
+			if err := p.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// TestPartWireMarkersHandBuilt pins that a part assembled in Go with the wire
+// keys reads the same as the decoded JSON: a zero of any numeric type is no
+// state, as JSON 0 is, and "resumed": false is no restart even with a
+// replaced input beside it.
+func TestPartWireMarkersHandBuilt(t *testing.T) {
+	tests := []struct {
+		name          string
+		meta          map[string]any
+		wantInterrupt bool
+		wantRestart   bool
+	}{
+		{"interrupt int zero", map[string]any{"interrupt": 0}, false, false},
+		{"interrupt int64 zero", map[string]any{"interrupt": int64(0)}, false, false},
+		{"resumed int zero", map[string]any{"resumed": 0}, false, false},
+		{"resumed uint8 zero", map[string]any{"resumed": uint8(0)}, false, false},
+		{"resumed float32 zero", map[string]any{"resumed": float32(0)}, false, false},
+		{"resumed json.Number zero", map[string]any{"resumed": json.Number("0")}, false, false},
+		{"resumed int one", map[string]any{"resumed": 1}, false, true},
+		{"resumed false with replaced input", map[string]any{"resumed": false, "replacedInput": map[string]any{"a": 1}}, false, false},
+		{"replaced input alone", map[string]any{"replacedInput": map[string]any{"a": 1}}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Part{Kind: PartToolRequest, ToolRequest: &ToolRequest{Name: "t"}, Metadata: tt.meta}
+			if got := p.IsInterrupt(); got != tt.wantInterrupt {
+				t.Errorf("IsInterrupt() = %v, want %v", got, tt.wantInterrupt)
+			}
+			if got := p.IsRestart(); got != tt.wantRestart {
+				t.Errorf("IsRestart() = %v, want %v", got, tt.wantRestart)
+			}
+		})
+	}
+}
+
+// TestPartWireState_Hygiene pins the cases where wire state could go stale
+// or vanish: decoding into a Part that already holds state replaces it, a
+// restart that keeps the input drops a stale "replacedInput" key, and a nil
+// map payload on a typed field marshals as the bare marker rather than null.
+func TestPartWireState_Hygiene(t *testing.T) {
+	t.Run("decoding into a used part replaces its state", func(t *testing.T) {
+		var p Part
+		if err := json.Unmarshal([]byte(`{"toolRequest":{"name":"t"},"metadata":{"interrupt":true}}`), &p); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if err := json.Unmarshal([]byte(`{"toolRequest":{"name":"t"},"metadata":{"resolvedInterrupt":true}}`), &p); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if p.IsInterrupt() || p.Interrupt == nil || !p.Interrupt.Resolved {
+			t.Errorf("interrupt = %+v, want the resolved state of the second decode", p.Interrupt)
+		}
+	})
+	t.Run("a stale replacedInput key is dropped", func(t *testing.T) {
+		p := NewToolRequestPart(&ToolRequest{Name: "t", Input: map[string]any{"a": 1}})
+		p.Metadata = map[string]any{"replacedInput": map[string]any{"a": 0}}
+		p.Restart = &ToolRestart{}
+		if wire := wireMetadataOf(t, p); wire["replacedInput"] != nil {
+			t.Errorf("wire metadata = %v, want no replacedInput", wire)
+		}
+	})
+	t.Run("a nil map payload is the bare marker", func(t *testing.T) {
+		p := NewToolRequestPart(&ToolRequest{Name: "t"})
+		p.Interrupt = &ToolInterrupt{Data: map[string]any(nil)}
+		p.Restart = &ToolRestart{Resume: map[string]any(nil)}
+		wire := wireMetadataOf(t, p)
+		if wire["interrupt"] != true || wire["resumed"] != true {
+			t.Errorf("wire metadata = %v, want the bare markers", wire)
+		}
+	})
+}
+
+func TestPartKindString(t *testing.T) {
+	for kind, want := range map[PartKind]string{
+		PartText:         "text",
+		PartMedia:        "media",
+		PartData:         "data",
+		PartToolRequest:  "toolRequest",
+		PartToolResponse: "toolResponse",
+		PartCustom:       "custom",
+		PartReasoning:    "reasoning",
+		PartResource:     "resource",
+		PartKind(99):     "unknown",
+	} {
+		if got := kind.String(); got != want {
+			t.Errorf("PartKind(%d).String() = %q, want %q", int8(kind), got, want)
+		}
+	}
+}
+
+func TestPartValidate(t *testing.T) {
+	toolReq := func() *Part { return NewToolRequestPart(&ToolRequest{Name: "t"}) }
+
+	valid := []struct {
+		name string
+		part *Part
+	}{
+		{"text", NewTextPart("hi")},
+		{"media", NewMediaPart("image/png", "data:...")},
+		{"tool request", toolReq()},
+		{"tool response", NewToolResponsePart(&ToolResponse{Name: "t"})},
+		{"interrupted tool request", func() *Part { p := toolReq(); p.Interrupt = &ToolInterrupt{}; return p }()},
+		{"restarted tool request", func() *Part { p := toolReq(); p.Restart = &ToolRestart{}; return p }()},
+		{"resolved interrupt restarted", func() *Part {
+			p := toolReq()
+			p.Interrupt = &ToolInterrupt{Resolved: true}
+			p.Restart = &ToolRestart{}
+			return p
+		}()},
+		// The JS restartTool spreads the interrupted part's metadata onto the
+		// restart, so a restart still carrying the interrupt it resolves is
+		// the normal cross-runtime shape.
+		{"restart of an unresolved interrupt", func() *Part {
+			p := toolReq()
+			p.Interrupt = &ToolInterrupt{}
+			p.Restart = &ToolRestart{}
+			return p
+		}()},
+		{"custom", NewCustomPart(map[string]any{"k": "v"})},
+		{"resource", NewResourcePart("res://x")},
+	}
+	for _, tt := range valid {
+		t.Run("valid/"+tt.name, func(t *testing.T) {
+			if err := tt.part.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+
+	invalid := []struct {
+		name string
+		part *Part
+	}{
+		{"nil part", nil},
+		{"unknown kind", &Part{Kind: PartKind(99)}},
+		{"tool request without request", &Part{Kind: PartToolRequest}},
+		{"tool response without response", &Part{Kind: PartToolResponse}},
+		{"custom without custom data", &Part{Kind: PartCustom}},
+		{"resource without resource", &Part{Kind: PartResource}},
+		{"interrupt on a text part", func() *Part { p := NewTextPart("hi"); p.Interrupt = &ToolInterrupt{}; return p }()},
+		{"restart on a tool response", func() *Part {
+			p := NewToolResponsePart(&ToolResponse{Name: "t"})
+			p.Restart = &ToolRestart{}
+			return p
+		}()},
+		{"tool response on a tool request", func() *Part {
+			p := toolReq()
+			p.ToolResponse = &ToolResponse{Name: "t"}
+			return p
+		}()},
+	}
+	for _, tt := range invalid {
+		t.Run("invalid/"+tt.name, func(t *testing.T) {
+			if err := tt.part.Validate(); err == nil {
+				t.Error("Validate() = nil, want an error")
+			}
+		})
 	}
 }

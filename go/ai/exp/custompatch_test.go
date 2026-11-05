@@ -18,12 +18,14 @@ package exp
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
+	"github.com/firebase/genkit/go/core/status"
 )
 
 // collectTurnPatches consumes one turn's chunks, returning the customPatch from
@@ -221,7 +223,7 @@ func TestCustomPatch_StateTransformErrorFailsInvocationClosed(t *testing.T) {
 			})
 		},
 		WithStateTransform(func(_ context.Context, st *SessionState[testState]) (*SessionState[testState], error) {
-			return nil, core.NewError(core.PERMISSION_DENIED, "cannot shape custom state")
+			return nil, status.Errorf(status.ErrPermissionDenied, "cannot shape custom state")
 		}),
 	)
 
@@ -246,6 +248,12 @@ func TestCustomPatch_StateTransformErrorFailsInvocationClosed(t *testing.T) {
 	}
 	if out.Error == nil || out.Error.Status != core.PERMISSION_DENIED {
 		t.Errorf("Error = %+v, want status %q from the transform", out.Error, core.PERMISSION_DENIED)
+	}
+	// The sentinel has to survive the failure path too, not just the status
+	// name: the runtime rebuilds the error onto the output, and a caller that
+	// branches with errors.Is would silently stop matching if it didn't.
+	if !errors.Is(out.Error, status.ErrPermissionDenied) {
+		t.Errorf("Error = %+v, want it to match status.ErrPermissionDenied", out.Error)
 	}
 }
 

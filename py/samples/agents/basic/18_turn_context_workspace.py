@@ -35,8 +35,10 @@ from pathlib import Path
 
 from genkit_google_genai import GoogleAI
 
-from genkit import ActionRunContext, FinishReason, Genkit, Message
-from genkit.agent import (
+from genkit import FinishReason
+from genkit.exp import Genkit
+from genkit.exp.agent import (
+    AgentContext,
     AgentFinishReason,
     AgentInput,
     AgentResult,
@@ -51,7 +53,7 @@ store = InMemorySessionStore()
 WORKSPACES = Path(__file__).resolve().parent / '.workspaces'
 
 
-async def workspace_agent_fn(sess: SessionRunner, _: ActionRunContext) -> AgentResult:
+async def workspace_agent_fn(sess: SessionRunner, _: AgentContext) -> AgentResult:
     async def handle_turn(inp: AgentInput, turn_ctx: TurnContext) -> TurnResult | None:
         # Reserved before this handler ran — same id the store will persist under.
         assert turn_ctx.snapshot_id is not None
@@ -60,14 +62,13 @@ async def workspace_agent_fn(sess: SessionRunner, _: ActionRunContext) -> AgentR
         note = work / 'turn.txt'
         prompt = ''
         if inp.message and inp.message.content:
-            root = inp.message.content[0].root
-            prompt = getattr(root, 'text', '') or ''
+            prompt = inp.message.content[0].text or ''
         note.write_text(f'parent={turn_ctx.parent_snapshot_id}\nprompt={prompt}\n', encoding='utf-8')
 
         history = await sess.get_messages()
-        messages = [Message(m) for m in history] if history else None
+        messages = history or None
         res = await ai.generate(
-            model='googleai/gemini-flash-latest',
+            model=GoogleAI.gemini('gemini-flash-latest'),
             system=(
                 'You are a terse assistant. Mention that you wrote notes into a '
                 f'workspace directory named after snapshot {turn_ctx.snapshot_id}.'

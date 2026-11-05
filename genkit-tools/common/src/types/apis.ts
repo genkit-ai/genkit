@@ -68,6 +68,10 @@ export type ListTracesResponse = z.infer<typeof ListTracesResponseSchema>;
 export const LogQueryFilterSchema = z.object({
   traceId: z.string().optional(),
   spanId: z.string().optional(),
+  /** Filters logs by exact string match. Use for custom severity levels. */
+  severityText: z.string().optional(),
+  /** Filters logs to this numerical severity level and higher (>=). Used for standard OpenTelemetry severities. */
+  severityNumber: z.number().optional(),
 });
 
 export type LogQueryFilter = z.infer<typeof LogQueryFilterSchema>;

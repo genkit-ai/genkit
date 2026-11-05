@@ -5,10 +5,10 @@ package googlegenai
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
 
@@ -23,7 +23,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	if v, ok := genkitSchema["$ref"]; ok {
 		ref, ok := v.(string)
 		if !ok {
-			return nil, fmt.Errorf("invalid $ref value: not a string")
+			return nil, status.Errorf(status.ErrInvalidSchema, "invalid $ref value: not a string")
 		}
 		s, err := resolveRef(originalSchema, ref)
 		if err != nil {
@@ -66,7 +66,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	schema := &genai.Schema{}
 	typeVal, ok := genkitSchema["type"]
 	if !ok {
-		return nil, fmt.Errorf("schema is missing the 'type' field: %#v", genkitSchema)
+		return nil, status.Errorf(status.ErrInvalidSchema, "schema is missing the 'type' field: %#v", genkitSchema)
 	}
 
 	// JSON Schema 2020-12 allows "type" to be an array of types, e.g.
@@ -83,14 +83,14 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 		for _, t := range tv {
 			s, isString := t.(string)
 			if !isString {
-				return nil, fmt.Errorf("schema 'type' array contains non-string element of type %T", t)
+				return nil, status.Errorf(status.ErrInvalidSchema, "schema 'type' array contains non-string element of type %T", t)
 			}
 			typeList = append(typeList, s)
 		}
 	case []string:
 		typeList = tv
 	default:
-		return nil, fmt.Errorf("schema 'type' field is not a string, but %T", typeVal)
+		return nil, status.Errorf(status.ErrInvalidSchema, "schema 'type' field is not a string, but %T", typeVal)
 	}
 	for _, s := range typeList {
 		if s == "null" {
@@ -98,7 +98,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 			continue
 		}
 		if typeStr != "" {
-			return nil, fmt.Errorf("schema 'type' array contains multiple non-null types: %v", typeList)
+			return nil, status.Errorf(status.ErrInvalidSchema, "schema 'type' array contains multiple non-null types: %v", typeList)
 		}
 		typeStr = s
 	}
@@ -119,7 +119,7 @@ func toGeminiSchema(originalSchema map[string]any, genkitSchema map[string]any) 
 	case "array":
 		schema.Type = genai.TypeArray
 	default:
-		return nil, fmt.Errorf("schema type %q not allowed", typeStr)
+		return nil, status.Errorf(status.ErrInvalidSchema, "schema type %q not allowed", typeStr)
 	}
 	if v, ok := genkitSchema["required"]; ok {
 		schema.Required = castToStringArray(v)
@@ -198,7 +198,7 @@ func resolveRef(originalSchema map[string]any, ref string) (map[string]any, erro
 			return def, nil
 		}
 	}
-	return nil, fmt.Errorf("unable to resolve schema reference")
+	return nil, status.Errorf(status.ErrInvalidSchema, "unable to resolve schema reference %q", ref)
 }
 
 // castToStringArray converts either []any or []string to []string, filtering non-strings.

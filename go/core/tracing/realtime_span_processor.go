@@ -94,7 +94,7 @@ func (p *realtimeSpanProcessor) save(s sdktrace.ReadOnlySpan, async bool) {
 		// action context was canceled (the dev UI canceled the run, or the agent
 		// connection closed), and the final trace write must still land.
 		if err := p.client.Save(context.Background(), td); err != nil {
-			slog.Debug("realtime telemetry: failed to save trace", "error", err)
+			reportTraceSaveError(err)
 		}
 		return
 	}
@@ -112,7 +112,7 @@ func (p *realtimeSpanProcessor) save(s sdktrace.ReadOnlySpan, async bool) {
 	go func() {
 		defer p.wg.Done()
 		if err := p.client.Save(context.Background(), td); err != nil {
-			slog.Debug("realtime telemetry: failed to save trace", "error", err)
+			reportTraceSaveError(err)
 		}
 	}()
 }

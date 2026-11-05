@@ -21,7 +21,7 @@ turn.abort() is a client-side detach — you stop reading the stream and the tur
 settles immediately, while the server turn keeps running to completion. The prompt
 you sent stays in history (it was still asked), so the session just continues from
 there; it works with or without a store. chat.abort() is the opposite:
-it halts the work on the server, firing the abort_signal inside running tools so a
+it halts the work on the server, cancelling running tools and model calls so a
 detached turn settles ABORTED. It needs a store. Requires GEMINI_API_KEY.
 """
 
@@ -31,8 +31,8 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import Genkit, GenkitError, ToolRunContext
-from genkit.agent import InMemorySessionStore, SnapshotStatus
+from genkit.exp import Genkit
+from genkit.exp.agent import InMemorySessionStore, SnapshotStatus
 
 ai = Genkit(plugins=[GoogleAI()])
 store = InMemorySessionStore()
@@ -40,24 +40,22 @@ store = InMemorySessionStore()
 # No store: state lives on the client, so turn.abort() is a purely local detach.
 chatty = ai.define_agent(
     name='chattyAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='You are a helpful assistant. When asked to write something long, write many paragraphs.',
 )
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolRunContext) -> dict:
+async def slow_work(_: dict) -> dict:
     for _i in range(30):
-        if ctx.abort_signal.is_set():  # chat.abort() reaches the tool here so it can bail out
-            raise GenkitError(status='ABORTED', message='Task aborted')
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # chat.abort() cancels the running task here
     return {'done': True}
 
 
 # Store-backed: chat.abort() cancels a server-side snapshot, so it needs a store.
 worker = ai.define_agent(
     name='workerAgent',
-    model='googleai/gemini-flash-latest',
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='When asked for a long task, call slowWork.',
     tools=[slow_work],
     store=store,
@@ -89,8 +87,12 @@ async def main() -> None:
     assert task.snapshot_id
     await asyncio.sleep(2.0)  # let the tool start churning
 
-    status = await worker_chat.abort()  # abort_signal fires inside slowWork; the snapshot settles ABORTED
-    assert status == SnapshotStatus.ABORTED
+    # chat.abort() cancels slowWork on the server. The call returns the
+    # previous status (PENDING) — not ABORTED. The prompt stays in history;
+    # it was still asked. Reload before the next send() so you are not still
+    # pointed at the aborted leaf.
+    status = await worker_chat.abort()
+    assert status == SnapshotStatus.PENDING
     await asyncio.sleep(0.5)  # let the background task unwind
 
     # The stop is durable: read the snapshot back and it stays ABORTED.

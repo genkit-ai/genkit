@@ -14,17 +14,14 @@
  * limitations under the License.
  */
 
-import {
-  BackgroundActionRunOptions,
-  GenkitError,
-  Operation,
-} from '@genkit-ai/core';
+import { GenkitError, Operation } from '@genkit-ai/core';
 import { Registry } from '@genkit-ai/core/registry';
+import { toRunOptions, type OperationOptions } from './operation.js';
 
 export async function checkOperation<T = unknown>(
   registry: Registry,
   operation: Operation<T>,
-  options?: BackgroundActionRunOptions
+  options?: OperationOptions
 ): Promise<Operation<T>> {
   if (!operation.action) {
     throw new GenkitError({
@@ -41,5 +38,5 @@ export async function checkOperation<T = unknown>(
       message: `Failed to resolve background action from original request: ${operation.action}`,
     });
   }
-  return await backgroundAction.check(operation, options);
+  return await backgroundAction.check(operation, toRunOptions(options));
 }

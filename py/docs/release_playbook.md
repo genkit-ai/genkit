@@ -23,11 +23,47 @@ No PR required.
 
 ## Stable release steps
 
-1. `./bin/bump_version X.Y.Z` — bump all `pyproject.toml` files
-2. Open a PR to main with release notes in the description (CI verifies build, tests, and consistency)
-3. Merge the PR
-4. `./bin/create_release X.Y.Z` — tags `py/vX.Y.Z`, pushes tag, creates GitHub release
-5. Approve the publish at <https://github.com/genkit-ai/genkit/actions>
+There is one path. `create_release` refuses to run unless every step below was followed.
+
+1. `py/bin/bump_version X.Y.Z` on a branch from main. It bumps every `pyproject.toml` and `uv.lock`.
+2. Open a PR to main titled exactly `chore(py): release Python SDK vX.Y.Z`. Its description is the release notes, published word for word.
+3. Get it approved and merged.
+4. `py/bin/create_release X.Y.Z <PR_NUMBER> --dry-run`, then without `--dry-run`.
+5. Approve the publish at <https://github.com/genkit-ai/genkit/actions/workflows/publish_python.yml>. The tag push already started it; don't run it by hand.
+6. `pip index versions genkit` shows X.Y.Z.
+
+`create_release` runs every check before it changes anything and prints a fix for each failure:
+
+- **Merged into main**: the PR is merged, and into main
+- **Title**: exactly `chore(py): release Python SDK vX.Y.Z`
+- **Release notes**: the description isn't empty
+- **Versions**: every `py/packages/*/pyproject.toml` is at X.Y.Z in the merge commit
+- **Tag**: `py/vX.Y.Z` doesn't exist yet
+
+It tags the PR's merge commit, not the tip of main, so anything merged later stays out of the release. Exit codes: `0` ok, `1` usage or environment, `2` a check failed and nothing changed.
+
+To fix notes after release, edit the GitHub release: `gh release edit py/vX.Y.Z --notes-file notes.md`. The PR description isn't read again.
+
+## After 0.13.0: retire genkit-evaluators
+
+genkit 1.0 removes evaluators (#6947). genkit-evaluators 0.13.0 is the last release and requires `genkit>=0.13.0,<1`. `bump_version` writes that floor; the steps above need no hand edits.
+
+Every earlier release (0.9.0 through 0.12.0) requires `genkit` with no upper bound. The cap alone isn't enough: when 0.13.0 conflicts with genkit 1.0, pip and uv backtrack to an older genkit-evaluators, and those accept genkit 1.0. So, once `py/v0.13.0` is on PyPI:
+
+1. Yank genkit-evaluators 0.9.0, 0.10.0, 0.11.0 and 0.12.0 on PyPI (Manage → Releases → Options → Yank). Reason: `unbounded genkit dependency; use 0.13.0`.
+2. Verify in a fresh venv:
+
+   ```bash
+   python3 -m venv /tmp/evals && /tmp/evals/bin/pip install genkit-evaluators
+   /tmp/evals/bin/pip list | grep -E '^genkit '
+   # => genkit             0.13.x
+   /tmp/evals/bin/pip show genkit-evaluators | grep Version
+   # => Version: 0.13.0
+   ```
+
+3. Only then merge #6947.
+
+Resolvers skip yanked versions unless pinned with `==`, so existing exact pins keep installing.
 
 ## Workflow: `publish_python.yml`
 

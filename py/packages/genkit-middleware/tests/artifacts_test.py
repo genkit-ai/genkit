@@ -18,19 +18,73 @@
 
 from __future__ import annotations
 
+import subprocess  # noqa: S404
+import sys
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 import pytest
-from genkit_middleware import Artifacts
+from genkit_middleware import Middleware
 from genkit_middleware._artifacts import (
     ARTIFACTS_LISTING_MARKER,
     build_artifact_listing,
     extract_artifact_text,
 )
+from genkit_middleware.exp import Artifacts
 
-from genkit import ModelResponse
-from genkit._ai._agents._session import Session, run_with_session
-from genkit._core._model import GenerateActionOptions
-from genkit._core._typing import Artifact, Part, Role, SessionState, TextPart
-from genkit.middleware import GenerateHookParams, GenerateMiddlewareContext
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit.exp import Genkit
+from genkit.exp.agent import (
+    AgentContext,
+    AgentFinishReason,
+    AgentInput,
+    AgentResult,
+    Artifact,
+    SessionRunner,
+    TurnContext,
+    TurnResult,
+)
+from genkit.middleware import GenerateHookParams, MiddlewareContext
+from genkit.model import GenerateActionOptions, ToolRequest
+from genkit.testing import define_scripted_model
+
+
+async def _run_in_agent_turn(
+    check: Callable[[SessionRunner], Awaitable[None]],
+    *,
+    artifacts: list[Artifact] | None = None,
+) -> None:
+    """Run ``check`` inside a real agent turn so the middleware sees an active session."""
+    ai = Genkit()
+
+    err: BaseException | None = None
+
+    async def agent_fn(session: SessionRunner, _ctx: AgentContext) -> AgentResult:
+        nonlocal err
+
+        async def handle_turn(_inp: AgentInput, _turn: TurnContext) -> TurnResult:
+            nonlocal err
+            try:
+                if artifacts:
+                    await session.add_artifacts(artifacts)
+                await check(session)
+            except BaseException as e:
+                err = e
+                raise
+            return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+        await session.run(handle_turn)
+        return await session.result()
+
+    await ai.define_custom_agent(name='artifactsTest', fn=agent_fn).chat().send('go')
+    if err:
+        raise err
+
+
+def _middleware_refs(*names: str) -> list[Any]:
+    """Build name-only middleware refs (what a .prompt's ``use:`` produces) via the public options model."""
+    opts = GenerateActionOptions.model_validate({'messages': [], 'use': [{'name': n} for n in names]})
+    return list(opts.use or [])
 
 
 def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookParams:
@@ -41,16 +95,15 @@ def _make_params(options: GenerateActionOptions | None = None) -> GenerateHookPa
     )
 
 
-def _listing_parts(messages) -> list[TextPart]:
-    parts: list[TextPart] = []
+def _listing_parts(messages) -> list[Part]:
+    parts: list[Part] = []
     for msg in messages:
         if msg.role != Role.SYSTEM:
             continue
         for part in msg.content:
-            root = part.root
-            if isinstance(root, TextPart) and isinstance(root.metadata, dict):
-                if root.metadata.get(ARTIFACTS_LISTING_MARKER):
-                    parts.append(root)
+            if part.text is not None and isinstance(part.metadata, dict):
+                if part.metadata.get(ARTIFACTS_LISTING_MARKER):
+                    parts.append(part)
     return parts
 
 
@@ -61,16 +114,15 @@ def test_build_artifact_listing_empty() -> None:
 
 
 def test_extract_artifact_text() -> None:
-    art = Artifact(name='a.txt', parts=[Part(TextPart(text='line1')), Part(TextPart(text='line2'))])
+    art = Artifact(name='a.txt', parts=[Part.from_text('line1'), Part.from_text('line2')])
     assert extract_artifact_text(art) == 'line1\nline2'
 
 
 @pytest.mark.asyncio
-async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContext) -> None:
+async def test_write_artifact_uses_current_session(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(SessionState())
 
-    async def check() -> None:
+    async def check(session: SessionRunner) -> None:
         tools = {t.name: t for t in mw.tools(ctx)}
         assert set(tools) == {'read_artifact', 'write_artifact'}
 
@@ -80,18 +132,16 @@ async def test_write_artifact_uses_current_session(ctx: GenerateMiddlewareContex
         arts = await session.get_artifacts()
         assert len(arts) == 1
         assert arts[0].name == 'poem.txt'
-        assert arts[0].parts[0].root.text == 'roses are red'
+        assert arts[0].parts[0].text == 'roses are red'
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check)
 
 
 @pytest.mark.asyncio
-async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> None:
+async def test_read_artifact_returns_found(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(SessionState())
-    await session.add_artifacts([Artifact(name='notes.txt', parts=[Part(TextPart(text='hello'))])])
 
-    async def check() -> None:
+    async def check(_session: SessionRunner) -> None:
         read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
 
         result = await read.run(input={'name': 'notes.txt'})
@@ -99,11 +149,11 @@ async def test_read_artifact_returns_found(ctx: GenerateMiddlewareContext) -> No
         assert result.response.content == 'hello'
         assert result.response.found is True
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check, artifacts=[Artifact(name='notes.txt', parts=[Part.from_text('hello')])])
 
 
 @pytest.mark.asyncio
-async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> None:
+async def test_read_artifact_without_session(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     read = next(t for t in mw.tools(ctx) if t.name == 'read_artifact')
     result = await read.run(input={'name': 'missing.txt'})
@@ -113,18 +163,15 @@ async def test_read_artifact_without_session(ctx: GenerateMiddlewareContext) -> 
 
 
 @pytest.mark.asyncio
-async def test_readonly_excludes_write_tool(ctx: GenerateMiddlewareContext) -> None:
+async def test_readonly_excludes_write_tool(ctx: MiddlewareContext) -> None:
     mw = Artifacts(readonly=True)
     names = {t.name for t in mw.tools(ctx)}
     assert names == {'read_artifact'}
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_injects_listing(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(
-        SessionState(artifacts=[Artifact(name='poem.txt', parts=[Part(TextPart(text='abc'))])]),
-    )
 
     captured: list[GenerateActionOptions] = []
 
@@ -132,7 +179,7 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         captured.append(params.options)
         return ModelResponse(message=None)
 
-    async def check() -> None:
+    async def check(_session: SessionRunner) -> None:
         await mw.wrap_generate(_make_params(), ctx, next_fn)
 
         assert len(captured) == 1
@@ -141,21 +188,18 @@ async def test_wrap_generate_injects_listing(ctx: GenerateMiddlewareContext) -> 
         listing_parts = [
             p
             for p in system_msgs[0].content
-            if isinstance(p.root, TextPart)
-            and isinstance(p.root.metadata, dict)
-            and p.root.metadata.get(ARTIFACTS_LISTING_MARKER)
+            if p.text is not None and isinstance(p.metadata, dict) and p.metadata.get(ARTIFACTS_LISTING_MARKER)
         ]
         assert len(listing_parts) == 1
-        assert 'poem.txt' in (listing_parts[0].root.text or '')
-        assert '(3 chars)' in (listing_parts[0].root.text or '')
+        assert 'poem.txt' in (listing_parts[0].text or '')
+        assert '(3 chars)' in (listing_parts[0].text or '')
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check, artifacts=[Artifact(name='poem.txt', parts=[Part.from_text('abc')])])
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_refreshes_listing(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
-    session = Session(SessionState())
     envelope = GenerateActionOptions(messages=[])
 
     seen: list[str] = []
@@ -165,9 +209,9 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
             seen.append(part.text or '')
         return ModelResponse(message=None)
 
-    async def check() -> None:
+    async def check(session: SessionRunner) -> None:
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
-        await session.add_artifacts([Artifact(name='b.txt', parts=[Part(TextPart(text='x'))])])
+        await session.add_artifacts([Artifact(name='b.txt', parts=[Part.from_text('x')])])
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
         assert len(seen) == 2
@@ -175,16 +219,13 @@ async def test_wrap_generate_refreshes_listing(ctx: GenerateMiddlewareContext) -
         assert 'b.txt' in seen[1]
         assert len(_listing_parts(envelope.messages)) == 0
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check)
 
 
 @pytest.mark.asyncio
-async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareContext) -> None:
+async def test_wrap_generate_does_not_mutate_envelope(ctx: MiddlewareContext) -> None:
     mw = Artifacts()
     envelope = GenerateActionOptions(messages=[])
-    session = Session(
-        SessionState(artifacts=[Artifact(name='a.txt', parts=[Part(TextPart(text='hi'))])]),
-    )
 
     captured_request: list[GenerateActionOptions] = []
 
@@ -192,11 +233,97 @@ async def test_wrap_generate_does_not_mutate_envelope(ctx: GenerateMiddlewareCon
         captured_request.append(params.options)
         return ModelResponse(message=None)
 
-    async def check() -> None:
+    async def check(_session: SessionRunner) -> None:
         await mw.wrap_generate(_make_params(envelope), ctx, next_fn)
 
         assert len(_listing_parts(envelope.messages)) == 0
-        assert len(_listing_parts(captured_request[0].messages)) == 1
-        assert 'a.txt' in _listing_parts(captured_request[0].messages)[0].text
+        listing_parts = _listing_parts(captured_request[0].messages)
+        assert len(listing_parts) == 1
+        listing = listing_parts[0].text
+        assert listing is not None
+        assert 'a.txt' in listing
 
-    await run_with_session(session=session, coro=check())
+    await _run_in_agent_turn(check, artifacts=[Artifact(name='a.txt', parts=[Part.from_text('hi')])])
+
+
+@pytest.mark.asyncio
+async def test_agent_using_artifacts_without_middleware_plugin_saves_written_file_to_chat() -> None:
+    """use=[Artifacts()] on an agent works with no Middleware() plugin: write_artifact lands on chat.artifacts."""
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(
+                role=Role.MODEL,
+                content=[
+                    Part(
+                        tool_request=ToolRequest(
+                            name='write_artifact',
+                            input={'name': 'poem.txt', 'content': 'roses are red'},
+                            ref='w1',
+                        )
+                    )
+                ],
+            ),
+        ),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('saved')]),
+        ),
+    ]
+    agent = ai.define_agent(name='workspaceAgent', model='scriptedModel', use=[Artifacts()])
+
+    chat = agent.chat()
+    out = await chat.send('Write poem.txt')
+
+    assert out.text == 'saved'
+    assert [(a.name, extract_artifact_text(a)) for a in chat.artifacts] == [('poem.txt', 'roses are red')]
+
+
+@pytest.mark.asyncio
+async def test_generate_naming_artifacts_middleware_with_middleware_plugin_raises_not_found() -> None:
+    """With Middleware() registered, use=[{'name': 'artifacts'}] (a .prompt's use:) raises NOT_FOUND."""
+    ai = Genkit(plugins=[Middleware()])
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    ]
+
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model='scriptedModel', prompt='hi', use=_middleware_refs('artifacts'))
+
+    assert err.value.status == 'NOT_FOUND'
+    assert '"artifacts"' in str(err.value)
+
+
+@pytest.mark.asyncio
+async def test_generate_naming_retry_middleware_with_middleware_plugin_runs() -> None:
+    """With Middleware() registered, use=[{'name': 'retry'}] still resolves and the call returns."""
+    ai = Genkit(plugins=[Middleware()])
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('ok')]),
+        )
+    ]
+
+    res = await ai.generate(model='scriptedModel', prompt='hi', use=_middleware_refs('retry'))
+
+    assert res.text == 'ok'
+
+
+def test_import_genkit_middleware_does_not_load_genkit_exp() -> None:
+    """In a fresh interpreter, import genkit_middleware leaves genkit.exp out of sys.modules."""
+    out = subprocess.run(  # noqa: S603
+        [sys.executable, '-c', "import sys, genkit_middleware; print('genkit.exp' in sys.modules)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert out.stdout.strip() == 'False'

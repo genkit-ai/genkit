@@ -14,17 +14,17 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Minimal Django settings for the django-hello sample.
+"""Settings for a Django app that serves Genkit flows as views.
 
-Database and admin middleware are turned off because this sample only exposes
-Genkit flows as JSON/SSE endpoints.
+No database or admin: this process only needs ASGI and urlpatterns.
 """
 
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-hello-dev-key-do-not-use-in-production'  # noqa: S105
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'dev')
 DEBUG = True
 ALLOWED_HOSTS = ['*']
 

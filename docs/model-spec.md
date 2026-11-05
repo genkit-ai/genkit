@@ -63,8 +63,9 @@ The output from a model action.
 | Field | Type | Description |
 |---|---|---|
 | `message` | `Message` | The generated message. |
-| `finishReason` | `enum` | Reason for generation completion: `'stop'`, `'length'`, `'blocked'`, `'interrupted'`, `'other'`, `'unknown'`. |
+| `finishReason` | `enum` | Reason for generation completion: `'stop'`, `'length'`, `'blocked'`, `'interrupted'`, `'other'`, `'unknown'`, `'failed'`. |
 | `finishMessage` | `string` | Additional information about the finish reason. |
+| `error` | `RuntimeError` | Classified failure when `finishReason` is `'failed'` (or an aborted model stop). Absent on `'blocked'`. |
 | `usage` | `GenerationUsage` | Token and character usage statistics. |
 | `latencyMs` | `number` | Time taken for generation in milliseconds. |
 | `custom` | `any` | Model-specific extra information. |

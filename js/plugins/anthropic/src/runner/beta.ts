@@ -160,7 +160,9 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
     | BetaToolResultBlockParam
     | BetaThinkingBlockParam
     | BetaRedactedThinkingBlockParam {
-    if (part.reasoning) {
+    // Claude can return signed thinking blocks with empty text, so check the
+    // type rather than truthiness.
+    if (typeof part.reasoning === 'string') {
       const signature = this.getThinkingSignature(part);
       if (!signature) {
         throw new Error(

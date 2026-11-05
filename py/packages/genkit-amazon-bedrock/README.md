@@ -1,0 +1,470 @@
+# Genkit Amazon Bedrock Plugin
+
+Amazon Bedrock plugin for Genkit Python. Provides text generation with
+Bedrock-hosted models (Anthropic Claude, Amazon Nova, Meta Llama, Mistral,
+Cohere, and others) through the Bedrock Converse and ConverseStream APIs, and
+embeddings and image generation through InvokeModel.
+
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
+## Installation
+
+```bash
+uv add genkit genkit-amazon-bedrock
+```
+
+## AWS setup
+
+### Model access
+
+Model access is granted per AWS account and per region, in the Bedrock console
+under Model access, and most models cannot be called until it is: a grant in
+`us-east-1` says nothing about `us-west-2`, so a working setup can break purely
+by changing region.
+
+The Anthropic models additionally need the account's one-time use-case
+agreement (Bedrock console, Model access, Anthropic use case details). Until it
+is accepted, Claude calls fail with `ResourceNotFoundException`, which reads
+like a mistyped model ID rather than a missing agreement.
+
+### IAM
+
+The minimal policy covering everything this plugin does:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*"
+      ]
+    }
+  ]
+}
+```
+
+Converse is authorized by `bedrock:InvokeModel` and ConverseStream by
+`bedrock:InvokeModelWithResponseStream`; there is no separate Converse action to
+grant. Embedding and image generation go through InvokeModel, so they need
+only the first.
+
+The inference-profile resource is the part that is easy to leave out.
+Cross-region profile IDs such as `us.anthropic.claude-sonnet-4-5-20250929-v1:0`
+are account-scoped inference-profile ARNs rather than foundation-model ARNs, so
+a policy limited to `foundation-model/*` refuses them with
+`AccessDeniedException` even when model access is granted.
+
+### Credentials
+
+Credentials resolve through the standard AWS SDK chain, so any of these work:
+
+- environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and
+  `AWS_SESSION_TOKEN` for temporary credentials)
+- the shared config and credentials files under `~/.aws`, selected with
+  `AWS_PROFILE`
+- IAM roles attached to EC2, ECS, or Lambda, supplied by the platform at runtime
+- SSO profiles, after `aws sso login`
+
+Anything the chain does not cover goes through `session=`, which takes a
+pre-configured `boto3.session.Session`. Region resolution is separate from
+credentials and is described under [Usage](#usage).
+
+Every call runs on these credentials. A per-request key in
+`context={'secrets': {'api_key': ...}}` is ignored, so a flow that carries
+another provider's key can still call Bedrock models. Reading that key as a
+per-request Bedrock API key is tracked in
+[#6976](https://github.com/genkit-ai/genkit/issues/6976).
+
+## Usage
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+ai = Genkit(
+    plugins=[
+        Bedrock(
+            region='us-east-1',
+            models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'],
+        )
+    ],
+    model='bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0',
+)
+```
+
+To pick a model per call, use a typed ref. Each constructor binds the config
+class that model's action validates, so the IDE completes the fields and a
+config for the wrong family is caught:
+
+```python
+from genkit_amazon_bedrock import Bedrock, BedrockConfig
+
+# 1. Text model (Converse) with a default config
+claude = Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0', config=BedrockConfig(max_output_tokens=512))
+
+# 2. Generate
+response = await ai.generate(model=claude, prompt='Pair a wine with mushroom risotto.')
+print(response.text)
+# => A dry white such as a Pinot Grigio ...
+```
+
+The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,
+served over Converse, including models that take image or document input),
+`Bedrock.stability` (IMAGE, the Stability text-to-image models), and
+`Bedrock.embedder` (EMBEDDING, an `EmbedderRef` for `ai.embed()`). Each takes a bare ID or a `bedrock/`-prefixed one, and
+returns `bedrock/<id>`. They route the ID the same way the plugin does at runtime,
+inference-profile prefixes (`us.`, `eu.`, ...) and model ARNs included, and an
+ID from another family raises `INVALID_ARGUMENT` naming the right constructor
+(`Bedrock.text('stability.sd3-5-large-v1:0')` points at `Bedrock.stability()`).
+An application inference profile ARN carries no model ID, so it routes to
+Converse and only `Bedrock.text` takes it. Plain `'bedrock/<id>'` strings still
+work everywhere.
+
+Credentials resolve through the standard AWS SDK chain (environment,
+`~/.aws/credentials`, instance metadata). Pass a pre-configured
+`boto3.session.Session` via `session=` for custom wiring. The region comes
+from `region=` or the SDK chain (`AWS_REGION`, `AWS_DEFAULT_REGION`,
+`~/.aws/config`); there is deliberately no default region.
+
+### Plugin options
+
+Every `Bedrock()` parameter, with its default:
+
+| Option                 | Default  | Meaning                                                                                                                     |
+| ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `region`               | unset    | AWS region. Falls back to the SDK chain; initialization fails when nothing resolves.                                        |
+| `max_retries`          | unset    | Retries after the initial attempt. Falls back to `3`, in botocore's `standard` mode, where your AWS configuration is silent. |
+| `read_timeout`         | unset    | Socket read timeout in seconds. Falls back to `3600.0`.                                                                     |
+| `connect_timeout`      | unset    | Socket connect timeout in seconds, covering the TCP handshake only. Falls back to `60.0`.                                   |
+| `max_pool_connections` | unset    | HTTP connection pool size. Falls back to `50`, raised off botocore's default of 10.                                         |
+| `total_timeout`        | `3600.0` | Whole-call deadline in seconds for a non-streaming generation, retries included. `None` removes it.                         |
+| `session`              | unset    | Pre-configured `boto3.session.Session` for custom credentials or SDK wiring.                                                |
+| `models`               | `[]`     | Model IDs to register. The route is inferred from the ID. Unlisted IDs still resolve on demand, except rerank models.       |
+| `embedders`            | `[]`     | Embedding model IDs to register. Unlisted IDs still resolve on demand.                                                      |
+
+`max_retries`, `read_timeout`, `connect_timeout` and `max_pool_connections` are
+unset by default, so your own AWS configuration wins and the fallbacks above
+fill in only where it is silent. Passing an argument explicitly overrides both.
+
+Which sources apply differs by knob, because botocore only reads some of them:
+
+- Retries come from `AWS_MAX_ATTEMPTS`, `AWS_RETRY_MODE`, the `max_attempts`
+  and `retry_mode` keys in `~/.aws/config`, or a session's default client
+  config. The attempt count and the mode are resolved separately, so setting
+  just one of them leaves the other at the package fallback, and passing
+  `max_retries` tunes the count without dragging you off `adaptive`.
+- The two timeouts and the pool size have no environment or config-file
+  equivalent in botocore. Their only external source is a `botocore.config.Config`
+  installed on a session you pass via `session=`.
+
+**`read_timeout` is a socket read timeout, not a whole-call deadline.** It
+bounds the wait for the next byte off the socket, not the length of the call,
+which is why its fallback is a full hour: a generation can legitimately run for
+many minutes (Nova allows 60-minute inference). Because it resets on every byte
+received, a connection that dribbles bytes never trips it.
+
+`total_timeout` is the wall-clock limit that does. It caps a non-streaming
+generation end to end, retries included, and is on by default at 3600s; pass
+`None` to remove it and leave only the socket timeouts. When the deadline fires
+the caller gets a `DEADLINE_EXCEEDED` error, though the boto3 call itself cannot
+be aborted and its worker thread runs until the socket timeouts end it.
+Streaming generations, embeddings and image generation are bounded by the
+socket timeouts alone.
+
+`max_pool_connections` falls back to 50 rather than botocore's 10 so the pool is
+never the bottleneck; concurrency is bounded first by the event loop's default
+thread pool, which the boto3 calls are dispatched to.
+
+`models` and `embedders` are what the Dev UI lists, so a bare `Bedrock()` lists
+nothing. The plugin does not discover the catalogue for you: that would mean a
+second client against the `bedrock` control plane and the IAM actions to go with
+it, on top of the runtime-only policy [above](#iam). Calls are unaffected, since
+any model ID resolves on demand either way.
+
+### Config fields that are ignored
+
+`BedrockConfig` inherits the core `ModelConfig` fields, so the Dev UI offers
+`topK` and `version`. Converse has no equivalent parameters and both values
+are dropped. Models that support a top-k knob take it
+through `extra` instead, which is sent as Converse `additionalModelRequestFields`:
+
+```python
+BedrockConfig(extra={'top_k': 40})
+```
+
+### Inference profiles
+
+Model IDs carrying one of the prefixes `global.`, `us-gov.`, `us.`, `eu.`,
+`jp.`, `apac.`, or `au.` are cross-region inference profiles, which route a call
+to whichever region in the geography has capacity:
+
+```python
+Bedrock(models=['us.anthropic.claude-sonnet-4-5-20250929-v1:0'])
+```
+
+The full ID is always sent to Bedrock verbatim. The prefix is stripped only for
+the local capability lookup, so a profile inherits its base model's declared
+capabilities instead of falling back to the unknown-model defaults. Several of
+the newer models are only invocable through a profile, never by bare
+foundation-model ID, so this is the normal form rather than an advanced option.
+Any profile ID or full ARN is accepted, across the `arn:aws:`, `arn:aws-us-gov:`
+and `arn:aws-cn:` partitions.
+
+## Prompt caching
+
+Bedrock can cache a prompt prefix and reuse it across calls, which is worth
+doing whenever a large static system prompt is sent repeatedly.
+`cache_point_part()` marks where the cacheable prefix ends:
+
+```python
+from genkit import Part
+from genkit_amazon_bedrock import cache_point_part
+
+CLAUDE = 'bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0'
+
+# The cache point goes after the content it should cache.
+system = [Part.from_text(LONG_STATIC_PROMPT), cache_point_part()]
+
+first = await ai.generate(model=CLAUDE, system=system, prompt='What are the delivery tiers?')
+second = await ai.generate(model=CLAUDE, system=system, prompt='Which tier needs a signature?')
+
+print(second.usage.cached_content_tokens)
+```
+
+Notes:
+
+- The cache point goes **after** the content it should cache, never before.
+- Cache points work in the system prompt and in ordinary user and model
+  messages. System messages keep only text and cache points; every other part
+  kind is dropped there.
+- The cached prefix must be byte-identical across calls to hit, so build it from
+  a constant rather than reassembling it per request.
+- A prefix below the model's minimum cacheable size (roughly 1,000 tokens for
+  Claude Sonnet, higher for the smaller models) is silently not cached. There is
+  no error and no warning, so a short prompt just quietly never hits.
+- The cache lives for a few minutes, which also means a re-run inside that
+  window can read a cache the previous run wrote.
+- On usage, `cacheReadInputTokens` surfaces as `usage.cached_content_tokens`.
+  `cacheWriteInputTokens` is deliberately dropped, so a cache write is
+  invisible: the second call reporting cached tokens the first did not is the
+  only evidence you get.
+- Bedrock counts cached tokens **outside** `inputTokens`, not within it, so
+  `usage.input_tokens` is only the uncached remainder and stays small however
+  well the cache works. The cached prefix appears in `usage.total_tokens`. Do
+  not treat a small `input_tokens` as a cache failure, and do not assert on it
+  to prove a cache hit.
+- Passing a plain string as `system` sends it through Genkit's dotprompt
+  templating, which rewrites the text and cannot express a cache point. A list
+  of parts is what you want here, both to hold the cache point and to keep the
+  cached prefix byte-identical.
+
+## Embedders
+
+Embedding models are listed separately from chat models, by bare model ID:
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+ai = Genkit(plugins=[Bedrock(embedders=['amazon.titan-embed-text-v2:0'])])
+
+embeddings = await ai.embed(
+    embedder=Bedrock.embedder('amazon.titan-embed-text-v2:0'),
+    content='Smoked salmon tartine',
+)
+print(len(embeddings[0].embedding))
+# => 1024
+```
+
+Listing an embedder is optional: any routable ID resolves on demand,
+including inference-profile and ARN forms. Listing one only adds it to
+the Dev UI.
+
+Notes:
+
+- Titan multimodal accepts JPEG and PNG, one image per document, and
+  averages the two vectors when a document carries text as well.
+- **Cohere embedding is text-only on Bedrock.** A document with no text
+  is rejected rather than sent; a media part alongside text is ignored.
+- Per-request embed options are ignored. Cohere requests are pinned to
+  `input_type: search_document`, so these embedders are for indexing
+  documents, not for embedding queries.
+
+## Image generation
+
+Image models go through InvokeModel rather than Converse, but they are ordinary
+Genkit model actions: `ai.generate` returns the result as media parts carrying
+data URLs. List one by ID like any other model:
+
+```python
+from genkit import Genkit
+from genkit_amazon_bedrock import Bedrock
+
+ai = Genkit(
+    plugins=[
+        Bedrock(
+            # us-west-2: the active text-to-image models are offered there only.
+            region='us-west-2',
+            models=['stability.sd3-5-large-v1:0'],
+        )
+    ]
+)
+
+response = await ai.generate(
+    model=Bedrock.stability('stability.sd3-5-large-v1:0'),
+    prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
+)
+image = response.media[0].url  # data:image/png;base64,...
+```
+
+The plugin infers the route from the ID: the image IDs below take the
+InvokeModel path, and anything else goes through Converse. Listing is
+optional here too, so a bare `ai.generate(model='bedrock/<id>')` routes the same
+way; listing only adds the model to the Dev UI. The prompt is the text of the
+most recent user message, concatenated across its text parts; other parts are
+ignored, as these models are text-to-image only.
+
+Streaming callbacks are never invoked for image models. There is nothing to
+stream, so `generate_stream` yields no chunks and the images arrive on the
+final response.
+
+### Request shapes
+
+Stability (IDs containing `sd3-`, `stable-image-core`, or `stable-image-ultra`)
+takes `StabilityImageConfig`. Generate validates `config` against it before the
+call, so a typo raises `INVALID_ARGUMENT` instead of being dropped, and the Dev
+UI renders the fields as a form. Dicts work too and are validated against the
+same class, in either snake_case or camelCase. The field names are Stability's
+wire names and go at the top of the body, over
+`{'prompt': ..., 'output_format': 'png'}`:
+
+```python
+from genkit_amazon_bedrock import Bedrock, StabilityImageConfig
+
+# 1. Typed ref and typed fields
+response = await ai.generate(
+    model=Bedrock.stability('stability.sd3-5-large-v1:0'),
+    prompt='A food truck at dusk, string lights.',
+    config=StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg'),
+)
+# => body: {'prompt': 'A food truck at dusk, string lights.', 'output_format': 'jpeg',
+#           'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
+
+# 2. The media part's MIME type follows output_format
+print(response.media[0].content_type)
+# => image/jpeg
+```
+
+`StabilityImageConfig` extends `GenkitConfig`, like the Veo config, not
+`ModelConfig`: Bedrock's image APIs take none of Genkit's generic generation
+options, so `temperature`, `topP`, `maxOutputTokens` and the rest raise
+`INVALID_ARGUMENT` as unknown keys, and the Dev UI form shows only real image
+fields.
+
+Titan Image and Nova Canvas were retired on Bedrock and aren't typed; with
+residual access, pass the raw model ID (`'bedrock/amazon.nova-canvas-v1:0'`)
+and put every body field past the prompt in `config['extra']`.
+
+### `extra` on image models
+
+Body fields `StabilityImageConfig` doesn't declare go in `extra`, which is
+deep-merged into the finished `InvokeModel` body using Bedrock's wire names.
+Nested objects merge key by key, and a colliding leaf takes your value:
+
+```python
+# 1. A field the class doesn't declare
+config = StabilityImageConfig(extra={'mode': 'text-to-image'})
+# => body: {'prompt': ..., 'output_format': 'png', 'mode': 'text-to-image'}
+
+# 2. A colliding leaf: extra wins
+config = StabilityImageConfig(seed=7, extra={'seed': 9})
+# => body: {'prompt': ..., 'output_format': 'png', 'seed': 9}
+```
+
+Fields Genkit builds from the prompt fail with `INVALID_ARGUMENT` instead of
+being overwritten, and nothing is sent:
+
+- Stability: `prompt`
+- Titan Image and Nova Canvas IDs: `taskType`, `textToImageParams.text`, or a
+  `textToImageParams` that isn't a mapping
+
+`extra` itself must be a mapping; anything else also fails with
+`INVALID_ARGUMENT`.
+
+Text-to-image and image-editing models are not interchangeable: a model
+offered in a region may only inpaint or upscale. Check the Bedrock
+console for the region you are calling. A Legacy model that this
+account cannot use (never enabled, or disabled after idle) arrives as
+`ResourceNotFoundException`, same as a missing grant.
+
+The legacy Stable Diffusion XL schema (`text_prompts`/`artifacts`) is not
+ported. Stability editing services (inpaint, erase, background removal, and the
+rest) are not text-to-image and are out of scope.
+
+## Troubleshooting
+
+The plugin maps Bedrock error codes onto Genkit error statuses, so these arrive as typed `GenkitError` (`PERMISSION_DENIED`, `NOT_FOUND`, `INVALID_ARGUMENT`, `RESOURCE_EXHAUSTED`, and the rest) with the service's own message preserved. The AWS code is the useful part, and each one means something specific:
+
+**No region resolved.** The plugin fails at initialization rather than on the
+first call, and deliberately does not default to a region: a silent `us-east-1`
+fallback would send traffic and data somewhere you never chose. Set `region=`,
+`AWS_REGION`, `AWS_DEFAULT_REGION`, or a region on the active profile.
+
+**`AccessDeniedException`.** Either model access has not been granted for that
+model in that region, or the IAM policy is missing the inference-profile
+resource. Both are covered under [AWS setup](#aws-setup); check the policy first
+if the model ID carries a cross-region prefix, because that failure looks
+identical to a missing grant.
+
+**`ResourceNotFoundException`.** The model exists but this account cannot use
+it there: an Anthropic model whose use-case agreement has not been accepted, or
+a Legacy model. A model that plainly is not offered in the
+region reports as a `ValidationException` instead, below.
+
+**`ValidationException` reading "The provided model identifier is invalid".**
+The ID is mistyped, or the model is not offered in the region the call went to.
+Both Converse and InvokeModel report a missing model this way, verified live,
+so it is what a region mistake actually looks like: calling
+`stability.sd3-5-large-v1:0` (us-west-2 only) from a session whose default
+region is `us-east-1` produces exactly this. Check the region before doubting
+the ID.
+
+**Any other `ValidationException`.** The request or config is malformed for
+that particular model: a thinking budget outside the bounds the model allows,
+or an image `extra` field the model does not accept (`extra` is sent
+unchecked). Bedrock validates per model, so a config
+that works on one model can be rejected by the next.
+
+**`ThrottlingException`.** The on-demand capacity limit for that model and
+region. The plugin retries automatically with exponential backoff, up to
+`max_retries` retries after the initial attempt, and surfaces the error once
+those are exhausted. Raise `max_retries`, spread the load, or move to
+provisioned throughput.
+
+### Debug logging
+
+`GENKIT_LOG=debug` turns on the plugin's own log lines: the resolved region and
+client config, which model each call routed to, stop reasons, token counts, and
+what `resolve` declined. They carry metadata only, never prompts, embeddings or
+image bytes, so they are safe to leave on.
+
+## Examples
+
+See [`py/samples/amazon-bedrock-sample`](../../samples/amazon-bedrock-sample)
+for a runnable `generate()` / `embed()` snippet.
+
+## License
+
+Apache 2.0

@@ -23,6 +23,7 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import { runWithManager } from '../utils/manager-utils';
+import { parsePositiveInt, parseTraceStatus } from '../utils/option-parsers';
 
 function formatTruncated(val: any, maxLen = 100): string {
   if (val === undefined) return '';
@@ -33,10 +34,11 @@ function formatTruncated(val: any, maxLen = 100): string {
 }
 
 export interface TraceListOptions {
-  limit: string;
-  status?: string;
+  limit: number;
+  status?: number;
   type?: string;
   name?: string;
+  sessionId?: string;
   continuationToken?: string;
 }
 
@@ -46,10 +48,16 @@ export interface TraceListOptions {
  */
 export const traceList = new Command('trace:list')
   .description('list traces')
-  .option('-l, --limit <number>', 'limit the number of returned traces', '15')
-  .option('--status <status>', 'filter by root span status')
+  .option(
+    '-l, --limit <number>',
+    'limit the number of returned traces',
+    parsePositiveInt,
+    15
+  )
+  .option('--status <status>', 'filter by root span status', parseTraceStatus)
   .option('--type <type>', 'filter by root span type')
   .option('--name <name>', 'filter by root span name')
+  .option('--session-id <sessionId>', 'filter by agent session ID')
   .option('--continuation-token <token>', 'continuation token for pagination')
   .action(async (options: TraceListOptions) => {
     const projectRoot = await findProjectRoot();
@@ -57,21 +65,17 @@ export const traceList = new Command('trace:list')
     const runAction = async (manager: BaseRuntimeManager) => {
       try {
         const eqFilter: Record<string, any[]> = {};
-        if (options.status) {
-          // Status mapped exactly as dev UI enum (Success: 0, Error: 2)
-          const statusVal =
-            options.status.toLowerCase() === 'error'
-              ? 2
-              : options.status.toLowerCase() === 'success'
-                ? 0
-                : Number(options.status);
-          eqFilter['status'] = [statusVal];
+        if (options.status !== undefined) {
+          eqFilter['status'] = [options.status];
         }
         if (options.type) {
           eqFilter['type'] = [options.type];
         }
         if (options.name) {
           eqFilter['name'] = [options.name];
+        }
+        if (options.sessionId) {
+          eqFilter['sessionId'] = [options.sessionId];
         }
 
         const filter: TraceQueryFilter = {
@@ -80,7 +84,7 @@ export const traceList = new Command('trace:list')
         };
 
         const listRequest = {
-          limit: Number.parseInt(options.limit, 10),
+          limit: options.limit,
           continuationToken: options.continuationToken,
           filter,
         };
@@ -92,7 +96,9 @@ export const traceList = new Command('trace:list')
           return;
         }
 
-        console.log(`Found ${response.traces.length} traces:\n`);
+        console.log(
+          `Found ${response.traces.length} trace${response.traces.length === 1 ? '' : 's'}:\n`
+        );
 
         response.traces.forEach((trace) => {
           let duration = 'unknown';
@@ -143,8 +149,13 @@ export const traceList = new Command('trace:list')
             `\nTo get the next page, use: --continuation-token ${response.continuationToken}`
           );
         }
+
+        console.log(
+          `\nTip: Use "genkit trace:get <traceId>" to view full trace details.`
+        );
       } catch (e) {
         logger.error(`Error listing traces: ${e}`);
+        process.exitCode = 1;
       }
     };
 

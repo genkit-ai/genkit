@@ -27,13 +27,13 @@ import { isKnownKey } from '../common/utils.js';
 import { veoCheckOperation, veoPredict } from './client.js';
 import {
   fromVeoOperation,
-  toVeoClientOptions,
   toVeoModel,
   toVeoOperationRequest,
   toVeoPredictRequest,
 } from './converters.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
+  applyContextOverrides,
   calculateRequestOptions,
   checkModelName,
   extractVersion,
@@ -154,6 +154,17 @@ const KNOWN_MODELS = {
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
 
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`). Remove a model once the server returns 404 for it.
+const HIDDEN_MODELS = {} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
+
 export type VeoModelName = `veo-${string}`;
 export function isVeoModelName(value?: string): value is VeoModelName {
   return !!value?.startsWith('veo-');
@@ -165,8 +176,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    const known = KNOWN_MODELS[name];
+  if (isKnownKey(name, ALL_MODELS)) {
+    const known = ALL_MODELS[name];
     return modelRef({
       name: known.name,
       info: known.info,
@@ -202,7 +213,7 @@ export function listKnownModels(
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
 ) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, clientOptions, pluginOptions)
   );
 }
@@ -218,8 +229,11 @@ export function defineModel(
     name: ref.name,
     ...ref.info,
     configSchema: ref.configSchema,
-    async start(request) {
-      const clientOpt = calculateRequestOptions(clientOptions, request.config);
+    async start(request, options) {
+      const clientOpt = applyContextOverrides(
+        calculateRequestOptions(clientOptions, request.config),
+        options?.context
+      );
       const veoPredictRequest = toVeoPredictRequest(request);
 
       const response = await veoPredict(
@@ -228,16 +242,19 @@ export function defineModel(
         clientOpt
       );
 
-      return fromVeoOperation(response, clientOpt);
+      return fromVeoOperation(response);
     },
-    async check(operation) {
-      const checkClientOptions = toVeoClientOptions(operation, clientOptions);
+    async check(operation, options) {
+      const checkClientOptions = applyContextOverrides(
+        clientOptions,
+        options?.context
+      );
       const response = await veoCheckOperation(
         toVeoModel(operation),
         toVeoOperationRequest(operation),
         checkClientOptions
       );
-      return fromVeoOperation(response, checkClientOptions);
+      return fromVeoOperation(response);
     },
   });
 }
@@ -245,4 +262,6 @@ export function defineModel(
 export const TEST_ONLY = {
   GENERIC_MODEL,
   KNOWN_MODELS,
+  HIDDEN_MODELS,
+  ALL_MODELS,
 };

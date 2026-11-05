@@ -20,12 +20,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/core/tracing"
 	"github.com/firebase/genkit/go/internal/registry"
+	"github.com/firebase/genkit/go/internal/tracingtest"
 )
 
 func inc(_ context.Context, x int, _ noStream) (int, error) {
@@ -34,7 +37,7 @@ func inc(_ context.Context, x int, _ noStream) (int, error) {
 
 func TestActionRun(t *testing.T) {
 	r := registry.New()
-	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	got, err := a.Run(context.Background(), 3, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +49,7 @@ func TestActionRun(t *testing.T) {
 
 func TestActionRunJSON(t *testing.T) {
 	r := registry.New()
-	a := DefineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil, nil, inc)
 	input := []byte("3")
 	want := []byte("4")
 	got, err := a.RunJSON(context.Background(), input, nil)
@@ -55,6 +58,100 @@ func TestActionRunJSON(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// TestActionRunPartialResult pins that a failure carries whatever the
+// function produced. The generate loop returns the conversation it completed
+// alongside its error, and that value has to survive the action boundary to
+// reach a caller or the reflection wire.
+func TestActionRunPartialResult(t *testing.T) {
+	boom := errors.New("boom")
+
+	t.Run("a partial value rides back with the error", func(t *testing.T) {
+		r := registry.New()
+		a := defineStreamingAction(r, "test/partial", api.ActionTypeCustom, nil, nil,
+			func(_ context.Context, x int, _ noStream) (int, error) { return x + 1, boom })
+
+		got, err := a.Run(context.Background(), 3, nil)
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+		if want := 4; got != want {
+			t.Errorf("got %d, want the partial %d", got, want)
+		}
+
+		raw, err := a.RunJSON(context.Background(), []byte("3"), nil)
+		if !errors.Is(err, boom) {
+			t.Fatalf("RunJSON err = %v, want boom", err)
+		}
+		if !bytes.Equal(raw, []byte("4")) {
+			t.Errorf("RunJSON result = %s, want the marshaled partial 4", raw)
+		}
+	})
+
+	t.Run("a function that produced nothing yields no result", func(t *testing.T) {
+		r := registry.New()
+		a := defineStreamingAction(r, "test/nothing", api.ActionTypeCustom, nil, nil,
+			func(_ context.Context, _ int, _ noStream) (*int, error) { return nil, boom })
+
+		res, err := a.RunJSONWithTelemetry(context.Background(), []byte("3"), nil)
+		if !errors.Is(err, boom) {
+			t.Fatalf("err = %v, want boom", err)
+		}
+		if res.Result != nil {
+			t.Errorf("result = %s, want none rather than a null", res.Result)
+		}
+	})
+}
+
+// TestActionInvalidInput pins how an action classifies input it refuses, on
+// both entry points: Run validates the typed value against the schema, and
+// RunJSON fails earlier, deserializing the bytes. Each is reported with
+// [status.ErrInvalidInput] so callers match a sentinel rather than a concrete
+// error type, and each keeps the underlying validation error reachable
+// through errors.Unwrap.
+func TestActionInvalidInput(t *testing.T) {
+	r := registry.New()
+	// Stricter than the Go type, so a valid int can still violate it.
+	a := defineStreamingAction(r, "test/inc", api.ActionTypeCustom, nil,
+		map[string]any{"type": "integer", "minimum": 10}, inc)
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{"Run rejects a value the schema refuses", func() error {
+			_, err := a.Run(context.Background(), 3, nil)
+			return err
+		}},
+		{"RunJSON rejects bytes that do not deserialize", func() error {
+			_, err := a.RunJSON(context.Background(), []byte(`"not a number"`), nil)
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected an error, got nil")
+			}
+			if !errors.Is(err, status.ErrInvalidInput) {
+				t.Errorf("errors.Is(err, ErrInvalidInput) = false, err = %v", err)
+			}
+			// The subtype classifies as its base, which is what reaches the wire.
+			if !errors.Is(err, status.ErrInvalidArgument) {
+				t.Error("errors.Is(err, ErrInvalidArgument) = false")
+			}
+			if got := status.Of(err); got != status.InvalidArgument {
+				t.Errorf("status.Of = %q, want %q", got, status.InvalidArgument)
+			}
+			// %w rather than %v, so the validation error stays matchable.
+			if errors.Unwrap(err) == nil {
+				t.Error("errors.Unwrap = nil, want the underlying validation error")
+			}
+		})
 	}
 }
 
@@ -73,7 +170,7 @@ func count(ctx context.Context, n int, cb func(context.Context, int) error) (int
 func TestActionStreaming(t *testing.T) {
 	ctx := context.Background()
 	r := registry.New()
-	a := DefineStreamingAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
+	a := defineStreamingAction(r, "test/count", api.ActionTypeCustom, nil, nil, count)
 	const n = 3
 
 	// Non-streaming.
@@ -105,25 +202,33 @@ func TestActionStreaming(t *testing.T) {
 
 func TestActionTracing(t *testing.T) {
 	r := registry.New()
-	tc := tracing.NewTestOnlyTelemetryClient()
-	tracing.WriteTelemetryImmediate(tc)
+	// An isolated client, so the assertions hold under -count=N.
+	tc := tracingtest.Capture(t)
 	name := api.NewName("test", "TestTracing-inc")
-	a := DefineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
+	a := defineStreamingAction(r, name, api.ActionTypeCustom, nil, nil, inc)
 	if _, err := a.Run(context.Background(), 3, nil); err != nil {
 		t.Fatal(err)
 	}
-	// The same trace store is used for all tests, so there might be several traces.
-	// Look for this one, which has a unique name.
+	if len(tc.Traces) != 1 {
+		t.Fatalf("got %d traces, want 1", len(tc.Traces))
+	}
 	for _, td := range tc.Traces {
-		if td.DisplayName == name {
-			// Spot check: expect a single span.
-			if g, w := len(td.Spans), 1; g != w {
-				t.Errorf("got %d spans, want %d", g, w)
-			}
-			return
+		if len(td.Spans) != 1 {
+			t.Fatalf("got %d spans, want 1", len(td.Spans))
+		}
+		var span *tracing.SpanData
+		for _, s := range td.Spans {
+			span = s
+		}
+		// The root span sets the trace envelope.
+		if td.DisplayName != name {
+			t.Errorf("trace DisplayName = %q, want %q", td.DisplayName, name)
+		}
+		if td.StartTime != span.StartTime || td.EndTime != span.EndTime || td.EndTime == 0 {
+			t.Errorf("trace times = [%v, %v], want the root span's [%v, %v]",
+				td.StartTime, td.EndTime, span.StartTime, span.EndTime)
 		}
 	}
-	t.Fatalf("did not find trace named %q", name)
 }
 
 func TestNewAction(t *testing.T) {
@@ -261,7 +366,7 @@ func TestActionDesc(t *testing.T) {
 		}
 
 		r := registry.New()
-		a := DefineAction(r, "test/describe", api.ActionTypeCustom, meta, nil, fn)
+		a := defineAction(r, "test/describe", api.ActionTypeCustom, meta, nil, fn)
 
 		desc := a.Desc()
 
@@ -297,8 +402,8 @@ func TestActionDesc(t *testing.T) {
 				"answer": map[string]any{"type": "string"},
 			},
 		}
-		DefineSchema(r, "AgentRequest", inputSchema)
-		DefineSchema(r, "AgentResponse", outputSchema)
+		r.RegisterSchema("AgentRequest", inputSchema)
+		r.RegisterSchema("AgentResponse", outputSchema)
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
 		a := NewAction("test/refs", api.ActionTypeCustom, nil, SchemaRef("AgentRequest"), fn)
@@ -327,7 +432,7 @@ func TestActionDesc(t *testing.T) {
 		r := registry.New()
 
 		fn := func(ctx context.Context, input any) (any, error) { return nil, nil }
-		a := DefineAction(r, "test/unresolved", api.ActionTypeCustom, nil, SchemaRef("Missing"), fn)
+		a := defineAction(r, "test/unresolved", api.ActionTypeCustom, nil, SchemaRef("Missing"), fn)
 
 		desc := a.Desc()
 
@@ -365,7 +470,7 @@ func TestResolveActionFor(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input + 1, nil
 		}
-		DefineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
+		defineAction(r, "test/resolvable", api.ActionTypeCustom, nil, nil, fn)
 
 		found := ResolveActionFor[int, int, struct{}](r, api.ActionTypeCustom, "test/resolvable")
 
@@ -394,7 +499,7 @@ func TestLookupActionFor(t *testing.T) {
 		fn := func(ctx context.Context, input string) (string, error) {
 			return "found: " + input, nil
 		}
-		DefineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
+		defineAction(r, "test/lookupable", api.ActionTypeCustom, nil, nil, fn)
 
 		found := LookupActionFor[string, string, struct{}](r, api.ActionTypeCustom, "test/lookupable")
 
@@ -420,7 +525,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input * 2, nil
 		}
-		a := DefineAction(r, "test/telemetry", api.ActionTypeCustom, nil, nil, fn)
+		a := defineAction(r, "test/telemetry", api.ActionTypeCustom, nil, nil, fn)
 
 		result, err := a.RunJSONWithTelemetry(context.Background(), []byte("5"), nil)
 
@@ -454,7 +559,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 			}
 			return n, nil
 		}
-		a := DefineStreamingAction(r, "test/streamTelemetry", api.ActionTypeCustom, nil, nil, fn)
+		a := defineStreamingAction(r, "test/streamTelemetry", api.ActionTypeCustom, nil, nil, fn)
 
 		var chunks []string
 		cb := func(ctx context.Context, chunk json.RawMessage) error {
@@ -480,7 +585,7 @@ func TestRunJSONWithTelemetry(t *testing.T) {
 		fn := func(ctx context.Context, input int) (int, error) {
 			return input, nil
 		}
-		a := DefineAction(r, "test/invalidInput", api.ActionTypeCustom, nil, nil, fn)
+		a := defineAction(r, "test/invalidInput", api.ActionTypeCustom, nil, nil, fn)
 
 		_, err := a.RunJSONWithTelemetry(context.Background(), []byte("not valid json"), nil)
 

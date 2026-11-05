@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
 )
 
@@ -141,6 +142,9 @@ func (p *pathLocks) lock(path string) func() {
 // that resolves outside the root, including via "..", absolute paths, or
 // symbolic links.
 //
+// A failed file operation does not fail the generation: its error answers
+// the call, as with [SoftToolErrors], so the model can correct itself.
+//
 // Usage:
 //
 //	resp, err := genkit.Generate(ctx, g,
@@ -153,21 +157,22 @@ func (p *pathLocks) lock(path string) func() {
 //	)
 type Filesystem struct {
 	// RootDir is the directory that all operations are confined to.
-	RootDir string `json:"rootDirectory,omitempty"`
+	RootDir string `json:"rootDirectory,omitempty" jsonschema_description:"Directory that all file operations are confined to. Required."`
 	// AllowWriteAccess adds write_file and edit_file.
-	AllowWriteAccess bool `json:"allowWriteAccess,omitempty"`
+	AllowWriteAccess bool `json:"allowWriteAccess,omitempty" jsonschema_description:"Adds the write_file and edit_file tools. Defaults to false."`
 	// ToolNamePrefix is prepended to each tool name. Use distinct prefixes
 	// when attaching multiple Filesystem middlewares to one call so their
 	// tool names don't collide.
-	ToolNamePrefix string `json:"toolNamePrefix,omitempty"`
+	ToolNamePrefix string `json:"toolNamePrefix,omitempty" jsonschema_description:"Prepended to each tool name. Use distinct prefixes when attaching multiple filesystem middlewares to one call, so their tool names do not collide."`
 }
 
-func (f *Filesystem) Name() string { return provider + "/filesystem" }
+// Name implements [ai.Middleware].
+func (f Filesystem) Name() string { return provider + "/filesystem" }
 
 // New initializes a per-call instance: opens the [os.Root], builds the tool
 // set, and allocates the message queue used to bridge tool output back to the
 // model on the next turn.
-func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
+func (f Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	if strings.TrimSpace(f.RootDir) == "" {
 		return nil, status.Errorf(status.ErrInvalidArgument, "filesystem middleware: RootDir is required")
 	}
@@ -191,7 +196,9 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 			queue[n-1].Content = append(queue[n-1].Content, parts...)
 			return
 		}
-		queue = append(queue, ai.NewUserMessage(parts...))
+		msg := ai.NewUserMessage(parts...)
+		msg.Metadata = map[string]any{filesystemToolKey: f.toolName("read_file")}
+		queue = append(queue, msg)
 	}
 
 	cache := newFileStateCache(fileStateCacheMaxEntries)
@@ -201,6 +208,12 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 	for _, t := range tools {
 		toolSet[t.Name()] = struct{}{}
 	}
+	// The model sees a failed file operation as the call's response and can
+	// correct its path or edit. Other tools keep failing the generation.
+	returnErrors := returnToolErrors(func(name string) bool {
+		_, ours := toolSet[name]
+		return ours
+	})
 
 	wrapGenerate := func(ctx context.Context, params *ai.GenerateParams, next ai.GenerateNext) (*ai.ModelResponse, error) {
 		mu.Lock()
@@ -209,6 +222,7 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 		mu.Unlock()
 
 		if len(queued) > 0 {
+			logger.Debug(ctx, "filesystem middleware injecting queued messages", "messages", len(queued))
 			if params.Callback != nil {
 				for _, msg := range queued {
 					if err := params.Callback(ctx, &ai.ModelResponseChunk{
@@ -224,34 +238,19 @@ func (f *Filesystem) New(ctx context.Context) (*ai.Hooks, error) {
 			params.Request.Messages = append(params.Request.Messages, queued...)
 		}
 
-		return next(ctx, params)
-	}
-
-	wrapTool := func(ctx context.Context, params *ai.ToolParams, next ai.ToolNext) (*ai.MultipartToolResponse, error) {
-		if _, ours := toolSet[params.Tool.Name()]; !ours {
-			return next(ctx, params)
-		}
-
-		resp, err := next(ctx, params)
-		if err == nil {
-			return resp, nil
-		}
-		if isInterrupt, _ := ai.IsToolInterruptError(err); isInterrupt {
-			return nil, err
-		}
-
-		enqueueParts(ai.NewTextPart(fmt.Sprintf("Tool %q failed: %v", params.Tool.Name(), err)))
-		return &ai.MultipartToolResponse{
-			Output: "Tool call failed; see user message below for details.",
-		}, nil
+		return returnErrors(ctx, params, next)
 	}
 
 	return &ai.Hooks{
 		Tools:        tools,
 		WrapGenerate: wrapGenerate,
-		WrapTool:     wrapTool,
 	}, nil
 }
+
+// filesystemToolKey is the metadata key that marks the user messages
+// Filesystem adds to carry file contents, valued with the tool name, as in JS.
+// Those messages are tool output, not something the user wrote.
+const filesystemToolKey = "filesystemMiddlewareTool"
 
 // toolName returns suffix prefixed with f.ToolNamePrefix.
 func (f *Filesystem) toolName(suffix string) string { return f.ToolNamePrefix + suffix }
@@ -304,8 +303,8 @@ func requireFilePath(s string) error {
 }
 
 type listFilesInput struct {
-	DirPath   string `json:"dirPath,omitempty" jsonschema:"description=Directory path relative to root. Defaults to the root directory."`
-	Recursive bool   `json:"recursive,omitempty" jsonschema:"description=If true, descend into subdirectories."`
+	DirPath   string `json:"dirPath,omitempty" jsonschema_description:"Directory path relative to root. Defaults to the root directory."`
+	Recursive bool   `json:"recursive,omitempty" jsonschema_description:"If true, descend into subdirectories."`
 }
 
 type fileEntry struct {
@@ -373,9 +372,9 @@ func (f *Filesystem) newListFilesTool(root *os.Root) ai.Tool {
 }
 
 type readFileInput struct {
-	FilePath string `json:"filePath" jsonschema:"description=File path relative to root."`
-	Offset   int    `json:"offset,omitempty" jsonschema:"description=1-indexed line to start reading from. 0 or 1 means start at the beginning."`
-	Limit    int    `json:"limit,omitempty" jsonschema:"description=Maximum number of lines to read. 0 means read to end of file."`
+	FilePath string `json:"filePath" jsonschema_description:"File path relative to root."`
+	Offset   int    `json:"offset,omitempty" jsonschema_description:"1-indexed line to start reading from. 0 or 1 means start at the beginning."`
+	Limit    int    `json:"limit,omitempty" jsonschema_description:"Maximum number of lines to read. 0 means read to end of file."`
 }
 
 func (f *Filesystem) newReadFileTool(
@@ -547,8 +546,8 @@ func sliceLines(data []byte, offset, limit int) []byte {
 }
 
 type writeFileInput struct {
-	FilePath string `json:"filePath" jsonschema:"description=File path relative to root."`
-	Content  string `json:"content" jsonschema:"description=Content to write to the file."`
+	FilePath string `json:"filePath" jsonschema_description:"File path relative to root."`
+	Content  string `json:"content" jsonschema_description:"Content to write to the file."`
 }
 
 func (f *Filesystem) newWriteFileTool(
@@ -603,14 +602,14 @@ func (f *Filesystem) newWriteFileTool(
 }
 
 type editSpec struct {
-	OldString  string `json:"oldString" jsonschema:"description=The exact text to find. Match is byte-for-byte including whitespace and indentation."`
-	NewString  string `json:"newString" jsonschema:"description=The replacement text. Use an empty string to delete oldString."`
-	ReplaceAll bool   `json:"replaceAll,omitempty" jsonschema:"description=If true, replace every occurrence of oldString. If false (default), oldString must match exactly once in the file."`
+	OldString  string `json:"oldString" jsonschema_description:"The exact text to find. Match is byte-for-byte including whitespace and indentation."`
+	NewString  string `json:"newString" jsonschema_description:"The replacement text. Use an empty string to delete oldString."`
+	ReplaceAll bool   `json:"replaceAll,omitempty" jsonschema_description:"If true, replace every occurrence of oldString. If false (default), oldString must match exactly once in the file."`
 }
 
 type editFileInput struct {
-	FilePath string     `json:"filePath" jsonschema:"description=File path relative to root."`
-	Edits    []editSpec `json:"edits" jsonschema:"description=One or more edits to apply in order. Each edit is applied to the result of the previous edit."`
+	FilePath string     `json:"filePath" jsonschema_description:"File path relative to root."`
+	Edits    []editSpec `json:"edits" jsonschema_description:"One or more edits to apply in order. Each edit is applied to the result of the previous edit."`
 }
 
 func (f *Filesystem) newEditFileTool(

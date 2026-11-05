@@ -158,5 +158,7 @@ func main() {
 	}
 
 	fmt.Println("\nAll telemetry modules active - check Google Cloud Console!")
-	log.Fatal(server.Start(ctx, "127.0.0.1:3400", mux))
+	if err := server.Start(ctx, "127.0.0.1:3400", mux); err != nil {
+		log.Fatal(err)
+	}
 }

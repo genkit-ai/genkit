@@ -133,6 +133,9 @@
         },
         "error": {
           "$ref": "#/$defs/RuntimeError"
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
         }
       },
       "additionalProperties": false
@@ -210,6 +213,9 @@
         },
         "sessionId": {
           "type": "string"
+        },
+        "metadataOnly": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -309,6 +315,9 @@
           "items": {
             "$ref": "#/$defs/Artifact"
           }
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
         }
       },
       "additionalProperties": false
@@ -317,6 +326,7 @@
       "type": "string",
       "enum": [
         "pending",
+        "aborting",
         "completed",
         "aborted",
         "failed",
@@ -331,6 +341,9 @@
         },
         "finishReason": {
           "$ref": "#/$defs/AgentFinishReason"
+        },
+        "usage": {
+          "$ref": "#/$defs/GenerationUsage"
         }
       },
       "additionalProperties": false
@@ -789,6 +802,7 @@
         "length",
         "blocked",
         "aborted",
+        "failed",
         "interrupted",
         "other",
         "unknown"
@@ -980,10 +994,16 @@
         "finishMessage": {
           "type": "string"
         },
+        "error": {
+          "$ref": "#/$defs/RuntimeError"
+        },
         "latencyMs": {
           "type": "number"
         },
         "usage": {
+          "$ref": "#/$defs/GenerationUsage"
+        },
+        "totalUsage": {
           "$ref": "#/$defs/GenerationUsage"
         },
         "custom": {},
@@ -1086,6 +1106,9 @@
           "type": "number"
         },
         "cachedContentTokens": {
+          "type": "number"
+        },
+        "cacheWriteTokens": {
           "type": "number"
         }
       },
@@ -1302,11 +1325,17 @@
         "finishMessage": {
           "$ref": "#/$defs/GenerateResponse/properties/finishMessage"
         },
+        "error": {
+          "$ref": "#/$defs/GenerateResponse/properties/error"
+        },
         "latencyMs": {
           "$ref": "#/$defs/GenerateResponse/properties/latencyMs"
         },
         "usage": {
           "$ref": "#/$defs/GenerateResponse/properties/usage"
+        },
+        "totalUsage": {
+          "$ref": "#/$defs/GenerateResponse/properties/totalUsage"
         },
         "custom": {
           "$ref": "#/$defs/GenerateResponse/properties/custom"
@@ -1987,6 +2016,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "secret": {
+          "type": "string"
         }
       },
       "required": [

@@ -1387,17 +1387,19 @@ export function defineGeminiModel({
             {
               metadata: {
                 name: sendChunk ? 'sendMessageStream' : 'sendMessage',
+                // Seed input up front so the realtime "pending" span export
+                // carries it.
+                input: {
+                  sdk: '@google-cloud/vertexai',
+                  cache: cache,
+                  model: genModel.getModelName(),
+                  chatOptions: updatedChatRequest,
+                  parts: msg.parts,
+                  options,
+                },
               },
             },
             async (metadata) => {
-              metadata.input = {
-                sdk: '@google-cloud/vertexai',
-                cache: cache,
-                model: genModel.getModelName(),
-                chatOptions: updatedChatRequest,
-                parts: msg.parts,
-                options,
-              };
               const response = await callGemini();
               metadata.output = response.custom;
               return response;

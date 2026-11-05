@@ -5,156 +5,121 @@ package googlegenai
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
-	"github.com/invopop/jsonschema"
+	"github.com/firebase/genkit/go/plugins/internal"
 	"google.golang.org/genai"
 )
 
-// TestConfigToMap_GenerateContentConfig verifies that the schema exposed for
-// the Gemini chat config drops fields the plugin manages on the user's behalf
-// and adds the curated descriptions used by the Genkit Developer UI.
-func TestConfigToMap_GenerateContentConfig(t *testing.T) {
+// curated pairs each reflected config schema with the overrides written for it.
+type curated struct {
+	schema    map[string]any
+	overrides internal.SchemaOverrides
+}
+
+func curatedConfigs() map[string]curated {
+	return map[string]curated{
+		"Gemini": {configToMap(genai.GenerateContentConfig{}), gccOverrides},
+		"Imagen": {configToMap(genai.GenerateImagesConfig{}), gicOverrides},
+		"Veo":    {configToMap(genai.GenerateVideosConfig{}), gvcOverrides},
+	}
+}
+
+// TestConfigOverridePathsResolve is the guard that keeps the override maps
+// honest. Applying a path the genai SDK no longer has is a silent no-op, so an
+// entry left behind by a renamed field would quietly stop describing anything.
+func TestConfigOverridePathsResolve(t *testing.T) {
+	for name, c := range curatedConfigs() {
+		if stale := c.overrides.UnresolvedPaths(c.schema); len(stale) > 0 {
+			t.Errorf("%s: override paths no longer in the SDK schema: %v", name, stale)
+		}
+	}
+}
+
+// TestConfigDescriptionsApplied checks the curated text actually lands, at the
+// top level and inside an array's items.
+func TestConfigDescriptionsApplied(t *testing.T) {
+	for name, c := range curatedConfigs() {
+		for path, want := range c.overrides.Descriptions {
+			target, ok := internal.SchemaAt(c.schema, path).(map[string]any)
+			if !ok {
+				continue // reported by TestConfigOverridePathsResolve
+			}
+			if got, _ := target["description"].(string); got != want {
+				t.Errorf("%s: description for %q\n got: %q\nwant: %q", name, path, got, want)
+			}
+		}
+	}
+}
+
+// TestManagedFieldsHiddenButAccepted pins what hiding means here: the property
+// stays present and typeless, so the dev UI skips it while a caller's value
+// still survives input validation and reaches the plugin check that names the
+// Genkit option to use instead.
+func TestManagedFieldsHiddenButAccepted(t *testing.T) {
 	schema := configToMap(genai.GenerateContentConfig{})
-
-	for _, hidden := range gccOverrides.hidden {
-		assertHidden(t, "Gemini", schema, hidden)
-	}
-
-	// Sanity: built-in API tools still surface in tools[]'s item shape so the
-	// dev UI can let users enable them. Only functionDeclarations should have
-	// been removed from there.
-	if toolItem := navigate(schema, "tools", "[]"); toolItem != nil {
-		if itemProps, ok := toolItem["properties"].(map[string]any); ok {
-			for _, expected := range []string{"googleSearch", "retrieval", "codeExecution"} {
-				if _, ok := itemProps[expected]; !ok {
-					t.Errorf("Gemini schema: tools[].%s should remain visible — got %v", expected, keys(itemProps))
-				}
-			}
-			if _, ok := itemProps["functionDeclarations"]; ok {
-				t.Error("Gemini schema: tools[].functionDeclarations should be hidden")
-			}
+	for _, path := range gccOverrides.Hidden {
+		if got := internal.SchemaAt(schema, path); got != true {
+			t.Errorf("%q = %v, want true (typeless, so the dev UI skips it)", path, got)
 		}
 	}
 
-	checkDescriptions(t, "Gemini", schema, gccOverrides.descriptions)
+	// Built-in API tools stay visible so the dev UI can offer them; only the
+	// function declarations Genkit owns are hidden from tools[].
+	item, _ := internal.SchemaAt(schema, "tools[]").(map[string]any)
+	itemProps, _ := item["properties"].(map[string]any)
+	for _, want := range []string{"googleSearch", "retrieval", "codeExecution"} {
+		if _, ok := itemProps[want]; !ok {
+			t.Errorf("tools[].%s should remain visible, got %v", want, keys(itemProps))
+		}
+	}
 }
 
-func TestConfigToMap_GenerateImagesConfig(t *testing.T) {
-	checkDescriptions(t, "Imagen", configToMap(genai.GenerateImagesConfig{}), gicOverrides.descriptions)
+// TestHidingKeepsObjectsClosed pins the reason a hidden property is replaced
+// rather than deleted: every object stays strict, including the ones that hide
+// something. Deleting would fail a caller's value as unknown, and reopening the
+// parent to let it through gives up rejecting real typos in that object.
+func TestHidingKeepsObjectsClosed(t *testing.T) {
+	for name, c := range curatedConfigs() {
+		if c.schema["additionalProperties"] != false {
+			t.Errorf("%s root additionalProperties = %v, want false", name, c.schema["additionalProperties"])
+		}
+	}
+	schema := configToMap(genai.GenerateContentConfig{})
+	for _, path := range []string{"tools[]", "thinkingConfig"} {
+		obj, ok := internal.SchemaAt(schema, path).(map[string]any)
+		if ok && obj["additionalProperties"] != false {
+			t.Errorf("%s additionalProperties = %v, want false", path, obj["additionalProperties"])
+		}
+	}
 }
 
-func TestConfigToMap_GenerateVideosConfig(t *testing.T) {
-	checkDescriptions(t, "Veo", configToMap(genai.GenerateVideosConfig{}), gvcOverrides.descriptions)
-}
-
-// TestConfigToMap_PointerVariant covers the &Config{} call sites (e.g.
-// model_type.DefaultConfig) to make sure overrides apply for pointer values
-// too, not just value receivers.
-func TestConfigToMap_PointerVariant(t *testing.T) {
+// TestConfigToMapPointerVariant covers the &Config{} call sites (e.g.
+// model_type.DefaultConfig), where overrides must apply just the same.
+func TestConfigToMapPointerVariant(t *testing.T) {
 	schema := configToMap(&genai.GenerateContentConfig{})
-	props, _ := schema["properties"].(map[string]any)
-	if _, present := props["systemInstruction"]; present {
-		t.Errorf("systemInstruction must be hidden for pointer config too")
+	if got := internal.SchemaAt(schema, "systemInstruction"); got != true {
+		t.Errorf("systemInstruction = %v, want true (hidden) for a pointer config too", got)
 	}
-	if prop, ok := props["temperature"].(map[string]any); !ok || prop["description"] == "" {
-		t.Errorf("temperature should carry a description for pointer config too: %#v", prop)
-	}
-}
-
-// TestApplyConfigOverrides_BestEffort exercises bogus paths that don't
-// resolve in the schema. They must silently no-op rather than panicking,
-// since this code runs during package init and a panic would prevent the
-// plugin from loading.
-func TestApplyConfigOverrides_BestEffort(t *testing.T) {
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("applyConfigOverrides panicked on bogus paths: %v", r)
-		}
-	}()
-	r := jsonschema.Reflector{
-		DoNotReference: true,
-		ExpandedStruct: true,
-		IgnoredTypes:   []any{genai.Schema{}},
-	}
-	schema := r.Reflect(genai.GenerateContentConfig{})
-	applyConfigOverrides(schema, configOverrides{
-		descriptions: map[string]string{
-			"doesNotExist":              "x",
-			"alsoMissing.deeplyMissing": "x",
-			"tools[].notARealField":     "x",
-			"completely[].fake[].path":  "x",
-			"thinkingConfig.gone":       "x",
-		},
-		hidden: []string{
-			"doesNotExist",
-			"missing[].alsoMissing",
-			"tools[].notARealField",
-			"[]",
-		},
-	})
-}
-
-func checkDescriptions(t *testing.T, label string, schema map[string]any, want map[string]string) {
-	t.Helper()
-	for path, desc := range want {
-		target := navigate(schema, parsePath(path)...)
-		if target == nil {
-			// Stale entry: either upstream renamed the field or we removed it.
-			// Surface the mismatch loudly so the override map stays honest.
-			t.Errorf("%s schema: described field %q missing — update %s overrides", label, path, label)
-			continue
-		}
-		if got, _ := target["description"].(string); got != desc {
-			t.Errorf("%s schema: description for %q\n got: %q\nwant: %q", label, path, got, desc)
-		}
+	prop, ok := internal.SchemaAt(schema, "temperature").(map[string]any)
+	if !ok || prop["description"] == "" {
+		t.Errorf("temperature should carry a description for a pointer config too: %#v", prop)
 	}
 }
 
-// assertHidden checks that a top-level or nested property (per parsePath
-// notation) is absent from the resolved schema map.
-func assertHidden(t *testing.T, label string, schema map[string]any, path string) {
-	t.Helper()
-	steps := parsePath(path)
-	leaf := steps[len(steps)-1]
-	parent := schema
-	if len(steps) > 1 {
-		parent = navigate(schema, steps[:len(steps)-1]...)
-	}
-	if parent == nil {
-		return // upstream removed the parent — nothing to assert
-	}
-	props, _ := parent["properties"].(map[string]any)
-	if props == nil && len(steps) == 1 {
-		t.Fatalf("%s schema missing top-level properties", label)
-	}
-	if _, present := props[leaf]; present {
-		t.Errorf("%s schema: %q must be hidden — found in properties %v", label, path, keys(props))
-	}
-}
-
-// navigate descends a JSON Schema map by walking `properties` for ordinary
-// step names and `items` for "[]" steps. Returns nil if the path doesn't
-// resolve.
-func navigate(schema map[string]any, steps ...string) map[string]any {
-	cur := schema
-	for _, step := range steps {
-		if cur == nil {
-			return nil
+// TestModelSupportsNativeConstraints keeps the constrained-output claim honest:
+// only models whose schema advertises responseJsonSchema handling may set it.
+func TestGeminiHidesResponseSchemaFields(t *testing.T) {
+	schema := configToMap(genai.GenerateContentConfig{})
+	for _, path := range []string{"responseSchema", "responseMimeType", "responseJsonSchema"} {
+		if got := internal.SchemaAt(schema, path); got != true {
+			t.Errorf("%s = %v, want true; ai.WithOutputType owns it", path, got)
 		}
-		if step == "[]" {
-			next, _ := cur["items"].(map[string]any)
-			cur = next
-			continue
-		}
-		props, _ := cur["properties"].(map[string]any)
-		if props == nil {
-			return nil
-		}
-		next, _ := props[step].(map[string]any)
-		cur = next
 	}
-	return cur
+	if !strings.Contains(strings.Join(gccOverrides.Hidden, ","), "candidateCount") {
+		t.Error("candidateCount should stay hidden; the plugin pins it to 1")
+	}
 }
 
 func keys(m map[string]any) []string {

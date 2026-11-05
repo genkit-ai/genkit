@@ -63,6 +63,23 @@ func TestNameHTTPCode(t *testing.T) {
 	})
 }
 
+func TestFromCode(t *testing.T) {
+	// Every canonical name must survive the Code -> FromCode round trip; the
+	// reverse map is derived from the same table, so this pins that the codes
+	// really are one-to-one.
+	for name := range statuses {
+		if got := FromCode(name.Code()); got != name {
+			t.Errorf("FromCode(%d) = %v, want %v", name.Code(), got, name)
+		}
+	}
+	// A code outside the canonical range is Unknown, not a silent zero value.
+	for _, code := range []int{-1, 17, 99} {
+		if got := FromCode(code); got != Unknown {
+			t.Errorf("FromCode(%d) = %v, want %v", code, got, Unknown)
+		}
+	}
+}
+
 func TestFromHTTPCode(t *testing.T) {
 	tests := []struct {
 		code int

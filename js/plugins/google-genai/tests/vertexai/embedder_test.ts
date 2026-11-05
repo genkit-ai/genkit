@@ -24,12 +24,21 @@ import { getVertexAIUrl } from '../../src/vertexai/client.js';
 import {
   EmbeddingConfig,
   defineEmbedder,
+  model,
 } from '../../src/vertexai/embedder.js';
 import {
   ClientOptions,
-  EmbedContentResponse,
+  EmbedPredictResponse,
   EmbeddingInstance,
 } from '../../src/vertexai/types.js';
+
+it('reports the default dimensions for multimodal embedders', () => {
+  assert.strictEqual(model('multimodalembedding@001').info?.dimensions, 1408);
+  assert.strictEqual(
+    model('custom-multimodalembedding', { multimodal: true }).info?.dimensions,
+    1408
+  );
+});
 
 describe('defineEmbedder', () => {
   let fetchStub: sinon.SinonStub;
@@ -99,10 +108,81 @@ describe('defineEmbedder', () => {
           content: [{ text: 'World' }],
         });
 
-        it('calls embedContent with text-only documents', async () => {
+        it('calls embedContent for gemini-embedding-2, one request per document', async () => {
+          const embedder = defineEmbedder('gemini-embedding-2', clientOptions);
+          fetchStub.callsFake(
+            async () =>
+              new Response(
+                JSON.stringify({ embedding: { values: [0.5, 0.6] } }),
+                { status: 200, headers: { 'Content-Type': 'application/json' } }
+              )
+          );
+
+          const result = await embedder.run({
+            input: [testDoc1, testDoc2],
+            options: { outputDimensionality: 128 },
+          });
+
+          sinon.assert.calledTwice(fetchStub);
+          const expectedUrl = getVertexAIUrl({
+            includeProjectAndLocation: true,
+            resourcePath: 'publishers/google/models/gemini-embedding-2',
+            resourceMethod: 'embedContent',
+            clientOptions,
+          });
+          assert.strictEqual(fetchStub.firstCall.args[0], expectedUrl);
+          assert.deepStrictEqual(JSON.parse(fetchStub.firstCall.args[1].body), {
+            content: { role: 'user', parts: [{ text: 'Hello' }] },
+            outputDimensionality: 128,
+          });
+          assert.deepStrictEqual(
+            JSON.parse(fetchStub.secondCall.args[1].body).content.parts,
+            [{ text: 'World' }]
+          );
+          assert.deepStrictEqual(result.result, {
+            embeddings: [{ embedding: [0.5, 0.6] }, { embedding: [0.5, 0.6] }],
+          });
+        });
+
+        it('sends unlisted newer Gemini embedders to embedContent', async () => {
+          const embedder = defineEmbedder('gemini-embedding-3', clientOptions);
+          mockFetchResponse({ embedding: { values: [0.1] } });
+          await embedder.run({ input: [testDoc1] });
+          assert.match(fetchStub.lastCall.args[0], /:embedContent$/);
+        });
+
+        it('keeps the hidden text-embedding-004 on predict', async () => {
+          const embedder = defineEmbedder('text-embedding-004', clientOptions);
+          const mockResponse: EmbedPredictResponse = {
+            predictions: [
+              {
+                embeddings: {
+                  values: [0.1],
+                  statistics: { token_count: 1, truncated: false },
+                },
+              },
+            ],
+          };
+          mockFetchResponse(mockResponse);
+
+          await embedder.run({ input: [testDoc1] });
+
+          assert.strictEqual(
+            fetchStub.lastCall.args[0],
+            getVertexAIUrl({
+              includeProjectAndLocation: true,
+              resourcePath: 'publishers/google/models/text-embedding-004',
+              resourceMethod: 'predict',
+              clientOptions,
+            })
+          );
+          assert.strictEqual(model('text-embedding-004').info?.dimensions, 768);
+        });
+
+        it('calls predict with text-only documents', async () => {
           const embedder = defineEmbedder('text-embedding-005', clientOptions);
 
-          const mockResponse: EmbedContentResponse = {
+          const mockResponse: EmbedPredictResponse = {
             predictions: [
               {
                 embeddings: {
@@ -179,7 +259,7 @@ describe('defineEmbedder', () => {
             ],
           });
 
-          const mockResponse: EmbedContentResponse = {
+          const mockResponse: EmbedPredictResponse = {
             predictions: [{ textEmbedding: [0.1], imageEmbedding: [0.2] }],
           };
           mockFetchResponse(mockResponse);
@@ -260,7 +340,7 @@ describe('defineEmbedder', () => {
         },
       });
 
-      const mockResponse: EmbedContentResponse = {
+      const mockResponse: EmbedPredictResponse = {
         predictions: [
           {
             textEmbedding: [0.1],

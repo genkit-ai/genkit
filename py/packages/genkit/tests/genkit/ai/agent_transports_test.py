@@ -30,7 +30,7 @@ from starlette.responses import StreamingResponse
 from starlette.routing import Route
 from uvicorn import Config, Server
 
-from genkit.agent import (
+from genkit.exp.agent import (
     AgentClient,
     AgentFinishReason,
     HttpAgentTransport,

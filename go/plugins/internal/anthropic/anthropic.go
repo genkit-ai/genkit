@@ -23,17 +23,20 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
+	"github.com/firebase/genkit/go/plugins/internal"
 	pluginjsonschema "github.com/firebase/genkit/go/plugins/internal/jsonschema"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 	"github.com/invopop/jsonschema"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/packages/respjson"
 )
 
 const (
@@ -44,6 +47,11 @@ const (
 	// DEFAULT_MAX_OUTPUT_TOKENS and is low enough for every Claude model.
 	DefaultMaxOutputTokens = 4096
 )
+
+// defaultConfigSchema is the schema every Claude model advertises for its
+// config. Reflecting the SDK params struct is expensive and the result is
+// read-only, so it is built once and shared by every model of both plugins.
+var defaultConfigSchema = reflectConfigSchema(anthropic.MessageNewParams{})
 
 // metadataSignature extracts a reasoning signature from part metadata. It
 // handles both []byte (the value [ai.NewReasoningPart] stores) and string
@@ -86,36 +94,45 @@ func toAnthropicMediaBlock(p *ai.Part, kind string) (anthropic.ContentBlockParam
 	}
 }
 
-func DefineModel(client anthropic.Client, provider, name string, info ai.ModelOptions) ai.Model {
-	label := "Anthropic"
-
-	if provider == "vertexai" {
-		label = "Vertex AI"
+// NewModel creates a Claude model action without registering it. name is both
+// the Genkit action name and the model ID requests are sent to: Anthropic
+// resolves an alias like claude-opus-4-5 to its current dated release itself.
+//
+// opts is used as given, except that a nil ConfigSchema defaults to the
+// reflected [anthropic.MessageNewParams] schema and an empty Label is derived
+// from the provider and the name. The framework validates the request's config
+// against that schema and deserializes it into [anthropic.MessageNewParams]
+// before the model function runs.
+func NewModel(client anthropic.Client, provider, name string, opts ai.ModelOptions) *ai.ModelAction {
+	if opts.ConfigSchema == nil {
+		opts.ConfigSchema = defaultConfigSchema
+	}
+	if opts.Label == "" {
+		opts.Label = internal.ProviderLabel(DisplayName(provider), name)
 	}
 
-	configSchema := info.ConfigSchema
-	if configSchema == nil {
-		configSchema = ConfigSchema(anthropic.MessageNewParams{})
-	}
-
-	meta := &ai.ModelOptions{
-		Label:        label + "-" + name,
-		Supports:     info.Supports,
-		Versions:     info.Versions,
-		ConfigSchema: configSchema,
-	}
-
-	return ai.NewModel(api.NewName(provider, name), meta, func(
+	return ai.NewModelAction(api.NewName(provider, name), &opts, func(
 		ctx context.Context,
 		input *ai.ModelRequest,
-		cb func(context.Context, *ai.ModelResponseChunk) error,
+		config anthropic.MessageNewParams,
+		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return Generate(ctx, client, provider, name, input, cb)
+		return Generate(ctx, client, provider, name, input, config, cb)
 	})
 }
 
-// ConfigSchema converts a config struct to a map[string]any.
-func ConfigSchema(config any) map[string]any {
+// DisplayName is how a provider is spelled in a model's dev UI label. Plugins
+// that curate their own labels join it with [internal.ProviderLabel], so every Claude
+// model names its provider the same way whichever plugin serves it.
+func DisplayName(provider string) string {
+	if provider == "vertexai" {
+		return "Vertex AI"
+	}
+	return "Anthropic"
+}
+
+// reflectConfigSchema converts a config struct to a map[string]any.
+func reflectConfigSchema(config any) map[string]any {
 	r := jsonschema.Reflector{
 		DoNotReference:             true, // Prevent $ref usage
 		AllowAdditionalProperties:  false,
@@ -148,98 +165,175 @@ func ConfigSchema(config any) map[string]any {
 		}
 		return nil
 	}
-	schema := r.Reflect(config)
-	result := base.SchemaAsMap(schema)
-
-	return result
+	schema := base.SchemaAsMap(r.Reflect(config))
+	stripParamObjArtifact(schema)
+	internal.ApplySchemaOverrides(schema, mncOverrides)
+	return schema
 }
 
-// Generate function defines how a generate request is done in Anthropic models
+// rejectManagedConfig reports a config field that a Genkit primitive owns.
+//
+// Each one is overwritten while the request is built, so accepting it would
+// drop the caller's value on the floor: messages and the model unconditionally,
+// the system prompt whenever the request carries system messages, and the
+// output format whenever constrained generation is on. Failing with the option
+// to use instead beats a request that silently ignores half of what it was
+// given.
+//
+// These are hidden from the advertised schema (see mncOverrides), so this is
+// what a caller setting one in code sees. They are hidden by being replaced
+// with a permissive schema rather than deleted, so the value reaches here
+// rather than failing validation as an unknown property.
+//
+// Classified ErrInvalidArgument: the request is the caller's to fix, so this
+// reaches the dev UI and any HTTP transport as a 400 rather than a 500. Not
+// ErrInvalidInput, which means a value failed the action's input schema; these
+// pass the schema and are refused on what they mean.
+func rejectManagedConfig(config *anthropic.MessageNewParams) error {
+	switch {
+	case len(config.Messages) > 0:
+		return status.Errorf(status.ErrInvalidArgument, "messages must be set using Genkit feature: ai.WithMessages() or ai.WithPrompt()")
+	case len(config.System) > 0:
+		return status.Errorf(status.ErrInvalidArgument, "system prompt must be set using Genkit feature: ai.WithSystem()")
+	case config.Model != "":
+		return status.Errorf(status.ErrInvalidArgument, "the model is chosen by the action; set it using Genkit feature: ai.WithModel() or ai.WithModelName()")
+	case config.OutputConfig.Format.Schema != nil || config.OutputConfig.Format.Type != "":
+		return status.Errorf(status.ErrInvalidArgument, "output format must be set using Genkit feature: ai.WithOutputType() or ai.WithOutputSchema(); the config-level output_config.effort field is unaffected")
+	}
+	for _, t := range config.Tools {
+		if t.OfTool != nil {
+			return status.Errorf(status.ErrInvalidArgument, "custom function tools must be set using Genkit feature: ai.WithTools(); the config-level tools field is reserved for server-side tools (web search, code execution, etc.)")
+		}
+	}
+	return nil
+}
+
+// Generate function defines how a generate request is done in Anthropic models.
+// config is the request's config, already deserialized by the framework, and is
+// the base the request is built on.
 func Generate(
 	ctx context.Context,
 	client anthropic.Client,
 	provider string,
 	model string,
 	input *ai.ModelRequest,
+	config anthropic.MessageNewParams,
 	cb func(context.Context, *ai.ModelResponseChunk) error,
 ) (*ai.ModelResponse, error) {
-	req, err := toAnthropicRequest(provider, input)
+	req, err := toAnthropicRequest(provider, input, config)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate anthropic request: %w", err)
 	}
 
 	req.Model = anthropic.Model(model)
 
-	// no streaming
-	if cb == nil {
+	if cb == nil && !mustStream(client, req) {
 		msg, err := client.Messages.New(ctx, *req)
 		if err != nil {
-			return nil, err
+			return nil, WrapAPIError(err)
 		}
 
-		r, err := toGenkitResponse(msg)
+		r, err := toGenkitResponse(msg, thinkingTokens(msg.Usage.JSON.ExtraFields["output_tokens_details"]))
 		if err != nil {
 			return nil, err
 		}
 
 		r.Request = input
 		return r, nil
-	} else {
-		stream := client.Messages.NewStreaming(ctx, *req)
-		message := anthropic.Message{}
-		for stream.Next() {
-			event := stream.Current()
-			err := message.Accumulate(event)
+	}
+	return generateStream(ctx, client, input, req, cb)
+}
+
+// mustStream reports whether the SDK would refuse req as a non-streaming
+// request. The SDK estimates a request's duration from max_tokens, at an hour
+// per 128,000 tokens, and refuses one it expects to run past ten minutes
+// (about 21,333 tokens) or whose max_tokens exceeds the model's non-streaming
+// cap, unless the client sets a request timeout. A large max_tokens is common
+// with extended thinking, so such a request streams instead, and the caller
+// still gets one response.
+func mustStream(client anthropic.Client, req *anthropic.MessageNewParams) bool {
+	_, err := anthropic.CalculateNonStreamingTimeout(int(req.MaxTokens), req.Model, client.Messages.Options)
+	return err != nil
+}
+
+// generateStream sends req as a streaming request and accumulates the events
+// into one response. cb receives each chunk as it arrives; nil streams only
+// to build the response.
+func generateStream(
+	ctx context.Context,
+	client anthropic.Client,
+	input *ai.ModelRequest,
+	req *anthropic.MessageNewParams,
+	cb func(context.Context, *ai.ModelResponseChunk) error,
+) (*ai.ModelResponse, error) {
+	stream := client.Messages.NewStreaming(ctx, *req)
+	message := anthropic.Message{}
+	var thinking int64
+	for stream.Next() {
+		event := stream.Current()
+		err := message.Accumulate(event)
+		if err != nil {
+			return nil, err
+		}
+
+		switch event := event.AsAny().(type) {
+		case anthropic.ContentBlockDeltaEvent:
+			if cb == nil {
+				continue
+			}
+			var content []*ai.Part
+			if event.Delta.Type == "thinking_delta" {
+				content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
+			} else {
+				content = append(content, ai.NewTextPart(event.Delta.Text))
+			}
+			err := cb(ctx, &ai.ModelResponseChunk{
+				Content: content,
+			})
 			if err != nil {
 				return nil, err
 			}
-
-			content := []*ai.Part{}
-			switch event := event.AsAny().(type) {
-			case anthropic.ContentBlockDeltaEvent:
-				if event.Delta.Type == "thinking_delta" {
-					content = append(content, ai.NewReasoningPart(event.Delta.Thinking, []byte(event.Delta.Signature)))
-				} else {
-					content = append(content, ai.NewTextPart(event.Delta.Text))
-				}
+		case anthropic.ContentBlockStopEvent:
+			if cb == nil || int(event.Index) >= len(message.Content) {
+				continue
+			}
+			block := message.Content[event.Index]
+			if toolBlock, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
+				p := ai.NewToolRequestPart(&ai.ToolRequest{
+					Ref:   toolBlock.ID,
+					Input: toolBlock.Input,
+					Name:  toolBlock.Name,
+				})
 				err := cb(ctx, &ai.ModelResponseChunk{
-					Content: content,
+					Content: []*ai.Part{p},
 				})
 				if err != nil {
 					return nil, err
 				}
-			case anthropic.ContentBlockStopEvent:
-				if int(event.Index) < len(message.Content) {
-					block := message.Content[event.Index]
-					if toolBlock, ok := block.AsAny().(anthropic.ToolUseBlock); ok {
-						p := ai.NewToolRequestPart(&ai.ToolRequest{
-							Ref:   toolBlock.ID,
-							Input: toolBlock.Input,
-							Name:  toolBlock.Name,
-						})
-						err := cb(ctx, &ai.ModelResponseChunk{
-							Content: []*ai.Part{p},
-						})
-						if err != nil {
-							return nil, err
-						}
-					}
-				}
-			case anthropic.MessageStopEvent:
-				r, err := toGenkitResponse(&message)
-				if err != nil {
-					return nil, err
-				}
-				r.Request = input
-				return r, nil
 			}
-		}
-		if stream.Err() != nil {
-			return nil, stream.Err()
+		case anthropic.MessageDeltaEvent:
+			applyDeltaUsage(&message.Usage, event.Usage)
+			thinking = max(thinking, thinkingTokens(event.Usage.JSON.ExtraFields["output_tokens_details"]))
+		case anthropic.MessageStopEvent:
+			r, err := toGenkitResponse(&message, thinking)
+			if err != nil {
+				return nil, err
+			}
+			r.Request = input
+			return r, nil
 		}
 	}
-
-	return nil, nil
+	if err := stream.Err(); err != nil {
+		return nil, WrapAPIError(err)
+	}
+	// The loop only returns from the message_stop case. Falling out of it
+	// means the stream ended early without one, and the SDK reports no
+	// error for a body that simply stops, so say so rather than returning
+	// a nil response the caller would dereference.
+	// Internal, not InvalidArgument: a body that stops early is usually a
+	// truncated response rather than a bad request, so this stays in the
+	// set the retry middleware reissues.
+	return nil, status.Errorf(status.ErrInternal, "anthropic stream ended without a message_stop event")
 }
 
 func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
@@ -251,16 +345,19 @@ func toAnthropicRole(role ai.Role) (anthropic.MessageParamRole, error) {
 	case ai.RoleTool:
 		return anthropic.MessageParamRoleAssistant, nil
 	default:
-		return "", fmt.Errorf("unknown role given: %q", role)
+		return "", status.Errorf(status.ErrInvalidArgument, "unknown role given: %q", role)
 	}
 }
 
-// toAnthropicRequest translates [ai.ModelRequest] to an Anthropic request
-func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
+// toAnthropicRequest folds an [ai.ModelRequest] into the config the framework
+// deserialized for the request, and returns the result to send to the API.
+// config is taken by value: the request's own copy is what gets amended, never
+// the caller's.
+func toAnthropicRequest(provider string, i *ai.ModelRequest, config anthropic.MessageNewParams) (*anthropic.MessageNewParams, error) {
 	messages := make([]anthropic.MessageParam, 0)
 
-	req, err := configFromRequest(i)
-	if err != nil {
+	req := &config
+	if err := rejectManagedConfig(req); err != nil {
 		return nil, err
 	}
 
@@ -307,8 +404,8 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 		})
 	}
 
-	// Only overwrite the config-provided system prompt when the request
-	// actually carries system messages, and never send an empty array.
+	// The config cannot carry a system prompt (rejectManagedConfig refuses
+	// one), so this only guards against sending an empty array.
 	if len(sysBlocks) > 0 {
 		req.System = sysBlocks
 	}
@@ -321,15 +418,24 @@ func toAnthropicRequest(provider string, i *ai.ModelRequest) (*anthropic.Message
 	// Append rather than assign: server-side tools (web search, code execution,
 	// ...) can only be expressed through the config, and assigning here would
 	// silently drop them.
-	req.Tools = append(req.Tools, tools...)
+	//
+	// Clip first so the append always allocates. config is only a shallow copy,
+	// so its slice header still points at the caller's backing array, and a
+	// config hoisted into a package-level var or a ModelRef is shared by every
+	// request made with it. Appending in place would write into that array's
+	// spare capacity, which two concurrent requests then race over, and one
+	// request's tools would surface in another's.
+	req.Tools = append(slices.Clip(req.Tools), tools...)
 
 	if toolChoice, ok := toAnthropicToolChoice(i.ToolChoice); ok {
 		req.ToolChoice = toolChoice
 	}
 
-	if i.Output != nil && i.Output.Format == "json" && i.Output.Schema != nil && i.Output.Constrained {
-		// Native structured output via OutputConfig. Set only the format so a
-		// config-provided OutputConfig.Effort survives.
+	if i.Output != nil && i.Output.Schema != nil && i.Output.Constrained {
+		// Native structured output via OutputConfig, for every format that
+		// asks for it: the API takes an array or an enum at the schema root
+		// as well as an object. Set only the format so a config-provided
+		// OutputConfig.Effort survives.
 		req.OutputConfig.Format = anthropic.JSONOutputFormatParam{
 			Schema: pluginjsonschema.EnforceStrict(i.Output.Schema),
 			// Type is elided, defaults to "json_schema"
@@ -355,29 +461,6 @@ func toAnthropicToolChoice(choice ai.ToolChoice) (anthropic.ToolChoiceUnionParam
 	}
 }
 
-// configFromRequest converts any supported config type to [anthropic.MessageNewParams]
-func configFromRequest(input *ai.ModelRequest) (*anthropic.MessageNewParams, error) {
-	var result anthropic.MessageNewParams
-
-	switch config := input.Config.(type) {
-	case anthropic.MessageNewParams:
-		result = config
-	case *anthropic.MessageNewParams:
-		result = *config
-	case map[string]any:
-		var err error
-		result, err = base.MapToStruct[anthropic.MessageNewParams](config)
-		if err != nil {
-			return nil, err
-		}
-	case nil:
-		// Empty configuration is considered valid
-	default:
-		return nil, fmt.Errorf("unexpected config type: %T", input.Config)
-	}
-	return &result, nil
-}
-
 // toAnthropicTools translates [ai.ToolDefinition] to an anthropic.ToolParam type
 func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.ToolUnionParam, error) {
 	if len(tools) == 0 {
@@ -388,10 +471,10 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 
 	for _, t := range tools {
 		if t.Name == "" {
-			return nil, fmt.Errorf("tool name is required")
+			return nil, status.Errorf(status.ErrInvalidArgument, "tool name is required")
 		}
 		if !regex.MatchString(t.Name) {
-			return nil, fmt.Errorf("tool name must match regex: %s", ToolNameRegex)
+			return nil, status.Errorf(status.ErrInvalidArgument, "tool name %q must match regex: %s", t.Name, ToolNameRegex)
 		}
 
 		inputSchema := t.InputSchema
@@ -414,7 +497,7 @@ func toAnthropicTools(provider string, tools []*ai.ToolDefinition) ([]anthropic.
 
 		schema, err := base.MapToStruct[anthropic.ToolInputSchemaParam](inputSchema)
 		if err != nil {
-			return nil, fmt.Errorf("unable to parse tool input schema: %w", err)
+			return nil, status.Errorf(status.ErrInvalidArgument, "unable to parse input schema for tool %q: %w", t.Name, err)
 		}
 
 		// ToolInputSchemaParam struct doesn't have AdditionalProperties field,
@@ -469,13 +552,21 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 			toolReq := p.ToolRequest
 			blocks = append(blocks, anthropic.NewToolUseBlock(toolReq.Ref, toolReq.Input, toolReq.Name))
 		case p.IsToolResponse():
-			block, err := toAnthropicToolResultBlock(p.ToolResponse)
+			block, err := toAnthropicToolResultBlock(p.ToolResponse, p.IsToolError())
 			if err != nil {
 				return nil, err
 			}
 			blocks = append(blocks, block)
 		case p.IsReasoning():
 			blocks = append(blocks, anthropic.NewThinkingBlock(string(metadataSignature(p.Metadata)), p.Text))
+		case p.IsCustom():
+			// Redacted thinking goes back exactly as it came, as the API
+			// requires.
+			data, ok := p.Custom[redactedThinkingKey].(string)
+			if !ok {
+				return nil, status.Errorf(ai.ErrInvalidPart, "unknown custom part in the request: %v", p.Custom)
+			}
+			blocks = append(blocks, anthropic.NewRedactedThinkingBlock(data))
 		default:
 			return nil, status.Errorf(ai.ErrInvalidPart, "unknown part type in the request")
 		}
@@ -485,13 +576,14 @@ func toAnthropicParts(parts []*ai.Part) ([]anthropic.ContentBlockParamUnion, err
 }
 
 // toAnthropicToolResultBlock translates an [ai.ToolResponse] to an Anthropic
-// tool_result block.
+// tool_result block. isError marks a response that answers the call with an
+// error (see [ai.Part.IsToolError]).
 //
 // Multipart tools return rich content parts alongside their structured output.
 // Anthropic exposes a single content array per tool_result rather than separate
 // fields, so the structured output is emitted as a leading text block and the
 // content parts follow as text, image, or document blocks.
-func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlockParamUnion, error) {
+func toAnthropicToolResultBlock(toolResp *ai.ToolResponse, isError bool) (anthropic.ContentBlockParamUnion, error) {
 	if toolResp == nil {
 		return anthropic.ContentBlockParamUnion{}, status.Errorf(ai.ErrInvalidPart, "tool response part carries no tool response")
 	}
@@ -506,7 +598,7 @@ func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlo
 	if toolResp.Output != nil || len(toolResp.Content) == 0 {
 		output, err := json.Marshal(toolResp.Output)
 		if err != nil {
-			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("unable to parse tool response, err: %w", err)
+			return anthropic.ContentBlockParamUnion{}, status.Errorf(status.ErrInvalidArgument, "unable to marshal response of tool %q: %w", toolResp.Name, err)
 		}
 		content = append(content, anthropic.ToolResultBlockParamContentUnion{
 			OfText: &anthropic.TextBlockParam{Text: string(output)},
@@ -525,7 +617,7 @@ func toAnthropicToolResultBlock(toolResp *ai.ToolResponse) (anthropic.ContentBlo
 		OfToolResult: &anthropic.ToolResultBlockParam{
 			ToolUseID: toolResp.Ref,
 			Content:   content,
-			IsError:   anthropic.Bool(false),
+			IsError:   anthropic.Bool(isError),
 		},
 	}, nil
 }
@@ -559,8 +651,15 @@ func toAnthropicToolResultContent(p *ai.Part) (anthropic.ToolResultBlockParamCon
 		"unsupported part in tool response content: Anthropic tool results accept text, image, and document parts")
 }
 
-// toGenkitResponse translates an Anthropic Message to [ai.ModelResponse]
-func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
+// redactedThinkingKey names the custom part that carries a redacted_thinking
+// block: thinking the API encrypted for safety reasons, which a later turn
+// must send back unchanged. It is a custom part rather than a reasoning part
+// since it holds no readable thought. The JS plugin uses the same shape.
+const redactedThinkingKey = "redactedThinking"
+
+// toGenkitResponse translates an Anthropic Message, and the thinking token
+// count reported beside it, to [ai.ModelResponse].
+func toGenkitResponse(m *anthropic.Message, thinking int64) (*ai.ModelResponse, error) {
 	r := ai.ModelResponse{}
 
 	switch m.StopReason {
@@ -583,6 +682,8 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 		switch part.AsAny().(type) {
 		case anthropic.ThinkingBlock:
 			p = ai.NewReasoningPart(part.Thinking, []byte(part.Signature))
+		case anthropic.RedactedThinkingBlock:
+			p = ai.NewCustomPart(map[string]any{redactedThinkingKey: part.Data})
 		case anthropic.TextBlock:
 			p = ai.NewTextPart(string(part.Text))
 		case anthropic.ToolUseBlock:
@@ -599,10 +700,90 @@ func toGenkitResponse(m *anthropic.Message) (*ai.ModelResponse, error) {
 
 	r.Message = msg
 	r.Raw = m.JSON
-	r.Usage = &ai.GenerationUsage{
-		InputTokens:         int(m.Usage.InputTokens),
-		OutputTokens:        int(m.Usage.OutputTokens),
-		CachedContentTokens: int(m.Usage.CacheReadInputTokens),
-	}
+	r.Usage = toGenkitUsage(m.Usage, thinking)
 	return &r, nil
+}
+
+// toGenkitUsage maps a message's usage and its thinking token count onto
+// [ai.GenerationUsage]'s convention. Anthropic's input_tokens leaves out the
+// tokens read from and written to the cache, so they are added back to make
+// InputTokens the whole prompt. Its output_tokens includes thinking, so the
+// thinking count is taken out of it. A response with no thinking count, as
+// from an API that does not report one, leaves all of it in OutputTokens.
+func toGenkitUsage(u anthropic.Usage, thinking int64) *ai.GenerationUsage {
+	if thinking > u.OutputTokens {
+		thinking = 0
+	}
+	usage := &ai.GenerationUsage{
+		InputTokens:         int(u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens),
+		OutputTokens:        int(u.OutputTokens - thinking),
+		ThoughtsTokens:      int(thinking),
+		CachedContentTokens: int(u.CacheReadInputTokens),
+		CacheWriteTokens:    int(u.CacheCreationInputTokens),
+	}
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens + usage.ThoughtsTokens
+
+	// Cache writes are billed by how long the entry lives, and server tools
+	// by the request, neither of which has a field of its own. The split by
+	// lifetime is reported only while it adds up to CacheWriteTokens: a
+	// stream whose server tools write more cache after message_start may not
+	// say how the extra writes split, and a partial split would undercharge.
+	split := u.CacheCreation
+	if split.Ephemeral5mInputTokens+split.Ephemeral1hInputTokens != u.CacheCreationInputTokens {
+		split = anthropic.CacheCreation{}
+	}
+	for _, c := range [...]struct {
+		name  string
+		count int64
+	}{
+		{"cacheWrite5mTokens", split.Ephemeral5mInputTokens},
+		{"cacheWrite1hTokens", split.Ephemeral1hInputTokens},
+		{"webSearchRequests", u.ServerToolUse.WebSearchRequests},
+		{"webFetchRequests", u.ServerToolUse.WebFetchRequests},
+	} {
+		if c.count <= 0 {
+			continue
+		}
+		if usage.Custom == nil {
+			usage.Custom = make(map[string]float64)
+		}
+		usage.Custom[c.name] = float64(c.count)
+	}
+	return usage
+}
+
+// thinkingTokens reads output_tokens_details.thinking_tokens, which the SDK
+// models only from v1.62.0, returning zero when the field is absent. Once the
+// SDK is bumped, Usage.OutputTokensDetails replaces it.
+func thinkingTokens(details respjson.Field) int64 {
+	var d struct {
+		ThinkingTokens int64 `json:"thinking_tokens"`
+	}
+	if raw := details.Raw(); raw != "" && raw != "null" {
+		_ = json.Unmarshal([]byte(raw), &d)
+	}
+	return d.ThinkingTokens
+}
+
+// applyDeltaUsage folds a message_delta's usage into the usage that
+// message_start reported. The delta's counts are cumulative, and server tools
+// can raise the input counts after the start, but the SDK's accumulator keeps
+// only output_tokens before v1.62.0. Cumulative counts never fall, so each
+// keeps the larger of the two: a delta that leaves a count out, or a proxy
+// that zeroes it, does not lower what the start reported.
+func applyDeltaUsage(u *anthropic.Usage, d anthropic.MessageDeltaUsage) {
+	u.InputTokens = max(u.InputTokens, d.InputTokens)
+	u.CacheReadInputTokens = max(u.CacheReadInputTokens, d.CacheReadInputTokens)
+	u.CacheCreationInputTokens = max(u.CacheCreationInputTokens, d.CacheCreationInputTokens)
+	u.ServerToolUse.WebSearchRequests = max(u.ServerToolUse.WebSearchRequests, d.ServerToolUse.WebSearchRequests)
+	u.ServerToolUse.WebFetchRequests = max(u.ServerToolUse.WebFetchRequests, d.ServerToolUse.WebFetchRequests)
+	// The split of cache writes by lifetime, which the SDK does not model on
+	// the delta.
+	if raw := d.JSON.ExtraFields["cache_creation"].Raw(); raw != "" && raw != "null" {
+		var c anthropic.CacheCreation
+		if json.Unmarshal([]byte(raw), &c) == nil {
+			u.CacheCreation.Ephemeral5mInputTokens = max(u.CacheCreation.Ephemeral5mInputTokens, c.Ephemeral5mInputTokens)
+			u.CacheCreation.Ephemeral1hInputTokens = max(u.CacheCreation.Ephemeral1hInputTokens, c.Ephemeral1hInputTokens)
+		}
+	}
 }

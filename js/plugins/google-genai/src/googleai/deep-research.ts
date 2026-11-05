@@ -22,6 +22,17 @@ import {
   modelRef,
 } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import {
+  ensureToolIds,
+  fromInteraction,
+  toInteractionResponseFormat,
+  toInteractionSteps,
+  toInteractionTool,
+} from '../common/interaction-converters.js';
+import {
+  InteractionAllowedTools,
+  InteractionTool,
+} from '../common/interaction-types.js';
 import { cleanSchema, isKnownKey } from '../common/utils.js';
 import {
   cancelInteraction,
@@ -29,23 +40,18 @@ import {
   getInteraction,
 } from './client.js';
 import {
-  ensureToolIds,
-  fromInteraction,
-  toInteractionSteps,
-  toInteractionTool,
-} from './interaction-converters.js';
-import { InteractionTool, ResponseModality } from './interaction-types.js';
-import {
   ClientOptions,
   CreateInteractionRequest,
   GoogleAIPluginOptions,
   Model,
 } from './types.js';
 import {
+  applyContextOverrides,
   calculateApiKey,
   checkApiKey,
   checkModelName,
   extractVersion,
+  isStringArray,
   modelName,
 } from './utils.js';
 
@@ -128,7 +134,19 @@ export const DeepResearchConfigSchema = z
             name: z.string().optional(),
             url: z.string().optional(),
             headers: z.record(z.string()).optional(),
-            allowedTools: z.array(z.string()).optional(),
+            allowedTools: z
+              .union([
+                z.array(z.string()),
+                z.array(
+                  z.object({
+                    mode: z
+                      .enum(['auto', 'any', 'none', 'validated'])
+                      .optional(),
+                    tools: z.array(z.string()).optional(),
+                  })
+                ),
+              ])
+              .optional(),
           })
           .passthrough()
       )
@@ -180,9 +198,6 @@ const ADVANCED_DEEP_RESEARCH_INFO = {
 } as ModelInfo;
 
 const KNOWN_MODELS = {
-  'deep-research-pro-preview-12-2025': commonRef(
-    'deep-research-pro-preview-12-2025'
-  ),
   'deep-research-preview-04-2026': commonRef(
     'deep-research-preview-04-2026',
     ADVANCED_DEEP_RESEARCH_INFO
@@ -193,6 +208,26 @@ const KNOWN_MODELS = {
   ),
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
+
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`).
+const HIDDEN_MODELS = {
+  // Deprecated; the shutdown date was Oct 23 2026 (changelog, Oct 8 2026),
+  // but it still accepted requests on Oct 27 2026. Remove it once the server
+  // returns 404. Replaced by deep-research-preview-04-2026 and
+  // deep-research-max-preview-04-2026.
+  'deep-research-pro-preview-12-2025': commonRef(
+    'deep-research-pro-preview-12-2025',
+    { ...GENERIC_MODEL.info, stage: 'deprecated' }
+  ),
+} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
 
 export type DeepResearchModelName = `deep-research-${string}`;
 export function isDeepResearchModelName(
@@ -207,8 +242,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -237,7 +272,7 @@ export function listActions(models: Model[]): ActionMetadata[] {
 }
 
 export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, options)
   );
 }
@@ -259,7 +294,7 @@ export function defineModel(
     name: ref.name,
     ...ref.info,
     configSchema: ref.configSchema,
-    async start(request) {
+    async start(request, options) {
       const {
         apiKey: apiKeyConfig,
         baseUrl,
@@ -277,13 +312,15 @@ export function defineModel(
         mcpServers,
         ...rest
       } = request.config || {};
-      const apiKey = calculateApiKey(pluginOptions?.apiKey, apiKeyConfig);
-      const newClientOptions: ClientOptions = {
-        ...clientOptions,
-        apiKey,
-        baseUrl: baseUrl || clientOptions.baseUrl,
-        apiVersion: apiVersion || clientOptions.apiVersion,
-      };
+      const newClientOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, apiKeyConfig),
+          baseUrl: baseUrl || clientOptions.baseUrl,
+          apiVersion: apiVersion || clientOptions.apiVersion,
+        },
+        options?.context
+      );
 
       const messages = structuredClone(request.messages);
       // Deep Research does not support system instructions, so we map them to
@@ -331,34 +368,37 @@ export function defineModel(
       if (mcpServers) {
         for (const mcpServer of mcpServers) {
           const { allowedTools, ...restMcp } = mcpServer;
+          let allowed_tools: InteractionAllowedTools[] | undefined = undefined;
+          if (allowedTools && allowedTools.length > 0) {
+            // A plain list of tool names is shorthand for one entry with no
+            // mode.
+            allowed_tools = isStringArray(allowedTools)
+              ? [{ tools: allowedTools }]
+              : allowedTools;
+          }
           tools.push({
             type: 'mcp_server',
             ...restMcp,
-            ...(allowedTools ? { allowed_tools: allowedTools } : {}),
-          } as InteractionTool);
+            ...(allowed_tools ? { allowed_tools } : {}),
+          });
         }
       }
 
-      let responseFormat: any = undefined;
-      if (
+      // JSON output and the requested output types, as `response_format`
+      // entries.
+      const jsonOutput =
         request.output?.format === 'json' ||
-        request.output?.contentType === 'application/json'
-      ) {
-        responseFormat = {
-          type: 'text',
-          mime_type: 'application/json',
-        };
-        if (request.output.schema) {
-          responseFormat.schema = cleanSchema(request.output.schema);
-        }
-      }
-
-      let responseModalitiesConverted: ResponseModality[] | undefined;
-      if (responseModalities) {
-        responseModalitiesConverted = responseModalities.map(
-          (m) => m.toLowerCase() as ResponseModality
-        );
-      }
+        request.output?.contentType === 'application/json';
+      const responseFormat = toInteractionResponseFormat({
+        modalities: responseModalities,
+        json: jsonOutput
+          ? {
+              schema: request.output?.schema
+                ? cleanSchema(request.output.schema)
+                : undefined,
+            }
+          : undefined,
+      });
 
       const req: CreateInteractionRequest = {
         agent: extractVersion(ref),
@@ -380,53 +420,52 @@ export function defineModel(
         store,
         tools: tools.length ? tools : undefined,
         response_format: responseFormat,
-        response_modalities: responseModalitiesConverted,
         ...rest,
       };
 
-      const response = await createInteraction(apiKey, req, newClientOptions);
+      const response = await createInteraction(
+        newClientOptions.apiKey,
+        req,
+        newClientOptions
+      );
 
-      return fromInteraction<ClientOptions>(response, newClientOptions);
+      return fromInteraction(response);
     },
-    async check(operation) {
-      const storedOptions = operation.metadata?.clientOptions as
-        | ClientOptions
-        | undefined;
-      const apiKey =
-        storedOptions?.apiKey ||
-        calculateApiKey(pluginOptions?.apiKey, undefined);
+    async check(operation, options) {
+      const checkOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, undefined),
+        },
+        options?.context
+      );
 
-      const checkOptions: ClientOptions = {
-        ...clientOptions,
-        ...storedOptions,
-      };
+      const response = await getInteraction(
+        checkOptions.apiKey,
+        operation.id,
+        checkOptions
+      );
 
-      const response = await getInteraction(apiKey, operation.id, checkOptions);
-
-      return fromInteraction<ClientOptions>(response, checkOptions);
+      return fromInteraction(response);
     },
-    async cancel(operation) {
-      const storedOptions = operation.metadata?.clientOptions as
-        | ClientOptions
-        | undefined;
-      const apiKey =
-        storedOptions?.apiKey ||
-        calculateApiKey(pluginOptions?.apiKey, undefined);
-
-      const cancelOptions: ClientOptions = {
-        ...clientOptions,
-        ...storedOptions,
-      };
+    async cancel(operation, options) {
+      const cancelOptions = applyContextOverrides(
+        {
+          ...clientOptions,
+          apiKey: calculateApiKey(pluginOptions?.apiKey, undefined),
+        },
+        options?.context
+      );
 
       const response = await cancelInteraction(
-        apiKey,
+        cancelOptions.apiKey,
         operation.id,
         cancelOptions
       );
 
-      return fromInteraction<ClientOptions>(response, cancelOptions);
+      return fromInteraction(response);
     },
   });
 }
 
-export const TEST_ONLY = { KNOWN_MODELS };
+export const TEST_ONLY = { KNOWN_MODELS, HIDDEN_MODELS, GENERIC_MODEL };

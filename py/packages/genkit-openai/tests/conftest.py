@@ -17,16 +17,15 @@
 
 """Test configuration for the OpenAI compatible plugin."""
 
-import pytest
-from genkit_openai.typing import OpenAIConfig
+from collections.abc import Callable
+from typing import Any
 
-from genkit import (
-    Message,
-    ModelRequest,
-    Part,
-    Role,
-    TextPart,
-)
+import pytest
+from genkit_openai._typing import OpenAIConfig
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+
+from genkit import Message, Part, Role
+from genkit.model import ModelRequest
 
 
 @pytest.fixture
@@ -36,15 +35,60 @@ def sample_request() -> ModelRequest:
         messages=[
             Message(
                 role=Role.SYSTEM,
-                content=[Part(root=TextPart(text='You are an assistant'))],
+                content=[Part.from_text('You are an assistant')],
             ),
-            Message(role=Role.USER, content=[Part(root=TextPart(text='Hello, world!'))]),
+            Message(role=Role.USER, content=[Part.from_text('Hello, world!')]),
         ],
         config=OpenAIConfig(
             model='gpt-4',
             top_p=0.9,
             temperature=0.7,
-            stop=['stop'],
-            max_tokens=100,
+            stop_sequences=['stop'],
+            max_output_tokens=100,
         ),
     )
+
+
+@pytest.fixture
+def make_completion() -> Callable[..., ChatCompletion]:
+    """Build a chat completion the way the SDK builds one off the wire."""
+
+    def factory(*, content: str = 'Hello, user!', choice: dict[str, Any] | None = None, **extra: Any) -> ChatCompletion:
+        payload: dict[str, Any] = {
+            'id': 'chatcmpl-abc',
+            'created': 1700000000,
+            'model': 'gpt-4o-2024-08-06',
+            'object': 'chat.completion',
+            'choices': [
+                {
+                    'index': 0,
+                    'finish_reason': 'stop',
+                    'message': {'role': 'assistant', 'content': content},
+                    **(choice or {}),
+                }
+            ],
+        }
+        payload.update(extra)
+        return ChatCompletion.construct(**payload)
+
+    return factory
+
+
+@pytest.fixture
+def make_chunk() -> Callable[..., ChatCompletionChunk]:
+    """Build a streamed chunk the way the SDK builds one off the wire."""
+
+    def factory(
+        *, content: str | None = None, choice: dict[str, Any] | None = None, **extra: Any
+    ) -> ChatCompletionChunk:
+        payload: dict[str, Any] = {
+            'id': 'chatcmpl-stream',
+            'created': 1700000000,
+            'model': 'grok-4',
+            'object': 'chat.completion.chunk',
+            'choices': [{'index': 0, 'delta': {'content': content}, **(choice or {})}],
+        }
+        payload.update(extra)
+        return ChatCompletionChunk.construct(**payload)
+
+    return factory

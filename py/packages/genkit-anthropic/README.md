@@ -1,11 +1,16 @@
-# Genkit Anthropic Plugin (Community)
-
-> **Community Plugin** — This plugin is community-maintained and is not an
-> official Google or Anthropic product. It is provided on an "as-is" basis.
->
-> **Preview** — This plugin is in preview and may have API changes in future releases.
+# Genkit Anthropic Plugin
 
 Anthropic Claude model provider for Genkit.
+
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
 
 ## Installation
 
@@ -22,18 +27,148 @@ from genkit_anthropic import Anthropic
 ai = Genkit(plugins=[Anthropic()])
 
 res = await ai.generate(
-    model='anthropic/claude-sonnet-4-6',
+    model=Anthropic.claude('claude-sonnet-4-6'),
     prompt='Explain recursion in 10 words.',
 )
 print(res.text)
 ```
 
 Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.
+`base_url=` points the plugin at another server. Pass the origin with no `/v1`
+suffix; the SDK appends `/v1/messages`. Any other `AsyncAnthropic` setting goes
+in `client_options`:
+
+```python
+Anthropic(
+    api_key=key,
+    base_url='https://claude-proxy.example.com',
+    client_options={'timeout': 30, 'max_retries': 5, 'default_headers': {'X-Team': 'search'}},
+)
+```
+
+## Typed config
+
+`AnthropicConfig` is flat. Choices are exported Literals (`ThinkingMode`,
+`ThinkingDisplay`, `Effort`), so pyright, pyrefly and ty check every key and
+value. The plugin builds Anthropic's nested request objects from the flat
+fields:
+
+- `thinking`, `thinking_budget`, `thinking_display` → `thinking`
+- `effort`, `task_budget` → `output_config`
+- `user_id` → `metadata`
+
+```python
+from genkit_anthropic import AnthropicConfig
+
+# 1. Build the config from flat fields
+config = AnthropicConfig(
+    max_output_tokens=4096,
+    thinking='adaptive',
+    thinking_display='summarized',
+    effort='high',
+    task_budget=20000,
+    user_id='diner-42',
+)
+
+# 2. Generate with it
+res = await ai.generate(model='anthropic/claude-opus-4-6', prompt='Plan a tasting menu.', config=config)
+# Sent as:
+#   thinking={'display': 'summarized', 'type': 'adaptive'}
+#   output_config={'effort': 'high', 'task_budget': {'type': 'tokens', 'total': 20000}}
+#   metadata={'user_id': 'diner-42'}
+```
+
+- A `thinking_budget` alone means `thinking='enabled'`. `'enabled'` needs a
+  budget from some config layer; `'adaptive'` doesn't send one, and
+  `'disabled'` sends neither the budget nor the display.
+- `task_budget` is a beta field, so it sends the call to the beta API.
+- To send a shape the flat fields don't cover, put Anthropic's object in
+  `extra`, e.g. `extra={'thinking': {...}}`. It replaces the built object.
+
+### Defaults and overrides
+
+Config merges key by key: the `Anthropic.claude(config=...)` default, then the
+prompt's config, then the call's. Rules that span fields are checked once, on
+the merged config. `thinking` is the switch, so a call can turn thinking off
+or back on without restating the budget:
+
+```python
+# 1. Model default with extended thinking on
+claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(thinking='enabled', thinking_budget=4096))
+
+# 2. Turn it off for one call; the inherited budget isn't sent
+await ai.generate(model=claude, prompt='Is shellfish safe for this guest?', config={'thinking': 'disabled'})
+# => thinking={'type': 'disabled'}
+
+# 3. Raise the budget for another; the mode is inherited
+await ai.generate(model=claude, prompt='Plan a nut-free tasting menu.', config={'thinking_budget': 8192})
+# => thinking={'type': 'enabled', 'budget_tokens': 8192}
+```
+
+A budget over an inherited `thinking='disabled'` stays disabled. Pass
+`thinking='enabled'` to turn it on, or `thinking=None` to clear the inherited
+mode. `None` clears any inherited value the same way.
+
+## Tool choice
+
+Tool choice is Genkit's `tool_choice` option, not a config field. The plugin
+sends it as Anthropic's `tool_choice` object: `'auto'` → `{'type': 'auto'}`,
+`'required'` → `{'type': 'any'}`, `'none'` → `{'type': 'none'}`. Anthropic
+carries `disable_parallel_tool_use` inside that object, so the config takes it
+as a flat flag:
+
+```python
+# 1. Require one tool call, and only one
+res = await ai.generate(
+    model='anthropic/claude-sonnet-4-6',
+    prompt='Is the pho in stock?',
+    tools=['lookup_menu'],
+    tool_choice='required',
+    config=AnthropicConfig(disable_parallel_tool_use=True),
+    return_tool_requests=True,
+)
+# Sent as: tool_choice={'type': 'any', 'disable_parallel_tool_use': True}
+```
+
+To pin one named tool, send Anthropic's object as
+`extra={'tool_choice': {'type': 'tool', 'name': 'lookup_menu'}}`; it replaces
+the translated value.
+
+With `thinking='enabled'` or `'adaptive'`, Anthropic accepts only `'auto'` and
+`'none'`, so `tool_choice='required'` raises `INVALID_ARGUMENT` before the
+request goes out. On a request with no tools, `tool_choice` (option or
+`extra`) is dropped, since the API rejects it there.
+
+## Per-request API key
+
+To bill a call to someone else's Anthropic account, pass their key in
+`context.secrets`. It's used for that call only:
+
+```python
+res = await ai.generate(
+    model='anthropic/claude-sonnet-4-6',
+    prompt='hi',
+    context={'secrets': {'api_key': tenant_key}},
+)
+```
+
+- `apiKey` works as well as `api_key`. Other entries in `context.secrets`
+  are left alone, so a call whose secrets hold no key runs on the plugin's
+  key. A key that is blank or not a string raises `INVALID_ARGUMENT`.
+- A key in `config` or `config.extra` raises `INVALID_ARGUMENT`; config is
+  recorded in traces.
+- The plugin doesn't need a key of its own: `Anthropic()` with no
+  `ANTHROPIC_API_KEY` serves every call that brings a key in
+  `context.secrets`, and a call without one fails with `FAILED_PRECONDITION`.
+- A client whose credential can't be swapped refuses a tenant key with
+  `FAILED_PRECONDITION` rather than billing its own account: an
+  `Anthropic(client_options={'auth_token': ...})` client, one whose `default_headers` pin
+  `x-api-key` or `Authorization`, and Claude on Vertex AI Model Garden, which
+  authenticates with Google Cloud credentials.
 
 ## Disclaimer
 
-This is a **community-maintained** plugin and is not officially supported by
-Google or Anthropic. Use of Anthropic's API is subject to
+Use of Anthropic's API is subject to
 [Anthropic's Terms of Service](https://www.anthropic.com/terms) and
 [Privacy Policy](https://www.anthropic.com/privacy). You are responsible for
 complying with all applicable terms when using this plugin.

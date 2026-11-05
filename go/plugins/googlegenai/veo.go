@@ -29,35 +29,32 @@ import (
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/core/status"
-	"github.com/firebase/genkit/go/internal/base"
 	"github.com/firebase/genkit/go/plugins/internal/uri"
 )
 
-// defineVeoModels defines a new Veo background model for video generation.
-// using Google's Veo API through the genai client.
+// newVeoModel creates a new Veo background model for video generation using
+// Google's Veo API through the genai client. The framework validates and
+// deserializes the request's config into [genai.GenerateVideosConfig] before
+// the start function runs.
 func newVeoModel(
 	client *genai.Client,
 	name string,
 	info ai.ModelOptions,
-) ai.BackgroundModel {
+) *ai.BackgroundModelAction {
 	provider := googleAIProvider
 	if client.ClientConfig().Backend == genai.BackendVertexAI {
 		provider = vertexAIProvider
 	}
 
-	startFunc := func(ctx context.Context, req *ai.ModelRequest) (*ai.ModelOperation, error) {
+	startFunc := func(ctx context.Context, req *ai.ModelRequest, videoConfig genai.GenerateVideosConfig) (*ai.ModelOperation, error) {
 		// Extract text prompt from the request
 		prompt := extractTextFromRequest(req)
 		if prompt == "" {
-			return nil, fmt.Errorf("no text prompt found in request")
+			return nil, status.Errorf(status.ErrInvalidArgument, "no text prompt found in request")
 		}
 
 		video := extractVeoVideoFromRequest(req)
 		image := extractVeoImageFromRequest(req)
-		videoConfig, err := toVeoParameters(req)
-		if err != nil {
-			return nil, err
-		}
 
 		// prevent SDK to pick a default number of video generation (usually 2)
 		// if users do not provide this setting
@@ -75,10 +72,10 @@ func newVeoModel(
 			ctx,
 			name,
 			sourceConfig,
-			videoConfig,
+			&videoConfig,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("veo video generation failed: %w", err)
+			return nil, fmt.Errorf("veo video generation failed: %w", wrapAPIError(err))
 		}
 
 		op := fromVeoOperation(operation)
@@ -95,7 +92,7 @@ func newVeoModel(
 	checkFunc := func(ctx context.Context, op *ai.ModelOperation) (*ai.ModelOperation, error) {
 		veoOp, err := checkVeoOperation(ctx, client, op)
 		if err != nil {
-			return nil, fmt.Errorf("veo operation status check failed: %w", err)
+			return nil, fmt.Errorf("veo operation status check failed: %w", wrapAPIError(err))
 		}
 
 		updatedOp := fromVeoOperation(veoOp)
@@ -130,7 +127,7 @@ func newVeoModel(
 		return updatedOp, nil
 	}
 
-	return ai.NewBackgroundModel(api.NewName(provider, name), &ai.BackgroundModelOptions{ModelOptions: info}, startFunc, checkFunc)
+	return ai.NewBackgroundModelAction(api.NewName(provider, name), &ai.BackgroundModelOptions{ModelOptions: info}, startFunc, checkFunc)
 }
 
 // extractTextFromRequest extracts the text prompt from a model request.
@@ -202,30 +199,6 @@ func extractVeoVideoFromRequest(request *ai.ModelRequest) *genai.Video {
 	return nil
 }
 
-// toVeoParameters converts model request configuration to Veo video generation parameters.
-func toVeoParameters(request *ai.ModelRequest) (*genai.GenerateVideosConfig, error) {
-	if request.Config == nil {
-		return &genai.GenerateVideosConfig{}, nil
-	}
-
-	switch config := request.Config.(type) {
-	case *genai.GenerateVideosConfig:
-		return config, nil
-	case genai.GenerateVideosConfig:
-		return &config, nil
-	case map[string]any:
-		var result genai.GenerateVideosConfig
-		var err error
-		result, err = base.MapToStruct[genai.GenerateVideosConfig](config)
-		if err != nil {
-			return nil, status.PublicErrorf(status.ErrInvalidArgument, "The video configuration settings are not in the correct format. Check that the names and values match what the model expects: %w", err)
-		}
-		return &result, nil
-	default:
-		return nil, status.PublicErrorf(status.ErrInvalidArgument, "The configuration type %T is not supported. Use the correct configuration for this model (like VideoModelRef) or a configuration struct.", request.Config)
-	}
-}
-
 // fromVeoOperation converts a Veo API operation to a Genkit core operation.
 func fromVeoOperation(veoOp *genai.GenerateVideosOperation) *ai.ModelOperation {
 	operation := &ai.ModelOperation{
@@ -242,12 +215,15 @@ func fromVeoOperation(veoOp *genai.GenerateVideosOperation) *ai.ModelOperation {
 		}
 	}
 
-	// Handle error cases
+	// Handle error cases. veoOp.Error is a google.rpc.Status, so it carries the
+	// canonical code alongside the message; classifying with it is what lets a
+	// caller tell a rejected prompt from a transient backend failure.
 	if veoOp.Error != nil {
+		sentinel := status.Base(veoOperationStatus(veoOp.Error))
 		if errorMsg, ok := veoOp.Error["message"].(string); ok {
-			operation.Error = fmt.Errorf("%s", errorMsg)
+			operation.Error = status.Errorf(sentinel, "%s", errorMsg)
 		} else {
-			operation.Error = fmt.Errorf("operation error: %v", veoOp.Error)
+			operation.Error = status.Errorf(sentinel, "operation error: %v", veoOp.Error)
 		}
 		return operation
 	}
@@ -324,4 +300,20 @@ func checkVeoOperation(ctx context.Context, client *genai.Client, ops *core.Oper
 		Name: ops.ID,
 	}
 	return client.Operations.GetVideosOperation(ctx, genaiOps, nil)
+}
+
+// veoOperationStatus reads the canonical status out of the google.rpc.Status
+// map a failed Veo operation carries. The code field is a gRPC status code,
+// numeric over the wire but a float64 (or json.Number) once decoded into a
+// map. An absent or unrecognized code answers Internal, which is what an
+// unexplained backend failure is.
+func veoOperationStatus(opErr map[string]any) status.Name {
+	code, ok := castToInt64(opErr["code"])
+	if !ok {
+		return status.Internal
+	}
+	if n := status.FromCode(int(code)); n != status.Unknown {
+		return n
+	}
+	return status.Internal
 }

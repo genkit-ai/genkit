@@ -85,8 +85,8 @@ func extractVariables(templateStr, uri string) (map[string]string, error) {
 
 // ResourceInput represents the input to a resource function.
 type ResourceInput struct {
-	URI       string            `json:"uri"`       // The resource URI
-	Variables map[string]string `json:"variables"` // Extracted variables from URI template matching
+	URI       string            `json:"uri"`                 // The resource URI
+	Variables map[string]string `json:"variables,omitempty"` // Extracted variables from URI template matching
 }
 
 // ResourceOutput represents the output from a resource function.
@@ -96,10 +96,14 @@ type ResourceOutput struct {
 
 // ResourceOptions configures a resource definition.
 type ResourceOptions struct {
-	URI         string         // Static URI (mutually exclusive with Template)
-	Template    string         // URI template (mutually exclusive with URI)
-	Description string         // Optional description
-	Metadata    map[string]any // Optional metadata
+	// URI is the resource's static URI. Mutually exclusive with Template.
+	URI string
+	// Template is a URI template the resource matches. Mutually exclusive with URI.
+	Template string
+	// Description is the resource's human-readable description.
+	Description string
+	// Metadata is arbitrary key-value data attached to the action descriptor.
+	Metadata map[string]any
 }
 
 // ResourceFunc is a function that loads content for a resource.
@@ -126,18 +130,12 @@ type Resource interface {
 	Register(r api.Registry)
 }
 
-// DefineResource creates a resource and registers it with the given Registry.
-func DefineResource(r api.Registry, name string, opts *ResourceOptions, fn ResourceFunc) Resource {
-	metadata := resourceMetadata(name, opts)
-	return &resource{Action: *core.DefineAction(r, name, api.ActionTypeResource, metadata, nil, fn)}
-}
-
 // NewResource creates a resource but does not register it in the registry.
 // It can be registered later via the Register method.
 func NewResource(name string, opts *ResourceOptions, fn ResourceFunc) Resource {
 	metadata := resourceMetadata(name, opts)
 	metadata["dynamic"] = true
-	return &resource{Action: *core.NewAction(name, api.ActionTypeResource, metadata, nil, fn)}
+	return &resource{Action: *core.NewActionOf(api.ActionTypeResource, name, &core.ActionOptions{Metadata: metadata}, fn)}
 }
 
 // resourceMetadata creates the metadata common to both DefineResource and NewResource.

@@ -45,20 +45,16 @@ Note:
     can be used with generate_operation().
 """
 
+from typing import Any
+
 import pytest
 
-from genkit import Genkit, Message, ModelResponse
-from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
+from genkit import Document, Genkit, Message, ModelResponse, Part
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import ModelRequest
-from genkit._core._typing import (
-    ModelInfo,
-    Operation,
-    Part,
-    Role,
-    Supports,
-    TextPart,
-)
+from genkit._core._operation import Operation
+from genkit._core._typing import ModelInfo, ModelSupports, Role
+from genkit.model import ModelContext
 
 
 @pytest.fixture
@@ -74,6 +70,8 @@ async def test_generate_operation_no_model_specified(ai: Genkit) -> None:
         await ai.generate_operation(prompt='Hi')
 
     assert 'No model specified' in str(exc_info.value)
+    assert exc_info.value.reason is ErrorReason.MODEL_NOT_FOUND
+    assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -83,6 +81,8 @@ async def test_generate_operation_model_not_found(ai: Genkit) -> None:
         await ai.generate_operation(model='nonexistent/model', prompt='Hi')
 
     assert 'not found' in str(exc_info.value).lower()
+    assert exc_info.value.reason is ErrorReason.MODEL_NOT_FOUND
+    assert 'MODEL_NOT_FOUND' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -93,11 +93,11 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
     """
 
     # Define a standard model without long_running support
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=TextPart(text='Hello'))],
+                content=[Part.from_text('Hello')],
             ),
         )
 
@@ -105,7 +105,7 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
         name='standard-model',
         fn=model_fn,
         info=ModelInfo(
-            supports=Supports(
+            supports=ModelSupports(
                 multiturn=True,
                 tools=True,
                 media=False,
@@ -118,6 +118,8 @@ async def test_generate_operation_model_no_long_running_support(ai: Genkit) -> N
         await ai.generate_operation(model='standard-model', prompt='Hi')
 
     assert 'does not support long running operations' in str(exc_info.value)
+    assert exc_info.value.reason is ErrorReason.UNSUPPORTED_BY_MODEL
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -125,11 +127,11 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
     """Test that models without supports info are rejected."""
 
     # Define a model without any ModelInfo
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=[Part(root=TextPart(text='Hello'))],
+                content=[Part.from_text('Hello')],
             ),
         )
 
@@ -139,69 +141,39 @@ async def test_generate_operation_model_no_supports_info(ai: Genkit) -> None:
         await ai.generate_operation(model='no-info-model', prompt='Hi')
 
     assert 'does not support long running operations' in str(exc_info.value)
+    assert exc_info.value.reason is ErrorReason.UNSUPPORTED_BY_MODEL
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
-@pytest.mark.asyncio
-async def test_generate_operation_no_operation_returned(ai: Genkit) -> None:
-    """Test error when model supports LRO but doesn't return an operation.
+def test_define_model_rejects_long_running(ai: Genkit) -> None:
+    """A chat model cannot advertise a background job. Use define_background_model."""
 
-    This matches the JS FAILED_PRECONDITION error case.
-    """
-
-    # Define a model that claims to support long_running but doesn't return an operation
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        # Return a normal response without an operation
+    async def model_fn(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Hello'))],
-            ),
+            message=Message(role=Role.MODEL, content=[Part.from_text('Hello')]),
         )
 
-    ai.define_model(
-        name='fake-lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,  # Claims to support LRO
-            ),
-        ),
-    )
+    with pytest.raises(GenkitError, match='define_background_model') as exc_info:
+        ai.define_model(
+            name='fake-lro-model',
+            fn=model_fn,
+            info=ModelInfo(supports=ModelSupports(long_running=True)),
+        )
 
-    with pytest.raises(GenkitError) as exc_info:
-        await ai.generate_operation(model='fake-lro-model', prompt='Hi')
-
-    assert 'did not return an operation' in str(exc_info.value)
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
 
 
 @pytest.mark.asyncio
 async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
-    """Test successful generate_operation with a proper long-running model."""
-    expected_operation = Operation(
-        id='test-operation-123',
-        done=False,
-        action='/background-model/lro-model',
-    )
+    """Test successful generate_operation with a background model."""
 
-    # Define a model that supports long_running and returns an operation
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='test-operation-123', done=False)
 
-    ai.define_model(
-        name='lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='lro-model', start=start, check=check)
 
     operation = await ai.generate_operation(model='lro-model', prompt='Generate video')
 
@@ -212,44 +184,17 @@ async def test_generate_operation_success_with_lro_model(ai: Genkit) -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_operation_with_default_model(ai: Genkit) -> None:
+async def test_generate_operation_with_default_model() -> None:
     """Test generate_operation uses default model when set."""
-    expected_operation = Operation(
-        id='default-op-456',
-        done=False,
-    )
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='default-op-456', done=False)
 
-    ai.define_model(
-        name='default-lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
 
-    # Create a new Genkit instance with the default model set
     ai_with_default = Genkit(model='default-lro-model')
-    # Re-register the model on the new instance
-    ai_with_default.define_model(
-        name='default-lro-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    ai_with_default.define_background_model(name='default-lro-model', start=start, check=check)
 
     operation = await ai_with_default.generate_operation(prompt='Generate video')
 
@@ -261,28 +206,16 @@ async def test_generate_operation_with_default_model(ai: Genkit) -> None:
 async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
     """Test that generate_operation passes all options to generate()."""
     captured_request: ModelRequest | None = None
-    expected_operation = Operation(id='opt-test-789', done=False)
 
-    async def model_fn(request: ModelRequest, ctx: ActionRunContext) -> ModelResponse:
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
         nonlocal captured_request
         captured_request = request
-        return ModelResponse(
-            message=Message(
-                role=Role.MODEL,
-                content=[Part(root=TextPart(text='Started'))],
-            ),
-            operation=expected_operation,
-        )
+        return Operation(id='opt-test-789', done=False)
 
-    ai.define_model(
-        name='options-test-model',
-        fn=model_fn,
-        info=ModelInfo(
-            supports=Supports(
-                long_running=True,
-            ),
-        ),
-    )
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='options-test-model', start=start, check=check)
 
     await ai.generate_operation(
         model='options-test-model',
@@ -292,5 +225,68 @@ async def test_generate_operation_passes_all_options(ai: Genkit) -> None:
     )
 
     assert captured_request is not None
-    # Verify config was passed
-    assert captured_request.config is not None
+    config = captured_request.config
+    if isinstance(config, dict):
+        assert config.get('temperature') == 0.7
+    else:
+        assert config is not None
+        assert getattr(config, 'temperature', None) == 0.7
+    assert any(m.role == Role.SYSTEM and 'test assistant' in m.text.lower() for m in captured_request.messages)
+    assert any(m.role == Role.USER and 'Test prompt' in m.text for m in captured_request.messages)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'arg',
+    [
+        'tools',
+        'tool_choice',
+        'return_tool_requests',
+        'max_turns',
+        'output_schema',
+        'output_format',
+        'output_content_type',
+        'output_instructions',
+        'output_constrained',
+    ],
+)
+async def test_generate_operation_rejects_tool_loop_and_output_args(ai: Genkit, arg: str) -> None:
+    """A background start runs no tool loop and check_operation parses no output, so these are not parameters."""
+
+    async def start(_request: ModelRequest, _ctx: ModelContext) -> Operation:
+        return Operation(id='op', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='veo-like', start=start, check=check)
+
+    kwargs: dict[str, Any] = {arg: None}
+    with pytest.raises(TypeError, match=arg):
+        await ai.generate_operation(model='veo-like', prompt='A flower blooming.', **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_generate_operation_forwards_docs(ai: Genkit) -> None:
+    """Docs reach a background start as context on the request."""
+    captured: ModelRequest | None = None
+
+    async def start(request: ModelRequest, _ctx: ModelContext) -> Operation:
+        nonlocal captured
+        captured = request
+        return Operation(id='op-docs', done=False)
+
+    async def check(op: Operation, _ctx: ModelContext) -> Operation:
+        return op
+
+    ai.define_background_model(name='research-like', start=start, check=check)
+
+    await ai.generate_operation(
+        model='research-like',
+        prompt='Summarize the allergy policy.',
+        docs=[Document.from_text('Peanuts are prepared on shared equipment.')],
+    )
+
+    assert captured is not None
+    assert captured.docs is not None
+    assert 'shared equipment' in ''.join(m.text for m in captured.messages)

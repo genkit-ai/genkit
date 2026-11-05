@@ -18,8 +18,12 @@ export {
   googleAI,
   type EmbeddingConfig,
   type GeminiConfig,
+  type GeminiImageConfig,
+  type GeminiInteraction,
   type GeminiTtsConfig,
+  type GeminiVideoConfig,
   type GoogleAIPluginOptions,
-  type ImagenConfig,
+  type TextAnnotation,
+  type UrlCitation,
 } from './googleai/index.js';
 export { vertexAI } from './vertexai/index.js';

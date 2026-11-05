@@ -14,18 +14,26 @@
  * limitations under the License.
  */
 
-import { logger } from '@genkit-ai/tools-common/utils';
+import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
 import { Command } from 'commander';
-import { loadDocs, searchDocs } from '../utils/docs';
+import {
+  SUPPORTED_DOC_LANGUAGES,
+  detectProjectLanguage,
+  loadDocs,
+  searchDocs,
+} from '../utils/docs';
 
 export const docsList = new Command('docs:list')
   .description('list available Genkit documentation files')
-  .argument('[language]', 'language to list docs for (js, go, python)', 'js')
+  .argument(
+    '[language]',
+    `language to list docs for (${SUPPORTED_DOC_LANGUAGES.join(', ')}). Defaults to the auto-detected project language`
+  )
   .action(async (language) => {
     try {
       const documents = await loadDocs();
-      const lang = language || 'js';
+      const lang = language || detectProjectLanguage(await findProjectRoot());
       const fileList = Object.keys(documents)
         .filter((file) => file.startsWith(lang))
         .sort();
@@ -50,6 +58,7 @@ export const docsList = new Command('docs:list')
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
       );
+      process.exitCode = 1;
     }
   });
 
@@ -59,11 +68,14 @@ export const docsSearch = new Command('docs:search')
     '<query>',
     'keywords to search for. For multiple keywords, enclose in quotes. E.g. "stream flows"'
   )
-  .argument('[language]', 'language to search docs for (js, go, python)', 'js')
+  .argument(
+    '[language]',
+    `language to search docs for (${SUPPORTED_DOC_LANGUAGES.join(', ')}). Defaults to the auto-detected project language`
+  )
   .action(async (query, language) => {
     try {
       const documents = await loadDocs();
-      const lang = language || 'js';
+      const lang = language || detectProjectLanguage(await findProjectRoot());
       const results = searchDocs(documents, query, lang).slice(0, 10);
 
       if (results.length === 0) {
@@ -86,6 +98,7 @@ export const docsSearch = new Command('docs:search')
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
       );
+      process.exitCode = 1;
     }
   });
 
@@ -98,6 +111,7 @@ export const docsRead = new Command('docs:read')
       const doc = documents[filePath];
       if (!doc) {
         logger.error(`Document not found: ${filePath}`);
+        process.exitCode = 1;
         return;
       }
 
@@ -109,5 +123,6 @@ export const docsRead = new Command('docs:read')
       logger.error(
         `Failed to load documentation: ${e instanceof Error ? e.message : String(e)}`
       );
+      process.exitCode = 1;
     }
   });

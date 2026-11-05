@@ -17,12 +17,34 @@
 package googlegenai
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
+
+// toGeminiRequestFromRaw runs the two steps a real request goes through: the
+// framework deserializes the type-erased config into the model's config type,
+// then the plugin folds the request into it. The tests below set
+// [ai.ModelRequest.Config] the way callers do, so going through both keeps
+// them honest about what the model function actually receives.
+func toGeminiRequestFromRaw(input *ai.ModelRequest, cache *genai.CachedContent, modelName ...string) (*genai.GenerateContentConfig, error) {
+	config, err := base.ConvertToExact[genai.GenerateContentConfig](input.Config)
+	if err != nil {
+		return nil, err
+	}
+	return toGeminiRequest(input, &config, cache, modelName...)
+}
 
 func TestConvertRequest(t *testing.T) {
 	text := "hello"
@@ -122,7 +144,7 @@ func TestConvertRequest(t *testing.T) {
 		},
 	}
 	t.Run("convert request", func(t *testing.T) {
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +229,7 @@ func TestConvertRequest(t *testing.T) {
 		req := ai.ModelRequest{
 			Config: badCfg,
 		}
-		_, err := toGeminiRequest(&req, nil)
+		_, err := toGeminiRequestFromRaw(&req, nil)
 		if err != nil {
 			t.Fatalf("expected nil, got: %v", err)
 		}
@@ -270,7 +292,7 @@ func TestConvertRequest(t *testing.T) {
 				req := ai.ModelRequest{
 					Config: tc.cfg,
 				}
-				_, err := toGeminiRequest(&req, nil)
+				_, err := toGeminiRequestFromRaw(&req, nil)
 				if err == nil {
 					t.Fatalf("expected an error: '%v' but got nil", tc.err)
 				}
@@ -283,7 +305,7 @@ func TestConvertRequest(t *testing.T) {
 				"temperature": "not a number", // This should fail map->struct conversion
 			},
 		}
-		_, err := toGeminiRequest(&req, nil)
+		_, err := toGeminiRequestFromRaw(&req, nil)
 		if err == nil {
 			t.Fatal("expected error for invalid config map")
 		}
@@ -304,7 +326,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,7 +353,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -356,7 +378,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -383,7 +405,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -423,7 +445,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-3.1-flash-tts-preview")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,7 +464,7 @@ func TestConvertRequest(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil, "googleai/gemini-2.5-flash")
+		gcc, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-2.5-flash")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -524,7 +546,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -568,7 +590,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -600,7 +622,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -640,7 +662,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -690,7 +712,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -737,7 +759,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -785,7 +807,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		if _, err := toGeminiRequest(req, nil); err == nil {
+		if _, err := toGeminiRequestFromRaw(req, nil); err == nil {
 			t.Fatal("expected error rejecting FunctionDeclarations in config tools, got nil")
 		}
 	})
@@ -811,7 +833,7 @@ func TestToolMerging(t *testing.T) {
 			},
 		}
 
-		gcc, err := toGeminiRequest(req, nil)
+		gcc, err := toGeminiRequestFromRaw(req, nil)
 		if err != nil {
 			t.Fatalf("toGeminiRequest failed: %v", err)
 		}
@@ -990,6 +1012,36 @@ func genToolName(length int, chars string) string {
 		r[i] = chars[i%len(chars)]
 	}
 	return string(r)
+}
+
+// Code execution answers come back as custom parts, and the next turn sends
+// them back in its history.
+func TestToGeminiPartCodeExecution(t *testing.T) {
+	sig := []byte("sig")
+	code := newExecutableCodePart("PYTHON", "print(1)")
+	code.Metadata = map[string]any{"signature": sig}
+	gp, err := toGeminiPart(code)
+	if err != nil {
+		t.Fatalf("toGeminiPart(executableCode) error = %v", err)
+	}
+	if gp.ExecutableCode == nil || gp.ExecutableCode.Code != "print(1)" || gp.ExecutableCode.Language != genai.LanguagePython {
+		t.Errorf("ExecutableCode = %+v, want the code and its language", gp.ExecutableCode)
+	}
+	if string(gp.ThoughtSignature) != "sig" {
+		t.Errorf("ThoughtSignature = %q, want %q", gp.ThoughtSignature, "sig")
+	}
+
+	gp, err = toGeminiPart(newCodeExecutionResultPart("OUTCOME_OK", "1\n"))
+	if err != nil {
+		t.Fatalf("toGeminiPart(codeExecutionResult) error = %v", err)
+	}
+	if gp.CodeExecutionResult == nil || gp.CodeExecutionResult.Outcome != genai.OutcomeOK || gp.CodeExecutionResult.Output != "1\n" {
+		t.Errorf("CodeExecutionResult = %+v, want the outcome and output", gp.CodeExecutionResult)
+	}
+
+	if _, err := toGeminiPart(ai.NewCustomPart(map[string]any{"other": 1})); err == nil {
+		t.Error("toGeminiPart(unknown custom part) error = nil, want it rejected")
+	}
 }
 
 // TestThoughtSignatureRoundTrip tests that thought signatures are properly preserved
@@ -1420,7 +1472,7 @@ func TestToGeminiContents(t *testing.T) {
 		},
 	}
 
-	contents, err := toGeminiContents(input)
+	contents, err := toGeminiContents(input.Messages)
 	if err != nil {
 		t.Fatalf("toGeminiContents failed: %v", err)
 	}
@@ -1435,5 +1487,826 @@ func TestToGeminiContents(t *testing.T) {
 		if contents[i].Role != want {
 			t.Errorf("contents[%d].Role = %q, want %q", i, contents[i].Role, want)
 		}
+	}
+}
+
+// TestCallerConfigNotMutated pins that folding a request into the config
+// leaves the caller's own config untouched. The framework hands the plugin a
+// shallow copy, so the two amendments that reach through it, the TTS default
+// voice and the built-in tools merge, have to clone before writing.
+func TestCallerConfigNotMutated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("tts default voice", func(t *testing.T) {
+		caller := &genai.GenerateContentConfig{
+			SpeechConfig: &genai.SpeechConfig{LanguageCode: "en-US"},
+		}
+		req := &ai.ModelRequest{
+			Config:   caller,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+		}
+		if _, err := toGeminiRequestFromRaw(req, nil, "googleai/gemini-3.1-flash-tts-preview"); err != nil {
+			t.Fatal(err)
+		}
+		if caller.SpeechConfig.VoiceConfig != nil {
+			t.Error("the plugin's default voice was written into the caller's SpeechConfig")
+		}
+	})
+
+	t.Run("tools merge", func(t *testing.T) {
+		// Spare capacity is what an append would scribble into.
+		tools := make([]*genai.Tool, 1, 4)
+		tools[0] = &genai.Tool{GoogleSearch: &genai.GoogleSearch{}}
+		caller := &genai.GenerateContentConfig{Tools: tools}
+		req := &ai.ModelRequest{
+			Config:   caller,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+			Tools: []*ai.ToolDefinition{{
+				Name:        "myTool",
+				Description: "this is a dummy tool",
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}
+		if _, err := toGeminiRequestFromRaw(req, nil); err != nil {
+			t.Fatal(err)
+		}
+		if len(caller.Tools) != 1 {
+			t.Errorf("caller's Tools length = %d, want 1", len(caller.Tools))
+		}
+		if spare := tools[:cap(tools)]; spare[1] != nil {
+			t.Error("the converted tools were appended into the caller's backing array")
+		}
+	})
+
+	// A config hoisted into a package var or a ModelRef is shared by every
+	// request, so writing the tool-calling mode through it would leak one
+	// request's allowed function names into the next and race between two in
+	// flight at once.
+	t.Run("tool choice", func(t *testing.T) {
+		caller := &genai.GenerateContentConfig{
+			ToolConfig: &genai.ToolConfig{
+				RetrievalConfig: &genai.RetrievalConfig{LanguageCode: "en-US"},
+			},
+		}
+		req := &ai.ModelRequest{
+			Config:     caller,
+			Messages:   []*ai.Message{ai.NewUserMessage(ai.NewTextPart("hi"))},
+			ToolChoice: ai.ToolChoiceRequired,
+			Tools: []*ai.ToolDefinition{{
+				Name:        "myTool",
+				Description: "this is a dummy tool",
+				InputSchema: map[string]any{"type": "object"},
+			}},
+		}
+		got, err := toGeminiRequestFromRaw(req, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if caller.ToolConfig.FunctionCallingConfig != nil {
+			t.Errorf("the request's tool choice was written into the caller's ToolConfig: %+v",
+				caller.ToolConfig.FunctionCallingConfig)
+		}
+		// The clone still has to carry the caller's own settings forward.
+		if got.ToolConfig == nil || got.ToolConfig.FunctionCallingConfig == nil {
+			t.Fatalf("request ToolConfig lost the tool choice, got %+v", got.ToolConfig)
+		}
+		if got.ToolConfig.RetrievalConfig != caller.ToolConfig.RetrievalConfig {
+			t.Error("cloning the ToolConfig dropped the caller's RetrievalConfig")
+		}
+	})
+}
+
+func TestTranslateCandidateBlockedWithoutContent(t *testing.T) {
+	// Safety-blocked candidates arrive with a finish reason but no Content.
+	// They must come back as a contentless blocked response, not an error.
+	cand := &genai.Candidate{
+		FinishReason:  genai.FinishReasonSafety,
+		FinishMessage: "blocked for safety",
+	}
+	r, err := translateCandidate(cand)
+	if err != nil {
+		t.Fatalf("translateCandidate: %v", err)
+	}
+	if r.FinishReason != ai.FinishReasonBlocked {
+		t.Errorf("FinishReason = %q, want %q", r.FinishReason, ai.FinishReasonBlocked)
+	}
+	if r.FinishMessage != "blocked for safety" {
+		t.Errorf("FinishMessage = %q, want %q", r.FinishMessage, "blocked for safety")
+	}
+	if r.Message == nil {
+		t.Fatal("Message = nil, want an empty model message")
+	}
+	if len(r.Message.Content) != 0 {
+		t.Errorf("Message.Content = %v, want empty", r.Message.Content)
+	}
+	if r.Message.Role != ai.RoleModel {
+		t.Errorf("Message.Role = %q, want %q", r.Message.Role, ai.RoleModel)
+	}
+}
+
+func TestTranslateCandidateNoContentNoFinishReason(t *testing.T) {
+	// A candidate with neither content nor a finish reason is malformed.
+	if _, err := translateCandidate(&genai.Candidate{}); err == nil {
+		t.Fatal("translateCandidate = nil error, want error for malformed candidate")
+	}
+}
+
+func TestTranslateResponsePromptBlocked(t *testing.T) {
+	resp := &genai.GenerateContentResponse{
+		PromptFeedback: &genai.GenerateContentResponsePromptFeedback{
+			BlockReason: genai.BlockedReasonSafety,
+		},
+	}
+	r, err := translateResponse(resp)
+	if err != nil {
+		t.Fatalf("translateResponse: %v", err)
+	}
+	if r.FinishReason != ai.FinishReasonBlocked {
+		t.Errorf("FinishReason = %q, want %q", r.FinishReason, ai.FinishReasonBlocked)
+	}
+	if r.FinishMessage == "" {
+		t.Error("FinishMessage is empty, want a block explanation")
+	}
+	if r.Message == nil {
+		t.Fatal("Message = nil, want an empty model message")
+	}
+	if _, ok := r.Custom.(map[string]any)["promptFeedback"]; !ok {
+		t.Error("Custom[promptFeedback] missing")
+	}
+}
+
+func TestTranslateResponsePromptBlockedMessagePreferred(t *testing.T) {
+	resp := &genai.GenerateContentResponse{
+		PromptFeedback: &genai.GenerateContentResponsePromptFeedback{
+			BlockReason:        genai.BlockedReasonBlocklist,
+			BlockReasonMessage: "term is on a blocklist",
+		},
+	}
+	r, err := translateResponse(resp)
+	if err != nil {
+		t.Fatalf("translateResponse: %v", err)
+	}
+	if r.FinishMessage != "term is on a blocklist" {
+		t.Errorf("FinishMessage = %q, want the service-provided message", r.FinishMessage)
+	}
+}
+
+func TestTranslateResponseNoCandidates(t *testing.T) {
+	if _, err := translateResponse(&genai.GenerateContentResponse{}); err == nil {
+		t.Fatal("translateResponse = nil error, want error when no candidates and no prompt feedback")
+	}
+}
+
+func TestMergeCandidateMetadata(t *testing.T) {
+	dst := &genai.Candidate{}
+
+	mergeCandidateMetadata(dst, &genai.Candidate{
+		SafetyRatings: []*genai.SafetyRating{{Category: genai.HarmCategoryHateSpeech}},
+		CitationMetadata: &genai.CitationMetadata{
+			Citations: []*genai.Citation{{URI: "https://one.example"}},
+		},
+	})
+	mergeCandidateMetadata(dst, &genai.Candidate{
+		FinishReason: genai.FinishReasonStop,
+		GroundingMetadata: &genai.GroundingMetadata{
+			WebSearchQueries: []string{"genkit"},
+		},
+		SafetyRatings: []*genai.SafetyRating{{Category: genai.HarmCategoryDangerousContent}},
+		CitationMetadata: &genai.CitationMetadata{
+			Citations: []*genai.Citation{{URI: "https://two.example"}},
+		},
+	})
+
+	if dst.FinishReason != genai.FinishReasonStop {
+		t.Errorf("FinishReason = %q, want STOP", dst.FinishReason)
+	}
+	if dst.GroundingMetadata == nil || len(dst.GroundingMetadata.WebSearchQueries) != 1 {
+		t.Errorf("GroundingMetadata = %+v, want web search queries preserved", dst.GroundingMetadata)
+	}
+	// Citations accumulate; safety ratings take the latest chunk's values.
+	if got := len(dst.CitationMetadata.Citations); got != 2 {
+		t.Errorf("Citations count = %d, want 2", got)
+	}
+	if len(dst.SafetyRatings) != 1 || dst.SafetyRatings[0].Category != genai.HarmCategoryDangerousContent {
+		t.Errorf("SafetyRatings = %+v, want only the latest ratings", dst.SafetyRatings)
+	}
+}
+
+// newTestClient returns a Gemini API genai client. A non-empty baseURL
+// points it at a fake server instead of the real API; with "" the client is
+// only good for constructing actions, never for requests.
+func newTestClient(t *testing.T, baseURL string) *genai.Client {
+	t.Helper()
+	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
+		Backend: genai.BackendGeminiAPI,
+		APIKey:  "test-api-key",
+		HTTPOptions: genai.HTTPOptions{
+			BaseURL: baseURL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	return client
+}
+
+func sseHandler(lines ...string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, l := range lines {
+			fmt.Fprintf(w, "data: %s\n\n", l)
+		}
+	}
+}
+
+func streamInput() *ai.ModelRequest {
+	return &ai.ModelRequest{
+		Messages: []*ai.Message{
+			{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("hi")}},
+		},
+	}
+}
+
+// TestTranslateResponseUsage pins how Gemini's usage maps onto the
+// [ai.GenerationUsage] convention. Gemini counts thinking apart from the
+// candidates, as the convention does, but it also counts tool results fed
+// back to the model apart from the prompt, which left InputTokens short of
+// the input Gemini bills. Gemini's own total stands, so a bucket the mapping
+// does not cover still reaches TotalTokens.
+func TestTranslateResponseUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		total int32
+		want  int
+	}{
+		{name: "gemini total", total: 160, want: 160},
+		{name: "no total", total: 0, want: 155},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := translateResponse(&genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content:      genai.NewContentFromText("4", genai.RoleModel),
+					FinishReason: genai.FinishReasonStop,
+				}},
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:        100,
+					CachedContentTokenCount: 60,
+					ToolUsePromptTokenCount: 20,
+					CandidatesTokenCount:    5,
+					ThoughtsTokenCount:      30,
+					TotalTokenCount:         tc.total,
+				},
+			})
+			if err != nil {
+				t.Fatalf("translateResponse() error = %v", err)
+			}
+			want := ai.GenerationUsage{
+				InputTokens:         120,
+				CachedContentTokens: 60,
+				OutputTokens:        5,
+				ThoughtsTokens:      30,
+				TotalTokens:         tc.want,
+			}
+			if got := *r.Usage; !reflect.DeepEqual(got, want) {
+				t.Errorf("Usage = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestGenerateStreamPreservesCandidateMetadata(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"hello "}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"finishReason":"STOP","groundingMetadata":{"webSearchQueries":["genkit"]},"safetyRatings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"NEGLIGIBLE"}]}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2,"totalTokenCount":3}}`,
+	))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	var streamed []*ai.Part
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error {
+		streamed = append(streamed, c.Content...)
+		return nil
+	}
+	r, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if got := r.Text(); got != "hello world" {
+		t.Errorf("Text() = %q, want %q", got, "hello world")
+	}
+	if len(streamed) != 2 {
+		t.Errorf("streamed %d parts, want 2", len(streamed))
+	}
+	if r.FinishReason != ai.FinishReasonStop {
+		t.Errorf("FinishReason = %q, want %q", r.FinishReason, ai.FinishReasonStop)
+	}
+	if r.Usage == nil || r.Usage.TotalTokens != 3 {
+		t.Errorf("Usage = %+v, want total tokens 3", r.Usage)
+	}
+
+	cands, ok := r.Custom.(map[string]any)["candidates"].([]*genai.Candidate)
+	if !ok || len(cands) != 1 {
+		t.Fatalf("Custom[candidates] = %#v, want one candidate", r.Custom)
+	}
+	if cands[0].GroundingMetadata == nil || len(cands[0].GroundingMetadata.WebSearchQueries) != 1 {
+		t.Errorf("GroundingMetadata = %+v, want web search queries preserved across the stream", cands[0].GroundingMetadata)
+	}
+	if len(cands[0].SafetyRatings) != 1 {
+		t.Errorf("SafetyRatings = %+v, want ratings preserved across the stream", cands[0].SafetyRatings)
+	}
+}
+
+// A stream splits a reply mid-sentence and ends it with an empty text part
+// that carries the thought signature (the chunks below have the shape of a
+// live gemini-3.8-flash stream). The final message must merge the text and
+// keep the signature on its own part.
+func TestGenerateStreamMergesTextParts(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"plan","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":" more","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"In Go"}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":", type parameters use []."}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"","thoughtSignature":"c2lnMQ=="}]},"finishReason":"STOP"}]}`,
+	))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error { return nil }
+	r, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	type part struct {
+		Kind      ai.PartKind
+		Text      string
+		Signature string
+	}
+	var got []part
+	for _, p := range r.Message.Content {
+		got = append(got, part{p.Kind, p.Text, string(metadataSignature(p.Metadata))})
+	}
+	want := []part{
+		{ai.PartReasoning, "plan more", ""},
+		{ai.PartText, "In Go, type parameters use [].", ""},
+		{ai.PartText, "", "sig1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Message.Content = %+v, want %+v", got, want)
+	}
+}
+
+func TestGenerateStreamEmptyStream(t *testing.T) {
+	srv := httptest.NewServer(sseHandler())
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error { return nil }
+	_, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err == nil {
+		t.Fatal("generate = nil error, want error for an empty stream")
+	}
+}
+
+// A cancel mid-stream must fail the call. The SDK only logs the failed read,
+// so without a check the stream would end as if the model had finished.
+func TestGenerateStreamCancelled(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: %s\n\n", `{"candidates":[{"content":{"role":"model","parts":[{"text":"1 2 3"}]}}]}`)
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	client := newTestClient(t, srv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cb := func(context.Context, *ai.ModelResponseChunk) error {
+		cancel()
+		return nil
+	}
+	_, err := generate(ctx, client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("generate error = %v, want one wrapping context.Canceled", err)
+	}
+}
+
+func TestGenerateStreamPromptBlocked(t *testing.T) {
+	srv := httptest.NewServer(sseHandler(
+		`{"promptFeedback":{"blockReason":"SAFETY"}}`,
+	))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	var streamed int
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error {
+		streamed++
+		return nil
+	}
+	r, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if r.FinishReason != ai.FinishReasonBlocked {
+		t.Errorf("FinishReason = %q, want %q", r.FinishReason, ai.FinishReasonBlocked)
+	}
+	if streamed != 0 {
+		t.Errorf("streamed %d chunks, want 0", streamed)
+	}
+}
+
+func TestGenerateStreamBlockedCandidateMidStream(t *testing.T) {
+	// A candidate that terminates on safety mid-stream has a finish reason
+	// but no content in its final chunk.
+	srv := httptest.NewServer(sseHandler(
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"so far"}]}}]}`,
+		`{"candidates":[{"finishReason":"SAFETY"}]}`,
+	))
+	defer srv.Close()
+	client := newTestClient(t, srv.URL)
+
+	cb := func(ctx context.Context, c *ai.ModelResponseChunk) error { return nil }
+	r, err := generate(context.Background(), client, "gemini-flash-latest", streamInput(), &genai.GenerateContentConfig{}, cb)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if r.FinishReason != ai.FinishReasonBlocked {
+		t.Errorf("FinishReason = %q, want %q", r.FinishReason, ai.FinishReasonBlocked)
+	}
+	if got := r.Text(); got != "so far" {
+		t.Errorf("Text() = %q, want %q", got, "so far")
+	}
+}
+
+// cacheServer stands in for the Gemini backend on the calls a cached request
+// makes: scanning for a reusable cache, creating one, and generating. The scan
+// comes back empty, so every test on it takes the create path. It records the
+// generateContent body so a test can assert what actually went on the wire.
+func cacheServer(t *testing.T, cacheName string, gotBody *map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+			fmt.Fprint(w, `{"cachedContents":[]}`)
+		case strings.Contains(r.URL.Path, "cachedContents"):
+			var req map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode cachedContents body: %v", err)
+			}
+			fmt.Fprintf(w, `{"name":%q,"displayName":%q}`, cacheName, req["displayName"])
+		default:
+			if err := json.NewDecoder(r.Body).Decode(gotBody); err != nil {
+				t.Errorf("decode generateContent body: %v", err)
+			}
+			fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+		}
+	}))
+}
+
+// contentTexts flattens the text of every content in a decoded
+// generateContent body.
+func contentTexts(t *testing.T, body map[string]any) []string {
+	t.Helper()
+	var texts []string
+	contents, _ := body["contents"].([]any)
+	for _, c := range contents {
+		parts, _ := c.(map[string]any)["parts"].([]any)
+		for _, p := range parts {
+			if s, ok := p.(map[string]any)["text"].(string); ok {
+				texts = append(texts, s)
+			}
+		}
+	}
+	return texts
+}
+
+// TestGenerateDropsCachedPrefix is the regression test for #6137: the prefix
+// folded into the cache resource must not also travel inline, or it is billed
+// twice and the model sees it twice. It drives generate end to end because the
+// bug was in the wiring, not in either helper on its own.
+func TestGenerateDropsCachedPrefix(t *testing.T) {
+	const (
+		prefix   = "a large stable prefix that should only live in the cache"
+		followUp = "what did I just say?"
+		name     = "cachedContents/abc123"
+	)
+	var body map[string]any
+	srv := cacheServer(t, name, &body)
+	defer srv.Close()
+
+	input := &ai.ModelRequest{Messages: []*ai.Message{
+		ai.NewUserTextMessage(prefix).WithCacheTTL(3600),
+		ai.NewUserTextMessage(followUp),
+	}}
+	r, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", input, &genai.GenerateContentConfig{}, nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if got := contentTexts(t, body); len(got) != 1 || got[0] != followUp {
+		t.Errorf("inline contents = %q, want only %q; the cached prefix was sent again", got, followUp)
+	}
+	if got := body["cachedContent"]; got != name {
+		t.Errorf("cachedContent = %v, want %q", got, name)
+	}
+	// The cache name rides back on the response so the next turn can reuse it.
+	cache, _ := r.Message.Metadata["cache"].(map[string]any)
+	if cache["name"] != name {
+		t.Errorf("response cache metadata = %v, want name %q", r.Message.Metadata["cache"], name)
+	}
+	// The full history stays on the request, so resp.History() can still find
+	// the marker on the next turn.
+	if len(r.Request.Messages) != 2 {
+		t.Errorf("r.Request.Messages = %d, want 2", len(r.Request.Messages))
+	}
+}
+
+// TestGenerateCachedPrefixCoversEveryMessage covers the boundary that leaves
+// nothing to send inline, e.g. one message carrying both a document and the
+// question. Dropping the prefix must not turn a request that worked into an
+// "at least one message is required" rejection.
+func TestGenerateCachedPrefixCoversEveryMessage(t *testing.T) {
+	var body map[string]any
+	srv := cacheServer(t, "cachedContents/only", &body)
+	defer srv.Close()
+
+	input := &ai.ModelRequest{Messages: []*ai.Message{
+		ai.NewUserTextMessage("a large document, and: summarize it").WithCacheTTL(3600),
+	}}
+	if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", input, &genai.GenerateContentConfig{}, nil); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if got := body["cachedContent"]; got != "cachedContents/only" {
+		t.Errorf("cachedContent = %v, want the cache to carry the prefix", got)
+	}
+	if got := contentTexts(t, body); len(got) != 1 || strings.TrimSpace(got[0]) != "" {
+		t.Errorf("inline contents = %q, want a single placeholder turn", got)
+	}
+}
+
+// TestGenerateNoMessages keeps the plain empty-request rejection, which the
+// cache placeholder above must not swallow.
+func TestGenerateNoMessages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("generate should have failed before reaching the API")
+	}))
+	defer srv.Close()
+
+	_, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", &ai.ModelRequest{}, &genai.GenerateContentConfig{}, nil)
+	if err == nil {
+		t.Fatal("generate = nil error, want an error for a request with no messages")
+	}
+}
+
+// TestGenerateRemakesUnusableCache covers the two ways a cache name carried
+// over from an earlier turn stops being usable: the resource is gone, or it no
+// longer holds what this request holds. Both build a fresh cache instead of
+// failing, because the name came from Genkit's own response metadata and the
+// caller has no way to act on the failure.
+func TestGenerateRemakesUnusableCache(t *testing.T) {
+	tests := []struct {
+		name   string
+		lookup func(w http.ResponseWriter)
+	}{
+		{
+			name: "resource expired",
+			lookup: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, `{"error":{"code":404,"message":"cache not found","status":"NOT_FOUND"}}`)
+			},
+		},
+		{
+			name: "contents no longer match",
+			lookup: func(w http.ResponseWriter) {
+				fmt.Fprint(w, `{"name":"cachedContents/stale","displayName":"the-hash-of-another-request"}`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var created bool
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.HasSuffix(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+					// The scan for a reusable cache finds nothing.
+					fmt.Fprint(w, `{"cachedContents":[]}`)
+				case strings.Contains(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+					tt.lookup(w)
+				case strings.Contains(r.URL.Path, "cachedContents"):
+					created = true
+					fmt.Fprint(w, `{"name":"cachedContents/fresh","displayName":"fresh"}`)
+				default:
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Errorf("decode generateContent body: %v", err)
+					}
+					fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+				}
+			}))
+			defer srv.Close()
+
+			// The ttl marker and the name from the previous turn ride on
+			// different messages, the way resp.History() replays them.
+			input := &ai.ModelRequest{Messages: []*ai.Message{
+				ai.NewUserTextMessage("a large stable prefix").WithCacheTTL(3600),
+				ai.NewModelTextMessage("an earlier answer").WithCacheName("cachedContents/stale"),
+				ai.NewUserTextMessage("follow up"),
+			}}
+			if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", input, &genai.GenerateContentConfig{}, nil); err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+
+			if !created {
+				t.Error("no fresh cache was created for an unusable cache name")
+			}
+			if got := body["cachedContent"]; got != "cachedContents/fresh" {
+				t.Errorf("cachedContent = %v, want the fresh cache", got)
+			}
+			if got := contentTexts(t, body); len(got) != 2 {
+				t.Errorf("inline contents = %q, want the two messages after the cache boundary", got)
+			}
+		})
+	}
+}
+
+// TestGenerateReusesCacheWithSameContents covers the caller who rebuilds the
+// same prefix rather than replaying resp.History(). The cache name only ever
+// travels back through the response metadata, so that caller arrives with no
+// name and used to mint, and pay to store, a fresh copy on every single call.
+func TestGenerateReusesCacheWithSameContents(t *testing.T) {
+	var created bool
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+			// A cache holding this exact prefix already exists. Its display
+			// name is the hash the plugin is about to compute.
+			contents, err := messagesToCache(cachedPrefixRequest().Messages, 0)
+			if err != nil {
+				t.Fatalf("messagesToCache: %v", err)
+			}
+			hash, err := calculateCacheHash(contents, "gemini-2.5-flash")
+			if err != nil {
+				t.Fatalf("calculateCacheHash: %v", err)
+			}
+			fmt.Fprintf(w, `{"cachedContents":[{"name":"cachedContents/other","displayName":"nope"},{"name":"cachedContents/existing","displayName":%q}]}`, hash)
+		case strings.Contains(r.URL.Path, "cachedContents"):
+			created = true
+			fmt.Fprint(w, `{"name":"cachedContents/wasteful","displayName":"x"}`)
+		default:
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode generateContent body: %v", err)
+			}
+			fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+		}
+	}))
+	defer srv.Close()
+
+	if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", cachedPrefixRequest(), &genai.GenerateContentConfig{}, nil); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if created {
+		t.Error("a second cache was created for contents already cached")
+	}
+	if got := body["cachedContent"]; got != "cachedContents/existing" {
+		t.Errorf("cachedContent = %v, want the cache that already held the prefix", got)
+	}
+}
+
+// cachedPrefixRequest is the canonical shape from the README: a large stable
+// message marked for caching, then the question.
+func cachedPrefixRequest() *ai.ModelRequest {
+	return &ai.ModelRequest{Messages: []*ai.Message{
+		ai.NewUserTextMessage("a large stable prefix").WithCacheTTL(3600),
+		ai.NewUserTextMessage("what did I just say?"),
+	}}
+}
+
+// TestGenerateWithCacheNameOnly covers ai.Message.WithCacheName used on its
+// own, which the README offers alongside WithCacheTTL. It used to be a silent
+// no-op: the whole prefix went inline at full price with no cache and no
+// error, which is bug #6137 by another route.
+func TestGenerateWithCacheNameOnly(t *testing.T) {
+	prefix := ai.NewUserTextMessage("a large stable prefix")
+	request := func() *ai.ModelRequest {
+		return &ai.ModelRequest{Messages: []*ai.Message{
+			ai.NewUserTextMessage("a large stable prefix").WithCacheName("cachedContents/known"),
+			ai.NewUserTextMessage("what did I just say?"),
+		}}
+	}
+	contents, err := messagesToCache([]*ai.Message{prefix}, 0)
+	if err != nil {
+		t.Fatalf("messagesToCache: %v", err)
+	}
+	hash, err := calculateCacheHash(contents, "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("calculateCacheHash: %v", err)
+	}
+
+	t.Run("named cache holds the prefix", func(t *testing.T) {
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "cachedContents"):
+				fmt.Fprintf(w, `{"name":"cachedContents/known","displayName":%q}`, hash)
+			default:
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode generateContent body: %v", err)
+				}
+				fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+			}
+		}))
+		defer srv.Close()
+
+		if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", request(), &genai.GenerateContentConfig{}, nil); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		if got := body["cachedContent"]; got != "cachedContents/known" {
+			t.Errorf("cachedContent = %v, want the named cache to be used", got)
+		}
+		if got := contentTexts(t, body); len(got) != 1 || got[0] != "what did I just say?" {
+			t.Errorf("inline contents = %q, want only the question", got)
+		}
+	})
+
+	t.Run("named cache is gone", func(t *testing.T) {
+		// No ttl means there is nothing to build a replacement with, so the
+		// request goes out whole rather than failing or losing the prefix.
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.HasSuffix(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+				fmt.Fprint(w, `{"cachedContents":[]}`)
+			case strings.Contains(r.URL.Path, "cachedContents") && r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, `{"error":{"code":404,"message":"cache not found","status":"NOT_FOUND"}}`)
+			case strings.Contains(r.URL.Path, "cachedContents"):
+				t.Error("no cache should be created without a ttl")
+			default:
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode generateContent body: %v", err)
+				}
+				fmt.Fprint(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`)
+			}
+		}))
+		defer srv.Close()
+
+		if _, err := generate(context.Background(), newTestClient(t, srv.URL), "gemini-2.5-flash", request(), &genai.GenerateContentConfig{}, nil); err != nil {
+			t.Fatalf("generate: %v", err)
+		}
+		if _, ok := body["cachedContent"]; ok {
+			t.Errorf("cachedContent = %v, want no cache on the request", body["cachedContent"])
+		}
+		if got := contentTexts(t, body); len(got) != 2 {
+			t.Errorf("inline contents = %q, want the whole request", got)
+		}
+	})
+}
+
+func TestToGeminiRequestResponseModalities(t *testing.T) {
+	req := func(config any) *ai.ModelRequest {
+		return &ai.ModelRequest{
+			Config:   config,
+			Messages: []*ai.Message{ai.NewUserMessage(ai.NewTextPart("draw a cat"))},
+		}
+	}
+	textImage := []string{"TEXT", "IMAGE"}
+	tests := []struct {
+		name   string
+		model  string
+		config any
+		want   []string
+	}{
+		{"image model defaults", "gemini-3.1-flash-image", nil, textImage},
+		{"vertex resource path defaults", "projects/p/locations/global/gemini-3-pro-image", nil, textImage},
+		{"caller modalities win", "gemini-2.5-flash-image", &genai.GenerateContentConfig{ResponseModalities: []string{"IMAGE"}}, []string{"IMAGE"}},
+		{"text model untouched", "gemini-2.5-flash", nil, nil},
+		{"project ID does not classify model", "projects/my-tts-app/locations/us-central1/gemini-2.5-flash", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gcc, err := toGeminiRequestFromRaw(req(tt.config), nil, tt.model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(gcc.ResponseModalities, tt.want) {
+				t.Errorf("ResponseModalities = %v, want %v", gcc.ResponseModalities, tt.want)
+			}
+		})
 	}
 }

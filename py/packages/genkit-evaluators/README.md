@@ -1,12 +1,24 @@
 # Genkit Evaluators Plugin
 
-Provides three rule-based evaluators matching the Go and JS implementations:
+> **Final release line.** genkit-evaluators is removed in genkit 1.0 and requires `genkit<1`.
+
+Provides three built-in rule-based evaluators:
 
 - **regex** – Tests output against a regex pattern (reference = regex string)
 - **deep_equal** – Tests equality of output against reference
 - **jsonata** – Evaluates a JSONata expression (reference) against output; pass if result is truthy
 
 No LLM or API keys required.
+
+> **Building with a coding agent? Install the Genkit Python skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-python
+> ```
+>
+> It teaches your agent the current Genkit Python APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
 
 ## Installation
 
@@ -31,6 +43,8 @@ results = await ai.evaluate(
         BaseDataPoint(input='sample', output='apple', reference='ba?a?a'),
     ],
 )
+for row in results:
+    print(row.test_case_id, row.evaluation[0].score)
 ```
 
 Or from the CLI:

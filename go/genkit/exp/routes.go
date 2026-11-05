@@ -22,6 +22,7 @@ import (
 	aix "github.com/firebase/genkit/go/ai/exp"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal/wire"
 )
 
 // Base paths for the built-in serving layouts.
@@ -62,7 +63,8 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 }
 
 // AllAgentRoutes returns the default serving layout for every agent
-// registered with g, the iterate-over-all counterpart to [AgentRoutes].
+// registered with g, except remote agents ([DefineRemoteAgent]), the
+// iterate-over-all counterpart to [AgentRoutes].
 // Mount the result onto an [http.ServeMux] (range over it and call
 // [Route.Handler]) or hand it to a router of your choice. See
 // [AgentRoutes] for the per-agent layout and the route set each agent
@@ -70,6 +72,12 @@ func (r Route) Handler(opts ...genkit.HandlerOption) http.HandlerFunc {
 func AllAgentRoutes(g *genkit.Genkit) []Route {
 	var routes []Route
 	for _, act := range ListAgents(g) {
+		if act.Desc().Metadata[wire.RemoteAgentMetadataKey] == true {
+			// A remote agent (see DefineRemoteAgent) forwards to another
+			// service with this app's credentials; serving it here would
+			// hand those credentials to every caller of this app.
+			continue
+		}
 		name := act.Name()
 		// The snapshot-lifecycle companions register independently under
 		// their own action types, keyed by the agent's name (see the agent
@@ -79,8 +87,9 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 		// client-managed agent has no companions), and buildAgentRoutes omits
 		// the route for a nil companion.
 		snapshot := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentSnapshot, name))
+		wait := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentWait, name))
 		abort := genkit.LookupAction(g, api.KeyFromName(api.ActionTypeAgentAbort, name))
-		routes = append(routes, buildAgentRoutes(name, act, snapshot, abort)...)
+		routes = append(routes, buildAgentRoutes(name, act, snapshot, wait, abort)...)
 	}
 	return routes
 }
@@ -91,37 +100,49 @@ func AllAgentRoutes(g *genkit.Genkit) []Route {
 //
 // The route set mirrors what the agent can do:
 //
-//   - POST /agents/{name}                the agent, one turn per request
-//   - POST /agents/{name}/getSnapshot    getSnapshot (store-backed agents)
-//   - POST /agents/{name}/abort          abort (abortable stores)
+//   - POST /agents/{name}                     the agent, one turn per request
+//   - POST /agents/{name}/getSnapshot         getSnapshot (store-backed agents)
+//   - POST /agents/{name}/waitForSnapshot     waitForSnapshot (store-backed
+//     agents); getSnapshot's blocking counterpart, so a client follows a
+//     detached invocation without polling. One request holds for at most
+//     the agent's wait limit (see aix.WithMaxSnapshotWait) and then returns
+//     the snapshot as it stands; a client whose snapshot is still pending
+//     or aborting asks again
+//   - POST /agents/{name}/abort               abort (abortable stores)
 //
 // Each takes the {"data": ...} request envelope and returns {"result":
 // ...}; the snapshot ID rides in the body ({"data": {"snapshotId": ...}}),
 // the same as the reflection API. Companion routes are omitted for
 // capabilities the agent lacks; a client-managed agent contributes only
 // its turn route.
+//
+// Each route serves through [genkit.Handler], so the errors in the agent's
+// outputs and snapshots reach clients under its error policy.
 func AgentRoutes[State any](a *aix.Agent[State]) []Route {
-	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.AbortAction())
+	return buildAgentRoutes(a.Name(), a, a.GetSnapshotAction(), a.WaitForSnapshotAction(), a.AbortAction())
 }
 
 // buildAgentRoutes builds an agent's route set from its run action and the
-// companion actions it has (either may be nil). Shared by AllAgentRoutes
+// companion actions it has (any may be nil). Shared by AllAgentRoutes
 // (companions looked up by key) and AgentRoutes (companions from the typed
 // ref's accessors).
-func buildAgentRoutes(name string, run, snapshot, abort api.Action) []Route {
+func buildAgentRoutes(name string, run, snapshot, wait, abort api.Action) []Route {
 	routes := []Route{{Method: http.MethodPost, Path: agentBasePath + "/" + name, Action: run}}
-	if snapshot != nil {
+	for _, companion := range []struct {
+		suffix string
+		action api.Action
+	}{
+		{"/getSnapshot", snapshot},
+		{"/waitForSnapshot", wait},
+		{"/abort", abort},
+	} {
+		if companion.action == nil {
+			continue
+		}
 		routes = append(routes, Route{
 			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/getSnapshot",
-			Action: snapshot,
-		})
-	}
-	if abort != nil {
-		routes = append(routes, Route{
-			Method: http.MethodPost,
-			Path:   agentBasePath + "/" + name + "/abort",
-			Action: abort,
+			Path:   agentBasePath + "/" + name + companion.suffix,
+			Action: companion.action,
 		})
 	}
 	return routes

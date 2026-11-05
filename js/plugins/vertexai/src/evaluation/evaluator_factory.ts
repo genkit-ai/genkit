@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+import type { protos } from '@google-cloud/aiplatform';
 import { type Action, type Genkit, type z } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
 import { runInNewSpan } from 'genkit/tracing';
 import type { GoogleAuth } from 'google-auth-library';
 import { getGenkitClientHeader } from '../common/index.js';
-import type { VertexAIEvaluationMetricType } from './evaluation.js';
+import type { VertexAIEvaluationMetricType } from './types.js';
 
 export class EvaluatorFactory {
   constructor(
@@ -36,7 +37,9 @@ export class EvaluatorFactory {
       definition: string;
       responseSchema: ResponseType;
     },
-    toRequest: (datapoint: BaseEvalDataPoint) => any,
+    toRequest: (
+      datapoint: BaseEvalDataPoint
+    ) => protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseHandler: (response: z.infer<ResponseType>) => Score
   ): Action {
     return ai.defineEvaluator(
@@ -63,24 +66,25 @@ export class EvaluatorFactory {
 
   async evaluateInstances<ResponseType extends z.ZodTypeAny>(
     ai: Genkit,
-    partialRequest: any,
+    partialRequest: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseSchema: ResponseType
   ): Promise<z.infer<ResponseType>> {
     const locationName = `projects/${this.projectId}/locations/${this.location}`;
+    const request: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest =
+      {
+        location: locationName,
+        ...partialRequest,
+      };
     return await runInNewSpan(
       ai,
       {
         metadata: {
           name: 'EvaluationService#evaluateInstances',
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: request,
         },
       },
       async (metadata, _otSpan) => {
-        const request = {
-          location: locationName,
-          ...partialRequest,
-        };
-
-        metadata.input = request;
         const client = await this.auth.getClient();
         const url = `https://${this.location}-aiplatform.googleapis.com/v1beta1/${locationName}:evaluateInstances`;
         const response = await client.request({

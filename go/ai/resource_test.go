@@ -26,7 +26,7 @@ func TestStaticResource(t *testing.T) {
 	g := registry.New()
 
 	// Define static resource
-	DefineResource(g, "test-doc", &ResourceOptions{
+	defineResource(g, "test-doc", &ResourceOptions{
 		URI: "file:///test.txt",
 	}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 		return &ResourceOutput{
@@ -48,6 +48,31 @@ func TestStaticResource(t *testing.T) {
 	if len(output.Content) != 1 || output.Content[0].Text != "test content" {
 		t.Fatalf("unexpected output: %v", output.Content)
 	}
+}
+
+func TestResourceOmittedVariables(t *testing.T) {
+	g := registry.New()
+	res := defineResource(g, "test/static", &ResourceOptions{
+		URI: "file:///h",
+	}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
+		return &ResourceOutput{Content: []*Part{NewTextPart(input.URI)}}, nil
+	})
+
+	t.Run("nil Variables in Execute", func(t *testing.T) {
+		output, err := res.Execute(context.Background(), &ResourceInput{URI: "file:///h"})
+		if err != nil {
+			t.Fatalf("Execute error: %v", err)
+		}
+		if len(output.Content) != 1 || output.Content[0].Text != "file:///h" {
+			t.Errorf("unexpected output: %v", output.Content)
+		}
+	})
+
+	t.Run("no variables key in JSON input", func(t *testing.T) {
+		if _, err := res.(*resource).RunJSON(context.Background(), []byte(`{"uri":"file:///h"}`), nil); err != nil {
+			t.Fatalf("RunJSON error: %v", err)
+		}
+	})
 }
 
 func TestDynamicResourceWithTemplate(t *testing.T) {
@@ -107,7 +132,7 @@ func TestResourceInGeneration(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define mock model
-	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	defineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		// Extract resource parts from the prompt
 		var responseText strings.Builder
 		for _, msg := range req.Messages {
@@ -128,7 +153,7 @@ func TestResourceInGeneration(t *testing.T) {
 	})
 
 	// Define resource
-	DefineResource(r, "policy", &ResourceOptions{
+	defineResource(r, "policy", &ResourceOptions{
 		URI: "file:///policy.txt",
 	}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 		return &ResourceOutput{
@@ -163,7 +188,7 @@ func TestDynamicResourceInGeneration(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define mock model
-	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	defineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		var responseText strings.Builder
 		for _, msg := range req.Messages {
 			for _, part := range msg.Content {
@@ -219,7 +244,7 @@ func TestMultipleDynamicResourcesInGeneration(t *testing.T) {
 	ConfigureFormats(r)
 
 	// Define mock model
-	DefineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	defineModel(r, "test", nil, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return &ModelResponse{
 			Request: req,
 			Message: &Message{
@@ -276,7 +301,7 @@ func contains(s, substr string) bool {
 func TestLookupResource(t *testing.T) {
 	t.Run("finds registered resource", func(t *testing.T) {
 		r := registry.New()
-		DefineResource(r, "test/lookup", &ResourceOptions{
+		defineResource(r, "test/lookup", &ResourceOptions{
 			URI: "lookup://test",
 		}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 			return &ResourceOutput{
@@ -304,7 +329,7 @@ func TestLookupResource(t *testing.T) {
 
 	t.Run("resource can be executed after lookup", func(t *testing.T) {
 		r := registry.New()
-		DefineResource(r, "test/executable", &ResourceOptions{
+		defineResource(r, "test/executable", &ResourceOptions{
 			URI: "exec://test",
 		}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 			return &ResourceOutput{
@@ -328,7 +353,7 @@ func TestLookupResource(t *testing.T) {
 
 	t.Run("resource matches and extracts variables after lookup", func(t *testing.T) {
 		r := registry.New()
-		DefineResource(r, "test/template", &ResourceOptions{
+		defineResource(r, "test/template", &ResourceOptions{
 			Template: "template://item/{id}",
 		}, func(ctx context.Context, input *ResourceInput) (*ResourceOutput, error) {
 			return &ResourceOutput{

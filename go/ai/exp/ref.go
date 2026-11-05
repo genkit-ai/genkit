@@ -30,11 +30,11 @@ package exp
 //	coderAgent.Ref()
 type AgentRef struct {
 	// Name identifies the agent, resolved as /agent/<Name>. Required.
-	Name string `json:"name"`
+	Name string `json:"name" jsonschema_description:"Name of the agent. Resolved as /agent/<Name>. Required."`
 	// Description is a human-readable description used by consumers that list
 	// agents (e.g. the agents middleware's system prompt). [Agent.Ref] fills it
 	// from the agent's descriptor. Optional.
-	Description string `json:"description,omitempty"`
+	Description string `json:"description,omitempty" jsonschema_description:"Human-readable description used by consumers that list agents. Overrides the description discovered from the registry."`
 }
 
 // Ref returns an [AgentRef] for this agent, capturing its name and description

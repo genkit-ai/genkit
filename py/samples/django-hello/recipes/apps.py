@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Django app config for the recipes app."""
+"""Django app that hangs the flow as a view."""
 
 from django.apps import AppConfig
 

@@ -30,6 +30,7 @@ import (
 
 	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/core/status"
+	"github.com/firebase/genkit/go/internal/base"
 )
 
 // AugmentWithContextOptions configures how a request is augmented with context.
@@ -48,6 +49,8 @@ type DownloadMediaOptions struct {
 	Filter   func(part *Part) bool // Filter to apply to parts that are media URLs.
 }
 
+// CalculateInputOutputUsage fills in the character, image, and video counts on
+// resp.Usage, for providers whose API reports token counts only.
 func CalculateInputOutputUsage(req *ModelRequest, resp *ModelResponse) {
 	if resp.Usage == nil {
 		resp.Usage = &GenerationUsage{}
@@ -100,6 +103,51 @@ func addAutomaticTelemetry() ModelMiddleware {
 
 			return resp, nil
 		}
+	}
+}
+
+// reportUsage reports each response's usage to the context's usage sink (see
+// [base.WithUsageSink]), so every route to a model action counts: the
+// generate loop, a hook that calls another model directly, a nested generate.
+// It wraps the telemetry middleware so the usage it reports carries the
+// character and media counts.
+func reportUsage() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			resp, err := fn(ctx, req, cb)
+			if resp != nil && resp.Usage != nil {
+				if sink := base.UsageSinkFromContext(ctx); sink != nil {
+					sink(resp.Usage)
+				}
+			}
+			return resp, err
+		}
+	}
+}
+
+// fillRequest sets the response's Request, when the model left it unset, to
+// the request the model action received. Generate wraps the model action with
+// it, outside the wrappers that rewrite the request (a simulated system
+// prompt, injected context), so [ModelResponse.History] gives back the
+// caller's conversation, not the rewritten one, and agrees with the request
+// an observer reports. The model action's own output does not carry the
+// request, so its trace and wire form do not repeat the input.
+func fillRequest() ModelMiddleware {
+	return func(fn ModelFunc) ModelFunc {
+		return func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+			resp, err := fn(ctx, req, cb)
+			if resp != nil && resp.Request == nil {
+				resp.Request = req
+			}
+			return resp, err
+		}
+	}
+}
+
+func init() {
+	base.FailedModelResponse = func(ctx context.Context, req any, err error) any {
+		r, _ := req.(*ModelRequest)
+		return failurePartial(ctx, nil, r, err)
 	}
 }
 
@@ -255,7 +303,7 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 			}
 
 			if opts.Stage == ModelStageDeprecated {
-				logger.FromContext(ctx).Warn("model is deprecated and may be removed in a future release", "model", model)
+				logger.Warn(ctx, "model is deprecated and may be removed in a future release", "model", model)
 			}
 
 			if (opts.Supports.Constrained == "" ||
@@ -265,17 +313,22 @@ func validateSupport(model string, opts *ModelOptions) ModelMiddleware {
 				return nil, status.Errorf(ErrUnsupportedByModel, "model %q does not support native constrained output, but constrained output was requested. Request: %+v", model, input)
 			}
 
-			if err := validateVersion(model, opts.Versions, input.Config); err != nil {
-				return nil, err
-			}
-
 			return next(ctx, input, cb)
 		}
 	}
 }
 
 // validateVersion validates that the requested model version is supported.
+// It runs against the raw, pre-conversion config (see [normalizeConfig])
+// because conversion into a Config type without a version field would
+// silently drop the key. A model that declares no versions is unconstrained:
+// the declared list curates the known versions, it does not exist to forbid
+// pinning on models that never enumerated any.
 func validateVersion(model string, versions []string, config any) error {
+	if len(versions) == 0 {
+		return nil
+	}
+
 	var configMap map[string]any
 
 	switch c := config.(type) {

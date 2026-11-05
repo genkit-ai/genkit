@@ -215,13 +215,13 @@ export function run<T>(
   }
   return runInNewSpan(
     {
-      metadata: { name },
+      // Input is set at creation so the realtime pending export carries it.
+      metadata: { name, ...(hasInput ? { input } : {}) },
       labels: {
         [SPAN_TYPE_ATTR]: 'flowStep',
       },
     },
     async (meta) => {
-      meta.input = input;
       const output = hasInput ? await func(input) : await func();
       meta.output = JSON.stringify(output);
       return output;

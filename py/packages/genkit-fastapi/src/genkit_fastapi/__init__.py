@@ -14,64 +14,47 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""FastAPI Plugin for Genkit.
+"""Serve Genkit flows as FastAPI routes.
 
-This plugin provides FastAPI integration for Genkit, enabling you to expose
-Genkit flows as HTTP endpoints in a FastAPI application.
+With ``GENKIT_ENV=dev``, the Dev UI reflection server starts on a background
+thread. No lifespan wiring needed.
 
-The Dev UI reflection server starts automatically in a background thread when
-``GENKIT_ENV=dev`` is set — no lifespan wiring needed.
+```python
+from fastapi import FastAPI
+from genkit import Genkit
+from genkit_fastapi import serve_flow
+from genkit_google_genai import GoogleAI
 
-Example:
-    ```python
-    from fastapi import FastAPI
-    from genkit import Genkit
-    from genkit_fastapi import genkit_fastapi_handler
-    from genkit_google_genai import GoogleAI
-
-    # 1. Initialize Genkit and FastAPI app
-    ai = Genkit(plugins=[GoogleAI()])
-    app = FastAPI()
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
+app = FastAPI()
 
 
-    # 2. Define flow and expose as FastAPI endpoint in one clean decorator stack
-    @app.post('/chat', response_model=None)
-    @genkit_fastapi_handler(ai)
-    @ai.flow()
-    async def chat_flow(prompt: str) -> str:
-        res = await ai.generate(
-            model='googleai/gemini-flash-latest',
-            prompt=f'Answer concisely: {prompt}',
-        )
-        return res.text
+@ai.flow()
+async def suggest_dish(cuisine: str) -> str:
+    response = await ai.generate(prompt=f'Suggest one {cuisine} dish.')
+    return response.text
 
 
-    # POST /chat {"data": "Why is the sky blue?"}
-    # => {"result": "The sky appears blue due to Rayleigh scattering..."}
-    ```
+# POST /api/suggest_dish
+app.include_router(serve_flow(suggest_dish), prefix='/api')
+```
 
-Running:
-    ```bash
-    # With Genkit Dev UI
-    genkit start -- uvicorn main:app --reload
+For a custom route, stack ``@genkit_fastapi_handler(ai)`` over ``@ai.flow()``.
 
-    # Production (no Dev UI)
-    uvicorn main:app
-    ```
+Agents are experimental, so their routes come from ``genkit_fastapi.exp``::
+
+    from genkit_fastapi.exp import serve_agent
+
+```bash
+genkit start -- uvicorn main:app --reload  # with Dev UI
+uvicorn main:app                           # production
+```
 """
 
-from .handler import genkit_fastapi_handler, handle_genkit_request, serve_agent, serve_flow
-
-
-def package_name() -> str:
-    """Get the package name for the FastAPI plugin."""
-    return 'genkit_fastapi'
-
+from ._handler import genkit_fastapi_handler, handle_genkit_request, serve_flow
 
 __all__ = [
     'genkit_fastapi_handler',
     'handle_genkit_request',
-    'package_name',
-    'serve_agent',
     'serve_flow',
 ]

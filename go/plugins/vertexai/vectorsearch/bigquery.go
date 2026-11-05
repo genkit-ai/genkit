@@ -18,12 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math/rand"
 	"time"
 
 	"cloud.google.com/go/bigquery"
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/logger"
 	"google.golang.org/api/iterator"
 )
 
@@ -61,7 +61,6 @@ func GetBigQueryDocumentRetriever(bqClient *bigquery.Client, datasetID, tableID 
 
 		it, err := q.Read(ctx)
 		if err != nil {
-			log.Printf("Failed to execute BigQuery query: %v", err)
 			return nil, fmt.Errorf("failed to query BigQuery: %w", err)
 		}
 
@@ -73,17 +72,18 @@ func GetBigQueryDocumentRetriever(bqClient *bigquery.Client, datasetID, tableID 
 				break
 			}
 			if err != nil {
-				log.Printf("Error reading BigQuery row: %v", err)
 				return nil, fmt.Errorf("error reading BigQuery row: %w", err)
 			}
 
 			var doc ai.Document
 
 			if err := json.Unmarshal([]byte(row.Content), &doc.Content); err != nil {
-				log.Printf("Failed to parse content for document ID %s: %v", row.ID, err)
+				logger.Warn(ctx, "vectorsearch: returning document with unparsable content",
+					"document", row.ID, "error", err)
 			}
 			if err := json.Unmarshal([]byte(row.Metadata), &doc.Metadata); err != nil {
-				log.Printf("Failed to parse metadata for document ID %s: %v", row.ID, err)
+				logger.Warn(ctx, "vectorsearch: returning document with unparsable metadata",
+					"document", row.ID, "error", err)
 			}
 			documents = append(documents, &doc)
 		}
@@ -126,10 +126,7 @@ func GetBigQueryDocumentIndexer(bqClient *bigquery.Client, datasetID, tableID st
 			rows = append(rows, row)
 		}
 
-		// Log rows for debugging.
-		for _, row := range rows {
-			log.Printf("Inserting row: %+v", row)
-		}
+		logger.Debug(ctx, "vectorsearch: inserting rows into BigQuery", "rows", len(rows), "dataset", datasetID, "table", tableID)
 
 		// Insert rows into the BigQuery table.
 		inserter := bqClient.Dataset(datasetID).Table(tableID).Inserter()

@@ -22,14 +22,32 @@ The pattern mirrors `tests/specs/generate.yaml` for the Generate API.
 ### Top-Level Structure
 
 ```yaml
+capabilities: [<capability>]    # Every name `requires` may use; see below
 tests:
   - name: <string>              # Human-readable test name
     description: <string>       # Optional description
     agent: <string>             # Name of the harness-provided agent
+    requires: [<capability>]    # Optional capability gate; see below
     steps:                      # Ordered sequence of operations
       - type: send | getSnapshotData | abort | waitUntilCompleted
         ...                     # Fields depend on step type
 ```
+
+`requires` lists the capabilities a test depends on. Each harness declares
+the capabilities its runtime implements and **skips** (not fails) any test
+naming one it does not, so the shared spec can carry cases for features an
+SDK has not adopted yet.
+
+Because every harness skips what it does not recognize, a misspelled name
+would otherwise skip the test in all of them and be reported by none. The
+top-level `capabilities` list is the spec's own registry of valid names, and
+a `requires` entry absent from it **fails** in every harness. Adding a
+capability means adding it there and to the table below. Known capabilities:
+
+| Capability | Meaning |
+|------------|---------|
+| `resumable-failures` | A failed turn commits what the generate call left at its last turn seam and persists it as a `failed` snapshot carrying the error; resume accepts that snapshot, and an input with no payload of its own re-attempts the turn. Gates model `error` entries, the empty input, a `failed` snapshot as a resume target, and the `promptAgentWithToolsAndStore` fixture. Implemented by: Go, JS. |
+| `resumable-aborts` | An aborted invocation persists the state through the last turn that committed, rolling back the one that did not finish, and resume accepts that snapshot. Gates an `aborted` snapshot carrying state, one as a resume target, and the `customAgentAbortable` fixture. Implemented by: Go, JS. |
 
 ### Step Types
 
@@ -42,15 +60,15 @@ Sends inputs to the agent via its bidirectional streaming interface (e.g.
 |-------|------|-------------|
 | `type` | `"send"` | Required. |
 | `init` | `AgentInit` | Initialization payload. May contain `snapshotId`, `state`, or be empty `{}`. |
-| `inputs` | `AgentInput[]` | Ordered list of inputs to send. Each may contain `messages`, `resume` (with `respond` and/or `restart`), and/or `detach`. |
-| `modelResponses` | `GenerateResponseData[]` | Pre-programmed responses for the programmable model, one per `generate` call made by the agent. |
+| `inputs` | `AgentInput[]` | Ordered list of inputs to send. Each may contain `messages`, `resume` (with `respond` and/or `restart`), and/or `detach`. An input with none of those continues the conversation already in the session (requires `resumable-failures`). |
+| `modelResponses` | `GenerateResponseData[]` | Pre-programmed turns for the programmable model, one per `generate` call made by the agent. An entry whose `error` is set (`{ status, message }`) fails that call with a classified error rather than returning (requires `resumable-failures`). |
 | `streamChunks` | `GenerateResponseChunkData[][]` | Optional. Pre-programmed streaming chunks, indexed by model call. Each inner array is emitted as a stream before the corresponding `modelResponses` entry. |
 | `expectChunks` | `AgentStreamChunk[]` | **Strict ordered** list of expected stream chunks. |
 | `expectOutput` | Object | Expected fields on the `AgentOutput`. See [Output Assertions](#output-assertions). |
 | `expectError` | Object | Optional. Asserts the turn *throws* (rather than resolving with a graceful `finishReason: 'failed'` output). Used for API-misuse cases (e.g. sending `state` to a server-managed agent). Fields: `status` (matched exactly) and `message` (matched as a substring). Mutually exclusive with `expectOutput`. |
 | `captureSnapshotId` | `string` | Optional. Stores `output.snapshotId` under this name for use in later steps via `{{name}}`. |
-
 | `captureState` | `string` | Optional. Stores `output.state` under this name for use in later steps via `{{name}}`. |
+| `captureSessionId` | `string` | Optional. Stores `output.state.sessionId` under this name for use in later steps via `{{name}}`. |
 
 #### `getSnapshotData`
 
@@ -75,12 +93,17 @@ Aborts an agent by snapshot ID.
 |-------|------|-------------|
 | `type` | `"abort"` | Required. |
 | `snapshotId` | `string` | The snapshot ID to abort. Supports `{{name}}` references. |
-| `expectPreviousStatus` | `string` | Expected previous status before abort (e.g. `"pending"`, `"done"`). |
+| `expectPreviousStatus` | `string` | Expected previous status before abort (e.g. `"pending"`, `"completed"`). YAML `~` means absent. |
 
 #### `waitUntilCompleted`
 
-Polls a snapshot until it reaches a terminal status (`done`, `failed`, or
+Polls a snapshot until it reaches a terminal status (`completed`, `failed`, or
 `aborted`).
+
+An aborted snapshot reaches its status in two writes: the abort flips it, and
+the finalize that follows stamps the finish reason and the state. This step
+waits for the second one, so `expectSnapshot` never reads a row that is still
+being written.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -99,6 +122,7 @@ Used in `expectOutput` for `send` steps.
 |-------|------|-------------|
 | `message` | `MessageData` | If present, `output.message` must deep-equal this value. |
 | `hasSnapshotId` | `boolean` | If `true`, asserts `output.snapshotId` is a non-empty string. |
+| `hasSessionId` | `boolean` | If `true`, asserts `output.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | If present, asserts that `output.state` contains (at minimum) these fields. Uses "contains" / subset matching — the actual state may have additional fields. |
 | `artifactsContain` | `Artifact[]` | If present, asserts that `output.artifacts` contains (at minimum) these entries. |
 | `finishReason` | `string` | If present, `output.finishReason` must equal this value exactly (e.g. `stop` on a normal completion, `interrupted` on a tool pause, `failed` on a graceful failure). |
@@ -113,10 +137,11 @@ steps.
 | Field | Type | Description |
 |-------|------|-------------|
 | `parentId` | `string` | Expected `parentId`. Supports `{{name}}` references. |
-| `status` | `string` | Expected `status` (e.g. `"done"`, `"pending"`, `"failed"`, `"aborted"`). |
+| `status` | `string` | Expected `status` (e.g. `"completed"`, `"pending"`, `"failed"`, `"aborted"`). |
 | `finishReason` | `string` | Expected `snapshot.finishReason` (e.g. `failed`). Distinct from `status` — a failed run records `finishReason: failed` in addition to `status: failed`. |
 | `hasSessionId` | `boolean` | If `true`, asserts `snapshot.state.sessionId` is a non-empty string. |
 | `stateContains` | `SessionState` (partial) | Subset match on `snapshot.state`. |
+| `messageCount` | `number` | If present, `snapshot.state.messages` must hold exactly this many messages. `stateContains` matches messages as a subsequence, so this is how a case asserts that a message is absent. |
 | `errorContains` | `object` (partial) | If present, asserts that `snapshot.error` contains (at minimum) these fields. Uses "contains" / subset matching. |
 
 
@@ -130,6 +155,7 @@ values:
 
 - `captureSnapshotId: snap1` → captures `output.snapshotId` as `snap1`
 - `captureState: state1` → captures `output.state` as `state1`
+- `captureSessionId: sess1` → captures `output.state.sessionId` as `sess1`
 
 These can be used anywhere a `snapshotId` or `state` is expected in subsequent
 steps:
@@ -154,6 +180,7 @@ Only simple `{{name}}` syntax is supported — no dot-paths or expressions.
 | `artifactsContain` | **Partial**: each specified artifact must be present (matched by name). |
 | `message` | **Strict**: deep-equality on the message object. |
 | `hasSnapshotId` | **Boolean**: asserts presence of a non-empty string. |
+| `hasSessionId` | **Boolean**: asserts `state.sessionId` is a non-empty string. |
 
 ---
 
@@ -182,6 +209,7 @@ via the `modelResponses` / `streamChunks` fields in `send` steps.
 | `promptAgentWithTools` | A prompt agent with `testTool` registered. Client-managed state. |
 | `promptAgentWithInterrupt` | A prompt agent with `interruptTool` registered and a server-managed store (for snapshot-based resume). |
 | `promptAgentWithRestartTool` | A prompt agent with `restartTool` registered and a server-managed store. Used for `resume.restart` tests. |
+| `promptAgentWithToolsAndStore` | A prompt agent with `testTool` and `flakyTool` registered and a server-managed store. Used for `resumable-failures` tests; only required by harnesses declaring that capability. |
 
 #### Custom agents (hardcoded behavior)
 
@@ -191,6 +219,7 @@ is not needed for tests targeting these agents.
 
 | Agent Name | Description |
 |------------|-------------|
+| `customAgentAbortable` | Server-managed. Records each turn's input, replies `ack`, and commits. On the turn whose message is `block` it blocks until its context is cancelled and commits nothing. Used for `resumable-aborts` tests; only required by harnesses declaring that capability. |
 | `customAgentBlocking` | Server-managed. Blocks indefinitely until its abort signal fires. Used for abort-while-pending tests. |
 | `customAgentFailing` | Server-managed. Throws `Error('intentional failure')` during processing. Used for detach + background failure tests. |
 | `customAgentWithArtifacts` | Client-managed. Adds artifact `doc1` (v1), updates it to `doc1` (v2), then adds `doc2`. Returns all artifacts. |
@@ -206,6 +235,7 @@ is not needed for tests targeting these agents.
 | `testTool` | A simple tool | `{}` (empty) | `"tool called"` (string) |
 | `interruptTool` | An interrupt tool | `{ query: string }` | `{ answer: string }` |
 | `restartTool` | A tool that requires confirmation; throws `ToolInterruptError` on first call, succeeds when `resumed` metadata is provided | `{ action: string }` | `{ result: string }` |
+| `flakyTool` | Fails its first call in each test with an UNAVAILABLE error (`flaky tool failed`), succeeds after with `"tool recovered"`. Requires `resumable-failures`. | `{}` (empty) | `"tool recovered"` (string) |
 
 ### Programmable Model
 
@@ -233,9 +263,19 @@ cd js/ai
 npx tsx --test tests/agents_spec_test.ts
 ```
 
-### Go ⏳
+### Python ✅
 
-_(Coming soon — implement a Go harness that reads the same YAML spec.)_
+```bash
+cd py
+uv run pytest packages/genkit/tests/genkit/ai/agent_conformance_test.py
+```
+
+### Go ✅
+
+```bash
+cd go
+go test ./ai/exp/ -run TestAgentConformance
+```
 
 ---
 

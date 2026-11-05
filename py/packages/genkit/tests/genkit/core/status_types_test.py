@@ -17,9 +17,12 @@
 """Unit tests for status_types module."""
 
 import pytest
-from pydantic import ValidationError
 
-from genkit._core._error import Status, StatusCodes, http_status_code
+from genkit._core._error import (
+    StatusCodes,
+    from_http_code,
+    http_status_code,
+)
 
 
 def test_status_codes_values() -> None:
@@ -43,38 +46,6 @@ def test_status_codes_values() -> None:
     assert StatusCodes.DATA_LOSS == 15
 
 
-def test_status_immutability() -> None:
-    """Tests that Status objects are immutable."""
-    status = Status(name='OK')
-
-    with pytest.raises(ValidationError):
-        # pyrefly: ignore[read-only] - Intentionally testing immutability
-        status.name = 'NOT_FOUND'
-
-    with pytest.raises(ValidationError):
-        # pyrefly: ignore[read-only] - Intentionally testing immutability
-        status.message = 'New message'
-
-
-def test_status_validation() -> None:
-    """Tests that Status validates inputs correctly."""
-    # Test invalid status name
-    with pytest.raises(ValidationError):
-        Status(name='INVALID_STATUS')  # type: ignore[arg-type]
-
-    # Test with invalid type for name
-    with pytest.raises(ValidationError):
-        Status(name=123)  # type: ignore[arg-type]
-
-    # Test with invalid type for message
-    with pytest.raises(ValidationError):
-        Status(name='OK', message=123)  # type: ignore[arg-type]
-
-    # Test with extra fields
-    with pytest.raises(ValidationError):
-        Status(name='OK', extra_field='value')  # type: ignore[call-arg]
-
-
 def test_http_status_code_mapping() -> None:
     """Tests http_status_code function returns correct HTTP status codes."""
     assert http_status_code('OK') == 200
@@ -96,33 +67,28 @@ def test_http_status_code_mapping() -> None:
     assert http_status_code('DATA_LOSS') == 500
 
 
+def test_from_http_code() -> None:
+    """Reverse map: shared codes pick the retry default; unmapped 5xx are INTERNAL."""
+    assert from_http_code(200) == 'OK'
+    assert from_http_code(400) == 'INVALID_ARGUMENT'
+    assert from_http_code(408) == 'DEADLINE_EXCEEDED'
+    assert from_http_code(401) == 'UNAUTHENTICATED'
+    assert from_http_code(403) == 'PERMISSION_DENIED'
+    assert from_http_code(404) == 'NOT_FOUND'
+    assert from_http_code(409) == 'ABORTED'
+    assert from_http_code(429) == 'RESOURCE_EXHAUSTED'
+    assert from_http_code(499) == 'CANCELLED'
+    assert from_http_code(500) == 'INTERNAL'
+    assert from_http_code(501) == 'UNIMPLEMENTED'
+    assert from_http_code(503) == 'UNAVAILABLE'
+    assert from_http_code(504) == 'DEADLINE_EXCEEDED'
+    assert from_http_code(418) == 'UNKNOWN'
+    assert from_http_code(502) == 'INTERNAL'
+    # 529 is Anthropic-only; the shared map treats it as an unmapped 5xx.
+    assert from_http_code(529) == 'INTERNAL'
+
+
 def test_http_status_code_invalid_input() -> None:
     """Tests http_status_code function with invalid input."""
     with pytest.raises(KeyError):
         http_status_code('INVALID_STATUS')  # type: ignore[arg-type]
-
-
-def test_status_json_serialization() -> None:
-    """Tests that Status objects can be serialized to JSON."""
-    status = Status(name='NOT_FOUND', message='Resource not found')
-    json_data = status.model_dump_json()
-    assert '"name":"NOT_FOUND"' in json_data
-    assert '"message":"Resource not found"' in json_data
-
-
-def test_status_json_deserialization() -> None:
-    """Tests that Status objects can be deserialized from JSON."""
-    json_data = '{"name": "NOT_FOUND", "message": "Resource not found"}'
-    status = Status.model_validate_json(json_data)
-    assert status.name == 'NOT_FOUND'
-    assert status.message == 'Resource not found'
-
-
-def test_status_equality() -> None:
-    """Tests Status equality comparison."""
-    status1 = Status(name='OK')
-    status2 = Status(name='OK')
-    status3 = Status(name='NOT_FOUND')
-
-    assert status1 == status2
-    assert status1 != status3

@@ -19,20 +19,32 @@ import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import getPort, { makeRange } from 'get-port';
 import open from 'open';
-import { getDevEnvVars, startDevProcessManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  REFLECTION_V2_HOST_OPTION_HELP,
+  getDevEnvVars,
+  startDevProcessManager,
+} from '../utils/manager-utils';
+import { parsePort } from '../utils/option-parsers';
 
 interface FlutterRunOptions {
-  port?: string;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
+  /** --reflection-v2-host. */
+  reflectionV2Host?: string;
+  port?: number;
   open?: boolean;
   corsOrigin?: string;
   noui?: boolean;
+  disableRealtimeTelemetry?: boolean;
 }
 
 /** Command to run a Flutter app in dev mode and/or the Dev UI. */
 export const startFlutter = new Command('start:flutter')
+  .allowExcessArguments(true)
   .description('runs a flutter app in Genkit dev mode')
   .option('-n, --noui', 'do not start the Dev UI', false)
-  .option('-p, --port <port>', 'port for the Dev UI')
+  .option('-p, --port <port>', 'port for the Dev UI', parsePort)
   .option('-o, --open', 'Open the browser on UI start up')
   .option(
     '--disable-realtime-telemetry',
@@ -42,6 +54,8 @@ export const startFlutter = new Command('start:flutter')
     '--cors-origin <origin>',
     'specify the allowed origin for CORS requests'
   )
+  .option('--reflection-v2-host <host>', REFLECTION_V2_HOST_OPTION_HELP)
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(async (options: FlutterRunOptions) => {
     const projectRoot = await findProjectRoot();
     if (projectRoot.includes('/.Trash/')) {
@@ -55,6 +69,7 @@ export const startFlutter = new Command('start:flutter')
       await getDevEnvVars(projectRoot, {
         ...options,
         experimentalReflectionV2: true,
+        auth: options.experimentalAuth,
       });
 
     const dartDefines = Object.entries(envVars).map(
@@ -77,16 +92,8 @@ export const startFlutter = new Command('start:flutter')
     );
 
     if (!options.noui) {
-      let port: number;
-      if (options.port) {
-        port = Number(options.port);
-        if (isNaN(port) || port < 0) {
-          logger.error(`"${options.port}" is not a valid port number`);
-          return;
-        }
-      } else {
-        port = await getPort({ port: makeRange(4000, 4099) });
-      }
+      const port =
+        options.port ?? (await getPort({ port: makeRange(4000, 4099) }));
       startServer(manager, port);
       if (options.open) {
         open(`http://localhost:${port}`);

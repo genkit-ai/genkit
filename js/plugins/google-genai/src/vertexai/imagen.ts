@@ -269,6 +269,17 @@ export const KNOWN_MODELS = {
 } as const;
 export type KnownModels = keyof typeof KNOWN_MODELS;
 
+// Models we no longer suggest, but that still work: they still resolve and
+// are still registered as actions, but aren't in the KnownModels type, so
+// they don't show up in autocomplete. Set `stage` on each one (keeping the
+// default `supports`). Remove a model once the server returns 404 for it.
+const HIDDEN_MODELS = {} as const;
+
+const ALL_MODELS = {
+  ...HIDDEN_MODELS,
+  ...KNOWN_MODELS,
+};
+
 export type ImagenModelName =
   | KnownModels
   | `imagen-${string}`
@@ -278,7 +289,7 @@ export function isImagenModelName(value?: string): value is ImagenModelName {
     !!value &&
     (value.startsWith('imagen-') ||
       value.startsWith('virtual-try-on-') ||
-      value in KNOWN_MODELS)
+      value in ALL_MODELS)
   );
 }
 
@@ -288,8 +299,8 @@ export function model(
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
-  if (isKnownKey(name, KNOWN_MODELS)) {
-    return KNOWN_MODELS[name].withConfig(config);
+  if (isKnownKey(name, ALL_MODELS)) {
+    return ALL_MODELS[name].withConfig(config);
   }
 
   return modelRef({
@@ -319,7 +330,7 @@ export function listKnownModels(
   clientOptions: ClientOptions,
   pluginOptions?: VertexPluginOptions
 ) {
-  return Object.keys(KNOWN_MODELS).map((name: string) =>
+  return Object.keys(ALL_MODELS).map((name: string) =>
     defineModel(name, clientOptions, pluginOptions)
   );
 }
@@ -365,4 +376,6 @@ export function defineModel(
 export const TEST_ONLY = {
   GENERIC_MODEL,
   KNOWN_MODELS,
+  HIDDEN_MODELS,
+  ALL_MODELS,
 };

@@ -18,9 +18,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/ai/tool"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -131,9 +134,7 @@ func (c *GenkitMCPClient) getTools(ctx context.Context) ([]mcp.Tool, error) {
 func (c *GenkitMCPClient) fetchToolsPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Tool, mcp.Cursor, error) {
 	listReq := mcp.ListToolsRequest{
 		PaginatedRequest: mcp.PaginatedRequest{
-			Params: struct {
-				Cursor mcp.Cursor `json:"cursor,omitempty"`
-			}{
+			Params: mcp.PaginatedParams{
 				Cursor: cursor,
 			},
 		},
@@ -162,14 +163,33 @@ func (c *GenkitMCPClient) createToolFunction(mcpTool mcp.Tool) func(*ai.ToolCont
 			return nil, err
 		}
 
-		// Create and execute the MCP tool call request
+		// Create and execute the MCP tool call request. An error here is the
+		// connection's or the protocol's, which the model cannot fix.
 		mcpResult, err := executeToolCall(ctx, client, currentMCPTool.Name, callToolArgs)
 		if err != nil {
 			return nil, fmt.Errorf("failed to call tool %s: %w", currentMCPTool.Name, err)
 		}
 
+		// MCP reports the errors a model can act on inside the result, so
+		// they answer the call rather than failing the generation.
+		if mcpResult.IsError {
+			return nil, tool.Fail(ctx, errors.New(resultText(mcpResult)))
+		}
+
 		return mcpResult, nil
 	}
+}
+
+// resultText joins the text content of an MCP tool result.
+func resultText(result *mcp.CallToolResult) string {
+	var sb strings.Builder
+	for _, c := range result.Content {
+		sb.WriteString(ExtractTextFromContent(c))
+	}
+	if sb.Len() == 0 {
+		return "the tool reported an error without a message"
+	}
+	return sb.String()
 }
 
 // prepareToolArguments converts Genkit tool arguments to MCP format
@@ -212,11 +232,7 @@ func validateRequiredArguments(mcpTool mcp.Tool, args map[string]interface{}) er
 // executeToolCall makes the actual MCP tool call
 func executeToolCall(ctx context.Context, client *client.Client, toolName string, args map[string]interface{}) (*mcp.CallToolResult, error) {
 	callReq := mcp.CallToolRequest{
-		Params: struct {
-			Name      string    `json:"name"`
-			Arguments any       `json:"arguments,omitempty"`
-			Meta      *mcp.Meta `json:"_meta,omitempty"`
-		}{
+		Params: mcp.CallToolParams{
 			Name:      toolName,
 			Arguments: args,
 			Meta:      nil,

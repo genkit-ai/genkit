@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	ant "github.com/firebase/genkit/go/plugins/internal/anthropic"
 )
 
 func TestResolveVertexMaasEnv_ExplicitArgsWin(t *testing.T) {
@@ -127,4 +128,21 @@ func TestResolveVertexMaasEnv_PanicsWithoutLocation(t *testing.T) {
 		}
 	}()
 	resolveVertexMaasEnv("", "")
+}
+
+// TestAnthropicModelLabelsAreBare pins the catalog's half of the labeling
+// contract. Init prefixes every entry with the provider so these models name
+// it the way the rest of the Vertex AI models do, which means an entry that
+// carried its own prefix would come out as "Vertex AI - Vertex AI - Claude".
+func TestAnthropicModelLabelsAreBare(t *testing.T) {
+	prefix := ant.DisplayName(provider)
+	for name, opts := range AnthropicModels {
+		if opts.Label == "" {
+			t.Errorf("AnthropicModels[%q].Label is empty, want a display name", name)
+		}
+		if strings.HasPrefix(opts.Label, prefix) {
+			t.Errorf("AnthropicModels[%q].Label = %q, want a bare display name; Init adds the %q prefix",
+				name, opts.Label, prefix)
+		}
+	}
 }

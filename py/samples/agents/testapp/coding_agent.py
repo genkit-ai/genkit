@@ -31,11 +31,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from _ai import ai
+from _ai import ai, reply_text
 from genkit_middleware import Filesystem, ToolApproval
 
-from genkit import ActionRunContext
-from genkit.agent import FileSessionStore
+from genkit import FlowContext
+from genkit.exp.agent import FileSessionStore
 
 WORKSPACE_DIR = Path(__file__).resolve().parent / 'workspace'
 WORKSPACE_DIR.mkdir(exist_ok=True)
@@ -58,12 +58,11 @@ coding_agent = ai.define_agent(
         Filesystem(root_dir=str(WORKSPACE_DIR), allow_write_access=True),
     ],
     store=FileSessionStore('./.snapshots-coding'),
-    max_turns=30,
 )
 
 
 @ai.flow()
-async def test_coding_agent(text: str, ctx: ActionRunContext) -> str:
+async def test_coding_agent(text: str, ctx: FlowContext) -> str:
     """Auto-approve every write so the agent can finish a task unattended."""
     chat = coding_agent.chat()
     turn = chat.send_stream(text or 'Create a Python hello world file called hello.py in the workspace.')
@@ -84,7 +83,7 @@ async def test_coding_agent(text: str, ctx: ActionRunContext) -> str:
                 ctx.send_chunk(chunk.text)
         res = await resume_turn
 
-    return res.text
+    return reply_text(res)
 
 
 # --- Workspace browser flows (served at /api/workspace/files and /file) --------

@@ -46,7 +46,7 @@ func definePromptAgent(g *genkit.Genkit) *aix.Agent[any] {
 	// at definition time.
 	genkit.DefineSchemasFor(g, ChatPromptInput{})
 	return genkitx.DefinePromptAgent(g, name,
-		aix.WithSessionStore(mustStore(name)),
+		aix.WithSessionStore(mustStore[any](name)),
 		aix.WithDescription[any]("Michelin-starred chef (prompt loaded from ./prompts/chef.prompt)"),
 	)
 }

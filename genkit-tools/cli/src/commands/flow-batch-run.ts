@@ -17,28 +17,45 @@
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import * as clc from 'colorette';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { readFile, writeFile } from 'fs/promises';
-import { runWithManager } from '../utils/manager-utils';
+import {
+  EXPERIMENTAL_AUTH_OPTION_HELP,
+  runWithManager,
+} from '../utils/manager-utils';
+import { parseJson } from '../utils/option-parsers';
 
 interface FlowBatchRunOptions {
-  wait?: boolean;
+  /** --experimental-auth. */
+  experimentalAuth?: boolean;
   output?: string;
   label?: string;
-  context?: string;
+  context?: any;
 }
 
 /** Command to run flows with batch input. */
-export const flowBatchRun = new Command('flow:batchRun')
+export const flowBatchRun = new Command('flow:batch-run')
+  .allowExcessArguments(true)
+  .alias('flow:batchRun')
+  .usage('[options] <flowName> <inputFileName> [-- <command...>]')
   .description(
     'batch run a flow using provided set of data from a file as input'
   )
   .argument('<flowName>', 'name of the flow to run')
   .argument('<inputFileName>', 'JSON batch data to use to run the flow')
-  .option('-w, --wait', 'Wait for the flow to complete', false)
-  .option('-c, --context <JSON>', 'JSON object passed to context', '')
+  // Deprecated no-op option kept for backward compatibility; flows always run to completion.
+  .addOption(
+    new Option(
+      '-w, --wait',
+      'Wait for the flow to complete (deprecated: flows always run to completion)'
+    )
+      .default(false)
+      .hideHelp()
+  )
+  .option('-c, --context <JSON>', 'JSON object passed to context', parseJson)
   .option('--output <filename>', 'name of the output file to store the output')
-  .option('--label [label]', 'label flow run in this batch')
+  .option('--label <label>', 'label flow run in this batch')
+  .option('--experimental-auth', EXPERIMENTAL_AUTH_OPTION_HELP)
   .action(
     async (
       flowName: string,
@@ -85,7 +102,7 @@ export const flowBatchRun = new Command('flow:batchRun')
           const response = await manager.runAction({
             key: `/flow/${flowName}`,
             input: data,
-            context: options.context ? JSON.parse(options.context) : undefined,
+            context: options.context,
             telemetryLabels: options.label
               ? { batchRun: options.label }
               : undefined,
@@ -120,6 +137,7 @@ export const flowBatchRun = new Command('flow:batchRun')
       await runWithManager(projectRoot, runAction, {
         runtimeCommand,
         waitForActionKeys: [`/flow/${flowName}`],
+        auth: options.experimentalAuth,
       });
     }
   );

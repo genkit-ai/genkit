@@ -14,25 +14,25 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
+from genkit import Part
+from genkit._ai._agents._session_stores._util import apply_save
 from genkit._ai._agents._snapshot import abort_snapshot_in_store
-from genkit._core._error import GenkitError
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._model import Message, SessionSnapshot, SessionState
 from genkit._core._typing import (
-    MessageData,
-    Part,
-    SessionSnapshot,
-    SessionState,
     SnapshotStatus,
-    TextPart,
 )
-from genkit.agent import (
+from genkit.exp.agent import (
     FileSessionStore,
     InMemorySessionStore,
     SessionStore,
+    SnapshotStatusStream,
 )
 
 
@@ -50,7 +50,7 @@ def make_snapshot(
         status=status,
         state=SessionState(
             session_id=session_id,
-            messages=[MessageData(role='user', content=[Part(root=TextPart(text=text))])],
+            messages=[Message(role='user', content=[Part.from_text(text)])],
             custom={},
         ),
     )
@@ -63,7 +63,7 @@ def first_text(snap: SessionSnapshot) -> str | None:
     assert messages is not None
     content = messages[0].content
     assert content is not None
-    return getattr(content[0].root, 'text', None)
+    return content[0].text
 
 
 # --- Core lifecycle: save, get-by-id, get-by-session leaf, retain history ---
@@ -123,6 +123,19 @@ async def test_get_snapshot_requires_exactly_one_selector() -> None:
         await store.get_snapshot(snapshot_id='a', session_id='b')
 
 
+@pytest.mark.asyncio
+async def test_get_snapshot_rejects_whitespace_only_selector() -> None:
+    """Whitespace-only ids are rejected (unusable as document keys)."""
+    store = InMemorySessionStore()
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(snapshot_id='   ')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+    with pytest.raises(GenkitError) as exc_info:
+        await store.get_snapshot(session_id='\t')
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
 # --- Abort lifecycle ---
 
 
@@ -135,7 +148,9 @@ async def test_abort_flips_pending_only() -> None:
     pending = await store.save_snapshot(pending_snap.snapshot_id, lambda _: pending_snap)
     assert pending is not None
 
-    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.ABORTED
+    # Abort returns the *previous* status (spec: tests/specs/agent.yaml) —
+    # 'pending' when this call performed the flip.
+    assert await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id) == SnapshotStatus.PENDING
     snap = await store.get_snapshot(snapshot_id=pending.snapshot_id)
     assert snap is not None and snap.status == SnapshotStatus.ABORTED
 
@@ -148,6 +163,81 @@ async def test_abort_flips_pending_only() -> None:
     assert await abort_snapshot_in_store(store=store, snapshot_id='does-not-exist') is None
 
 
+def test_apply_save_rejects_terminal_status_flip() -> None:
+    """Direct apply_save: a terminal snapshot cannot change status."""
+    existing = make_snapshot('sess-term', 'done', SnapshotStatus.ABORTED)
+
+    def flip(prev: SessionSnapshot | None) -> SessionSnapshot | None:
+        assert prev is not None
+        return prev.model_copy(update={'status': SnapshotStatus.COMPLETED})
+
+    with pytest.raises(GenkitError) as exc_info:
+        apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=flip)
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+def test_apply_save_rejects_session_id_rewrite() -> None:
+    """Direct apply_save: a snapshot cannot be rewritten onto another session."""
+    existing = make_snapshot('sess-a', 'work', SnapshotStatus.PENDING)
+    existing.session_id = 'sess-a'
+
+    def rewrite(prev: SessionSnapshot | None) -> SessionSnapshot | None:
+        assert prev is not None
+        return prev.model_copy(update={'session_id': 'sess-b'})
+
+    with pytest.raises(GenkitError) as exc_info:
+        apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=rewrite)
+    assert exc_info.value.status == 'FAILED_PRECONDITION'
+
+
+def test_apply_save_rejects_async_mutator() -> None:
+    """Direct apply_save: an async mutator is INVALID_ARGUMENT, not awaited."""
+    existing = make_snapshot('sess-async', 'work', SnapshotStatus.PENDING)
+
+    async def bad(_prev: SessionSnapshot | None) -> SessionSnapshot | None:
+        return existing
+
+    with pytest.raises(GenkitError) as exc_info:
+        apply_save(existing=existing, snapshot_id=existing.snapshot_id, fn=bad)  # type: ignore[arg-type]
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_abort_returns_last_mutator_observation_under_retry() -> None:
+    """save_snapshot may call fn more than once; return the last pre-image, not the first."""
+    pending = make_snapshot('sess-retry', 'work', SnapshotStatus.PENDING)
+    completed = pending.model_copy(update={'status': SnapshotStatus.COMPLETED})
+
+    class _RetryStore(SessionStore):
+        async def get_snapshot(self, *, snapshot_id=None, session_id=None, context=None):  # noqa: ANN001
+            return completed
+
+        async def save_snapshot(self, snapshot_id, fn, *, context=None):  # noqa: ANN001
+            fn(pending)
+            fn(completed)
+            return completed
+
+    # First observation is pending; last observation is completed (finalize won).
+    assert (
+        await abort_snapshot_in_store(store=_RetryStore(), snapshot_id=pending.snapshot_id) == SnapshotStatus.COMPLETED
+    )
+
+
+@pytest.mark.asyncio
+async def test_abort_returns_none_when_mutator_never_runs() -> None:
+    """If save_snapshot never runs the mutator, abort reports nothing — don't invent pending via get_snapshot."""
+    pending = make_snapshot('sess-skip', 'work', SnapshotStatus.PENDING)
+
+    class _SkipMutatorStore(SessionStore):
+        async def get_snapshot(self, *, snapshot_id=None, session_id=None, context=None):  # noqa: ANN001
+            return pending
+
+        async def save_snapshot(self, snapshot_id, fn, *, context=None):  # noqa: ANN001
+            return pending
+
+    assert await abort_snapshot_in_store(store=_SkipMutatorStore(), snapshot_id=pending.snapshot_id) is None
+
+
 @pytest.mark.asyncio
 async def test_status_subscription_observes_abort() -> None:
     store = InMemorySessionStore()
@@ -155,11 +245,63 @@ async def test_status_subscription_observes_abort() -> None:
     pending = await store.save_snapshot(pending_snap.snapshot_id, lambda _: pending_snap)
     assert pending is not None
 
-    queue = await store.on_snapshot_status_change(pending.snapshot_id)
-    assert await queue.get() == SnapshotStatus.PENDING  # current status on subscribe
+    seen: list[SnapshotStatus] = []
 
+    async def consume() -> None:
+        statuses = await store.on_snapshot_status_change(pending.snapshot_id)
+        async for status in statuses:
+            seen.append(status)
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0)  # let the consumer take the seeded PENDING
     await abort_snapshot_in_store(store=store, snapshot_id=pending.snapshot_id)
-    assert await queue.get() == SnapshotStatus.ABORTED
+    await asyncio.wait_for(task, 2)
+    assert seen == [SnapshotStatus.PENDING, SnapshotStatus.ABORTED]
+    assert pending.snapshot_id not in store.subs
+
+
+@pytest.mark.asyncio
+async def test_status_subscription_waits_for_missing_snapshot() -> None:
+    """Subscribing before the snapshot exists stays open until the first save."""
+    store = InMemorySessionStore()
+    snapshot_id = 'not-yet'
+    statuses = await store.on_snapshot_status_change(snapshot_id)
+    assert store.subs[snapshot_id][0].empty()  # nothing yet; stream stays open
+
+    pending_snap = make_snapshot('sess-wait', 'hello', SnapshotStatus.PENDING).model_copy(
+        update={'snapshot_id': snapshot_id}
+    )
+    await store.save_snapshot(snapshot_id, lambda _: pending_snap)
+    assert await asyncio.wait_for(anext(statuses), 2) == SnapshotStatus.PENDING
+    await statuses.aclose()
+
+
+@pytest.mark.asyncio
+async def test_status_subscription_already_terminal_ends() -> None:
+    """Subscribe on a finished snapshot yields the status then ends (no hang)."""
+    store = InMemorySessionStore()
+    done = make_snapshot('sess-done', 'ok', SnapshotStatus.COMPLETED)
+    await store.save_snapshot(done.snapshot_id, lambda _: done)
+
+    seen: list[SnapshotStatus] = []
+    statuses = await store.on_snapshot_status_change(done.snapshot_id)
+    async for status in statuses:
+        seen.append(status)
+    assert seen == [SnapshotStatus.COMPLETED]
+    assert done.snapshot_id not in store.subs
+
+
+@pytest.mark.asyncio
+async def test_status_subscription_aclose_unsubscribes() -> None:
+    """Explicit ``aclose`` stops the subscription (JS-style unsubscribe)."""
+    store = InMemorySessionStore()
+    pending = make_snapshot('sess-aclose', 'work', SnapshotStatus.PENDING)
+    await store.save_snapshot(pending.snapshot_id, lambda _: pending)
+
+    statuses = await store.on_snapshot_status_change(pending.snapshot_id)
+    assert await anext(statuses) == SnapshotStatus.PENDING
+    await statuses.aclose()
+    assert pending.snapshot_id not in store.subs
 
 
 # --- Branching leaf resolution ---
@@ -266,7 +408,9 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
     with pytest.raises(GenkitError) as exc:
         await store.get_snapshot(snapshot_id=bad_id)
     assert exc.value.status == 'INVALID_ARGUMENT'
+    assert exc.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
     assert 'Invalid snapshotId' in str(exc.value)
+    assert 'INVALID_SNAPSHOT_ID' not in exc.value.message
 
     with pytest.raises(GenkitError) as exc:
         await store.save_snapshot(
@@ -274,9 +418,64 @@ async def test_file_store_rejects_unsafe_snapshot_ids(tmp_path: Path, bad_id: st
             lambda current: make_snapshot('sess', 'x') if current is None else current,
         )
     assert exc.value.status == 'INVALID_ARGUMENT'
+    assert exc.value.reason is ErrorReason.INVALID_SNAPSHOT_ID
+    assert 'INVALID_SNAPSHOT_ID' not in exc.value.message
 
     # Path traversal must not create files outside the store directory.
     assert not (tmp_path.parent / 'escape.json').exists()
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_empty_snapshot_id_raises_invalid_snapshot_id() -> None:
+    """An empty snapshot id is a bad id, not a missing row."""
+    store = InMemorySessionStore()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(snapshot_id='   ')
+    error = raised.value
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is ErrorReason.INVALID_SNAPSHOT_ID
+    assert 'snapshot_id must not be empty' in error.message
+    assert 'INVALID_SNAPSHOT_ID' not in error.message
+
+
+@pytest.mark.asyncio
+async def test_get_snapshot_empty_session_id_raises_session_id_required() -> None:
+    """An empty session id is a missing session id, not a missing row."""
+    store = InMemorySessionStore()
+
+    with pytest.raises(GenkitError) as raised:
+        await store.get_snapshot(session_id='')
+    error = raised.value
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is ErrorReason.SESSION_ID_REQUIRED
+    assert 'session_id must not be empty' in error.message
+    assert 'SESSION_ID_REQUIRED' not in error.message
+
+
+@pytest.mark.asyncio
+async def test_file_store_save_without_session_id_raises_session_id_required(tmp_path: Path) -> None:
+    """A file-store row has to belong to a session before it is written."""
+    store = FileSessionStore(str(tmp_path))
+
+    def mutator(_: SessionSnapshot | None) -> SessionSnapshot:
+        return SessionSnapshot(
+            snapshot_id='snap-1',
+            created_at='2026-06-18T12:00:00Z',
+            status=SnapshotStatus.COMPLETED,
+            state=SessionState(
+                messages=[Message(role='user', content=[Part.from_text('hi')])],
+                custom={},
+            ),
+        )
+
+    with pytest.raises(GenkitError) as raised:
+        await store.save_snapshot('snap-1', mutator)
+    error = raised.value
+    assert error.status == 'INVALID_ARGUMENT'
+    assert error.reason is ErrorReason.SESSION_ID_REQUIRED
+    assert 'sessionId' in error.message
+    assert 'SESSION_ID_REQUIRED' not in error.message
 
 
 @pytest.mark.asyncio
@@ -290,3 +489,14 @@ async def test_file_store_accepts_plain_basename_snapshot_id(tmp_path: Path) -> 
     assert got is not None
     missing_id = str(uuid4())
     assert await store.get_snapshot(snapshot_id=missing_id) is None  # missing but safe id
+
+
+@pytest.mark.asyncio
+async def test_snapshot_status_stream_is_public_and_runtime_checkable() -> None:
+    """Wrapper authors can import and isinstance-check SnapshotStatusStream."""
+    store = InMemorySessionStore()
+    snap = make_snapshot('sess', 'hi', status=SnapshotStatus.PENDING)
+    assert snap.snapshot_id is not None
+    await store.save_snapshot(snap.snapshot_id, lambda _: snap)
+    stream = await store.on_snapshot_status_change(snap.snapshot_id)
+    assert isinstance(stream, SnapshotStatusStream)

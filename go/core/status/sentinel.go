@@ -55,11 +55,18 @@ func (s *Sentinel) Subtype(label string) *Sentinel {
 func (s *Sentinel) Status() Name { return s.status }
 
 // Error implements error so a sentinel can be returned or wrapped directly.
-func (s *Sentinel) Error() string { return s.label }
+// A nil *Sentinel renders as "<nil>", matching how fmt prints a nil error, so
+// a typed nil in a chain cannot panic the errors.Is walk that finds it.
+func (s *Sentinel) Error() string {
+	if s == nil {
+		return "<nil>"
+	}
+	return s.label
+}
 
 // Unwrap returns the sentinel s was derived from, or nil for a base sentinel.
 func (s *Sentinel) Unwrap() error {
-	if s.parent == nil {
+	if s == nil || s.parent == nil {
 		return nil
 	}
 	return s.parent

@@ -90,6 +90,12 @@ export const SnapshotAssertionsSchema = z.object({
 
   /** Partial match on snapshot.state. */
   stateContains: SessionStateSchema.partial().optional(),
+  /**
+   * If present, snapshot.state.messages must hold exactly this many messages.
+   * stateContains matches messages as a subsequence, so this is how a case
+   * asserts that a message is absent.
+   */
+  messageCount: z.number().optional(),
   /** If present, asserts snapshot.error contains (at minimum) these fields. */
   errorContains: z.record(z.string(), z.any()).optional(),
 });
@@ -108,7 +114,13 @@ export const SendInvocationSchema = z.object({
   init: AgentInitSchema.optional(),
   /** Ordered list of inputs to send. */
   inputs: z.array(AgentInputSchema).optional(),
-  /** Pre-programmed model responses, one per generate call. */
+  /**
+   * Pre-programmed model turns, one per generate call. An entry carrying
+   * `error` fails that call with a classified error rather than returning,
+   * which is how a spec case fails a turn mid loop (gated behind
+   * `requires: [resumable-failures]`); an entry may carry both, to return a
+   * partial response alongside the error that ended it.
+   */
   modelResponses: z.array(GenerateResponseSchema).optional(),
   /** Pre-programmed streaming chunks, indexed by model call. */
   streamChunks: z.array(z.array(GenerateResponseChunkSchema)).optional(),
@@ -220,6 +232,12 @@ export const SpecTestSchema = z.object({
   description: z.string().optional(),
   /** Name of the harness-provided agent to use. */
   agent: z.string(),
+  /**
+   * Capabilities the test depends on. A harness skips a test naming a
+   * capability its runtime does not implement, so the shared spec can carry
+   * cases for features an SDK has not adopted yet.
+   */
+  requires: z.array(z.string()).optional(),
   /** Ordered sequence of steps to execute. */
   steps: z.array(SpecStepSchema),
 });

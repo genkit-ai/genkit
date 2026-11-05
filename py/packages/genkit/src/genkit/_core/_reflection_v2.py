@@ -39,23 +39,30 @@ from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 import websockets
-from opentelemetry import trace as trace_api
-from opentelemetry.sdk.trace import TracerProvider
 from pydantic import BaseModel, JsonValue, ValidationError
 from websockets.exceptions import ConnectionClosed
 
-from genkit._core._action import Action, BidiAction
+from genkit._core._action import Action, BidiAction, input_from_json
 from genkit._core._channel import CloseableQueue
 from genkit._core._constants import GENKIT_VERSION
-from genkit._core._error import ReflectionError, ReflectionErrorDetails, StatusCodes, get_reflection_json
+from genkit._core._error import (
+    Interrupt,
+    ReflectionError,
+    ReflectionErrorDetails,
+    StatusCodes,
+    get_reflection_json,
+    interrupt_escape_error,
+)
 from genkit._core._logger import get_logger
-from genkit._core._middleware import GenerateMiddleware
-from genkit._core._reflection import as_agent_input_dict, resolve_agent_init
+from genkit._core._middleware import _MiddlewareMetadata
+from genkit._core._model import AgentInput, ModelRef
+from genkit._core._reflection import as_agent_input_dict, resolve_agent_init, resolve_runnable_key
+from genkit._core._reflection_config import REFLECTION_AUTH_ERROR_CODE
 from genkit._core._registry import Registry
-from genkit._core._trace._default_exporter import TraceServerExporter
-from genkit._core._tracing import add_custom_exporter
+from genkit._core._telemetry._http import connect_developer_ui_collector
+from genkit._core._telemetry._instrumentation import flush_instrumentations
+from genkit._core._telemetry._log_exporter import enable_log_export
 from genkit._core._typing import (
-    AgentInput,
     ReflectionCancelActionParams,
     ReflectionCancelActionResponse,
     ReflectionConfigureParams,
@@ -127,10 +134,13 @@ class ReflectionServerV2:
         ws_url: str,
         *,
         app_name: str | None = None,
+        secret: str | None = None,
     ) -> None:
         self.registry = registry
         self.ws_url = ws_url
         self.app_name = app_name
+        #: Presented in register. The CLI rejects the connection on a mismatch.
+        self.secret = secret
         self.ws: Any = None
         self.write_lock = asyncio.Lock()
         self.pending: dict[str, asyncio.Future[JsonValue]] = {}
@@ -147,19 +157,17 @@ class ReflectionServerV2:
         self.reflection_handshake_telemetry_applied = False
 
     def apply_handshake_telemetry(self, url: str | None) -> None:
-        """Use the Dev UI trace server URL from the reflection handshake.
+        """Point telemetry at the handshake collector URL.
 
-        The CLI manager returns ``telemetryServerUrl`` on ``register`` and may send it
-        again on ``configure``. We need that base URL so OpenTelemetry spans can be
-        POSTed to ``{url}/api/traces`` (see ``TraceServerExporter``).
+        Same wiring as HTTP ``/api/notify``. Under ``GENKIT_ENV=dev`` this
+        turns tracing on when nothing is minting yet. Already minting
+        with no collector in env hangs the mailbox only.
         """
-        if not url or os.environ.get('GENKIT_TELEMETRY_SERVER'):
-            return
-        if self.reflection_handshake_telemetry_applied:
+        if not url or self.reflection_handshake_telemetry_applied:
             return
         self.reflection_handshake_telemetry_applied = True
-        # Register HTTP export to this URL on the global OTel provider.
-        add_custom_exporter(TraceServerExporter(telemetry_server_url=url), 'reflection_v2_telemetry')
+        connect_developer_ui_collector(url=url)
+        enable_log_export(url=url)
         logger.debug('reflection V2: connected to telemetry server', url=url)
 
     async def run_forever(self) -> None:
@@ -201,8 +209,16 @@ class ReflectionServerV2:
             logger.debug('reflection V2: reconnect scheduled', delay_s=delay, attempt=attempt)
             await asyncio.sleep(delay)
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
+        """Stop for good: no reconnect, and close the live socket so read_loop returns.
+
+        Setting the flag alone is not enough: read_loop blocks on the socket,
+        so run_forever would not see it until the peer hung up.
+        """
         self.stopped = True
+        ws = self.ws
+        if ws is not None:
+            await ws.close(1000, 'stopped')
 
     def spawn(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run a fire-and-forget coroutine while keeping a reference to its task."""
@@ -270,12 +286,21 @@ class ReflectionServerV2:
             genkit_version='py/' + GENKIT_VERSION,
             reflection_api_spec_version=float(GENKIT_REFLECTION_API_SPEC_VERSION),
             envs=['dev'],
+            secret=self.secret,
         ).model_dump(by_alias=True, exclude_none=True)
         try:
             result = await self.send_request('register', params)
             if isinstance(result, dict) and (telemetry_url := result.get('telemetryServerUrl')):
                 self.apply_handshake_telemetry(str(telemetry_url))
         except JsonRpcCallError as e:
+            # Auth failures are terminal: the secret will not change, so
+            # retrying just loops against a CLI that keeps refusing.
+            if e.code == REFLECTION_AUTH_ERROR_CODE:
+                logger.error('reflection API rejected this runtime; not reconnecting', message=e.message)
+                # Closing ends read_loop, and run_forever's cleanup then cancels
+                # this task (it is a background task). Fine: nothing follows.
+                await self.stop()
+                return
             logger.error('reflection V2: register failed', code=e.code, message=e.message)
         except Exception as e:
             logger.error('reflection V2: register failed', err=e)
@@ -416,9 +441,7 @@ class ReflectionServerV2:
         stream.close()
 
     async def flush_tracing(self) -> None:
-        provider = trace_api.get_tracer_provider()
-        if isinstance(provider, TracerProvider):
-            await asyncio.to_thread(provider.force_flush)
+        await asyncio.to_thread(flush_instrumentations)
 
     @staticmethod
     def run_action_call_options(
@@ -447,6 +470,9 @@ class ReflectionServerV2:
     ) -> Callable[[str, str], Awaitable[None]]:
         async def on_trace_start(tid: str, span_id: str) -> None:
             trace_holder[0] = tid
+            # Empty ids aren't a run the Developer UI can cancel or display.
+            if not tid:
+                return
             if register_for_cancel and (t := asyncio.current_task()):
                 self.active_actions[tid] = t
             await self.notify_run_action_state(sid, tid)
@@ -552,8 +578,8 @@ class ReflectionServerV2:
                 await asyncio.gather(*stream_chunk_tasks, return_exceptions=True)
 
         try:
-            output = await action.run(
-                input=p.input,
+            output = await action._run(
+                input=input_from_json(p.input),
                 on_chunk=on_chunk,
                 context=ctx or None,
                 on_trace_start=on_trace_start,
@@ -565,9 +591,11 @@ class ReflectionServerV2:
                 output.response,
                 output.trace_id or trace_holder[0],
             )
-        except (asyncio.CancelledError, Exception) as e:
+        except (asyncio.CancelledError, Exception, Interrupt) as e:
+            # A tool run on its own has no generate loop to pause, so its
+            # Interrupt is reported like any other failure.
             await drain_chunks()
-            await self.send_run_action_error(sid, e, trace_holder)
+            await self.send_run_action_error(sid, interrupt_escape_error(e) or e, trace_holder)
             # Report the cancellation to the Dev UI, then let it propagate so the
             # task actually winds down (swallowing it fakes a clean completion and
             # breaks cooperative cancellation on shutdown).
@@ -584,7 +612,7 @@ class ReflectionServerV2:
         p: ReflectionRunActionParams,
         action: BidiAction,
     ) -> None:
-        """Drive a bidi (agent) runAction through action.run() with a per-turn input stream.
+        """Drive a bidi (agent) runAction through action._run() with a per-turn input stream.
 
         A one-shot call passes the single resolved input; a ``streamInput`` call
         registers a live stream under ``sid`` so ``sendInputStreamChunk`` /
@@ -618,8 +646,8 @@ class ReflectionServerV2:
         input_stream: CloseableQueue[Any] | None = None
         if p.stream_input:
             # Register before the run starts so sendInputStreamChunk can find the
-            # stream while run() is in flight (the client waits for runActionState
-            # before sending turns, and that fires from on_trace_start inside run).
+            # stream while _run() is in flight (the client waits for runActionState
+            # before sending turns, and that fires from on_trace_start inside _run).
             input_stream = CloseableQueue()
             self.bidi_input_streams[sid] = input_stream
         else:
@@ -633,7 +661,7 @@ class ReflectionServerV2:
                 return
 
         try:
-            output = await action.run(
+            output = await action._run(
                 input=input_val,
                 input_stream=input_stream,
                 init=init,
@@ -677,8 +705,8 @@ class ReflectionServerV2:
                 'actionType': meta.action_type,
                 'description': meta.description,
                 'metadata': meta.metadata,
-                'inputSchema': meta.input_schema or meta.input_json_schema,
-                'outputSchema': meta.output_schema or meta.output_json_schema,
+                'inputSchema': meta.input_schema or None,
+                'outputSchema': meta.output_schema or None,
             })
             for key, meta in catalog.items()
         }
@@ -693,21 +721,28 @@ class ReflectionServerV2:
         except ValidationError as e:
             await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
-        if p.type not in ('defaultModel', 'middleware'):
+        if p.type not in ('defaultModel', 'middleware', 'a2ui-catalog'):
             await self.send_error(
                 sid,
                 JSON_RPC_INVALID_PARAMS,
-                f"'type' {p.type} is not supported. Only 'defaultModel' and 'middleware' are supported",
+                (
+                    f"'type' {p.type} is not supported. "
+                    "Only 'defaultModel', 'middleware', and 'a2ui-catalog' are supported"
+                ),
             )
             return
         mapped: dict[str, Any] = {}
         for name in self.registry.list_values(p.type):
             value = self.registry.lookup_value(p.type, name)
             if p.type == 'middleware':
-                assert isinstance(value, GenerateMiddleware), (
-                    f'registry middleware/{name!r} must be GenerateMiddleware, got {type(value).__name__}'
+                assert isinstance(value, _MiddlewareMetadata), (
+                    f'registry middleware/{name!r} must be _MiddlewareMetadata, got {type(value).__name__}'
                 )
                 mapped[name] = value.model_dump(by_alias=True, exclude_none=True, mode='json')
+            elif p.type == 'defaultModel':
+                # Dev UI lists a model name. A stored ModelRef is an object;
+                # only the name is JSON-serializable here.
+                mapped[name] = value.name if isinstance(value, ModelRef) else value
             else:
                 mapped[name] = value
         await self.send_response(sid, {'values': mapped})
@@ -756,7 +791,7 @@ class ReflectionServerV2:
             await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'invalid params: {e}')
             return
 
-        action = await self.registry.resolve_action_by_key(p.key)
+        action = await resolve_runnable_key(self.registry, p.key)
         if not action:
             await self.send_error(sid, JSON_RPC_INVALID_PARAMS, f'action {p.key} not found')
             return

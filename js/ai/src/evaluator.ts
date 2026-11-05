@@ -393,13 +393,14 @@ async function runBatch<
       {
         metadata: {
           name: `Test Case ${datapoint.testCaseId}`,
+          // Seed input up front so the realtime "pending" span export carries it.
+          input: datapoint,
           metadata: { 'evaluator:evalRunId': evalRunId },
         },
       },
       async (metadata, otSpan) => {
         const spanId = otSpan.spanContext().spanId;
         const traceId = otSpan.spanContext().traceId;
-        metadata.input = datapoint;
         try {
           const result = await runner(datapoint, options);
           metadata.output = result;

@@ -71,7 +71,7 @@ func defineProgrammableModel(r api.Registry) *programmableModel {
 		Tools:     true,
 		Multiturn: true,
 	}
-	DefineModel(r, "programmableModel", &ModelOptions{Supports: supports}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
+	defineModel(r, "programmableModel", &ModelOptions{Supports: supports}, func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 		return pm.Generate(ctx, r, req, &ToolConfig{MaxTurns: 5}, cb)
 	})
 	return pm
@@ -97,7 +97,7 @@ func TestGenerateAction(t *testing.T) {
 
 			pm := defineProgrammableModel(r)
 
-			DefineTool(r, "testTool", "description",
+			defineTool(r, "testTool", "description",
 				func(ctx *ToolContext, input any) (any, error) {
 					return "tool called", nil
 				})
@@ -144,7 +144,9 @@ func TestGenerateAction(t *testing.T) {
 
 				if diff := cmp.Diff(tc.ExpectResponse, resp, cmp.Options{
 					cmpopts.EquateEmpty(),
-					cmpopts.IgnoreFields(ModelResponse{}, "LatencyMs", "formatHandler"),
+					// The shared spec states totalUsage only once every runtime
+					// sets it; TestGenerateTotalUsage covers it here.
+					cmpopts.IgnoreFields(ModelResponse{}, "LatencyMs", "TotalUsage", "formatHandler"),
 					cmpopts.IgnoreFields(GenerationUsage{}, "InputCharacters", "OutputCharacters"),
 					cmpopts.IgnoreFields(ToolDefinition{}, "Metadata"),
 				}); diff != "" {
@@ -158,7 +160,9 @@ func TestGenerateAction(t *testing.T) {
 
 				if diff := cmp.Diff(tc.ExpectResponse, resp, cmp.Options{
 					cmpopts.EquateEmpty(),
-					cmpopts.IgnoreFields(ModelResponse{}, "LatencyMs", "formatHandler"),
+					// The shared spec states totalUsage only once every runtime
+					// sets it; TestGenerateTotalUsage covers it here.
+					cmpopts.IgnoreFields(ModelResponse{}, "LatencyMs", "TotalUsage", "formatHandler"),
 					cmpopts.IgnoreFields(GenerationUsage{}, "InputCharacters", "OutputCharacters"),
 					cmpopts.IgnoreFields(ToolDefinition{}, "Metadata"),
 				}); diff != "" {

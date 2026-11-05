@@ -2,6 +2,16 @@
 
 **`@genkit-ai/compat-oai`** is a plugin for using OpenAI Compatible APIs with [Genkit](https://genkit.dev).
 
+> **Building with a coding agent? Install the Genkit JS skill first.**
+>
+> ```bash
+> npx skills add genkit-ai/skills --skill developing-genkit-js
+> ```
+>
+> It teaches your agent the current Genkit JS APIs and common gotchas.
+> Source, manual install and skills for other languages:
+> [genkit-ai/skills](https://github.com/genkit-ai/skills).
+
 This Genkit plugin allows to use OpenAI models through their official APIs.
 
 Official OpenAI-compatible provider documentation:
@@ -53,6 +63,35 @@ const response = await ai.generate({
 
 console.log(response.text);
 ```
+
+### Structured Outputs
+
+Use `config.strict: true` with an output schema on a model that supports OpenAI Structured Outputs:
+
+```typescript
+import { z } from 'genkit';
+import { openAI } from '@genkit-ai/compat-oai/openai';
+
+const response = await ai.generate({
+  model: openAI.model('gpt-5'),
+  prompt: 'Extract the answer from the text.',
+  output: {
+    schema: z
+      .object({
+        answer: z.string(),
+      })
+      .strict(),
+  },
+  config: {
+    strict: true,
+  },
+});
+
+console.log(response.output);
+```
+
+Apply `.strict()` to every object in the schema; Genkit does not automatically set `additionalProperties: false`.
+See the [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 
 ### Multi-modal prompt
 

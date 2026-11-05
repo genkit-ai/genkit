@@ -19,24 +19,41 @@ import { Registry } from '@genkit-ai/core/registry';
 import { enableTelemetry } from '@genkit-ai/core/tracing';
 import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 
-import { GenkitError, z } from '@genkit-ai/core';
+import {
+  GenkitError,
+  getContext,
+  runWithContext,
+  z,
+  type ActionContext,
+} from '@genkit-ai/core';
 import { TestSpanExporter } from '../../core/tests/utils.js';
-import { AgentError } from '../src/agent-core.js';
+import {
+  AgentError,
+  createAgentAPI,
+  type AgentTransport,
+} from '../src/agent-core.js';
 import {
   AgentStreamChunk,
+  CommittedTurnError,
   SessionRunner,
   defineAgent,
   defineCustomAgent,
   definePromptAgent,
+  type Agent,
 } from '../src/agent.js';
+import { GenerationResponseError, generate } from '../src/generate.js';
 import { definePrompt } from '../src/prompt.js';
 import { InMemorySessionStore } from '../src/session-stores.js';
 import {
   Session,
   reserveSnapshotId,
+  type GetSnapshotOptions,
   type SessionSnapshot,
+  type SessionStore,
+  type SessionStoreOptions,
+  type SnapshotMutator,
 } from '../src/session.js';
 import { ToolInterruptError, defineTool, interrupt } from '../src/tool.js';
 import {
@@ -348,6 +365,138 @@ describe('Agent', () => {
     });
   });
 
+  describe('generation failures', () => {
+    /** A registry whose model calls a tool that always throws. */
+    function registryWithFailingTool(): Registry {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      defineTool(
+        registry,
+        { name: 'badTool', description: 'bad' },
+        async () => {
+          throw new Error('db exploded');
+        }
+      );
+      pm.handleResponse = async () => ({
+        message: {
+          role: 'model',
+          content: [{ toolRequest: { name: 'badTool', input: {}, ref: 'r1' } }],
+        },
+        finishReason: 'stop',
+      });
+      return registry;
+    }
+
+    it('commits the failed turn and keeps the partial response out of its details', async () => {
+      const registry = registryWithFailingTool();
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        registry,
+        { name: 'stripAgent', store },
+        async (sess) => {
+          await sess.run(async () => {
+            const res = await generate(registry, {
+              model: 'programmableModel',
+              prompt: 'secret prompt',
+              tools: ['badTool'],
+              throwOnError: false,
+            });
+            // The turn's state is worth continuing from: commit it, with the
+            // failure the response reports.
+            if (res.error) {
+              throw new CommittedTurnError(
+                new GenerationResponseError(
+                  res,
+                  res.error.message,
+                  res.error.status as any
+                )
+              );
+            }
+          });
+          return {};
+        }
+      );
+
+      const session = agent.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'go' }] } });
+      session.close();
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'INTERNAL');
+      assert.strictEqual(
+        output.error?.message,
+        'tool "badTool" failed: db exploded'
+      );
+      // The generation error's partial response carries the conversation; it
+      // is not what the output or the snapshot reports as the error's details.
+      const wire = JSON.stringify(output.error);
+      assert.strictEqual(wire.includes('secret prompt'), false);
+      assert.strictEqual(wire.includes('"response"'), false);
+
+      // The committed turn's own snapshot is the resume point.
+      const snapshotId = chunks.find((c) => c.turnEnd)?.turnEnd?.snapshotId;
+      assert.ok(snapshotId, 'a committed turn reports its snapshotId');
+      assert.strictEqual(output.snapshotId, snapshotId);
+      const snapshot = await store.getSnapshot({ snapshotId: snapshotId! });
+      assert.strictEqual(snapshot?.status, 'failed');
+      assert.strictEqual(snapshot?.error?.status, 'INTERNAL');
+      assert.strictEqual(
+        JSON.stringify(snapshot?.error).includes('secret prompt'),
+        false
+      );
+    });
+
+    it('rolls back a turn that does not commit its generation failure', async () => {
+      const registry = registryWithFailingTool();
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        registry,
+        { name: 'rollbackAgent', store },
+        async (sess) => {
+          await sess.run(async () => {
+            await generate(registry, {
+              model: 'programmableModel',
+              prompt: 'secret prompt',
+              tools: ['badTool'],
+            });
+          });
+          return {};
+        }
+      );
+
+      const session = agent.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'go' }] } });
+      session.close();
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'INTERNAL');
+      assert.strictEqual(
+        JSON.stringify(output.error).includes('secret prompt'),
+        false
+      );
+      // Nothing committed: no snapshot, and so no resume point.
+      const turnEnd = chunks.find((c) => c.turnEnd)?.turnEnd;
+      assert.strictEqual(turnEnd?.finishReason, 'failed');
+      assert.strictEqual(turnEnd?.snapshotId, undefined);
+      assert.strictEqual(output.snapshotId, undefined);
+      assert.strictEqual(
+        await store.getSnapshot({ sessionId: output.sessionId! }),
+        undefined
+      );
+    });
+  });
+
   describe('reserveSnapshotId', () => {
     const UUID =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -645,6 +794,41 @@ describe('Agent', () => {
       // The turn span's output is the session state this turn produced.
       const out = JSON.parse(turnSpan.attributes['genkit:output']);
       assert.deepStrictEqual(out.state.custom, { count: 1 });
+    });
+
+    it("records a committed failed turn's snapshotId on the turn span", async () => {
+      spanExporter.exportedSpans = [];
+      const store = new InMemorySessionStore<{}>();
+
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'turnSpanFailedTest', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new CommittedTurnError(new Error('boom'));
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+      assert.ok(output.snapshotId, 'the committed turn reports its snapshot');
+
+      const turnSpan = spanExporter.exportedSpans.find(
+        (s) => s.displayName === 'runTurn-1'
+      );
+      assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
+      assert.strictEqual(
+        turnSpan.attributes['genkit:metadata:agent:snapshotId'],
+        output.snapshotId
+      );
     });
 
     it('records state on the turn span for a client-managed agent', async () => {
@@ -1150,8 +1334,10 @@ describe('Agent', () => {
       const previousStatus = await flow.abort(snapshotId!);
 
       assert.strictEqual(previousStatus, 'pending');
+      // The abort flips the row to `aborting`; the finalize settles it as
+      // `aborted` once the stopped turn winds down.
       const snapAborted = await store.getSnapshot({ snapshotId: snapshotId! });
-      assert.strictEqual(snapAborted?.status, 'aborted');
+      assert.strictEqual(snapAborted?.status, 'aborting');
       // AbortController.abort() fires onabort synchronously, so no delay needed.
       assert.strictEqual(aborted, true);
     });
@@ -1236,6 +1422,74 @@ describe('Agent', () => {
 
       const viaData = await flow.getSnapshotData({ snapshotId: snapshotId! });
       assert.strictEqual(viaData?.status, 'expired');
+
+      // An aborting row whose worker stopped beating before its finalize is
+      // one nothing will settle, and reads as expired too.
+      await store.saveSnapshot(snapshotId!, (row) => ({
+        ...row!,
+        status: 'aborting',
+      }));
+      const aborting = await flow.getSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(aborting?.status, 'expired');
+    });
+
+    it('reads a snapshot metadata-only, shaped and without state', async () => {
+      // A store that ignores the metadataOnly hint: the runtime still drops
+      // the state.
+      class FullReadStore extends InMemorySessionStore<{ foo: string }> {
+        override getSnapshot(opts: GetSnapshotOptions) {
+          return super.getSnapshot({ ...opts, metadataOnly: false });
+        }
+      }
+      for (const store of [
+        new InMemorySessionStore<{ foo: string }>(),
+        new FullReadStore(),
+      ]) {
+        const flow = defineCustomAgent<{ foo: string }>(
+          new Registry(),
+          {
+            name: 'metadataOnlyTest',
+            store,
+            clientTransform: { state: (state) => ({ ...state, custom: {} }) },
+          },
+          async (sess) => {
+            await sess.run(async () => {});
+            return { artifacts: [] };
+          }
+        );
+        const stale = new Date(Date.now() - 120_000).toISOString();
+        const pendingId = (await store.saveSnapshot(undefined, () => ({
+          createdAt: stale,
+          heartbeatAt: stale,
+          status: 'pending',
+          state: { sessionId: 'sess-meta', custom: { foo: 'bar' } },
+        })))!;
+        const completedId = (await store.saveSnapshot(undefined, () => ({
+          createdAt: stale,
+          status: 'completed',
+          state: { sessionId: 'sess-meta', custom: { foo: 'bar' } },
+        })))!;
+
+        const { result: pending } = await flow.getSnapshotDataAction.run({
+          snapshotId: pendingId,
+          metadataOnly: true,
+        });
+        assert.strictEqual(pending.status, 'expired');
+        assert.strictEqual(pending.state, undefined);
+        const completed = await flow.getSnapshotData({
+          snapshotId: completedId,
+          metadataOnly: true,
+        });
+        assert.strictEqual(completed?.status, 'completed');
+        assert.strictEqual(completed?.state, undefined);
+
+        // A wait returns the settled snapshot in full.
+        const { result: waited } = await flow.waitForSnapshotAction.run({
+          snapshotId: completedId,
+          metadataOnly: true,
+        });
+        assert.deepStrictEqual(waited.state?.custom, {});
+      }
     });
 
     it('keeps a pending snapshot with a fresh heartbeat as pending', async () => {
@@ -1488,11 +1742,19 @@ describe('Agent', () => {
       await flow.abort(snapshotId!);
 
       const snapshot = await store.getSnapshot({ snapshotId: snapshotId! });
-      assert.strictEqual(snapshot?.status, 'aborted');
+      assert.strictEqual(snapshot?.status, 'aborting');
 
-      // Release the flow so it doesn't hang
+      // Release the flow: its finalize settles the row the abort flipped.
       resolveBlock();
       session.close();
+      const start = Date.now();
+      let settled = snapshot;
+      while (settled?.status === 'aborting' && Date.now() - start < 5000) {
+        await new Promise((r) => setTimeout(r, 20));
+        settled = await store.getSnapshot({ snapshotId: snapshotId! });
+      }
+      assert.strictEqual(settled?.status, 'aborted');
+      assert.strictEqual(settled?.finishReason, 'aborted');
     });
 
     it('should fetch snapshot data via companion action', async () => {
@@ -1638,6 +1900,7 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
+      session.close();
 
       const snapDone = await waitForSnapshotStatus(
         store,
@@ -1650,8 +1913,6 @@ describe('Agent', () => {
         snapDone.state.messages[0].content[0].text,
         'appended message'
       );
-
-      session.close();
     });
 
     it('should accumulate message history across multiple turns in one invocation', async () => {
@@ -2250,6 +2511,7 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
+      session.close();
 
       // Detach-only messages are not forwarded to the runner - 2 turns, not 3.
       const snapDone = await waitForSnapshotStatus(
@@ -2259,8 +2521,448 @@ describe('Agent', () => {
       );
       assert.strictEqual(snapDone.status, 'completed');
       assert.strictEqual(processedCount, 2);
+      // Both turns landed on the one row the detach wrote.
+      assert.deepStrictEqual(
+        snapDone.state?.messages?.map((m) => m.content[0].text),
+        ['task 1', 'task 2']
+      );
+    });
+  });
 
+  describe('waitForSnapshot', () => {
+    type S = { foo: string };
+
+    /**
+     * Defines a store-backed custom agent whose turn blocks until `release()`
+     * is called (or the invocation is aborted), so a detached invocation stays
+     * pending for exactly as long as a test needs.
+     */
+    function defineGatedAgent(
+      name: string,
+      store: SessionStore<S>,
+      config: { maxSnapshotWaitMs?: number } = {}
+    ) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const agent = defineCustomAgent<S>(
+        new Registry(),
+        { name, store, ...config },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            await Promise.race([
+              gate,
+              new Promise<never>((_, reject) =>
+                abortSignal?.addEventListener(
+                  'abort',
+                  () => reject(new Error('aborted')),
+                  { once: true }
+                )
+              ),
+            ]);
+            sess.addMessages([{ role: 'model', content: [{ text: 'done' }] }]);
+            return { finishReason: 'stop' as const };
+          });
+          return {
+            artifacts: [],
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop' as const,
+          };
+        }
+      );
+      return { agent, release };
+    }
+
+    /** Starts a detached invocation and returns its pending snapshot id. */
+    async function detach(agent: Agent<S>): Promise<string> {
+      const session = agent.streamBidi({});
+      session.send({
+        message: { role: 'user', content: [{ text: 'hi' }] },
+        detach: true,
+      });
       session.close();
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'detached');
+      assert.ok(output.snapshotId);
+      return output.snapshotId!;
+    }
+
+    it('returns an already-settled snapshot without waiting', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitSettled', store);
+      release();
+      const chat = agent.chat();
+      await chat.send('hi');
+      const snapshotId = chat.snapshotId!;
+
+      const snap = await agent.waitForSnapshotData({ snapshotId });
+      assert.strictEqual(snap?.snapshotId, snapshotId);
+      assert.strictEqual(snap?.status, 'completed');
+    });
+
+    it('follows a pending detached snapshot until it settles', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitPending', store);
+      const snapshotId = await detach(agent);
+
+      let settled = false;
+      const waiting = agent.waitForSnapshotData({ snapshotId }).then((snap) => {
+        settled = true;
+        return snap;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.strictEqual(settled, false, 'the wait must block while pending');
+      const raw = await store.getSnapshot({ snapshotId });
+      assert.strictEqual(raw?.status, 'pending');
+
+      release();
+      const snap = await waiting;
+      assert.strictEqual(snap?.status, 'completed');
+      const messages = snap?.state?.messages ?? [];
+      assert.strictEqual(
+        messages[messages.length - 1]?.content[0].text,
+        'done'
+      );
+    });
+
+    it('resolves with the aborted snapshot when the task is aborted', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitAborted', store);
+      const snapshotId = await detach(agent);
+
+      const waiting = agent.waitForSnapshotData({ snapshotId });
+      assert.strictEqual(await agent.abort(snapshotId), 'pending');
+      const snap = await waiting;
+      assert.strictEqual(snap?.status, 'aborted');
+    });
+
+    it('keeps waiting on an aborting row until its finalize lands', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitAborting', store);
+      const now = new Date().toISOString();
+      const snapshotId = (await store.saveSnapshot(undefined, () => ({
+        createdAt: now,
+        heartbeatAt: now,
+        status: 'aborting',
+        state: { sessionId: 'sess-aborting' },
+      })))!;
+
+      // A live worker is still winding the row down, so it is not settled.
+      await assert.rejects(
+        agent.waitForSnapshotData({
+          snapshotId,
+          abortSignal: AbortSignal.timeout(30),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+
+      const waiting = agent.waitForSnapshotData({ snapshotId });
+      await store.saveSnapshot(snapshotId, (current) => ({
+        ...current!,
+        status: 'aborted',
+      }));
+      assert.strictEqual((await waiting)?.status, 'aborted');
+    });
+
+    it('polls a store that cannot push status changes', async () => {
+      const base = new InMemorySessionStore<S>();
+      // The same store minus `onSnapshotStateChange`: the wait has to notice
+      // the settled row by re-reading it.
+      const store: SessionStore<S> = {
+        getSnapshot: (opts) => base.getSnapshot(opts),
+        saveSnapshot: (id, mutator, options) =>
+          base.saveSnapshot(id, mutator, options),
+      };
+      const { agent, release } = defineGatedAgent('waitPolling', store);
+      const snapshotId = await detach(agent);
+
+      const waiting = agent.waitForSnapshotData({
+        snapshotId,
+        pollIntervalMs: 5,
+      });
+      release();
+      const snap = await waiting;
+      assert.strictEqual(snap?.status, 'completed');
+    });
+
+    it('reports a pending snapshot whose heartbeat went stale as expired', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitExpired', store);
+      const stale = new Date(Date.now() - 120_000).toISOString();
+      const snapshotId = await store.saveSnapshot(undefined, () => ({
+        createdAt: stale,
+        updatedAt: stale,
+        heartbeatAt: stale,
+        status: 'pending',
+        state: { sessionId: 'sess-expired' },
+      }));
+
+      // Expiry is computed on read, so the wait settles on its first read.
+      const snap = await agent.waitForSnapshotData({ snapshotId: snapshotId! });
+      assert.strictEqual(snap?.status, 'expired');
+    });
+
+    it('notices a heartbeat that goes stale while waiting', async () => {
+      // A row that reads as fresh once and stale afterwards, on a store that
+      // cannot notify: only the liveness re-read can see the worker die.
+      const fresh = new Date().toISOString();
+      const stale = new Date(Date.now() - 120_000).toISOString();
+      let reads = 0;
+      const store: SessionStore<S> = {
+        async getSnapshot({ snapshotId }) {
+          reads++;
+          return {
+            snapshotId: snapshotId!,
+            createdAt: fresh,
+            status: 'pending',
+            heartbeatAt: reads === 1 ? fresh : stale,
+          };
+        },
+        async saveSnapshot() {
+          throw new Error('unused');
+        },
+      };
+      const { agent } = defineGatedAgent('waitGoesStale', store);
+
+      const snap = await agent.waitForSnapshotData({
+        snapshotId: 'row',
+        pollIntervalMs: 5,
+      });
+      assert.strictEqual(snap?.status, 'expired');
+      assert.strictEqual(reads, 2);
+    });
+
+    it('answers the companion action with the snapshot as it stands once its limit passes', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitLimit', store, {
+        maxSnapshotWaitMs: 20,
+      });
+      const snapshotId = await detach(agent);
+
+      // One request holds for at most the limit; the client asks again.
+      const answered = await agent.waitForSnapshotAction({ snapshotId });
+      assert.strictEqual(answered.status, 'pending');
+
+      // A wait in process is not limited.
+      const waiting = agent.waitForSnapshotData({ snapshotId });
+      release();
+      assert.strictEqual((await waiting)?.status, 'completed');
+    });
+
+    it('rejects a wait limit that is not positive', () => {
+      assert.throws(
+        () =>
+          defineGatedAgent('waitLimitZero', new InMemorySessionStore<S>(), {
+            maxSnapshotWaitMs: 0,
+          }),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
+    });
+
+    it('returns undefined for a missing snapshot and NOT_FOUND via the companion action', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent } = defineGatedAgent('waitMissing', store);
+
+      assert.strictEqual(
+        await agent.waitForSnapshotData({ snapshotId: 'nope' }),
+        undefined
+      );
+      await assert.rejects(
+        agent.waitForSnapshotAction({ snapshotId: 'nope' }),
+        (e: any) => e.status === 'NOT_FOUND'
+      );
+      // The action takes getSnapshot's request but requires the snapshot id:
+      // a session's latest snapshot can change under a wait.
+      await assert.rejects(
+        agent.waitForSnapshotAction({ sessionId: 'some-session' }),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
+    });
+
+    it('requires a store', async () => {
+      const agent = defineCustomAgent<S>(
+        new Registry(),
+        { name: 'waitNoStore' },
+        async (sess) => {
+          await sess.run(async () => {});
+          return { artifacts: [] };
+        }
+      );
+      await assert.rejects(
+        agent.waitForSnapshotData({ snapshotId: 'x' }),
+        (e: any) => e.status === 'FAILED_PRECONDITION'
+      );
+    });
+
+    it('ends the wait when the abort signal fires and leaves the snapshot pending', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitAbortSignal', store);
+      const snapshotId = await detach(agent);
+
+      await assert.rejects(
+        agent.waitForSnapshotData({
+          snapshotId,
+          abortSignal: AbortSignal.timeout(20),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+      const pending = await agent.getSnapshotData({ snapshotId });
+      assert.strictEqual(pending?.status, 'pending');
+
+      release();
+      const settled = await agent.waitForSnapshotData({ snapshotId });
+      assert.strictEqual(settled?.status, 'completed');
+    });
+
+    it('ends the wait on abort without sitting out a hung read', async () => {
+      const store: SessionStore<S> = {
+        getSnapshot: () => new Promise(() => {}),
+        async saveSnapshot() {
+          throw new Error('unused');
+        },
+      };
+      const { agent } = defineGatedAgent('waitHungRead', store);
+
+      const started = Date.now();
+      await assert.rejects(
+        agent.waitForSnapshotData({
+          snapshotId: 'row',
+          abortSignal: AbortSignal.timeout(20),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
+      assert.ok(
+        Date.now() - started < 5_000,
+        'the abort must not wait for the read timeout'
+      );
+    });
+
+    it('rides out transient read failures and surfaces dead ends at once', async () => {
+      const base = new InMemorySessionStore<S>();
+      let failures: unknown[] = [];
+      const store: SessionStore<S> = {
+        getSnapshot(opts) {
+          const failure = failures.shift();
+          return failure ? Promise.reject(failure) : base.getSnapshot(opts);
+        },
+        saveSnapshot: (id, mutator, options) =>
+          base.saveSnapshot(id, mutator, options),
+        onSnapshotStateChange: (id, callback, options) =>
+          base.onSnapshotStateChange(id, callback, options),
+      };
+      const { agent, release } = defineGatedAgent('waitFlaky', store);
+      release();
+      const chat = agent.chat();
+      await chat.send('hi');
+      const snapshotId = chat.snapshotId!;
+
+      // Two blips, then the settled row.
+      failures = [new Error('blip'), new Error('blip')];
+      const snap = await agent.waitForSnapshotData({
+        snapshotId,
+        pollIntervalMs: 5,
+      });
+      assert.strictEqual(snap?.status, 'completed');
+
+      // A rejected request is a dead end: no retry, the error surfaces as is.
+      failures = [
+        new GenkitError({ status: 'INVALID_ARGUMENT', message: 'bad' }),
+      ];
+      await assert.rejects(
+        agent.waitForSnapshotData({ snapshotId, pollIntervalMs: 5 }),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
+
+      // Past the retry budget the failure surfaces too.
+      failures = Array.from({ length: 5 }, () => new Error('down'));
+      await assert.rejects(
+        agent.waitForSnapshotData({ snapshotId, pollIntervalMs: 5 }),
+        /down/
+      );
+      assert.strictEqual(failures.length, 1, 'four consecutive failures');
+    });
+
+    it('waits through the chat surface (DetachedTask.wait, AgentAPI.waitForSnapshot)', async () => {
+      const store = new InMemorySessionStore<S>();
+      const { agent, release } = defineGatedAgent('waitChat', store);
+      const chat = agent.chat();
+      const task = await chat.detach('hi');
+
+      const waiting = task.wait();
+      release();
+      assert.strictEqual((await waiting).status, 'completed');
+      const again = await agent.waitForSnapshot(task.snapshotId);
+      assert.strictEqual(again?.status, 'completed');
+    });
+
+    it('falls back to polling when the transport cannot wait server-side', async () => {
+      // An aborting row is still in flight: the poll goes on until the
+      // finalize settles it.
+      const statuses: SessionSnapshot['status'][] = [
+        'pending',
+        'aborting',
+        'aborted',
+      ];
+      let reads = 0;
+      const snapshot = (
+        status: SessionSnapshot['status']
+      ): SessionSnapshot => ({
+        snapshotId: 'x',
+        createdAt: '2026',
+        status,
+      });
+      const transport: AgentTransport = {
+        runTurn() {
+          throw new Error('unused');
+        },
+        async getSnapshot() {
+          reads++;
+          return snapshot(statuses.shift() ?? 'completed');
+        },
+        async abort() {
+          return undefined;
+        },
+      };
+
+      const api = createAgentAPI(transport);
+      const snap = await api.waitForSnapshot('x', { intervalMs: 1 });
+      assert.strictEqual(snap?.status, 'aborted');
+      assert.strictEqual(reads, 3);
+
+      // A missing snapshot resolves undefined rather than polling forever.
+      const missing = createAgentAPI({
+        ...transport,
+        async getSnapshot() {
+          return undefined;
+        },
+      });
+      assert.strictEqual(await missing.waitForSnapshot('gone'), undefined);
+
+      // An absent status is the `completed` default, so it settles the wait.
+      const statusless = createAgentAPI({
+        ...transport,
+        async getSnapshot() {
+          return snapshot(undefined);
+        },
+      });
+      const legacy = await statusless.waitForSnapshot('x', { intervalMs: 1 });
+      assert.strictEqual(legacy?.status, undefined);
+
+      // The abort signal ends a polling wait too.
+      const stuck = createAgentAPI({
+        ...transport,
+        async getSnapshot() {
+          return snapshot('pending');
+        },
+      });
+      await assert.rejects(
+        stuck.waitForSnapshot('x', {
+          intervalMs: 1,
+          abortSignal: AbortSignal.timeout(10),
+        }),
+        (e: any) => e?.name === 'TimeoutError'
+      );
     });
   });
 
@@ -2554,23 +3256,30 @@ describe('Agent', () => {
 
       const output = await session.output;
       assert.ok(output.snapshotId);
-      // Server-managed agents don't return state in output (state is undefined)
-      // but the snapshot should have the transformed state
+      // Server-managed agents don't return state in output (state is
+      // undefined). The pending row carries no state either; the finalized
+      // row does, and it is read through the transform.
+      const pending = await flow.getSnapshotData({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(pending?.status, 'pending');
+      assert.strictEqual(pending?.state, undefined);
+
+      resolvePromise();
+      session.close();
+      await waitForSnapshotStatus(store, output.snapshotId!, 'completed');
       const snapshot = await flow.getSnapshotData({
         snapshotId: output.snapshotId!,
       });
       assert.ok(snapshot);
       assert.strictEqual(
-        (snapshot!.state.custom as any).publicField,
+        (snapshot!.state!.custom as any).publicField,
         'visible'
       );
       assert.strictEqual(
-        (snapshot!.state.custom as any).secretField,
+        (snapshot!.state!.custom as any).secretField,
         undefined
       );
-
-      resolvePromise();
-      session.close();
     });
 
     it('should pass clientTransform through definePromptAgent', async () => {
@@ -3372,7 +4081,7 @@ Now respond to the latest message.`,
       assert.strictEqual(snapshot?.finishReason, 'interrupted');
     });
 
-    it('reports failed as the finishReason when a turn throws', async () => {
+    it('reports failed and rolls the turn back when a turn throws', async () => {
       const store = new InMemorySessionStore<{}>();
 
       const flow = defineCustomAgent<{}>(
@@ -3392,7 +4101,7 @@ Now respond to the latest message.`,
       });
       session.close();
 
-      // The agent no longer throws on an in-band turn failure - it resolves
+      // The agent does not throw on an in-band turn failure - it resolves
       // gracefully with finishReason 'failed' and a structured error.
       const chunks: AgentStreamChunk[] = [];
       for await (const chunk of session.stream) {
@@ -3404,23 +4113,271 @@ Now respond to the latest message.`,
       assert.ok(output.error);
       assert.strictEqual(output.error!.status, 'INTERNAL');
       assert.ok(output.error!.message.includes('boom'));
+      // A failed output describes the run's result, not a reply.
+      assert.strictEqual(output.message, undefined);
 
       const turnEndChunk = chunks.find((c) => !!c.turnEnd);
       assert.strictEqual(turnEndChunk?.turnEnd?.finishReason, 'failed');
 
-      // The failed turn's snapshot records the failure.
-      const turnEndSnapshotId = turnEndChunk?.turnEnd?.snapshotId;
-      assert.ok(turnEndSnapshotId);
-      const snapshot = await store.getSnapshot({
-        snapshotId: turnEndSnapshotId!,
-      });
-      assert.strictEqual(snapshot?.finishReason, 'failed');
-      assert.strictEqual(snapshot?.status, 'failed');
-
-      // First-turn failure: no prior successful turn ran, so the last-good
-      // state is the seed the client already has. No redundant recovery
-      // snapshot is written and snapshotId is left unset.
+      // A plain error rolls the turn back: no snapshot records it, and with
+      // no committed turn before it there is no resume point at all.
+      assert.strictEqual(turnEndChunk?.turnEnd?.snapshotId, undefined);
       assert.strictEqual(output.snapshotId, undefined);
+      assert.strictEqual(
+        await store.getSnapshot({ sessionId: output.sessionId! }),
+        undefined
+      );
+    });
+
+    it('commits a failed turn as the resume point when it throws a CommittedTurnError', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'frCommitted', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            throw new CommittedTurnError(
+              new GenkitError({
+                status: 'UNAVAILABLE',
+                message: 'model melted',
+              })
+            );
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      // The output reports the cause, not the commit signal.
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'UNAVAILABLE');
+      assert.strictEqual(output.error?.message, 'model melted');
+      assert.strictEqual(output.message, undefined);
+
+      // The failed turn's own snapshot is written, with the turn's state and
+      // the error on the row, and it is the resume point the output names.
+      const turnEnd = chunks.find((c) => !!c.turnEnd)?.turnEnd;
+      assert.strictEqual(turnEnd?.finishReason, 'failed');
+      assert.ok(turnEnd?.snapshotId, 'a committed turn reports its snapshotId');
+      assert.strictEqual(output.snapshotId, turnEnd!.snapshotId);
+      const snapshot = await store.getSnapshot({
+        snapshotId: turnEnd!.snapshotId!,
+      });
+      assert.strictEqual(snapshot?.status, 'failed');
+      assert.strictEqual(snapshot?.finishReason, 'failed');
+      assert.strictEqual(snapshot?.error?.status, 'UNAVAILABLE');
+      assert.strictEqual(snapshot?.error?.message, 'model melted');
+      assert.strictEqual(snapshot?.parentId, undefined);
+      assert.strictEqual((snapshot!.state.custom as any).count, 1);
+      assert.deepStrictEqual(
+        snapshot!.state.messages.map((m) => m.content[0].text),
+        ['hi']
+      );
+    });
+
+    it('reports failed with the error when a committed turn names its own finish reason', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'frOwnReason', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new CommittedTurnError(
+              new GenkitError({
+                status: 'RESOURCE_EXHAUSTED',
+                message: 'too long',
+              }),
+              { finishReason: 'length' }
+            );
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      // The invocation reports how it ended; the turn's own reason is on the
+      // turn-end chunk and the row.
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'RESOURCE_EXHAUSTED');
+      assert.strictEqual(output.message, undefined);
+      const turnEnd = chunks.find((c) => c.turnEnd)?.turnEnd;
+      assert.strictEqual(turnEnd?.finishReason, 'length');
+      assert.ok(
+        turnEnd?.snapshotId,
+        'the committed turn reports its snapshotId'
+      );
+      assert.strictEqual(output.snapshotId, turnEnd!.snapshotId);
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'failed');
+      assert.strictEqual(row?.finishReason, 'length');
+      assert.strictEqual(row?.error?.status, 'RESOURCE_EXHAUSTED');
+    });
+
+    it('accepts a CommittedTurnError by name without a result', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'frBranded', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw Object.assign(new Error('boom'), {
+              name: 'CommittedTurnError',
+              cause: new Error('boom'),
+            });
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.message, 'boom');
+      assert.ok(output.snapshotId, 'the turn committed');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'failed');
+    });
+
+    it('keeps a failed output free of artifacts', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'frNoArtifacts', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.addArtifacts([{ name: 'doc', parts: [{ text: 'draft' }] }]);
+            throw new Error('boom');
+          });
+          return {
+            artifacts: sess.getArtifacts(),
+            message: { role: 'model', content: [{ text: 'done' }] },
+          };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      // The rolled-back turn's artifact is not part of any resume point.
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.artifacts, undefined);
+
+      const chat = flow.chat();
+      await assert.rejects(() => chat.send('hi'));
+      assert.deepStrictEqual(chat.artifacts, []);
+    });
+
+    it('does not write a completed row for state mutated after a committed failure', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'frPostRunWrite', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.updateCustom(() => ({ count: 1 }));
+            throw new CommittedTurnError(new Error('boom'));
+          });
+          // Mutated after the failed turn: not a resume point of its own.
+          sess.updateCustom(() => ({ count: 99 }));
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.ok(output.snapshotId, 'the failed row is the resume point');
+      const failedRow = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual((failedRow!.state.custom as any).count, 1);
+      // The failed row is also the session's latest: nothing was written on
+      // top of it, so resuming by sessionId lands on the same state.
+      const latest = await store.getSnapshot({ sessionId: output.sessionId! });
+      assert.strictEqual(latest?.snapshotId, output.snapshotId);
+    });
+
+    it('strips a request from the details a custom error carries', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'frDetailsRequest', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new CommittedTurnError(
+              new GenkitError({
+                status: 'INVALID_ARGUMENT',
+                message: 'bad',
+                detail: {
+                  request: { messages: [{ text: 'secret' }] },
+                  code: 7,
+                },
+              })
+            );
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'hi' }] },
+      });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.deepStrictEqual(output.error?.details, { code: 7 });
+      assert.strictEqual(
+        JSON.stringify(output.error).includes('secret'),
+        false
+      );
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.deepStrictEqual(row?.error?.details, { code: 7 });
     });
 
     it('does not validate a never-set custom state against a required-field stateSchema across turns', async () => {
@@ -3486,10 +4443,10 @@ Now respond to the latest message.`,
     it('does not leak the raw thrown error into error.details', async () => {
       const store = new InMemorySessionStore<{}>();
 
-      // Throw a value with a circular reference and no `detail`/`details`
-      // field. The old behavior fell back to placing the whole error object in
-      // `details`, which both leaked internals and could break JSON.stringify
-      // (here: a circular structure) when persisting the failed snapshot.
+      // Fail a committed turn with a value that has a circular reference and
+      // no `detail`/`details` field. Placing the whole error object in
+      // `details` would both leak internals and break JSON.stringify (here: a
+      // circular structure) when persisting the failed snapshot.
       const circular: any = new Error('boom');
       circular.self = circular;
 
@@ -3498,7 +4455,7 @@ Now respond to the latest message.`,
         { name: 'frNoLeak', store },
         async (sess) => {
           await sess.run(async () => {
-            throw circular;
+            throw new CommittedTurnError(circular);
           });
           return { message: { role: 'model', content: [{ text: 'done' }] } };
         }
@@ -3525,6 +4482,10 @@ Now respond to the latest message.`,
 
       // The failed snapshot persisted without throwing on the circular error.
       const turnEndChunk = chunks.find((c) => !!c.turnEnd);
+      assert.ok(
+        turnEndChunk?.turnEnd?.snapshotId,
+        'a committed turn reports its snapshotId'
+      );
       const snapshot = await store.getSnapshot({
         snapshotId: turnEndChunk!.turnEnd!.snapshotId!,
       });
@@ -3627,17 +4588,16 @@ Now respond to the latest message.`,
       assert.strictEqual(output.state!.messages![0].content[0].text, 'one');
     });
 
-    it('server-managed: failure returns the last-good (done) snapshot, not the failed one', async () => {
+    it('server-managed: an uncommitted failure keeps the last committed snapshot as the resume point', async () => {
       const store = new InMemorySessionStore<{ count: number }>();
       let turn = 0;
 
-      // Every turn is persisted. On failure the output points at the prior
-      // successful turn's `done` snapshot (the last-good state), not the failed
-      // turn's snapshot. No extra recovery snapshot is written - the last good
-      // turn is already persisted.
+      // Every committed turn is persisted. A turn that fails without
+      // committing rolls back: no snapshot records it, and the output points
+      // at the prior turn's snapshot as the resume point.
       const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
-        { name: 'frServerRecoveryDefault', store },
+        { name: 'frServerRollback', store },
         async (sess) => {
           await sess.run(async () => {
             turn++;
@@ -3666,45 +4626,28 @@ Now respond to the latest message.`,
       const output = await session.output;
 
       assert.strictEqual(output.finishReason, 'failed');
-      assert.ok(output.snapshotId);
 
-      // Collect the per-turn snapshot ids: turn 1 (done) then turn 2 (failed).
-      const turnEndChunks = chunks.filter((c) => !!c.turnEnd);
-      const successfulTurnSnapshotId = turnEndChunks[0]?.turnEnd?.snapshotId;
-      const failedTurnSnapshotId =
-        turnEndChunks[turnEndChunks.length - 1]?.turnEnd?.snapshotId;
-      assert.ok(successfulTurnSnapshotId);
-      assert.ok(failedTurnSnapshotId);
-      assert.notStrictEqual(successfulTurnSnapshotId, failedTurnSnapshotId);
+      // Turn 1 committed and reports its snapshot; turn 2 rolled back and
+      // reports none.
+      const turnEnds = chunks.filter((c) => !!c.turnEnd).map((c) => c.turnEnd!);
+      assert.strictEqual(turnEnds.length, 2);
+      const committedSnapshotId = turnEnds[0].snapshotId;
+      assert.ok(committedSnapshotId, 'turn 1 reports its snapshotId');
+      assert.strictEqual(turnEnds[1].finishReason, 'failed');
+      assert.strictEqual(turnEnds[1].snapshotId, undefined);
 
-      // The failed turn's snapshot records the partial (failed-turn) state and
-      // is persisted (inspectable) but is NOT resumable.
-      const failedSnap = await store.getSnapshot({
-        snapshotId: failedTurnSnapshotId!,
-      });
-      assert.strictEqual(failedSnap?.status, 'failed');
-      assert.strictEqual((failedSnap!.state.custom as any).count, 2);
-
-      // The returned snapshotId is the last-good (turn 1) `done` snapshot - no
-      // separate recovery snapshot is written.
-      assert.strictEqual(output.snapshotId, successfulTurnSnapshotId);
+      // The resume point is turn 1's snapshot, and it is the session's latest.
+      assert.strictEqual(output.snapshotId, committedSnapshotId);
       const lastGood = await store.getSnapshot({
-        snapshotId: output.snapshotId!,
+        snapshotId: committedSnapshotId!,
       });
       assert.strictEqual(lastGood?.status, 'completed');
       assert.strictEqual((lastGood!.state.custom as any).count, 1);
-
-      // The raw store still returns the failed leaf for a sessionId lookup -
-      // resumability is enforced by the agent, not the store.
-      const bySession = await store.getSnapshot({
-        sessionId: lastGood!.state.sessionId!,
-      });
-      assert.strictEqual(bySession?.snapshotId, failedTurnSnapshotId);
-
-      // But resuming by sessionId walks back over the failed leaf to the
-      // last-good `done` snapshot: the next turn continues from count 1 (not the
-      // failed turn's partial count 2) and chains from the last-good snapshot.
       const sessionId = lastGood!.state.sessionId!;
+      const latest = await store.getSnapshot({ sessionId });
+      assert.strictEqual(latest?.snapshotId, committedSnapshotId);
+
+      // Resuming by sessionId continues from turn 1: count 1 + 1.
       const resumeSession = flow.streamBidi({ sessionId });
       resumeSession.send({
         message: { role: 'user' as const, content: [{ text: 'three' }] },
@@ -3713,81 +4656,33 @@ Now respond to the latest message.`,
       for await (const _ of resumeSession.stream) {
       }
       const resumeOutput = await resumeSession.output;
+      assert.strictEqual(resumeOutput.error, undefined);
       assert.strictEqual(resumeOutput.finishReason, undefined);
-      assert.ok(resumeOutput.snapshotId);
+      assert.ok(
+        resumeOutput.snapshotId,
+        'the resumed turn reports its snapshot'
+      );
       const resumed = await store.getSnapshot({
         snapshotId: resumeOutput.snapshotId!,
       });
-      // count 1 (last-good) + 1 (this turn) = 2, and it chains from the
-      // last-good snapshot, not the failed leaf.
       assert.strictEqual((resumed!.state.custom as any).count, 2);
-      assert.strictEqual(resumed?.parentId, successfulTurnSnapshotId);
+      assert.strictEqual(resumed?.parentId, committedSnapshotId);
     });
 
-    it('server-managed: resuming a non-done (failed) snapshot is rejected', async () => {
+    it('server-managed: a committed failure is the resume point, by sessionId or by snapshotId', async () => {
       const store = new InMemorySessionStore<{ count: number }>();
+      let turn = 0;
 
       const flow = defineCustomAgent<{ count: number }>(
         new Registry(),
-        { name: 'frResumeNonDone', store },
+        { name: 'frServerCommitted', store },
         async (sess) => {
           await sess.run(async () => {
+            turn++;
             sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
-            throw new Error('boom');
-          });
-          return { message: { role: 'model', content: [{ text: 'done' }] } };
-        }
-      );
-
-      // First turn fails, persisting a `failed` snapshot.
-      const session1 = flow.streamBidi({});
-      session1.send({
-        message: { role: 'user' as const, content: [{ text: 'one' }] },
-      });
-      session1.close();
-      const chunks: AgentStreamChunk[] = [];
-      for await (const chunk of session1.stream) {
-        chunks.push(chunk);
-      }
-      await session1.output;
-
-      const failedTurnSnapshotId = chunks.filter((c) => !!c.turnEnd).pop()
-        ?.turnEnd?.snapshotId;
-      assert.ok(failedTurnSnapshotId);
-
-      // Resuming that failed snapshot by snapshotId is rejected.
-      const session2 = flow.streamBidi({ snapshotId: failedTurnSnapshotId });
-      session2.send({
-        message: { role: 'user' as const, content: [{ text: 'two' }] },
-      });
-      session2.close();
-      for await (const _ of session2.stream) {
-      }
-      const output2 = await session2.output;
-
-      assert.strictEqual(output2.finishReason, 'failed');
-      assert.ok(output2.error);
-      assert.strictEqual(output2.error!.status, 'INVALID_ARGUMENT');
-      assert.ok(
-        output2.error!.message.includes('not resumable'),
-        `Expected not-resumable error, got: ${output2.error!.message}`
-      );
-    });
-
-    it('server-managed: no redundant recovery snapshot when the first turn fails', async () => {
-      const store = new InMemorySessionStore<{ count: number }>();
-
-      // The very first turn fails - there is no prior successful turn, so the
-      // last-good state is the seed the client already has. Writing a recovery
-      // snapshot would be a redundant no-diff write, so none is created and
-      // snapshotId is left unset.
-      const flow = defineCustomAgent<{ count: number }>(
-        new Registry(),
-        { name: 'frServerRecoveryFirstTurn', store },
-        async (sess) => {
-          await sess.run(async () => {
-            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
-            throw new Error('first turn boom');
+            if (turn === 2) {
+              throw new CommittedTurnError(new Error('committed boom'));
+            }
           });
           return { message: { role: 'model', content: [{ text: 'done' }] } };
         }
@@ -3796,6 +4691,9 @@ Now respond to the latest message.`,
       const session = flow.streamBidi({});
       session.send({
         message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'two' }] },
       });
       session.close();
 
@@ -3806,19 +4704,199 @@ Now respond to the latest message.`,
       const output = await session.output;
 
       assert.strictEqual(output.finishReason, 'failed');
-      // No recovery snapshot is returned for a first-turn failure.
-      assert.strictEqual(output.snapshotId, undefined);
+      assert.strictEqual(output.error?.message, 'committed boom');
 
-      // The only snapshot in the store is the failed turn's own snapshot - no
-      // separate 'done' seed recovery snapshot was written.
-      const turnEndChunks = chunks.filter((c) => !!c.turnEnd);
-      const failedTurnSnapshotId =
-        turnEndChunks[turnEndChunks.length - 1]?.turnEnd?.snapshotId;
-      assert.ok(failedTurnSnapshotId);
+      const turnEnds = chunks.filter((c) => !!c.turnEnd).map((c) => c.turnEnd!);
+      assert.strictEqual(turnEnds.length, 2);
+      const firstSnapshotId = turnEnds[0].snapshotId;
+      const failedSnapshotId = turnEnds[1].snapshotId;
+      assert.ok(firstSnapshotId, 'turn 1 reports its snapshotId');
+      assert.ok(failedSnapshotId, 'the committed failed turn reports its own');
+      assert.notStrictEqual(failedSnapshotId, firstSnapshotId);
+
+      // The failed turn's snapshot holds that turn's state and its error,
+      // chains from turn 1, and is the resume point the output names.
+      assert.strictEqual(output.snapshotId, failedSnapshotId);
       const failedSnap = await store.getSnapshot({
-        snapshotId: failedTurnSnapshotId!,
+        snapshotId: failedSnapshotId!,
       });
       assert.strictEqual(failedSnap?.status, 'failed');
+      assert.strictEqual(failedSnap?.parentId, firstSnapshotId);
+      assert.strictEqual(failedSnap?.error?.message, 'committed boom');
+      assert.strictEqual((failedSnap!.state.custom as any).count, 2);
+
+      const resumeWith = async (init: {
+        sessionId?: string;
+        snapshotId?: string;
+      }) => {
+        const resumeSession = flow.streamBidi(init);
+        resumeSession.send({
+          message: { role: 'user' as const, content: [{ text: 'three' }] },
+        });
+        resumeSession.close();
+        for await (const _ of resumeSession.stream) {
+        }
+        const resumeOutput = await resumeSession.output;
+        assert.strictEqual(resumeOutput.error, undefined);
+        assert.ok(
+          resumeOutput.snapshotId,
+          'the resumed turn reports its snapshot'
+        );
+        return (await store.getSnapshot({
+          snapshotId: resumeOutput.snapshotId!,
+        }))!;
+      };
+
+      // The failed row is the session's latest, and resuming by sessionId
+      // continues from it as it stands rather than walking past it.
+      const bySession = await resumeWith({
+        sessionId: failedSnap!.state.sessionId!,
+      });
+      assert.strictEqual((bySession.state.custom as any).count, 3);
+      assert.strictEqual(bySession.parentId, failedSnapshotId);
+
+      // So does naming it by snapshotId.
+      const bySnapshot = await resumeWith({ snapshotId: failedSnapshotId });
+      assert.strictEqual((bySnapshot.state.custom as any).count, 3);
+      assert.strictEqual(bySnapshot.parentId, failedSnapshotId);
+    });
+
+    it('server-managed: resuming a pending or aborting snapshot is rejected', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'frResumeDeadEnd', store },
+        async (sess) => {
+          await sess.run(async () => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session1 = flow.streamBidi({});
+      session1.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session1.close();
+      for await (const _ of session1.stream) {
+      }
+      const output1 = await session1.output;
+      const snapshotId = output1.snapshotId!;
+      assert.ok(snapshotId, 'the first turn reports its snapshotId');
+      const sessionId = output1.sessionId!;
+
+      const resumeWith = async (init: {
+        sessionId?: string;
+        snapshotId?: string;
+      }) => {
+        const session2 = flow.streamBidi(init);
+        session2.send({
+          message: { role: 'user' as const, content: [{ text: 'two' }] },
+        });
+        session2.close();
+        for await (const _ of session2.stream) {
+        }
+        return session2.output;
+      };
+      const setRow = (mutate: (row: SessionSnapshot<any>) => unknown) =>
+        store.saveSnapshot(snapshotId, (current) => mutate(current!) as any);
+
+      // A pending row is still being written by its detached invocation.
+      await setRow((row) => ({ ...row, status: 'pending' }));
+      for (const init of [{ snapshotId }, { sessionId }]) {
+        const output = await resumeWith(init);
+        assert.strictEqual(output.finishReason, 'failed', JSON.stringify(init));
+        assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+        assert.ok(
+          output.error!.message.includes('still pending'),
+          output.error!.message
+        );
+      }
+
+      // A pending row whose worker stopped heartbeating is one nothing will
+      // finalize: the rejection names the parent to resume from.
+      await setRow((row) => ({
+        ...row,
+        status: 'pending',
+        parentId: 'parent-1',
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+      }));
+      for (const init of [{ snapshotId }, { sessionId }]) {
+        const output = await resumeWith(init);
+        assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+        assert.ok(
+          output.error!.message.includes('presumed dead'),
+          output.error!.message
+        );
+        assert.ok(
+          output.error!.message.includes(
+            'abort it, then resume from its parent snapshot parent-1'
+          ),
+          output.error!.message
+        );
+      }
+
+      // An aborted row carrying state is a resume point, as a failed one is.
+      await setRow((row) => ({
+        ...row,
+        status: 'aborted',
+        finishReason: 'aborted',
+      }));
+      const resumed = await resumeWith({ sessionId });
+      assert.strictEqual(
+        resumed.error,
+        undefined,
+        JSON.stringify(resumed.error)
+      );
+      const resumedRow = await store.getSnapshot({
+        snapshotId: resumed.snapshotId!,
+      });
+      assert.strictEqual((resumedRow!.state.custom as any).count, 2);
+      assert.strictEqual(resumedRow?.parentId, snapshotId);
+
+      // An aborting row is one whose worker is winding down toward the
+      // finalize that settles it. The heartbeat says whether that write is
+      // still coming (retry this id) or never will be (name an earlier one).
+      await setRow((row) => ({
+        ...row,
+        status: 'aborting',
+        heartbeatAt: new Date().toISOString(),
+      }));
+      let output = await resumeWith({ snapshotId });
+      assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+      assert.ok(
+        output.error!.message.includes('retry this same snapshot ID'),
+        output.error!.message
+      );
+
+      await setRow((row) => ({
+        ...row,
+        status: 'aborting',
+        parentId: 'parent-1',
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+      }));
+      output = await resumeWith({ snapshotId });
+      assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+      assert.ok(
+        output.error!.message.includes(
+          'resume from its parent snapshot parent-1'
+        ),
+        output.error!.message
+      );
+
+      // A first-turn row has no parent, so there is nothing to go back to.
+      await setRow(({ parentId: _parentId, ...row }) => ({
+        ...row,
+        status: 'aborting',
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+      }));
+      output = await resumeWith({ snapshotId });
+      assert.ok(
+        output.error!.message.includes('nothing to resume'),
+        output.error!.message
+      );
     });
 
     it('surfaces the generate finishReason from a prompt agent', async () => {
@@ -3857,6 +4935,632 @@ Now respond to the latest message.`,
 
       const output = await session.output;
       assert.strictEqual(output.finishReason, 'stop');
+    });
+  });
+
+  describe('prompt agent failed turns', () => {
+    it('rejects an input with no payload on a fresh conversation', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let modelCalls = 0;
+      pm.handleResponse = async () => {
+        modelCalls++;
+        return {
+          message: { role: 'model', content: [{ text: 'hello' }] },
+          finishReason: 'stop',
+        };
+      };
+      const flow = defineAgent(registry, {
+        name: 'emptyInputAgent',
+        model: 'programmableModel',
+        store: new InMemorySessionStore(),
+      });
+
+      const session = flow.streamBidi({});
+      session.send({});
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'INVALID_ARGUMENT');
+      assert.ok(
+        output.error!.message.includes('required'),
+        output.error!.message
+      );
+      assert.strictEqual(modelCalls, 0);
+      // The turn never reached the model, so it rolled back: no snapshot.
+      assert.strictEqual(output.snapshotId, undefined);
+    });
+
+    it('commits a turn that failed at the seam and re-attempts it on an empty input', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let toolCalls = 0;
+      defineTool(
+        registry,
+        { name: 'flaky', description: 'fails once' },
+        async () => {
+          toolCalls++;
+          if (toolCalls === 1) {
+            throw new GenkitError({
+              status: 'UNAVAILABLE',
+              message: 'db down',
+            });
+          }
+          return 'db up';
+        }
+      );
+      const requests: any[] = [];
+      pm.handleResponse = async (req: any) => {
+        requests.push(req);
+        const last = req.messages[req.messages.length - 1];
+        if (last.role === 'tool') {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'flaky', input: {}, ref: 'r1' } }],
+          },
+          finishReason: 'stop',
+        };
+      };
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'seamAgent',
+        model: 'programmableModel',
+        tools: ['flaky'],
+        store,
+      });
+
+      const first = flow.streamBidi({});
+      first.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      first.close();
+      for await (const _ of first.stream) {
+      }
+      const failed = await first.output;
+
+      assert.strictEqual(failed.finishReason, 'failed');
+      assert.strictEqual(failed.error?.status, 'INTERNAL');
+      assert.strictEqual(failed.error?.message, 'tool "flaky" failed: db down');
+      assert.strictEqual(failed.message, undefined);
+      assert.ok(failed.snapshotId, 'the failed turn commits a snapshot');
+      // The committed conversation ends at the turn seam: the model's
+      // unanswered tool request is not part of it.
+      const failedRow = await store.getSnapshot({
+        snapshotId: failed.snapshotId!,
+      });
+      assert.strictEqual(failedRow?.status, 'failed');
+      assert.strictEqual(failedRow?.error?.status, 'INTERNAL');
+      assert.deepStrictEqual(
+        failedRow?.state.messages.map((m) => m.role),
+        ['user']
+      );
+
+      // Re-attempting with no input calls the model on that conversation
+      // again, from the seam.
+      const again = flow.streamBidi({ snapshotId: failed.snapshotId });
+      again.send({});
+      again.close();
+      for await (const _ of again.stream) {
+      }
+      const output = await again.output;
+
+      assert.strictEqual(output.error, undefined, JSON.stringify(output.error));
+      assert.strictEqual(output.finishReason, 'stop');
+      assert.strictEqual(output.message?.content[0].text, 'done');
+      assert.strictEqual(toolCalls, 2);
+      assert.deepStrictEqual(
+        requests[1].messages.map((m: any) => m.role),
+        ['user']
+      );
+      const finalRow = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(finalRow?.status, 'completed');
+      assert.strictEqual(finalRow?.parentId, failed.snapshotId);
+      assert.deepStrictEqual(
+        finalRow?.state.messages.map((m) => m.role),
+        ['user', 'model', 'tool', 'model']
+      );
+    });
+
+    it('commits the seam, not the rejected message, when structured output fails validation', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let modelCalls = 0;
+      pm.handleResponse = async () => {
+        modelCalls++;
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: modelCalls === 1 ? '{"a": "bad"}' : '{"a": 2}' }],
+          },
+          finishReason: 'stop',
+        };
+      };
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'schemaAgent',
+        model: 'programmableModel',
+        output: { schema: z.object({ a: z.number() }) },
+        store,
+      });
+
+      const first = flow.streamBidi({});
+      first.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      first.close();
+      for await (const _ of first.stream) {
+      }
+      const failed = await first.output;
+
+      assert.strictEqual(failed.finishReason, 'failed');
+      assert.strictEqual(failed.error?.status, 'INVALID_ARGUMENT');
+      assert.ok(failed.snapshotId, 'the failed turn commits a snapshot');
+      // The rejected completion is not a message to continue from.
+      const row = await store.getSnapshot({ snapshotId: failed.snapshotId! });
+      assert.deepStrictEqual(
+        row?.state?.messages.map((m) => m.role),
+        ['user']
+      );
+
+      // The re-attempt asks the model again from the seam.
+      const again = flow.streamBidi({ snapshotId: failed.snapshotId });
+      again.send({});
+      again.close();
+      for await (const _ of again.stream) {
+      }
+      const output = await again.output;
+      assert.strictEqual(output.error, undefined, JSON.stringify(output.error));
+      assert.deepStrictEqual(output.message?.content[0].text, '{"a": 2}');
+      const finalRow = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.deepStrictEqual(
+        finalRow?.state?.messages.map((m) => m.role),
+        ['user', 'model']
+      );
+      assert.strictEqual(modelCalls, 2);
+    });
+
+    it('commits the seam when the model blocks the response', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      pm.handleResponse = async () => ({
+        finishReason: 'blocked',
+        finishMessage: 'safety',
+      });
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'blockedAgent',
+        model: 'programmableModel',
+        store,
+      });
+
+      const session = flow.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'FAILED_PRECONDITION');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'failed');
+      assert.deepStrictEqual(
+        row?.state?.messages.map((m) => m.role),
+        ['user']
+      );
+    });
+
+    it('keeps a valid reply that carries an error a model wrote itself', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      pm.handleResponse = async () => ({
+        message: { role: 'model', content: [{ text: 'ok' }] },
+        finishReason: 'stop',
+        error: { status: 'RATE_LIMITED', message: 'slow down' },
+      });
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'selfErrorAgent',
+        model: 'programmableModel',
+        store,
+      });
+
+      const session = flow.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      // The loop did not reject the response, so the turn is not a failure.
+      assert.strictEqual(output.finishReason, 'stop');
+      assert.strictEqual(output.error, undefined);
+      assert.strictEqual(output.message?.content[0].text, 'ok');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'completed');
+    });
+  });
+
+  describe('aborted runs', () => {
+    /** A custom agent whose turn on the message "block" waits for the stop. */
+    function blockingAgent(store: InMemorySessionStore<{ count: number }>) {
+      let enterBlock: () => void = () => {};
+      const blocking = new Promise<void>((resolve) => {
+        enterBlock = resolve;
+      });
+      const flow = defineCustomAgent<{ count: number }>(
+        new Registry(),
+        { name: 'stopMidTurn', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async (input) => {
+            sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+            if (input.message?.content[0]?.text === 'block') {
+              enterBlock();
+              // A plain error: the stop, not the error's own status, says
+              // CANCELLED.
+              await new Promise<never>((_, reject) => {
+                abortSignal?.addEventListener(
+                  'abort',
+                  () => reject(new Error('stopped')),
+                  { once: true }
+                );
+              });
+            }
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+      return { flow, blocking };
+    }
+
+    it('reports a turn the caller stopped as aborted and keeps the last committed turn as the resume point', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const { flow, blocking } = blockingAgent(store);
+
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'block' }] },
+      });
+      session.close();
+      void blocking.then(() => ac.abort());
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'CANCELLED');
+      assert.strictEqual(output.error?.message, 'stopped');
+      assert.strictEqual(output.message, undefined);
+
+      // Turn 1 committed; the stopped turn rolled back and reports no row.
+      const turnEnds = chunks.filter((c) => c.turnEnd).map((c) => c.turnEnd!);
+      assert.strictEqual(turnEnds.length, 2);
+      assert.ok(turnEnds[0].snapshotId, 'turn 1 reports its snapshotId');
+      assert.strictEqual(turnEnds[1].finishReason, 'aborted');
+      assert.strictEqual(turnEnds[1].snapshotId, undefined);
+      assert.strictEqual(output.snapshotId, turnEnds[0].snapshotId);
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'completed');
+      assert.strictEqual((row!.state.custom as any).count, 1);
+      const latest = await store.getSnapshot({ sessionId: output.sessionId! });
+      assert.strictEqual(latest?.snapshotId, output.snapshotId);
+    });
+
+    it('reports a stop between turns as aborted and drops the inputs still queued', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const { flow } = blockingAgent(store);
+
+      // Stopped while idle: the first turn ended and the input side is open.
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      const chunks: AgentStreamChunk[] = [];
+      for await (const chunk of session.stream) {
+        chunks.push(chunk);
+        if (chunk.turnEnd) ac.abort(new Error('user closed the tab'));
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'CANCELLED');
+      assert.strictEqual(output.error?.message, 'user closed the tab');
+      const turnEnds = chunks.filter((c) => c.turnEnd).map((c) => c.turnEnd!);
+      assert.strictEqual(turnEnds.length, 1);
+      assert.ok(
+        turnEnds[0].snapshotId,
+        'the committed turn is the resume point'
+      );
+      assert.strictEqual(output.snapshotId, turnEnds[0].snapshotId);
+
+      // Stopped before it started: the queued input never runs a turn.
+      const pre = new AbortController();
+      pre.abort();
+      const never = flow.streamBidi({}, { abortSignal: pre.signal });
+      never.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      never.close();
+      const neverChunks: AgentStreamChunk[] = [];
+      for await (const chunk of never.stream) {
+        neverChunks.push(chunk);
+      }
+      const neverOutput = await never.output;
+      assert.strictEqual(neverOutput.finishReason, 'aborted');
+      assert.strictEqual(neverOutput.error?.status, 'CANCELLED');
+      assert.strictEqual(neverOutput.snapshotId, undefined);
+      assert.strictEqual(neverChunks.filter((c) => c.turnEnd).length, 0);
+      assert.strictEqual(
+        await store.getSnapshot({ sessionId: neverOutput.sessionId! }),
+        undefined
+      );
+    });
+
+    it('refuses a detach that arrives after the run ended', async () => {
+      const store = new InMemorySessionStore<{ count: number }>();
+      const { flow, blocking } = blockingAgent(store);
+
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'one' }] },
+      });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'block' }] },
+      });
+      void blocking.then(() => ac.abort());
+      const output = await session.output;
+      assert.strictEqual(output.finishReason, 'aborted');
+
+      // The client detaches after the fact. There is no run to move to the
+      // background, so no pending row is written: the session's latest row
+      // stays the committed turn.
+      session.send({ detach: true });
+      session.close();
+      await new Promise((r) => setTimeout(r, 20));
+      const latest = await store.getSnapshot({ sessionId: output.sessionId! });
+      assert.strictEqual(latest?.snapshotId, output.snapshotId);
+      assert.strictEqual(latest?.status, 'completed');
+    });
+
+    it('records a stop reason a turn rethrew as is', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let enterBlock: () => void = () => {};
+      const blocking = new Promise<void>((resolve) => {
+        enterBlock = resolve;
+      });
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'rethrowReason', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            enterBlock();
+            await new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener(
+                'abort',
+                () => reject(abortSignal.reason),
+                { once: true }
+              );
+            });
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const ac = new AbortController();
+      const session = flow.streamBidi({}, { abortSignal: ac.signal });
+      session.send({
+        message: { role: 'user' as const, content: [{ text: 'go' }] },
+      });
+      session.close();
+      void blocking.then(() => ac.abort('closed by user'));
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'CANCELLED');
+      assert.strictEqual(output.error?.message, 'closed by user');
+    });
+
+    /**
+     * A prompt agent over a model that calls `slow`, a tool whose first call
+     * waits to be released and then fails; the model answers "done" once the
+     * tool has responded.
+     */
+    function slowToolAgent(store: InMemorySessionStore<unknown>) {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let enterTool: () => void = () => {};
+      const inTool = new Promise<void>((resolve) => {
+        enterTool = resolve;
+      });
+      let toolCalls = 0;
+      defineTool(
+        registry,
+        { name: 'slow', description: 'blocks once' },
+        async () => {
+          toolCalls++;
+          if (toolCalls === 1) {
+            enterTool();
+            await released;
+            throw new Error('released after the stop');
+          }
+          return 'fast now';
+        }
+      );
+      pm.handleResponse = async (req: any) => {
+        const last = req.messages[req.messages.length - 1];
+        if (last.role === 'tool') {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'slow', input: {}, ref: 'r1' } }],
+          },
+          finishReason: 'stop',
+        };
+      };
+      const flow = defineAgent(registry, {
+        name: 'stopAgent',
+        model: 'programmableModel',
+        tools: ['slow'],
+        store,
+      });
+      return { flow, inTool, release, toolCalls: () => toolCalls };
+    }
+
+    it('commits a prompt agent turn stopped mid-generation as an aborted row and resumes it', async () => {
+      const store = new InMemorySessionStore();
+      const { flow, inTool, release } = slowToolAgent(store);
+
+      const ac = new AbortController();
+      const first = flow.streamBidi({}, { abortSignal: ac.signal });
+      first.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      first.close();
+      void inTool.then(() => {
+        ac.abort();
+        release();
+      });
+      for await (const _ of first.stream) {
+      }
+      const stopped = await first.output;
+
+      assert.strictEqual(stopped.finishReason, 'aborted');
+      assert.strictEqual(stopped.error?.status, 'CANCELLED');
+      assert.ok(stopped.snapshotId, 'the stopped turn commits its seam');
+      const row = await store.getSnapshot({ snapshotId: stopped.snapshotId! });
+      assert.strictEqual(row?.status, 'aborted');
+      assert.strictEqual(row?.finishReason, 'aborted');
+      assert.strictEqual(row?.error?.status, 'CANCELLED');
+      // The unfinished round went whole: the conversation ends at the seam.
+      assert.deepStrictEqual(
+        row?.state?.messages.map((m) => m.role),
+        ['user']
+      );
+
+      // The row resumes; an empty input runs the turn again from the seam.
+      const again = flow.streamBidi({ snapshotId: stopped.snapshotId });
+      again.send({});
+      again.close();
+      for await (const _ of again.stream) {
+      }
+      const output = await again.output;
+      assert.strictEqual(output.error, undefined, JSON.stringify(output.error));
+      assert.strictEqual(output.message?.content[0].text, 'done');
+      const finalRow = await store.getSnapshot({
+        snapshotId: output.snapshotId!,
+      });
+      assert.strictEqual(finalRow?.status, 'completed');
+      assert.strictEqual(finalRow?.parentId, stopped.snapshotId);
+      assert.deepStrictEqual(
+        finalRow?.state?.messages.map((m) => m.role),
+        ['user', 'model', 'tool', 'model']
+      );
+    });
+
+    it('reports a run that reached its turn limit as aborted', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      defineTool(
+        registry,
+        { name: 'again', description: 'always more' },
+        async () => 'more'
+      );
+      pm.handleResponse = async () => ({
+        message: {
+          role: 'model',
+          content: [{ toolRequest: { name: 'again', input: {}, ref: 'r1' } }],
+        },
+        finishReason: 'stop',
+      });
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'limitedAgent',
+        model: 'programmableModel',
+        tools: ['again'],
+        maxTurns: 2,
+        store,
+      });
+
+      const session = flow.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      // A limit the caller set stops the run; it does not break it.
+      assert.strictEqual(output.finishReason, 'aborted');
+      assert.strictEqual(output.error?.status, 'ABORTED');
+      assert.ok(output.snapshotId, 'the stopped turn commits its rounds');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'aborted');
+      assert.strictEqual(row?.finishReason, 'aborted');
+      const roles = row!.state!.messages.map((m) => m.role);
+      assert.strictEqual(roles[0], 'user');
+      assert.strictEqual(roles[roles.length - 1], 'tool');
+    });
+
+    it('reports a provider abort as failed: only the caller stops a run', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      pm.handleResponse = async () => {
+        throw new GenkitError({
+          status: 'ABORTED',
+          message: 'provider gave up',
+        });
+      };
+      const store = new InMemorySessionStore();
+      const flow = defineAgent(registry, {
+        name: 'providerAbortAgent',
+        model: 'programmableModel',
+        store,
+      });
+
+      const session = flow.streamBidi({});
+      session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+      session.close();
+      for await (const _ of session.stream) {
+      }
+      const output = await session.output;
+
+      assert.strictEqual(output.finishReason, 'failed');
+      assert.strictEqual(output.error?.status, 'ABORTED');
+      assert.strictEqual(output.error?.message, 'provider gave up');
+      const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      assert.strictEqual(row?.status, 'failed');
+      assert.strictEqual(row?.finishReason, 'failed');
     });
   });
 
@@ -4095,6 +5799,292 @@ Now respond to the latest message.`,
       );
     });
 
+    it('rolls back the user message after a turn that fails without committing', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiRollback', store },
+        async (sess) => {
+          await sess.run(async () => {
+            throw new Error('boom');
+          });
+          return { message: { role: 'model', content: [{ text: 'ok' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      await assert.rejects(
+        () => chat.send('hi'),
+        (err: unknown) => {
+          assert.ok(err instanceof AgentError);
+          assert.strictEqual(err.snapshotId, undefined);
+          return true;
+        }
+      );
+      // Nothing committed: the message is not part of any resume point.
+      assert.strictEqual(chat.messages.length, 0);
+      assert.strictEqual(chat.snapshotId, undefined);
+    });
+
+    it('rolls back the message of an uncommitted failure on a chat opened by sessionId', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let attempts = 0;
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiSessionRollback', store },
+        async (sess) => {
+          await sess.run(async () => {
+            attempts++;
+            if (attempts === 2) throw new Error('boom');
+            if (attempts === 3) throw new CommittedTurnError(new Error('kept'));
+          });
+          return { message: { role: 'model', content: [{ text: 'ok' }] } };
+        }
+      );
+
+      const first = agent.chat();
+      await first.send('one');
+      const firstSnapshot = first.snapshotId!;
+      assert.ok(firstSnapshot, 'the first turn reports its snapshot');
+      const sessionId = (await store.getSnapshot({
+        snapshotId: firstSnapshot,
+      }))!.state.sessionId!;
+
+      // No baseline snapshot: the failed output names the previous row, which
+      // is not this turn's, and the turn-end chunk says the turn rolled back.
+      const bySession = agent.chat({ sessionId });
+      await assert.rejects(
+        () => bySession.send('two'),
+        (err: unknown) => {
+          assert.ok(err instanceof AgentError);
+          assert.strictEqual(err.snapshotId, firstSnapshot);
+          return true;
+        }
+      );
+      assert.strictEqual(bySession.messages.length, 0);
+      assert.strictEqual(bySession.snapshotId, firstSnapshot);
+
+      // A committed failure on the same kind of chat keeps its message.
+      const again = agent.chat({ sessionId });
+      await assert.rejects(
+        () => again.send('three'),
+        (err: unknown) => {
+          assert.ok(err instanceof AgentError);
+          assert.notStrictEqual(err.snapshotId, firstSnapshot);
+          return true;
+        }
+      );
+      assert.deepStrictEqual(
+        again.messages.map((m) => m.content[0].text),
+        ['three']
+      );
+    });
+
+    it('keeps a committed failed turn as the resume point and re-attempts it on an empty input', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let attempts = 0;
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiCommitted', store },
+        async (sess) => {
+          await sess.run(async () => {
+            attempts++;
+            if (attempts === 1) {
+              throw new CommittedTurnError(new Error('boom'));
+            }
+          });
+          return { message: { role: 'model', content: [{ text: 'ok' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      await assert.rejects(
+        () => chat.send('hi'),
+        (err: unknown) => {
+          assert.ok(err instanceof AgentError);
+          assert.strictEqual(err.status, 'INTERNAL');
+          assert.ok(err.snapshotId, 'the failed turn names its snapshot');
+          return true;
+        }
+      );
+      // The committed turn is the chat's resume point: the message stays.
+      const failedSnapshotId = chat.snapshotId;
+      assert.ok(failedSnapshotId, 'the chat adopts the failed snapshot');
+      assert.strictEqual(chat.messages.length, 1);
+
+      // An empty input runs the turn again on the conversation as it stands.
+      const res = await chat.send({});
+      assert.strictEqual(res.message?.content[0].text, 'ok');
+      assert.ok(chat.snapshotId, 'the re-attempt reports its snapshot');
+      assert.notStrictEqual(chat.snapshotId, failedSnapshotId);
+      const row = await store.getSnapshot({ snapshotId: chat.snapshotId! });
+      assert.strictEqual(row?.status, 'completed');
+      assert.strictEqual(row?.parentId, failedSnapshotId);
+      assert.deepStrictEqual(
+        chat.messages.map((m) => m.content[0].text),
+        ['hi', 'ok']
+      );
+      assert.strictEqual(attempts, 2);
+    });
+
+    it('rolls back the message of a turn the caller stopped before it committed', async () => {
+      const store = new InMemorySessionStore<{}>();
+      let enterTurn: () => void = () => {};
+      const inTurn = new Promise<void>((resolve) => {
+        enterTurn = resolve;
+      });
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiStopRollback', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async () => {
+            enterTurn();
+            await new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener(
+                'abort',
+                () => reject(new Error('stopped')),
+                { once: true }
+              );
+            });
+          });
+          return { message: { role: 'model', content: [{ text: 'ok' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      const ac = new AbortController();
+      void inTurn.then(() => ac.abort());
+      const res = await chat.send('hi', { abortSignal: ac.signal });
+      assert.strictEqual(res.finishReason, 'aborted');
+      assert.strictEqual(chat.messages.length, 0);
+      assert.strictEqual(chat.snapshotId, undefined);
+    });
+
+    it('keeps the message of a stopped turn that committed and continues from it', async () => {
+      const registry = new Registry();
+      registry.apiStability = 'beta';
+      const pm = defineProgrammableModel(registry);
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let enterTool: () => void = () => {};
+      const inTool = new Promise<void>((resolve) => {
+        enterTool = resolve;
+      });
+      let toolCalls = 0;
+      defineTool(
+        registry,
+        { name: 'slow', description: 'blocks once' },
+        async () => {
+          toolCalls++;
+          if (toolCalls === 1) {
+            enterTool();
+            await released;
+            throw new Error('released after the stop');
+          }
+          return 'fast now';
+        }
+      );
+      pm.handleResponse = async (req: any) => {
+        const last = req.messages[req.messages.length - 1];
+        if (last.role === 'tool') {
+          return {
+            message: { role: 'model', content: [{ text: 'done' }] },
+            finishReason: 'stop',
+          };
+        }
+        return {
+          message: {
+            role: 'model',
+            content: [{ toolRequest: { name: 'slow', input: {}, ref: 'r1' } }],
+          },
+          finishReason: 'stop',
+        };
+      };
+      const store = new InMemorySessionStore();
+      const agent = defineAgent(registry, {
+        name: 'apiStopCommitted',
+        model: 'programmableModel',
+        tools: ['slow'],
+        store,
+      });
+
+      const chat = agent.chat();
+      const ac = new AbortController();
+      void inTool.then(() => {
+        ac.abort();
+        release();
+      });
+      const stopped = await chat.send('hi', { abortSignal: ac.signal });
+      assert.strictEqual(stopped.finishReason, 'aborted');
+      const abortedId = chat.snapshotId;
+      assert.ok(abortedId, 'the chat adopts the aborted snapshot');
+      assert.strictEqual(chat.messages.length, 1);
+
+      // An empty input runs the turn again from the seam the stop left.
+      const res = await chat.send({});
+      assert.strictEqual(res.finishReason, 'stop');
+      assert.strictEqual(chat.messages[0].content[0].text, 'hi');
+      assert.strictEqual(
+        chat.messages[chat.messages.length - 1].content[0].text,
+        'done'
+      );
+      const row = await store.getSnapshot({ snapshotId: chat.snapshotId! });
+      assert.strictEqual(row?.status, 'completed');
+      assert.strictEqual(row?.parentId, abortedId);
+    });
+
+    it('wait() settles an aborted task only once its finalize has landed', async () => {
+      const store = new InMemorySessionStore<{}>();
+      const agent = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'apiAbortWait', store },
+        async (sess, { abortSignal }) => {
+          await sess.run(async (input) => {
+            if (input.message?.content[0]?.text === 'block') {
+              await new Promise<never>((_, reject) => {
+                abortSignal?.addEventListener(
+                  'abort',
+                  () => reject(new Error('stopped')),
+                  { once: true }
+                );
+              });
+            }
+            sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const chat = agent.chat();
+      await chat.send('first');
+      const task = await chat.detach('block');
+      assert.strictEqual(await task.abort(), 'pending');
+      // The abort flips the row; the finalize that follows stamps the reason
+      // and the state. `wait()` resolves with the second write, not the first.
+      const snapshot = await task.wait({ intervalMs: 5 });
+      assert.strictEqual(snapshot.status, 'aborted');
+      assert.strictEqual(snapshot.finishReason, 'aborted');
+      assert.strictEqual(snapshot.error?.status, 'CANCELLED');
+      assert.strictEqual(snapshot.error?.message, 'stopped');
+      assert.deepStrictEqual(
+        snapshot.state?.messages.map((m) => m.content[0].text),
+        ['first', 'ack']
+      );
+
+      // And that row is the resume point it says it is.
+      const resumed = agent.chat({ snapshotId: task.snapshotId });
+      const res = await resumed.send('carry on');
+      assert.strictEqual(res.text, 'done');
+      const row = await store.getSnapshot({ snapshotId: resumed.snapshotId! });
+      assert.strictEqual(row?.parentId, task.snapshotId);
+      assert.deepStrictEqual(
+        row?.state?.messages.map((m) => m.content[0].text),
+        ['first', 'ack', 'carry on', 'ack']
+      );
+    });
+
     it('loadChat() restores history from a snapshot (server-managed)', async () => {
       const store = new InMemorySessionStore<{}>();
       const agent = defineCustomAgent<{}>(
@@ -4168,5 +6158,640 @@ Now respond to the latest message.`,
       const snap = await task.wait({ intervalMs: 1 });
       assert.ok(snap.status);
     });
+
+    describe('context', () => {
+      type Ctx = ActionContext | undefined;
+
+      /** An in-memory store that records the context of every call. */
+      class RecordingStore extends InMemorySessionStore<{}> {
+        reads: Ctx[] = [];
+        writes: Ctx[] = [];
+
+        override getSnapshot(opts: GetSnapshotOptions) {
+          this.reads.push(opts.context);
+          return super.getSnapshot(opts);
+        }
+
+        override saveSnapshot(
+          snapshotId: string | undefined,
+          mutator: SnapshotMutator<{}>,
+          options?: SessionStoreOptions
+        ) {
+          this.writes.push(options?.context);
+          return super.saveSnapshot(snapshotId, mutator, options);
+        }
+      }
+
+      /** An agent that echoes the uid it sees via `options.context`. */
+      function defineUidAgent(name: string, store?: RecordingStore) {
+        const seen: Ctx[] = [];
+        const agent = defineCustomAgent<{}>(
+          new Registry(),
+          { name, store },
+          async (sess, { context }) => {
+            seen.push(context);
+            await sess.run(async () => ({ finishReason: 'stop' as const }));
+            return {
+              message: {
+                role: 'model',
+                content: [{ text: `uid=${context?.auth?.uid ?? 'none'}` }],
+              },
+              finishReason: 'stop' as const,
+            };
+          }
+        );
+        return { agent, seen };
+      }
+
+      const alice: ActionContext = { auth: { uid: 'alice' } };
+      const bob: ActionContext = { auth: { uid: 'bob' } };
+      // Compare by uid: actions copy the context (merging in registry context),
+      // so the store does not always see the same object reference.
+      const uids = (ctxs: Ctx[]) => ctxs.map((c) => c?.auth?.uid);
+
+      it('passes chat-bound context to every turn', async () => {
+        const { agent } = defineUidAgent('ctxBound');
+
+        const chat = agent.chat({}, { context: alice });
+        assert.strictEqual((await chat.send('hi')).text, 'uid=alice');
+        const turn = chat.sendStream('again');
+        for await (const _ of turn.stream) {
+          // drain
+        }
+        assert.strictEqual((await turn.response).text, 'uid=alice');
+      });
+
+      it('per-call context replaces the chat-bound one', async () => {
+        const { agent } = defineUidAgent('ctxOverride');
+
+        const chat = agent.chat({}, { context: alice });
+        const res = await chat.send('hi', { context: bob });
+        assert.strictEqual(res.text, 'uid=bob');
+        // The override is per call; the bound context still applies after.
+        assert.strictEqual((await chat.send('hi')).text, 'uid=alice');
+      });
+
+      it('makes context visible to tools via getContext()', async () => {
+        const registry = new Registry();
+        registry.apiStability = 'beta';
+        const pm = defineProgrammableModel(registry, undefined, 'ctxModel');
+        defineTool(
+          registry,
+          {
+            name: 'whoami',
+            description: 'returns the caller uid',
+            outputSchema: z.string(),
+          },
+          async () => String(getContext()?.auth?.uid ?? 'none')
+        );
+        let toolOutput: unknown;
+        pm.handleResponse = async (req) => {
+          const toolResp = req.messages
+            .flatMap((m) => m.content)
+            .find((p) => p.toolResponse);
+          if (toolResp) {
+            toolOutput = toolResp.toolResponse?.output;
+            return {
+              message: { role: 'model', content: [{ text: 'done' }] },
+              finishReason: 'stop',
+            };
+          }
+          return {
+            message: {
+              role: 'model',
+              content: [{ toolRequest: { name: 'whoami', input: {} } }],
+            },
+            finishReason: 'stop',
+          };
+        };
+        definePrompt(registry, {
+          name: 'ctxPrompt',
+          model: 'ctxModel',
+          tools: ['whoami'],
+        });
+        const agent = definePromptAgent(registry, { promptName: 'ctxPrompt' });
+
+        await agent.chat({}, { context: alice }).send('who am i?');
+        assert.strictEqual(toolOutput, 'alice');
+      });
+
+      it('passes context to store calls (loadChat, getSnapshot, abort, detach)', async () => {
+        const store = new RecordingStore();
+        const { agent } = defineUidAgent('ctxStore', store);
+
+        const chat = agent.chat({}, { context: alice });
+        await chat.send('hi');
+        const snapshotId = chat.snapshotId!;
+        // Sets (not `.every`) so an empty list fails too; explicit asserts
+        // also keep a failure from re-tokenizing this large file.
+        assert.deepStrictEqual(new Set(uids(store.writes)), new Set(['alice']));
+
+        store.reads = [];
+        const restored = await agent.loadChat({ snapshotId }, { context: bob });
+        await agent.getSnapshot(snapshotId, { context: bob });
+        assert.deepStrictEqual(uids(store.reads), ['bob', 'bob']);
+        store.reads = [];
+        await agent.waitForSnapshot(snapshotId, { context: bob });
+        assert.deepStrictEqual(new Set(uids(store.reads)), new Set(['bob']));
+
+        // The loaded chat is bound to the context it was loaded with.
+        assert.strictEqual((await restored.send('hi')).text, 'uid=bob');
+
+        store.writes = [];
+        await chat.abort();
+        await chat.abort({ context: bob });
+        assert.deepStrictEqual(uids(store.writes), ['alice', 'bob']);
+
+        store.reads = [];
+        store.writes = [];
+        const task = await chat.detach('long job');
+        await task.wait({ intervalMs: 1 });
+        await task.abort();
+        assert.deepStrictEqual(new Set(uids(store.reads)), new Set(['alice']));
+        assert.deepStrictEqual(new Set(uids(store.writes)), new Set(['alice']));
+
+        // A per-call option on the task overrides the detach-time one.
+        store.writes = [];
+        await task.abort({ context: bob });
+        assert.deepStrictEqual(uids(store.writes), ['bob']);
+      });
+
+      it('per-call undefined context does not clear the bound one', async () => {
+        const store = new RecordingStore();
+        const { agent } = defineUidAgent('ctxUndefined', store);
+
+        const chat = agent.chat({}, { context: alice });
+        const res = await chat.send('hi', { context: undefined });
+        assert.strictEqual(res.text, 'uid=alice');
+        const turn = chat.sendStream('again', { context: undefined });
+        for await (const _ of turn.stream) {
+          // drain
+        }
+        assert.strictEqual((await turn.response).text, 'uid=alice');
+
+        store.writes = [];
+        await chat.abort({ context: undefined });
+        assert.deepStrictEqual(uids(store.writes), ['alice']);
+      });
+
+      it('chats keep the ambient context they were created under', async () => {
+        const store = new RecordingStore();
+        const { agent, seen } = defineUidAgent('ctxCaptured', store);
+
+        const chat = runWithContext(alice, () => agent.chat());
+        // Driven later, outside the original context (ex. a queue worker).
+        await runWithContext(bob, () => chat.send('hi'));
+        assert.deepStrictEqual(uids(seen), ['alice']);
+
+        store.reads = [];
+        const task = await chat.detach('long job');
+        await task.wait({ intervalMs: 1 });
+        assert.deepStrictEqual(new Set(uids(store.reads)), new Set(['alice']));
+
+        const restored = await runWithContext(alice, () =>
+          agent.loadChat({ snapshotId: chat.snapshotId! })
+        );
+        assert.strictEqual((await restored.send('hi')).text, 'uid=alice');
+      });
+
+      it('falls back to the ambient context when none is passed', async () => {
+        const store = new RecordingStore();
+        const { agent, seen } = defineUidAgent('ctxAmbient', store);
+
+        await runWithContext(alice, async () => {
+          const chat = agent.chat();
+          assert.strictEqual((await chat.send('hi')).text, 'uid=alice');
+          store.reads = [];
+          store.writes = [];
+          await agent.loadChat({ snapshotId: chat.snapshotId! });
+          await agent.getSnapshot(chat.snapshotId!);
+          await chat.abort();
+        });
+
+        assert.deepStrictEqual(uids(seen), ['alice']);
+        assert.deepStrictEqual(uids(store.reads), ['alice', 'alice']);
+        assert.deepStrictEqual(uids(store.writes), ['alice']);
+      });
+
+      it('explicit context wins over the ambient one', async () => {
+        const { agent } = defineUidAgent('ctxExplicitWins');
+
+        const res = await runWithContext(alice, () =>
+          agent.chat({}, { context: bob }).send('hi')
+        );
+        assert.strictEqual(res.text, 'uid=bob');
+      });
+
+      // Type-level checks (ex. rejecting `context` on transports that do not
+      // declare it) live in `tests/types/`, checked by `tsconfig.types-test.json`.
+    });
+  });
+});
+
+describe('detach finalize', () => {
+  const rowCount = (store: InMemorySessionStore<any>) =>
+    (store as any).snapshots.size as number;
+
+  it('writes the pending row without state and finalizes it with every turn', async () => {
+    const store = new InMemorySessionStore<{ count: number }>();
+    // The first turn waits until the detach has landed, so no per-turn row
+    // lands before the pending one and every turn's state goes to the finalize.
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const flow = defineCustomAgent<{ count: number }>(
+      new Registry(),
+      { name: 'finalizeAllTurns', store },
+      async (sess) => {
+        await sess.run(async () => {
+          if (!sess.isDetached) await released;
+          sess.session.updateCustom((c) => ({ count: (c?.count ?? 0) + 1 }));
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    for (const text of ['one', 'two', 'three']) {
+      session.send({ message: { role: 'user', content: [{ text }] } });
+    }
+    session.send({ detach: true });
+    const output = await session.output;
+    assert.strictEqual(output.finishReason, 'detached');
+    const pendingId = output.snapshotId!;
+    assert.ok(pendingId);
+
+    const pending = await store.getSnapshot({ snapshotId: pendingId });
+    assert.strictEqual(pending?.status, 'pending');
+    assert.strictEqual(pending?.state, undefined);
+    assert.ok(pending?.heartbeatAt);
+
+    // The row settles once the queued inputs drain. A detach ends the input
+    // side, so a client that keeps its stream open does not hold it pending,
+    // and an input sent after the detach never runs.
+    session.send({ message: { role: 'user', content: [{ text: 'late' }] } });
+    release();
+    const done = await waitForSnapshotStatus(store, pendingId, 'completed');
+    session.close();
+    // One row holds the cumulative state of all three turns; no per-turn row
+    // was written beside it, and the row's lineage is intact.
+    assert.strictEqual(rowCount(store), 1);
+    assert.deepStrictEqual(
+      done.state?.messages?.map((m) => m.content[0].text),
+      ['one', 'two', 'three']
+    );
+    assert.strictEqual(done.state?.custom?.count, 3);
+    assert.strictEqual(done.parentId, undefined);
+    assert.strictEqual(done.heartbeatAt, undefined);
+    assert.strictEqual(done.createdAt, pending!.createdAt);
+    // The session resolves to the settled row.
+    const leaf = await store.getSnapshot({ sessionId: done.sessionId! });
+    assert.strictEqual(leaf?.snapshotId, pendingId);
+  });
+
+  it('keeps the pre-detach leaf as the pending row parent', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeParent', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    // Let the first turn land its own row before detaching. The stream is
+    // drained in the background: breaking out of it would close the input side.
+    const firstTurnEnd = new Promise<string | undefined>((resolve) => {
+      (async () => {
+        for await (const chunk of session.stream) {
+          if (chunk.turnEnd) resolve(chunk.turnEnd.snapshotId);
+        }
+        resolve(undefined);
+      })();
+    });
+    session.send({ message: { role: 'user', content: [{ text: 'one' }] } });
+    const firstTurnSnapshotId = await firstTurnEnd;
+    assert.ok(firstTurnSnapshotId);
+    session.send({
+      message: { role: 'user', content: [{ text: 'two' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    session.close();
+    const pendingId = output.snapshotId!;
+    assert.notStrictEqual(pendingId, firstTurnSnapshotId);
+
+    const done = await waitForSnapshotStatus(store, pendingId, 'completed');
+    assert.strictEqual(done.parentId, firstTurnSnapshotId);
+    assert.deepStrictEqual(
+      done.state?.messages?.map((m) => m.content[0].text),
+      ['one', 'two']
+    );
+    assert.strictEqual(rowCount(store), 2);
+    const leaf = await store.getSnapshot({ sessionId: done.sessionId! });
+    assert.strictEqual(leaf?.snapshotId, pendingId);
+  });
+
+  it('lands a failure the agent function threw outside a turn on the pending row', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeOutsideThrow', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        throw new Error('outside boom');
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({
+      message: { role: 'user', content: [{ text: 'go' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    assert.strictEqual(output.finishReason, 'detached');
+    session.close();
+
+    const failed = await waitForSnapshotStatus(
+      store,
+      output.snapshotId!,
+      'failed'
+    );
+    assert.strictEqual(failed.finishReason, 'failed');
+    assert.strictEqual(failed.error?.message, 'outside boom');
+    assert.ok(failed.state?.messages?.length);
+  });
+
+  it('finalizes a committed failed turn under its own finish reason', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeOwnReason', store },
+      async (sess) => {
+        await sess.run(async () => {
+          throw new CommittedTurnError(
+            new GenkitError({
+              status: 'RESOURCE_EXHAUSTED',
+              message: 'too long',
+            }),
+            { finishReason: 'length' }
+          );
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({
+      message: { role: 'user', content: [{ text: 'go' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    session.close();
+    const snap = await waitForSnapshotStatus(
+      store,
+      output.snapshotId!,
+      'failed'
+    );
+    assert.strictEqual(snap.finishReason, 'length');
+    assert.strictEqual(snap.error?.status, 'RESOURCE_EXHAUSTED');
+  });
+
+  it('reuses the pending row for a second detach input', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeIdempotent', store },
+      async (sess) => {
+        await sess.run(async () => {});
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({ message: { role: 'user', content: [{ text: 'go' }] } });
+    session.send({ detach: true });
+    session.send({ detach: true });
+    const output = await session.output;
+    session.close();
+    await waitForSnapshotStatus(store, output.snapshotId!, 'completed');
+    assert.strictEqual(rowCount(store), 1);
+  });
+
+  it('stamps the abort reason and the committed state on a row the abort flipped', async () => {
+    const store = new InMemorySessionStore<{}>();
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'finalizeAborted', store },
+      async (sess, { abortSignal }) => {
+        await sess.run(async (input) => {
+          if (input.message?.content[0]?.text === 'block') {
+            await new Promise<never>((_, reject) => {
+              abortSignal?.addEventListener(
+                'abort',
+                () => reject(new Error('stopped')),
+                { once: true }
+              );
+            });
+          }
+          sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const session = flow.streamBidi({});
+    session.send({ message: { role: 'user', content: [{ text: 'first' }] } });
+    session.send({
+      message: { role: 'user', content: [{ text: 'block' }] },
+      detach: true,
+    });
+    const output = await session.output;
+    session.close();
+    assert.strictEqual(await flow.abort(output.snapshotId!), 'pending');
+
+    const start = Date.now();
+    let snap: SessionSnapshot | undefined;
+    while (Date.now() - start < 5000) {
+      snap = await store.getSnapshot({ snapshotId: output.snapshotId! });
+      if (snap?.status === 'aborted' && snap.finishReason === 'aborted') break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.strictEqual(snap?.status, 'aborted');
+    assert.strictEqual(snap?.finishReason, 'aborted');
+    assert.strictEqual(snap?.heartbeatAt, undefined);
+    // The row says what stopped it, as an attached abort's row does.
+    assert.strictEqual(snap?.error?.status, 'CANCELLED');
+    assert.strictEqual(snap?.error?.message, 'stopped');
+    // The state through the committed turn: the blocked turn's message rolled
+    // back with the turn, which committed nothing.
+    assert.deepStrictEqual(
+      snap?.state?.messages.map((m) => m.content[0].text),
+      ['first', 'ack']
+    );
+
+    // The row resumes, and the continued turn runs on that conversation.
+    const resumed = flow.streamBidi({ snapshotId: output.snapshotId });
+    resumed.send({
+      message: { role: 'user', content: [{ text: 'carry on' }] },
+    });
+    resumed.close();
+    for await (const _ of resumed.stream) {
+    }
+    const resumedOutput = await resumed.output;
+    assert.strictEqual(resumedOutput.error, undefined);
+    const row = await store.getSnapshot({
+      snapshotId: resumedOutput.snapshotId!,
+    });
+    assert.strictEqual(row?.parentId, output.snapshotId);
+    assert.deepStrictEqual(
+      row?.state?.messages.map((m) => m.content[0].text),
+      ['first', 'ack', 'carry on', 'ack']
+    );
+  });
+
+  it('keeps heartbeating an aborting row until its finalize lands', async () => {
+    // The abort flips the row to aborting and stops the work, not the
+    // worker: the beats go on while the stopped turn drains, so a reader sees
+    // a live row whose finalize is still coming rather than one whose worker
+    // died.
+    mock.timers.enable({ apis: ['setInterval'] });
+    try {
+      const store = new InMemorySessionStore<{}>();
+      let release: () => void = () => {};
+      const flow = defineCustomAgent<{}>(
+        new Registry(),
+        { name: 'finalizeWindDown', store },
+        async (sess) => {
+          await sess.run(async () => {
+            // Ignores the signal: the turn drains on its own time.
+            await new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            throw new Error('drained');
+          });
+          return { message: { role: 'model', content: [{ text: 'done' }] } };
+        }
+      );
+
+      const session = flow.streamBidi({});
+      session.send({
+        message: { role: 'user', content: [{ text: 'block' }] },
+        detach: true,
+      });
+      const output = await session.output;
+      session.close();
+      const snapshotId = output.snapshotId!;
+      const firstBeat = (await store.getSnapshot({ snapshotId }))!.heartbeatAt;
+      assert.ok(firstBeat, 'the pending row carries a heartbeat');
+
+      const until = async (
+        ready: (snap: SessionSnapshot | undefined) => boolean
+      ) => {
+        const start = Date.now();
+        let snap: SessionSnapshot | undefined;
+        while (Date.now() - start < 5000) {
+          snap = await store.getSnapshot({ snapshotId });
+          if (ready(snap)) return snap;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        return snap;
+      };
+
+      assert.strictEqual(await flow.abort(snapshotId), 'pending');
+      const flipped = await until((s) => s?.status === 'aborting');
+      assert.strictEqual(flipped?.status, 'aborting');
+      assert.strictEqual(flipped?.heartbeatAt, firstBeat);
+
+      // The next beat lands on the aborting row.
+      mock.timers.tick(30_000);
+      const beating = await until((s) => s?.heartbeatAt !== firstBeat);
+      assert.strictEqual(beating?.status, 'aborting');
+      assert.ok(beating?.heartbeatAt, 'the aborting row keeps its heartbeat');
+
+      // The finalize clears it, settles the row, and stamps how the run
+      // ended.
+      release();
+      const settled = await until((s) => s?.status === 'aborted');
+      assert.strictEqual(settled?.status, 'aborted');
+      assert.strictEqual(settled?.heartbeatAt, undefined);
+      assert.strictEqual(settled?.error?.status, 'CANCELLED');
+      assert.strictEqual(settled?.error?.message, 'drained');
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("ignores the caller's signal from the detach request on, even while the pending row is being written", async () => {
+    const base = new InMemorySessionStore<{}>();
+    let gateNext = false;
+    let writing: () => void = () => {};
+    const writeStarted = new Promise<void>((resolve) => {
+      writing = resolve;
+    });
+    let releaseWrite: () => void = () => {};
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    // The first write after the gate is armed is the detach's pending row;
+    // it is held until the test releases it.
+    const store = Object.assign(Object.create(base), {
+      getSnapshot: base.getSnapshot.bind(base),
+      onSnapshotStateChange: base.onSnapshotStateChange.bind(base),
+      saveSnapshot: async (id: any, mutator: any, opts: any) => {
+        if (gateNext) {
+          gateNext = false;
+          writing();
+          await writeGate;
+        }
+        return base.saveSnapshot(id, mutator, opts);
+      },
+    }) as InMemorySessionStore<{}>;
+
+    let releaseTurn: () => void = () => {};
+    const turnGate = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    const flow = defineCustomAgent<{}>(
+      new Registry(),
+      { name: 'detachRace', store },
+      async (sess) => {
+        await sess.run(async () => {
+          await turnGate;
+          sess.addMessages([{ role: 'model', content: [{ text: 'ack' }] }]);
+        });
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+
+    const ac = new AbortController();
+    const session = flow.streamBidi({}, { abortSignal: ac.signal });
+    gateNext = true;
+    session.send({
+      message: { role: 'user', content: [{ text: 'go' }] },
+      detach: true,
+    });
+    await writeStarted;
+    // The transport closes behind the detach while its row is in flight.
+    ac.abort();
+    releaseWrite();
+    const output = await session.output;
+    session.close();
+
+    assert.strictEqual(output.finishReason, 'detached');
+    assert.ok(output.snapshotId, 'the detach reports its pending row');
+
+    // The background run was not stopped: it finishes and finalizes the row.
+    releaseTurn();
+    const snap = await waitForSnapshotStatus(
+      store,
+      output.snapshotId!,
+      'completed'
+    );
+    assert.deepStrictEqual(
+      snap.state?.messages.map((m) => m.content[0].text),
+      ['go', 'ack']
+    );
   });
 });

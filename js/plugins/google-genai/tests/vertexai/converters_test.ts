@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { GenerateRequest, Operation, z } from 'genkit';
+import { GenerateRequest, z } from 'genkit';
 import { describe, it } from 'node:test';
 import { HarmBlockThreshold, HarmCategory } from '../../src/common/types.js';
 import {
@@ -26,7 +26,6 @@ import {
   toGeminiSafetySettings,
   toImagenPredictRequest,
   toLyriaPredictRequest,
-  toVeoClientOptions,
   toVeoMedia,
   toVeoModel,
   toVeoOperationRequest,
@@ -39,7 +38,6 @@ import {
 } from '../../src/vertexai/imagen.js';
 import { LyriaConfigSchema } from '../../src/vertexai/lyria.js';
 import {
-  ClientOptions,
   ImagenPredictResponse,
   LyriaPredictResponse,
   VeoOperation,
@@ -660,25 +658,47 @@ describe('Vertex AI Converters', () => {
       });
     });
 
-    it('should convert operation with clientOptions', () => {
-      const clientOptions: ClientOptions = {
-        kind: 'regional',
-        location: 'us-west1',
-        projectId: 'foo',
-        authClient: {} as any,
-      };
+    it('should not throw and should surface an error when all videos are filtered', () => {
+      // When every generated video is filtered by the safety (RAI) filters,
+      // the API returns a response with no `videos` array.
       const veoOp: VeoOperation = {
-        name: 'operations/789',
-        done: false,
+        name: 'operations/rai',
+        done: true,
+        response: {
+          raiMediaFilteredCount: 1,
+          raiMediaFilteredReasons: ['1 videos were filtered out.'],
+        },
       };
-      const result = fromVeoOperation(veoOp, clientOptions);
+      const result = fromVeoOperation(veoOp);
       assert.deepStrictEqual(result, {
-        id: 'operations/789',
-        done: false,
-        metadata: {
-          clientOptions: clientOptions,
+        id: 'operations/rai',
+        done: true,
+        error: { message: '1 videos were filtered out.' },
+        output: {
+          finishReason: 'blocked',
+          raw: veoOp.response,
+          message: {
+            role: 'model',
+            content: [],
+          },
         },
       });
+    });
+
+    it('should use a default message when videos are filtered with no reasons', () => {
+      const veoOp: VeoOperation = {
+        name: 'operations/rai2',
+        done: true,
+        response: {
+          raiMediaFilteredCount: 2,
+        },
+      };
+      const result = fromVeoOperation(veoOp);
+      assert.strictEqual(
+        result.error?.message,
+        'All generated videos were filtered out by safety filters.'
+      );
+      assert.strictEqual(result.output?.finishReason, 'blocked');
     });
   });
 
@@ -701,52 +721,6 @@ describe('Vertex AI Converters', () => {
       assert.deepStrictEqual(result, {
         operationName: 'operations/abcdef',
       });
-    });
-  });
-
-  describe('toVeoClientOptions', () => {
-    const defaultClientOptions: ClientOptions = {
-      kind: 'regional',
-      location: 'us-central1',
-      projectId: 'default-project',
-      authClient: {} as any,
-    };
-    const opClientOptions: ClientOptions = {
-      kind: 'global',
-      location: 'global',
-      projectId: 'op-project',
-      authClient: {} as any,
-    };
-
-    it('should return client options from operation metadata if present', () => {
-      const op: Operation = {
-        id: 'op1',
-        done: false,
-        metadata: {
-          clientOptions: opClientOptions,
-        },
-      };
-      const result = toVeoClientOptions(op, defaultClientOptions);
-      assert.deepStrictEqual(result, opClientOptions);
-    });
-
-    it('should return default client options if not in operation metadata', () => {
-      const op: Operation = {
-        id: 'op2',
-        done: false,
-      };
-      const result = toVeoClientOptions(op, defaultClientOptions);
-      assert.deepStrictEqual(result, defaultClientOptions);
-    });
-
-    it('should return default client options if metadata is empty', () => {
-      const op: Operation = {
-        id: 'op3',
-        done: false,
-        metadata: {},
-      };
-      const result = toVeoClientOptions(op, defaultClientOptions);
-      assert.deepStrictEqual(result, defaultClientOptions);
     });
   });
 });

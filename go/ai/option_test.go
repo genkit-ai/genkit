@@ -155,6 +155,22 @@ func TestCollectionOptionsAccumulate(t *testing.T) {
 		}
 	})
 
+	t.Run("resume sorts parts by kind and appends", func(t *testing.T) {
+		g := applyGen(
+			WithResume(
+				NewToolResponsePart(&ToolResponse{Name: "answered"}),
+				NewToolRequestPart(&ToolRequest{Name: "restarted"}),
+			),
+			WithResume(NewToolRequestPart(&ToolRequest{Name: "restartedToo"})),
+		)
+		if len(g.RespondParts) != 1 || g.RespondParts[0].ToolResponse.Name != "answered" {
+			t.Errorf("RespondParts = %+v, want the one response part", g.RespondParts)
+		}
+		if len(g.RestartParts) != 2 {
+			t.Errorf("len(RestartParts) = %d, want 2", len(g.RestartParts))
+		}
+	})
+
 	t.Run("dataset appends", func(t *testing.T) {
 		e := &evaluatorOptions{}
 		for _, o := range []EvaluatorOption{
@@ -211,11 +227,23 @@ func TestSingleValueOptionsLastWins(t *testing.T) {
 			WithPrompt("usr one"),
 			WithPrompt("usr two"),
 		)
-		if sys, _ := g.SystemFn(context.Background(), nil); sys != "sys two" {
-			t.Errorf("system = %q, want %q", sys, "sys two")
+		parts, err := g.SystemFn(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("SystemFn: %v", err)
 		}
-		if usr, _ := g.PromptFn(context.Background(), nil); usr != "usr two" {
-			t.Errorf("prompt = %q, want %q", usr, "usr two")
+		if len(parts) != 1 || parts[0].Text != "sys two" {
+			t.Errorf("system = %+v, want one part %q", parts, "sys two")
+		}
+		// The later function has to clear the earlier text, or the renderer's
+		// fixed order would decide the winner instead of the call order.
+		if g.SystemText != nil {
+			t.Errorf("SystemText = %q, want it cleared by the later WithSystemFn", *g.SystemText)
+		}
+		if g.PromptFn != nil {
+			t.Error("PromptFn set, want it cleared by the later WithPrompt")
+		}
+		if g.PromptText == nil || *g.PromptText != "usr two" {
+			t.Errorf("prompt = %v, want %q", g.PromptText, "usr two")
 		}
 	})
 
@@ -341,8 +369,8 @@ func TestGenerateOptionsComplete(t *testing.T) {
 			Middleware:         []ModelMiddleware{mw},
 		},
 		promptingOptions: promptingOptions{
-			SystemFn: opts.SystemFn,
-			PromptFn: opts.PromptFn,
+			SystemText: opts.SystemText,
+			PromptText: opts.PromptText,
 		},
 		outputOptions: outputOptions{
 			OutputFormat: OutputFormatJSON,
@@ -377,11 +405,13 @@ func TestGenerateOptionsComplete(t *testing.T) {
 	if len(opts.Middleware) == 0 {
 		t.Errorf("Middleware should not be empty")
 	}
-	if opts.SystemFn == nil {
-		t.Errorf("SystemFn should not be nil")
+	// WithSystem and WithPrompt fill their slot with template text; the
+	// parts and function forms fill the same slot with a function instead.
+	if opts.SystemText == nil && opts.SystemFn == nil {
+		t.Errorf("the system slot should be filled")
 	}
-	if opts.PromptFn == nil {
-		t.Errorf("PromptFn should not be nil")
+	if opts.PromptText == nil && opts.PromptFn == nil {
+		t.Errorf("the prompt slot should be filled")
 	}
 	if opts.Stream == nil {
 		t.Errorf("Stream should not be nil")
@@ -436,8 +466,8 @@ func TestPromptOptionsComplete(t *testing.T) {
 			Middleware:         []ModelMiddleware{mw},
 		},
 		promptingOptions: promptingOptions{
-			SystemFn: opts.SystemFn,
-			PromptFn: opts.PromptFn,
+			SystemText: opts.SystemText,
+			PromptText: opts.PromptText,
 		},
 		inputOptions: inputOptions{
 			InputSchema:  opts.InputSchema,
@@ -473,11 +503,13 @@ func TestPromptOptionsComplete(t *testing.T) {
 	if len(opts.Middleware) == 0 {
 		t.Errorf("Middleware should not be empty")
 	}
-	if opts.SystemFn == nil {
-		t.Errorf("SystemFn should not be nil")
+	// WithSystem and WithPrompt fill their slot with template text; the
+	// parts and function forms fill the same slot with a function instead.
+	if opts.SystemText == nil && opts.SystemFn == nil {
+		t.Errorf("the system slot should be filled")
 	}
-	if opts.PromptFn == nil {
-		t.Errorf("PromptFn should not be nil")
+	if opts.PromptText == nil && opts.PromptFn == nil {
+		t.Errorf("the prompt slot should be filled")
 	}
 	if opts.OutputSchema == nil {
 		t.Errorf("OutputSchema should not be nil")
@@ -686,4 +718,26 @@ func TestWithEvaluatorName(t *testing.T) {
 			t.Errorf("Evaluator.Name() = %q, want %q", opts.Evaluator.Name(), "test/myEvaluator")
 		}
 	})
+}
+
+type withInputTypeQuery struct {
+	City string `json:"city"`
+}
+
+// TestWithInputTypeAppliesToTools pins that WithInputType reaches the tool
+// constructors, not just prompts. The tool constructors have accepted it since
+// before go/v1.9.0, so narrowing it to an option prompts alone can take would
+// break existing callers at compile time with no deprecation.
+func TestWithInputTypeAppliesToTools(t *testing.T) {
+	var _ ToolOption = WithInputType(withInputTypeQuery{})
+	var _ PromptOption = WithInputType(withInputTypeQuery{})
+
+	tl := NewTool("withInputTypeTool", "takes a typed input",
+		func(ctx *ToolContext, in any) (string, error) { return "ok", nil },
+		WithInputType(withInputTypeQuery{}))
+
+	props, ok := tl.Definition().InputSchema["properties"].(map[string]any)
+	if !ok || props["city"] == nil {
+		t.Errorf("InputSchema = %v, want the schema derived from withInputTypeQuery", tl.Definition().InputSchema)
+	}
 }

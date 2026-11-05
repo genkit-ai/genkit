@@ -78,6 +78,13 @@ export interface SessionStoreOptions {
 export interface GetSnapshotOptions {
   snapshotId?: string;
   sessionId?: string;
+  /**
+   * A hint that the caller needs the snapshot's metadata only. A store may
+   * then leave `state` out, which spares loading a potentially large
+   * conversation; one that returns it anyway is still correct, because the
+   * runtime drops the state from a metadata-only read itself.
+   */
+  metadataOnly?: boolean;
   context?: ActionContext;
 }
 

@@ -41,27 +41,27 @@ def test_parse_stream_line_sse_data_prefix() -> None:
 def test_error_from_wire_callable_format() -> None:
     err = error_from_wire({'status': 'UNAVAILABLE', 'message': 'down', 'details': {'x': 1}})
     assert err.status == 'UNAVAILABLE'
-    assert err.original_message == 'down'
+    assert err.message == 'down'
     assert err.details['x'] == 1  # type: ignore[index]
 
 
 def test_error_from_wire_reflection_format() -> None:
     err = error_from_wire({'code': 13, 'message': 'boom', 'details': {'stack': ''}})
     assert err.status == 'INTERNAL'
-    assert err.original_message == 'boom'
+    assert err.message == 'boom'
 
 
 def test_error_from_http_json_body() -> None:
     body = '{"error": {"status": "INVALID_ARGUMENT", "message": "bad input", "details": {}}}'
     err = error_from_http(status_code=400, body=body)
     assert err.status == 'INVALID_ARGUMENT'
-    assert err.original_message == 'bad input'
+    assert err.message == 'bad input'
 
 
 def test_error_from_http_fallback() -> None:
     err = error_from_http(status_code=503, body='service unavailable')
     assert err.status == 'UNAVAILABLE'
-    assert 'service unavailable' in err.original_message
+    assert 'service unavailable' in err.message
 
 
 def test_parse_stream_line_sse_data_error() -> None:
@@ -80,19 +80,19 @@ def test_stream_error_from_payload_callable() -> None:
     err = stream_error_from_payload({'error': {'status': 'UNAVAILABLE', 'message': 'down'}})
     assert isinstance(err, GenkitError)
     assert err.status == 'UNAVAILABLE'
-    assert err.original_message == 'down'
+    assert err.message == 'down'
 
 
 def test_stream_error_from_payload_reflection() -> None:
     err = stream_error_from_payload({'error': {'code': 13, 'message': 'boom'}})
     assert err.status == 'INTERNAL'
-    assert err.original_message == 'boom'
+    assert err.message == 'boom'
 
 
 def test_stream_error_from_payload_fastapi_wrapper() -> None:
     wrapped = {'error': {'error': {'status': 'INTERNAL', 'message': 'wrapped'}}}
     err = stream_error_from_payload(wrapped)
-    assert err.original_message == 'wrapped'
+    assert err.message == 'wrapped'
 
 
 def test_parse_stream_line_empty_returns_none() -> None:

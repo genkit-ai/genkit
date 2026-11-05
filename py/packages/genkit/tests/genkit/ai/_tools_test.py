@@ -1,24 +1,22 @@
 # Copyright 2025 Google LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for tool restart builder and run_tool_after_restart."""
+"""Tests for Part.restart, Part.respond, and run_tool_after_restart."""
 
 import pytest
 
-from genkit import ActionKind, Genkit
+from genkit import Genkit, Part
 from genkit._ai._tools import (
     Interrupt,
-    ToolRunContext,
+    ToolContext,
     _tool_original_input,
     _tool_resumed_metadata,
-    respond_to_interrupt,
     restart_interrupt_error,
-    restart_tool,
     run_tool_after_restart,
 )
-from genkit._core._error import GenkitError
-from genkit._core._middleware import GenerateMiddlewareContext
-from genkit._core._typing import ToolRequest, ToolRequestPart, ToolResponsePart
+from genkit._core._error import ErrorReason, GenkitError
+from genkit._core._middleware import MiddlewareContext
+from genkit.plugin_api import ActionKind
 
 
 async def _echo_tool(x: object) -> object:
@@ -26,42 +24,37 @@ async def _echo_tool(x: object) -> object:
 
 
 def test_restart_sets_resumed_metadata_and_preserves_interrupt() -> None:
-    """``restart_tool``: copy interrupt metadata, set ``resumed``; ``interrupt`` stays on the restart TRP."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
-        metadata={'interrupt': {'reason': 'hold'}},
+    """``Part.restart``: copy interrupt metadata, set ``resumed``; ``interrupt`` stays on the restart TRP."""
+    interrupt_trp = Part.from_tool_request(
+        name='pay', ref='r1', input={'amount': 10}, metadata={'interrupt': {'reason': 'hold'}}
     )
-    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'k': 'v'})
-    assert isinstance(out, ToolRequestPart)
+    out = interrupt_trp.restart(resumed_metadata={'k': 'v'})
+    assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('resumed') == {'k': 'v'}
     assert out.metadata.get('interrupt') == {'reason': 'hold'}
+    assert out.tool_request is not None
     assert out.tool_request.input == {'amount': 10}
 
 
 def test_restart_replace_input_sets_replaced_input() -> None:
     """Restart with new input sets ``replacedInput`` to prior input and updates ``tool_request.input``."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='r1', input={'amount': 10}),
-        metadata={'interrupt': True},
-    )
-    out = restart_tool(replace_input={'amount': 99}, interrupt=interrupt_trp, resumed_metadata={'by': 'u'})
-    assert isinstance(out, ToolRequestPart)
+    interrupt_trp = Part.from_tool_request(name='pay', ref='r1', input={'amount': 10}, metadata={'interrupt': True})
+    out = interrupt_trp.restart(replace_input={'amount': 99}, resumed_metadata={'by': 'u'})
+    assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('replacedInput') == {'amount': 10}
+    assert out.tool_request is not None
     assert out.tool_request.input == {'amount': 99}
     assert out.metadata.get('resumed') == {'by': 'u'}
     assert out.metadata.get('interrupt') is True
 
 
 def test_restart_resumed_defaults_to_true() -> None:
-    """When ``resumed_metadata=None``, restart TRP sets ``metadata.resumed`` to True."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='r1', input={}),
-        metadata={'interrupt': True},
-    )
-    out = restart_tool(interrupt=interrupt_trp, resumed_metadata=None)
-    assert isinstance(out, ToolRequestPart)
+    """When ``resumed_metadata`` is omitted, restart sets ``metadata.resumed`` to True."""
+    interrupt_trp = Part.from_tool_request(name='pay', ref='r1', input={}, metadata={'interrupt': True})
+    out = interrupt_trp.restart(resumed_metadata=None)
+    assert type(out) is Part
     assert out.metadata is not None
     assert out.metadata.get('resumed') is True
     assert out.metadata.get('interrupt') is True
@@ -69,22 +62,19 @@ def test_restart_resumed_defaults_to_true() -> None:
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context() -> None:
-    """``run_tool_after_restart``: ``metadata.resumed is True`` → ``ToolRunContext.resumed_metadata`` is ``{}``."""
+    """``run_tool_after_restart``: ``metadata.resumed is True`` → ``ToolContext.resumed_metadata`` is ``{}``."""
     ai = Genkit()
     captured: list[tuple[dict | None, object | None]] = []
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         captured.append((ctx.resumed_metadata, ctx.original_input))
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t2', ref='x', input={'q': 1}),
-        metadata={'resumed': True},
-    )
+    restart_trp = Part.from_tool_request(name='t2', ref='x', input={'q': 1}, metadata={'resumed': True})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert len(captured) == 1
     assert captured[0][0] == {}
@@ -93,22 +83,19 @@ async def test_run_tool_after_restart_resumed_true_maps_to_empty_dict_in_context
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_resumed_dict() -> None:
-    """Restart TRP with ``metadata.resumed`` dict is passed through to ``ToolRunContext.resumed_metadata``."""
+    """Restart TRP with ``metadata.resumed`` dict is passed through to ``ToolContext.resumed_metadata``."""
     ai = Genkit()
     captured: list[dict | None] = []
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         captured.append(ctx.resumed_metadata)
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t2', ref='x', input={}),
-        metadata={'resumed': {'by': 'x'}},
-    )
+    restart_trp = Part.from_tool_request(name='t2', ref='x', input={}, metadata={'resumed': {'by': 'x'}})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert captured == [{'by': 'x'}]
 
@@ -120,16 +107,15 @@ async def test_run_tool_after_restart_replaced_input() -> None:
     captured: list[tuple[object, object | None]] = []
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         captured.append((inp, ctx.original_input))
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t2', ref='x', input={'new': True}),
-        metadata={'resumed': True, 'replacedInput': {'old': True}},
+    restart_trp = Part.from_tool_request(
+        name='t2', ref='x', input={'new': True}, metadata={'resumed': True, 'replacedInput': {'old': True}}
     )
     await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert len(captured) == 1
@@ -143,16 +129,13 @@ async def test_run_tool_after_restart_resets_contextvars() -> None:
     ai = Genkit()
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t2', ref='x', input={}),
-        metadata={'resumed': True},
-    )
+    restart_trp = Part.from_tool_request(name='t2', ref='x', input={}, metadata={'resumed': True})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert _tool_resumed_metadata.get() is None
     assert _tool_original_input.get() is None
@@ -164,21 +147,20 @@ async def test_run_tool_after_restart_nested_interrupt_raises() -> None:
     ai = Genkit()
 
     @ai.tool(name='t2')
-    async def t2(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t2(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         raise Interrupt()
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t2')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t2')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t2', ref='x', input={}),
-        metadata={'resumed': True},
-    )
+    restart_trp = Part.from_tool_request(name='t2', ref='x', input={}, metadata={'resumed': True})
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert 'interrupted again' in ei.value.original_message.lower()
-    assert isinstance(ei.value.cause, Interrupt)
+    assert ei.value.reason is ErrorReason.INVALID_RESUME
+    assert 'interrupted again' in ei.value.message.lower()
+    assert 'INVALID_RESUME' not in ei.value.message
+    assert isinstance(ei.value.__cause__, Interrupt)
 
 
 def test_restart_interrupt_error_accepts_string_metadata() -> None:
@@ -186,7 +168,9 @@ def test_restart_interrupt_error_accepts_string_metadata() -> None:
     intr = Interrupt('plain string reason')  # type: ignore[arg-type]
     err = restart_interrupt_error(intr)
     assert err.status == 'FAILED_PRECONDITION'
-    assert err.original_message == 'Tool interrupted again during restart: plain string reason'
+    assert err.reason is ErrorReason.INVALID_RESUME
+    assert err.message == 'Tool interrupted again during restart: plain string reason'
+    assert 'INVALID_RESUME' not in err.message
 
 
 @pytest.mark.asyncio
@@ -195,33 +179,35 @@ async def test_run_tool_after_restart_nested_interrupt_includes_reason() -> None
     ai = Genkit()
 
     @ai.tool(name='t3')
-    async def t3(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def t3(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         raise Interrupt({'message': 'Tool not in approved list: t3'})
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t3')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t3')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t3', ref='x', input={}),
-        metadata={'resumed': True},
-    )
+    restart_trp = Part.from_tool_request(name='t3', ref='x', input={}, metadata={'resumed': True})
     with pytest.raises(GenkitError) as ei:
         await run_tool_after_restart(tool=action, restart_trp=restart_trp)
     assert ei.value.status == 'FAILED_PRECONDITION'
-    assert ei.value.original_message == ('Tool interrupted again during restart: Tool not in approved list: t3')
-    assert isinstance(ei.value.cause, Interrupt)
+    assert ei.value.reason is ErrorReason.INVALID_RESUME
+    assert ei.value.message == ('Tool interrupted again during restart: Tool not in approved list: t3')
+    assert 'INVALID_RESUME' not in ei.value.message
+    assert isinstance(ei.value.__cause__, Interrupt)
 
 
-def test_respond_to_interrupt_wire_format_basic() -> None:
-    """respond_to_interrupt produces a ToolResponsePart with matching ref/name and interruptResponse metadata."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='ask_user', ref='ref-abc', input={'question': 'ok?'}),
+def test_respond_wire_format_basic() -> None:
+    """Part.respond produces a Part with matching ref/name and interruptResponse metadata."""
+    interrupt_trp = Part.from_tool_request(
+        name='ask_user',
+        ref='ref-abc',
+        input={'question': 'ok?'},
         metadata={'interrupt': {'reason': 'needs_approval'}},
     )
 
-    result = respond_to_interrupt('yes', interrupt=interrupt_trp)
+    result = interrupt_trp.respond('yes')
 
-    assert isinstance(result, ToolResponsePart)
+    assert type(result) is Part
+    assert result.tool_response is not None
     assert result.tool_response.name == 'ask_user'
     assert result.tool_response.ref == 'ref-abc'
     assert result.tool_response.output == 'yes'
@@ -229,29 +215,27 @@ def test_respond_to_interrupt_wire_format_basic() -> None:
     assert result.metadata.get('interruptResponse') is True
 
 
-def test_respond_to_interrupt_wire_format_with_metadata() -> None:
-    """respond_to_interrupt attaches custom metadata under interruptResponse key."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='confirm', ref='ref-xyz', input={}),
-        metadata={'interrupt': True},
-    )
+def test_respond_wire_format_with_metadata() -> None:
+    """Part.respond attaches custom metadata under interruptResponse key."""
+    interrupt_trp = Part.from_tool_request(name='confirm', ref='ref-xyz', input={}, metadata={'interrupt': True})
 
-    result = respond_to_interrupt({'approved': True}, interrupt=interrupt_trp, metadata={'by': 'admin'})
+    result = interrupt_trp.respond({'approved': True}, metadata={'by': 'admin'})
 
+    assert result.tool_response is not None
     assert result.tool_response.ref == 'ref-xyz'
     assert result.tool_response.output == {'approved': True}
     assert result.metadata is not None
     assert result.metadata.get('interruptResponse') == {'by': 'admin'}
 
 
-def test_restart_tool_directly() -> None:
-    """``restart_tool`` works directly without a ``Tool`` reference."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='middleware_tool', ref='r1', input={'p': 1}),
-        metadata={'interrupt': True},
+def test_restart_directly() -> None:
+    """``Part.restart`` works directly without a ``Tool`` reference."""
+    interrupt_trp = Part.from_tool_request(
+        name='middleware_tool', ref='r1', input={'p': 1}, metadata={'interrupt': True}
     )
-    out = restart_tool(interrupt=interrupt_trp, resumed_metadata={'tool_approved': True})
+    out = interrupt_trp.restart(resumed_metadata={'tool_approved': True})
 
+    assert out.tool_request is not None
     assert out.tool_request.name == 'middleware_tool'
     assert out.tool_request.input == {'p': 1}
     assert out.metadata is not None
@@ -259,66 +243,67 @@ def test_restart_tool_directly() -> None:
 
 
 def test_restart_preserves_ref_on_wire() -> None:
-    """``restart_tool`` preserves the original tool_request.ref so the resumed TRP can be correlated."""
-    interrupt_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='pay', ref='corr-id-1', input={'amount': 50}),
-        metadata={'interrupt': True},
+    """``Part.restart`` preserves the original tool_request.ref so the resumed TRP can be correlated."""
+    interrupt_trp = Part.from_tool_request(
+        name='pay', ref='corr-id-1', input={'amount': 50}, metadata={'interrupt': True}
     )
-    out = restart_tool(interrupt=interrupt_trp)
+    out = interrupt_trp.restart()
 
+    assert out.tool_request is not None
     assert out.tool_request.ref == 'corr-id-1'
 
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_response_preserves_ref() -> None:
-    """run_tool_after_restart produces a ToolResponsePart whose ref matches the restart TRP's ref."""
+    """run_tool_after_restart produces a Part whose ref matches the restart TRP's ref."""
     ai = Genkit()
 
     @ai.tool(name='t_ref')
     async def t_ref(inp: dict) -> str:  # noqa: ARG001
         return 'done'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='t_ref')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='t_ref')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='t_ref', ref='wire-ref-99', input={}),
-        metadata={'resumed': True},
-    )
+    restart_trp = Part.from_tool_request(name='t_ref', ref='wire-ref-99', input={}, metadata={'resumed': True})
     part = await run_tool_after_restart(tool=action, restart_trp=restart_trp)
+    assert part.tool_response is not None
     assert part.tool_response.ref == 'wire-ref-99'
 
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input() -> None:
-    """``run_tool_after_restart`` returns a ToolResponsePart whose ref matches the restart TRP;
+    """``run_tool_after_restart`` returns a Part whose ref matches the restart TRP;
     ``tool_request.input`` is what ``tool.run`` receives, and ``metadata.replacedInput`` is
-    ``ToolRunContext.original_input`` (prior interrupted input).
+    ``ToolContext.original_input`` (prior interrupted input).
     """
     ai = Genkit()
     received_inputs: list[dict] = []
     original_inputs: list[object | None] = []
 
     @ai.tool(name='transfer')
-    async def transfer(inp: dict, ctx: ToolRunContext) -> str:
+    async def transfer(inp: dict, ctx: ToolContext) -> str:
         received_inputs.append(dict(inp))
         original_inputs.append(ctx.original_input)
         if not inp.get('confirmed'):
             raise Interrupt({'reason': 'needs_approval'})
         return f'transferred {inp.get("amount")}'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='transfer')
     assert action is not None
 
     prior = {'amount': 100, 'confirmed': False}
     # Simulate a restart TRP: original input had confirmed=False, new input has confirmed=True.
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='transfer', ref='ref-42', input={'amount': 100, 'confirmed': True}),
+    restart_trp = Part.from_tool_request(
+        name='transfer',
+        ref='ref-42',
+        input={'amount': 100, 'confirmed': True},
         metadata={'resumed': True, 'replacedInput': prior},
     )
     result = await run_tool_after_restart(tool=action, restart_trp=restart_trp)
 
     # Ref is preserved from the restart TRP.
+    assert result.tool_response is not None
     assert result.tool_response.ref == 'ref-42'
     assert result.tool_response.name == 'transfer'
     # Primary arg is current tool_request.input; replacedInput is surfaced as original_input.
@@ -329,23 +314,20 @@ async def test_run_tool_after_restart_response_preserves_ref_and_uses_new_input(
 
 @pytest.mark.asyncio
 async def test_run_tool_after_restart_pipes_generate_context() -> None:
-    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolRunContext.context``."""
+    """``run_tool_after_restart(..., ctx=ctx)`` pipes custom_context into ``ToolContext.context``."""
     ai = Genkit()
     seen: list[dict[str, object]] = []
 
     @ai.tool(name='ctx_restart_tool')
-    async def ctx_restart_tool(inp: dict, ctx: ToolRunContext) -> str:  # noqa: ARG001
+    async def ctx_restart_tool(inp: dict, ctx: ToolContext) -> str:  # noqa: ARG001
         seen.append(dict(ctx.context))
         return 'resumed_ok'
 
-    action = await ai.registry.resolve_action(kind=ActionKind.TOOL, name='ctx_restart_tool')
+    action = await ai._registry.resolve_action(kind=ActionKind.TOOL, name='ctx_restart_tool')
     assert action is not None
 
-    restart_trp = ToolRequestPart(
-        tool_request=ToolRequest(name='ctx_restart_tool', ref='r1', input={}),
-        metadata={'resumed': True},
-    )
-    mw_ctx = GenerateMiddlewareContext(ai, custom_context={'auth_role': 'admin'})
+    restart_trp = Part.from_tool_request(name='ctx_restart_tool', ref='r1', input={}, metadata={'resumed': True})
+    mw_ctx = MiddlewareContext(ai, context={'auth_role': 'admin'})
     await run_tool_after_restart(tool=action, restart_trp=restart_trp, ctx=mw_ctx)
 
     assert seen == [{'auth_role': 'admin'}]

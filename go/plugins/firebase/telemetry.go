@@ -82,7 +82,7 @@ type FirebaseTelemetryOptions struct {
 //
 //	// Basic usage - uses environment variables for project ID
 //	firebase.EnableFirebaseTelemetry(nil)
-//	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+//	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 //
 //	// With full configuration
 //	firebase.EnableFirebaseTelemetry(&firebase.FirebaseTelemetryOptions{
@@ -93,7 +93,7 @@ type FirebaseTelemetryOptions struct {
 //		DisableTraces:              false,
 //		MetricExportIntervalMillis: &[]int{10000}[0], // 10 seconds
 //	})
-//	g, err := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
+//	g := genkit.Init(ctx, genkit.WithPlugins(&googlegenai.GoogleAI{}))
 func EnableFirebaseTelemetry(options *FirebaseTelemetryOptions) {
 	if options == nil {
 		options = &FirebaseTelemetryOptions{}

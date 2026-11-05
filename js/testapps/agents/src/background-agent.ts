@@ -26,7 +26,8 @@ import { ai } from './genkit.js';
 //     the background and return a snapshotId immediately.
 //   • The client can poll `getSnapshotDataAction` to check the status
 //     (pending → completed/failed/aborted).
-//   • The client can call `abortAgentAction` to cancel background work.
+//   • The client can call `abortAgentAction` to cancel background work. The
+//     aborted snapshot keeps the turns that finished and can be resumed.
 //   • A persistent store is REQUIRED for detach to work — the server needs
 //     somewhere to write the result when the background work completes.
 // ---------------------------------------------------------------------------
@@ -84,6 +85,40 @@ export const testBackgroundAgent = ai.defineFlow(
       messagePreview: snapshot?.state?.messages
         ?.slice(-1)?.[0]
         ?.content?.[0]?.text?.slice(0, 200),
+    };
+  }
+);
+
+/**
+ * Stops a background turn and continues from what it kept. Abort flips the
+ * pending snapshot; the runtime observes the flip, stops the work, and writes
+ * the turns that finished onto the `aborted` row, which `wait()` resolves with
+ * once that write has landed. The row resumes like any other: an input with
+ * no payload runs the stopped turn again on the conversation it left.
+ */
+export const testAbortBackgroundAgent = ai.defineFlow(
+  {
+    name: 'testAbortBackgroundAgent',
+    inputSchema: z.void(),
+    outputSchema: z.any(),
+  },
+  async () => {
+    const chat = backgroundAgent.chat();
+    const task = await chat.detach('Write a report on renewable energy trends');
+    const previousStatus = await task.abort();
+    const aborted = await task.wait({ intervalMs: 500 });
+
+    const resumed = backgroundAgent.chat({ snapshotId: task.snapshotId });
+    const res = await resumed.send({});
+
+    return {
+      snapshotId: task.snapshotId,
+      previousStatus,
+      abortedStatus: aborted.status,
+      abortedFinishReason: aborted.finishReason,
+      keptMessages: aborted.state?.messages?.length,
+      resumedFinishReason: res.finishReason,
+      resumedSnapshotId: resumed.snapshotId,
     };
   }
 );

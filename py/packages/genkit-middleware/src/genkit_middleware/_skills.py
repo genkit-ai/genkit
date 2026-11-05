@@ -26,13 +26,10 @@ from typing import Any
 import yaml
 from pydantic import BaseModel as PydanticBaseModel, Field
 
-from genkit._ai._model import Message
-from genkit._ai._tools import define_tool
-from genkit._core._action import Action
-from genkit._core._model import GenerateActionOptions, ModelResponse
-from genkit._core._registry import Registry
-from genkit._core._typing import Part, Role, TextPart
-from genkit.middleware import BaseMiddleware, GenerateHookParams, GenerateMiddlewareContext
+from genkit import Message, ModelResponse, Part, Role, Tool
+from genkit.middleware import GenerateHookParams, Middleware, MiddlewareContext
+from genkit.model import GenerateActionOptions
+from genkit.plugin_api import GenkitConfig
 
 _SKILLS_MARKER = 'skills-instructions'
 _MISSING_DESCRIPTION = 'No description provided.'
@@ -44,14 +41,17 @@ class _UseSkillInput(PydanticBaseModel):
     skill_name: str = Field(description='The name of the skill to load (as listed in the system prompt).')
 
 
-class SkillsConfig(PydanticBaseModel):
+class SkillsConfig(GenkitConfig):
     """Directories to scan for skill folders containing ``SKILL.md``."""
 
     skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
 
 
-class Skills(BaseMiddleware[SkillsConfig]):
+class Skills(Middleware[SkillsConfig]):
     """Skills middleware that exposes ``SKILL.md`` files as loadable instructions."""
+
+    name = 'skills'
+    description = 'Provides access to skill library for specialized instructions'
 
     def _scan_skills(self) -> dict[str, dict[str, str]]:
         skills: dict[str, dict[str, str]] = {}
@@ -126,14 +126,14 @@ class Skills(BaseMiddleware[SkillsConfig]):
                 break
 
         marker_meta: dict[str, Any] = {_SKILLS_MARKER: True}
-        new_part = Part(root=TextPart(text=prompt_text, metadata=marker_meta))
+        new_part = Part.from_text(prompt_text, metadata=marker_meta)
 
         if system_idx is not None:
             msg = messages[system_idx]
             new_content = []
             replaced = False
             for part in msg.content:
-                meta = part.root.metadata if isinstance(part.root, TextPart) else None
+                meta = part.metadata if part.text is not None else None
                 if isinstance(meta, dict) and meta.get(_SKILLS_MARKER):
                     new_content.append(new_part)
                     replaced = True
@@ -149,11 +149,9 @@ class Skills(BaseMiddleware[SkillsConfig]):
         new_options.messages = messages
         return new_options
 
-    def tools(self, ctx: GenerateMiddlewareContext) -> list[Action]:
+    def tools(self, ctx: MiddlewareContext) -> list[Tool]:
         if not self._scan_skills():
             return []
-
-        scratch = Registry()
 
         async def use_skill(input: _UseSkillInput) -> str:
             skill_name = input.skill_name
@@ -168,14 +166,13 @@ class Skills(BaseMiddleware[SkillsConfig]):
             except Exception as exc:
                 return f'Failed to read skill "{skill_name}": {exc}'
 
-        t = define_tool(scratch, use_skill, name='use_skill')
-        return [t.action()]
+        return [Tool(use_skill, description='Load a skill by name.')]
 
     async def wrap_generate(
         self,
         params: GenerateHookParams,
-        ctx: GenerateMiddlewareContext,
-        next_fn: Callable[[GenerateHookParams, GenerateMiddlewareContext], Awaitable[ModelResponse]],
+        ctx: MiddlewareContext,
+        next_fn: Callable[[GenerateHookParams, MiddlewareContext], Awaitable[ModelResponse]],
     ) -> ModelResponse:
         skills = await asyncio.to_thread(self._scan_skills)
         if skills:

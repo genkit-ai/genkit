@@ -70,8 +70,12 @@ export {
   UserFacingError,
   assertUnstable,
   getCallableJSON,
+  getErrorMessage,
   getHttpStatus,
+  inheritSpanMarks,
   type ErrorResponseMetadata,
+  type HttpErrorWireFormat,
+  type SpanFailureMarks,
   type StatusName,
 } from './error.js';
 export {
@@ -84,6 +88,11 @@ export {
   type FlowSideChannel,
 } from './flow.js';
 export * from './plugin.js';
+// Only what `genkit()` needs; the rest of reflection-config is internal.
+export {
+  resolveReflectionConfig,
+  type ReflectionConfig,
+} from './reflection-config.js';
 export * from './reflection.js';
 export {
   annotateSchema,
