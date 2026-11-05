@@ -523,9 +523,13 @@ def _encode_json_value(value: object) -> str:
     """Encode an object as a JSON string, dumping Pydantic models to dicts first."""
     if isinstance(value, str):
         return value
-    if isinstance(value, BaseModel):
-        return json.dumps(value.model_dump(mode='json'), default=str)
-    return json.dumps(value, default=str)
+
+    def _json_default(obj: object) -> object:
+        if isinstance(obj, BaseModel):
+            return obj.model_dump(mode='json')
+        return str(obj)
+
+    return json.dumps(value, default=_json_default)
 
 
 def _set_json_attribute(span: Span, key: str, value: object) -> None:

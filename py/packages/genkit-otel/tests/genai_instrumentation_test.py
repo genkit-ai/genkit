@@ -430,6 +430,33 @@ async def test_tool_arguments_pydantic_serialized_as_valid_json(harness) -> None
 
 
 @pytest.mark.asyncio
+async def test_tool_arguments_nested_pydantic_serialized_as_valid_json(harness) -> None:
+    """Nested Pydantic models in lists/dicts serialize to valid JSON."""
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        name: str
+        qty: int
+
+    instr = harness.instrumentation(content_capturing_mode='SPAN_AND_EVENT', emit_tool_spans=True)
+
+    await instr.run_in_new_span(
+        SpanMetadata(
+            name='bulk_order',
+            action_type='tool.v2',
+            input={'items': [Item(name='spring roll', qty=4)], 'special': Item(name='pad thai', qty=1)},
+        ),
+        lambda span=None: _awaitable({'status': 'ok'}),
+    )
+    span = harness.span_named('execute_tool bulk_order')
+    assert span is not None
+    raw_args = harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS)
+    assert raw_args is not None
+    parsed = json.loads(raw_args)
+    assert parsed == {'items': [{'name': 'spring roll', 'qty': 4}], 'special': {'name': 'pad thai', 'qty': 1}}
+
+
+@pytest.mark.asyncio
 async def test_does_not_capture_action_io_by_default(harness) -> None:
     instr = harness.instrumentation()
     await _run_model(
