@@ -8,8 +8,8 @@ and Ollama. Reports pass/fail/skip for each model.
 
 | Provider | Models |
 |----------|--------|
-| Google AI | `gemini-2.5-pro`, `gemini-2.5-flash` |
-| Vertex AI | `gemini-2.5-pro`, `gemini-2.5-flash` |
+| Google AI | `gemini-4-carbon`, `gemini-4-hydrogen` |
+| Vertex AI | `gemini-4-carbon`, `gemini-4-hydrogen` |
 | Vertex AI Model Garden | `claude-sonnet-4@20250514`, `meta/llama-4-maverick-17b-128e-instruct-maas` |
 | Ollama | `gemma2` |
 

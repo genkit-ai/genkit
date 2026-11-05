@@ -61,7 +61,7 @@ pnpm start
 1. **Open DevUI** at http://localhost:4000
 
 2. **Test basic flows**:
-   - [ ] `jokeFlow` — Joke generation (input: `{"modelName": "vertexai/gemini-2.5-pro", "subject": "cats"}`)
+   - [ ] `jokeFlow` — Joke generation (input: `{"modelName": "vertexai/gemini-4-carbon", "subject": "cats"}`)
    - [ ] `streamFlowVertex` — Streaming response
    - [ ] `streamJsonFlow` — Streaming JSON (RPG characters)
 
