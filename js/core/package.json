@@ -59,8 +59,7 @@
     "typescript": "^5.9.3"
   },
   "optionalDependencies": {
-    "@cfworker/json-schema": "^4.1.1",
-    "@genkit-ai/firebase": "^1.16.1"
+    "@cfworker/json-schema": "^4.1.1"
   },
   "types": "lib/index.d.ts",
   "exports": {
