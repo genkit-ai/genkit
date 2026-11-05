@@ -42,7 +42,7 @@ classifiers = [
   "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
-  "genkit>=0.12.0,<2",
+  "genkit>=0.13.0,<2",
   "pydantic>=2.11",
   "django>=5.0",
 ]
@@ -56,7 +56,7 @@ license = "Apache-2.0"
 name = "genkit-django"
 readme = "README.md"
 requires-python = ">=3.10"
-version = "0.12.0"
+version = "0.13.0"
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
