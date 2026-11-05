@@ -157,7 +157,7 @@ def _hang_exporter_on_process_logger(*, exporter: LogRecordExporter) -> None:
 
 def resolve_project(
     project: str | None = None,
-    credentials: dict[str, Any] | None = None,
+    credentials: dict[str, Any] | GoogleCredentials | None = None,
 ) -> str | None:
     """Resolve the GCP project ID from multiple sources.
 
@@ -169,7 +169,7 @@ def resolve_project(
 
     Args:
         project: Explicitly provided project ID.
-        credentials: Optional service-account credentials dict; its ``project_id`` key is read.
+        credentials: Optional service-account credentials dict or Credentials instance; its ``project_id`` is read.
 
     Returns:
         The resolved project ID or None.
@@ -184,8 +184,12 @@ def resolve_project(
             return env_value
 
     # Check credentials for project_id
-    if credentials and 'project_id' in credentials:
-        return credentials['project_id']
+    if credentials:
+        if isinstance(credentials, dict) and credentials.get('project_id'):
+            return str(credentials['project_id'])
+        creds_project = getattr(credentials, 'project_id', None)
+        if creds_project:
+            return str(creds_project)
 
     return None
 
@@ -303,7 +307,11 @@ class GcpTelemetry:
         should_export = self.force_dev_export or not is_dev
 
         if should_export and not self.project:
-            if isinstance(self.credentials, dict) and self.credentials.get('project_id'):
+            creds = self._get_google_credentials()
+            creds_project = getattr(creds, 'project_id', None)
+            if creds_project:
+                self.project = str(creds_project)
+            elif isinstance(self.credentials, dict) and self.credentials.get('project_id'):
                 self.project = str(self.credentials['project_id'])
             else:
                 # Only when exporting: an ADC lookup can probe the metadata server.

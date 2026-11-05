@@ -814,3 +814,15 @@ def test_structlog_trace_processor_placed_before_renderers() -> None:
         assert trace_idx < renderer_idx
     finally:
         structlog.configure(**saved_config)
+
+
+def test_resolve_project_with_credentials_object() -> None:
+    """resolve_project extracts project_id from Credentials instances."""
+    from genkit_google_cloud._telemetry._config import resolve_project
+
+    mock_creds = MagicMock()
+    mock_creds.project_id = 'resolved-from-creds-obj'
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+        project = resolve_project(credentials=mock_creds)
+        assert project == 'resolved-from-creds-obj'
