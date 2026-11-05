@@ -17,6 +17,7 @@
 import * as fs from 'fs';
 import type { JSONSchema7 } from 'json-schema';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import * as z from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -47,7 +48,8 @@ const IGNORED_TYPES = ['NestedSpanDataSchema'];
 async function generateJsonSchema(modulePaths: string[]): Promise<JSONSchema7> {
   const schemas: Record<string, z.ZodType> = {};
   for (const modulePath of modulePaths) {
-    const module = await import(modulePath);
+    const resolvedPath = path.resolve(import.meta.dirname, modulePath);
+    const module = await import(pathToFileURL(resolvedPath).href);
     Object.keys(module).forEach((key) => {
       if (module[key] instanceof z.ZodType && !IGNORED_TYPES.includes(key)) {
         const strippedKey = key.replace(/Schema$/, '');
@@ -71,11 +73,16 @@ if (!process.argv[2]) {
 }
 
 async function main() {
-  const schema = await generateJsonSchema(EXPORTED_TYPE_MODULES);
-  fs.writeFileSync(
-    path.join(process.argv[2], 'genkit-schema.json'),
-    JSON.stringify(schema, null, 2)
-  );
+  try {
+    const schema = await generateJsonSchema(EXPORTED_TYPE_MODULES);
+    fs.writeFileSync(
+      path.join(process.argv[2], 'genkit-schema.json'),
+      JSON.stringify(schema, null, 2)
+    );
+  } catch (error) {
+    console.error('Failed to export schema:', error);
+    process.exit(1);
+  }
 }
 
 main();
