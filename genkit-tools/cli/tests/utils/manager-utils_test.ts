@@ -39,7 +39,7 @@ import {
   startManager,
   waitForActionKeys,
   waitForRuntime,
-} from '../../src/utils/manager-utils';
+} from '../../src/utils/manager-utils.js';
 
 describe('getDevEnvVars', () => {
   // Setting GENKIT_TELEMETRY_SERVER makes resolveTelemetryServer return it

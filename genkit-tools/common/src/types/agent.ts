@@ -15,17 +15,17 @@
  */
 
 import { z } from 'zod';
-import { RuntimeErrorSchema } from './error';
+import { RuntimeErrorSchema } from './error.js';
 import {
   GenerationUsageSchema,
   MessageSchema,
   ModelResponseChunkSchema,
-} from './model';
+} from './model.js';
 import {
   PartSchema,
   ToolRequestPartSchema,
   ToolResponsePartSchema,
-} from './parts';
+} from './parts.js';
 
 /**
  * Zod schema for an artifact produced during a session.

@@ -21,13 +21,13 @@ const UUID_V4_REGEX =
 
 describe('analytics', () => {
   const store = new Map<string, any>();
-  let getAnalyticsSettings: typeof import('../../src/utils/analytics').getAnalyticsSettings;
-  let configstoreModule: typeof import('../../src/utils/configstore');
+  let getAnalyticsSettings: typeof import('../../src/utils/analytics.js').getAnalyticsSettings;
+  let configstoreModule: typeof import('../../src/utils/configstore.js');
 
   beforeEach(async () => {
     vi.resetModules();
-    configstoreModule = await import('../../src/utils/configstore');
-    ({ getAnalyticsSettings } = await import('../../src/utils/analytics'));
+    configstoreModule = await import('../../src/utils/configstore.js');
+    ({ getAnalyticsSettings } = await import('../../src/utils/analytics.js'));
 
     store.clear();
     vi.spyOn(configstoreModule.configstore, 'get').mockImplementation(

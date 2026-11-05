@@ -17,16 +17,16 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LocalFileDatasetStore } from '../../src/eval/localFileDatasetStore';
+import { LocalFileDatasetStore } from '../../src/eval/localFileDatasetStore.js';
 import {
   CreateDatasetRequestSchema,
   UpdateDatasetRequestSchema,
-} from '../../src/types/apis';
+} from '../../src/types/apis.js';
 import type {
   Dataset,
   DatasetMetadata,
   DatasetStore,
-} from '../../src/types/eval';
+} from '../../src/types/eval.js';
 
 vi.mock('fs/promises', () => ({
   get writeFile() {
@@ -162,7 +162,7 @@ vi.mock('process', () => {
 });
 
 const TEST_CASE_ID = 'test-case-1234-1234-1234';
-vi.mock('../../src/utils', () => ({
+vi.mock('../../src/utils/index.js', () => ({
   generateTestCaseId: vi.fn(() => TEST_CASE_ID),
 }));
 

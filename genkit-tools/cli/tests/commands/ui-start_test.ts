@@ -37,12 +37,12 @@ import {
   type Mocked,
   type MockedFunction,
 } from 'vitest';
-import { uiStart } from '../../src/commands/ui-start';
-import { detectCLIRuntime } from '../../src/utils/runtime-detector';
+import { uiStart } from '../../src/commands/ui-start.js';
+import { detectCLIRuntime } from '../../src/utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,
-} from '../../src/utils/spawn-config';
+} from '../../src/utils/spawn-config.js';
 
 // Mock all external dependencies
 vi.mock('@genkit-ai/tools-common/utils');
@@ -52,8 +52,8 @@ vi.mock('colorette');
 vi.mock('fs/promises');
 // Use real getPort - don't mock it
 vi.mock('open');
-vi.mock('../../src/utils/runtime-detector');
-vi.mock('../../src/utils/spawn-config');
+vi.mock('../../src/utils/runtime-detector.js');
+vi.mock('../../src/utils/spawn-config.js');
 
 const mockedFindProjectRoot = findProjectRoot as MockedFunction<
   typeof findProjectRoot

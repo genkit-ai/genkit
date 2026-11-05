@@ -30,7 +30,7 @@ import { logDataFromOtlp, traceDataFromOtlp } from './utils/otlp.js';
 
 export { LocalFileLogStore } from './file-log-store.js';
 export { LocalFileTraceStore } from './file-trace-store.js';
-export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types';
+export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types.js';
 
 let server: http.Server;
 const broadcastManager = new BroadcastManager();

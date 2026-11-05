@@ -25,14 +25,14 @@ import {
   vi,
   type Mock,
 } from 'vitest';
-import { LocalFileEvalStore } from '../../src/eval/localFileEvalStore';
+import { LocalFileEvalStore } from '../../src/eval/localFileEvalStore.js';
 import {
   EvalRunSchema,
   type EvalResult,
   type EvalRun,
   type EvalRunKey,
   type EvalStore,
-} from '../../src/types/eval';
+} from '../../src/types/eval.js';
 
 // Mock modules
 vi.mock('fs/promises', () => ({

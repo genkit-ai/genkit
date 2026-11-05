@@ -17,8 +17,7 @@
 import * as clc from 'colorette';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import { getDatasetStore, getEvalStore } from '.';
-import type { BaseRuntimeManager } from '../manager/manager';
+import type { BaseRuntimeManager } from '../manager/manager.js';
 import {
   GenerateActionOptions,
   GenerateResponseData,
@@ -31,7 +30,7 @@ import {
   type EvalRunKey,
   type RunNewEvaluationRequest,
   type SpanData,
-} from '../types';
+} from '../types/index.js';
 import {
   evaluatorName,
   generateTestCaseId,
@@ -41,12 +40,13 @@ import {
   isEvaluator,
   logger,
   stackTraceSpans,
-} from '../utils';
+} from '../utils/index.js';
+import { getDatasetStore, getEvalStore } from './index.js';
 import {
   enrichResultsWithScoring,
   extractMetricSummaries,
   extractMetricsMetadata,
-} from './parser';
+} from './parser.js';
 
 interface InferenceRunState {
   testCaseId: string;

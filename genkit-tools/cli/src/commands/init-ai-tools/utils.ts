@@ -19,8 +19,8 @@ import { existsSync, readFileSync } from 'fs';
 import { Runtime } from '@genkit-ai/tools-common/manager';
 import * as crypto from 'crypto';
 import { writeFile } from 'fs/promises';
-import { GENKIT_CONTEXT as GoContext } from './context/go';
-import { GENKIT_CONTEXT as NodeContext } from './context/nodejs';
+import { GENKIT_CONTEXT as GoContext } from './context/go.js';
+import { GENKIT_CONTEXT as NodeContext } from './context/nodejs.js';
 
 /** Shared location for the GENKIT.md context file */
 export const GENKIT_PROMPT_PATH = 'GENKIT.md';

@@ -19,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cleanTraceJson,
   formatTraceTree,
-} from '../../src/utils/trace-formatter';
+} from '../../src/utils/trace-formatter.js';
 
 describe('trace-formatter', () => {
   describe('cleanTraceJson', () => {

@@ -16,7 +16,7 @@
 
 import { ChildProcess, spawn } from 'child_process';
 import terminate from 'terminate';
-import { logger } from '../utils';
+import { logger } from '../utils/index.js';
 
 export type ProcessStatus = 'running' | 'stopped' | 'unconfigured';
 

@@ -16,8 +16,12 @@
 
 import { Runtime } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
-import { AIToolConfigResult, AIToolModule, InitConfigOptions } from '../types';
-import { GENKIT_PROMPT_PATH, initGenkitFile } from '../utils';
+import {
+  AIToolConfigResult,
+  AIToolModule,
+  InitConfigOptions,
+} from '../types.js';
+import { GENKIT_PROMPT_PATH, initGenkitFile } from '../utils.js';
 
 /** Configuration module for GENKIT.md context file for generic use */
 export const generic: AIToolModule = {

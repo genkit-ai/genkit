@@ -20,8 +20,8 @@
 //
 
 import { z } from 'zod';
-import { MiddlewareRefSchema } from './middleware';
-import { GenerationCommonConfigSchema } from './model';
+import { MiddlewareRefSchema } from './middleware.js';
+import { GenerationCommonConfigSchema } from './model.js';
 
 /**
  * Formal schema for prompt YAML frontmatter.

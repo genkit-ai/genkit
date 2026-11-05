@@ -16,11 +16,11 @@
 
 import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineFlowTools } from '../../src/mcp/flows';
-import { defineRuntimeTools } from '../../src/mcp/runtime';
-import { defineTraceTools } from '../../src/mcp/trace';
-import { McpRuntimeManager, type McpToolOptions } from '../../src/mcp/utils';
-import * as managerUtils from '../../src/utils/manager-utils';
+import { defineFlowTools } from '../../src/mcp/flows.js';
+import { defineRuntimeTools } from '../../src/mcp/runtime.js';
+import { defineTraceTools } from '../../src/mcp/trace.js';
+import { McpRuntimeManager, type McpToolOptions } from '../../src/mcp/utils.js';
+import * as managerUtils from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
   const actual =

@@ -15,9 +15,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defineDocsTool } from '../../src/mcp/docs';
-import * as docsUtils from '../../src/utils/docs';
-import { SAMPLE_DOCS } from '../utils/docs';
+import { defineDocsTool } from '../../src/mcp/docs.js';
+import * as docsUtils from '../../src/utils/docs.js';
+import { SAMPLE_DOCS } from '../utils/docs.js';
 
 describe('MCP docs tools', () => {
   let registeredTools: Record<string, (opts: any) => Promise<any>>;

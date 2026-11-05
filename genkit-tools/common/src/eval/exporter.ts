@@ -16,8 +16,8 @@
 
 import { writeFile } from 'fs/promises';
 import { json2csv } from 'json-2-csv';
-import type { EvalRun } from '../types/eval';
-import { logger } from '../utils/logger';
+import type { EvalRun } from '../types/eval.js';
+import { logger } from '../utils/logger.js';
 
 const SUPPORTED_FORMATS: Record<string, EvalExporter> = {
   csv: toCsv,

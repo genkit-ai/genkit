@@ -1,10 +1,7 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "module": "ES2022",
-    "moduleResolution": "Node",
-    "outDir": "lib/esm",
-    "esModuleInterop": true,
+    "outDir": "lib",
     "typeRoots": ["./node_modules/@types"],
     "rootDir": "src"
   },

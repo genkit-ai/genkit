@@ -17,13 +17,13 @@
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import z from 'zod';
-import { McpRunToolEvent } from './analytics';
+import { McpRunToolEvent } from './analytics.js';
 import {
   McpToolOptions,
   formatMcpError,
   getCommonSchema,
   resolveProjectRoot,
-} from './utils';
+} from './utils.js';
 
 export function defineTraceTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(

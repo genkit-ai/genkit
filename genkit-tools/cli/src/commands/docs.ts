@@ -22,7 +22,7 @@ import {
   detectProjectLanguage,
   loadDocs,
   searchDocs,
-} from '../utils/docs';
+} from '../utils/docs.js';
 
 export const docsList = new Command('docs:list')
   .description('list available Genkit documentation files')

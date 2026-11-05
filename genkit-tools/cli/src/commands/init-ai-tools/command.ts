@@ -19,12 +19,12 @@ import { detectRuntime, logger } from '@genkit-ai/tools-common/utils';
 import { checkbox, select } from '@inquirer/prompts';
 import * as clc from 'colorette';
 import { Command } from 'commander';
-import { claude } from './ai-tools/claude';
-import { cursor } from './ai-tools/cursor';
-import { gemini } from './ai-tools/gemini';
-import { generic } from './ai-tools/generic';
-import { studio } from './ai-tools/studio';
-import { AIToolChoice, AIToolModule, InitConfigOptions } from './types';
+import { claude } from './ai-tools/claude.js';
+import { cursor } from './ai-tools/cursor.js';
+import { gemini } from './ai-tools/gemini.js';
+import { generic } from './ai-tools/generic.js';
+import { studio } from './ai-tools/studio.js';
+import { AIToolChoice, AIToolModule, InitConfigOptions } from './types.js';
 
 /** Set of all supported AI tools that can be configured (incl. a generic
  * configuration) */
