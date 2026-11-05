@@ -104,6 +104,7 @@ from genkit._core._logger import (
     configure_logging,
     get_logger,
     has_app_uvicorn_logging,
+    quiet_log_export_logs,
     quiet_reflection_logs,
 )
 from genkit._core._middleware import Middleware
@@ -1211,6 +1212,7 @@ class Genkit:
                 than a background thread nobody is watching.
         """
         config = self._reflection_config
+        quiet_log_export_logs()
 
         sock: socket.socket | None = None
         if config.mode == 'v1':

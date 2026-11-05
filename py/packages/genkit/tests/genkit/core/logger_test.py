@@ -5,6 +5,7 @@
 
 import logging
 import os
+import threading
 from collections.abc import Iterator
 from typing import Any
 from unittest import mock
@@ -16,10 +17,12 @@ from structlog.testing import capture_logs
 
 from genkit._core._logger import (
     GENKIT_LOG,
+    LOG_EXPORT_THREAD_NAME,
     QUIET_LOGGERS,
     REFLECTION_LOGGERS,
     REFLECTION_THREAD_NAME,
     ReflectionLogFilter,
+    _genkit_quieted_levels,
     configure_logging,
     configure_structlog_level,
     get_logger,
@@ -58,10 +61,17 @@ def test_resolve_level() -> None:
         assert resolve_level() == logging.INFO
 
 
-def _record(level: int, thread_name: str) -> logging.LogRecord:
-    record = logging.LogRecord('uvicorn.access', level, __file__, 1, 'GET /api/__health', None, None)
-    record.threadName = thread_name
-    return record
+def _record(level: int) -> logging.LogRecord:
+    return logging.LogRecord('uvicorn.access', level, __file__, 1, 'GET /api/__health', None, None)
+
+
+def _filter_on_thread(log_filter: logging.Filter, record: logging.LogRecord, thread_name: str) -> bool:
+    result: list[bool] = []
+    thread = threading.Thread(target=lambda: result.append(log_filter.filter(record)), name=thread_name)
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    return result[0]
 
 
 @pytest.mark.parametrize(
@@ -76,9 +86,22 @@ def _record(level: int, thread_name: str) -> logging.LogRecord:
 )
 def test_reflection_filter_quiets_only_the_reflection_thread(genkit_log: str, level: int, passes: bool) -> None:
     """Reflection records follow max(WARNING, GENKIT_LOG); debug lets them all through."""
+    log_filter = ReflectionLogFilter()
     with mock.patch.dict(os.environ, {GENKIT_LOG: genkit_log}):
-        assert ReflectionLogFilter().filter(_record(level, REFLECTION_THREAD_NAME)) is passes
-        assert ReflectionLogFilter().filter(_record(level, 'MainThread')) is True
+        assert _filter_on_thread(log_filter, _record(level), REFLECTION_THREAD_NAME) is passes
+        assert log_filter.filter(_record(level)) is True
+
+
+def test_reflection_filter_works_when_log_threads_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Disabling logging.logThreads leaves record.threadName None without bypassing the filter."""
+    monkeypatch.setattr(logging, 'logThreads', False)
+    log_filter = ReflectionLogFilter()
+    record = _record(logging.INFO)
+    assert record.threadName is None
+
+    with mock.patch.dict(os.environ, {GENKIT_LOG: 'info'}):
+        assert _filter_on_thread(log_filter, record, REFLECTION_THREAD_NAME) is False
+        assert log_filter.filter(record) is True
 
 
 def test_quiet_reflection_logs_adds_one_filter_and_keeps_levels() -> None:
@@ -155,6 +178,88 @@ def test_configure_logging_respects_user_configured_levels() -> None:
         mock_get_logger.return_value.level = logging.DEBUG
         configure_logging(shared_tty=True)
         mock_get_logger.return_value.setLevel.assert_not_called()
+
+
+def test_configure_logging_filters_log_export_thread_even_when_app_enables_httpx_info() -> None:
+    """Log-export httpx INFO hops are dropped while the app's own httpx INFO hops pass."""
+    loggers = [logging.getLogger(name) for name in QUIET_LOGGERS]
+    saved = [(lg, lg.level, list(lg.handlers), list(lg.filters), lg.propagate) for lg in loggers]
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    httpx_logger = logging.getLogger('httpx')
+    try:
+        for lg in loggers:
+            _genkit_quieted_levels.pop(lg, None)
+            lg.filters = []
+        httpx_logger.setLevel(logging.INFO)
+        httpx_logger.handlers = [_Capture()]
+        httpx_logger.propagate = False
+
+        with mock.patch.dict(os.environ, {GENKIT_LOG: 'info'}):
+            configure_logging(shared_tty=True)
+            configure_logging(shared_tty=True)
+
+            assert httpx_logger.level == logging.INFO
+            assert sum(isinstance(f, ReflectionLogFilter) for f in httpx_logger.filters) == 1
+
+            export_thread = threading.Thread(
+                target=lambda: httpx_logger.info('POST http://127.0.0.1:4033/api/otlp "HTTP/1.1 200 OK"'),
+                name=LOG_EXPORT_THREAD_NAME,
+            )
+            export_thread.start()
+            export_thread.join(timeout=5)
+            httpx_logger.info('GET https://menu.example.com/dishes "HTTP/1.1 200 OK"')
+
+        assert [r.getMessage() for r in records] == ['GET https://menu.example.com/dishes "HTTP/1.1 200 OK"']
+
+        with mock.patch.dict(os.environ, {GENKIT_LOG: 'debug'}):
+            debug_thread = threading.Thread(
+                target=lambda: httpx_logger.info('POST http://127.0.0.1:4033/api/otlp "HTTP/1.1 200 OK"'),
+                name=LOG_EXPORT_THREAD_NAME,
+            )
+            debug_thread.start()
+            debug_thread.join(timeout=5)
+
+        assert 'POST http://127.0.0.1:4033/api/otlp "HTTP/1.1 200 OK"' in [r.getMessage() for r in records]
+    finally:
+        for lg, level, handlers, filters, propagate in saved:
+            _genkit_quieted_levels.pop(lg, None)
+            lg.setLevel(level)
+            lg.handlers = handlers
+            lg.filters = filters
+            lg.propagate = propagate
+
+
+def test_configure_logging_updates_quiet_level_across_calls() -> None:
+    """Repeated configure_logging calls update Genkit-managed quiet levels without duplicating filters."""
+    loggers = [logging.getLogger(name) for name in QUIET_LOGGERS]
+    saved = [(lg, lg.level, list(lg.handlers), list(lg.filters)) for lg in loggers]
+    try:
+        for lg in loggers:
+            _genkit_quieted_levels.pop(lg, None)
+            lg.setLevel(logging.NOTSET)
+            lg.filters = []
+
+        with mock.patch.dict(os.environ, {GENKIT_LOG: 'info'}):
+            configure_logging(shared_tty=True)
+        for lg in loggers:
+            assert lg.level == logging.WARNING
+
+        with mock.patch.dict(os.environ, {GENKIT_LOG: 'debug'}):
+            configure_logging(shared_tty=True)
+        for lg in loggers:
+            assert lg.level == logging.DEBUG
+            assert sum(isinstance(f, ReflectionLogFilter) for f in lg.filters) == 1
+    finally:
+        for lg, level, handlers, filters in saved:
+            _genkit_quieted_levels.pop(lg, None)
+            lg.setLevel(level)
+            lg.handlers = handlers
+            lg.filters = filters
 
 
 def test_has_app_uvicorn_logging() -> None:
