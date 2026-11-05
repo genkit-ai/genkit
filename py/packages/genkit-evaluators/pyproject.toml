@@ -28,9 +28,12 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Topic :: Software Development :: Libraries :: Application Frameworks",
+  "Typing :: Typed",
 ]
 dependencies = [
-  "genkit",
+  # Final release line: genkit 1.0 removes evaluators. bump_version moves the
+  # floor to each release; the <1 cap stays.
+  "genkit>=0.12.0,<1",
   "jsonata-python>=0.6.0",
 ]
 description = "Regex and schema checks for genkit eval:run. No API key."

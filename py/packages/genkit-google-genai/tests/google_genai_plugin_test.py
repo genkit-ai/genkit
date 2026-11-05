@@ -49,11 +49,14 @@ from genkit_google_genai._models._virtual_try_on import VirtualTryOnConfig
 from google.genai import types as genai_types
 
 from genkit import Document, Genkit, GenkitError, Message, Operation, Part, Role
-from genkit._core._schema import custom_options_schema, to_json_schema
+
+# TID251: whitebox check that the advertised `customOptions` matches core's
+# null-default-stripping schema helper, which has no public export.
+from genkit._core._schema import custom_options_schema  # noqa: TID251
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.evaluator import BaseDataPoint
 from genkit.model import BackgroundModel, ModelRequest
-from genkit.plugin_api import Action, ActionKind
+from genkit.plugin_api import Action, ActionKind, to_json_schema
 
 
 def _custom_options(action: Action) -> object:
@@ -699,7 +702,7 @@ async def test_embed_applies_a_typed_ref_config(mock_list_models: MagicMock, moc
     )
     mock_client.return_value.aio.models.embed_content = embed_content
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    ref = GoogleAI.embedding(
+    ref = GoogleAI.embedder(
         'gemini-embedding-001',
         config=EmbeddingConfig(
             task_type='RETRIEVAL_QUERY',
@@ -742,7 +745,7 @@ async def test_embed_call_config_overrides_the_ref_config_in_either_spelling(
     )
     mock_client.return_value.aio.models.embed_content = embed_content
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    ref = GoogleAI.embedding(
+    ref = GoogleAI.embedder(
         'gemini-embedding-001',
         config=EmbeddingConfig(task_type='RETRIEVAL_DOCUMENT'),
     )
@@ -1401,7 +1404,7 @@ async def test_embed_call_config_keeps_the_ref_fields_it_does_not_set(
     )
     mock_client.return_value.aio.models.embed_content = embed_content
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    ref = GoogleAI.embedding(
+    ref = GoogleAI.embedder(
         'gemini-embedding-001',
         config=EmbeddingConfig(output_dimensionality=256, version='gemini-embedding-2'),
     )
@@ -1439,7 +1442,7 @@ async def test_embed_call_config_explicit_none_clears_ref_field(
     )
     mock_client.return_value.aio.models.embed_content = embed_content
     ai = Genkit(plugins=[GoogleAI(api_key='test-key')])
-    ref = GoogleAI.embedding(
+    ref = GoogleAI.embedder(
         'gemini-embedding-001',
         config=EmbeddingConfig(task_type='RETRIEVAL_DOCUMENT', output_dimensionality=256),
     )
@@ -1466,7 +1469,7 @@ async def test_embed_rejects_duplicate_spellings_in_one_call_dict(
 
     with pytest.raises(GenkitError, match='are the same setting; pass one') as exc_info:
         await ai.embed(
-            embedder=GoogleAI.embedding('gemini-embedding-001'),
+            embedder=GoogleAI.embedder('gemini-embedding-001'),
             content='hello',
             config={'task_type': 'RETRIEVAL_QUERY', 'taskType': 'CLUSTERING'},
         )
@@ -1489,7 +1492,7 @@ async def test_embed_rejects_wrong_config_class_at_call_time(
 
     with pytest.raises(GenkitError, match='EmbeddingConfig') as exc_info:
         await ai.embed(
-            embedder=GoogleAI.embedding('gemini-embedding-001'),
+            embedder=GoogleAI.embedder('gemini-embedding-001'),
             content='hello',
             config=GeminiConfig(temperature=0.5),
         )

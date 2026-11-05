@@ -17,11 +17,13 @@
 """Error classes and utilities for the Genkit framework."""
 
 import builtins
+import copy
 import importlib
 import math
 import reprlib
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, cast, get_args
@@ -30,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_
 from pydantic.alias_generators import to_camel
 from pydantic_core import ErrorDetails
 from pydantic_core.core_schema import ErrorType
+from typing_extensions import Self
 
 from genkit._core._compat import StrEnum
 from genkit._core._typing import _RuntimeErrorWire
@@ -770,7 +773,65 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
-def error_status(error: object) -> int:
+def _split_rendered(error: GenkitError) -> tuple[str | None, str]:
+    """Split ``str(error)`` (``[source: ]STATUS: message[: cause]``) into source and message-with-cause.
+
+    GenkitError keeps ``source`` only as a prefix on its string form, so read
+    it back from there. The first ``STATUS: message`` is the anchor; a cause
+    suffix can repeat it but always comes after.
+    """
+    text = str(error)
+    at = text.find(f'{error.status}: {error.message}')
+    if at < 0:
+        return None, error.message
+    return text[:at].removesuffix(': ') or None, text[at + len(error.status) + 2 :]
+
+
+@dataclass(frozen=True)
+class BoxedFailure:
+    """Plain-data record of a boxed turn failure for SSE error framing.
+
+    Stores only strings and JSON-safe PublicError details—never a live
+    BaseException or traceback—so a failed ModelResponse retains no frame
+    locals and survives deepcopy and pickle round-trips.
+    """
+
+    status: StatusName
+    message: str
+    is_public: bool = False
+    details: Any = None  # noqa: ANN401
+    source: str | None = None
+
+    @classmethod
+    def from_exc(cls, exc: BaseException) -> Self:
+        """Capture plain-data failure metadata from an exception without holding it."""
+        if isinstance(exc, PublicError):
+            try:
+                details = _client_details(exc.details)
+            except Exception:
+                details = None
+            return cls(status=exc.status, message=exc.message, is_public=True, details=details)
+        if isinstance(exc, GenkitError):
+            source, message = _split_rendered(exc)
+            return cls(status=exc.status, message=message, source=source)
+        text = str(exc)
+        return cls(
+            status='INTERNAL',
+            message=f'{type(exc).__name__}: {text}' if text else type(exc).__name__,
+        )
+
+    def to_exception(self) -> GenkitError:
+        """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
+        if self.is_public:
+            return PublicError(
+                self.status,
+                self.message,
+                details=copy.deepcopy(self.details) if self.details is not None else None,
+            )
+        return GenkitError(status=self.status, message=self.message, source=self.source)
+
+
+def error_status(error: Exception) -> int:
     """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
     A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
@@ -819,7 +880,7 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def error_body(error: object) -> dict[str, Any]:
+def error_body(error: Exception) -> dict[str, Any]:
     """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's

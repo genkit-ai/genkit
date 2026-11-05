@@ -27,14 +27,12 @@ from mcp.types import (
     CallToolResult,
     EmbeddedResource,
     ImageContent,
-    ResourceLink,
     TextContent,
     TextResourceContents,
     Tool as McpTool,
 )
 
 from genkit import MultipartToolResponse, Part, Tool, ToolContext, get_logger
-from genkit._core._typing import Resource
 from genkit_mcp._errors import _ToolResultError
 
 McpToolCall = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[CallToolResult]]
@@ -122,9 +120,11 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
 
     Text blocks are concatenated into ``output``, parsed as JSON only when the
     text begins with ``{`` or ``[``. ``structuredContent`` wins over text when
-    present. Image, audio and blob resource blocks become media parts, and a
-    resource link becomes a resource part. An error result yields an ``error``
-    output and drops any media, so the model can read the failure and retry.
+    present. Image, audio, and blob resource blocks become media parts; text
+    resource blocks append to text output; resource links are skipped since
+    Genkit Python does not expose resource actions. An error result yields an
+    ``error`` output and drops any media, so the model can read the failure and
+    retry.
 
     Args:
         result: What ``ClientSession.call_tool`` returned.
@@ -147,8 +147,6 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
             text_output += block.text
         elif isinstance(block, (ImageContent, AudioContent)):
             content.append(_media_part(block.mimeType, block.data))
-        elif isinstance(block, ResourceLink):
-            content.append(Part(resource=Resource(uri=str(block.uri))))
         elif isinstance(block, EmbeddedResource):
             resource = block.resource
             if isinstance(resource, TextResourceContents):

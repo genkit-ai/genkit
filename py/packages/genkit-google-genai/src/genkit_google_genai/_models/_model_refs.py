@@ -43,7 +43,7 @@ FAMILY_METHOD: dict[str, str] = {
     'image': 'gemini_image',
     'gemma': 'gemma',
     'veo': 'veo',
-    'embedder': 'embedding',
+    'embedder': 'embedder',
 }
 
 # Families one plugin class serves: display name, constructor, and that class.
@@ -58,7 +58,7 @@ PLUGIN_FAMILY_METHODS: dict[str, tuple[str, str, str]] = {
 def wrong_family_error(*, plugin_class: str, method: str, family: str, local: str, actual: str) -> GenkitError:
     """Build the INVALID_ARGUMENT error naming the id and the way out."""
     if actual == 'embedder':
-        hint = f"'{local}' is an embedder; use {plugin_class}.embedding()."
+        hint = f"'{local}' is an embedder; use {plugin_class}.embedder()."
     elif actual in PLUGIN_FAMILY_METHODS:
         display, method_name, owner = PLUGIN_FAMILY_METHODS[actual]
         hint = (
@@ -123,14 +123,14 @@ def family_embedder_ref(
     """
     if not isinstance(name, str):
         raise GenkitError(
-            status='INVALID_ARGUMENT', message=f'{plugin_class}.embedding: embedder name must be a string.'
+            status='INVALID_ARGUMENT', message=f'{plugin_class}.embedder: embedder name must be a string.'
         )
     local = strip_ref_prefixes(name)
     if not local:
-        raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.embedding: embedder name is required.')
+        raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.embedder: embedder name is required.')
     actual = classify_family(local)
     if actual not in ('embedder', 'unknown'):
         raise wrong_family_error(
-            plugin_class=plugin_class, method='embedding', family='embedder', local=local, actual=actual
+            plugin_class=plugin_class, method='embedder', family='embedder', local=local, actual=actual
         )
     return EmbedderRef(name=f'{namespace}/{local}', config_schema=EmbeddingConfig, config=config)

@@ -52,6 +52,8 @@ from mcp.types import (
     Tool as McpTool,
 )
 
+from genkit import get_logger
+
 ALL_TOOLS = [
     'echo',
     'second',
@@ -178,12 +180,12 @@ async def hold_in_flight(connection: McpConnection) -> Blocker:
 
 
 def rendered_for_logs(error: BaseException) -> str:
-    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    """Render ``error``'s exception chain and frame locals into an isolated ``StringIO`` buffer."""
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)

@@ -94,7 +94,7 @@ ANTIGRAVITY_INFO = ModelInfo(
     supports=ModelSupports(
         multiturn=True,
         media=True,
-        tools=False,
+        tools=True,
         tool_choice=False,
         system_role=False,
         output=['text'],
@@ -102,7 +102,7 @@ ANTIGRAVITY_INFO = ModelInfo(
 )
 
 KNOWN_ANTIGRAVITY_MODELS: dict[str, ModelInfo] = {
-    'antigravity-preview-05-2026': ANTIGRAVITY_INFO,
+    'antigravity-preview-09-2026': ANTIGRAVITY_INFO,
 }
 
 

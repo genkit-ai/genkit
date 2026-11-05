@@ -20,7 +20,7 @@ import json
 from typing import Any, cast
 
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, StabilityImageConfig
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -28,6 +28,7 @@ from genkit import Genkit, GenkitError
 
 CHAT_MODEL = 'bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0'
 IMAGE_MODEL = 'bedrock/stability.sd3-5-large-v1:0'
+# Retired on Bedrock and not typed; the raw IDs still route and take extra.
 NOVA_CANVAS = 'bedrock/amazon.nova-canvas-v1:0'
 TITAN_IMAGE = 'bedrock/amazon.titan-image-generator-v2:0'
 THINKING = {'thinking': {'type': 'enabled', 'budget_tokens': 2048}}
@@ -129,7 +130,7 @@ async def test_generate_bedrock_image_extra_key_overrides_built_field() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_bedrock_image_extra_deep_merges_nested_object() -> None:
-    """`extra={'imageGenerationConfig': {'seed': 7}}` sets `seed` and keeps the other defaults."""
+    """`extra={'imageGenerationConfig': {'seed': 7}}` on a retired Nova Canvas ID lands next to the prompt fields."""
     ai, transport = bedrock_app()
 
     await ai.generate(
@@ -139,15 +140,11 @@ async def test_generate_bedrock_image_extra_deep_merges_nested_object() -> None:
     )
 
     body = json.loads(transport.invoke_calls[0]['body'])
-    assert body['imageGenerationConfig'] == {
-        'numberOfImages': 1,
-        'height': 1024,
-        'width': 1024,
-        'cfgScale': 8.0,
-        'seed': 7,
-        'quality': 'standard',
+    assert body == {
+        'taskType': 'TEXT_IMAGE',
+        'textToImageParams': {'text': 'a reef'},
+        'imageGenerationConfig': {'seed': 7},
     }
-    assert body['taskType'] == 'TEXT_IMAGE'
 
 
 @pytest.mark.asyncio
@@ -194,26 +191,102 @@ async def test_generate_bedrock_image_extra_prompt_field_fails_invalid_argument(
 
 @pytest.mark.asyncio
 async def test_generate_bedrock_image_extra_not_a_mapping_fails_invalid_argument() -> None:
-    """`config={'extra': 'oops'}` fails with INVALID_ARGUMENT instead of an AttributeError, and sends nothing."""
+    """`config={'extra': 'oops'}` fails with INVALID_ARGUMENT before the call, and sends nothing."""
     ai, transport = bedrock_app()
 
-    response = await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'extra': 'oops'})
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'extra': 'oops'})
 
-    assert response.error is not None
-    assert response.error.status == 'INVALID_ARGUMENT'
-    assert "config['extra'] must be a mapping" in response.error.message
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert "'extra'" in str(exc_info.value)
     assert transport.invoke_calls == []
 
 
 @pytest.mark.asyncio
-async def test_generate_bedrock_image_undeclared_key_is_accepted() -> None:
-    """`config={'aspect_ratio': '16:9'}` on a Stability model is sent; image config does not reject unknown keys."""
+@pytest.mark.parametrize(
+    ('model', 'config', 'expected'),
+    [
+        (
+            TITAN_IMAGE,
+            {'extra': {'imageGenerationConfig': {'numberOfImages': 2, 'width': 512, 'height': 512}}},
+            {
+                'taskType': 'TEXT_IMAGE',
+                'textToImageParams': {'text': 'a reef'},
+                'imageGenerationConfig': {'numberOfImages': 2, 'width': 512, 'height': 512},
+            },
+        ),
+        (
+            IMAGE_MODEL,
+            StabilityImageConfig(aspect_ratio='16:9', seed=42, negative_prompt='blurry', output_format='jpeg'),
+            {
+                'prompt': 'a reef',
+                'output_format': 'jpeg',
+                'aspect_ratio': '16:9',
+                'seed': 42,
+                'negative_prompt': 'blurry',
+            },
+        ),
+    ],
+    ids=['titan_extra', 'stability_typed'],
+)
+async def test_generate_bedrock_image_config_reaches_the_wire(
+    model: str, config: Any, expected: dict[str, Any]
+) -> None:  # noqa: ANN401
+    """A typed Stability config and a raw extra on a retired Amazon ID each map to their wire body."""
     ai, transport = bedrock_app()
 
-    await ai.generate(model=IMAGE_MODEL, prompt='a reef', config={'aspect_ratio': '16:9'})
+    response = await ai.generate(model=model, prompt='a reef', config=config)
 
-    body = json.loads(transport.invoke_calls[0]['body'])
-    assert body['aspect_ratio'] == '16:9'
+    assert response.error is None
+    assert json.loads(transport.invoke_calls[0]['body']) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('model', 'config', 'needle'),
+    [
+        (IMAGE_MODEL, {'aspect_ratio': '16:9', 'style_preset': 'photographic'}, "'style_preset'"),
+        (IMAGE_MODEL, {'aspect_ratio': '16:9', 'temperature': 0.4}, "'temperature'"),
+        # The retired Amazon models declare only extra, so even the old nested
+        # object and the formerly typed fields point there.
+        (NOVA_CANVAS, {'imageGenerationConfig': {'seed': 7}}, "'imageGenerationConfig'"),
+        (TITAN_IMAGE, {'number_of_images': 2}, "'number_of_images'"),
+        (NOVA_CANVAS, {'maxOutputTokens': 10}, "'maxOutputTokens'"),
+    ],
+    ids=[
+        'stability_unlisted_field',
+        'stability_temperature',
+        'nova_nested_object',
+        'titan_former_field',
+        'nova_max_output_tokens',
+    ],
+)
+async def test_generate_bedrock_image_unknown_key_fails_and_points_to_extra(
+    model: str, config: dict[str, Any], needle: str
+) -> None:
+    """An undeclared image config key raises INVALID_ARGUMENT naming it and `extra`, and sends nothing."""
+    ai, transport = bedrock_app()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=model, prompt='a reef', config=config)
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert needle in str(exc_info.value)
+    assert "config['extra']" in str(exc_info.value)
+    assert transport.invoke_calls == []
+
+
+@pytest.mark.asyncio
+async def test_generate_bedrock_image_stability_config_on_a_retired_amazon_id_fails() -> None:
+    """`StabilityImageConfig` on a Titan Image ID is rejected; that ID takes only `extra`."""
+    ai, transport = bedrock_app()
+
+    with pytest.raises(GenkitError) as exc_info:
+        await ai.generate(model=TITAN_IMAGE, prompt='a reef', config=StabilityImageConfig(seed=7))
+
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'AmazonImageConfig' in str(exc_info.value)
+    assert transport.invoke_calls == []
 
 
 @pytest.mark.asyncio
@@ -223,18 +296,7 @@ async def test_generate_bedrock_image_undeclared_key_is_accepted() -> None:
         (IMAGE_MODEL, {'prompt': 'a reef', 'output_format': 'png'}),
         (
             NOVA_CANVAS,
-            {
-                'taskType': 'TEXT_IMAGE',
-                'textToImageParams': {'text': 'a reef'},
-                'imageGenerationConfig': {
-                    'numberOfImages': 1,
-                    'height': 1024,
-                    'width': 1024,
-                    'cfgScale': 8.0,
-                    'seed': 0,
-                    'quality': 'standard',
-                },
-            },
+            {'taskType': 'TEXT_IMAGE', 'textToImageParams': {'text': 'a reef'}},
         ),
     ],
     ids=['stability', 'nova_canvas'],

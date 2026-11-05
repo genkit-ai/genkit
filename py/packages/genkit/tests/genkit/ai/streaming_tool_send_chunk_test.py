@@ -42,14 +42,13 @@ from genkit import (
     ToolContext,
 )
 from genkit._ai._agents._client import StreamedMessageAccumulator
-from genkit._ai._generate import CallScope, generate_action
 from genkit._ai._tools import define_tool
 from genkit._core._action import Action, ActionKind, ActionRunContext
 from genkit._core._registry import Registry
 from genkit.exp import Genkit as ExpGenkit
 from genkit.exp.agent import AgentStreamChunk
 from genkit.middleware import GenerateHookParams, Middleware, MiddlewareContext, ToolHookParams
-from genkit.model import GenerateActionOptions, ModelRequest, ToolRequest
+from genkit.model import ModelRequest, ToolRequest
 from genkit.testing import define_scripted_model
 
 
@@ -989,7 +988,7 @@ async def test_generate_stream_resume_respond_emits_no_partial_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_generate_stream_consumer_cancellation_after_partial_chunk_stops_tool_and_keeps_history_clean() -> None:
-    """Consumer breaking out / cancelling or caller aborting after receiving a partial chunk stops the tool cleanly."""
+    """Consumer cancelling or closing the stream after a partial chunk stops the tool cleanly."""
     ai = Genkit(model='scriptedModel')
     pm, _ = define_scripted_model(ai)
     tool_cancelled = asyncio.Event()
@@ -1022,27 +1021,19 @@ async def test_generate_stream_consumer_cancellation_after_partial_chunk_stops_t
     assert [p.tool_response.output for p in _partial_parts(seen_chunks) if p.tool_response] == ['live']
     assert _final_parts(seen_chunks) == []
 
-    # 2. Caller-side abort_signal triggered by stream consumer upon receiving partial chunk keeps messages clean
+    # 2. Consumer stops the stream with aclose() after the partial chunk: .response resolves ABORTED with clean history
     pm.reset()
     pm.responses = [_model_calls(('deploy', 'r2')), _model_says('ok')]
-    caller_abort = asyncio.Event()
+    tool_cancelled.clear()
     aborted_chunks: list[ModelResponseChunk[Any]] = []
-
-    def on_chunk(chunk: ModelResponseChunk[Any]) -> None:
+    aborted_stream = ai.generate_stream(prompt='go', tools=[deploy])
+    async for chunk in aborted_stream:
         aborted_chunks.append(chunk)
         if any(p.is_partial for p in chunk.tool_responses):
-            caller_abort.set()
-
-    aborted_response = await generate_action(
-        CallScope(ai),
-        GenerateActionOptions(
-            model='scriptedModel',
-            messages=[Message(role=Role.USER, content=[Part.from_text('go')])],
-            tools=['deploy'],
-        ),
-        abort_signal=caller_abort,
-        on_chunk=on_chunk,
-    )
+            break
+    await aborted_stream.aclose()
+    aborted_response = await aborted_stream.response
+    await asyncio.wait_for(tool_cancelled.wait(), timeout=2.0)
     assert aborted_response.finish_reason == FinishReason.ABORTED
     assert aborted_response.error is not None
     assert aborted_response.error.status == 'CANCELLED'

@@ -171,7 +171,6 @@ async def run_tool_request(
                 on_chunk=sink,
                 context=run_context,
                 telemetry_labels=telemetry_labels,
-                abort_signal=ctx.abort_signal if ctx else None,
             )
         ).response
     finally:

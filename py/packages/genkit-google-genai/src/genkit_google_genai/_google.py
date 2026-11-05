@@ -442,8 +442,8 @@ class GoogleFamilyRefs:
         )
 
     @classmethod
-    def embedding(cls, name: str, *, config: EmbeddingConfig | None = None) -> EmbedderRef[EmbeddingConfig]:
-        """Typed ref for an embedder, e.g. ``GoogleAI.embedding('gemini-embedding-001')``.
+    def embedder(cls, name: str, *, config: EmbeddingConfig | None = None) -> EmbedderRef[EmbeddingConfig]:
+        """Typed ref for an embedder, e.g. ``GoogleAI.embedder('gemini-embedding-001')``.
 
         Returns an ``EmbedderRef[EmbeddingConfig]``, not a ``ModelRef``: an
         embedder id must never end up in ``generate(model=...)``. Pass raw

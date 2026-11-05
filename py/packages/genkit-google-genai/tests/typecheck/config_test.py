@@ -85,7 +85,7 @@ def test_empty_construction() -> None:
 
 
 def test_embedding_config_and_ref_types() -> None:
-    """EmbeddingConfig takes flat snake_case kwargs, and embedding() returns EmbedderRef[EmbeddingConfig]."""
+    """EmbeddingConfig takes flat snake_case kwargs, and embedder() returns EmbedderRef[EmbeddingConfig]."""
     config = EmbeddingConfig(
         task_type='RETRIEVAL_DOCUMENT',
         title='Menu',
@@ -94,8 +94,8 @@ def test_embedding_config_and_ref_types() -> None:
         mime_type='text/plain',
         auto_truncate=False,
     )
-    assert_type(GoogleAI.embedding('gemini-embedding-001', config=config), EmbedderRef[EmbeddingConfig])
-    assert_type(VertexAI.embedding('text-embedding-005', config=config), EmbedderRef[EmbeddingConfig])
+    assert_type(GoogleAI.embedder('gemini-embedding-001', config=config), EmbedderRef[EmbeddingConfig])
+    assert_type(VertexAI.embedder('text-embedding-005', config=config), EmbedderRef[EmbeddingConfig])
     assert _wire(config) == {
         'taskType': 'RETRIEVAL_DOCUMENT',
         'title': 'Menu',
@@ -302,7 +302,7 @@ def test_lyria_config_snake_case_kwargs() -> None:
 
 
 def test_antigravity_config_snake_case_kwargs() -> None:
-    """AntigravityConfig takes snake_case kwargs; the dump is camelCase."""
+    """AntigravityConfig takes snake_case kwargs and server tools in extra; the dump is camelCase."""
     config = AntigravityConfig(
         base_url='https://kitchen.example',
         api_version='v1beta',
@@ -312,6 +312,13 @@ def test_antigravity_config_snake_case_kwargs() -> None:
         store=True,
         environment='sandbox',
         response_modalities=['text'],
+        extra={
+            'tools': [
+                {'type': 'google_search', 'search_types': ['web_search']},
+                {'type': 'url_context'},
+                {'type': 'mcp_server', 'name': 'pos', 'url': 'https://pos.example/mcp'},
+            ]
+        },
     )
 
     assert _wire(config) == {
@@ -323,7 +330,15 @@ def test_antigravity_config_snake_case_kwargs() -> None:
         'store': True,
         'environment': 'sandbox',
         'responseModalities': ['text'],
+        'extra': {
+            'tools': [
+                {'type': 'google_search', 'search_types': ['web_search']},
+                {'type': 'url_context'},
+                {'type': 'mcp_server', 'name': 'pos', 'url': 'https://pos.example/mcp'},
+            ]
+        },
     }
+    assert AntigravityConfig.model_validate(_wire(config)) == config
 
 
 def test_deep_research_config_flat_kwargs() -> None:

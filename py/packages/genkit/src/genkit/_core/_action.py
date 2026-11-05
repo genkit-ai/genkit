@@ -24,7 +24,7 @@ import re
 import sys
 import time
 import types
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -32,7 +32,6 @@ from typing import (
     ClassVar,
     Generic,
     NamedTuple,
-    TypeAlias,
     Union,
     cast,
     get_args,
@@ -45,7 +44,7 @@ from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from typing_extensions import Self, TypeVar
 
-from genkit._core._channel import CloseableQueue, mirror_result, start_stream
+from genkit._core._channel import Channel, CloseableQueue, StoppableStream
 from genkit._core._compat import StrEnum
 from genkit._core._config_check import (
     check_config_json_schema,
@@ -234,6 +233,13 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     - If the run raises, both the loop and ``.response`` raise it.
       ``ModelStreamResponse`` (``generate_stream``, ``prompt.stream``) reports
       model failures on ``.response`` instead; see its docstring.
+    - Closing before the run finishes (``async with result:`` or
+      ``await result.aclose()``) stops the run and awaits ``finally:`` cleanup;
+      ``.response`` then raises
+      ``GenkitError`` with status ``CANCELLED`` (``ModelStreamResponse``
+      resolves with ``finish_reason == ABORTED`` instead). Reading to the end
+      or leaving a bare ``async for`` without closing doesn't stop the run.
+      See ``Action.stream``.
 
     Example:
         ```python
@@ -244,7 +250,7 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
 
         result = track_order.stream('A-1042')
-        async for update in result:
+        async for update in result.stream:
             print(update)
         # => Out for delivery
 
@@ -255,15 +261,18 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
     def __init__(
         self,
-        stream: AsyncIterator[ChunkT_co],
+        stream: AsyncIterable[ChunkT_co],
         response: Awaitable[OutputT_co],
     ) -> None:
-        self._stream = stream
+        self._stream: StoppableStream[ChunkT_co] = (
+            stream if isinstance(stream, StoppableStream) else StoppableStream(chunks=stream, stop=None)
+        )
         self._response = response
+        self._action_name: str | None = None
 
     @property
-    def stream(self) -> AsyncIterator[ChunkT_co]:
-        """The chunks, in order. Iterating the response itself reads the same stream."""
+    def stream(self) -> StoppableStream[ChunkT_co]:
+        """The chunks, in order (``AsyncIterator``). Iterating the response itself reads the same stream."""
         return self._stream
 
     @property
@@ -271,9 +280,9 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
         """The final result, available once the run ends."""
         return self._response
 
-    def __aiter__(self) -> AsyncIterator[ChunkT_co]:
-        # `async for chunk in result` reads `.stream`, so callers can skip the hop.
-        return self._stream.__aiter__()
+    def __aiter__(self) -> StoppableStream[ChunkT_co]:
+        # `async for chunk in result` reads `.stream`, so `aiter(result) is result.stream`.
+        return self._stream
 
     async def aclose(self) -> None:
         """Close the stream and release any underlying resources."""
@@ -332,8 +341,8 @@ def parse_plugin_name_from_action_name(name: str) -> str | None:
 #   async def ping(ctx: FlowContext) -> str: ...                      # no input
 #
 # Rules for the function:
-#   - The context is the parameter annotated ActionRunContext (FlowContext is
-#     the same class) or a subclass (ToolContext).
+#   - The context is the parameter annotated ActionRunContext or a subclass
+#     (FlowContext, ToolContext, ModelContext, AgentContext).
 #   - Any other parameter is the input, so there's only one. Put more fields
 #     on one input model.
 #   - Input and return types need a JSON schema: a Pydantic model, dataclass,
@@ -407,8 +416,7 @@ def _public_context_name(kind: ActionKind) -> str:
 
     ToolContext for tools, ModelContext (genkit.model) for model and
     background-model ops, AgentContext (genkit.exp.agent) for agents, and
-    FlowContext for everything else. FlowContext is the public name of the
-    run-context class, so it's correct for embedders, evaluators and the rest.
+    FlowContext for flows, embedders, evaluators, and custom actions.
     """
     if kind in (ActionKind.TOOL, ActionKind.TOOL_V2):
         return 'ToolContext'
@@ -425,13 +433,14 @@ def find_input_and_context(
     *,
     kind: ActionKind,
     name: str,
+    context_kind: ActionKind | None = None,
 ) -> ActionParams:
     """Find ``fn``'s input and run-context parameters, or raise a TypeError saying how to fix it.
 
     ``hints`` is ``resolve_type_hints(fn)``. ``*args`` and ``**kwargs`` are ignored.
     """
     owner = describe_action(kind, name)
-    context_class = _public_context_name(kind)
+    context_class = _public_context_name(context_kind if context_kind is not None else kind)
 
     params = [
         p
@@ -480,25 +489,27 @@ def find_input_and_context(
     return ActionParams(input=input_param, context=context_param)
 
 
-def known_annotation_names(kind: ActionKind) -> dict[str, object]:
+def known_annotation_names(kind: ActionKind, *, context_kind: ActionKind | None = None) -> dict[str, object]:
     """Genkit types a handler of this kind always takes or returns, by name.
 
     A model gets a ModelRequest and ModelContext and returns a ModelResponse,
     an embedder gets an EmbedRequest and returns an EmbedResponse, and a
-    background model's start, check, and cancel deal in Operations and
-    ModelContext. When the handler imports these only under TYPE_CHECKING,
-    resolve_type_hints looks the missing names up here, so
-    ``ModelRequest[GardenConfig]`` keeps its config type and any other missing
-    name still raises.
+    background action's start, check, and cancel deal in Operations plus
+    ModelContext (background models) or FlowContext (other background actions).
+    When the handler imports these only under TYPE_CHECKING, resolve_type_hints
+    looks the missing names up here, so ``ModelRequest[GardenConfig]`` keeps
+    its config type and any other missing name still raises.
     """
+    effective_context_kind = context_kind if context_kind is not None else kind
     if kind == ActionKind.MODEL:
         return {'ModelRequest': ModelRequest, 'ModelResponse': ModelResponse, 'ModelContext': ModelContext}
     if kind == ActionKind.BACKGROUND_MODEL:
         return {'ModelRequest': ModelRequest, 'Operation': Operation, 'ModelContext': ModelContext}
     if kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
-        return {'Operation': Operation, 'ModelContext': ModelContext}
+        ctx_cls = ModelContext if effective_context_kind in _MODEL_CONTEXT_KINDS else FlowContext
+        return {'Operation': Operation, ctx_cls.__name__: ctx_cls}
     if kind == ActionKind.EMBEDDER:
-        return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse}
+        return {'EmbedRequest': EmbedRequest, 'EmbedResponse': EmbedResponse, 'FlowContext': FlowContext}
     return {}
 
 
@@ -671,9 +682,10 @@ def _resolve_one(annotation: object, module_globals: dict[str, Any]) -> object:
 def _is_context_annotation(annotation: object) -> bool:
     """True if ``annotation`` marks the run-context parameter.
 
-    That's ActionRunContext (FlowContext) or any subclass, written any of these
-    ways: ``ToolContext``, ``FlowContext[str]``, ``ToolContext | None``, or as
-    a string (see _string_names_context).
+    That's ActionRunContext or any subclass (FlowContext, ToolContext,
+    ModelContext, AgentContext), written any of these ways: ``ToolContext``,
+    ``FlowContext[str]``, ``ToolContext | None``, or as a string
+    (see _string_names_context).
     """
     # On 3.14 a name missing at runtime is a ForwardRef; use its text.
     forward_arg = getattr(annotation, '__forward_arg__', None)
@@ -685,14 +697,14 @@ def _is_context_annotation(annotation: object) -> bool:
     origin = get_origin(annotation)
     if origin is Union or origin is types.UnionType:
         return any(_is_context_annotation(arg) for arg in get_args(annotation))
-    # FlowContext[str] -> ActionRunContext
+    # FlowContext[str] -> FlowContext
     cls = origin if origin is not None else annotation
     return isinstance(cls, type) and issubclass(cls, ActionRunContext)
 
 
-# Public names for the run-context classes. FlowContext, ModelContext, and
-# AgentContext are aliases over ActionRunContext; ToolContext is listed so a
-# string annotation matches even before genkit._core._tool is imported.
+# Public run-context subclasses of ActionRunContext. ToolContext and
+# AgentContext live in submodules that may not be imported yet when
+# ActionRunContext.__subclasses__() runs, so list all four explicitly.
 _CONTEXT_ALIAS_NAMES = frozenset({'FlowContext', 'ToolContext', 'AgentContext', 'ModelContext'})
 
 
@@ -703,7 +715,7 @@ def _string_names_context(annotation: str) -> bool:
     'FlowContext[str]' and 'genkit.ToolContext' all do.
     """
     # The annotation couldn't be resolved to a class, so match by name against
-    # the public aliases, ActionRunContext and every subclass defined so far.
+    # the public context classes, ActionRunContext, and every subclass defined so far.
     context_names: set[str] = set(_CONTEXT_ALIAS_NAMES)
     classes: list[type] = [ActionRunContext]
     while classes:
@@ -851,10 +863,11 @@ def input_from_json(value: object) -> object:
 
 
 class ActionRunContext(Generic[ChunkT]):
-    """What an action sees while it runs: request context, streaming, and an abort signal.
+    """Base execution context for a running action: request context and chunk streaming.
 
-    Apps use it as ``genkit.FlowContext``; model and background-model plugins
-    use ``genkit.model.ModelContext``. ``ChunkT`` is the type ``send_chunk`` accepts.
+    Subclassed publicly as ``genkit.FlowContext``, ``genkit.ToolContext``,
+    ``genkit.model.ModelContext``, and ``genkit.exp.agent.AgentContext``.
+    ``ChunkT`` is the type ``send_chunk`` accepts.
 
         @ai.flow()
         async def plate_dish(dish: str, ctx: FlowContext[str]) -> str:
@@ -864,15 +877,14 @@ class ActionRunContext(Generic[ChunkT]):
 
     def __init__(
         self,
+        *,
         context: dict[str, Any] | None = None,
         streaming_callback: Callable[[ChunkT], None] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: object | None = None,
         input_stream: AsyncIterator[object] | None = None,
     ) -> None:
         self._context: dict[str, Any] = context if context is not None else {}
         self._streaming_callback = streaming_callback
-        self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
         # Bidi plumbing, read only by BidiAction: the session init value sent
         # on connection open, and the live stream of per-turn inputs.
         self._init: object | None = init
@@ -911,27 +923,56 @@ class ActionRunContext(Generic[ChunkT]):
         return _action_context.get(None)
 
 
-# The app-facing name for a flow's ctx. Same class, so FlowContext[str] works.
-FlowContext = ActionRunContext
-"""Execution context passed to a flow function.
+class FlowContext(ActionRunContext[ChunkT]):
+    """Execution context passed to flow, embedder, evaluator, and custom action functions.
 
-An alias for :class:`~genkit.ActionRunContext`. Provides access to streaming,
-caller context data, and cancellation signals.
-"""
+    Provides ``ctx.send_chunk(chunk)`` for streaming ``ChunkT`` chunks and
+    ``ctx.context`` for caller context data.
 
-# The context parameter passed to model and background-model functions.
-ModelContext: TypeAlias = ActionRunContext[ModelResponseChunk]
-"""Annotation alias for ``ActionRunContext[ModelResponseChunk]``: the ctx a model function gets.
+    ``FlowContext`` and ``ToolContext`` are siblings, so neither annotation
+    accepts the other. A helper shared by a flow and a tool takes the union:
 
-- ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
-- ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
-- ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
-- ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
+        # 1. Read the caller's uid from either context
+        def user_id(ctx: FlowContext | ToolContext) -> str:
+            return ctx.context['auth']['uid']
 
-Use it in annotations only. It's a subscripted generic, so
-``isinstance(ctx, ModelContext)`` raises TypeError; runtime checks should use
-``isinstance(ctx, ActionRunContext)``.
-"""
+        # 2. Call it from a flow and from a tool
+        @ai.flow()
+        async def reorder_last(dish: str, ctx: FlowContext) -> str:
+            return f'{dish} for {user_id(ctx)}'
+
+        @ai.tool()
+        async def check_allergies(dish: str, ctx: ToolContext) -> str:
+            return f'{dish}: nut-free for {user_id(ctx)}'
+
+        # 3. Both see the same request context
+        await reorder_last('tartine', context={'auth': {'uid': 'diner-42'}})
+        # => 'tartine for diner-42'
+        await check_allergies('tartine', context={'auth': {'uid': 'diner-42'}})
+        # => 'tartine: nut-free for diner-42'
+    """
+
+
+class ModelContext(ActionRunContext[ModelResponseChunk]):
+    """Execution context passed to model and background-model functions.
+
+    - ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
+    - ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
+    - ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
+    """
+
+
+def _context_cls_for_kind(kind: ActionKind) -> type[ActionRunContext[Any]]:
+    """The context class ``Action._run`` constructs before invoking ``self._fn``."""
+    if kind in _MODEL_CONTEXT_KINDS:
+        return ModelContext
+    # Tools and agents wrap or replace this base context in the AI layer:
+    # call_tool_fn wraps it into ToolContext (adding resumed_metadata and
+    # original_input) for both the tool and its tool.v2 envelope, and
+    # BidiAction hands init/stream to AgentRuntime.run, which builds AgentContext.
+    if kind in (ActionKind.TOOL, ActionKind.TOOL_V2, ActionKind.AGENT):
+        return ActionRunContext
+    return FlowContext
 
 
 class Action(Generic[InputT, OutputT, ChunkT, InitT]):
@@ -942,6 +983,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         kind: ActionKind,
         name: str,
         fn: Callable[..., Awaitable[OutputT]],
+        *,
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -951,9 +993,12 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         config_schema: type[BaseModel] | dict[str, object] | None = None,
         _strict_io: bool = False,
         _io_schemas: tuple[dict[str, object], dict[str, object]] | None = None,
+        _context_kind: ActionKind | None = None,
     ) -> None:
         self._kind: ActionKind = kind
         self._name: str = name
+        context_kind = _context_kind if _context_kind is not None else kind
+        self._context_cls: type[ActionRunContext[Any]] = _context_cls_for_kind(context_kind)
         # Flows treat None as a real value and check the return against the
         # annotation. Other actions still treat a missing/None input as omitted
         # and leave the return unchecked.
@@ -976,8 +1021,10 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         # is one) and metadata_fn is the user's function, whose signature
         # decides the input and context.
         user_fn: Callable[..., object] = metadata_fn if metadata_fn else fn
-        hints = resolve_type_hints(user_fn, known_annotation_names(kind))
-        self._params: ActionParams = find_input_and_context(user_fn, hints, kind=kind, name=name)
+        hints = resolve_type_hints(user_fn, known_annotation_names(kind, context_kind=context_kind))
+        self._params: ActionParams = find_input_and_context(
+            user_fn, hints, kind=kind, name=name, context_kind=context_kind
+        )
         self._fn: Callable[..., Awaitable[OutputT]] = fn
         self._user_fn: Callable[..., object] = user_fn
         self._fn_is_wrapper: bool = metadata_fn is not None
@@ -1161,7 +1208,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
@@ -1196,10 +1242,9 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         inside_token = _inside_action.set(True)
 
         streaming_cb = cast(StreamingCallback, on_chunk) if on_chunk else None
-        action_ctx = ActionRunContext(
+        action_ctx: ActionRunContext[Any] = self._context_cls(
             context=_action_context.get(None),
             streaming_callback=streaming_cb,
-            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
         )
@@ -1225,7 +1270,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """Start the action and return a ``StreamResponse``: iterate it for chunks, await ``.response`` for the result.
+        """Return a ``StreamResponse``: iterate ``.stream`` for chunks, await ``.response`` for the result.
 
         Takes the same keyword arguments as ``run``, minus ``on_chunk``. If the
         action raises, both the loop and ``.response`` raise.
@@ -1243,25 +1288,100 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """``stream`` plus ``input_stream``, which ``BidiAction.stream_bidi`` feeds."""
+        """Run the action and return a StreamResponse to read its chunks and result.
 
-        async def run(send_chunk: Callable[[ChunkT], None]) -> ActionResponse[OutputT]:
-            return await self._run(
-                input,
-                on_chunk=send_chunk,
-                context=context,
-                telemetry_labels=telemetry_labels,
-                abort_signal=abort_signal,
-                init=init,
-                input_stream=input_stream,
-            )
+        Iterate ``.stream`` for chunks and await ``.response`` for the output.
+        Closing early via ``async with my_flow.stream(x) as res:`` (or
+        ``await res.aclose()``) cancels the run and awaits ``finally:`` cleanup,
+        and ``.response`` then raises ``GenkitError`` with status ``CANCELLED``. Python does not tear down an
+        ``AsyncIterator`` on ``break`` alone, so wrap the stream in ``async with``
+        when exiting early should cancel the action.
 
-        channel, task = start_stream(run)
-        return StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
+        Example:
+            async with my_flow.stream(x) as res:
+                async for chunk in res.stream:
+                    if done_with(chunk):
+                        break
+        """
+        return self._start_stream(
+            input=input,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            init=init,
+            input_stream=input_stream,
+            stop_on_early_exit=True,
+        )
+
+    def _start_stream(
+        self,
+        *,
+        input: InputT | None,
+        context: dict[str, Any] | None,
+        telemetry_labels: dict[str, object] | None,
+        init: InitT | None,
+        input_stream: AsyncIterator[InputT] | None,
+        stop_on_early_exit: bool,
+    ) -> StreamResponse[ChunkT, OutputT]:
+        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel()
+
+        def send_chunk(c: ChunkT) -> None:
+            channel.send(c)
+
+        resp = self._run(
+            input,
+            on_chunk=send_chunk,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            init=init,
+            input_stream=input_stream,
+        )
+        run_task = asyncio.create_task(resp)
+        channel.set_close_future(run_task)
+        reader_stopped = asyncio.Event()
+
+        async def stop() -> None:
+            if run_task.done():
+                return
+            if not reader_stopped.is_set():
+                reader_stopped.set()
+                run_task.cancel()
+            # waiting here is what lets aclosing(...) promise the run is over
+            # once the block exits.
+            await asyncio.wait([run_task])
+
+        # Mirror the run's terminal state onto .response so a caller awaiting it
+        # sees the same success/error/cancel the run ended with, instead of
+        # hanging (or dropping the error on the floor) when the run raises.
+        result_future: asyncio.Future[OutputT] = asyncio.Future()
+
+        def resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
+            if result_future.done():
+                return
+            if closed.cancelled():
+                if reader_stopped.is_set():
+                    result_future.set_exception(
+                        GenkitError(status='CANCELLED', message='The stream was closed before the run finished.')
+                    )
+                    # the reader chose to stop, so leaving .response unread
+                    # shouldn't log "exception was never retrieved".
+                    _ = result_future.exception()
+                else:
+                    result_future.cancel()
+            elif (exc := closed.exception()) is not None:
+                result_future.set_exception(exc)
+                _ = result_future.exception()
+            else:
+                result_future.set_result(closed.result().response)
+
+        channel.closed.add_done_callback(resolve_response)
+
+        chunks = StoppableStream(chunks=channel, stop=stop if stop_on_early_exit else None)
+        stream_response = StreamResponse(stream=chunks, response=result_future)
+        stream_response._action_name = self.name
+        return stream_response
 
     def _initialize_io_schemas(
         self,
@@ -1702,6 +1822,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         kind: ActionKind,
         name: str,
         bidi_fn: BidiFn[InitT, InputT, ChunkT, OutputT],
+        *,
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -1760,11 +1881,15 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         """
         # Unbounded: turn-level backpressure is managed at the agent runtime intake.
         in_queue: CloseableQueue[InputT] = CloseableQueue()
-        stream_response = self._stream(
+        # A connection outlives any one read of its chunks, so a reader that
+        # stops early leaves the session running.
+        stream_response = self._start_stream(
+            input=NO_INPUT,
             init=init,
             context=context,
             telemetry_labels=telemetry_labels,
             input_stream=in_queue,
+            stop_on_early_exit=False,
         )
         return BidiConnection(in_queue, stream_response)
 
