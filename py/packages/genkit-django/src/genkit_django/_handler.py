@@ -17,24 +17,31 @@
 """Genkit Django handler for serving flows as HTTP endpoints."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
-from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, JsonResponse, StreamingHttpResponse
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from pydantic import BaseModel
 
 from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
-from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
+from genkit.web import (
+    ContextProvider,
+    RequestData,
+    error_json,
+    error_sse,
+    error_status,
+    read_body,
+    result_json,
+    to_sse,
+    wants_stream,
+)
 
 logger = logging.getLogger(__name__)  # noqa: TID251
-
-# Compact JSON (no spaces) for smaller wire payload.
-_JSON_SEPARATORS = (',', ':')
 
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
@@ -53,30 +60,11 @@ def _log_failure(*, error: Exception, flow: str, where: str) -> None:
         logger.warning('served action %r %s failed: %s', flow, where, error, extra=extra)
 
 
-def _to_dict(obj: Any) -> Any:  # noqa: ANN401
-    """Recursively convert Pydantic models inside ``obj`` to plain JSON-friendly types.
-
-    Flows can return a Pydantic model, a list of Pydantic models, or a dict whose
-    values are Pydantic models. Django's ``JsonResponse`` and ``json.dumps`` don't
-    know how to serialize ``BaseModel`` instances natively, so descend into lists,
-    tuples, and dicts to convert every model we find.
-    """
-    if isinstance(obj, BaseModel):
-        return obj.model_dump()
-    if isinstance(obj, list):
-        return [_to_dict(item) for item in obj]
-    if isinstance(obj, tuple):
-        return [_to_dict(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    return obj
-
-
 def _error_response(err: Exception, status: int | None = None) -> HttpResponse:
     """Return a JSON error body; status comes from the error unless overridden."""
     return HttpResponse(
         status=error_status(err) if status is None else status,
-        content=json.dumps(error_body(err), separators=_JSON_SEPARATORS).encode('utf-8'),
+        content=error_json(err).encode('utf-8'),
         content_type='application/json',
     )
 
@@ -131,7 +119,7 @@ def genkit_django_handler(
     ]
     ```
 
-    Requires Django ASGI (Django 4.1+). The returned view is `csrf_exempt`
+    Requires Django ASGI (Django 5.0+). The returned view is `csrf_exempt`
     because this is a JSON API.
 
     Args:
@@ -191,20 +179,24 @@ def genkit_django_handler(
                 async def event_stream() -> AsyncIterator[str]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
-                        async for chunk in stream_response.stream:
-                            yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
-
-                        result = await stream_response.response
-                        yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
                         _log_failure(error=e, flow=flow.name, where='stream')
-                        yield f'data: {json.dumps({"error": error_body(e)}, separators=_JSON_SEPARATORS)}\n\n'
+                        yield error_sse(e)
+                        return
+                    # a client that hangs up closes this generator; aclosing makes
+                    # that cancel the flow right away instead of whenever it's collected.
+                    async with contextlib.aclosing(to_sse(stream_response)) as lines:
+                        async for line in lines:
+                            yield line
 
-                return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+                return StreamingHttpResponse(event_stream(), content_type='text/event-stream; charset=utf-8')
 
             try:
                 response = await flow.run(input=action_input, context=action_context, init=init)
-                return JsonResponse({'result': _to_dict(response.response)})
+                return HttpResponse(
+                    content=result_json(response.response).encode('utf-8'),
+                    content_type='application/json',
+                )
             except Exception as e:
                 _log_failure(error=e, flow=flow.name, where='run')
                 return _error_response(e)

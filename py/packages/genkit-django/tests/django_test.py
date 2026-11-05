@@ -17,6 +17,7 @@
 
 """Tests for the Django plugin."""
 
+import asyncio
 import json
 import logging
 import sys
@@ -26,6 +27,7 @@ from typing import Any
 
 import pytest
 from django.core.exceptions import PermissionDenied
+from django.core.handlers.asgi import ASGIHandler
 from django.http import HttpRequest
 from django.test import AsyncClient
 from django.test.utils import override_settings
@@ -148,7 +150,7 @@ def _build_views() -> dict[str, Any]:
     @genkit_django_handler(ai)
     @ai.flow()
     async def close_tab(table: int) -> Receipt:
-        return {'table': table}  # type: ignore[return-value]
+        return {'table': table, 'note': None}  # type: ignore[return-value]
 
     @genkit_django_handler(ai)
     @ai.flow()
@@ -440,13 +442,13 @@ async def test_django_flow_with_default_and_null_data_uses_python_default(urlcon
 
 
 @pytest.mark.asyncio
-async def test_django_flow_returning_partial_dict_for_model_sends_defaults(urlconf: None) -> None:  # noqa: ARG001
-    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+async def test_django_flow_returning_dict_for_model_omits_none_fields(urlconf: None) -> None:  # noqa: ARG001
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` omits `note` on the wire."""
     client = AsyncClient()
     response = await client.post('/close_tab', data=json.dumps({'data': 4}), content_type='application/json')
 
     assert response.status_code == 200
-    assert json.loads(response.content) == {'result': {'table': 4, 'note': None}}
+    assert json.loads(response.content) == {'result': {'table': 4}}
 
 
 @pytest.mark.asyncio
@@ -504,6 +506,65 @@ async def test_context_provider_reads_raw_django_request(urlconf: None) -> None:
 
     assert response.status_code == 200
     assert json.loads(response.content) == {'result': 'table T7'}
+
+
+@pytest.mark.asyncio
+async def test_django_streaming_client_disconnect_cancels_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A client that hangs up after the first SSE chunk of a streamed flow view cancels the flow."""
+    ai = Genkit()
+    flow_cancelled = asyncio.Event()
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def slow(_: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        return 'never'
+
+    module = types.ModuleType('genkit_django_disconnect_urls')
+    module.urlpatterns = [path('slow', slow)]  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
+    monkeypatch.setitem(sys.modules, 'genkit_django_disconnect_urls', module)
+
+    first_chunk = asyncio.Event()
+    request_read = False
+    bodies: list[bytes] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_read
+        if not request_read:
+            request_read = True
+            return {'type': 'http.request', 'body': json.dumps({'data': 'x'}).encode(), 'more_body': False}
+        await first_chunk.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: dict[str, Any]) -> None:
+        if message['type'] == 'http.response.body' and message.get('body'):
+            bodies.append(message['body'])
+            first_chunk.set()
+
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0'},
+        'http_version': '1.1',
+        'method': 'POST',
+        'scheme': 'http',
+        'path': '/slow',
+        'raw_path': b'/slow',
+        'root_path': '',
+        'query_string': b'',
+        'headers': [(b'content-type', b'application/json'), (b'accept', b'text/event-stream')],
+        'client': ('testclient', 50000),
+        'server': ('testserver', 80),
+    }
+    with override_settings(ROOT_URLCONF='genkit_django_disconnect_urls'):
+        await asyncio.wait_for(ASGIHandler()(scope, receive, send), timeout=5)
+
+    assert bodies == [b'data: {"message":1}\n\n']
+    assert flow_cancelled.is_set()
 
 
 @pytest.mark.asyncio

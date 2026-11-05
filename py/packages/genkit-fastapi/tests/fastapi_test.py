@@ -22,14 +22,16 @@ import datetime
 import functools
 import json
 import logging
+from collections.abc import MutableMapping
 from typing import Any, cast
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from genkit_fastapi import genkit_fastapi_handler, handle_genkit_request, serve_flow
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic.alias_generators import to_camel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import (
@@ -72,7 +74,7 @@ def create_app() -> FastAPI:
     ai = Genkit()
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai)
     @ai.flow()
     async def say_hi(name: str, ctx: FlowContext) -> dict[str, str]:
@@ -441,7 +443,7 @@ def test_fastapi_context_provider_sees_method_lowercase_headers_and_input() -> N
             'input': request_data.input,
         }
 
-    @app.post('/echo', response_model=None)
+    @app.post('/echo')
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
     async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
@@ -473,7 +475,7 @@ def test_request_data_duplicate_authorization_is_comma_joined() -> None:
     async def provider(request_data: RequestData) -> dict[str, object]:
         return {'authorization': request_data.headers.get('authorization')}
 
-    @app.post('/echo', response_model=None)
+    @app.post('/echo')
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
     async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
@@ -497,7 +499,7 @@ def test_request_data_duplicate_x_forwarded_for_is_comma_joined() -> None:
     async def provider(request_data: RequestData) -> dict[str, object]:
         return {'xff': request_data.headers.get('x-forwarded-for')}
 
-    @app.post('/echo', response_model=None)
+    @app.post('/echo')
     @genkit_fastapi_handler(ai, context_provider=provider)
     @ai.flow()
     async def echo(_: str, ctx: FlowContext) -> dict[str, object]:
@@ -526,7 +528,7 @@ def test_fastapi_context_provider_public_error_returns_its_status_and_message() 
 
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai, context_provider=deny)
     async def chat_route():
         return chat
@@ -601,7 +603,7 @@ def test_fastapi_flow_returning_dict_for_model_sends_model_dump() -> None:
     async def close_tab(table: int) -> Receipt:
         return {'table': table, 'note': None}  # type: ignore[return-value]
 
-    @app.post('/close_tab', response_model=None)
+    @app.post('/close_tab')
     @genkit_fastapi_handler(ai)
     async def close_tab_route():
         return close_tab
@@ -760,7 +762,7 @@ def test_fastapi_context_provider_route_malformed_json_returns_400() -> None:
 
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai, context_provider=deny)
     async def chat_route():
         return chat
@@ -789,7 +791,7 @@ def test_fastapi_handler_sync_wrapper_returns_json_internal_error() -> None:
 
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai)  # pyright: ignore[reportArgumentType]
     def chat_route():
         return chat
@@ -805,7 +807,7 @@ def test_fastapi_handler_wrapper_returning_non_action_returns_json_internal_erro
     ai = Genkit()
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai)  # pyright: ignore[reportArgumentType]
     async def chat_route():
         return 'not an action'
@@ -821,7 +823,7 @@ def test_fastapi_handler_wrapper_failure_logs_wrapper_name_or_unknown(caplog: py
     ai = Genkit()
     app = FastAPI()
 
-    @app.post('/named', response_model=None)
+    @app.post('/named')
     @genkit_fastapi_handler(ai)
     async def wrapped_route() -> Any:
         raise RuntimeError('db pool closed')
@@ -829,7 +831,7 @@ def test_fastapi_handler_wrapper_failure_logs_wrapper_name_or_unknown(caplog: py
     async def load_route(_name: str) -> Any:
         raise RuntimeError('db pool closed')
 
-    app.post('/partial', response_model=None)(genkit_fastapi_handler(ai)(functools.partial(load_route, 'orders')))
+    app.post('/partial')(genkit_fastapi_handler(ai)(functools.partial(load_route, 'orders')))
 
     client = TestClient(app)
     with caplog.at_level(logging.DEBUG, logger='genkit_fastapi._handler'):
@@ -863,7 +865,7 @@ def test_fastapi_context_provider_http_exception_keeps_its_status() -> None:
 
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai, context_provider=require_token)
     async def chat_route():
         return chat
@@ -905,7 +907,7 @@ def test_fastapi_context_provider_starlette_http_exception_keeps_401() -> None:
 
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai, context_provider=require_token)
     async def chat_route():
         return chat
@@ -922,7 +924,7 @@ def test_fastapi_wrapper_http_exception_keeps_503() -> None:
 
     app = FastAPI()
 
-    @app.post('/chat', response_model=None)
+    @app.post('/chat')
     @genkit_fastapi_handler(ai)
     async def chat_route():
         raise HTTPException(status_code=503, detail='not ready')
@@ -1102,8 +1104,8 @@ def test_served_flow_streams_models_with_datetimes_and_lists_over_sse() -> None:
     app = FastAPI()
     app.include_router(serve_flow(bookings, base_path='/bookings'))
 
-    @app.post('/custom_bookings', response_model=None)
-    async def custom_bookings(request: Request) -> object:
+    @app.post('/custom_bookings')
+    async def custom_bookings(request: Request) -> Response:
         return await handle_genkit_request(request, action=bookings)
 
     client = TestClient(app)
@@ -1166,3 +1168,152 @@ def test_readme_chat_route_sends_text_chunks_and_text_result() -> None:
         'data: {"message":", no peanuts."}\n\n'
         'data: {"result":"Pad thai, no peanuts."}\n\n'
     )
+
+
+class MenuItem(BaseModel):
+    """Menu item with a camelCase alias and optional allergy note."""
+
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
+    unit_price: float
+    note: str | None = None
+
+
+def test_genkit_fastapi_handler_registers_without_response_model_none_and_builds_openapi() -> None:
+    """@app.post without response_model=None registers cleanly, builds OpenAPI, and serves compact JSON and SSE."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @app.post('/items')
+    @genkit_fastapi_handler(ai)
+    @ai.flow()
+    async def list_items(category: str, ctx: FlowContext[MenuItem]) -> list[MenuItem]:
+        item = MenuItem(unit_price=9.5, note=None)
+        ctx.send_chunk(item)
+        return [item, MenuItem(unit_price=12.0, note=category)]
+
+    schema = app.openapi()
+    assert '/items' in schema['paths']
+
+    client = TestClient(app)
+    res = client.post('/items', json={'data': 'vegan'})
+    assert res.status_code == 200
+    assert res.headers['content-type'] == 'application/json'
+    assert res.content == b'{"result":[{"unitPrice":9.5},{"unitPrice":12.0,"note":"vegan"}]}'
+
+    stream_res = client.post('/items?stream=true', json={'data': 'vegan'})
+    assert stream_res.status_code == 200
+    assert stream_res.headers['content-type'] == 'text/event-stream; charset=utf-8'
+    assert stream_res.content == (
+        b'data: {"message":{"unitPrice":9.5}}\n\n'
+        b'data: {"result":[{"unitPrice":9.5},{"unitPrice":12.0,"note":"vegan"}]}\n\n'
+    )
+
+
+def test_handle_genkit_request_returns_response_supporting_custom_headers_and_null_result() -> None:
+    """handle_genkit_request returns Response on 200 JSON, SSE, and errors, and preserves {"result":null}."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def ack_order(order_id: str) -> None:
+        if order_id == 'missing':
+            raise PublicError('NOT_FOUND', 'order missing')
+        return None
+
+    app = FastAPI()
+    app.include_router(serve_flow(ack_order, base_path='/ack'))
+
+    @app.post('/custom_ack')
+    async def custom_ack(request: Request) -> Response:
+        resp = await handle_genkit_request(request, action=ack_order)
+        assert isinstance(resp, Response)
+        resp.headers['x-trace-id'] = 'trace-42'
+        return resp
+
+    client = TestClient(app)
+
+    served = client.post('/ack', json={'data': 'A-1'})
+    assert served.status_code == 200
+    assert served.content == b'{"result":null}'
+
+    ok = client.post('/custom_ack', json={'data': 'A-1'})
+    assert ok.status_code == 200
+    assert ok.headers['x-trace-id'] == 'trace-42'
+    assert ok.content == b'{"result":null}'
+
+    sse = client.post('/custom_ack?stream=true', json={'data': 'A-1'})
+    assert sse.status_code == 200
+    assert sse.headers['x-trace-id'] == 'trace-42'
+    assert sse.content == b'data: {"result":null}\n\n'
+
+    err = client.post('/custom_ack', json={'data': 'missing'})
+    assert err.status_code == 404
+    assert err.headers['x-trace-id'] == 'trace-42'
+    assert err.content == b'{"message":"order missing","status":"NOT_FOUND"}'
+
+
+async def post_sse_then_hang_up(app: FastAPI, path: str) -> list[bytes]:
+    """POST `{"data": "x"}` asking for SSE, then disconnect right after the first body chunk arrives."""
+    first_chunk = asyncio.Event()
+    request_read = False
+    bodies: list[bytes] = []
+
+    async def receive() -> dict[str, Any]:
+        nonlocal request_read
+        if not request_read:
+            request_read = True
+            return {'type': 'http.request', 'body': json.dumps({'data': 'x'}).encode(), 'more_body': False}
+        await first_chunk.wait()
+        return {'type': 'http.disconnect'}
+
+    async def send(message: MutableMapping[str, Any]) -> None:
+        if message['type'] == 'http.response.body' and message.get('body'):
+            bodies.append(message['body'])
+            first_chunk.set()
+
+    scope = {
+        'type': 'http',
+        'asgi': {'version': '3.0', 'spec_version': '2.3'},
+        'http_version': '1.1',
+        'method': 'POST',
+        'scheme': 'http',
+        'path': path,
+        'raw_path': path.encode(),
+        'root_path': '',
+        'query_string': b'',
+        'headers': [(b'content-type', b'application/json'), (b'accept', b'text/event-stream')],
+        'client': ('testclient', 50000),
+        'server': ('testserver', 80),
+    }
+    await asyncio.wait_for(app(scope, receive, send), timeout=5)
+    return bodies
+
+
+@pytest.mark.asyncio
+async def test_fastapi_streaming_client_disconnect_cancels_flow() -> None:
+    """A client that hangs up after the first SSE chunk cancels the flow and lets awaiting `finally:` finish."""
+    ai = Genkit()
+    flow_cancelled = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    @ai.flow()
+    async def slow(_: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        finally:
+            await asyncio.sleep(0.02)
+            cleanup_finished.set()
+        return 'never'
+
+    app = FastAPI()
+    app.include_router(serve_flow(slow, base_path='/slow'))
+
+    bodies = await post_sse_then_hang_up(app, '/slow')
+
+    assert bodies == [b'data: {"message":1}\n\n']
+    assert flow_cancelled.is_set()
+    await asyncio.wait_for(cleanup_finished.wait(), timeout=1.0)

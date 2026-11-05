@@ -17,13 +17,18 @@
 
 """Tests for the Flask plugin."""
 
+import asyncio
 import json
 import logging
+import threading
+import warnings
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from flask import Flask, abort
 from genkit_flask import genkit_flask_handler
+from genkit_flask._handler import _iter_over_async
 from pydantic import BaseModel
 
 from genkit import FlowContext, Genkit, GenkitError, PublicError
@@ -420,8 +425,8 @@ class Receipt(BaseModel):
     note: str | None = None
 
 
-def test_flask_flow_returning_partial_dict_for_model_sends_defaults() -> None:
-    """POST to a `-> Receipt` flow that returns `{'table': 4}` includes `note: null`."""
+def test_flask_flow_returning_dict_for_model_omits_none_fields() -> None:
+    """POST to a `-> Receipt` flow that returns `{'table': 4, 'note': None}` omits `note` on the wire."""
     ai = Genkit()
     app = Flask(__name__)
     app.config.update({'TESTING': True})
@@ -430,12 +435,12 @@ def test_flask_flow_returning_partial_dict_for_model_sends_defaults() -> None:
     @genkit_flask_handler(ai)
     @ai.flow()
     async def close_tab(table: int) -> Receipt:
-        return {'table': table}  # type: ignore[return-value]
+        return {'table': table, 'note': None}  # type: ignore[return-value]
 
     response = app.test_client().post('/close_tab', json={'data': 4})
 
     assert response.status_code == 200
-    assert response.json == {'result': {'table': 4, 'note': None}}
+    assert response.json == {'result': {'table': 4}}
 
 
 def test_flask_context_provider_abort_keeps_its_status() -> None:
@@ -456,6 +461,81 @@ def test_flask_context_provider_abort_keeps_its_status() -> None:
     response = app.test_client().post('/chat', json={'data': 'x'})
 
     assert response.status_code == 401
+
+
+def test_flask_streaming_client_disconnect_cancels_flow() -> None:
+    """A client that hangs up after the first SSE chunk cancels the flow and lets awaiting `finally:` finish."""
+    ai = Genkit()
+    flow_cancelled = threading.Event()
+    cleanup_finished = threading.Event()
+    app = Flask(__name__)
+    app.config.update({'TESTING': True})
+
+    @app.post('/slow')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def slow(_: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        finally:
+            await asyncio.sleep(0.02)
+            cleanup_finished.set()
+        return 'never'
+
+    response = app.test_client().post(
+        '/slow', json={'data': 'x'}, headers={'accept': 'text/event-stream'}, buffered=False
+    )
+    first = next(iter(response.response))
+    # Werkzeug closes the response iterator when the client goes away.
+    response.close()
+
+    assert first == b'data: {"message":1}\n\n'
+    assert flow_cancelled.is_set()
+    assert cleanup_finished.is_set()
+
+
+def test_flask_iter_over_async_skips_aclose_when_loop_closed() -> None:
+    """Closing `_iter_over_async` after `loop.close()` does not raise `RuntimeError` or leak an unawaited coroutine."""
+    loop = asyncio.new_event_loop()
+
+    async def source() -> AsyncIterator[str]:
+        yield 'first'
+        yield 'second'
+
+    sync_iter = _iter_over_async(source(), loop)
+    assert next(sync_iter) == 'first'
+    loop.close()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', RuntimeWarning)
+        sync_iter.close()
+
+
+def test_flask_iter_over_async_skips_aclose_when_loop_running() -> None:
+    """Closing `_iter_over_async` while `loop` is busy does not raise `RuntimeError` or leak a coroutine."""
+    loop = asyncio.new_event_loop()
+
+    async def source() -> AsyncIterator[str]:
+        yield 'first'
+        yield 'second'
+
+    sync_iter = _iter_over_async(source(), loop)
+    assert next(sync_iter) == 'first'
+
+    async def close_while_busy() -> None:
+        assert loop.is_running()
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            sync_iter.close()
+
+    try:
+        loop.run_until_complete(close_while_busy())
+    finally:
+        loop.close()
 
 
 def test_flask_failure_logs_name_the_flow(caplog: pytest.LogCaptureFixture) -> None:

@@ -20,7 +20,6 @@ pyright, pyrefly, and ty include ``packages/*/tests/typecheck/`` with strict
 argument and overload checks enabled, so any signature mismatch here fails CI.
 """
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -94,7 +93,6 @@ def test_context_subclasses_satisfy_action_run_context() -> None:
     assert_type(stream_model_chunk(model_ctx), ActionRunContext[ModelResponseChunk])
     assert_type(stream_agent_chunk(agent_ctx), ActionRunContext[AgentStreamChunk])
     assert_type(flow_ctx.context, dict[str, Any])
-    assert_type(flow_ctx.abort_signal, asyncio.Event)
     assert_type(tool_ctx.is_resumed(), bool)
     assert_type(model_ctx.is_streaming, bool)
     assert_type(agent_ctx.is_streaming, bool)

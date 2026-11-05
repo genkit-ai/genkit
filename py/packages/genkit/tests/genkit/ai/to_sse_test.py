@@ -4,6 +4,7 @@
 """`genkit.web.to_sse` frames flow streams, model streams and agent turns; these pin its frames."""
 
 import asyncio
+import contextlib
 import copy
 import datetime
 import gc
@@ -11,8 +12,8 @@ import json
 import logging
 import pickle  # noqa: S403
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Any, cast
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
@@ -435,7 +436,7 @@ async def test_agent_turn_to_sse_reads_response_only_after_the_stream_drains(
         failed_reads = failed.response_reads
 
         abandoned = spy_turn([AgentChunk(text='Hi', raw=wire_chunk)], loop.create_future())
-        agen = cast(AsyncGenerator[str, None], to_sse(abandoned))
+        agen = to_sse(abandoned)
         first = await agen.__anext__()
         mid_stream_reads = abandoned.response_reads
         await agen.aclose()
@@ -638,3 +639,46 @@ def test_boxed_failure_round_trips_source_and_cause_without_holding_the_exceptio
         'no table 12',
         {'table': 12},
     )
+
+
+@pytest.mark.asyncio
+async def test_to_sse_aclosing_cancels_flow_and_generate_stream_immediately() -> None:
+    """Closing `to_sse(handle)` while suspended at a yielded frame cancels the run right away."""
+    ai = Genkit()
+    flow_cancelled = asyncio.Event()
+    model_cancelled = asyncio.Event()
+
+    @ai.flow()
+    async def slow_flow(_: str, ctx: FlowContext[int]) -> str:
+        ctx.send_chunk(1)
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            flow_cancelled.set()
+            raise
+        return 'never'
+
+    async def slow_model(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('first')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            model_cancelled.set()
+            raise
+        return ModelResponse()
+
+    ai.define_model(name='slow_model', fn=slow_model)
+
+    async with contextlib.aclosing(to_sse(slow_flow.stream('x'))) as lines:
+        async for line in lines:
+            assert line == 'data: {"message":1}\n\n'
+            break
+    assert flow_cancelled.is_set()
+
+    gen_handle = ai.generate_stream(model='slow_model', prompt='hi')
+    async with contextlib.aclosing(to_sse(gen_handle)) as lines:
+        async for line in lines:
+            assert json.loads(line.removeprefix('data: '))['message']['content'] == [{'text': 'first'}]
+            break
+    assert model_cancelled.is_set()
+    assert (await gen_handle.response).finish_reason == FinishReason.ABORTED

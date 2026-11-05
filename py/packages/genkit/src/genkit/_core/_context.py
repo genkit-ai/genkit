@@ -99,7 +99,7 @@ ContextProvider = Callable[[RequestData], dict[str, Any] | Awaitable[dict[str, A
 Action. If middleware throws an error, that error will fail the request and the Action will not
 be called.
 
-Expected cases should return a PublicError, which allows the request handler to
+Expected cases should raise a PublicError, which allows the request handler to
 know what data is safe to return to end users.
 Middleware can provide validation in addition to parsing. For example, an auth middleware can have
 policies for validating auth in addition to passing auth context to the Action.

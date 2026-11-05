@@ -269,6 +269,7 @@ class ToolContext(ActionRunContext[ChunkT]):
     def __init__(
         self,
         ctx: ActionRunContext[ChunkT],
+        *,
         resumed_metadata: dict[str, Any] | None = None,
         original_input: Any = None,  # noqa: ANN401 - prior tool_request.input when replacing on restart
     ) -> None:
@@ -282,7 +283,6 @@ class ToolContext(ActionRunContext[ChunkT]):
         super().__init__(
             context=ctx.context,
             streaming_callback=ctx.streaming_callback,
-            abort_signal=ctx.abort_signal,
         )
         self.resumed_metadata = resumed_metadata
         self.original_input = original_input

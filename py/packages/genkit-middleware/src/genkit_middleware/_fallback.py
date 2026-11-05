@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -129,8 +131,6 @@ class Fallback(Middleware[FallbackConfig]):
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
         for entry in self.config.models:
-            if ctx.abort_signal.is_set():
-                raise last_error
             model_name = entry if isinstance(entry, str) else entry.name
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             # A plain ModelRequest with a dict config, so the backup model parses
@@ -145,7 +145,6 @@ class Fallback(Middleware[FallbackConfig]):
                     input=fallback_request,
                     context=ctx.context,
                     on_chunk=on_chunk,
-                    abort_signal=ctx.abort_signal,
                 )
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
@@ -158,4 +157,7 @@ class Fallback(Middleware[FallbackConfig]):
     def _should_fall_back(self, exc: Exception) -> bool:
         # A raw exception has no status, so it stays on this model. Only a
         # listed GenkitError status sends the request on.
+        curr = asyncio.current_task()
+        if curr is not None and sys.version_info >= (3, 11) and curr.cancelling() > 0:
+            return False
         return isinstance(exc, GenkitError) and exc.status in self.config.statuses

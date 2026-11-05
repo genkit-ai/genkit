@@ -16,6 +16,8 @@
 
 """Tests for Fallback middleware."""
 
+import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
@@ -404,14 +406,17 @@ async def test_fallback_does_not_call_backup_when_inner_middleware_chunk_callbac
 
 
 @pytest.mark.asyncio
-async def test_fallback_stops_when_aborted() -> None:
-    """Test that fallback halts and re-raises when the abort signal is already set."""
+async def test_fallback_halts_when_task_cancelled() -> None:
+    """Cancelling the task during backup1 unwinds via CancelledError without calling backup2."""
     ai = Genkit()
     ran: list[str] = []
+    backup1_started = asyncio.Event()
 
     async def backup1(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup1')
-        raise GenkitError(status='UNAVAILABLE', message='backup1 down')
+        backup1_started.set()
+        await asyncio.Event().wait()
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('never')]))
 
     async def backup2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup2')
@@ -424,28 +429,44 @@ async def test_fallback_stops_when_aborted() -> None:
     ai.define_model(name='backup2', fn=backup2)
 
     ctx = MiddlewareContext(ai=ai)
-    ctx.abort_signal.set()
     fallback = Fallback(models=['backup1', 'backup2'])
 
     async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
-    with pytest.raises(GenkitError, match='primary down'):
-        await fallback.wrap_model(_make_params(), ctx, next_fn)
+    task = asyncio.create_task(fallback.wrap_model(_make_params(), ctx, next_fn))
+    await asyncio.wait_for(backup1_started.wait(), timeout=2.0)
+    task.cancel()
 
-    assert ran == []
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert ran == ['backup1']
 
 
 @pytest.mark.asyncio
-async def test_fallback_halts_subsequent_models_on_abort() -> None:
-    """Test that fallback stops calling subsequent backup models when aborted mid-sequence."""
+async def test_fallback_generate_stream_break_halts_subsequent_models() -> None:
+    """Exiting `async with ai.generate_stream(..., use=[Fallback(...)])` cancels backup1 and never calls backup2."""
     ai = Genkit()
     ran: list[str] = []
+    backup1_cancelled = asyncio.Event()
+
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        ran.append('primary')
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     async def backup1(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ran.append('backup1')
-        ctx.abort_signal.set()
-        raise GenkitError(status='UNAVAILABLE', message='backup1 down')
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('backup1-chunk')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            backup1_cancelled.set()
+            raise
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('backup1')]),
+        )
 
     async def backup2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup2')
@@ -454,19 +475,25 @@ async def test_fallback_halts_subsequent_models_on_abort() -> None:
             message=Message(role=Role.MODEL, content=[Part.from_text('backup2')]),
         )
 
+    ai.define_model(name='primary', fn=primary)
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
-    ctx = MiddlewareContext(ai=ai)
-    fallback = Fallback(models=['backup1', 'backup2'])
+    seen: list[str] = []
+    async with ai.generate_stream(
+        model='primary',
+        prompt='hi',
+        use=[Fallback(models=['backup1', 'backup2'])],
+    ) as stream:
+        async for chunk in stream:
+            seen.append(chunk.text)
+            break
+    final = await asyncio.wait_for(stream.response, timeout=2.0)
 
-    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
-        raise GenkitError(status='UNAVAILABLE', message='primary down')
-
-    with pytest.raises(GenkitError, match='backup1 down'):
-        await fallback.wrap_model(_make_params(), ctx, next_fn)
-
-    assert ran == ['backup1']
+    assert seen == ['backup1-chunk']
+    assert backup1_cancelled.is_set()
+    assert ran == ['primary', 'backup1']
+    assert final.finish_reason == FinishReason.ABORTED
 
 
 @pytest.mark.asyncio
@@ -584,3 +611,43 @@ async def test_fallback_model_ref_entry_preserves_explicit_none_over_backup_defa
 
     assert response.text == 'ok'
     assert seen == [{'seed': None, 'backup_tag': 'house', 'max_output_tokens': 64}]
+
+
+@pytest.mark.asyncio
+async def test_fallback_generate_stream_aclose_when_sdk_turns_cancel_into_error_halts_backups() -> None:
+    """When primary SDK turns `CancelledError` into `UNAVAILABLE`, `aclose()` aborts without calling backup."""
+    ai = Genkit()
+    backup_calls = 0
+
+    async def primary(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as cancel_err:
+            raise GenkitError(status='UNAVAILABLE', message='sdk closed stream') from cancel_err
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('never')]),
+        )
+
+    async def backup(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='primary', fn=primary)
+    ai.define_model(name='backup', fn=backup)
+
+    stream = ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+    async with contextlib.aclosing(stream.stream) as chunks:
+        async for _ in chunks:
+            break
+
+    final = await asyncio.wait_for(stream.response, timeout=2.0)
+    assert backup_calls == 0
+    assert final.finish_reason == FinishReason.ABORTED
+    assert final.error is not None
+    assert final.error.status == 'CANCELLED'

@@ -16,7 +16,7 @@
   "dependencies": {
     "genkit": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "dotenv": "^16.4.5"
+    "dotenv": "^18.0.8"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",

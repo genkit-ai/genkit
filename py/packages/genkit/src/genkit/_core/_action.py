@@ -24,7 +24,7 @@ import re
 import sys
 import time
 import types
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -44,7 +44,7 @@ from pydantic.alias_generators import to_camel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticSchemaGenerationError, PydanticUserError
 from typing_extensions import Self, TypeVar
 
-from genkit._core._channel import CloseableQueue, mirror_result, start_stream
+from genkit._core._channel import Channel, CloseableQueue, StoppableStream
 from genkit._core._compat import StrEnum
 from genkit._core._config_check import (
     check_config_json_schema,
@@ -233,6 +233,13 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     - If the run raises, both the loop and ``.response`` raise it.
       ``ModelStreamResponse`` (``generate_stream``, ``prompt.stream``) reports
       model failures on ``.response`` instead; see its docstring.
+    - Closing before the run finishes (``async with result:`` or
+      ``await result.aclose()``) stops the run and awaits ``finally:`` cleanup;
+      ``.response`` then raises
+      ``GenkitError`` with status ``CANCELLED`` (``ModelStreamResponse``
+      resolves with ``finish_reason == ABORTED`` instead). Reading to the end
+      or leaving a bare ``async for`` without closing doesn't stop the run.
+      See ``Action.stream``.
 
     Example:
         ```python
@@ -243,7 +250,7 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
 
         result = track_order.stream('A-1042')
-        async for update in result:
+        async for update in result.stream:
             print(update)
         # => Out for delivery
 
@@ -254,16 +261,18 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
 
     def __init__(
         self,
-        stream: AsyncIterator[ChunkT_co],
+        stream: AsyncIterable[ChunkT_co],
         response: Awaitable[OutputT_co],
     ) -> None:
-        self._stream = stream
+        self._stream: StoppableStream[ChunkT_co] = (
+            stream if isinstance(stream, StoppableStream) else StoppableStream(chunks=stream, stop=None)
+        )
         self._response = response
         self._action_name: str | None = None
 
     @property
-    def stream(self) -> AsyncIterator[ChunkT_co]:
-        """The chunks, in order. Iterating the response itself reads the same stream."""
+    def stream(self) -> StoppableStream[ChunkT_co]:
+        """The chunks, in order (``AsyncIterator``). Iterating the response itself reads the same stream."""
         return self._stream
 
     @property
@@ -271,9 +280,9 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
         """The final result, available once the run ends."""
         return self._response
 
-    def __aiter__(self) -> AsyncIterator[ChunkT_co]:
-        # `async for chunk in result` reads `.stream`, so callers can skip the hop.
-        return self._stream.__aiter__()
+    def __aiter__(self) -> StoppableStream[ChunkT_co]:
+        # `async for chunk in result` reads `.stream`, so `aiter(result) is result.stream`.
+        return self._stream
 
     async def aclose(self) -> None:
         """Close the stream and release any underlying resources."""
@@ -854,7 +863,7 @@ def input_from_json(value: object) -> object:
 
 
 class ActionRunContext(Generic[ChunkT]):
-    """Base execution context for a running action: request context, streaming, and an abort signal.
+    """Base execution context for a running action: request context and chunk streaming.
 
     Subclassed publicly as ``genkit.FlowContext``, ``genkit.ToolContext``,
     ``genkit.model.ModelContext``, and ``genkit.exp.agent.AgentContext``.
@@ -868,15 +877,14 @@ class ActionRunContext(Generic[ChunkT]):
 
     def __init__(
         self,
+        *,
         context: dict[str, Any] | None = None,
         streaming_callback: Callable[[ChunkT], None] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: object | None = None,
         input_stream: AsyncIterator[object] | None = None,
     ) -> None:
         self._context: dict[str, Any] = context if context is not None else {}
         self._streaming_callback = streaming_callback
-        self.abort_signal: asyncio.Event = abort_signal if abort_signal is not None else asyncio.Event()
         # Bidi plumbing, read only by BidiAction: the session init value sent
         # on connection open, and the live stream of per-turn inputs.
         self._init: object | None = init
@@ -918,9 +926,8 @@ class ActionRunContext(Generic[ChunkT]):
 class FlowContext(ActionRunContext[ChunkT]):
     """Execution context passed to flow, embedder, evaluator, and custom action functions.
 
-    Provides ``ctx.send_chunk(chunk)`` for streaming ``ChunkT`` chunks,
-    ``ctx.context`` for caller context data, and ``ctx.abort_signal`` for
-    cancellation.
+    Provides ``ctx.send_chunk(chunk)`` for streaming ``ChunkT`` chunks and
+    ``ctx.context`` for caller context data.
 
     ``FlowContext`` and ``ToolContext`` are siblings, so neither annotation
     accepts the other. A helper shared by a flow and a tool takes the union:
@@ -952,7 +959,6 @@ class ModelContext(ActionRunContext[ModelResponseChunk]):
     - ``ctx.send_chunk(chunk)`` streams a :class:`~genkit.ModelResponseChunk` to the caller.
     - ``ctx.is_streaming`` is ``True`` when the caller requested streaming.
     - ``ctx.context`` holds the caller's context dict (e.g. ``ctx.context.get('secrets')``).
-    - ``ctx.abort_signal`` is the :class:`asyncio.Event` set when the turn is cancelled.
     """
 
 
@@ -977,6 +983,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         kind: ActionKind,
         name: str,
         fn: Callable[..., Awaitable[OutputT]],
+        *,
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -1201,7 +1208,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         on_trace_start: Callable[[str, str], Awaitable[None]] | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
@@ -1239,7 +1245,6 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         action_ctx: ActionRunContext[Any] = self._context_cls(
             context=_action_context.get(None),
             streaming_callback=streaming_cb,
-            abort_signal=abort_signal,
             init=init,
             input_stream=input_stream,
         )
@@ -1265,7 +1270,7 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """Start the action and return a ``StreamResponse``: iterate it for chunks, await ``.response`` for the result.
+        """Return a ``StreamResponse``: iterate ``.stream`` for chunks, await ``.response`` for the result.
 
         Takes the same keyword arguments as ``run``, minus ``on_chunk``. If the
         action raises, both the loop and ``.response`` raise.
@@ -1283,25 +1288,98 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
-        abort_signal: asyncio.Event | None = None,
         init: InitT | None = None,
         input_stream: AsyncIterator[InputT] | None = None,
     ) -> StreamResponse[ChunkT, OutputT]:
-        """``stream`` plus ``input_stream``, which ``BidiAction.stream_bidi`` feeds."""
+        """Run the action and return a StreamResponse to read its chunks and result.
 
-        async def run(send_chunk: Callable[[ChunkT], None]) -> ActionResponse[OutputT]:
-            return await self._run(
-                input,
-                on_chunk=send_chunk,
-                context=context,
-                telemetry_labels=telemetry_labels,
-                abort_signal=abort_signal,
-                init=init,
-                input_stream=input_stream,
-            )
+        Iterate ``.stream`` for chunks and await ``.response`` for the output.
+        Closing early via ``async with my_flow.stream(x) as res:`` (or
+        ``await res.aclose()``) cancels the run and awaits ``finally:`` cleanup,
+        and ``.response`` then raises ``GenkitError`` with status ``CANCELLED``. Python does not tear down an
+        ``AsyncIterator`` on ``break`` alone, so wrap the stream in ``async with``
+        when exiting early should cancel the action.
 
-        channel, task = start_stream(run)
-        stream_response = StreamResponse(stream=channel, response=mirror_result(task, lambda result: result.response))
+        Example:
+            async with my_flow.stream(x) as res:
+                async for chunk in res.stream:
+                    if done_with(chunk):
+                        break
+        """
+        return self._start_stream(
+            input=input,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            init=init,
+            input_stream=input_stream,
+            stop_on_early_exit=True,
+        )
+
+    def _start_stream(
+        self,
+        *,
+        input: InputT | None,
+        context: dict[str, Any] | None,
+        telemetry_labels: dict[str, object] | None,
+        init: InitT | None,
+        input_stream: AsyncIterator[InputT] | None,
+        stop_on_early_exit: bool,
+    ) -> StreamResponse[ChunkT, OutputT]:
+        channel: Channel[ChunkT, ActionResponse[OutputT]] = Channel()
+
+        def send_chunk(c: ChunkT) -> None:
+            channel.send(c)
+
+        resp = self._run(
+            input,
+            on_chunk=send_chunk,
+            context=context,
+            telemetry_labels=telemetry_labels,
+            init=init,
+            input_stream=input_stream,
+        )
+        run_task = asyncio.create_task(resp)
+        channel.set_close_future(run_task)
+        reader_stopped = asyncio.Event()
+
+        async def stop() -> None:
+            if run_task.done():
+                return
+            if not reader_stopped.is_set():
+                reader_stopped.set()
+                run_task.cancel()
+            # waiting here is what lets aclosing(...) promise the run is over
+            # once the block exits.
+            await asyncio.wait([run_task])
+
+        # Mirror the run's terminal state onto .response so a caller awaiting it
+        # sees the same success/error/cancel the run ended with, instead of
+        # hanging (or dropping the error on the floor) when the run raises.
+        result_future: asyncio.Future[OutputT] = asyncio.Future()
+
+        def resolve_response(closed: asyncio.Future[ActionResponse[OutputT]]) -> None:
+            if result_future.done():
+                return
+            if closed.cancelled():
+                if reader_stopped.is_set():
+                    result_future.set_exception(
+                        GenkitError(status='CANCELLED', message='The stream was closed before the run finished.')
+                    )
+                    # the reader chose to stop, so leaving .response unread
+                    # shouldn't log "exception was never retrieved".
+                    _ = result_future.exception()
+                else:
+                    result_future.cancel()
+            elif (exc := closed.exception()) is not None:
+                result_future.set_exception(exc)
+                _ = result_future.exception()
+            else:
+                result_future.set_result(closed.result().response)
+
+        channel.closed.add_done_callback(resolve_response)
+
+        chunks = StoppableStream(chunks=channel, stop=stop if stop_on_early_exit else None)
+        stream_response = StreamResponse(stream=chunks, response=result_future)
         stream_response._action_name = self.name
         return stream_response
 
@@ -1744,6 +1822,7 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         kind: ActionKind,
         name: str,
         bidi_fn: BidiFn[InitT, InputT, ChunkT, OutputT],
+        *,
         metadata_fn: Callable[..., object] | None = None,
         description: str | None = None,
         metadata: dict[str, object] | None = None,
@@ -1802,11 +1881,15 @@ class BidiAction(Action[InputT, OutputT, ChunkT, InitT]):
         """
         # Unbounded: turn-level backpressure is managed at the agent runtime intake.
         in_queue: CloseableQueue[InputT] = CloseableQueue()
-        stream_response = self._stream(
+        # A connection outlives any one read of its chunks, so a reader that
+        # stops early leaves the session running.
+        stream_response = self._start_stream(
+            input=NO_INPUT,
             init=init,
             context=context,
             telemetry_labels=telemetry_labels,
             input_stream=in_queue,
+            stop_on_early_exit=False,
         )
         return BidiConnection(in_queue, stream_response)
 

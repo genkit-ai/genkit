@@ -18,7 +18,7 @@
 
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 from typing import Protocol
 
 from pydantic_core import to_jsonable_python
@@ -63,11 +63,32 @@ def _frame_value(obj: object) -> object:
     return to_jsonable_python(obj, by_alias=True, exclude_none=True)
 
 
+def _dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=_JSON_SEPARATORS)
+
+
 def _frame(key: str, value: object) -> str:
-    return f'data: {json.dumps({key: value}, separators=_JSON_SEPARATORS)}\n\n'
+    return f'data: {_dumps({key: value})}\n\n'
 
 
-async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
+def result_json(result: object) -> str:
+    """Encode a one-shot result as compact ``{"result": ...}`` JSON, the bytes every adapter sends."""
+    # Same encoding as to_sse frames: aliases, no null model fields.
+    return _dumps({'result': _frame_value(result)})
+
+
+def error_json(error: Exception) -> str:
+    """Encode ``error_body(error)`` as compact JSON; pair with ``error_status(error)``."""
+    return _dumps(error_body(error))
+
+
+def error_sse(error: Exception) -> str:
+    r"""Encode ``error_body(error)`` as one ``data: {"error": ...}\n\n`` SSE frame."""
+    # For failures before to_sse runs, e.g. action.stream(...) raising.
+    return _frame('error', error_body(error))
+
+
+async def to_sse(handle: StreamHandle) -> AsyncGenerator[str, None]:
     r"""Frame a streaming handle as Genkit SSE lines.
 
     Yields ``data: {"message": ...}`` for each chunk, then ``data: {"result": ...}``.
@@ -109,9 +130,17 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
     Yields:
         One SSE ``data:`` line per frame, each ending in a blank line.
     """
+    chunks = handle.stream.__aiter__()
     try:
-        async for chunk in handle.stream:
-            yield _frame('message', _frame_value(chunk))
+        try:
+            async for chunk in chunks:
+                yield _frame('message', _frame_value(chunk))
+        finally:
+            # Closing `to_sse` early (e.g. a client disconnect) closes the
+            # chunk iterator right away so the run cancels immediately.
+            aclose = getattr(chunks, 'aclose', None)
+            if aclose is not None:
+                await aclose()
         result = await handle.response
         # ModelStreamResponse boxes turn failures onto .response instead of raising
         # from .stream; re-raise here so SSE callers get the error frame and log.
@@ -148,4 +177,4 @@ async def to_sse(handle: StreamHandle) -> AsyncIterator[str]:
             _logger.exception('served stream failed')
         else:
             _logger.warning('served stream failed: %s', e)
-        yield _frame('error', error_body(e))
+        yield error_sse(e)

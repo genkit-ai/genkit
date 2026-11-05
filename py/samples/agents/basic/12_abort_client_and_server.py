@@ -21,7 +21,7 @@ turn.abort() is a client-side detach — you stop reading the stream and the tur
 settles immediately, while the server turn keeps running to completion. The prompt
 you sent stays in history (it was still asked), so the session just continues from
 there; it works with or without a store. chat.abort() is the opposite:
-it halts the work on the server, firing the abort_signal inside running tools so a
+it halts the work on the server, cancelling running tools and model calls so a
 detached turn settles ABORTED. It needs a store. Requires GEMINI_API_KEY.
 """
 
@@ -31,7 +31,6 @@ import asyncio
 
 from genkit_google_genai import GoogleAI
 
-from genkit import GenkitError, ToolContext
 from genkit.exp import Genkit
 from genkit.exp.agent import InMemorySessionStore, SnapshotStatus
 
@@ -47,11 +46,9 @@ chatty = ai.define_agent(
 
 
 @ai.tool(name='slowWork', description='Simulate long background work.')
-async def slow_work(_: dict, ctx: ToolContext) -> dict:
+async def slow_work(_: dict) -> dict:
     for _i in range(30):
-        if ctx.abort_signal.is_set():  # chat.abort() reaches the tool here so it can bail out
-            raise GenkitError(status='ABORTED', message='Task aborted')
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.5)  # chat.abort() cancels the running task here
     return {'done': True}
 
 
@@ -90,7 +87,7 @@ async def main() -> None:
     assert task.snapshot_id
     await asyncio.sleep(2.0)  # let the tool start churning
 
-    # chat.abort() fires abort_signal inside slowWork. The call returns the
+    # chat.abort() cancels slowWork on the server. The call returns the
     # previous status (PENDING) — not ABORTED. The prompt stays in history;
     # it was still asked. Reload before the next send() so you are not still
     # pointed at the aborted leaf.

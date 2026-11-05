@@ -17,24 +17,31 @@
 """Genkit Flask plugin."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from asyncio import AbstractEventLoop
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
-from typing import Any, TypeAlias, TypeVar, cast
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator
+from typing import Any, TypeVar, cast
 
 from flask import Response, request
-from pydantic import BaseModel
 from werkzeug.exceptions import HTTPException
 
 from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
-from genkit.web import ContextProvider, RequestData, error_body, error_status, read_body, wants_stream
+from genkit.web import (
+    ContextProvider,
+    RequestData,
+    error_json,
+    error_sse,
+    error_status,
+    read_body,
+    result_json,
+    to_sse,
+    wants_stream,
+)
 
 logger = logging.getLogger(__name__)  # noqa: TID251
-
-# Compact JSON (no spaces) for smaller wire payload.
-_JSON_SEPARATORS = (',', ':')
 
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
@@ -55,7 +62,7 @@ def _log_failure(*, error: Exception, flow: str, where: str) -> None:
 def _error_response(error: Exception, status: int | None = None) -> Response:
     return Response(
         status=error_status(error) if status is None else status,
-        response=json.dumps(error_body(error), separators=_JSON_SEPARATORS),
+        response=error_json(error),
         mimetype='application/json',
     )
 
@@ -69,11 +76,6 @@ def _parse_request_json() -> object:
         raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
-def _to_dict(obj: Any) -> Any:  # noqa: ANN401
-    """Convert object to dict if it's a Pydantic model, otherwise return as-is."""
-    return obj.model_dump() if isinstance(obj, BaseModel) else obj
-
-
 T = TypeVar('T')
 
 
@@ -85,7 +87,7 @@ def _create_loop() -> AbstractEventLoop:
         return asyncio.new_event_loop()
 
 
-def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable[T]:
+def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Generator[T, None, None]:
     """Synchronously iterates over an AsyncIterable using a specified event loop."""
     ait_iter = ait.__aiter__()
 
@@ -96,16 +98,20 @@ def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Iterable
         except StopAsyncIteration:
             return True, None
 
-    while True:
-        done, obj = loop.run_until_complete(get_next())
-        if done:
-            break
-        assert obj is not None
-        yield obj
-
-
-# Type alias for Flask-compatible route handler return type
-FlaskRouteReturn: TypeAlias = Response | dict[str, object] | Iterable[Any]
+    try:
+        while True:
+            done, obj = loop.run_until_complete(get_next())
+            if done:
+                break
+            assert obj is not None
+            yield obj
+    finally:
+        # Werkzeug closes this iterator when the client hangs up. The async side
+        # only runs while we drive the loop, so close it here or the flow never
+        # hears about it.
+        aclose = getattr(ait_iter, 'aclose', None)
+        if aclose is not None and not loop.is_closed() and not loop.is_running():
+            loop.run_until_complete(aclose())
 
 
 class _FlaskRequestData(RequestData):
@@ -121,7 +127,7 @@ class _FlaskRequestData(RequestData):
 def genkit_flask_handler(
     ai: Genkit,
     context_provider: ContextProvider | None = None,
-) -> Callable[[Action], Callable[..., Awaitable[FlaskRouteReturn]]]:
+) -> Callable[[Action], Callable[..., Awaitable[Response]]]:
     """A decorator for serving Genkit flows via a Flask server.
 
     The returned view function is named after the flow (dots replaced with
@@ -151,11 +157,11 @@ def genkit_flask_handler(
     """
     loop = _create_loop()
 
-    def decorator(flow: Action) -> Callable[..., Awaitable[FlaskRouteReturn]]:
+    def decorator(flow: Action) -> Callable[..., Awaitable[Response]]:
         if not isinstance(flow, Action):
             raise GenkitError(status='INVALID_ARGUMENT', message='must apply @genkit_flask_handler on a @flow')
 
-        async def handler() -> FlaskRouteReturn:
+        async def handler() -> Response:
             try:
                 input_data = _parse_request_json()
             except PublicError as e:
@@ -189,24 +195,23 @@ def genkit_flask_handler(
                 async def async_gen() -> AsyncIterator[str]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
-                        async for chunk in stream_response.stream:
-                            yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
-
-                        result = await stream_response.response
-                        yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
                         _log_failure(error=e, flow=flow.name, where='stream')
-                        yield f'data: {json.dumps({"error": error_body(e)}, separators=_JSON_SEPARATORS)}\n\n'
+                        yield error_sse(e)
+                        return
+                    # closing this generator has to cancel the flow before the
+                    # loop stops; nothing runs the loop afterwards to collect it.
+                    async with contextlib.aclosing(to_sse(stream_response)) as lines:
+                        async for line in lines:
+                            yield line
 
-                iter = _iter_over_async(async_gen(), loop)
-                return iter
-            else:
-                try:
-                    response = await flow.run(input=action_input, context=action_context, init=init)
-                    return {'result': _to_dict(response.response)}
-                except Exception as e:
-                    _log_failure(error=e, flow=flow.name, where='run')
-                    return _error_response(e)
+                return Response(_iter_over_async(async_gen(), loop), mimetype='text/event-stream')
+            try:
+                response = await flow.run(input=action_input, context=action_context, init=init)
+                return Response(response=result_json(response.response), mimetype='application/json')
+            except Exception as e:
+                _log_failure(error=e, flow=flow.name, where='run')
+                return _error_response(e)
 
         # Flask's default endpoint is the view function's __name__. Name the
         # view after the flow, as if @app.post had decorated the flow itself,

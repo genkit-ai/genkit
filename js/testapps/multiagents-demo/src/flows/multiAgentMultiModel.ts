@@ -29,7 +29,7 @@ export const flow = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (input) => {
-    let currentAgent: ExecutablePrompt<any> = triageAgent;
+    let currentAgent: ExecutablePrompt<any, any, any> = triageAgent;
     let textInput = input.userInput;
     const history: any[] = [];
 

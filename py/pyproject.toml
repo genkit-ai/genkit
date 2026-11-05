@@ -486,6 +486,7 @@ project_includes = [
   # Core package
   "packages/genkit/src/**/*.py",
   "packages/genkit-mcp/src/**/*.py",
+  "packages/genkit-otel/src/**/*.py",
   # Typing contracts (see [tool.pyright])
   "packages/*/tests/typecheck/**/*.py",
 ]

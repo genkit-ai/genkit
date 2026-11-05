@@ -403,9 +403,10 @@ def test_served_and_in_process_messages_share_path_format_and_cap() -> None:
 
 def test_error_body_plain_exception_is_internal_error() -> None:
     """error_body(ValueError('secret')) and non-exceptions are a 500 Internal Error."""
+    # Typed Exception, but anything else still fails closed at runtime.
     for error in (ValueError('secret'), TypeError('secret'), 'secret', None):
-        assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}
-        assert error_status(error) == 500
+        assert error_body(error) == {'message': 'Internal Error', 'status': 'INTERNAL'}  # type: ignore[arg-type]
+        assert error_status(error) == 500  # type: ignore[arg-type]
 
 
 def test_error_status_matches_error_body_status() -> None:

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { googleAI } from '@genkit-ai/google-genai';
 import { ai } from '../config/genkit';
 
 import {
@@ -27,7 +28,7 @@ import {
 export const agent = ai.definePrompt({
   name: 'catalogAgent',
   description: 'Catalog Agent can help customers browse and search products',
-  model: 'googleai/gemini-2.5-pro',
+  model: googleAI.model('gemini-pro-latest'),
   tools: [
     fetchCatalogTool,
     fetchMostPopularItemsTool,
