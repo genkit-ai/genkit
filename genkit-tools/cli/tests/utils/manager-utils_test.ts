@@ -28,8 +28,9 @@ import {
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
+  vi,
+  type MockInstance,
+} from 'vitest';
 import {
   getDevEnvVars,
   resolveReflectionSecret,
@@ -141,16 +142,16 @@ describe('getDevEnvVars', () => {
 // suppressRuntimeTelemetry so neither half can be dropped silently.
 describe('experimentalUseOtel -> suppressRuntimeTelemetry', () => {
   const TELEMETRY_URL = 'http://localhost:4033';
-  let createSpy: jest.SpiedFunction<typeof RuntimeManager.create>;
+  let createSpy: MockInstance<typeof RuntimeManager.create>;
 
   beforeEach(() => {
-    createSpy = jest
+    createSpy = vi
       .spyOn(RuntimeManager, 'create')
       .mockResolvedValue({} as BaseRuntimeManager);
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it.each([true, false])(
@@ -206,8 +207,8 @@ describe('waitForRuntime', () => {
 
   beforeEach(() => {
     mockManager = {
-      listRuntimes: jest.fn(),
-      onRuntimeEvent: jest.fn(),
+      listRuntimes: vi.fn(),
+      onRuntimeEvent: vi.fn(),
     };
     mockProcessPromise = new Promise((_, reject) => {
       processReject = reject;
@@ -227,7 +228,7 @@ describe('waitForRuntime', () => {
 
     mockManager.onRuntimeEvent.mockImplementation((cb: any) => {
       eventCallback = cb;
-      return jest.fn(); // unsubscribe
+      return vi.fn(); // unsubscribe
     });
 
     const waitPromise = waitForRuntime(mockManager, mockProcessPromise);
@@ -246,7 +247,7 @@ describe('waitForRuntime', () => {
 
     mockManager.onRuntimeEvent.mockImplementation((cb: any) => {
       eventCallback = cb;
-      return jest.fn();
+      return vi.fn();
     });
 
     const waitPromise = waitForRuntime(
@@ -265,7 +266,7 @@ describe('waitForRuntime', () => {
 
   it('should reject if process exits early', async () => {
     mockManager.listRuntimes.mockReturnValue([]);
-    mockManager.onRuntimeEvent.mockReturnValue(jest.fn());
+    mockManager.onRuntimeEvent.mockReturnValue(vi.fn());
 
     const waitPromise = waitForRuntime(mockManager, mockProcessPromise);
 
@@ -276,18 +277,18 @@ describe('waitForRuntime', () => {
   });
 
   it('should timeout if runtime never appears', async () => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
     mockManager.listRuntimes.mockReturnValue([]);
-    mockManager.onRuntimeEvent.mockReturnValue(jest.fn());
+    mockManager.onRuntimeEvent.mockReturnValue(vi.fn());
 
     const waitPromise = waitForRuntime(mockManager, mockProcessPromise);
 
-    jest.advanceTimersByTime(30000);
+    vi.advanceTimersByTime(30000);
 
     await expect(waitPromise).rejects.toThrow(
       'Timeout waiting for runtime to be ready'
     );
-    jest.useRealTimers();
+    vi.useRealTimers();
   });
 });
 
@@ -296,8 +297,8 @@ describe('waitForActionKeys', () => {
 
   beforeEach(() => {
     mockManager = {
-      listActions: jest.fn(),
-      listRuntimes: jest.fn().mockReturnValue([{}]),
+      listActions: vi.fn(),
+      listRuntimes: vi.fn().mockReturnValue([{}]),
     };
   });
 
@@ -399,11 +400,11 @@ describe('runWithManager', () => {
     origTelemetryServer = process.env.GENKIT_TELEMETRY_SERVER;
     process.env.GENKIT_TELEMETRY_SERVER = 'http://localhost:4033';
     mockManager = {
-      stop: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+      stop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     };
-    jest.spyOn(RuntimeManager, 'create').mockResolvedValue(mockManager);
-    jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
-    jest.spyOn(logger, 'debug').mockImplementation((() => {}) as any);
+    vi.spyOn(RuntimeManager, 'create').mockResolvedValue(mockManager);
+    vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
+    vi.spyOn(logger, 'debug').mockImplementation((() => {}) as any);
   });
 
   afterEach(() => {
@@ -413,7 +414,7 @@ describe('runWithManager', () => {
     } else {
       process.env.GENKIT_TELEMETRY_SERVER = origTelemetryServer;
     }
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('sets process.exitCode = 1, logs error.message, and stops manager when fn throws a standard Error', async () => {
@@ -450,7 +451,7 @@ describe('runWithManager', () => {
   });
 
   it('warns that --experimental-auth has no effect without a runtime command', async () => {
-    const warnSpy = jest
+    const warnSpy = vi
       .spyOn(logger, 'warn')
       .mockImplementation((() => {}) as any);
     await runWithManager('/mock/root', async () => {}, { auth: true });

@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, vi } from 'vitest';
 import { evalExtractData } from '../../src/commands/eval-extract-data';
 import { evalFlow } from '../../src/commands/eval-flow';
 import { evalRun } from '../../src/commands/eval-run';
 import { mcp } from '../../src/commands/mcp';
 
-jest.mock('../../src/mcp/server', () => ({
-  startMcpServer: jest.fn(),
+vi.mock('../../src/mcp/server', () => ({
+  startMcpServer: vi.fn(),
 }));
 
 describe('eval:run', () => {
@@ -34,7 +34,7 @@ describe('eval:run', () => {
           writeErr: () => {},
         })
         .parse(['node', 'eval:run']);
-    }).toThrowError(new Error("error: missing required argument 'dataset'"));
+    }).toThrowError("error: missing required argument 'dataset'");
   });
 
   it('fails if invalid output-format is passed', () => {

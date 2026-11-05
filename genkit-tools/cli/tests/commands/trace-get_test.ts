@@ -28,29 +28,25 @@ import {
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
+  vi,
+  type Mock,
+  type Mocked,
+  type MockedFunction,
+} from 'vitest';
 import { traceGet } from '../../src/commands/trace-get';
 import { runWithManager } from '../../src/utils/manager-utils';
 
-jest.mock('@genkit-ai/tools-common/utils');
-jest.mock('../../src/utils/manager-utils');
+vi.mock('@genkit-ai/tools-common/utils');
+vi.mock('../../src/utils/manager-utils');
 
-const mockedFindProjectRoot = findProjectRoot as jest.MockedFunction<
+const mockedFindProjectRoot = findProjectRoot as MockedFunction<
   typeof findProjectRoot
 >;
-const mockedLogger = logger as jest.Mocked<typeof logger>;
-const mockedForceStderr = forceStderr as jest.MockedFunction<
-  typeof forceStderr
->;
-const mockedRunWithManager = runWithManager as jest.MockedFunction<
+const mockedLogger = logger as Mocked<typeof logger>;
+const mockedForceStderr = forceStderr as MockedFunction<typeof forceStderr>;
+const mockedRunWithManager = runWithManager as MockedFunction<
   typeof runWithManager
 >;
-const {
-  stackTraceSpans: actualStackTraceSpans,
-  parseAndSanitizeJson: actualParseAndSanitizeJson,
-  sanitizeBase64DataUrls: actualSanitizeBase64DataUrls,
-} = jest.requireActual('@genkit-ai/tools-common/utils') as any;
 
 describe('trace:get', () => {
   const createCommand = () =>
@@ -61,17 +57,24 @@ describe('trace:get', () => {
 
   const mockProjectRoot = '/mock/project/root';
 
-  beforeEach(() => {
-    jest.clearAllMocks();
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const {
+      stackTraceSpans: actualStackTraceSpans,
+      parseAndSanitizeJson: actualParseAndSanitizeJson,
+      sanitizeBase64DataUrls: actualSanitizeBase64DataUrls,
+    } = await vi.importActual<typeof import('@genkit-ai/tools-common/utils')>(
+      '@genkit-ai/tools-common/utils'
+    );
     mockedFindProjectRoot.mockResolvedValue(mockProjectRoot);
     mockedForceStderr.mockImplementation(() => {});
-    (stackTraceSpans as jest.MockedFunction<any>).mockImplementation(
+    (stackTraceSpans as MockedFunction<any>).mockImplementation(
       actualStackTraceSpans
     );
-    (parseAndSanitizeJson as jest.MockedFunction<any>).mockImplementation(
+    (parseAndSanitizeJson as MockedFunction<any>).mockImplementation(
       actualParseAndSanitizeJson
     );
-    (sanitizeBase64DataUrls as jest.MockedFunction<any>).mockImplementation(
+    (sanitizeBase64DataUrls as MockedFunction<any>).mockImplementation(
       actualSanitizeBase64DataUrls
     );
 
@@ -80,13 +83,13 @@ describe('trace:get', () => {
     traceGet.setOptionValue('keepBase64', undefined);
 
     // Mock console.log to avoid spamming test output
-    jest.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
 
     // Provide a default implementation for runWithManager
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
       // Simulate calling the action with a mocked manager
       const mockManager = {
-        getTrace: jest
+        getTrace: vi
           .fn<any>()
           .mockResolvedValue({ traceId: 'test-id', details: 'mock-trace' }),
       };
@@ -96,7 +99,7 @@ describe('trace:get', () => {
 
   afterEach(() => {
     process.exitCode = undefined;
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('should get and print trace details in tree format by default', async () => {
@@ -114,7 +117,7 @@ describe('trace:get', () => {
   it('should print trace in json format when -f json is specified', async () => {
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
       const mockManager = {
-        getTrace: jest.fn<any>().mockResolvedValue({
+        getTrace: vi.fn<any>().mockResolvedValue({
           traceId: 'test-id',
           spans: {
             s1: {
@@ -138,7 +141,7 @@ describe('trace:get', () => {
       'json',
     ]);
 
-    const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;
+    const loggedStr = (console.log as Mock).mock.calls[0][0] as string;
     const parsed = JSON.parse(loggedStr);
     expect(parsed.spans.s1.attributes['genkit:input']).toEqual({
       query: 'hello',
@@ -151,7 +154,7 @@ describe('trace:get', () => {
       'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
       const mockManager = {
-        getTrace: jest.fn<any>().mockResolvedValue({
+        getTrace: vi.fn<any>().mockResolvedValue({
           traceId: 'test-id',
           spans: {
             s1: {
@@ -175,7 +178,7 @@ describe('trace:get', () => {
       '--keep-base64',
     ]);
 
-    const loggedStr = (console.log as jest.Mock).mock.calls[0][0] as string;
+    const loggedStr = (console.log as Mock).mock.calls[0][0] as string;
     const parsed = JSON.parse(loggedStr);
     expect(parsed.spans.s1.attributes.img).toEqual(rawImage);
   });
@@ -183,7 +186,7 @@ describe('trace:get', () => {
   it('should handle trace not found', async () => {
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
       const mockManager = {
-        getTrace: jest.fn<any>().mockResolvedValue(undefined), // Simulate trace not found
+        getTrace: vi.fn<any>().mockResolvedValue(undefined), // Simulate trace not found
       };
       await fn(mockManager as any);
     });
@@ -200,7 +203,7 @@ describe('trace:get', () => {
     const errorMsg = 'Failed to connect to telemetry server';
     mockedRunWithManager.mockImplementation(async (projectRoot, fn) => {
       const mockManager = {
-        getTrace: jest.fn<any>().mockRejectedValue(new Error(errorMsg)),
+        getTrace: vi.fn<any>().mockRejectedValue(new Error(errorMsg)),
       };
       await fn(mockManager as any);
     });

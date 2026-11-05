@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import type { MessageData } from '../../src/types/model';
 import { PromptFrontmatter } from '../../src/types/prompt';
 import {
