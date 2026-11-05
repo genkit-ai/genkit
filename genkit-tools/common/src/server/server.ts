@@ -373,7 +373,7 @@ export function startServer(
     })
   );
 
-  app.all('*', (_, res) => {
+  app.all('/{*splat}', (_, res) => {
     res.status(200).sendFile('/', { root: UI_ASSETS_SERVE_PATH });
   });
 
