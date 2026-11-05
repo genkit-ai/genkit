@@ -25,19 +25,20 @@ import {
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
+  vi,
+  type Mock,
+} from 'vitest';
 import { traceList } from '../../src/commands/trace-list';
 import { runWithManager } from '../../src/utils/manager-utils';
 
-jest.mock('@genkit-ai/tools-common/utils');
-jest.mock('../../src/utils/manager-utils');
+vi.mock('@genkit-ai/tools-common/utils');
+vi.mock('../../src/utils/manager-utils');
 
 describe('trace:list command', () => {
   let mockManager: any;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     process.exitCode = undefined;
     traceList.setOptionValue('limit', 15);
     traceList.setOptionValue('status', undefined);
@@ -47,20 +48,20 @@ describe('trace:list command', () => {
     traceList.setOptionValue('continuationToken', undefined);
 
     mockManager = {
-      listTraces: jest.fn(),
+      listTraces: vi.fn(),
     };
 
-    (findProjectRoot as jest.Mock<any>).mockResolvedValue('/mock/project/root');
+    (findProjectRoot as Mock<any>).mockResolvedValue('/mock/project/root');
 
-    (runWithManager as jest.Mock<any>).mockImplementation(
+    (runWithManager as Mock<any>).mockImplementation(
       async (projectRoot: any, action: any) => {
         await action(mockManager);
       }
     );
 
-    jest.spyOn(logger, 'info').mockImplementation((() => {}) as any);
-    jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
-    jest.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(logger, 'info').mockImplementation((() => {}) as any);
+    vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -79,7 +80,7 @@ describe('trace:list command', () => {
       ],
     });
 
-    (stackTraceSpans as jest.Mock<any>).mockReturnValue({
+    (stackTraceSpans as Mock<any>).mockReturnValue({
       attributes: {
         'genkit:state': 'success',
         'genkit:input': 'my input string',

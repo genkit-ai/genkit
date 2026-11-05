@@ -14,42 +14,33 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineDocsTool } from '../../src/mcp/docs';
-import { defineUsageGuideTool } from '../../src/mcp/usage';
 import * as docsUtils from '../../src/utils/docs';
 import { SAMPLE_DOCS } from '../utils/docs';
 
-describe('MCP docs and usage guide tools', () => {
+describe('MCP docs tools', () => {
   let registeredTools: Record<string, (opts: any) => Promise<any>>;
 
   beforeEach(async () => {
     registeredTools = {};
-    jest.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
+    vi.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
 
     const mockServer: any = {
-      registerTool: jest.fn((name: string, _config: any, handler: any) => {
+      registerTool: vi.fn((name: string, _config: any, handler: any) => {
         registeredTools[name] = handler;
       }),
     };
     await defineDocsTool(mockServer, '/workspace');
-    await defineUsageGuideTool(mockServer, '/workspace');
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('list_genkit_docs', () => {
     it('auto-detects project language when language is omitted', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
 
       const res = await registeredTools['list_genkit_docs']({});
       expect(docsUtils.detectProjectLanguage).toHaveBeenCalledWith(
@@ -62,7 +53,7 @@ describe('MCP docs and usage guide tools', () => {
     });
 
     it('respects an explicit language override', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       const res = await registeredTools['list_genkit_docs']({
         language: 'dart',
@@ -76,7 +67,7 @@ describe('MCP docs and usage guide tools', () => {
 
   describe('search_genkit_docs', () => {
     it('auto-detects project language when language is omitted', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       const res = await registeredTools['search_genkit_docs']({
         query: 'Flows',
@@ -88,7 +79,7 @@ describe('MCP docs and usage guide tools', () => {
     });
 
     it('respects an explicit language override', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       const res = await registeredTools['search_genkit_docs']({
         query: 'Flows',
@@ -96,63 +87,5 @@ describe('MCP docs and usage guide tools', () => {
       });
       expect(res.content[0].text).toContain('**FilePath**: python/flows.md');
     });
-  });
-
-  describe('get_usage_guide', () => {
-    it.each([
-      {
-        detectedLang: 'js' as const,
-        expectedHeading: '# Genkit Node.js API Rules',
-      },
-      {
-        detectedLang: 'go' as const,
-        expectedHeading: '# Genkit Go API Rules',
-      },
-    ])(
-      'auto-detects $detectedLang usage guide when language is omitted',
-      async ({ detectedLang, expectedHeading }) => {
-        jest
-          .spyOn(docsUtils, 'detectProjectLanguage')
-          .mockReturnValue(detectedLang);
-
-        const res = await registeredTools['get_usage_guide']({});
-        expect(docsUtils.detectProjectLanguage).toHaveBeenCalledWith(
-          '/workspace'
-        );
-        expect(res.content[0].text).toContain(expectedHeading);
-      }
-    );
-
-    it.each(['python' as const, 'dart' as const])(
-      'directs caller to docs tools when language is omitted in a %s workspace',
-      async (detectedLang) => {
-        jest
-          .spyOn(docsUtils, 'detectProjectLanguage')
-          .mockReturnValue(detectedLang);
-
-        const res = await registeredTools['get_usage_guide']({});
-        expect(res.content[0].text).toContain(
-          `No standalone usage guide is bundled for '${detectedLang}' projects.`
-        );
-        expect(res.content[0].text).toContain('list_genkit_docs');
-        expect(res.content[0].text).toContain('search_genkit_docs');
-        expect(res.content[0].text).not.toContain('# Genkit Node.js API Rules');
-      }
-    );
-
-    it.each([
-      { language: 'js', expectedHeading: '# Genkit Node.js API Rules' },
-      { language: 'go', expectedHeading: '# Genkit Go API Rules' },
-    ])(
-      'returns the $language usage guide when explicitly requested',
-      async ({ language, expectedHeading }) => {
-        jest
-          .spyOn(docsUtils, 'detectProjectLanguage')
-          .mockReturnValue('python');
-
-        const res = await registeredTools['get_usage_guide']({ language });
-        expect(res.content[0].text).toContain(expectedHeading);
-      }
-    );
   });
 });

@@ -15,7 +15,7 @@
  */
 
 import type { TraceData } from '@genkit-ai/tools-common';
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import {
   cleanTraceJson,
   formatTraceTree,

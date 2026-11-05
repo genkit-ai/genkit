@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import Ajv from 'ajv';
 import { Dotprompt } from 'dotprompt';
+import { describe, expect, it } from 'vitest';
 import { toPromptFile } from '../../src/utils/prompt';
 
 function object(properties: Record<string, unknown>) {

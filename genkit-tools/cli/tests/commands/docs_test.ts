@@ -15,14 +15,7 @@
  */
 
 import { logger } from '@genkit-ai/tools-common/utils';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { docsList, docsSearch } from '../../src/commands/docs';
 import * as docsUtils from '../../src/utils/docs';
 import { SAMPLE_DOCS } from '../utils/docs';
@@ -32,19 +25,19 @@ describe('docs CLI commands', () => {
 
   beforeEach(() => {
     loggedLines = [];
-    jest.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
-    jest.spyOn(logger, 'info').mockImplementation(((...args: unknown[]) => {
+    vi.spyOn(docsUtils, 'loadDocs').mockResolvedValue(SAMPLE_DOCS);
+    vi.spyOn(logger, 'info').mockImplementation(((...args: unknown[]) => {
       loggedLines.push(args.map(String).join(' '));
     }) as any);
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('docs:list', () => {
     it('auto-detects project language when [language] is omitted', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('python');
 
       await docsList.parseAsync(['node', 'docs:list']);
       const output = loggedLines.join('\n');
@@ -54,7 +47,7 @@ describe('docs CLI commands', () => {
     });
 
     it('respects an explicit [language] argument over the detected project language', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       await docsList.parseAsync(['node', 'docs:list', 'dart']);
       const output = loggedLines.join('\n');
@@ -65,7 +58,7 @@ describe('docs CLI commands', () => {
 
   describe('docs:search', () => {
     it('auto-detects project language when [language] is omitted', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       await docsSearch.parseAsync(['node', 'docs:search', 'Flows']);
       const output = loggedLines.join('\n');
@@ -74,7 +67,7 @@ describe('docs CLI commands', () => {
     });
 
     it('respects an explicit [language] argument over the detected project language', async () => {
-      jest.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
+      vi.spyOn(docsUtils, 'detectProjectLanguage').mockReturnValue('go');
 
       await docsSearch.parseAsync(['node', 'docs:search', 'Flows', 'python']);
       const output = loggedLines.join('\n');

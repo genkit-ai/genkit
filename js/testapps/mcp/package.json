@@ -24,8 +24,8 @@
     "genkit": "workspace:*"
   },
   "devDependencies": {
-    "@modelcontextprotocol/server-everything": "^2025.5.12",
-    "@modelcontextprotocol/server-filesystem": "^2025.3.28",
+    "@modelcontextprotocol/server-everything": "~2026.1.26",
+    "@modelcontextprotocol/server-filesystem": "~2026.1.14",
     "@types/express": "^5.0.1",
     "genkit-cli": "link:../../../genkit-tools/cli",
     "rimraf": "^6.0.1",

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
 import { Command, InvalidArgumentError } from 'commander';
+import { describe, expect, it } from 'vitest';
 import {
   parseJson,
   parseNonNegativeInt,

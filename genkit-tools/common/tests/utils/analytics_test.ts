@@ -14,14 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const UUID_V4_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -31,27 +24,26 @@ describe('analytics', () => {
   let getAnalyticsSettings: typeof import('../../src/utils/analytics').getAnalyticsSettings;
   let configstoreModule: typeof import('../../src/utils/configstore');
 
-  beforeEach(() => {
-    jest.resetModules();
-    configstoreModule = require('../../src/utils/configstore');
-    getAnalyticsSettings =
-      require('../../src/utils/analytics').getAnalyticsSettings;
+  beforeEach(async () => {
+    vi.resetModules();
+    configstoreModule = await import('../../src/utils/configstore');
+    ({ getAnalyticsSettings } = await import('../../src/utils/analytics'));
 
     store.clear();
-    jest
-      .spyOn(configstoreModule.configstore, 'get')
-      .mockImplementation((key: string) => store.get(key));
-    jest.spyOn(configstoreModule.configstore, 'set').mockImplementation(((
+    vi.spyOn(configstoreModule.configstore, 'get').mockImplementation(
+      (key: string) => store.get(key)
+    );
+    vi.spyOn(configstoreModule.configstore, 'set').mockImplementation(((
       key: string,
       value?: any
     ) => {
       store.set(key, value);
     }) as any);
-    jest.spyOn(configstoreModule, 'getUserSettings').mockReturnValue({});
+    vi.spyOn(configstoreModule, 'getUserSettings').mockReturnValue({});
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('getAnalyticsSettings', () => {

@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
+import * as fs from 'fs';
 import {
   afterEach,
   beforeEach,
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
-import * as fs from 'fs';
+  vi,
+  type Mocked,
+} from 'vitest';
 import { detectCLIRuntime } from '../../src/utils/runtime-detector';
 
-jest.mock('fs');
-const mockedFs = fs as jest.Mocked<typeof fs>;
+vi.mock('fs');
+const mockedFs = fs as Mocked<typeof fs>;
 
 describe('runtime-detector', () => {
   const originalArgv = process.argv;
@@ -35,7 +36,7 @@ describe('runtime-detector', () => {
   const originalPlatform = process.platform;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
