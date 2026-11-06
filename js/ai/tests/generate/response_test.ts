@@ -49,6 +49,67 @@ describe('GenerateResponse', () => {
           custom: {},
         },
       },
+      {
+        should: 'serialize raw when it is the only provider data',
+        responseData: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          raw: { id: 'chatcmpl-1' },
+        },
+        expectedOutput: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          usage: {},
+          custom: {},
+          raw: { id: 'chatcmpl-1' },
+        },
+      },
+      {
+        should: 'serialize raw and custom when they differ',
+        responseData: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          custom: { a: 1 },
+          raw: { b: 2 },
+        },
+        expectedOutput: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          usage: {},
+          custom: { a: 1 },
+          raw: { b: 2 },
+        },
+      },
+      {
+        should: 'serialize raw through its own toJSON',
+        responseData: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          raw: { toJSON: () => ({ id: 'chatcmpl-2' }) },
+        },
+        expectedOutput: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          usage: {},
+          custom: {},
+          raw: { id: 'chatcmpl-2' },
+        },
+      },
+      {
+        should: 'keep raw as is when its toJSON is not a function',
+        responseData: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          raw: { id: 'chatcmpl-4', toJSON: 'plain value' },
+        },
+        expectedOutput: {
+          message: { role: 'model', content: [{ text: 'hi' }] },
+          finishReason: 'stop',
+          usage: {},
+          custom: {},
+          raw: { id: 'chatcmpl-4', toJSON: 'plain value' },
+        },
+      },
     ];
 
     for (const test of testCases) {
@@ -59,6 +120,31 @@ describe('GenerateResponse', () => {
         assert.deepStrictEqual(response.toJSON(), test.expectedOutput);
       });
     }
+
+    it('omits raw when it is the same object as custom', () => {
+      const custom = { a: 1 };
+      const sameObject = new GenerateResponse({
+        finishReason: 'stop',
+        custom,
+        raw: custom,
+      });
+      const fallback = new GenerateResponse({ finishReason: 'stop', custom });
+      assert.strictEqual('raw' in sameObject.toJSON(), false);
+      assert.strictEqual('raw' in fallback.toJSON(), false);
+      assert.deepStrictEqual(
+        new GenerateResponse(fallback.toJSON()).raw,
+        custom
+      );
+    });
+
+    it('round-trips raw through toJSON', () => {
+      const raw = { id: 'chatcmpl-3', choices: [] };
+      const rebuilt = new GenerateResponse(
+        new GenerateResponse({ finishReason: 'stop', raw }).toJSON()
+      );
+      assert.deepStrictEqual(rebuilt.raw, raw);
+      assert.deepStrictEqual(rebuilt.custom, {});
+    });
   });
 
   describe('#output()', () => {
