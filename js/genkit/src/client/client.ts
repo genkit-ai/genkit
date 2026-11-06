@@ -139,7 +139,15 @@ async function __flowRunEnvelope({
   let buffer = '';
   while (true) {
     const result = await reader.read();
-    const decodedValue = decoder.decode(result.value);
+    if (result.done) {
+      // The server closed the stream without sending a `result` (or `error`)
+      // event; fall through to the "did not terminate correctly" error below
+      // instead of reading from a finished stream forever.
+      break;
+    }
+    // `stream: true` keeps the bytes of a multi-byte character that is split
+    // across two network chunks until the rest of it arrives.
+    const decodedValue = decoder.decode(result.value, { stream: true });
     if (decodedValue) {
       buffer += decodedValue;
     }
