@@ -39,7 +39,6 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionRole,
   ChatCompletionTool,
-  CompletionChoice,
 } from 'openai/resources/index.mjs';
 import { checkModelName } from './utils.js';
 
@@ -234,10 +233,7 @@ export function toOpenAiMessages(
   return openAiMsgs;
 }
 
-const finishReasonMap: Record<
-  CompletionChoice['finish_reason'] | 'tool_calls',
-  CandidateData['finishReason']
-> = {
+const finishReasonMap: Record<string, CandidateData['finishReason']> = {
   length: 'length',
   stop: 'stop',
   tool_calls: 'stop',
@@ -356,9 +352,13 @@ export function toRequestBody(
       throw new Error(`${response_format} format is not supported currently`);
     }
   }
-  for (const key in body) {
-    if (!body[key] || (Array.isArray(body[key]) && !body[key].length))
-      delete body[key];
+  const bodyRecord = body as unknown as Record<string, unknown>;
+  for (const key in bodyRecord) {
+    if (
+      !bodyRecord[key] ||
+      (Array.isArray(bodyRecord[key]) && !(bodyRecord[key] as unknown[]).length)
+    )
+      delete bodyRecord[key];
   }
   return body;
 }

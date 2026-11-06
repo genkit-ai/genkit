@@ -66,7 +66,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
       .map((model: OpenAI.Model) => {
         if (model.id.includes('image')) {
           const modelRef =
-            SUPPORTED_IMAGE_MODELS[model.id] ??
+            (SUPPORTED_IMAGE_MODELS as Record<string, any>)[model.id] ??
             xaiImageModelRef({ name: model.id });
           return modelActionMetadata({
             name: modelRef.name,
@@ -75,7 +75,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           });
         } else {
           const modelRef =
-            SUPPORTED_LANGUAGE_MODELS[model.id] ??
+            (SUPPORTED_LANGUAGE_MODELS as Record<string, any>)[model.id] ??
             xaiModelRef({ name: model.id });
           return modelActionMetadata({
             name: modelRef.name,

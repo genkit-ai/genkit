@@ -213,7 +213,7 @@ export class TraceServerExporter implements SpanExporter {
     }
   }
 
-  private async save(traceId, spans: ReadableSpan[]): Promise<void> {
+  private async save(traceId: string, spans: ReadableSpan[]): Promise<void> {
     if (!telemetryServerUrl) {
       logger.debug(
         `Telemetry server is not configured, trace ${traceId} not saved!`

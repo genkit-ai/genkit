@@ -1252,19 +1252,20 @@ export function defineModel(
 
       if (toolConfigConfig) {
         // We need it in snake case or it doesn't work
+        const toolConfigRecord = toolConfigConfig as Record<string, unknown>;
         if (
           Object.hasOwnProperty.call(
-            toolConfigConfig,
+            toolConfigRecord,
             'includeServerSideToolInvocations'
           )
         ) {
-          toolConfigConfig['include_server_side_tool_invocations'] =
-            toolConfigConfig['includeServerSideToolInvocations'];
-          delete toolConfigConfig['includeServerSideToolInvocations'];
+          toolConfigRecord['include_server_side_tool_invocations'] =
+            toolConfigRecord['includeServerSideToolInvocations'];
+          delete toolConfigRecord['includeServerSideToolInvocations'];
         }
         toolConfig = {
           ...toolConfig,
-          ...toolConfigConfig,
+          ...toolConfigRecord,
         };
       }
 
@@ -1564,8 +1565,8 @@ export function defineModel(
       }
 
       const candidates = response.candidates || [];
-      if (response.candidates?.['undefined']) {
-        candidates.push(response.candidates['undefined']);
+      if ((response.candidates as any)?.['undefined']) {
+        candidates.push((response.candidates as any)['undefined']);
       }
       if (!candidates.length) {
         throw new GenkitError({

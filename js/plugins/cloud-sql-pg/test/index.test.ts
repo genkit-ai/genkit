@@ -70,7 +70,7 @@ const mockGenkit: Genkit = {
   }),
 
   embedMany: jest.fn(async ({ content }) => {
-    return content.map((text) => ({
+    return content.map((text: string | string[]) => ({
       embedding: new Array(1536).fill(0.1),
       text: Array.isArray(text) ? text.join(' ') : text,
     }));

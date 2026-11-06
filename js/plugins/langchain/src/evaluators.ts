@@ -49,14 +49,18 @@ export function langchainEvaluator(
                 },
               }
             );
-            const lcData = {
+            const lcData: {
+              input: string;
+              prediction: string;
+              reference?: string;
+            } = {
               input: datapoint.input as string,
               prediction: datapoint.output as string,
             };
             if (datapoint.reference) {
-              lcData['reference'] = datapoint.reference as string;
+              lcData.reference = datapoint.reference as string;
             }
-            const res = await evaluator.evaluateStrings({ ...lcData });
+            const res = await evaluator.evaluateStrings(lcData);
             return {
               testCaseId: datapoint.testCaseId,
               evaluation: {

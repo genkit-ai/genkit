@@ -285,8 +285,9 @@ function toParameters(
     ...request?.config,
   };
 
-  for (const k in out) {
-    if (!out[k]) delete out[k];
+  const outRecord = out as Record<string, unknown>;
+  for (const k in outRecord) {
+    if (!outRecord[k]) delete outRecord[k];
   }
 
   return out;
@@ -340,7 +341,7 @@ export function defineImagenModel(
 ): ModelAction {
   const modelName = `vertexai/${name}`;
   const model: ModelReference<z.ZodTypeAny> =
-    SUPPORTED_IMAGEN_MODELS[name] ||
+    (SUPPORTED_IMAGEN_MODELS as Record<string, any>)[name] ||
     modelRef({
       name: modelName,
       info: {

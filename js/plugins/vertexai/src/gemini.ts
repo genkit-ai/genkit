@@ -20,6 +20,7 @@ import {
   UsageMetadata,
   type Content,
   type FunctionDeclaration,
+  type FunctionDeclarationSchema,
   type Part as GeminiPart,
   type GenerateContentCandidate,
   type GenerateContentResponse,
@@ -332,7 +333,9 @@ function nearestGeminiModelRef(
     Object.keys(SUPPORTED_GEMINI_MODELS)
   );
   if (matchingKey) {
-    return SUPPORTED_GEMINI_MODELS[matchingKey].withConfig({
+    return (SUPPORTED_GEMINI_MODELS as Record<string, any>)[
+      matchingKey
+    ].withConfig({
       ...options,
       version,
     });
@@ -742,7 +745,9 @@ export const toGeminiTool = (
   const declaration: FunctionDeclaration = {
     name: tool.name.replace(/\//g, '__'), // Gemini throws on '/' in tool name
     description: tool.description,
-    parameters: convertSchemaProperty(tool.inputSchema),
+    parameters: convertSchemaProperty(
+      tool.inputSchema
+    ) as FunctionDeclarationSchema,
   };
   return declaration;
 };
@@ -996,7 +1001,9 @@ function fromGeminiThought(part: {
 // Translate JSON schema to Vertex AI's format. Specifically, the type field needs be mapped.
 // Since JSON schemas can include nested arrays/objects, we have to recursively map the type field
 // in all nested fields.
-function convertSchemaProperty(property) {
+function convertSchemaProperty(
+  property?: Record<string, any> | null
+): Schema | undefined {
   if (!property || !property.type) {
     return undefined;
   }
@@ -1023,14 +1030,14 @@ function convertSchemaProperty(property) {
     propertyType = property.type;
   }
   if (propertyType === 'object') {
-    const nestedProperties = {};
+    const nestedProperties: Record<string, Schema | undefined> = {};
     Object.keys(property.properties ?? {}).forEach((key) => {
       nestedProperties[key] = convertSchemaProperty(property.properties[key]);
     });
     return {
       ...baseSchema,
       type: FunctionDeclarationSchemaType.OBJECT,
-      properties: nestedProperties,
+      properties: nestedProperties as Record<string, Schema>,
       required: property.required,
     };
   } else if (propertyType === 'array') {
@@ -1040,9 +1047,12 @@ function convertSchemaProperty(property) {
       items: convertSchemaProperty(property.items),
     };
   } else {
-    const schemaType = FunctionDeclarationSchemaType[
-      propertyType.toUpperCase()
-    ] as FunctionDeclarationSchemaType;
+    const schemaType = (
+      FunctionDeclarationSchemaType as unknown as Record<
+        string,
+        FunctionDeclarationSchemaType
+      >
+    )[propertyType.toUpperCase()];
     if (!schemaType) {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -1092,7 +1102,9 @@ export function defineGeminiKnownModel(
 ): ModelAction {
   const modelName = `vertexai/${name}`;
 
-  const model: ModelReference<z.ZodTypeAny> = SUPPORTED_GEMINI_MODELS[name];
+  const model: ModelReference<z.ZodTypeAny> = (
+    SUPPORTED_GEMINI_MODELS as Record<string, any>
+  )[name];
   if (!model) throw new Error(`Unsupported model: ${name}`);
 
   return defineGeminiModel({
@@ -1130,7 +1142,7 @@ export function defineGeminiModel({
   debugTraces?: boolean;
 }): ModelAction {
   const middlewares: ModelMiddleware[] = [];
-  if (SUPPORTED_V1_MODELS[version]) {
+  if ((SUPPORTED_V1_MODELS as Record<string, any>)[version]) {
     middlewares.push(simulateSystemPrompt());
   }
   if (modelInfo?.supports?.media) {
@@ -1171,7 +1183,7 @@ export function defineGeminiModel({
 
       // Handle system instructions separately
       let systemInstruction: Content | undefined = undefined;
-      if (!SUPPORTED_V1_MODELS[version]) {
+      if (!(SUPPORTED_V1_MODELS as Record<string, any>)[version]) {
         const systemMessage = messages.find((m) => m.role === 'system');
         if (systemMessage) {
           messages.splice(messages.indexOf(systemMessage), 1);

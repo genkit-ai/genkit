@@ -62,7 +62,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
       .filter((model) => model.object === 'model')
       .map((model: OpenAI.Model) => {
         const modelRef =
-          SUPPORTED_DEEPSEEK_MODELS[model.id] ??
+          (SUPPORTED_DEEPSEEK_MODELS as Record<string, any>)[model.id] ??
           deepSeekModelRef({
             name: model.id,
           });

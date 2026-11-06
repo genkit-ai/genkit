@@ -135,14 +135,15 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
         return embedderActionMetadata({
           name: model.id,
           configSchema: TextEmbeddingConfigSchema,
-          info: SUPPORTED_EMBEDDING_MODELS[model.id]?.info,
+          info: (SUPPORTED_EMBEDDING_MODELS as Record<string, any>)[model.id]
+            ?.info,
         });
       } else if (
         model.id.includes('gpt-image-1') ||
         model.id.includes('dall-e')
       ) {
         const modelRef =
-          SUPPORTED_IMAGE_MODELS[model.id] ??
+          (SUPPORTED_IMAGE_MODELS as Record<string, any>)[model.id] ??
           openAIImageModelRef({ name: model.id });
         return modelActionMetadata({
           name: modelRef.name,
@@ -151,7 +152,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
         });
       } else if (model.id.includes('tts')) {
         const modelRef =
-          SUPPORTED_TTS_MODELS[model.id] ??
+          (SUPPORTED_TTS_MODELS as Record<string, any>)[model.id] ??
           openAISpeechModelRef({ name: model.id });
         return modelActionMetadata({
           name: modelRef.name,
@@ -160,7 +161,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
         });
       } else if (model.id.includes('whisper')) {
         const modelRef =
-          SUPPORTED_WHISPER_MODELS[model.id] ??
+          (SUPPORTED_WHISPER_MODELS as Record<string, any>)[model.id] ??
           openAIWhisperModelRef({ name: model.id });
         return modelActionMetadata({
           name: modelRef.name,
@@ -169,7 +170,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
         });
       } else if (model.id.includes('transcribe')) {
         const modelRef =
-          SUPPORTED_STT_MODELS[model.id] ??
+          (SUPPORTED_STT_MODELS as Record<string, any>)[model.id] ??
           openAITranscriptionModelRef({ name: model.id });
         return modelActionMetadata({
           name: modelRef.name,
@@ -178,7 +179,8 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
         });
       } else {
         const modelRef =
-          SUPPORTED_GPT_MODELS[model.id] ?? openAIModelRef({ name: model.id });
+          (SUPPORTED_GPT_MODELS as Record<string, any>)[model.id] ??
+          openAIModelRef({ name: model.id });
         return modelActionMetadata({
           name: modelRef.name,
           info: modelRef.info,
