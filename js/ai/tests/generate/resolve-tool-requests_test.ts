@@ -25,7 +25,11 @@ import {
   resolveResumeOption,
   resolveToolRequests,
 } from '../../src/generate/resolve-tool-requests.js';
-import { ToolInterruptError, defineTool } from '../../src/tool.js';
+import {
+  ToolInterruptError,
+  defineTool,
+  type ToolAction,
+} from '../../src/tool.js';
 
 initNodeFeatures();
 
@@ -478,7 +482,7 @@ describe('resolveToolRequests', () => {
           { toolRequest: { name: 'interruptTool', ref: 'i1', input: {} } },
         ],
       },
-      [multiTool, interruptTool]
+      [multiTool as unknown as ToolAction, interruptTool]
     );
 
     assert.strictEqual(toolMessage, undefined);

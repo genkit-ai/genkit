@@ -32,12 +32,6 @@ import { defineProgrammableModel, runAsync } from '../helpers.js';
 initNodeFeatures();
 
 describe('jsonFormat', () => {
-  let registry: Registry;
-
-  beforeEach(() => {
-    registry = new Registry();
-  });
-
   const streamingTests = [
     {
       desc: 'parses complete JSON object',
