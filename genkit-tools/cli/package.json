@@ -2,6 +2,9 @@
   "name": "genkit-cli",
   "version": "1.45.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "description": "CLI for interacting with the Google Genkit AI framework",
   "license": "Apache-2.0",
   "keywords": [

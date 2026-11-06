@@ -2,6 +2,9 @@
   "name": "@genkit-ai/tools-common",
   "version": "1.45.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "compile": "pnpm genversion && tsc",
     "build:clean": "rimraf ./lib",

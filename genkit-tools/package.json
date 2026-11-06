@@ -1,6 +1,9 @@
 {
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "build": "pnpm install && pnpm build:common && pnpm build:telemetry-server && pnpm build:cli",
