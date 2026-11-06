@@ -723,3 +723,106 @@ def test_enable_under_genkit_start_with_force_exports_on_span_end() -> None:
         assert any(isinstance(proc, SimpleSpanProcessor) for proc in _processors(isolated))
     finally:
         isolated.shutdown()
+
+
+def test_genkit_metric_exporter_preserves_aggregation_temporality() -> None:
+    """GenkitMetricExporter calls super().__init__() and initializes _preferred_aggregation."""
+    from genkit_google_cloud._telemetry._metrics_exporter import GenkitMetricExporter
+
+    mock_underlying = MagicMock()
+    mock_underlying._preferred_aggregation = {'custom': 'agg'}
+
+    exporter = GenkitMetricExporter(mock_underlying)
+    assert hasattr(exporter, '_preferred_aggregation')
+    assert exporter._preferred_aggregation == {'custom': 'agg'}
+    assert exporter._preferred_temporality is not None
+
+
+def test_enable_telemetry_with_credentials_dict_creates_clients() -> None:
+    """Passing credentials dict creates GCP service clients and sets project from creds."""
+    sample_creds = {
+        'type': 'service_account',
+        'project_id': 'creds-project',
+        'private_key': 'fake-key',
+        'client_email': 'sa@creds-project.iam.gserviceaccount.com',
+    }
+    with (
+        mock.patch.dict(os.environ, {_GENKIT_ENV: _ENV_PROD}, clear=False),
+        patch('genkit_google_cloud._telemetry._config.GenkitGCPExporter') as mock_trace_exp,
+        patch('genkit_google_cloud._telemetry._config.CloudMonitoringMetricsExporter') as mock_metric_exp,
+        patch('genkit_google_cloud._telemetry._config.CloudLoggingExporter') as mock_log_exp,
+        patch('genkit_google_cloud._telemetry._config.GcpAdjustingTraceExporter'),
+        patch('genkit_google_cloud._telemetry._config._hang_exporter_on_process_tracer'),
+        patch('genkit_google_cloud._telemetry._config.GoogleCloudResourceDetector'),
+        patch('genkit_google_cloud._telemetry._config.GenkitMetricExporter'),
+        patch('genkit_google_cloud._telemetry._config.PeriodicExportingMetricReader'),
+        patch('genkit_google_cloud._telemetry._config.metrics'),
+        patch('google.oauth2.service_account.Credentials.from_service_account_info') as mock_from_info,
+        patch('google.cloud.trace_v2.TraceServiceClient') as mock_trace_client_cls,
+        patch('google.cloud.monitoring_v3.MetricServiceClient') as mock_metric_client_cls,
+        patch('google.cloud.logging_v2.services.logging_service_v2.LoggingServiceV2Client') as mock_log_client_cls,
+    ):
+        mock_creds_obj = MagicMock()
+        mock_from_info.return_value = mock_creds_obj
+        mock_trace_client = MagicMock()
+        mock_trace_client_cls.return_value = mock_trace_client
+        mock_metric_client = MagicMock()
+        mock_metric_client_cls.return_value = mock_metric_client
+        mock_log_client = MagicMock()
+        mock_log_client_cls.return_value = mock_log_client
+
+        enable_google_cloud_telemetry(credentials=sample_creds)
+
+        mock_from_info.assert_called_with(sample_creds)
+        mock_trace_client_cls.assert_called_with(credentials=mock_creds_obj)
+        mock_metric_client_cls.assert_called_with(credentials=mock_creds_obj)
+        mock_log_client_cls.assert_called_with(credentials=mock_creds_obj)
+
+        # Verify exporter kwargs pass project_id and client, and never raw credentials
+        assert mock_trace_exp.call_args.kwargs['project_id'] == 'creds-project'
+        assert mock_trace_exp.call_args.kwargs['client'] == mock_trace_client
+        assert 'credentials' not in mock_trace_exp.call_args.kwargs
+
+        assert mock_metric_exp.call_args.kwargs['project_id'] == 'creds-project'
+        assert mock_metric_exp.call_args.kwargs['client'] == mock_metric_client
+        assert 'credentials' not in mock_metric_exp.call_args.kwargs
+
+        assert mock_log_exp.call_args.kwargs['project_id'] == 'creds-project'
+        assert mock_log_exp.call_args.kwargs['client'] == mock_log_client
+        assert 'credentials' not in mock_log_exp.call_args.kwargs
+
+
+def test_structlog_trace_processor_placed_before_renderers() -> None:
+    """_configure_logging places _genkit_inject_trace_context before final renderer in structlog chain."""
+    import structlog
+
+    saved_config = structlog.get_config()
+    try:
+        console_renderer = structlog.dev.ConsoleRenderer()
+        structlog.configure(processors=[structlog.processors.TimeStamper(), console_renderer])
+
+        telemetry = GcpTelemetry(project='test-proj')
+        telemetry._configure_logging()
+
+        procs = structlog.get_config()['processors']
+        proc_names = [getattr(p, '__name__', p.__class__.__name__) for p in procs]
+
+        # Verify _genkit_inject_trace_context is present and precedes ConsoleRenderer
+        assert '_genkit_inject_trace_context' in proc_names
+        trace_idx = proc_names.index('_genkit_inject_trace_context')
+        renderer_idx = proc_names.index('ConsoleRenderer')
+        assert trace_idx < renderer_idx
+    finally:
+        structlog.configure(**saved_config)
+
+
+def test_resolve_project_with_credentials_object() -> None:
+    """resolve_project extracts project_id from Credentials instances."""
+    from genkit_google_cloud._telemetry._config import resolve_project
+
+    mock_creds = MagicMock()
+    mock_creds.project_id = 'resolved-from-creds-obj'
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+        project = resolve_project(credentials=mock_creds)
+        assert project == 'resolved-from-creds-obj'
