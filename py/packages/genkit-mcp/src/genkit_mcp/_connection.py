@@ -20,6 +20,7 @@ import asyncio
 import contextvars
 import os
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -292,6 +293,8 @@ class McpConnection:
         )
         self._state = _ConnectionState.NEW
         self._failure: Exception | None = None
+        self._failed_at: float | None = None
+        self._answered = False
         self._queue: asyncio.Queue[_Request[Any]] = asyncio.Queue()
         self._ready = asyncio.Event()
         self._closed = asyncio.Event()
@@ -306,6 +309,21 @@ class McpConnection:
     def is_terminal(self) -> bool:
         """Whether this connection is closed or failed and serves nothing more."""
         return self._state in (_ConnectionState.FAILED, _ConnectionState.CLOSED)
+
+    @property
+    def failed_at(self) -> float | None:
+        """When this connection failed, by ``time.monotonic``, or ``None`` if it has not failed."""
+        return self._failed_at
+
+    @property
+    def answered(self) -> bool:
+        """Whether an operation after the handshake finished without timing out while the server stayed reachable."""
+        return self._answered
+
+    @property
+    def failure(self) -> Exception | None:
+        """What ended this connection, once known."""
+        return self._failure
 
     async def list_tools(self) -> list[McpTool]:
         """List every tool the server offers, following pagination cursors.
@@ -524,9 +542,13 @@ class McpConnection:
                     # Settle now rather than leaving callers waiting the seconds the SDK spends terminating the child.
                     self._settle(error)
                     serving.cancel()
-                elif not request.result.done():
-                    request.result.set_exception(self._answered_error(error))
+                else:
+                    if not _timed_out(error):
+                        self._answered = True
+                    if not request.result.done():
+                        request.result.set_exception(self._answered_error(error))
             else:
+                self._answered = True
                 if not request.result.done():
                     request.result.set_result(value)
         except BaseException:
@@ -535,7 +557,7 @@ class McpConnection:
                 self._settle(None)
             else:
                 # The SDK cancels this child before its task group hands the owner the transport error.
-                self._state = _ConnectionState.FAILED
+                self._mark_failed()
                 self._unwinding.append(request)
                 deferred = True
             raise
@@ -563,11 +585,17 @@ class McpConnection:
         if self._state is _ConnectionState.CLOSED:
             self._fail_queued(self._closed_error)
             return
-        self._state = _ConnectionState.FAILED
+        self._mark_failed()
         if self._failure is None and error is not None:
             _drop_tracebacks(error)
             self._failure = error
         self._fail_queued(self._failed_error)
+
+    def _mark_failed(self) -> None:
+        """Enter the failed state, keeping the time it was first entered."""
+        self._state = _ConnectionState.FAILED
+        if self._failed_at is None:
+            self._failed_at = time.monotonic()
 
     def _fail_queued(self, build_error: Callable[[], BaseException]) -> None:
         """Release callers whose work was not yet started, or who wait for a failure's cause.
