@@ -17,6 +17,7 @@
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import z from 'zod';
+import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter';
 import { McpRunToolEvent } from './analytics';
 import {
   McpToolOptions,
@@ -38,6 +39,12 @@ export function defineTraceTools(server: McpServer, options: McpToolOptions) {
           .describe(
             'trace id (typically returned after running a flow or other actions); type: string'
           ),
+        format: z
+          .enum(['tree', 'json'])
+          .optional()
+          .describe(
+            "Output format: 'tree' (compact execution tree, default) or 'json' (sanitized trace JSON); type: string"
+          ),
       }),
     },
     async (opts) => {
@@ -48,16 +55,29 @@ export function defineTraceTools(server: McpServer, options: McpToolOptions) {
         options.projectRoot
       );
       if (typeof rootOrError !== 'string') return rootOrError;
-      const { traceId } = opts;
+      const { traceId, format } = opts;
 
       try {
         const runtimeManager = await options.manager.getManager(rootOrError);
         const response = await runtimeManager.getTrace({ traceId });
+        if (!response) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: `Trace with ID '${traceId}' not found.`,
+              },
+            ],
+          };
+        }
+        const cleanedTrace = cleanTraceJson(response, false);
+        const text =
+          format === 'json'
+            ? JSON.stringify(cleanedTrace, undefined, 2)
+            : formatTraceTree(cleanedTrace);
         return {
-          content: [
-            // TODO: render the trace insetad of of dumping it as is.
-            { type: 'text', text: JSON.stringify(response, undefined, 2) },
-          ],
+          content: [{ type: 'text', text }],
         };
       } catch (e) {
         return {

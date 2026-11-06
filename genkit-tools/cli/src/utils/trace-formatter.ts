@@ -31,6 +31,64 @@ type FormattedPart = {
   text: string;
 };
 
+const COMPACT_VALUE = Symbol('compactValue');
+
+type CompactFormattedValue = {
+  [COMPACT_VALUE]: string | string[];
+};
+
+function compactValue(value: string | string[]): CompactFormattedValue {
+  return { [COMPACT_VALUE]: value };
+}
+
+function isCompactValue(val: unknown): val is CompactFormattedValue {
+  return Boolean(val && typeof val === 'object' && COMPACT_VALUE in val);
+}
+
+function isEmptyPlainObject(val: unknown): boolean {
+  return (
+    Boolean(val) &&
+    typeof val === 'object' &&
+    !Array.isArray(val) &&
+    !isCompactValue(val) &&
+    Object.keys(val as Record<string, unknown>).length === 0
+  );
+}
+
+const USAGE_NON_ZERO_FIELDS = [
+  'inputTokens',
+  'outputTokens',
+  'totalTokens',
+  'thoughtsTokens',
+  'cachedContentTokens',
+  'cacheWriteTokens',
+  'inputImages',
+  'outputImages',
+  'inputVideos',
+  'outputVideos',
+  'inputAudioFiles',
+  'outputAudioFiles',
+] as const;
+
+function formatCompactUsage(usage: Record<string, unknown>): string | null {
+  const parts: string[] = [];
+  for (const field of USAGE_NON_ZERO_FIELDS) {
+    const val = usage[field];
+    if (typeof val === 'number' && val > 0) {
+      parts.push(`${field}: ${val}`);
+    }
+  }
+  if (parts.length === 0) {
+    for (const charField of ['inputCharacters', 'outputCharacters'] as const) {
+      const val = usage[charField];
+      if (typeof val === 'number' && val > 0) {
+        parts.push(`${charField}: ${val}`);
+      }
+    }
+  }
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
 /**
  * Formats a single Part object into a human-readable FormattedPart.
  */
@@ -95,16 +153,16 @@ function formatMessageContent(
     return [`${rolePrefix}(empty)`];
   }
 
-  // Check for tool call first
-  const toolCall = formattedParts.find((p) => p.type === 'toolCall');
-  if (toolCall) {
-    return [toolCall.text];
+  // Check for tool call(s) first
+  const toolCalls = formattedParts.filter((p) => p.type === 'toolCall');
+  if (toolCalls.length > 0) {
+    return toolCalls.map((p) => p.text);
   }
 
-  // Check for tool response next
-  const toolResp = formattedParts.find((p) => p.type === 'toolResponse');
-  if (toolResp) {
-    return [toolResp.text];
+  // Check for tool response(s) next
+  const toolResps = formattedParts.filter((p) => p.type === 'toolResponse');
+  if (toolResps.length > 0) {
+    return toolResps.map((p) => p.text);
   }
 
   // Text / media content
@@ -121,12 +179,17 @@ function formatMessageContent(
   }
 }
 
-function hasMessages(val: unknown): boolean {
+function hasSpecialFormatting(val: unknown): boolean {
   if (!val || typeof val !== 'object') return false;
+  if (isCompactValue(val)) return true;
 
   // Try to parse array elements directly
   if (Array.isArray(val)) {
-    if (val.some((item) => MessageSchema.safeParse(item).success)) {
+    if (
+      val.some(
+        (item) => isCompactValue(item) || MessageSchema.safeParse(item).success
+      )
+    ) {
       return true;
     }
   }
@@ -134,7 +197,7 @@ function hasMessages(val: unknown): boolean {
   if (MessageSchema.safeParse(val).success) {
     return true;
   }
-  return Object.values(val).some(hasMessages);
+  return Object.values(val).some(hasSpecialFormatting);
 }
 
 /**
@@ -147,6 +210,22 @@ function formatCompactValue(
   keyName?: string
 ): string[] {
   if (val === undefined || val === null) return [];
+
+  if (isCompactValue(val)) {
+    const inner = val[COMPACT_VALUE];
+    if (typeof inner === 'string') {
+      return keyName
+        ? [`${childPrefix}${keyName}: ${inner}`]
+        : [`${childPrefix}${inner}`];
+    }
+    if (keyName) {
+      return [
+        `${childPrefix}${keyName}:`,
+        ...inner.map((l) => `${childPrefix}  ${l}`),
+      ];
+    }
+    return inner.map((l) => `${childPrefix}${l}`);
+  }
 
   // 1. Matches MessageSchema -> format as Message
   const msgRes = MessageSchema.safeParse(val);
@@ -172,7 +251,7 @@ function formatCompactValue(
     return [`${childPrefix}${formatted}`];
   }
 
-  // 4. Array -> Recurse on items
+  // 3. Array -> Recurse on items
   if (Array.isArray(val)) {
     if (val.length === 0) {
       if (keyName) return [`${childPrefix}${keyName}: []`];
@@ -194,7 +273,7 @@ function formatCompactValue(
       return lines;
     }
 
-    if (!hasMessages(val)) {
+    if (!hasSpecialFormatting(val)) {
       const yamlStr = YAML.stringify(val, {
         indent: 2,
         lineWidth: 0,
@@ -214,7 +293,7 @@ function formatCompactValue(
     return lines;
   }
 
-  // 4. Object -> Recurse on properties if it contains messages
+  // 4. Object -> Recurse on properties if it contains messages or compact values
   const obj = val as Record<string, unknown>;
   const keys = Object.keys(obj);
   if (keys.length === 0) {
@@ -222,7 +301,7 @@ function formatCompactValue(
     return [];
   }
 
-  const containsSpecial = hasMessages(obj);
+  const containsSpecial = hasSpecialFormatting(obj);
 
   const lines: string[] = [];
   if (keyName) {
@@ -244,6 +323,174 @@ function formatCompactValue(
 }
 
 /**
+ * Checks whether a span represents a `generate` util span or a `model` action span,
+ * where verbose tool schemas, echoed requests, and zero-valued usage counters
+ * should be compacted in tree view.
+ */
+function isGenerateOrModelSpan(
+  span: NestedSpanData,
+  sanitizedInput: unknown
+): boolean {
+  const type = getSpanType(span);
+  if (type === 'model' || type === 'background-model' || type === 'generate') {
+    return true;
+  }
+  if (type === 'util') {
+    const attrs = span.attributes || {};
+    const name = span.displayName || (attrs['genkit:name'] as string) || '';
+    if (name === 'generate') {
+      return true;
+    }
+    if (
+      sanitizedInput &&
+      typeof sanitizedInput === 'object' &&
+      !Array.isArray(sanitizedInput) &&
+      Array.isArray((sanitizedInput as Record<string, unknown>).messages)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function summarizeToolItem(item: unknown): string | null {
+  if (typeof item === 'string') {
+    return item.startsWith('/tool/') ? item.slice('/tool/'.length) : item;
+  }
+  if (
+    item &&
+    typeof item === 'object' &&
+    'name' in item &&
+    typeof (item as { name: unknown }).name === 'string'
+  ) {
+    const name = (item as { name: string }).name;
+    return name.startsWith('/tool/') ? name.slice('/tool/'.length) : name;
+  }
+  return null;
+}
+
+type MessageHistoryContext = {
+  messages: unknown[];
+  fromParent: boolean;
+};
+
+function compactGenerateOrModelInput(
+  input: unknown,
+  priorContext?: MessageHistoryContext
+): unknown {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return input;
+  }
+  const obj = input as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined || value === null) continue;
+    if ((key === 'config' || key === 'output') && isEmptyPlainObject(value)) {
+      continue;
+    }
+    if (
+      (key === 'use' || key === 'docs' || key === 'resources') &&
+      Array.isArray(value) &&
+      value.length === 0
+    ) {
+      continue;
+    }
+    if (key === 'tools' && Array.isArray(value)) {
+      if (value.length === 0) continue;
+      const names = value.map(summarizeToolItem);
+      if (names.every((n): n is string => n !== null)) {
+        result[key] = compactValue(`[${names.join(', ')}]`);
+        continue;
+      }
+    }
+    if (
+      key === 'messages' &&
+      Array.isArray(value) &&
+      priorContext &&
+      priorContext.messages.length > 0
+    ) {
+      const priorMessages = priorContext.messages;
+      let shared = 0;
+      const maxLen = Math.min(value.length, priorMessages.length);
+      while (
+        shared < maxLen &&
+        JSON.stringify(value[shared]) === JSON.stringify(priorMessages[shared])
+      ) {
+        shared++;
+      }
+      if (shared > 0) {
+        const noun = shared === 1 ? 'message' : 'messages';
+        if (shared === value.length) {
+          const source = priorContext.fromParent ? 'parent' : 'previous turn';
+          result[key] = compactValue(`[same ${shared} ${noun} as ${source}]`);
+        } else {
+          const deltaLines: string[] = [`... (${shared} earlier ${noun})`];
+          for (const msg of value.slice(shared)) {
+            deltaLines.push(...formatCompactValue(msg, ''));
+          }
+          result[key] = compactValue(deltaLines);
+        }
+        continue;
+      }
+    }
+    result[key] = value;
+  }
+
+  return result;
+}
+
+function compactGenerateOrModelOutput(output: unknown): unknown {
+  if (!output || typeof output !== 'object' || Array.isArray(output)) {
+    return output;
+  }
+  const obj = output as Record<string, unknown>;
+  const hasMessageOrCandidates = Boolean(
+    (obj.message && typeof obj.message === 'object') ||
+      (Array.isArray(obj.candidates) && obj.candidates.length > 0)
+  );
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined || value === null) continue;
+    if (
+      hasMessageOrCandidates &&
+      (key === 'request' || key === 'custom' || key === 'raw')
+    ) {
+      continue;
+    }
+    if (
+      (key === 'config' ||
+        key === 'output' ||
+        key === 'custom' ||
+        key === 'raw') &&
+      isEmptyPlainObject(value)
+    ) {
+      continue;
+    }
+    if (
+      (key === 'usage' || key === 'totalUsage') &&
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value)
+    ) {
+      const summary = formatCompactUsage(value as Record<string, unknown>);
+      if (summary) {
+        result[key] = compactValue(summary);
+      }
+      continue;
+    }
+    if (key === 'candidates' && Array.isArray(value)) {
+      result[key] = value.map((cand) => compactGenerateOrModelOutput(cand));
+      continue;
+    }
+    result[key] = value;
+  }
+
+  return result;
+}
+
+/**
  * Recursively renders a span and its nested children into a hierarchical string
  * array, dynamically appending the span's Input and Output payloads alongside
  * its child spans, drawing appropriate box-drawing tree connectors.
@@ -251,7 +498,8 @@ function formatCompactValue(
 function renderSpanTree(
   span: NestedSpanData,
   prefix: string = '',
-  isLast: boolean = true
+  isLast: boolean = true,
+  priorHistory?: MessageHistoryContext
 ): string[] {
   const lines: string[] = [];
   const connector = isLast ? '└─ ' : '├─ ';
@@ -275,11 +523,43 @@ function renderSpanTree(
   const attrs = span.attributes || {};
   const rawInput = attrs['genkit:input'];
   const rawOutput = attrs['genkit:output'];
+  const errorMessage =
+    status === '✖' || span.status?.code === 2
+      ? span.status?.message
+      : undefined;
   const children = span.spans || [];
 
-  const items: { type: 'input' | 'output' | 'child'; data: any }[] = [];
-  if (rawInput !== undefined) items.push({ type: 'input', data: rawInput });
+  const sanitizedInput =
+    rawInput !== undefined
+      ? parseAndSanitizeJson(rawInput, true /* keepBase64 */)
+      : undefined;
+  const isGenOrModel = isGenerateOrModelSpan(span, sanitizedInput);
+
+  let childHistory: MessageHistoryContext | undefined = priorHistory
+    ? { messages: priorHistory.messages, fromParent: false }
+    : undefined;
+  if (
+    isGenOrModel &&
+    sanitizedInput &&
+    typeof sanitizedInput === 'object' &&
+    !Array.isArray(sanitizedInput) &&
+    Array.isArray((sanitizedInput as Record<string, unknown>).messages)
+  ) {
+    childHistory = {
+      messages: (sanitizedInput as Record<string, unknown>)
+        .messages as unknown[],
+      fromParent: true,
+    };
+  }
+
+  const items: {
+    type: 'input' | 'output' | 'error' | 'child';
+    data: any;
+  }[] = [];
+  if (rawInput !== undefined)
+    items.push({ type: 'input', data: sanitizedInput });
   if (rawOutput !== undefined) items.push({ type: 'output', data: rawOutput });
+  if (errorMessage) items.push({ type: 'error', data: errorMessage });
   children.forEach((c) => items.push({ type: 'child', data: c }));
 
   items.forEach((item, index) => {
@@ -288,11 +568,10 @@ function renderSpanTree(
     const itemPrefix = childPrefix + (itemIsLast ? '   ' : '│  ');
 
     if (item.type === 'input') {
-      const sanitizedInput = parseAndSanitizeJson(
-        item.data,
-        true /* keepBase64 */
-      );
-      const compactInput = formatCompactValue(sanitizedInput, '', 'Input');
+      const displayInput = isGenOrModel
+        ? compactGenerateOrModelInput(item.data, priorHistory)
+        : item.data;
+      const compactInput = formatCompactValue(displayInput, '', 'Input');
       if (compactInput.length > 0) {
         lines.push(`${childPrefix}${itemConnector}${compactInput[0]}`);
         for (let i = 1; i < compactInput.length; i++) {
@@ -304,15 +583,47 @@ function renderSpanTree(
         item.data,
         true /* keepBase64 */
       );
-      const compactOutput = formatCompactValue(sanitizedOutput, '', 'Output');
+      const displayOutput = isGenOrModel
+        ? compactGenerateOrModelOutput(sanitizedOutput)
+        : sanitizedOutput;
+      const compactOutput = formatCompactValue(displayOutput, '', 'Output');
       if (compactOutput.length > 0) {
         lines.push(`${childPrefix}${itemConnector}${compactOutput[0]}`);
         for (let i = 1; i < compactOutput.length; i++) {
           lines.push(`${itemPrefix}${compactOutput[i]}`);
         }
       }
+    } else if (item.type === 'error') {
+      const compactError = formatCompactValue(item.data, '', 'Error');
+      if (compactError.length > 0) {
+        lines.push(`${childPrefix}${itemConnector}${compactError[0]}`);
+        for (let i = 1; i < compactError.length; i++) {
+          lines.push(`${itemPrefix}${compactError[i]}`);
+        }
+      }
     } else if (item.type === 'child') {
-      lines.push(...renderSpanTree(item.data, childPrefix, itemIsLast));
+      const childSpan = item.data as NestedSpanData;
+      lines.push(
+        ...renderSpanTree(childSpan, childPrefix, itemIsLast, childHistory)
+      );
+      // Support flat `generate` trees where sequential `model` spans are siblings
+      const childRawIn = childSpan.attributes?.['genkit:input'];
+      if (childRawIn !== undefined) {
+        const childSanitizedIn = parseAndSanitizeJson(childRawIn, true);
+        if (
+          isGenerateOrModelSpan(childSpan, childSanitizedIn) &&
+          childSanitizedIn &&
+          typeof childSanitizedIn === 'object' &&
+          !Array.isArray(childSanitizedIn) &&
+          Array.isArray((childSanitizedIn as Record<string, unknown>).messages)
+        ) {
+          childHistory = {
+            messages: (childSanitizedIn as Record<string, unknown>)
+              .messages as unknown[],
+            fromParent: false,
+          };
+        }
+      }
     }
   });
 
