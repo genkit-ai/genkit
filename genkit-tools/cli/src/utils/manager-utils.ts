@@ -32,7 +32,7 @@ import {
   type GenkitToolsError,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 
 /** Shared help text for `--experimental-auth` on every command that spawns or hosts runtimes. */
 export const EXPERIMENTAL_AUTH_OPTION_HELP =
@@ -56,7 +56,7 @@ export async function resolveTelemetryServer(options: {
 }): Promise<string> {
   let telemetryServerUrl = process.env.GENKIT_TELEMETRY_SERVER;
   if (!telemetryServerUrl) {
-    const telemetryPort = await getPort({ port: makeRange(4033, 4999) });
+    const telemetryPort = await getPort({ port: portNumbers(4033, 4999) });
     telemetryServerUrl = `http://localhost:${telemetryPort}`;
     await startTelemetryServer({
       port: telemetryPort,
@@ -230,7 +230,7 @@ export async function getDevEnvVars(
     // Probe and URL must both match the interface the v2 server binds;
     // `localhost` may resolve to ::1 first and miss an IPv4-only listener.
     const host = options?.reflectionV2Host ?? DEFAULT_REFLECTION_V2_HOST;
-    reflectionV2Port = await getPort({ port: makeRange(3200, 3400), host });
+    reflectionV2Port = await getPort({ port: portNumbers(3200, 3400), host });
     envVars.GENKIT_REFLECTION_V2_SERVER = reflectionV2Url(
       host,
       reflectionV2Port

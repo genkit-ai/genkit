@@ -280,7 +280,7 @@ export function startServer(
     express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('sendBidiInput', projectRuntime),
     (req, res) => {
-      const { traceId, chunk } = req.body;
+      const { traceId, chunk } = req.body ?? {};
       const stream = activeInputStreams.get(traceId);
       if (stream) {
         stream.push(chunk);
@@ -296,7 +296,7 @@ export function startServer(
     express.json(),
     loggedExpressRoute('endBidiInput', projectRuntime),
     (req, res) => {
-      const { traceId } = req.body;
+      const { traceId } = req.body ?? {};
       const stream = activeInputStreams.get(traceId);
       if (stream) {
         stream.close();
@@ -316,7 +316,7 @@ export function startServer(
     express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('streamTrace', projectRuntime),
     async (req, res) => {
-      const { traceId } = req.body;
+      const { traceId } = req.body ?? {};
 
       if (!traceId) {
         res.status(400).json({ error: 'traceId is required' });
@@ -373,7 +373,7 @@ export function startServer(
     })
   );
 
-  app.all('*', (_, res) => {
+  app.all('/{*splat}', (_, res) => {
     res.status(200).sendFile('/', { root: UI_ASSETS_SERVE_PATH });
   });
 

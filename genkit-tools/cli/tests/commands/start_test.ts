@@ -44,7 +44,7 @@ vi.mock('@genkit-ai/tools-common/utils', () => ({
 vi.mock('get-port', () => ({
   __esModule: true,
   default: vi.fn(() => Promise.resolve(4000)),
-  makeRange: vi.fn(),
+  portNumbers: vi.fn(),
 }));
 vi.mock('open');
 
