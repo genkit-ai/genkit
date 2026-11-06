@@ -15,7 +15,7 @@
  */
 
 import {
-  DocumentData,
+  Document,
   RerankerInfo,
   RerankerReference,
   z,
@@ -139,19 +139,16 @@ export function defineReranker(
   );
 }
 
-function toRerankerDoc(doc: DocumentData, idx: number): RerankRequestRecord {
+function toRerankerDoc(doc: Document, idx: number): RerankRequestRecord {
   return {
     id: `${idx}`,
-    content:
-      ('text' in doc ? (doc as { text?: string }).text : undefined) ??
-      doc.content?.map((part) => part.text || '').join('') ??
-      '',
+    content: doc.text,
   };
 }
 
 function fromRerankResponse(
   response: RerankResponse,
-  documents: DocumentData[]
+  documents: Document[]
 ): RankedDocument[] {
   return response.records.map((record) => {
     const doc = documents[Number(record.id)];
