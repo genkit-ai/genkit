@@ -300,8 +300,8 @@ export async function startTelemetryServer(params: {
         const { parentTraceId, parentSpanId } = request.params;
 
         if (
-          !request.body.resourceSpans?.length &&
-          !request.body.resourceLogs?.length
+          !request.body?.resourceSpans?.length &&
+          !request.body?.resourceLogs?.length
         ) {
           // Acknowledge and ignore empty payloads.
           response.status(200).json({});
