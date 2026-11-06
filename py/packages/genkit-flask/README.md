@@ -38,4 +38,9 @@ async def greet_user(name: str) -> str:
     return res.text
 ```
 
+The endpoint name defaults to the flow's name with dots replaced by underscores
+(e.g., `greet_user`). To override the endpoint name or prevent clashes with an
+existing view, pass `endpoint=` to the route decorator (e.g.,
+`@app.post('/api/greet', endpoint='custom_greet')`).
+
 Requires Flask 3.1+.

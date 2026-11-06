@@ -1561,7 +1561,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit" }
 dependencies = [
     { name = "anyio" },
@@ -1626,6 +1626,9 @@ otel = [
 vertex-ai = [
     { name = "genkit-vertexai", extra = ["anthropic", "openai"] },
 ]
+vertexai = [
+    { name = "genkit-vertexai", extra = ["anthropic", "openai"] },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1646,6 +1649,7 @@ requires-dist = [
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "genkit-otel", marker = "extra == 'otel'", editable = "packages/genkit-otel" },
     { name = "genkit-vertexai", extras = ["anthropic", "openai"], marker = "extra == 'vertex-ai'", editable = "packages/genkit-vertexai" },
+    { name = "genkit-vertexai", extras = ["anthropic", "openai"], marker = "extra == 'vertexai'", editable = "packages/genkit-vertexai" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "json5", specifier = ">=0.10.0" },
     { name = "jsonschema", specifier = ">=4.23.0" },
@@ -1659,11 +1663,11 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32'", specifier = ">=0.21.0" },
     { name = "websockets", specifier = ">=13.0.0" },
 ]
-provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "otel", "ollama", "openai", "vertex-ai"]
+provides-extras = ["a2ui", "amazon-bedrock", "anthropic", "django", "evaluators", "fastapi", "flask", "google-cloud", "google-genai", "mcp", "middleware", "otel", "ollama", "openai", "vertex-ai", "vertexai"]
 
 [[package]]
 name = "genkit-a2ui"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-a2ui" }
 dependencies = [
     { name = "genkit" },
@@ -1691,7 +1695,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "genkit-amazon-bedrock"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-amazon-bedrock" }
 dependencies = [
     { name = "boto3" },
@@ -1708,7 +1712,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-anthropic"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-anthropic" }
 dependencies = [
     { name = "anthropic" },
@@ -1723,7 +1727,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-django"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-django" }
 dependencies = [
     { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -1734,14 +1738,14 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "django", specifier = ">=4.2" },
+    { name = "django", specifier = ">=5.0" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [[package]]
 name = "genkit-evaluators"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-evaluators" }
 dependencies = [
     { name = "genkit" },
@@ -1756,7 +1760,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-fastapi"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-fastapi" }
 dependencies = [
     { name = "fastapi" },
@@ -1773,7 +1777,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-flask"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-flask" }
 dependencies = [
     { name = "flask" },
@@ -1790,7 +1794,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-cloud"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-google-cloud" }
 dependencies = [
     { name = "genkit" },
@@ -1823,7 +1827,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-google-genai"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-google-genai" }
 dependencies = [
     { name = "genkit" },
@@ -1844,7 +1848,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-mcp"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-mcp" }
 dependencies = [
     { name = "anyio" },
@@ -1865,7 +1869,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-middleware"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-middleware" }
 dependencies = [
     { name = "genkit" },
@@ -1893,7 +1897,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "genkit-ollama"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-ollama" }
 dependencies = [
     { name = "genkit" },
@@ -1908,7 +1912,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-openai"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-openai" }
 dependencies = [
     { name = "genkit" },
@@ -1919,13 +1923,13 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
-    { name = "openai" },
+    { name = "openai", specifier = ">=1.60.0,<3" },
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
 ]
 
 [[package]]
 name = "genkit-otel"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-otel" }
 dependencies = [
     { name = "genkit" },
@@ -1940,7 +1944,7 @@ requires-dist = [
 
 [[package]]
 name = "genkit-vertexai"
-version = "0.12.0"
+version = "0.13.0"
 source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "genkit" },
@@ -2001,6 +2005,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
+    { name = "pytest-xdist" },
     { name = "twine" },
 ]
 lint = [
@@ -2070,6 +2075,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pytest-mock", specifier = ">=3.14.0" },
+    { name = "pytest-xdist", specifier = ">=3.6.1" },
     { name = "twine", specifier = ">=7.0.0" },
 ]
 lint = [

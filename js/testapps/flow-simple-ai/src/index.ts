@@ -16,11 +16,9 @@
 
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { defineFirestoreRetriever } from '@genkit-ai/firebase';
-import { enableGoogleCloudTelemetry } from '@genkit-ai/google-cloud';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 import { filesystem, skills, toolApproval } from '@genkit-ai/middleware';
-import { GoogleAIFileManager } from '@google/generative-ai/server';
-import { AlwaysOnSampler } from '@opentelemetry/sdk-trace-base';
+import { GoogleGenAI } from '@google/genai';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
@@ -42,23 +40,6 @@ import { Allow, parse } from 'partial-json';
 import wav from 'wav';
 
 logger.setLogLevel('debug');
-
-enableGoogleCloudTelemetry({
-  // These are configured for demonstration purposes. Sensible defaults are
-  // in place in the event that telemetryConfig is absent.
-
-  // Forces telemetry export in 'dev'
-  forceDevExport: true,
-  sampler: new AlwaysOnSampler(),
-  autoInstrumentation: true,
-  autoInstrumentationConfig: {
-    '@opentelemetry/instrumentation-fs': { enabled: false },
-    '@opentelemetry/instrumentation-dns': { enabled: false },
-    '@opentelemetry/instrumentation-net': { enabled: false },
-  },
-  metricExportIntervalMillis: 5_000,
-  metricExportTimeoutMillis: 5_000,
-});
 
 const ai = genkit({
   plugins: [
@@ -611,9 +592,6 @@ export const invalidOutput = ai.defineFlow(
   }
 );
 
-const fileManager = new GoogleAIFileManager(
-  process.env.GOOGLE_GENAI_API_KEY || process.env.GOOGLE_API_KEY!
-);
 export const fileApi = ai.defineFlow(
   {
     name: 'fileApi',
@@ -621,14 +599,23 @@ export const fileApi = ai.defineFlow(
     outputSchema: z.string(),
   },
   async () => {
-    const uploadResult = await fileManager.uploadFile(
-      '../menu/data/menu.jpeg',
-      {
+    const genaiClient = new GoogleGenAI({
+      apiKey:
+        process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_GENAI_API_KEY ||
+        process.env.GOOGLE_API_KEY,
+    });
+    const uploadedFile = await genaiClient.files.upload({
+      file: '../menu/data/menu.jpeg',
+      config: {
         mimeType: 'image/jpeg',
         displayName: 'Restaurant Menu',
-      }
-    );
-    console.log(uploadResult.file);
+      },
+    });
+    if (!uploadedFile.uri) {
+      throw new Error('File upload did not return a URI');
+    }
+    console.log(uploadedFile);
 
     const result = await ai.generate({
       model: googleAI.model('gemini-flash-latest'),
@@ -636,8 +623,8 @@ export const fileApi = ai.defineFlow(
         { text: 'Describe this image:' },
         {
           media: {
-            contentType: uploadResult.file.mimeType,
-            url: uploadResult.file.uri,
+            contentType: uploadedFile.mimeType ?? 'image/jpeg',
+            url: uploadedFile.uri,
           },
         },
       ],

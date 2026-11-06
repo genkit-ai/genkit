@@ -50,12 +50,12 @@ export const ai = genkit({
       metrics: [
         {
           type: GenkitMetric.MALICIOUSNESS,
-          judge: googleAI.model('gemini-2.5-pro'),
+          judge: googleAI.model('gemini-pro-latest'),
           judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
         },
         {
           type: GenkitMetric.ANSWER_ACCURACY,
-          judge: googleAI.model('gemini-2.5-pro'),
+          judge: googleAI.model('gemini-pro-latest'),
           judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
         },
       ],
@@ -70,7 +70,7 @@ export const ai = genkit({
       evaluators: {
         criteria: ['coherence'],
         labeledCriteria: ['correctness'],
-        judge: googleAI.model('gemini-2.5-pro'),
+        judge: googleAI.model('gemini-pro-latest'),
       },
     }),
   ],

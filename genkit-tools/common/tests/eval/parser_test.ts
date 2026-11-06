@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import {
   enrichResultsWithScoring,
   extractMetricSummaries,

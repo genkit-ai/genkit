@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import re
 from collections.abc import Awaitable, Callable, Iterable
@@ -28,7 +27,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, PrivateAttr, Validatio
 from typing_extensions import TypeVar
 
 from genkit._core._action import Action
-from genkit._core._config_check import config_field_names
 from genkit._core._error import ErrorReason, GenkitError, _StreamingCallbackError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
@@ -122,23 +120,18 @@ def _config_key_spellings(config_cls: type[BaseModel]) -> dict[str, str] | None:
     accepts_field_name = bool(
         config_cls.model_config.get('validate_by_name') or config_cls.model_config.get('populate_by_name')
     )
-    # config_field_names is the same walk model config folding uses; pydantic
-    # only rejects the bare field name when it has an alias and the class
-    # doesn't validate by name.
-    names = config_field_names(config_cls)
-    alias_keys = set(names) - set(fields)
+    accepted: dict[str, str] = {}
     for name, info in fields.items():
-        if name == info.alias or name == info.validation_alias:
-            alias_keys.add(name)
-        elif isinstance(info.validation_alias, AliasChoices) and name in info.validation_alias.choices:
-            alias_keys.add(name)
-    accepted = {
-        key: name
-        for key, name in names.items()
-        if key in alias_keys
-        or accepts_field_name
-        or (fields[name].alias is None and fields[name].validation_alias is None)
-    }
+        if accepts_field_name or (info.alias is None and info.validation_alias is None):
+            accepted[name] = name
+        if info.alias:
+            accepted[info.alias] = name
+        if isinstance(info.validation_alias, str):
+            accepted[info.validation_alias] = name
+        elif isinstance(info.validation_alias, AliasChoices):
+            for choice in info.validation_alias.choices:
+                if isinstance(choice, str):
+                    accepted[choice] = name
     spellings: dict[str, str] = {}
     for key, name in accepted.items():
         info = fields[name]
@@ -291,15 +284,13 @@ class MiddlewareContext:
     find what the app defined. Inside an agent, read the session with
     ``genkit.exp.current_session()``. Also carries a copy of the call's
     ``context=`` (auth, secrets; the same dict flows and tools read as
-    ``ctx.context``), streaming hooks, and the abort signal for the whole
-    generate invocation.
+    ``ctx.context``) and streaming hooks.
 
     A callback stored on ``on_chunk`` that raises fails the turn; see
     ``replace_on_chunk``.
     """
 
     ai: GenkitLike
-    abort_signal: asyncio.Event
     context: dict[str, object]
     _on_chunk: Callable[[ModelResponseChunk], None] | None
     telemetry_labels: dict[str, str] | None
@@ -307,13 +298,12 @@ class MiddlewareContext:
     def __init__(
         self,
         ai: GenkitLike,
-        abort_signal: asyncio.Event | None = None,
+        *,
         context: dict[str, object] | None = None,
         on_chunk: Callable[[ModelResponseChunk], None] | None = None,
         telemetry_labels: dict[str, str] | None = None,
     ) -> None:
         self.ai = ai
-        self.abort_signal = abort_signal if abort_signal is not None else asyncio.Event()
         self.context = context if context is not None else {}
         self._on_chunk = _guard_on_chunk(on_chunk)
         self.telemetry_labels = telemetry_labels

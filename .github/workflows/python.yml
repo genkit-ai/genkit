@@ -16,12 +16,7 @@
 
 name: Python Checks
 
-on:
-  pull_request:
-    paths:
-      - "py/**"
-      - "genkit-tools/genkit-schema.json"
-      - ".github/workflows/python.yml"
+on: pull_request
 
 permissions:
   contents: read
@@ -32,11 +27,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    uses: ./.github/workflows/changes.yml
+    permissions:
+      pull-requests: read
+
   # =============================================================================
   # Fast checks that run quickly and catch common issues early
   # =============================================================================
   lint-and-format:
     name: Lint and Format
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.schema == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,18 +59,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          cd py
-          uv sync --group lint
+        run: uv sync --frozen --group lint --directory py
 
       - name: Check lockfile is up to date
         run: uv lock --check --directory py
 
       - name: Format check
-        run: uv run --directory py ruff format --check --preview .
+        run: uv run --no-sync --directory py ruff format --check --preview .
 
       - name: Lint with ruff
-        run: uv run --directory py ruff check --preview .
+        run: uv run --no-sync --directory py ruff check --preview .
 
       # Every import is declared, and every declared dependency is imported.
       - name: Check dependencies match imports
@@ -80,6 +85,13 @@ jobs:
   # =============================================================================
   type-check:
     name: Type Check (${{ matrix.checker }})
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.schema == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -92,11 +104,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
-
       - name: Install uv and setup Python
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
@@ -104,30 +111,35 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          cd py
-          uv sync --group lint
+        run: uv sync --frozen --group lint --directory py
 
       - name: Generate schema typing
         run: ./py/bin/generate_schema_typing --ci
 
       - name: Type check with Ty
         if: matrix.checker == 'ty'
-        run: uv run --directory py ty check .
+        run: uv run --no-sync --directory py ty check .
 
       - name: Type check with Pyrefly
         if: matrix.checker == 'pyrefly'
-        run: uv run --directory py pyrefly check
+        run: uv run --no-sync --directory py pyrefly check
 
       - name: Type check with Pyright
         if: matrix.checker == 'pyright'
-        run: cd py && uv run pyright
+        run: uv run --no-sync --directory py pyright
 
   # =============================================================================
   # Security and compliance checks
   # =============================================================================
   security-and-compliance:
     name: Security and Compliance
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.schema == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -143,15 +155,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          cd py
-          uv sync --group lint
+        run: uv sync --frozen --group lint --directory py
 
       - name: Check source file license headers
         run: ./bin/check_license
 
       - name: Check Python dependency licenses
-        run: uv run --directory py liccheck -s pyproject.toml
+        run: uv run --no-sync --directory py liccheck -s pyproject.toml
 
       - name: Check for hardcoded secrets
         run: |
@@ -169,10 +179,16 @@ jobs:
   # =============================================================================
   tests:
     name: Tests (Python ${{ matrix.python-version }})
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.schema == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # No 'needs' - runs in parallel. If lint fails, concurrency will cancel this.
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -182,11 +198,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential libffi-dev cmake libjpeg-dev zlib1g-dev
-
       - name: Install uv and setup Python
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
@@ -194,9 +205,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: |
-          cd py
-          uv sync
+        env:
+          PY_VER: ${{ matrix.python-version }}
+        run: uv sync --frozen --python "$PY_VER" --directory py
 
       - name: Generate schema typing
         run: ./py/bin/generate_schema_typing --ci
@@ -204,9 +215,15 @@ jobs:
       - name: Run tests
         env:
           PY_VER: ${{ matrix.python-version }}
+          COVERAGE_CORE: sysmon
         run: |
-          uv run --python "$PY_VER" --active --isolated --directory py \
-            pytest -xvs --log-level=DEBUG .
+          if [[ "$PY_VER" == "3.12" ]]; then
+            uv run --no-sync --python "$PY_VER" --directory py \
+              pytest --cov --cov-report=term-missing:skip-covered
+          else
+            uv run --no-sync --python "$PY_VER" --directory py pytest
+          fi
+
   # =============================================================================
   # Build verification (runs after tests pass)
   # =============================================================================
@@ -215,8 +232,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    if: ${{ always() && !failure() && !cancelled() }}
     needs: [lint-and-format, type-check, security-and-compliance, tests]
+    if: >-
+      ${{ !cancelled() &&
+      needs.lint-and-format.result == 'success' &&
+      needs.type-check.result == 'success' &&
+      needs.security-and-compliance.result == 'success' &&
+      needs.tests.result == 'success' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -258,3 +280,31 @@ jobs:
           name: python-distributions
           path: py/dist/
           retention-days: 7
+
+  # =============================================================================
+  # Single fan-in gate job for main branch protection required_status_checks
+  # =============================================================================
+  python-checks:
+    # Job name can be pinned in main branch protection required_status_checks.
+    name: Run Python checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: [changes, lint-and-format, type-check, security-and-compliance, tests, build]
+    if: >-
+      ${{ always() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.schema == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
+    steps:
+      - name: Verify all Python jobs succeeded
+        env:
+          RESULTS: >-
+            ${{ needs.lint-and-format.result }},${{ needs.type-check.result }},${{ needs.security-and-compliance.result }},${{ needs.tests.result }},${{ needs.build.result }}
+        run: |
+          echo "Python job results: $RESULTS"
+          if [[ "$RESULTS" != "success,success,success,success,success" ]]; then
+            echo "::error::One or more Python checks did not succeed: $RESULTS"
+            exit 1
+          fi

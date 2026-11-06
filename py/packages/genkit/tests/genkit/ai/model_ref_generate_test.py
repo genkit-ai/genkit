@@ -433,10 +433,10 @@ async def test_dict_none_clears_ref_default_via_generate(
 
 
 @pytest.mark.asyncio
-async def test_string_model_none_omits_key(
+async def test_string_model_none_is_a_value(
     ai_with_echo: tuple[Genkit, EchoModel],
 ) -> None:
-    """None means omit on a name too, same as on a ref."""
+    """An explicit None is a value on a name too, same as on a ref."""
     ai, echo = ai_with_echo
 
     await ai.generate(model='testEcho', config={'temperature': None}, prompt='Hello')
@@ -444,10 +444,10 @@ async def test_string_model_none_omits_key(
     assert echo.last_request is not None
     cfg = echo.last_request.config
     if isinstance(cfg, dict):
-        assert 'temperature' not in cfg
+        assert cfg['temperature'] is None
     else:
         assert cfg is not None
-        assert 'temperature' not in cfg.model_dump(exclude_unset=True)
+        assert cfg.model_dump(exclude_unset=True)['temperature'] is None
 
 
 @pytest.mark.asyncio
@@ -892,10 +892,15 @@ async def test_generate_does_not_fold_inner_keys(
 
 
 @pytest.mark.asyncio
-async def test_generate_both_spellings_last_write_wins(
+@pytest.mark.parametrize(
+    'config',
+    [{'max_output_tokens': 1, 'maxOutputTokens': 5}, {'maxOutputTokens': 5, 'max_output_tokens': 1}],
+)
+async def test_generate_both_spellings_in_one_dict_raises(
     ai_with_echo: tuple[Genkit, EchoModel],
+    config: dict[str, int],
 ) -> None:
-    """Both keys in one call dict fold onto one field; later key wins."""
+    """Both spellings in one call dict raise even when the class allows extra keys, whatever the dict order."""
     ai, echo = ai_with_echo
     ref = ModelRef(
         name='testEcho',
@@ -903,23 +908,37 @@ async def test_generate_both_spellings_last_write_wins(
         config=AllowExtraConfig(max_output_tokens=100),
     )
 
-    await ai.generate(
-        model=ref,
-        config={'max_output_tokens': 1, 'maxOutputTokens': 5},
-        prompt='Hello',
-    )
+    with pytest.raises(GenkitError) as err:
+        await ai.generate(model=ref, config=config, prompt='Hello')
+
+    assert err.value.status == 'INVALID_ARGUMENT'
+    assert 'max_output_tokens and maxOutputTokens are the same setting; pass one' in err.value.message
+    assert echo.last_request is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('ref_config', 'call_config', 'expected'),
+    [
+        ({'maxOutputTokens': 100}, {'max_output_tokens': 5}, 5),
+        ({'max_output_tokens': 100}, {'maxOutputTokens': 5}, 5),
+        ({'maxOutputTokens': 100}, {'max_output_tokens': None}, None),
+    ],
+)
+async def test_generate_spellings_across_ref_and_call_fold_last_wins(
+    ai_with_echo: tuple[Genkit, EchoModel],
+    ref_config: dict[str, int],
+    call_config: dict[str, int | None],
+    expected: int | None,
+) -> None:
+    """One spelling on the ModelRef and the other on the call is two layers, not a repeat: the call wins."""
+    ai, echo = ai_with_echo
+    ref = ModelRef(name='testEcho', config_schema=AllowExtraConfig, config=AllowExtraConfig.model_validate(ref_config))
+
+    await ai.generate(model=ref, config=call_config, prompt='Hello')
 
     assert echo.last_request is not None
-    assert _config_value(echo.last_request.config, 'max_output_tokens') == 5
-    _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
-
-    await ai.generate(
-        model=ref,
-        config={'maxOutputTokens': 5, 'max_output_tokens': 1},
-        prompt='Hello',
-    )
-
-    assert _config_value(echo.last_request.config, 'max_output_tokens') == 1
+    assert _config_value(echo.last_request.config, 'max_output_tokens') == expected
     _leftover_alias(echo.last_request.config, 'max_output_tokens', 'maxOutputTokens')
 
 

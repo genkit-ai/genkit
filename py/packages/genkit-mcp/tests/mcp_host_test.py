@@ -4,7 +4,12 @@
 # you may not use this file except in compliance with the License.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Integration tests for several MCP servers behind one dynamic action provider."""
+"""Integration tests for several MCP servers behind one dynamic action provider.
+
+Includes whitebox unit checks calling ``genkit._ai._generate.expand_wildcard_tools``
+to verify ``server:tool/*`` dynamic action provider expansion before ``generate``
+runs, without exporting internal generate plumbing on the public surface.
+"""
 
 import asyncio
 import io
@@ -25,14 +30,14 @@ from genkit_mcp._config import McpServerEntry
 from pydantic import ValidationError
 from structlog.testing import capture_logs
 
-from genkit import Genkit, GenkitError, Message, ModelResponse, Part, Tool
-from genkit._ai._generate import expand_wildcard_tools
-from genkit._core._action import ActionKind
-from genkit._core._typing import (
-    FinishReason,
-    Role,
-    ToolRequest,
-)
+from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role, Tool, get_logger
+
+# TID251: whitebox unit tests call `genkit._ai._generate.expand_wildcard_tools`
+# directly to assert `server:tool/*` dynamic action provider expansion before
+# `generate` runs, without exporting internal generate plumbing.
+from genkit._ai._generate import expand_wildcard_tools  # noqa: TID251
+from genkit.model import ToolRequest
+from genkit.plugin_api import ActionKind
 from genkit.testing import define_scripted_model
 
 ALL_TOOLS = [
@@ -51,12 +56,12 @@ ALL_TOOLS = [
 # assert is one the host asked for.
 LONG_TTL_MILLIS = 600_000
 
-# Long enough for a healthy test server to start and answer on a slow machine,
-# since the same timeout bounds its handshake.
-STALL_TIMEOUT_MILLIS = 3_000
+# Long enough for a healthy test server to start and answer under parallel
+# xdist load on CI runners, since the same timeout bounds its handshake.
+STALL_TIMEOUT_MILLIS = 8_000
 
 # Bounds every wait on a test server, so a regression fails rather than hangs.
-LIMIT = 15
+LIMIT = 30
 
 # Module level, so no test frame's locals can put it into a rendered traceback.
 SECRET = 'genkit-mcp-redaction-canary-7f3a'
@@ -86,12 +91,12 @@ def missing_server(tmp_path: Path) -> McpServerEntry:
 
 
 def rendered_for_logs(error: BaseException) -> str:
-    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    """Render ``error``'s exception chain and frame locals into an isolated ``StringIO`` buffer."""
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)
@@ -302,7 +307,7 @@ async def test_a_host_closed_during_a_listing_fails_it_as_closed(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path) -> None:
-    """``<host>:tool/*`` reaches every server behind the one provider."""
+    """Whitebox check: ``<host>:tool/*`` expands across every hosted server via ``expand_wildcard_tools``."""
     ai = Genkit()
     host = define_mcp_host(ai, 'hosted', mcp_servers=servers(tmp_path, 'alpha', 'beta'))
     try:
@@ -310,7 +315,7 @@ async def test_a_wildcard_selector_binds_tools_from_every_server(tmp_path: Path)
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha', 'beta'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha', 'beta'))
 
 
 @pytest.mark.asyncio
@@ -400,8 +405,8 @@ async def test_connect_adds_a_server_and_drops_the_listing(tmp_path: Path) -> No
     finally:
         await host.close()
 
-    assert sorted(before) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
-    assert sorted(after) == sorted(f'/tool.v2/{name}' for name in hosted('alpha', 'beta'))
+    assert sorted(before) == sorted(f'/tool/{name}' for name in hosted('alpha'))
+    assert sorted(after) == sorted(f'/tool/{name}' for name in hosted('alpha', 'beta'))
 
 
 @pytest.mark.asyncio
@@ -472,7 +477,7 @@ async def test_connect_reports_a_server_which_cannot_be_started_and_keeps_the_ho
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -560,7 +565,7 @@ async def test_connect_installs_the_replacement_when_the_replaced_server_fails_t
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -586,7 +591,7 @@ async def test_disconnect_removes_one_server_and_stops_it(tmp_path: Path) -> Non
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert server_processes() == []
 
 
@@ -784,7 +789,7 @@ async def test_a_host_name_a_model_would_refuse_is_accepted(tmp_path: Path) -> N
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
 
 
 @pytest.mark.asyncio
@@ -899,7 +904,7 @@ async def test_a_disabled_server_is_never_started_or_listed(tmp_path: Path) -> N
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert not (tmp_path / 'beta.pid').exists()
 
 
@@ -965,7 +970,7 @@ async def test_connect_with_a_disabled_entry_removes_the_server_of_that_name(tmp
     finally:
         await host.close()
 
-    assert sorted(expanded) == sorted(f'/tool.v2/{name}' for name in hosted('alpha'))
+    assert sorted(expanded) == sorted(f'/tool/{name}' for name in hosted('alpha'))
     assert not (tmp_path / 'replacement.pid').exists()
 
 

@@ -14,7 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Translation between MCP tools and Genkit ``tool.v2`` actions."""
+"""Translation between MCP tools and Genkit ``tool`` actions."""
 
 import json
 import re
@@ -27,16 +27,12 @@ from mcp.types import (
     CallToolResult,
     EmbeddedResource,
     ImageContent,
-    ResourceLink,
     TextContent,
     TextResourceContents,
     Tool as McpTool,
 )
 
-import genkit
 from genkit import MultipartToolResponse, Part, Tool, ToolContext, get_logger
-from genkit._core._typing import Resource
-from genkit.plugin_api import Action
 from genkit_mcp._errors import _ToolResultError
 
 McpToolCall = Callable[[str, dict[str, Any], dict[str, Any] | None], Awaitable[CallToolResult]]
@@ -124,15 +120,17 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
 
     Text blocks are concatenated into ``output``, parsed as JSON only when the
     text begins with ``{`` or ``[``. ``structuredContent`` wins over text when
-    present. Image, audio and blob resource blocks become media parts, and a
-    resource link becomes a resource part. An error result yields an ``error``
-    output and drops any media, so the model can read the failure and retry.
+    present. Image, audio, and blob resource blocks become media parts; text
+    resource blocks append to text output; resource links are skipped since
+    Genkit Python does not expose resource actions. An error result yields an
+    ``error`` output and drops any media, so the model can read the failure and
+    retry.
 
     Args:
         result: What ``ClientSession.call_tool`` returned.
 
     Returns:
-        The envelope ``generate`` expects from a ``tool.v2`` action.
+        The envelope ``generate`` expects from a ``tool`` action.
     """
     metadata = dict(result.meta) if result.meta is not None else None
     if result.isError:
@@ -149,8 +147,6 @@ def call_result_to_multipart(result: CallToolResult) -> MultipartToolResponse:
             text_output += block.text
         elif isinstance(block, (ImageContent, AudioContent)):
             content.append(_media_part(block.mimeType, block.data))
-        elif isinstance(block, ResourceLink):
-            content.append(Part(resource=Resource(uri=str(block.uri))))
         elif isinstance(block, EmbeddedResource):
             resource = block.resource
             if isinstance(resource, TextResourceContents):
@@ -196,8 +192,8 @@ def mcp_tool_to_action(
     tool: McpTool,
     prefix: str,
     call: McpToolCall,
-) -> Action:
-    """Build a Genkit ``tool.v2`` action that invokes one MCP tool.
+) -> Tool:
+    """Build a Genkit ``tool`` action that invokes one MCP tool.
 
     The returned action carries its own name under the ``name`` metadata key,
     which is what a dynamic action provider matches a wildcard selector against,
@@ -209,7 +205,7 @@ def mcp_tool_to_action(
         call: Coroutine function invoking the tool on the live session.
 
     Returns:
-        An unregistered action, for a dynamic action provider to hand out.
+        An unregistered tool action, for a dynamic action provider to hand out.
     """
     tool_name = mcp_tool_name(prefix, tool.name)
     if tool_name != f'{prefix}_{tool.name}':
@@ -238,12 +234,12 @@ def mcp_tool_to_action(
             )
         return call_result_to_multipart(result)
 
-    action = genkit.Tool(
+    action: Tool = Tool(
         handler,
         name=tool_name,
         description=tool.description or '',
         input_schema=tool.inputSchema,
-    ).action()
+    )
     action.metadata['name'] = action.name
     action.metadata['mcp'] = {'prefix': prefix, 'tool': tool.name, '_meta': mcp_meta}
     return action
@@ -253,8 +249,8 @@ def mcp_tools_to_actions(
     tools: Sequence[McpTool],
     prefix: str,
     call: McpToolCall,
-) -> list[Action]:
-    """Build one Genkit ``tool.v2`` action per tool in a server listing.
+) -> list[Tool]:
+    """Build one Genkit ``tool`` action per tool in a server listing.
 
     Args:
         tools: Tools as listed by the server.
@@ -262,8 +258,8 @@ def mcp_tools_to_actions(
         call: Coroutine function invoking a tool on the live session.
 
     Returns:
-        Unregistered actions in listing order, for a dynamic action provider to
-        hand out. Tools that share a Genkit tool name are logged and left out,
+        Unregistered tool actions in listing order, for a dynamic action provider
+        to hand out. Tools that share a Genkit tool name are logged and left out,
         since either one could answer a call meant for the other.
     """
     server_tools_by_name: dict[str, list[str]] = {}
@@ -291,7 +287,7 @@ def mcp_tools_to_handles(
     """Build one Genkit tool handle per tool in a server listing.
 
     A handle is what ``generate`` accepts in ``tools``, and what a caller can
-    invoke directly. Its ``output_schema`` is the one the server declared.
+    invoke directly. Its ``model_output_schema`` is the one the server declared.
 
     Args:
         tools: Tools as listed by the server.
@@ -303,7 +299,8 @@ def mcp_tools_to_handles(
         :func:`mcp_tools_to_actions` leaves out.
     """
     by_name = {mcp_tool_name(prefix, tool.name): tool for tool in tools}
-    return [
-        Tool._from_action(action, original_output_schema=by_name[action.name].outputSchema)
-        for action in mcp_tools_to_actions(tools, prefix, call)
-    ]
+    handles = mcp_tools_to_actions(tools, prefix, call)
+    for handle in handles:
+        output_schema = by_name[handle.name].outputSchema
+        handle.model_output_schema = dict(output_schema) if output_schema is not None else None
+    return handles

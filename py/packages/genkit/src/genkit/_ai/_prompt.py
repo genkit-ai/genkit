@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -42,6 +43,7 @@ from genkit._ai._generate import (
     register_middleware,
     register_tools,
     resolve_tools_from_options,
+    start_generate_stream,
     to_tool_definition,
     tools_to_action_names,
 )
@@ -53,12 +55,12 @@ from genkit._ai._model import (
     ModelResponseChunk,
     assert_correct_config_class,
     check_call_config,
-    config_class_for_generate,
+    clear_on_hop,
     config_schema_at_define,
-    fold_config_aliases,
     normalize_config,
     resolve_call_model,
     resolve_for_generate,
+    resolve_model_name,
 )
 from genkit._core._action import (
     Action,
@@ -68,7 +70,6 @@ from genkit._core._action import (
     create_action_key,
     get_current_context,
 )
-from genkit._core._channel import start_stream
 from genkit._core._config_check import check_config_values, config_field_names
 from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._logger import get_logger
@@ -156,7 +157,7 @@ class ModelStreamResponse(StreamResponse[ModelResponseChunk[OutputT], ModelRespo
     """Chunks of a model reply, then the full ``ModelResponse``.
 
     Returned by ``ai.generate_stream()`` and ``prompt.stream()``. Iteration
-    and ``.response`` follow ``StreamResponse``; failures don't:
+    and ``.response`` follow ``StreamResponse``; failures and early exit don't:
 
     - **Before the request** (unknown model, bad config, ...): the loop and
       ``.response`` both raise the ``GenkitError`` (``NOT_FOUND``, ...).
@@ -164,11 +165,16 @@ class ModelStreamResponse(StreamResponse[ModelResponseChunk[OutputT], ModelRespo
       ends normally and ``.response`` resolves with ``error`` set and
       ``finish_reason == FAILED``. The chunks already received are the record
       of what was shown.
+    - **Early close** (``async with`` or ``await result.aclose()``): stops the
+      in-flight model or tool turn and awaits ``finally:`` cleanup;
+      ``.response`` resolves with ``finish_reason == ABORTED``,
+      ``error.status == 'CANCELLED'``, and ``messages`` ending at the last
+      completed round.
 
     Example:
         ```python
         result = ai.generate_stream(prompt='Describe miso soup in one line.')
-        async for chunk in result:
+        async for chunk in result.stream:
             print(chunk.text)
         # => Savory soybean broth
         #    with tofu and scallions.
@@ -254,6 +260,7 @@ class Prompt(Generic[InputT, OutputT]):
     def __init__(
         self,
         ai: _aio.Genkit,
+        *,
         variant: str | None = None,
         model: ModelArg | Action | None = None,
         config: Mapping[str, Any] | BaseModel | None = None,
@@ -361,38 +368,35 @@ class Prompt(Generic[InputT, OutputT]):
         """
         override_config = opts.get('config')
         override_model = opts.get('model')
+        # A hop is a different model name: 'gem' and ModelRef(name='gem') are the same model.
+        hopping = (
+            override_model is not None
+            and self._defined_model_name is not None
+            and resolve_model_name(model=override_model, registry=self._ai._registry) != self._defined_model_name
+        )
         model = override_model if override_model is not None else self._def.model
-        merged_config: Mapping[str, Any] | BaseModel | None
-        if override_config is not None:
-            # exclude_unset semantics via normalize_config: untouched fields are
-            # absent (cannot clobber defaults); an explicitly-set None survives
-            # the merge and clears the lower-precedence value downstream.
-            base = normalize_config(config=self._def.config)
-            override = normalize_config(config=override_config)
-            # `maxOutputTokens` in the prompt and `max_output_tokens` in the
-            # call are one setting: fold both to field names so the call wins.
-            # A model typed only by its ModelRequest[...] annotation folds too.
-            schema = await config_class_for_generate(model=model, registry=self._ai._registry)
-            if schema is not None:
-                base = fold_config_aliases(config=base, schema=schema)
-                override = fold_config_aliases(config=override, schema=schema)
-            merged_config = {**base, **override} if base or override else None
-        else:
-            merged_config = self._def.config
-
         resolved = await resolve_for_generate(
             model=model,
-            config=merged_config,
+            config=override_config,
+            prompt_config=self._def.config,
+            hopping=hopping,
             registry=self._ai._registry,
         )
+        check_config = override_config
+        if hopping and isinstance(override_config, Mapping):
+            _, check_config = clear_on_hop(
+                prompt_config=self._def.config,
+                call_config=override_config,
+                schema=resolved.config_schema,
+            )
         check_call_config(
-            config=override_config,
+            config=check_config,
             schema=resolved.config_schema,
             model=resolved.name,
         )
         # Re-check the stored typed config unless this call hops models.
-        # A None override clears that default, so the prompt's copy of the
-        # key is not checked against the model this call hits.
+        # A key the call sets to None replaces the prompt's value, so the
+        # prompt's copy of that key is not checked against the model this call hits.
         if self._defined_model_name is None or self._defined_model_name == resolved.name:
             assert_correct_config_class(
                 config=self._def.config,
@@ -400,7 +404,7 @@ class Prompt(Generic[InputT, OutputT]):
                 model=resolved.name,
             )
         check_config_values(
-            config=prompt_config_after_clears(
+            config=unoverridden_prompt_config(
                 stored=self._def.config,
                 override=override_config,
                 schema=resolved.config_schema,
@@ -450,6 +454,16 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
+        return await self._run(input=input, opts=opts, on_chunk=on_chunk, caller_stopped=None)
+
+    async def _run(
+        self,
+        *,
+        input: InputT | dict[str, Any] | None,
+        opts: PromptGenerateOptions,
+        on_chunk: ModelStreamingCallback | None,
+        caller_stopped: asyncio.Event | None,
+    ) -> ModelResponse[OutputT]:
         prepared = await prepare_prompt(prompt=self, input=input, opts=opts)
         result = await generate_action(
             prepared.scope,
@@ -457,6 +471,7 @@ class Prompt(Generic[InputT, OutputT]):
             on_chunk=on_chunk,
             # Same context the template already rendered, so {{@auth}} and tools agree.
             context=prepared.context,
+            caller_stopped=caller_stopped,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -480,33 +495,40 @@ class Prompt(Generic[InputT, OutputT]):
     ) -> ModelStreamResponse[OutputT]:
         """Stream the prompt execution. Same keywords as ``__call__``, minus ``on_chunk``.
 
-        Iterate the returned stream for chunks; there's no callback here so
-        chunks only arrive one way.
+        Iterate ``.stream`` on the returned response for chunks; there's no
+        callback here so chunks only arrive one way.
         """
+        opts = PromptGenerateOptions(
+            model=model,
+            config=config,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            docs=docs,
+            use=use,
+            max_turns=max_turns,
+            context=context,
+            return_tool_requests=return_tool_requests,
+            resume_respond=resume_respond,
+            resume_restart=resume_restart,
+            resume_metadata=resume_metadata,
+        )
 
         # Same run path as __call__; only the chunk sink differs.
-        async def run(send_chunk: Callable[[ModelResponseChunk[OutputT]], None]) -> ModelResponse[OutputT]:
-            return await self(
-                input,
-                model=model,
-                config=config,
-                messages=messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                docs=docs,
-                use=use,
-                max_turns=max_turns,
-                context=context,
-                return_tool_requests=return_tool_requests,
-                resume_respond=resume_respond,
-                resume_restart=resume_restart,
-                resume_metadata=resume_metadata,
+        async def run(
+            send_chunk: Callable[[ModelResponseChunk[OutputT]], None],
+            caller_stopped: asyncio.Event,
+        ) -> ModelResponse[OutputT]:
+            return await self._run(
+                input=input,
+                opts=opts,
                 on_chunk=lambda c: send_chunk(cast('ModelResponseChunk[OutputT]', c)),
+                caller_stopped=caller_stopped,
             )
 
-        channel, task = start_stream(run)
-
-        return ModelStreamResponse[OutputT](stream=channel, response=task)
+        initial_msgs = list(messages) if isinstance(messages, list) else []
+        stream, task = start_generate_stream(initial_messages=initial_msgs, run=run)
+        return ModelStreamResponse[OutputT](stream=stream, response=task)
 
     async def render(
         self,
@@ -596,24 +618,24 @@ async def prepare_prompt(
     return PreparedPrompt(scope=scope, options=options, context=context)
 
 
-def prompt_config_after_clears(
+def unoverridden_prompt_config(
     *,
     stored: Mapping[str, Any] | BaseModel | None,
     override: object,
     schema: type[BaseModel] | None,
 ) -> dict[str, Any]:
-    """The prompt's config minus keys this call set to None.
+    """The prompt's config minus keys this call sets.
 
-    None means "clear the default". The prompt still names the key, but
-    this call does not send it, so it must not fail the model's check.
+    The call's value (None included) replaces the prompt's, so the prompt's
+    copy is not sent and must not fail the model's check. The call's own
+    values are checked with the call config. A stored None is a value.
     """
     stored_bag = normalize_config(config=stored)
     if override is None:
-        return {key: value for key, value in stored_bag.items() if value is not None}
-    override_bag = normalize_config(config=override)
+        return stored_bag
     names = config_field_names(schema) if schema is not None else {}
-    cleared = {names.get(key, key) for key, value in override_bag.items() if value is None}
-    return {key: value for key, value in stored_bag.items() if value is not None and names.get(key, key) not in cleared}
+    replaced = {names.get(key, key) for key in normalize_config(config=override)}
+    return {key: value for key, value in stored_bag.items() if names.get(key, key) not in replaced}
 
 
 def _register_prompt_action_pair(

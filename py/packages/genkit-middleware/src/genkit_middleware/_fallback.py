@@ -18,6 +18,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
@@ -69,12 +71,18 @@ class FallbackConfig(GenkitConfig):
 
 
 def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
-    """The config this backup runs with: the ref's version and config only."""
+    """The config this backup runs with: the ref's version and config only.
+
+    Stored as wire keys (``by_alias=True``) because ``FallbackConfig`` is a
+    JSON middleware config, with ``ref.version < ref.config`` and an explicit
+    ``None`` kept. The backup model's own defaults and validation apply when
+    it runs.
+    """
     bag: dict[str, Any] = {}
     if model.version is not None:
         bag['version'] = model.version
     if model.config is not None:
-        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=True))
+        bag.update(model.config.model_dump(by_alias=True, exclude_unset=True, exclude_none=False))
     return bag or None
 
 
@@ -123,8 +131,6 @@ class Fallback(Middleware[FallbackConfig]):
         assert last_error is not None  # noqa: S101
         on_chunk = ctx.on_chunk
         for entry in self.config.models:
-            if ctx.abort_signal.is_set():
-                raise last_error
             model_name = entry if isinstance(entry, str) else entry.name
             fallback_action = await self._resolve_fallback_model(ctx, model_name)
             # A plain ModelRequest with a dict config, so the backup model parses
@@ -139,7 +145,6 @@ class Fallback(Middleware[FallbackConfig]):
                     input=fallback_request,
                     context=ctx.context,
                     on_chunk=on_chunk,
-                    abort_signal=ctx.abort_signal,
                 )
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
@@ -152,4 +157,7 @@ class Fallback(Middleware[FallbackConfig]):
     def _should_fall_back(self, exc: Exception) -> bool:
         # A raw exception has no status, so it stays on this model. Only a
         # listed GenkitError status sends the request on.
+        curr = asyncio.current_task()
+        if curr is not None and sys.version_info >= (3, 11) and curr.cancelling() > 0:
+            return False
         return isinstance(exc, GenkitError) and exc.status in self.config.statuses

@@ -234,11 +234,18 @@ create body (snake_case names). A nested object merges key by key. Keys match
 ignoring case and underscores, the same way the Gemini merge aligns them. A
 `None` value means unset and is skipped. Like Gemini, fields Genkit builds from
 the request raise in `extra`: the model id (`agent`, or `model` on Lyria),
-`input`, `tools`, and Lyria's `system_instruction`. Deep Research's tools are
-its declared settings (`google_search`, `url_context`, `code_execution`,
-`file_search_store_names`, `mcp_servers`); Lyria takes no tools, and
-Antigravity tool configuration is not yet supported in this plugin
-(`generate(tools=...)` raises on both). Blocks with defaults, such as
+`input`, `tools` (on Deep Research and Lyria), and Lyria's `system_instruction`.
+Deep Research declares its tools as flat config fields (`google_search`,
+`url_context`, `code_execution`, `file_search_store_names`, `mcp_servers`).
+Antigravity enables `google_search`, `url_context`, and `code_execution` by
+default when `tools` is omitted; `extra={'tools': [...]}` overrides that with an
+explicit allowlist of Interactions tool dicts (`{'type': 'google_search'}`,
+`{'type': 'mcp_server', ...}`, etc.), `generate(tools=...)` appends client
+function tools after `extra['tools']` and continues stored interactions across
+turns via `previous_interaction_id` and `environment_id`, and
+`extra={'tools': []}` raises because the API reads an empty `tools` list as
+unset. Lyria takes no tools, and neither Deep Research nor Lyria supports
+function tools (`generate(tools=...)` raises). Blocks with defaults, such as
 `agent_config` and `environment`, merge key by key.
 
 `timeout` on these three configs (and in Deep Research's `check_operation` /

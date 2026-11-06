@@ -398,7 +398,7 @@ async def test_antigravity_passes_previous_interaction_id() -> None:
         },
     )
     action = create_antigravity_action(
-        'antigravity-preview-05-2026',
+        'antigravity-preview-09-2026',
         plugin_api_key='key',
         client_options=ClientOptions(),
     )
@@ -420,7 +420,7 @@ async def test_antigravity_rejects_empty_messages() -> None:
         create_result={'id': 'ag-empty', 'status': 'completed', 'steps': []},
     )
     action = create_antigravity_action(
-        'antigravity-preview-05-2026',
+        'antigravity-preview-09-2026',
         plugin_api_key='key',
         client_options=ClientOptions(),
     )
@@ -493,7 +493,7 @@ async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
         },
     )
     action = create_antigravity_action(
-        'antigravity-preview-05-2026',
+        'antigravity-preview-09-2026',
         plugin_api_key='key',
         client_options=ClientOptions(),
     )
@@ -508,7 +508,7 @@ async def test_antigravity_generate_folds_system_and_uses_agent() -> None:
         response = await action.run(request)
 
     body = create_calls[0]
-    assert body['agent'] == 'antigravity-preview-05-2026'
+    assert body['agent'] == 'antigravity-preview-09-2026'
     assert body['response_modalities'] == ['text', 'image']
     assert 'background' not in body
     assert body['environment'] == {'type': 'remote'}
@@ -533,7 +533,7 @@ async def test_antigravity_keeps_custom_environment() -> None:
         },
     )
     action = create_antigravity_action(
-        'antigravity-preview-05-2026',
+        'antigravity-preview-09-2026',
         plugin_api_key='key',
         client_options=ClientOptions(),
     )
@@ -633,8 +633,8 @@ def test_googleai_family_constructors() -> None:
     assert dr.config_schema is DeepResearchConfig
     assert dr.info == deep_research_model_info('deep-research-preview-04-2026')
 
-    ag = GoogleAI.antigravity('antigravity-preview-05-2026')
-    assert ag.name == 'googleai/antigravity-preview-05-2026'
+    ag = GoogleAI.antigravity('antigravity-preview-09-2026')
+    assert ag.name == 'googleai/antigravity-preview-09-2026'
     assert ag.config_schema is AntigravityConfig
 
     ly = GoogleAI.lyria('lyria-3-clip-preview')
@@ -720,7 +720,7 @@ async def test_googleai_plugin_registers_interactions_models() -> None:
     members = [m for a in actions for m in (a.actions if isinstance(a, BackgroundAction) else [a])]
     kinds_by_name = {action.name: action.kind for action in members}
     dr_name = googleai_name('deep-research-preview-04-2026')
-    ag_name = googleai_name('antigravity-preview-05-2026')
+    ag_name = googleai_name('antigravity-preview-09-2026')
     ly_name = googleai_name('lyria-3-clip-preview')
 
     assert kinds_by_name[dr_name] == ActionKind.BACKGROUND_MODEL
@@ -754,7 +754,7 @@ async def test_googleai_resolve_routes_interactions_models() -> None:
     assert cancel is not None
     assert cancel.kind == ActionKind.CANCEL_OPERATION
 
-    ag = await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-05-2026')
+    ag = await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-09-2026')
     assert ag is not None
     assert ag.kind == ActionKind.MODEL
 
@@ -784,7 +784,7 @@ async def test_googleai_list_actions_includes_interactions_models() -> None:
 
     names = {action.name for action in actions}
     assert googleai_name('deep-research-max-preview-04-2026') in names
-    assert googleai_name('antigravity-preview-05-2026') in names
+    assert googleai_name('antigravity-preview-09-2026') in names
     assert googleai_name('lyria-3-pro-preview') in names
 
 
@@ -798,7 +798,7 @@ async def test_vertex_keeps_interactions_families_fail_closed() -> None:
 
     assert await plugin.resolve(ActionKind.MODEL, 'deep-research-preview-04-2026') is None
     assert await plugin.resolve(ActionKind.BACKGROUND_MODEL, 'deep-research-preview-04-2026') is None
-    assert await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-05-2026') is None
+    assert await plugin.resolve(ActionKind.MODEL, 'antigravity-preview-09-2026') is None
     assert await plugin.resolve(ActionKind.MODEL, 'lyria-3-clip-preview') is None
     assert await plugin.resolve(ActionKind.MODEL, 'lyria-002') is None
 
@@ -957,7 +957,7 @@ async def test_antigravity_rejects_config_api_key() -> None:
         create_result={'id': 'ag-key', 'status': 'completed', 'steps': []},
     )
     action = create_antigravity_action(
-        'antigravity-preview-05-2026',
+        'antigravity-preview-09-2026',
         plugin_api_key='key',
         client_options=ClientOptions(),
     )
@@ -1008,7 +1008,7 @@ async def test_antigravity_generate_uses_context_secrets() -> None:
         captured=captured,
     )
     action = create_antigravity_action(
-        'antigravity-preview-05-2026',
+        'antigravity-preview-09-2026',
         plugin_api_key='plugin-key',
         client_options=ClientOptions(),
     )
@@ -1019,7 +1019,7 @@ async def test_antigravity_generate_uses_context_secrets() -> None:
         )
 
     assert captured['api_key'] == 'tenant-key'
-    assert create_calls[0]['agent'] == 'antigravity-preview-05-2026'
+    assert create_calls[0]['agent'] == 'antigravity-preview-09-2026'
 
 
 @pytest.mark.asyncio
@@ -1173,7 +1173,7 @@ async def test_ai_generate_antigravity_uses_context_secrets(
     ai = Genkit(plugins=[GoogleAI(api_key='plugin-key')])
     with patcher:
         response = await ai.generate(
-            model=GoogleAI.antigravity('antigravity-preview-05-2026'),
+            model=GoogleAI.antigravity('antigravity-preview-09-2026'),
             prompt='Plan a three-day itinerary',
             config={
                 'base_url': 'https://antigravity.example',
@@ -1191,7 +1191,7 @@ async def test_ai_generate_antigravity_uses_context_secrets(
         timeout=1500,
         custom_headers={'x-request-id': 'antigravity'},
     )
-    assert create_calls[0]['agent'] == 'antigravity-preview-05-2026'
+    assert create_calls[0]['agent'] == 'antigravity-preview-09-2026'
     assert 'background' not in create_calls[0]
     assert response.text == 'hello'
 
@@ -1287,7 +1287,7 @@ async def test_check_operation_saved_deep_research_handle_checks_on_a_fresh_app(
 # call: another plugin's class or an unknown key fails before anything is sent,
 # and `extra` is merged into the create body.
 
-_ANTIGRAVITY = 'googleai/antigravity-preview-05-2026'
+_ANTIGRAVITY = 'googleai/antigravity-preview-09-2026'
 _LYRIA = 'googleai/lyria-3-clip-preview'
 _DEEP_RESEARCH = 'googleai/deep-research-preview-04-2026'
 _DEEP_RESEARCH_KEY = f'/background-model/{_DEEP_RESEARCH}'
@@ -1327,7 +1327,7 @@ async def test_generate_antigravity_extra_lands_in_create_body(googleai: Genkit)
 
     body = create_calls[0]
     assert body['agent_config'] == {'type': 'dynamic'}
-    assert body['agent'] == 'antigravity-preview-05-2026'
+    assert body['agent'] == 'antigravity-preview-09-2026'
     assert body['environment'] == {'type': 'remote'}
     assert 'extra' not in body
 
@@ -1701,7 +1701,6 @@ async def test_generate_operation_deep_research_extra_empty_tools_with_built_too
     [
         ('_antigravity', _ANTIGRAVITY, 'agent', 'Pick the model with generate(model=...).'),
         ('_antigravity', _ANTIGRAVITY, 'Input', 'Pass the prompt and messages to generate().'),
-        ('_antigravity', _ANTIGRAVITY, 'tools', 'not yet supported in this plugin'),
         ('_interactions_lyria', _LYRIA, 'model', 'Pick the model with generate(model=...).'),
         ('_interactions_lyria', _LYRIA, 'input', 'Pass the prompt and messages to generate().'),
         ('_interactions_lyria', _LYRIA, 'systemInstruction', 'Pass a system message to generate().'),
@@ -1711,7 +1710,7 @@ async def test_generate_operation_deep_research_extra_empty_tools_with_built_too
 async def test_generate_extra_cannot_set_fields_built_from_the_request(
     googleai: Genkit, mod: str, model: str, key: str, expected_hint: str
 ) -> None:
-    """The model id, input, tools, and Lyria's system_instruction are reserved; extra can't replace them."""
+    """The model id, input, and Lyria's system_instruction / tools are reserved; extra can't replace them."""
     patcher, create_calls, _, _ = patch_interactions(f'genkit_google_genai._models.{mod}', create_result=_TEXT_REPLY)
     with patcher:
         response = await googleai.generate(model=model, prompt='hi', config={'extra': {key: 'x'}})
@@ -1737,28 +1736,374 @@ async def test_generate_operation_deep_research_extra_cannot_set_agent_or_input(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ('mod', 'model', 'expected_reason'),
-    [
-        ('_antigravity', _ANTIGRAVITY, 'not yet supported in this plugin'),
-        ('_interactions_lyria', _LYRIA, 'does not support function tools'),
-    ],
-)
-async def test_generate_function_tools_raise_instead_of_being_dropped(
-    googleai: Genkit, mod: str, model: str, expected_reason: str
-) -> None:
-    """generate(tools=[...]) on Antigravity (unwired in plugin) and Lyria (no tools) fails instead of dropping."""
+async def test_generate_lyria_function_tools_raise_instead_of_being_dropped(googleai: Genkit) -> None:
+    """generate(tools=[...]) on Lyria (no tools) fails instead of dropping."""
 
     @googleai.tool(name='todays_specials')
     async def todays_specials() -> str:
         """List today's specials."""
         return 'ramen'
 
-    patcher, create_calls, _, _ = patch_interactions(f'genkit_google_genai._models.{mod}', create_result=_TEXT_REPLY)
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._interactions_lyria', create_result=_TEXT_REPLY
+    )
     with patcher:
-        response = await googleai.generate(model=model, prompt='hi', tools=['todays_specials'])
+        response = await googleai.generate(model=_LYRIA, prompt='hi', tools=['todays_specials'])
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
-    assert expected_reason in response.error.message
+    assert 'does not support function tools' in response.error.message
     assert create_calls == []
+
+
+def test_antigravity_info_declares_function_tools() -> None:
+    """Antigravity advertises function tool support in ModelInfo."""
+    from genkit_google_genai._models._interactions_registry import antigravity_model_info
+
+    supports = antigravity_model_info('antigravity-preview-09-2026').supports
+    assert supports is not None
+    assert supports.tools is True
+
+
+class _AllergenInput(BaseModel):
+    dish: str
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_function_tools_loop_skips_sandbox_calls_and_continues_interaction(
+    googleai: Genkit,
+) -> None:
+    """`generate(tools=[...])` appends after `extra['tools']`, skips sandbox calls, and resumes via interactionId."""
+
+    @googleai.tool(name='lookup_allergens')
+    async def lookup_allergens(query: _AllergenInput) -> dict[str, list[str]]:
+        """Look up supplier allergens for a dish."""
+        return {'allergens': [f'{query.dish}:soy', f'{query.dish}:wheat']}
+
+    turn_1 = {
+        'id': 'v1_abc123',
+        'status': 'requires_action',
+        'environment_id': 'env-123',
+        'steps': [
+            # Sandbox file tool already executed on the server: must NOT become a client ToolRequest.
+            {
+                'type': 'function_call',
+                'id': 'sandbox-1',
+                'name': 'write_to_file',
+                'arguments': {'path': 'notes.txt', 'content': 'checking'},
+            },
+            {
+                'type': 'function_result',
+                'call_id': 'sandbox-1',
+                'name': 'write_to_file',
+                'result': {'status': 'written'},
+            },
+            # Pending client tool call: Genkit's tool loop executes this and sends function_result on turn 2.
+            {
+                'type': 'function_call',
+                'id': 'call_58754',
+                'name': 'lookup_allergens',
+                'arguments': {'dish': 'tonkotsu'},
+            },
+        ],
+    }
+    turn_2 = {
+        'id': 'v1_def456',
+        'status': 'completed',
+        'environment_id': 'env-123',
+        'steps': [
+            {
+                'type': 'model_output',
+                'content': [{'type': 'text', 'text': 'Tonkotsu contains soy and wheat.'}],
+            },
+        ],
+    }
+
+    create_calls: list[dict[str, Any]] = []
+    replies = [
+        Interaction.model_validate(turn_1),
+        Interaction.model_validate(turn_2),
+        Interaction.model_validate(_TEXT_REPLY),
+    ]
+
+    async def fake_create(_api_key: str, kwargs: dict[str, Any], _options: object) -> Interaction:
+        create_calls.append(kwargs)
+        return replies.pop(0)
+
+    with patch('genkit_google_genai._models._antigravity.create_interaction', side_effect=fake_create):
+        # 1. With extra['tools'] + generate(tools=...): server tools precede client function tools.
+        response = await googleai.generate(
+            model=GoogleAI.antigravity('antigravity-preview-09-2026'),
+            system='Be concise.',
+            prompt='Check allergens in tonkotsu.',
+            tools=['lookup_allergens'],
+            config=AntigravityConfig(
+                extra={'tools': [{'type': 'code_execution'}]},
+            ),
+        )
+        # 2. With generate(tools=...) and no extra['tools']: wire `tools` contains only the function tool.
+        await googleai.generate(
+            model=GoogleAI.antigravity('antigravity-preview-09-2026'),
+            prompt='Check allergens in shoyu.',
+            tools=['lookup_allergens'],
+        )
+
+    assert response.error is None
+    assert response.text == 'Tonkotsu contains soy and wheat.'
+    assert len(create_calls) == 3
+
+    # Turn 1: built-in tool from extra['tools'] first, followed by client function tool; remote sandbox default.
+    first = create_calls[0]
+    assert 'previous_interaction_id' not in first
+    assert first['environment'] == {'type': 'remote'}
+    assert first['input'] == [
+        {'type': 'user_input', 'content': [{'type': 'text', 'text': 'Be concise.'}]},
+        {'type': 'user_input', 'content': [{'type': 'text', 'text': 'Check allergens in tonkotsu.'}]},
+    ]
+    first_tools: list[dict[str, Any]] = first['tools']
+    assert first_tools[0] == {'type': 'code_execution'}
+    assert first_tools[1]['type'] == 'function'
+    assert first_tools[1]['name'] == 'lookup_allergens'
+
+    # Turn 2: continues v1_abc123 in env-123 and sends ONLY the new function_result step (no system/call replay).
+    second = create_calls[1]
+    assert second['previous_interaction_id'] == 'v1_abc123'
+    assert second['environment'] == 'env-123'
+    assert second['input'] == [
+        {
+            'type': 'function_result',
+            'name': 'lookup_allergens',
+            'result': {'allergens': ['tonkotsu:soy', 'tonkotsu:wheat']},
+            'call_id': 'call_58754',
+        }
+    ]
+
+    # Standalone call with tools=[...] and no extra['tools']: sends only the client function tool.
+    only_fn_tools: list[dict[str, Any]] = create_calls[2]['tools']
+    assert len(only_fn_tools) == 1
+    assert only_fn_tools[0]['type'] == 'function'
+    assert only_fn_tools[0]['name'] == 'lookup_allergens'
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_continues_multiturn_conversation_and_respects_overrides(
+    googleai: Genkit,
+) -> None:
+    """Multi-turn history reuses `interactionId` + `environmentId` unless explicitly overridden."""
+    history = [
+        Message(role=Role.USER, content=[Part.from_text('Write hello.py')]),
+        Message(
+            role=Role.MODEL,
+            content=[Part.from_text('Done.')],
+            metadata={'interactionId': 'v1_abc123', 'environmentId': 'env-123'},
+        ),
+        Message(role=Role.USER, content=[Part.from_text('Now run it.')]),
+    ]
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity',
+        create_result=_TEXT_REPLY,
+    )
+    with patcher:
+        # 1. Default / 'remote' config reuses stored interactionId and sandbox environmentId
+        await googleai.generate(model=_ANTIGRAVITY, messages=history, config={'environment': 'remote'})
+        # 2. Explicit environment ID is preserved
+        await googleai.generate(model=_ANTIGRAVITY, messages=history, config={'environment': 'env-other'})
+        # 3. Explicit previous_interaction_id wins and still slices messages after the last model turn
+        await googleai.generate(
+            model=_ANTIGRAVITY,
+            messages=history,
+            config={'previous_interaction_id': 'v1_explicit'},
+        )
+
+    assert create_calls[0]['previous_interaction_id'] == 'v1_abc123'
+    assert create_calls[0]['environment'] == 'env-123'
+    assert create_calls[0]['input'] == [{'type': 'user_input', 'content': [{'type': 'text', 'text': 'Now run it.'}]}]
+
+    assert create_calls[1]['previous_interaction_id'] == 'v1_abc123'
+    assert create_calls[1]['environment'] == 'env-other'
+
+    assert create_calls[2]['previous_interaction_id'] == 'v1_explicit'
+    assert create_calls[2]['environment'] == {'type': 'remote'}
+    assert create_calls[2]['input'] == [{'type': 'user_input', 'content': [{'type': 'text', 'text': 'Now run it.'}]}]
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_extra_tools_passes_through_allowlist(googleai: Genkit) -> None:
+    """`extra={'tools': [...]}` sends the caller's exact Interactions tool dicts on the create body."""
+    raw_tools = [
+        {'type': 'google_search', 'search_types': ['web_search']},
+        {
+            'type': 'mcp_server',
+            'name': 'pos',
+            'url': 'https://pos.example/mcp',
+            'headers': {'Authorization': 'Bearer tok', 'X-Kitchen-Id': 'aus-1'},
+            'allowed_tools': [{'mode': 'AUTO', 'tools': ['lookup_allergens']}],
+        },
+        {'type': 'future_tool', 'custom_knob': 2},
+    ]
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity',
+        create_result=_TEXT_REPLY,
+    )
+    with patcher:
+        await googleai.generate(
+            model=GoogleAI.antigravity('antigravity-preview-09-2026'),
+            prompt='Summarize the allergen policy at three Austin ramen shops.',
+            config=AntigravityConfig(
+                extra={'tools': [{'type': 'google_search'}, {'type': 'url_context'}]},
+            ),
+        )
+        await googleai.generate(
+            model=_ANTIGRAVITY,
+            prompt='Cross-check ramen supplier allergens in POS.',
+            config={'extra': {'tools': raw_tools}},
+        )
+
+    assert create_calls[0]['tools'] == [{'type': 'google_search'}, {'type': 'url_context'}]
+    assert create_calls[1]['tools'] == raw_tools
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_surfaces_code_execution_steps_with_default_tools(googleai: Genkit) -> None:
+    """With `extra['tools']` omitted, `tools` is absent on the wire and code execution steps surface as custom parts."""
+    code_reply = {
+        'id': 'ag-exec-1',
+        'status': 'completed',
+        'environment_id': 'env-sandbox-1',
+        'steps': [
+            {
+                'type': 'code_execution_call',
+                'id': 'exec-1',
+                'arguments': {'code': 'print(round(224.49 * 1.0825, 2))', 'language': 'python'},
+            },
+            {
+                'type': 'code_execution_result',
+                'call_id': 'exec-1',
+                'result': '243.01\n',
+            },
+            {
+                'type': 'model_output',
+                'content': [{'type': 'text', 'text': 'Total due with 8.25% tax is $243.01.'}],
+            },
+        ],
+    }
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity',
+        create_result=code_reply,
+    )
+    with patcher:
+        response = await googleai.generate(
+            model=GoogleAI.antigravity('antigravity-preview-09-2026'),
+            prompt='Reconcile invoice subtotal $224.49 with 8.25% tax.',
+        )
+
+    assert 'tools' not in create_calls[0]
+    assert response.text == 'Total due with 8.25% tax is $243.01.'
+    assert response.message is not None
+    custom_parts = [part.custom for part in response.message.content if part.custom]
+    assert custom_parts == [
+        {'executableCode': {'code': 'print(round(224.49 * 1.0825, 2))', 'language': 'python'}},
+        {'codeExecutionResult': {'output': '243.01\n', 'outcome': 'OUTCOME_OK'}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_generate_antigravity_call_extra_tools_override_and_none_clears_ref_default(googleai: Genkit) -> None:
+    """Per-call `extra={'tools': ...}` replaces a ModelRef default, and `None` clears it back to server defaults."""
+    ref = GoogleAI.antigravity(
+        'antigravity-preview-09-2026',
+        config=AntigravityConfig(extra={'tools': [{'type': 'google_search'}]}),
+    )
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity',
+        create_result=_TEXT_REPLY,
+    )
+    with patcher:
+        # 1. Replace the ref allowlist for a single call
+        await googleai.generate(
+            model=ref,
+            prompt='check policy',
+            config={'extra': {'tools': [{'type': 'url_context'}, {'type': 'code_execution'}]}},
+        )
+        # 2. Clear via `extra={'tools': None}` so `tools` is omitted and all three server defaults turn on
+        await googleai.generate(model=ref, prompt='check policy', config={'extra': {'tools': None}})
+        # 3. Clear via `extra=None` as well
+        await googleai.generate(model=ref, prompt='check policy', config={'extra': None})
+
+    assert create_calls[0]['tools'] == [{'type': 'url_context'}, {'type': 'code_execution'}]
+    assert 'tools' not in create_calls[1]
+    assert 'tools' not in create_calls[2]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('key', ['tools', 'Tools', 'TOOLS', 't_o_o_l_s'])
+async def test_generate_antigravity_extra_empty_tools_list_raises_and_sends_nothing(googleai: Genkit, key: str) -> None:
+    """`extra={'tools': []}` raises INVALID_ARGUMENT in any spelling: `tools: []` reads as unset on the wire."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity',
+        create_result=_TEXT_REPLY,
+    )
+    with patcher:
+        response = await googleai.generate(
+            model=_ANTIGRAVITY,
+            prompt='hi',
+            config=AntigravityConfig(extra={key: []}),
+        )
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert f'extra[{key!r}] cannot be empty ([])' in response.error.message
+    assert 'reads an empty tools list as unset' in response.error.message
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad_tools', ['google_search', True, 123, {'type': 'google_search'}])
+async def test_generate_antigravity_extra_non_list_tools_raises_and_sends_nothing(
+    googleai: Genkit, bad_tools: object
+) -> None:
+    """Non-list `extra['tools']` raises INVALID_ARGUMENT before any HTTP request."""
+    patcher, create_calls, _, _ = patch_interactions(
+        'genkit_google_genai._models._antigravity',
+        create_result=_TEXT_REPLY,
+    )
+    with patcher:
+        response = await googleai.generate(
+            model=_ANTIGRAVITY,
+            prompt='hi',
+            config={'extra': {'tools': bad_tools}},
+        )
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert "extra['tools'] must be a non-empty list" in response.error.message
+    assert create_calls == []
+
+
+@pytest.mark.asyncio
+async def test_antigravity_config_has_no_top_level_tool_fields() -> None:
+    """Server tools live in `extra['tools']` only; top-level `tools` or `disable_*` fail validation."""
+    for rejected in (
+        {'tools': [{'type': 'google_search'}]},
+        {'disable_code_execution': True},
+        {'google_search': True},
+    ):
+        with pytest.raises(ValidationError):
+            AntigravityConfig.model_validate(rejected)
+
+    with patch('genkit_google_genai._google.genai.client.Client') as mock_client:
+        _set_empty_async_model_list(mock_client.return_value)
+        listed = {meta.name: meta for meta in await GoogleAI(api_key='plugin-key').list_actions()}
+
+    props = _config_form(listed[_ANTIGRAVITY].metadata)['properties']
+    assert 'extra' in props
+    for field in (
+        'tools',
+        'disableGoogleSearch',
+        'disableUrlContext',
+        'disableCodeExecution',
+        'googleSearch',
+        'urlContext',
+        'codeExecution',
+    ):
+        assert field not in props

@@ -191,10 +191,11 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
 
 
 def test_get_logger_lives_only_in_genkit() -> None:
-    """`get_logger` is app-facing: exported from `genkit`, not from `genkit.plugin_api`."""
-    assert 'get_logger' in genkit.__all__
-    assert 'get_logger' not in genkit.plugin_api.__all__
-    assert not hasattr(genkit.plugin_api, 'get_logger')
+    """`GenkitLogger` and `get_logger` live in `genkit`, not `genkit.plugin_api`."""
+    for name in ('GenkitLogger', 'get_logger'):
+        assert name in genkit.__all__
+        assert name not in genkit.plugin_api.__all__
+        assert not hasattr(genkit.plugin_api, name)
 
 
 @pytest.mark.asyncio

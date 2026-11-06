@@ -224,7 +224,8 @@ async def test_openai_plugin_list_actions() -> None:
     chat_model = cast(dict[str, Any], chat.metadata['model'])
     chat_props = chat_model['customOptions']['properties']
     assert 'frequencyPenalty' in chat_props
-    assert 'maxTokens' in chat_props
+    assert 'maxOutputTokens' in chat_props
+    assert 'maxTokens' not in chat_props
 
     image = next(a for a in actions if a.name == 'openai/gpt-image-1')
     assert image.metadata is not None

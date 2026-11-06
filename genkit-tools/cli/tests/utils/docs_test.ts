@@ -14,17 +14,10 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Doc, detectProjectLanguage, searchDocs } from '../../src/utils/docs';
 
 describe('docs utils', () => {
@@ -99,7 +92,7 @@ describe('docs utils', () => {
     });
 
     afterEach(() => {
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
@@ -139,7 +132,7 @@ describe('docs utils', () => {
       fs.mkdirSync(pyDir, { recursive: true });
       fs.writeFileSync(path.join(pyDir, 'pyproject.toml'), '[project]');
 
-      jest.spyOn(process, 'cwd').mockReturnValue(pyDir);
+      vi.spyOn(process, 'cwd').mockReturnValue(pyDir);
       expect(detectProjectLanguage()).toBe('python');
     });
   });

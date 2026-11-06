@@ -16,7 +16,7 @@
 
 """EmbedRequest[Cfg] follows ModelRequest[Cfg]'s config rule."""
 
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -92,6 +92,7 @@ def test_non_model_type_argument_raises_when_annotated(request_type: Any, field:
 
 def test_declared_config_type_reads_every_request_type() -> None:
     assert declared_config_type(EmbedRequest[CrmEmbedConfig]) is CrmEmbedConfig
+    assert declared_config_type(EmbedRequest[Any]) is None
     assert declared_config_type(EmbedRequest) is None
 
 
@@ -99,3 +100,18 @@ def test_typed_options_json_schema_references_the_class() -> None:
     schema = TypeAdapter(EmbedRequest[CrmEmbedConfig]).json_schema()
 
     assert schema['properties']['options'] == {'$ref': '#/$defs/CrmEmbedConfig'}
+
+
+@pytest.mark.parametrize('request_type', [EmbedRequest, EmbedRequest[Any]], ids=['bare', 'any'])
+@pytest.mark.parametrize('mode', ['validation', 'serialization'])
+def test_untyped_options_json_schema_is_an_object(
+    request_type: Any,  # noqa: ANN401
+    mode: Literal['validation', 'serialization'],
+) -> None:
+    schema = TypeAdapter(request_type).json_schema(mode=mode)
+
+    assert schema['properties']['options'] == {
+        'additionalProperties': True,
+        'title': 'Options',
+        'type': 'object',
+    }

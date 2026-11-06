@@ -17,18 +17,22 @@
 """Error classes and utilities for the Genkit framework."""
 
 import builtins
+import copy
 import importlib
 import math
 import reprlib
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
+from pydantic_core import ErrorDetails
 from pydantic_core.core_schema import ErrorType
+from typing_extensions import Self
 
 from genkit._core._compat import StrEnum
 from genkit._core._typing import _RuntimeErrorWire
@@ -394,6 +398,26 @@ def _join_problems(problems: list[str], *, total: int, max_errors: int) -> str:
     return '; '.join(clauses)
 
 
+def validation_input_is_printable(error: ValidationError) -> bool:
+    """Follow Pydantic's own decision about whether the input values are safe to print."""
+    return error.error_count() == 0 or 'input_value=' in str(error)
+
+
+def validation_problem(err: ErrorDetails, *, show_input: bool) -> str:
+    """Pydantic's message for one error, plus ``, got <value>`` when the value is worth printing.
+
+    For a missing field the input is the whole parent object, which says nothing new.
+    """
+    if err['type'] == 'missing' or not show_input:
+        return err['msg']
+    return f'{err["msg"]}, got {_value_preview.repr(err["input"])}'
+
+
+def validation_error_details(error: ValidationError) -> list[dict[str, Any]]:
+    """The ``details['errors']`` entries for a ValidationError: path, message, type."""
+    return [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in error.errors()]
+
+
 def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PROBLEMS) -> str:
     """One short clause per Pydantic error: where, what was expected, what came in.
 
@@ -405,14 +429,10 @@ def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PR
     Example:
         ``items[1].qty: Field required; table: Input should be a valid integer, got 'x'``
     """
-    # Follow Pydantic's own decision about whether the value is safe to print.
-    hide_input = error.error_count() > 0 and 'input_value=' not in str(error)
+    show_input = validation_input_is_printable(error)
     problems: list[str] = []
     for err in error.errors(include_url=False)[:max_errors]:
-        text = err['msg']
-        # For a missing field the input is the whole parent object, which says nothing new.
-        if err['type'] != 'missing' and not hide_input:
-            text = f'{text}, got {_value_preview.repr(err["input"])}'
+        text = validation_problem(err, show_input=show_input)
         path = _loc_path(err['loc'])
         problems.append(f'{path}: {text}' if path else text)
     return _join_problems(problems, total=error.error_count(), max_errors=max_errors)
@@ -476,9 +496,7 @@ class GenkitError(Exception):
             details['reason'] = reason.value
         if isinstance(cause, ValidationError) and 'errors' not in details:
             details = dict(details)
-            details['errors'] = [
-                {'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in cause.errors()
-            ]
+            details['errors'] = validation_error_details(cause)
 
         self.details: Any = details
         if cause is not None:
@@ -755,7 +773,65 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
-def error_status(error: object) -> int:
+def _split_rendered(error: GenkitError) -> tuple[str | None, str]:
+    """Split ``str(error)`` (``[source: ]STATUS: message[: cause]``) into source and message-with-cause.
+
+    GenkitError keeps ``source`` only as a prefix on its string form, so read
+    it back from there. The first ``STATUS: message`` is the anchor; a cause
+    suffix can repeat it but always comes after.
+    """
+    text = str(error)
+    at = text.find(f'{error.status}: {error.message}')
+    if at < 0:
+        return None, error.message
+    return text[:at].removesuffix(': ') or None, text[at + len(error.status) + 2 :]
+
+
+@dataclass(frozen=True)
+class BoxedFailure:
+    """Plain-data record of a boxed turn failure for SSE error framing.
+
+    Stores only strings and JSON-safe PublicError details—never a live
+    BaseException or traceback—so a failed ModelResponse retains no frame
+    locals and survives deepcopy and pickle round-trips.
+    """
+
+    status: StatusName
+    message: str
+    is_public: bool = False
+    details: Any = None  # noqa: ANN401
+    source: str | None = None
+
+    @classmethod
+    def from_exc(cls, exc: BaseException) -> Self:
+        """Capture plain-data failure metadata from an exception without holding it."""
+        if isinstance(exc, PublicError):
+            try:
+                details = _client_details(exc.details)
+            except Exception:
+                details = None
+            return cls(status=exc.status, message=exc.message, is_public=True, details=details)
+        if isinstance(exc, GenkitError):
+            source, message = _split_rendered(exc)
+            return cls(status=exc.status, message=message, source=source)
+        text = str(exc)
+        return cls(
+            status='INTERNAL',
+            message=f'{type(exc).__name__}: {text}' if text else type(exc).__name__,
+        )
+
+    def to_exception(self) -> GenkitError:
+        """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
+        if self.is_public:
+            return PublicError(
+                self.status,
+                self.message,
+                details=copy.deepcopy(self.details) if self.details is not None else None,
+            )
+        return GenkitError(status=self.status, message=self.message, source=self.source)
+
+
+def error_status(error: Exception) -> int:
     """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
     A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
@@ -804,7 +880,7 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def error_body(error: object) -> dict[str, Any]:
+def error_body(error: Exception) -> dict[str, Any]:
     """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's
