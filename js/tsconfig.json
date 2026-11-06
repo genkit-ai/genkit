@@ -10,7 +10,6 @@
     "noImplicitReturns": true,
     "noImplicitAny": true,
     "noUnusedLocals": true,
-    "skipLibCheck": true,
     "resolveJsonModule": true,
     "sourceMap": true,
     "esModuleInterop": false,
@@ -19,5 +18,6 @@
     "lib": ["es2022", "DOM"],
     "noEmit": true
   },
+  "files": ["./handlebars-cjs.d.ts"],
   "compileOnSave": true
 }
