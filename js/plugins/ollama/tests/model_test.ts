@@ -15,7 +15,7 @@
  */
 import * as assert from 'assert';
 import { genkit, z, type Genkit } from 'genkit';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import { ollama } from '../src/index.js';
 import type { OllamaPluginParams } from '../src/types.js';
 
@@ -127,6 +127,118 @@ describe('ollama models', () => {
         prompt: 'Hello',
         tools: [get_current_weather, fooz],
       });
+    });
+  });
+
+  describe('assistant text with tool_calls', () => {
+    const originalFetch = global.fetch;
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    function defineWeatherTool() {
+      return ai.defineTool(
+        {
+          name: 'weather',
+          description: 'w',
+          inputSchema: z.object({ city: z.string() }),
+          outputSchema: z.string(),
+        },
+        async () => 'sunny'
+      );
+    }
+
+    function chatResponse(message: Record<string, unknown>) {
+      return new Response(
+        JSON.stringify({ model: 'test-model', message, done: true })
+      );
+    }
+
+    it('keeps assistant text next to toolRequest when parsing a response', async () => {
+      global.fetch = async () =>
+        chatResponse({
+          role: 'assistant',
+          content: 'Let me check the weather.',
+          tool_calls: [
+            { function: { name: 'weather', arguments: { city: 'Paris' } } },
+          ],
+        });
+
+      const result = await ai.generate({
+        model: 'ollama/test-model',
+        prompt: 'weather?',
+        tools: [defineWeatherTool()],
+        returnToolRequests: true,
+      });
+
+      const textPart = result.message.content.find((p) => p.text);
+      const toolPart = result.message.content.find((p) => p.toolRequest);
+      assert.strictEqual(textPart?.text, 'Let me check the weather.');
+      assert.strictEqual(toolPart?.toolRequest?.name, 'weather');
+      assert.deepStrictEqual(toolPart?.toolRequest?.input, { city: 'Paris' });
+    });
+
+    it('replays assistant text together with tool_calls on the next request', async () => {
+      const sent: Array<Record<string, any>> = [];
+      global.fetch = async (_input, init) => {
+        sent.push(JSON.parse(init!.body as string));
+        return chatResponse({ role: 'assistant', content: 'Sunny.' });
+      };
+
+      await ai.generate({
+        model: 'ollama/test-model',
+        messages: [
+          { role: 'user', content: [{ text: 'weather?' }] },
+          {
+            role: 'model',
+            content: [
+              { text: 'Let me check the weather.' },
+              { toolRequest: { name: 'weather', input: { city: 'Paris' } } },
+            ],
+          },
+        ],
+      });
+
+      const assistant = sent[0].messages.find(
+        (m: { role: string }) => m.role === 'assistant'
+      );
+      assert.strictEqual(assistant.content, 'Let me check the weather.');
+      assert.deepStrictEqual(assistant.tool_calls, [
+        { function: { name: 'weather', arguments: { city: 'Paris' } } },
+      ]);
+    });
+
+    it('keeps assistant text next to toolRequest in streaming chunks', async () => {
+      global.fetch = async () =>
+        chatResponse({
+          role: 'assistant',
+          content: 'Let me check the weather.',
+          tool_calls: [
+            { function: { name: 'weather', arguments: { city: 'Paris' } } },
+          ],
+        });
+
+      const chunks: Array<{ text?: string; toolRequest?: { name?: string } }> =
+        [];
+      const { stream } = await ai.generateStream({
+        model: 'ollama/test-model',
+        prompt: 'weather?',
+        tools: [defineWeatherTool()],
+        returnToolRequests: true,
+      });
+      for await (const chunk of stream) {
+        chunks.push(...chunk.content);
+      }
+
+      assert.ok(
+        chunks.some((p) => p.text === 'Let me check the weather.'),
+        'stream chunks should include the assistant text'
+      );
+      assert.ok(
+        chunks.some((p) => p.toolRequest?.name === 'weather'),
+        'stream chunks should include the tool request'
+      );
     });
   });
 });
