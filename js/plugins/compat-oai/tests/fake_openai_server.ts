@@ -29,7 +29,11 @@ export class FakeOpenAIServer {
   private server: http.Server;
   private port: number = 0;
   private responses: MockResponse[] = [];
-  public requests: { headers: http.IncomingHttpHeaders; body: any }[] = [];
+  public requests: {
+    headers: http.IncomingHttpHeaders;
+    body: any;
+    path: string;
+  }[] = [];
   private expectedApiKey?: string;
 
   constructor(expectedApiKey?: string) {
@@ -43,7 +47,11 @@ export class FakeOpenAIServer {
       await new Promise<void>((resolve) => req.on('end', resolve));
 
       const parsedBody = body ? JSON.parse(body) : {};
-      this.requests.push({ headers: req.headers, body: parsedBody });
+      this.requests.push({
+        headers: req.headers,
+        body: parsedBody,
+        path: req.url ?? '',
+      });
 
       if (this.expectedApiKey) {
         const authHeader = req.headers['authorization'];
