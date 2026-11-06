@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import json
 from collections.abc import Mapping
 from typing import get_args
 
@@ -392,6 +393,67 @@ async def test_span_and_event_records_tool_arguments_on_span_and_event(harness) 
     attrs = dict(record.attributes or {})
     assert 'the recipe' in attrs[GenAiAttr.TOOL_CALL_ARGUMENTS]
     assert 'classified' in attrs[GenAiAttr.TOOL_CALL_RESULT]
+
+
+@pytest.mark.asyncio
+async def test_tool_arguments_pydantic_serialized_as_valid_json(harness) -> None:
+    """Pydantic model input is serialized to valid JSON on tool spans and events."""
+    from pydantic import BaseModel
+
+    class OrderInput(BaseModel):
+        dish: str
+        quantity: int
+
+    instr = harness.instrumentation(content_capturing_mode='SPAN_AND_EVENT', emit_tool_spans=True)
+
+    async def order_tool(span=None):
+        return {'status': 'confirmed'}
+
+    await instr.run_in_new_span(
+        SpanMetadata(name='order_food', action_type='tool.v2', input=OrderInput(dish='pad thai', quantity=2)),
+        order_tool,
+    )
+    span = harness.span_named('execute_tool order_food')
+    assert span is not None
+    raw_args = harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS)
+    assert raw_args is not None
+    parsed = json.loads(raw_args)
+    assert parsed == {'dish': 'pad thai', 'quantity': 2}
+
+    record = _operation_details_record(harness)
+    assert record is not None
+    attrs = dict(record.attributes or {})
+    raw_event_args = attrs[GenAiAttr.TOOL_CALL_ARGUMENTS]
+    assert isinstance(raw_event_args, str)
+    event_parsed = json.loads(raw_event_args)
+    assert event_parsed == {'dish': 'pad thai', 'quantity': 2}
+
+
+@pytest.mark.asyncio
+async def test_tool_arguments_nested_pydantic_serialized_as_valid_json(harness) -> None:
+    """Nested Pydantic models in lists/dicts serialize to valid JSON."""
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        name: str
+        qty: int
+
+    instr = harness.instrumentation(content_capturing_mode='SPAN_AND_EVENT', emit_tool_spans=True)
+
+    await instr.run_in_new_span(
+        SpanMetadata(
+            name='bulk_order',
+            action_type='tool.v2',
+            input={'items': [Item(name='spring roll', qty=4)], 'special': Item(name='pad thai', qty=1)},
+        ),
+        lambda span=None: _awaitable({'status': 'ok'}),
+    )
+    span = harness.span_named('execute_tool bulk_order')
+    assert span is not None
+    raw_args = harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS)
+    assert raw_args is not None
+    parsed = json.loads(raw_args)
+    assert parsed == {'items': [{'name': 'spring roll', 'qty': 4}], 'special': {'name': 'pad thai', 'qty': 1}}
 
 
 @pytest.mark.asyncio
