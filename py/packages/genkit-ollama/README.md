@@ -239,10 +239,10 @@ embedders.
 
 ### Troubleshooting
 
-If the plugin can't reach the server it raises a `GenkitError` with status
-`UNAVAILABLE` and the URL it tried (`DEADLINE_EXCEEDED` if the request timed
-out). Start the daemon (`ollama serve`) or set `base_url` to a reachable
-host.
+If the plugin can't reach the server, `ai.generate` returns the failure on
+`res.error` with status `UNAVAILABLE` and the URL it tried
+(`DEADLINE_EXCEEDED` if the request timed out). Start the daemon
+(`ollama serve`) or set `base_url` to a reachable host.
 
 ## Sample
 

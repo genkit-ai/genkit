@@ -126,7 +126,7 @@ def enable_google_cloud_telemetry(
             ``GenAiInstrumentation`` is still installed. Metrics and logs may
             still be exported. Defaults to False.
         metric_export_interval_ms: Metrics export interval in milliseconds.
-            GCP requires a minimum of 5000ms. Defaults to 60000ms.
+            GCP requires a minimum of 5000ms. Defaults to 300000ms.
         metric_export_timeout_ms: Timeout for metrics export in milliseconds.
             Defaults to the export interval if not specified.
 
