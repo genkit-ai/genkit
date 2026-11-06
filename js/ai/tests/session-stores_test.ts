@@ -63,7 +63,7 @@ describe('InMemorySessionStore', () => {
     state.foo = 'baz';
 
     const got = await store.getSnapshot({ snapshotId: 'snap-123' });
-    assert.strictEqual(got?.state.custom?.foo, 'bar');
+    assert.strictEqual(got?.state?.custom?.foo, 'bar');
   });
 
   it('resolves the latest leaf snapshot by sessionId', async () => {
@@ -154,7 +154,7 @@ describe('FileSessionStore', () => {
 
     const got = await store.getSnapshot({ snapshotId });
     assert.strictEqual(got?.snapshotId, snapshotId);
-    assert.strictEqual(got?.state.sessionId, sessionId);
+    assert.strictEqual(got?.state?.sessionId, sessionId);
   });
 
   it('resolves the latest leaf snapshot by sessionId', async () => {
@@ -652,7 +652,7 @@ describe('FileSessionStore', () => {
       }));
       assert.strictEqual(saved, id);
       const snap = await store.getSnapshot({ snapshotId: id });
-      assert.deepStrictEqual(snap?.state.custom, { ok: true });
+      assert.deepStrictEqual(snap?.state?.custom, { ok: true });
     });
   });
 });

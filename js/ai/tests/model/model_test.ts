@@ -20,8 +20,8 @@ import {
   StreamingCallback,
 } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
+import { Registry } from '@genkit-ai/core/registry';
 import assert from 'assert';
-import { Registry } from 'genkit/registry';
 import { describe, it } from 'node:test';
 import {
   defineModel,
