@@ -204,6 +204,14 @@ class TestVertexAIPluginProject:
         mock_adc.assert_not_called()
         assert plugin._project is None
 
+    def test_api_key_omits_default_location(self) -> None:
+        """Express mode (api_key) without location leaves location unset rather than defaulting to us-central1."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch('genkit_google_genai._google.genai.client.Client'):
+                plugin = VertexAI(api_key='k')
+        assert plugin._location is None
+        assert plugin._client_kwargs['location'] is None
+
     def test_explicit_project_skips_adc_probe(self) -> None:
         """An explicit project short-circuits the ADC probe."""
         with patch.dict(os.environ, {}, clear=True):
