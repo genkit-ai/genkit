@@ -29,7 +29,6 @@ import { TestSpanExporter } from './utils.js';
 initNodeFeatures();
 const spanExporter = new TestSpanExporter();
 enableTelemetry({
-  exporter: spanExporter,
   spanProcessor: new SimpleSpanProcessor(spanExporter),
 });
 
