@@ -168,7 +168,11 @@ async def test_exp_genkit_still_generates() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_turn_awaiting_failing_flow_reports_message_without_details() -> None:
-    """A turn that awaits a flow raising RuntimeError('db rejected') records that message and no details."""
+    """A turn that awaits a flow raising RuntimeError('db rejected') records 'internal error' and no details.
+
+    The flow wraps the RuntimeError as an INTERNAL GenkitError with a foreign
+    cause, so its text stays server-side, as generate does for a raising tool.
+    """
     ai = Genkit()
 
     @ai.flow()
@@ -189,6 +193,6 @@ async def test_agent_turn_awaiting_failing_flow_reports_message_without_details(
 
     assert res.finish_reason == AgentFinishReason.FAILED
     assert res.error is not None
-    assert res.error.message == 'db rejected'
+    assert res.error.message == 'internal error'
     assert res.error.details is None
     assert res.error.status == 'INTERNAL'

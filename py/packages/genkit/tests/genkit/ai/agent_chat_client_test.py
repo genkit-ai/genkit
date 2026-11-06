@@ -15,12 +15,14 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 import anyio
 import pytest
+import structlog
 from pydantic import BaseModel
+from structlog.testing import capture_logs
 
 from genkit import Part
 from genkit._ai._agents._base import Agent, define_custom_agent
@@ -36,7 +38,7 @@ from genkit._ai._agents._runtime import AgentInitError, SessionRunner, to_error_
 from genkit._ai._agents._types import StateManagement, TurnResult
 from genkit._ai._json_patch import apply_json_patch
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -1738,6 +1740,85 @@ async def test_send_on_failed_turn_with_reason_reads_reason() -> None:
     assert err.reason is ErrorReason.TOOL_FAILED
 
 
+def _logged_errors(entries: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [e for e in entries if e['log_level'] == 'error']
+
+
+@pytest.mark.asyncio
+async def test_custom_agent_raising_foreign_error_redacts_message_and_logs_cause() -> None:
+    """A ValueError's text stays server-side; the caller gets INTERNAL 'internal error'."""
+    structlog.reset_defaults()
+    agent = _flaky(
+        Genkit(),
+        'ordersDb',
+        store=InMemorySessionStore(),
+        fail=ValueError('db password=hunter2'),
+    )
+
+    with capture_logs() as entries:
+        res = await agent.chat().send('please fail now')
+
+    err = _assert_failed(res, message='internal error')
+    assert err.status == 'INTERNAL'
+    assert 'hunter2' not in err.model_dump_json()
+    errors = _logged_errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['event'] == "agent 'ordersDb' raised, returning finish_reason=failed"
+    assert errors[0]['agent'] == 'ordersDb'
+    assert str(errors[0]['exc_info']) == 'db password=hunter2'
+
+
+@pytest.mark.asyncio
+async def test_custom_agent_raising_genkit_error_keeps_status_and_message() -> None:
+    """A GenkitError is the author's chosen caller-facing failure, so it passes through unlogged."""
+    structlog.reset_defaults()
+    agent = _flaky(
+        Genkit(),
+        'orderLookup',
+        store=InMemorySessionStore(),
+        fail=GenkitError(status='NOT_FOUND', message='no order A-17'),
+    )
+
+    with capture_logs() as entries:
+        res = await agent.chat().send('please fail now')
+
+    err = _assert_failed(res, message='no order A-17')
+    assert err.status == 'NOT_FOUND'
+    assert _logged_errors(entries) == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_agent_with_crashing_tool_logs_cause_once() -> None:
+    """generate already boxed and logged the tool error; the agent runtime does not log it again."""
+    structlog.reset_defaults()
+    ai = Genkit()
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='check_allergens')
+    async def check_allergens(_: dict) -> str:  # noqa: ARG001
+        raise RuntimeError('allergen db password=hunter2')
+
+    pm.responses = [
+        ModelResponse(
+            message=Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(name='check_allergens', input={}, ref='1'))],
+            ),
+            finish_reason=FinishReason.STOP,
+        )
+    ]
+    agent = ai.define_agent(name='allergyAgent', model='scriptedModel', tools=['check_allergens'])
+
+    with capture_logs() as entries:
+        res = await agent.chat().send('is the tartine nut-free?')
+
+    err = _assert_failed(res, message='internal error')
+    assert err.status == 'INTERNAL'
+    errors = _logged_errors(entries)
+    assert len(errors) == 1
+    assert errors[0]['tool'] == 'check_allergens'
+
+
 @pytest.mark.asyncio
 async def test_send_on_failed_turn_keeps_last_good_snapshot_id() -> None:
     """res.snapshot_id and chat.snapshot_id both stay on the last completed snapshot."""
@@ -2306,17 +2387,29 @@ class _ClientResponseError(Exception):
             {'reason': 'TOOL_NOT_FOUND'},
         ),
         (GenkitError(status='ABORTED', message='stopped'), 'ABORTED', 'stopped', None),
-        (asyncio.CancelledError(), 'CANCELLED', 'Internal failure', None),
-        (TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
-        (asyncio.TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
-        (_ClientResponseError(), 'INTERNAL', '429, message=Too Many Requests', None),
-        (ValueError('bad table number'), 'INTERNAL', 'bad table number', None),
+        (PublicError('PERMISSION_DENIED', 'table 12 is reserved'), 'PERMISSION_DENIED', 'table 12 is reserved', None),
+        # An INTERNAL wrapper around a foreign cause hides it, as generate does for a tool.
+        (
+            GenkitError(status='INTERNAL', message='pos sync failed', cause=ValueError('dsn=pg://admin@10.0.0.4')),
+            'INTERNAL',
+            'internal error',
+            None,
+        ),
+        (asyncio.CancelledError(), 'CANCELLED', 'internal error', None),
+        (TimeoutError('kitchen printer 10.0.0.9 timed out'), 'DEADLINE_EXCEEDED', 'internal error', None),
+        (asyncio.TimeoutError('kitchen printer 10.0.0.9 timed out'), 'DEADLINE_EXCEEDED', 'internal error', None),
+        (_ClientResponseError(), 'INTERNAL', 'internal error', None),
+        (ValueError('db password=hunter2'), 'INTERNAL', 'internal error', None),
     ],
 )
 def test_to_error_details_classifies_status_like_go(
     exc: BaseException, status: str, message: str, details: dict[str, Any] | None
 ) -> None:
-    """Only a GenkitError names its status; a foreign int ``.status`` (aiohttp's 429) is INTERNAL."""
+    """Only a GenkitError names its status and message; anything else is classified and redacted.
+
+    A foreign int ``.status`` (aiohttp's 429) is INTERNAL, and no foreign
+    exception text reaches the Failure.
+    """
     failure = to_error_details(exc)
 
     assert failure.status == status

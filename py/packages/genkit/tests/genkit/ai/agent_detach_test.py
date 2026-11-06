@@ -474,7 +474,9 @@ async def test_detach_swallowed_turn_error_finalizes_failed() -> None:
     assert snap.status == SnapshotStatus.FAILED
     assert snap.finish_reason == AgentFinishReason.FAILED
     assert snap.error is not None
-    assert 'intentional failure' in (snap.error.message or '')
+    # The RuntimeError's text stays server-side; the snapshot is client-readable.
+    assert snap.error.status == 'INTERNAL'
+    assert snap.error.message == 'internal error'
 
 
 @pytest.mark.asyncio
