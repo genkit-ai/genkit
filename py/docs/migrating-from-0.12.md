@@ -554,7 +554,7 @@ except GenkitError as e:
 
 ## Plugin exception types
 
-Plugin-specific exceptions such as `OllamaConnectionError` are gone. Check the status instead.
+Plugin-specific exceptions such as `OllamaConnectionError` are gone. Check the status on `res.error` instead.
 
 **Old:**
 
@@ -566,8 +566,8 @@ except GenkitError as e:
 **New:**
 
 ```python
-except GenkitError as e:
-    if e.status == 'UNAVAILABLE': ...
+res = await ai.generate(model=m, prompt=p)
+if res.error and res.error.status == 'UNAVAILABLE': ...
 ```
 
 ## Interrupts and except Exception
