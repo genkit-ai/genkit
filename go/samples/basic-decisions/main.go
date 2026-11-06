@@ -14,7 +14,8 @@
 
 // This sample demonstrates decisions: asking a System One model typed
 // questions about a state and getting calibrated answers back, instead of
-// asking a chat model for prose and parsing it. The model is TypeSafe's jev.
+// asking a chat model for prose and parsing it. The default model is
+// TypeSafe's jev; -nace runs triageFlow with Nace's Drex Max instead.
 // The Go type you ask for is the question set: each field is one question,
 // its description is the instructions, and the answer lands in the field
 // with a probability for every option.
@@ -48,6 +49,18 @@
 //	export OPENROUTER_API_KEY=...
 //	export GEMINI_API_KEY=...
 //	go run .
+//
+// To run only triageFlow with Nace's Drex Max, set NACE_API_KEY instead.
+// The same Triage type and routing policy work on either server; tune the
+// confidence thresholds against the model you deploy. No OpenRouter or
+// Gemini key is needed in this mode:
+//
+//	cd go/samples/basic-decisions
+//	export NACE_API_KEY=...
+//	go run . -nace
+//
+// Test it with the /triageFlow HTTP request below, or use
+// genkit start -- go run . -nace to inspect its questions and answers.
 //
 // Or with the Dev UI, to call the flows from a browser and read a trace of
 // every run at http://localhost:4000/traces. The trace shows the question
@@ -89,6 +102,7 @@ import (
 	"context"
 	"embed"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -298,9 +312,9 @@ type ToolPick struct {
 //go:embed prompts/*
 var promptsFS embed.FS
 
-// model is the decision model, by name, shared by every flow. Pin a version
-// in production: thresholds tuned against one release do not carry over to
-// the next.
+// model is the default decision model, by name, shared by the jev flows.
+// Pin a version in production: thresholds tuned against one release do not
+// carry over to the next.
 const model = "openrouter-decisions/~typesafe/jev-latest"
 
 // The answer models behind askFlow. The light one is fast and cheap; the
@@ -316,27 +330,34 @@ var (
 )
 
 func main() {
+	nace := flag.Bool("nace", false, "serve only triageFlow using Nace's Drex Max")
+	flag.Parse()
 	ctx := context.Background()
 
-	// jev is reached through OpenRouter's Decisions API here. The questions
-	// and the answers are the same on TypeSafe's own API or any other server
-	// that speaks System One; only the plugin and the model name differ.
-	g := genkit.Init(ctx,
-		genkit.WithPlugins(systemonex.OpenRouter(), &googlegenai.GoogleAI{}),
-		genkit.WithPromptFS(promptsFS),
-	)
+	var g *genkit.Genkit
+	if *nace {
+		// The questions and answers have the same shape on every System One
+		// server; only the plugin and model name change.
+		g = genkit.Init(ctx, genkit.WithPlugins(systemonex.Nace()))
+		DefineTriage(g, "nace/drex-max")
+	} else {
+		g = genkit.Init(ctx,
+			genkit.WithPlugins(systemonex.OpenRouter(), &googlegenai.GoogleAI{}),
+			genkit.WithPromptFS(promptsFS),
+		)
 
-	// The prompt file names its input and output schemas; the decision type
-	// is registered like any other, and keeps its questions.
-	genkit.DefineSchemasFor(g, TicketRequest{}, Triage{})
+		// The prompt file names its input and output schemas; the decision
+		// type is registered like any other, and keeps its questions.
+		genkit.DefineSchemasFor(g, TicketRequest{}, Triage{})
 
-	DefineTriage(g)
-	DefineTriageFromPrompt(g)
-	DefineScreen(g)
-	DefineRank(g)
-	DefineAsk(g)
-	DefineTeam(g)
-	DefineToolPick(g)
+		DefineTriage(g, model)
+		DefineTriageFromPrompt(g)
+		DefineScreen(g)
+		DefineRank(g)
+		DefineAsk(g)
+		DefineTeam(g)
+		DefineToolPick(g)
+	}
 
 	// Serve every flow over HTTP.
 	mux := http.NewServeMux()
@@ -353,7 +374,7 @@ func main() {
 // of text. The system message is not state: it goes in front of every
 // question, which is where context shared by the questions belongs. The
 // route is decided in code from the answers.
-func DefineTriage(g *genkit.Genkit) {
+func DefineTriage(g *genkit.Genkit, model string) {
 	genkit.DefineFlow(g, "triageFlow", func(ctx context.Context, input TicketRequest) (TriageResult, error) {
 		decision, resp, err := genkit.GenerateData[Triage](ctx, g,
 			ai.WithModelName(model),

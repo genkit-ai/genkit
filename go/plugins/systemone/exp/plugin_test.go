@@ -30,6 +30,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
@@ -772,13 +774,16 @@ func TestNace(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, body := fake.Last(t)
-	if req.URL.Path != "/v1/systemone" || body["model"] != "drex-max" || !reflect.DeepEqual(body["images"], []any{png}) {
-		t.Errorf("request = %s model=%v images=%v, want /v1/systemone naming drex-max with the image", req.URL.Path, body["model"], body["images"])
+	if req.URL.Path != "/v1/systemone" || body["model"] != "drex-max" {
+		t.Errorf("request = %s model=%v, want /v1/systemone naming drex-max", req.URL.Path, body["model"])
+	}
+	if diff := cmp.Diff([]any{png}, body["images"]); diff != "" {
+		t.Errorf("images mismatch (-want +got):\n%s", diff)
 	}
 
-	// Drex 2.0 and its alias are text only, so images are refused before sending.
+	// Text-only versions and their aliases refuse images before sending.
 	calls := fake.Calls()
-	for _, id := range []string{"drex-v2.0", "drex-latest"} {
+	for _, id := range []string{"drex-v2.0", "drex-latest", "drex-v1.5", "drex-v1.1"} {
 		if _, _, err := genkit.GenerateData[triage](t.Context(), g, ai.WithModelName("nace/"+id), photo); err == nil || !strings.Contains(err.Error(), "media") {
 			t.Errorf("%s: error = %v, want the image refused", id, err)
 		}
@@ -793,8 +798,9 @@ func TestNace(t *testing.T) {
 	for _, desc := range p.ListActions(t.Context()) {
 		listed = append(listed, desc.Name)
 	}
-	if want := []string{"nace/drex-latest", "nace/drex-max", "nace/drex-max-v1.1", "nace/drex-v1.5", "nace/drex-v2.0"}; !reflect.DeepEqual(listed, want) {
-		t.Errorf("listed %v, want %v", listed, want)
+	wantNames := []string{"nace/drex-latest", "nace/drex-max", "nace/drex-max-v1.1", "nace/drex-v1.5", "nace/drex-v2.0"}
+	if diff := cmp.Diff(wantNames, listed); diff != "" {
+		t.Errorf("listed models mismatch (-want +got):\n%s", diff)
 	}
 	if got := fake.Listings(); len(got) == 0 || got[len(got)-1] != "/v1/models" {
 		t.Errorf("listings = %v, want /v1/models", got)
@@ -810,8 +816,34 @@ func TestNace(t *testing.T) {
 	for _, desc := range offline.ListActions(t.Context()) {
 		offlineNames = append(offlineNames, desc.Name)
 	}
-	if want := []string{"nace/drex-latest", "nace/drex-max", "nace/drex-max-v1.1", "nace/drex-v2.0"}; !reflect.DeepEqual(offlineNames, want) {
-		t.Errorf("listed %v while offline, want %v", offlineNames, want)
+	if diff := cmp.Diff(wantNames, offlineNames); diff != "" {
+		t.Errorf("offline listed models mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestNaceModelMediaSupport(t *testing.T) {
+	p := Nace()
+	p.APIKey = "test-key"
+	p.Init(t.Context())
+	// The documented catalog includes server-listed models and retired IDs.
+	for id, want := range map[string]bool{
+		"drex-max":         true,
+		"drex-max-v1.1":    true,
+		"drex-max-finance": true,
+		"drex-v1.0":        true, // Retired; served by Drex Max.
+		"drex-v2.0":        false,
+		"drex-latest":      false,
+		"drex-v1.5":        false,
+		"drex-v1.1":        false, // Retired; served by Drex 1.5.
+	} {
+		t.Run(id, func(t *testing.T) {
+			desc := p.ResolveAction(api.ActionTypeModel, id).(*ai.ModelAction).Desc()
+			model := desc.Metadata["model"].(map[string]any)
+			supports := model["supports"].(map[string]any)
+			if got := supports["media"]; got != want {
+				t.Errorf("supports.media = %v, want %v", got, want)
+			}
+		})
 	}
 }
 

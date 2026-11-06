@@ -172,8 +172,11 @@ const (
 )
 
 // preset is what a constructor sets for its server beyond the public
-// fields: where its key and base URL come from.
+// fields: server defaults, including where its key and base URL come from.
 type preset struct {
+	// unlistedModels supplies defaults for IDs absent from Models without
+	// advertising them in the Dev UI's fallback listing.
+	unlistedModels map[string]ModelSpec
 	// label names the server in model labels; empty means Provider.
 	label string
 	// apiKeyEnv names the variable the key is read from. A server that
@@ -371,7 +374,10 @@ func (s *SystemOne) initialized() *systemone.Client {
 
 // newModel builds the model action for one ID.
 func (s *SystemOne) newModel(c *systemone.Client, id string) *ai.ModelAction {
-	spec := s.models[id]
+	spec, ok := s.models[id]
+	if !ok {
+		spec = s.preset.unlistedModels[id]
+	}
 	label := spec.Label
 	if label == "" {
 		label = internal.ProviderLabel(cmp.Or(s.preset.label, c.Endpoint.Name), id)
@@ -484,18 +490,20 @@ func naceClient() string {
 }
 
 // Nace is nace.ai's Drex API, which serves the Drex decision models. Its
-// models are nace/<ID> by Drex's ID: nace/drex-max and nace/drex-max-v1.1,
-// which read text and images, and nace/drex-v2.0, which reads text only.
+// models are nace/<ID> by Drex's ID: nace/drex-max and nace/drex-max-v1.1
+// read text and images; nace/drex-v2.0, nace/drex-latest, nace/drex-v1.5,
+// and the retired nace/drex-v1.1 alias read text only.
 // The API key comes from NACE_API_KEY, the variable the docs use. The Dev UI
-// lists the models the server lists, and the known ones when the listing
-// fails. Pin a version in production: drex-latest is an alias of
-// drex-v2.0, not of Drex Max, and moves only on an announced date.
+// lists the server's models together with the known current models, and
+// keeps the known ones when the listing fails. Pin a version in production:
+// drex-latest is an alias of drex-v2.0, not of Drex Max, and moves only on
+// an announced date.
 //
-// Images is set, since the Drex Max models read them, and drex-v2.0 and
-// drex-latest are marked text only in Models. drex-v1.5 is text only too, but
-// it is not in Models, so an image sent to it is left to the server, which
-// refuses it with 422. A request takes up to 512
-// questions and 255 options a question.
+// Images is set, since the Drex Max models read them. drex-v2.0,
+// drex-latest, and drex-v1.5 are marked text only in Models, so images are
+// refused before sending. The retired drex-v1.1 alias also refuses images
+// locally, without being added to the fallback listing. A request takes up
+// to 512 questions and 255 options a question.
 //
 // Nace sets its own HTTPClient, which waits 60 seconds an attempt and
 // does not follow a redirect to another scheme, host, or port, so the API key stays
@@ -512,8 +520,12 @@ func Nace() *SystemOne {
 			"drex-max-v1.1": {},
 			"drex-v2.0":     {Images: MediaUnsupported},
 			"drex-latest":   {Images: MediaUnsupported},
+			"drex-v1.5":     {Images: MediaUnsupported},
 		},
 		preset: preset{
+			unlistedModels: map[string]ModelSpec{
+				"drex-v1.1": {Images: MediaUnsupported},
+			},
 			label:     "nace.ai",
 			apiKeyEnv: "NACE_API_KEY",
 			baseURL:   "https://console.nace.ai",

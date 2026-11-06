@@ -273,7 +273,7 @@ on the day it ships.
 | `OpenRouter()` | `openrouter-decisions/liquid/d1`, `openrouter-decisions/typesafe/jev-1.13`, `openrouter-decisions/~typesafe/jev-latest` | `OPENROUTER_API_KEY` | alpha Decisions API; lists OpenRouter's decision models; cost in `resp.Usage.Custom["cost"]`; text only |
 | `Ollama()`     | `ollama-decisions/clef`                 | none                 | `http://localhost:11434` unless `BaseURL` is set; images as raw base64; a request needs text |
 | `WorkersAI(accountID)` | `cloudflare-decisions/@cf/cloudflare/clef`, `cloudflare-decisions/@cf/cloudflare/clef-flash`, `cloudflare-decisions/@cf/cloudflare/clef-omni`, `cloudflare-decisions/typesafe/jev` | `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_ACCOUNT_ID` when `accountID` is empty; Clef models read images, Clef-omni audio and video too; a long state is truncated; no versions to pin |
-| `Nace()`       | `nace/drex-max`, `nace/drex-v2.0`       | `NACE_API_KEY`       | lists models; Drex Max reads images, Drex 2.0 text only; `drex-latest` is an alias of Drex 2.0, not Drex Max; 60 s timeout, no cross-origin redirects |
+| `Nace()`       | `nace/drex-max`, `nace/drex-v2.0`       | `NACE_API_KEY`       | lists models; Drex Max reads images, Drex 2.0 and Drex 1.5 text only; `drex-latest` is an alias of Drex 2.0, not Drex Max; 60 s timeout, no cross-origin redirects |
 
 A gateway serves several vendors' models under one key, so one plugin reaches
 all of them. OpenRouter's is named `openrouter-decisions` because the plugin for
@@ -382,10 +382,13 @@ against a model can move when Cloudflare updates it.
 ### nace.ai
 
 nace.ai's Drex API serves the Drex decision models: Drex Max (`drex-max`,
-`drex-max-v1.1`), which reads text and images, and Drex 2.0 (`drex-v2.0`),
-which reads text only. A model is named by its pinned ID. `drex-latest` is an
-alias of `drex-v2.0`, not of Drex Max, and moves only on an announced date.
-The Dev UI lists the models the server lists. `Nace()` sets its own
+`drex-max-v1.1`), which reads text and images, and Drex 2.0 (`drex-v2.0`)
+and Drex 1.5 (`drex-v1.5`), which read text only. A model is named by its
+pinned ID. `drex-latest` is an alias of `drex-v2.0`, not of Drex Max, and
+moves only on an announced date.
+The Dev UI lists the server's models together with the known current models.
+The retired `drex-v1.1` alias is served by Drex 1.5 and is not added to the
+fallback listing. `Nace()` sets its own
 `HTTPClient`, with a 60-second timeout per attempt, since Drex waits up to 55
 seconds on its side, and a refusal to follow a redirect to another scheme, host, or
 port, so the API key stays on the API's origin.
@@ -412,9 +415,20 @@ the 4 MiB request body. The token limits differ by model: `drex-max` takes up
 to 262,144 tokens for the state and for each question, image tokens included;
 `drex-max-v1.1` takes 262,144 for the whole request; `drex-v2.0` takes a state
 of up to 131,072 tokens, and 262,144 with its longest question. The plugin
-refuses an image sent to `drex-v2.0` or `drex-latest` before sending it, and
-the server refuses one sent to `drex-v1.5` with 422, and a criterion that is
-not a string, which a type's `Guidance()` puts on the wire.
+refuses images sent to `drex-v2.0`, `drex-latest`, `drex-v1.5`, or the
+retired `drex-v1.1` alias before sending them. The server refuses a criterion
+that is not a string, which a type's `Guidance()` puts on the wire.
+
+To try Nace with the ticket-triage flow in [basic-decisions](../../../samples/basic-decisions/main.go):
+
+```sh
+cd go/samples/basic-decisions
+export NACE_API_KEY=...
+go run . -nace
+```
+
+Call `/triageFlow` using the HTTP request in the sample's package comment,
+or run `genkit start -- go run . -nace` to inspect it in the Dev UI.
 
 ### Several servers
 
