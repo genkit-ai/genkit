@@ -31,6 +31,8 @@ import anyio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.shared.exceptions import McpError
+from mcp.shared.message import MessageMetadata
+from mcp.shared.session import ProgressFnT
 from mcp.types import (
     CONNECTION_CLOSED,
     INTERNAL_ERROR,
@@ -39,10 +41,16 @@ from mcp.types import (
     METHOD_NOT_FOUND,
     PARSE_ERROR,
     CallToolResult,
+    CancelledNotification,
+    CancelledNotificationParams,
+    ClientNotification,
+    ClientRequest,
     Implementation,
     PaginatedRequestParams,
+    RequestId,
     Tool as McpTool,
 )
+from pydantic import BaseModel
 
 from genkit import get_logger
 from genkit.plugin_api import StatusName
@@ -61,6 +69,7 @@ if sys.version_info < (3, 11):
     from exceptiongroup import BaseExceptionGroup  # type: ignore[import-not-found]
 
 _T = TypeVar('_T')
+_Result = TypeVar('_Result', bound=BaseModel)
 
 logger = get_logger(__name__)
 
@@ -101,6 +110,9 @@ dead one: the opposite reading tears down a healthy connection over one slow
 reply.
 """
 
+CANCEL_NOTICE_SECONDS = 1.0
+"""Bound on sending ``notifications/cancelled`` to a server that is not reading its stdin."""
+
 CLOSE_GRACE_SECONDS = 6.0
 """How long ``close`` lets the SDK's stdio shutdown run before it kills the server outright.
 
@@ -122,6 +134,9 @@ CLIENT_INFO = _client_info()
 
 _serving: contextvars.ContextVar['McpConnection | None'] = contextvars.ContextVar('genkit_mcp_serving', default=None)
 """The connection whose operation the current task, or a task it spawned, is running."""
+
+_abandon: contextvars.ContextVar[anyio.CancelScope | None] = contextvars.ContextVar('genkit_mcp_abandon', default=None)
+"""Cancelled once the caller of the operation the current task is running stops waiting for it."""
 
 
 class _ConnectionState(Enum):
@@ -245,6 +260,60 @@ async def _call_tool(
         raise
 
 
+class _Session(ClientSession):
+    """A session that sends ``notifications/cancelled`` for an operation's request that times out or is abandoned.
+
+    Only for the ``mcp<2`` pin: SDK 2 sends this notice itself and has no
+    ``_request_id`` counter, so this class goes when the pin is lifted.
+    """
+
+    async def send_request(
+        self,
+        request: ClientRequest,
+        result_type: type[_Result],
+        request_read_timeout_seconds: timedelta | None = None,
+        metadata: MessageMetadata = None,
+        progress_callback: ProgressFnT | None = None,
+    ) -> _Result:
+        """Send a request and wait for its reply, cancelling it on the server if the wait is given up."""
+        abandon = _abandon.get()
+        sent = super().send_request(
+            request,
+            result_type,
+            request_read_timeout_seconds=request_read_timeout_seconds,
+            metadata=metadata,
+            progress_callback=progress_callback,
+        )
+        # Outside an operation is the handshake, and initialize must never be cancelled.
+        if abandon is None:
+            return await sent
+        # The SDK takes the request's id from this counter before it first suspends.
+        request_id = self._request_id
+        try:
+            return await sent
+        except McpError as error:
+            if _timed_out(error):
+                await self._cancel(request_id, 'Request timed out')
+            raise
+        except asyncio.CancelledError:
+            if abandon.cancel_called:
+                await self._cancel(request_id, 'Request cancelled')
+            raise
+
+    async def _cancel(self, request_id: RequestId, reason: str) -> None:
+        """Ask the server to stop one request, giving up quietly if the notice cannot be written."""
+        connection = _serving.get()
+        # When the connection is ending, the reply to the cancelled request could arrive after the reader has gone.
+        if connection is None or connection.is_terminal:
+            return
+        notice = CancelledNotification(params=CancelledNotificationParams(requestId=request_id, reason=reason))
+        with anyio.move_on_after(CANCEL_NOTICE_SECONDS, shield=True):
+            try:
+                await self.send_notification(ClientNotification(notice))
+            except _TRANSPORT_ERRORS:
+                pass
+
+
 def validate_request_timeout(request_timeout_millis: int | None) -> None:
     """Reject a request timeout that is not positive.
 
@@ -280,7 +349,9 @@ class McpConnection:
             config: How to launch the server.
             request_timeout_millis: How long one request may take before it
                 fails. Must be positive. ``None`` is the only way to disable
-                the timeout.
+                the timeout. A request that times out, or whose caller is
+                cancelled, is stopped and the server is sent
+                ``notifications/cancelled``.
 
         Raises:
             ValueError: If ``request_timeout_millis`` is zero or negative.
@@ -469,7 +540,7 @@ class McpConnection:
             )
             with shutdown:
                 async with stdio_client(parameters) as (read_stream, write_stream):
-                    async with ClientSession(
+                    async with _Session(
                         read_stream,
                         write_stream,
                         read_timeout_seconds=self._request_timeout,
@@ -513,12 +584,27 @@ class McpConnection:
                 operations.start_soon(self._execute, session, request, operations.cancel_scope)
 
     async def _execute(self, session: ClientSession, request: _Request[Any], serving: anyio.CancelScope) -> None:
-        """Run one operation and release its caller, however the body is left."""
+        """Run one operation and release its caller, however the body is left.
+
+        A caller that is cancelled cancels the operation with it, and the
+        connection stays open.
+        """
         _serving.set(self)
+        abandon = anyio.CancelScope()
+        _abandon.set(abandon)
+
+        def caller_gone(result: asyncio.Future[Any]) -> None:
+            if result.cancelled():
+                abandon.cancel()
+
+        request.result.add_done_callback(caller_gone)
         deferred = False
         try:
             try:
-                value = await request.operation(session)
+                with abandon:
+                    value = await request.operation(session)
+                    if not request.result.done():
+                        request.result.set_result(value)
             except Exception as error:
                 if await _transport_is_dead(session, error):
                     # Settle now rather than leaving callers waiting the seconds the SDK spends terminating the child.
@@ -526,9 +612,6 @@ class McpConnection:
                     serving.cancel()
                 elif not request.result.done():
                     request.result.set_exception(self._answered_error(error))
-            else:
-                if not request.result.done():
-                    request.result.set_result(value)
         except BaseException:
             # Only an ending connection cancels a child, and the state must say so before any caller is released.
             if self._state is _ConnectionState.CLOSED or self._failure is not None:
@@ -540,6 +623,7 @@ class McpConnection:
                 deferred = True
             raise
         finally:
+            request.result.remove_done_callback(caller_gone)
             # A caller must never see the child's own CancelledError.
             if not deferred and not request.result.done():
                 request.result.set_exception(self._terminal_error())

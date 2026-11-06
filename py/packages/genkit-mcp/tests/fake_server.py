@@ -13,14 +13,17 @@ import sys
 import threading
 
 import anyio
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.shared.exceptions import McpError
+from mcp.shared.message import SessionMessage
 from mcp.types import (
     CONNECTION_CLOSED,
     CallToolRequest,
     CallToolResult,
     ErrorData,
+    JSONRPCNotification,
     ListToolsRequest,
     ListToolsResult,
     Resource,
@@ -114,7 +117,18 @@ async def call_tool(name: str, arguments: dict[str, object]) -> list[TextContent
         await asyncio.sleep(0.25)
     if name == 'stall':
         stall_started.set()
-        await asyncio.Event().wait()
+        stall_dir = os.environ.get('MCP_FAKE_STALL_DIR')
+        if stall_dir is None:
+            await asyncio.Event().wait()
+        else:
+            marker = anyio.Path(stall_dir) / str(arguments.get('message', name))
+            await marker.with_suffix('.started').write_text('started', encoding='utf-8')
+            try:
+                await asyncio.Event().wait()
+            finally:
+                # Written for a notifications/cancelled, and also when the server shuts down.
+                with anyio.CancelScope(shield=True):
+                    await marker.with_suffix('.cancelled').write_text('cancelled', encoding='utf-8')
     if name == 'await_stall':
         await stall_started.wait()
         return [TextContent(type='text', text='stalled')]
@@ -181,6 +195,22 @@ def close_stdin_after_handshake(marker: str) -> None:
     threading.Event().wait()
 
 
+async def log_cancellations(
+    source: MemoryObjectReceiveStream[SessionMessage | Exception],
+    sink: MemoryObjectSendStream[SessionMessage | Exception],
+    log_path: str,
+) -> None:
+    """Record the params of each notifications/cancelled the client sends, and pass every message on."""
+    async with sink:
+        async for message in source:
+            if isinstance(message, SessionMessage):
+                notice = message.message.root
+                if isinstance(notice, JSONRPCNotification) and notice.method == 'notifications/cancelled':
+                    async with await anyio.open_file(log_path, 'a', encoding='utf-8') as log:
+                        await log.write(json.dumps(notice.params) + '\n')
+            await sink.send(message)
+
+
 async def main() -> None:
     if os.environ.get('MCP_FAKE_BAD_UTF8'):
         # Bypasses the SDK's text stream deliberately: this is a byte a strict
@@ -196,7 +226,14 @@ async def main() -> None:
         # Never answers initialize, so the client stays in its connecting state.
         await asyncio.Event().wait()
     async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+        cancel_log = os.environ.get('MCP_FAKE_CANCEL_LOG')
+        if cancel_log is None:
+            await app.run(read_stream, write_stream, app.create_initialization_options())
+        else:
+            sink, source = anyio.create_memory_object_stream[SessionMessage | Exception](0)
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(log_cancellations, read_stream, sink, cancel_log)
+                await app.run(source, write_stream, app.create_initialization_options())
     eof_marker = os.environ.get('MCP_FAKE_EOF_MARKER')
     if eof_marker:
         # Stands in for state a server flushes once stdin closes.
