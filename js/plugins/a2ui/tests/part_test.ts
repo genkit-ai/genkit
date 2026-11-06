@@ -156,4 +156,13 @@ describe('a2uiEnvelopesFromParts', () => {
     assert.ok(isA2uiPart(legacy));
     assert.deepStrictEqual(a2uiEnvelopesFromParts([legacy]), [sampleEnvelope]);
   });
+
+  it('falls back to `envelopes` when `messages` is present but undefined', () => {
+    const part = {
+      data: { messages: undefined, envelopes: [sampleEnvelope] },
+      metadata: { mimeType: A2UI_MIME_TYPE },
+    };
+    assert.ok(isA2uiPart(part));
+    assert.deepStrictEqual(a2uiEnvelopesFromParts([part]), [sampleEnvelope]);
+  });
 });
