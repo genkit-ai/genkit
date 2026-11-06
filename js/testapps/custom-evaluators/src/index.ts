@@ -41,7 +41,7 @@ export const ai = genkit({
   plugins: [
     googleAI(),
     byoEval({
-      judge: googleAI.model('gemini-2.5-flash'),
+      judge: googleAI.model('gemini-flash-latest'),
       judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
       metrics: [
         // regexMatcher will register an evaluator with a name in the format
