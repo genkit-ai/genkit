@@ -701,15 +701,17 @@ class AnthropicModel:
             return cast(AnthropicMessage, await stream.get_final_message())
 
     def _extract_system(self, messages: list[Message]) -> str | None:
-        """Extract system prompt from messages."""
+        """Extract system prompt from messages.
+
+        Text from every system message is kept, in order, joined by blank lines.
+        """
+        system_texts = []
         for msg in messages:
             if msg.role == Role.SYSTEM:
-                texts = []
-                for part in msg.content:
-                    if part.text is not None:
-                        texts.append(part.text)
-                return ''.join(texts) if texts else None
-        return None
+                texts = [part.text for part in msg.content if part.text is not None]
+                if texts:
+                    system_texts.append(''.join(texts))
+        return '\n\n'.join(system_texts) if system_texts else None
 
     def _to_anthropic_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
         """Convert Genkit messages to Anthropic format.
