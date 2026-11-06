@@ -16,11 +16,12 @@
 
 """EmbedRequest[Cfg] follows ModelRequest[Cfg]'s config rule."""
 
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from genkit._core._action import Action, ActionKind
 from genkit._core._error import GenkitError
 from genkit._core._model import (
     EmbedRequest,
@@ -115,3 +116,94 @@ def test_untyped_options_json_schema_is_an_object(
         'title': 'Options',
         'type': 'object',
     }
+
+
+class CrmEmbedRequest(EmbedRequest[CrmEmbedConfig]):
+    """A plugin's own request type: a subclass of the parameterized EmbedRequest."""
+
+
+class MenuModelRequest(ModelRequest[MenuModelConfig]):
+    """A plugin's own request type: a subclass of the parameterized ModelRequest."""
+
+
+class CrmEmbedRequestChild(CrmEmbedRequest):
+    """A subclass of a subclass keeps the config class too."""
+
+
+_ExtraT = TypeVar('_ExtraT')
+_OptionsT = TypeVar('_OptionsT')
+
+
+class TaggedEmbedRequest(EmbedRequest[_OptionsT], Generic[_ExtraT, _OptionsT]):
+    """A generic subclass whose first type parameter is not the options class."""
+
+
+@pytest.mark.parametrize(
+    ('request_type', 'expected'),
+    [
+        (CrmEmbedRequest, CrmEmbedConfig),
+        (CrmEmbedRequestChild, CrmEmbedConfig),
+        (MenuModelRequest, MenuModelConfig),
+        (TaggedEmbedRequest[MenuModelConfig, CrmEmbedConfig], CrmEmbedConfig),
+        (ModelRequest[MenuModelConfig], MenuModelConfig),
+        (ModelRequest, None),
+        (ModelRequest[Any], None),
+        (TaggedEmbedRequest, None),
+        (CrmEmbedConfig, None),
+    ],
+    ids=[
+        'embed-subclass',
+        'embed-grandchild',
+        'model-subclass',
+        'generic-subclass-config-not-first',
+        'model-typed',
+        'model-bare',
+        'model-any',
+        'generic-subclass-unparameterized',
+        'not-a-request',
+    ],
+)
+def test_declared_config_type_reads_subclasses_of_typed_requests(
+    request_type: type,
+    expected: type[BaseModel] | None,
+) -> None:
+    assert declared_config_type(request_type) is expected
+
+
+def test_typed_embed_request_subclass_json_schema_references_the_class() -> None:
+    schema = TypeAdapter(CrmEmbedRequest).json_schema()
+
+    assert schema['properties']['options'] == {'$ref': '#/$defs/CrmEmbedConfig'}
+    assert 'CrmEmbedConfig' in schema['$defs']
+
+
+def test_typed_embed_request_subclass_validates_options_into_the_class() -> None:
+    request = CrmEmbedRequest.model_validate({'input': [], 'options': {'task_type': 'query'}})
+
+    assert request.options == CrmEmbedConfig(task_type='query')
+
+
+@pytest.mark.parametrize(
+    ('request_type', 'payload', 'field'),
+    [
+        (CrmEmbedRequest, {'input': [], 'options': MenuModelConfig(temperature=0.2)}, 'options'),
+        (MenuModelRequest, {'messages': [], 'config': CrmEmbedConfig()}, 'config'),
+    ],
+    ids=['embed', 'model'],
+)
+def test_typed_request_subclass_rejects_an_instance_of_another_class(
+    request_type: Any,  # noqa: ANN401
+    payload: dict[str, Any],
+    field: str,
+) -> None:
+    with pytest.raises(ValidationError, match=f'{field} must be .* or a mapping, got '):
+        request_type.model_validate(payload)
+
+
+def test_action_config_schema_comes_from_a_typed_request_subclass_annotation() -> None:
+    async def run_model(req: MenuModelRequest) -> str:
+        return ''
+
+    action = Action(kind=ActionKind.MODEL, name='menu-model', fn=run_model)
+
+    assert action.config_schema is MenuModelConfig
