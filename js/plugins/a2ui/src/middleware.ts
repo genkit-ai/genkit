@@ -51,7 +51,7 @@ import {
 } from './catalog.js';
 import { resolveCatalog } from './loader.js';
 import { A2uiStreamParser, type ParseResult } from './parser.js';
-import { a2uiPart, isA2uiPart } from './part.js';
+import { a2uiPart, a2uiPartMessages, isA2uiPart } from './part.js';
 import {
   A2UI_VERSION,
   SUPPORTED_VERSIONS,
@@ -422,7 +422,7 @@ function sanitizeInboundA2ui(req: GenerateRequest): GenerateRequest {
     for (const part of message.content) {
       if (isA2uiPart(part)) {
         msgChanged = true;
-        const text = summarizeA2uiPart(part.data.envelopes);
+        const text = summarizeA2uiPart(a2uiPartMessages(part));
         if (text) content.push({ text });
       } else {
         content.push(part as Part);

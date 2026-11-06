@@ -16,8 +16,8 @@
 
 /**
  * Helpers for working with the canonical "a2ui part" - a Genkit `data` part
- * whose `data` is an object `{ envelopes }` wrapping an array of A2UI envelopes,
- * tagged with {@link A2UI_MIME_TYPE}.
+ * whose `data` is `{ messages }` wrapping an array of A2UI envelopes, tagged
+ * with {@link A2UI_MIME_TYPE}.
  *
  * These helpers operate on plain part-shaped objects (no Genkit runtime import),
  * so they are safe to use on both the server and the browser. To pull envelopes
@@ -49,23 +49,40 @@ interface PartLike {
 /** Builds an a2ui data part wrapping the given envelopes. */
 export function a2uiPart(envelopes: A2uiEnvelope[]): A2uiPart {
   return {
-    data: { envelopes },
+    data: { messages: envelopes },
     metadata: { mimeType: A2UI_MIME_TYPE },
   };
+}
+
+/**
+ * The message list in an a2ui part's `data`: `messages`, or `envelopes` for a
+ * part written before the rename (still read so persisted sessions replay).
+ */
+function messagesOf(data: unknown): unknown[] | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const d = data as { messages?: unknown; envelopes?: unknown };
+  const list = d.messages ?? d.envelopes;
+  return Array.isArray(list) ? list : undefined;
 }
 
 /** Type guard: is this part an a2ui data part? */
 export function isA2uiPart(part: unknown): part is A2uiPart {
   const p = part as PartLike | null | undefined;
-  const data = p?.data as { envelopes?: unknown } | undefined;
   return (
     !!p &&
     typeof p === 'object' &&
-    !!data &&
-    typeof data === 'object' &&
-    Array.isArray(data.envelopes) &&
-    (p as PartLike).metadata?.mimeType === A2UI_MIME_TYPE
+    messagesOf(p.data) !== undefined &&
+    p.metadata?.mimeType === A2UI_MIME_TYPE
   );
+}
+
+/** The envelopes an a2ui part carries, whichever key it was written with. */
+export function a2uiPartMessages(part: A2uiPart): A2uiEnvelope[] {
+  // Read like messagesOf: a part from the wire can carry `messages: undefined`
+  // (or null) next to a legacy `envelopes`, which an `in` check would pick.
+  const data: { messages?: A2uiEnvelope[]; envelopes?: A2uiEnvelope[] } =
+    part.data;
+  return data.messages ?? data.envelopes ?? [];
 }
 
 /**
@@ -99,7 +116,7 @@ export function a2uiEnvelopesFromParts(
   const out: A2uiServerEnvelope[] = [];
   for (const part of parts) {
     if (!isA2uiPart(part)) continue;
-    for (const env of part.data.envelopes) {
+    for (const env of a2uiPartMessages(part)) {
       // Keep only server-to-client surface envelopes. This is a positive check,
       // so inbound action envelopes (a user action echoed in history) and any
       // null / non-object / array / arbitrary-object garbage from malformed
