@@ -102,6 +102,7 @@ from genkit._core._model import (
     MultipartToolResponse,
     OutputConfig,
     Part,
+    ToolChoice,
     as_message,
     chunk_for_stream,
     reject_config_api_key,
@@ -2093,6 +2094,7 @@ async def run_tools_or_stop(
         next_messages.append(tool_msg)
     next_options.messages = next_messages
     next_options.model = resolved.model.name
+    next_options.tool_choice = tool_choice_after_tool_round(options.tool_choice)
     # Tools already ran. This is the history they resend if the tool-chunk
     # pipe fails after that closed round.
     call.set_messages(next_messages)
@@ -2313,6 +2315,17 @@ async def resolve_parameters(
             check_output_schema(json_schema)
 
     return (model_action, tools, format_def)
+
+
+def tool_choice_after_tool_round(tool_choice: ToolChoice | None) -> ToolChoice | None:
+    """Return the tool_choice for the model call that follows a closed tool round.
+
+    'required' forces the model to call a tool. Re-sending it after the tools
+    ran forbids a text answer, so the loop calls tools until max_turns. It
+    applies to the call that opens the loop only; later calls get 'auto'.
+    'none' and 'auto' carry over unchanged.
+    """
+    return 'auto' if tool_choice == 'required' else tool_choice
 
 
 async def to_model_request(
@@ -2765,6 +2778,9 @@ async def resolve_resume_options(
 
     revised_request = options.model_copy(deep=True)
     revised_request.resume = None
+    # The interrupted call already made the forced tool call; resuming closes
+    # that round, so the next model call is free to answer.
+    revised_request.tool_choice = tool_choice_after_tool_round(options.tool_choice)
     # Replace the last message in the deep copy with the resolved version
     # (pending TRPs swapped for resolved ones) without touching options.
     revised_request.messages[-1] = Message(

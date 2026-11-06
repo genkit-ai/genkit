@@ -2252,7 +2252,9 @@ def _echo_request_kwargs() -> dict[str, Any]:
     return {
         'docs': [Document(content=[Part.from_text('doc content 1')])],
         'config': dict(_ECHO_CONFIG),
-        'tool_choice': 'required',
+        # 'auto', not 'required': 'required' applies to the opening call only,
+        # and these exits echo a later turn's request.
+        'tool_choice': 'auto',
         'output_format': 'json',
     }
 
@@ -2265,7 +2267,7 @@ def _assert_request_fully_echoed(response: ModelResponse) -> None:
     assert request.docs is not None, 'docs dropped from echoed request'
     assert request.config == _ECHO_CONFIG, 'config dropped from echoed request'
     assert request.tools, 'tools dropped from echoed request'
-    assert request.tool_choice == 'required', 'tool_choice dropped from echoed request'
+    assert request.tool_choice == 'auto', 'tool_choice dropped from echoed request'
     assert request.output is not None
     assert request.output.format == 'json', 'output dropped from echoed request'
 

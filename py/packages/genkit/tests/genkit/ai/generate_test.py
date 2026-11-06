@@ -36,7 +36,7 @@ from genkit._ai._tools import Interrupt, ToolContext, define_tool
 from genkit._core._compat import cancelled_history
 from genkit._core._error import ErrorReason, GenkitError, PublicError, _StreamingCallbackError
 from genkit._core._middleware import _MiddlewareMetadata
-from genkit._core._model import GenerateActionOptions, ModelRequest, Resume
+from genkit._core._model import GenerateActionOptions, ModelRequest, Resume, ToolChoice
 from genkit._core._protocols import RegistryLike
 from genkit._core._registry import Registry
 from genkit._core._typing import (
@@ -3547,6 +3547,148 @@ async def test_return_tool_requests_keeps_model_message_without_running_tool() -
     assert [message.role for message in response.messages] == [Role.USER, Role.MODEL]
     assert response.messages[0].text == 'let me run it'
     assert response.messages[1] == response.message
+
+
+def _obeys_tool_choice(
+    seen: list[str | None], *, tool: str, answer: str = 'Order #4821 shipped on Nov 3.'
+) -> Callable[[ModelRequest], ModelResponse]:
+    """A model that calls ``tool`` whenever the request forces it, else answers in text."""
+
+    def respond(request: ModelRequest) -> ModelResponse:
+        seen.append(request.tool_choice)
+        if request.tool_choice == 'required':
+            return _model_calls_tool(name=tool, ref=f'r{len(seen)}')
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text(answer)]),
+        )
+
+    return respond
+
+
+@pytest.mark.asyncio
+async def test_tool_choice_required_forces_only_the_first_model_call() -> None:
+    """'required' forces the opening call; after the tool round the model may answer."""
+    ai = Genkit(model='scriptedModel')
+    seen: list[str | None] = []
+    define_scripted_model(ai, response_cb=_obeys_tool_choice(seen, tool='lookup_order'))
+    lookups = 0
+
+    @ai.tool(name='lookup_order')
+    async def lookup_order() -> str:
+        nonlocal lookups
+        lookups += 1
+        return 'shipped 2026-11-03'
+
+    response = await ai.generate(
+        prompt='Look up order #4821.',
+        tools=['lookup_order'],
+        tool_choice='required',
+    )
+
+    assert seen == ['required', 'auto']
+    assert lookups == 1
+    assert response.finish_reason == FinishReason.STOP
+    assert response.error is None
+    assert response.text == 'Order #4821 shipped on Nov 3.'
+    assert [m.role for m in response.messages] == [Role.USER, Role.MODEL, Role.TOOL, Role.MODEL]
+    assert response.request is not None
+    assert response.request.tool_choice == 'auto'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('tool_choice', ['auto', 'none', None])
+async def test_tool_choice_other_than_required_carries_across_tool_rounds(tool_choice: ToolChoice | None) -> None:
+    """Only 'required' is relaxed; 'auto', 'none', and unset reach every call unchanged."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    seen: list[str | None] = []
+
+    @ai.tool(name='lookup_order')
+    async def lookup_order() -> str:
+        return 'shipped 2026-11-03'
+
+    responses = [
+        _model_calls_tool(name='lookup_order', ref='r1'),
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('shipped')]),
+        ),
+    ]
+
+    def respond(request: ModelRequest) -> ModelResponse:
+        seen.append(request.tool_choice)
+        return responses[len(seen) - 1]
+
+    pm.response_cb = respond
+
+    response = await ai.generate(prompt='Look up order #4821.', tools=['lookup_order'], tool_choice=tool_choice)
+
+    assert seen == [tool_choice, tool_choice]
+    assert response.text == 'shipped'
+
+
+@pytest.mark.asyncio
+async def test_tool_choice_required_with_return_tool_requests_returns_first_call() -> None:
+    """return_tool_requests stops after the forced call; the caller sees 'required' on it."""
+    ai = Genkit(model='scriptedModel')
+    seen: list[str | None] = []
+    define_scripted_model(ai, response_cb=_obeys_tool_choice(seen, tool='lookup_order'))
+    called = False
+
+    @ai.tool(name='lookup_order')
+    async def lookup_order() -> str:
+        nonlocal called
+        called = True
+        return 'shipped 2026-11-03'
+
+    response = await ai.generate(
+        prompt='Look up order #4821.',
+        tools=['lookup_order'],
+        tool_choice='required',
+        return_tool_requests=True,
+    )
+
+    assert seen == ['required']
+    assert called is False
+    assert response.finish_reason == FinishReason.STOP
+    assert response.message is not None
+    assert response.message.tool_requests[0].tool_request == ToolRequest(name='lookup_order', input={}, ref='r1')
+    assert response.request is not None
+    assert response.request.tool_choice == 'required'
+
+
+@pytest.mark.asyncio
+async def test_tool_choice_required_resume_lets_model_answer() -> None:
+    """Resuming an interrupt closes the forced tool round, so the next call gets 'auto'."""
+    ai = Genkit(model='scriptedModel')
+    seen: list[str | None] = []
+    define_scripted_model(ai, response_cb=_obeys_tool_choice(seen, tool='approve_refund', answer='Refund approved.'))
+
+    @ai.tool(name='approve_refund')
+    async def approve_refund(inp: dict) -> str:  # noqa: ARG001
+        return 'refund approved'
+
+    pending = Part.from_tool_request(name='approve_refund', ref='r1', input={}, metadata={'interrupt': True})
+    restart = Part.from_tool_request(name='approve_refund', ref='r1', input={'ok': True}, metadata={'resumed': True})
+
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[
+                Message(role=Role.USER, content=[Part.from_text('Refund order #4821.')]),
+                Message(role=Role.MODEL, content=[pending]),
+            ],
+            tools=['approve_refund'],
+            tool_choice='required',
+            resume=Resume(restart=[restart]),
+        ),
+    )
+
+    assert seen == ['auto']
+    assert response.finish_reason == FinishReason.STOP
+    assert response.text == 'Refund approved.'
 
 
 @pytest.mark.asyncio

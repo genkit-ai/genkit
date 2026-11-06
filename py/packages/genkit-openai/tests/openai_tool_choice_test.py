@@ -128,26 +128,26 @@ async def test_tool_choice_kept_after_a_tool_turn(tool_choice: Any) -> None:  # 
 
 
 @pytest.mark.asyncio
-async def test_required_tool_choice_persists_on_followup_turn() -> None:
-    """Under 'required', the follow-up request after a tool result still sends tool_choice='required'."""
+async def test_required_tool_choice_relaxes_to_auto_on_followup_turn() -> None:
+    """Under 'required', the follow-up request after a tool result sends 'auto', so the model can answer."""
     server = _ScriptedServer([
         _tool_call('call_1', 'lookup_menu', 'pho'),
-        _tool_call('call_2', 'check_allergens', 'pho'),
+        _ANSWER,
     ])
     ai = _genkit(server)
 
-    await ai.generate(
+    response = await ai.generate(
         model='openai/gpt-4o',
         prompt='Is the pho in stock, and is it nut-free?',
         tools=['lookup_menu', 'check_allergens'],
         tool_choice='required',
-        max_turns=1,
     )
 
+    assert response.text == 'The pho is in stock and nut-free.'
     assert len(server.bodies) == 2
     assert server.bodies[0]['tool_choice'] == 'required'
     assert any(m['role'] == 'tool' for m in server.bodies[1]['messages'])
-    assert server.bodies[1]['tool_choice'] == 'required'
+    assert server.bodies[1]['tool_choice'] == 'auto'
 
 
 @pytest.mark.asyncio
