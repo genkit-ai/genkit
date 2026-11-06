@@ -40,7 +40,13 @@ from genkit._ai._agents._session import (
 from genkit._ai._agents._session_stores._util import session_id_of
 from genkit._ai._agents._snapshot import walk_back_to_resumable
 from genkit._ai._agents._types import ChunkTransform, StateTransform, TurnContext, TurnResult
-from genkit._ai._generate import CallScope, generate_action
+from genkit._ai._generate import (
+    INTERNAL_FINISH_MESSAGE,
+    CallScope,
+    boxed_finish_message,
+    generate_action,
+    log_dropped_failure,
+)
 from genkit._ai._json_patch import diff_json
 from genkit._core._action import ActionRunContext, get_current_context
 from genkit._core._channel import CloseableQueue, QueueShutDown
@@ -53,6 +59,7 @@ from genkit._core._error import (
     PublicError,
     StatusName,
     TaskGroupError,
+    attached_cause,
     interrupt_escape_error,
 )
 from genkit._core._logger import get_logger
@@ -105,8 +112,10 @@ class SessionRunner(Generic[StateT]):
         get_parent_snapshot_id: Callable[[], str | None] | None = None,
         on_begin_turn: Callable[[], Awaitable[None]] | None = None,
         on_end_turn: Callable[[AgentFinishReason | None], Awaitable[str | None]] | None = None,
+        agent_name: str | None = None,
     ) -> None:
         self.session = session
+        self.agent_name = agent_name
         self.turn_inputs = turn_inputs
         self.store = store
         self.get_parent_snapshot_id = get_parent_snapshot_id
@@ -220,7 +229,7 @@ class SessionRunner(Generic[StateT]):
                 else:
                     raise
                 self.last_turn_finish_reason = AgentFinishReason.FAILED
-                self.last_turn_error = to_error_details(turn_error)
+                self.last_turn_error = to_error_details(turn_error, agent=self.agent_name)
 
                 if self.on_end_turn is not None:
                     await self.on_end_turn(AgentFinishReason.FAILED)
@@ -523,6 +532,7 @@ class AgentRuntime:
             get_parent_snapshot_id=lambda: self.last_snapshot.snapshot_id if self.last_snapshot else None,
             on_begin_turn=self.reset_custom_patch_turn,
             on_end_turn=self.emit_turn_end,
+            agent_name=name,
         )
 
         session.on_custom_changed(self.emit_custom_patch)
@@ -846,7 +856,7 @@ class AgentRuntime:
                 parent_id=pending_snap.parent_id or '',
                 status=SnapshotStatus.FAILED if is_failed else SnapshotStatus.COMPLETED,
                 state=state,
-                error=(to_error_details(fn_err) if fn_err else turn_err),
+                error=(to_error_details(fn_err, agent=self.name) if fn_err else turn_err),
                 finish_reason=finish_reason,
                 created_at=existing.created_at if existing else now,
             )
@@ -1167,7 +1177,7 @@ async def generate_prompt_agent_turn(
 # ---------------------------------------------------------------------------
 
 
-def to_error_details(exc: BaseException) -> Failure:
+def to_error_details(exc: BaseException, *, agent: str | None = None) -> Failure:
     """A turn failure as data, with the status classified like Go's ``status.Classified``.
 
     Classifies the top-level exception; Go also walks the wrapped chain
@@ -1176,12 +1186,30 @@ def to_error_details(exc: BaseException) -> Failure:
     Only a GenkitError names its own status. A third-party ``.status``
     attribute (aiohttp's ``status=429``) isn't a Genkit status, so it never
     leaks through.
+
+    The message follows generate's rule for a raising tool: a GenkitError
+    keeps its own text (an INTERNAL one wrapping a foreign cause does not),
+    and anything else becomes ``internal error``. The Failure lands on
+    ``AgentOutput.error`` and in snapshots, which a served agent returns
+    in a 200, so raw exception text would reach the client. What gets
+    hidden is logged here with its traceback instead.
+
+    Args:
+        exc: The exception that ended the turn or invocation.
+        agent: Agent name for the server-side log line, when known.
     """
     status: StatusName
     details: dict[str, Any] | None = None
     if isinstance(exc, GenkitError):
         status = exc.status
-        message = exc.message
+        cause = attached_cause(exc)
+        if cause is not None and interrupt_escape_error(cause) is not None:
+            # interrupt_escape_error's own sentence; the attached Interrupt
+            # is tool metadata, not foreign exception text.
+            message = exc.message
+        else:
+            message = boxed_finish_message(exc=exc, pipe_failed=False)
+        redacted = message != exc.message
         if isinstance(exc.details, Mapping) and exc.details:
             details = dict(cast(Mapping[str, Any], exc.details))
     else:
@@ -1192,7 +1220,13 @@ def to_error_details(exc: BaseException) -> Failure:
             status = 'DEADLINE_EXCEEDED'
         else:
             status = 'INTERNAL'
-        message = str(exc) or 'Internal failure'
+        message = INTERNAL_FINISH_MESSAGE
+        redacted = True
+    # A prompt agent re-raises generate's already-boxed error as a fresh
+    # GenkitError carrying ``internal error``; nothing is hidden there, and
+    # generate logged the cause, so only log when this call hid text.
+    if redacted:
+        log_dropped_failure(exc, agent=agent)
     return Failure(status=status, message=message, details=details)
 
 

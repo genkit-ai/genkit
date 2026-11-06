@@ -1373,7 +1373,13 @@ def boxed_finish_message(*, exc: BaseException, pipe_failed: bool) -> str:
 _LOGGED_ATTR = '_genkit_failure_logged'
 
 
-def log_dropped_failure(exc: BaseException, *, model: str | None = None, tool: str | None = None) -> None:
+def log_dropped_failure(
+    exc: BaseException,
+    *,
+    model: str | None = None,
+    tool: str | None = None,
+    agent: str | None = None,
+) -> None:
     """Log a failure whose cause boxing hides behind ``internal error``.
 
     The caller only gets ``finish_reason=failed`` with ``internal error``, so
@@ -1385,6 +1391,8 @@ def log_dropped_failure(exc: BaseException, *, model: str | None = None, tool: s
         exc: The exception about to be boxed.
         model: Model the turn was calling, when known.
         tool: Tool that raised, when known. Named over ``model``.
+        agent: Agent whose turn raised, when known. ``tool`` and ``model``
+            are named over it.
     """
     if getattr(exc, _LOGGED_ATTR, False):
         return
@@ -1397,6 +1405,8 @@ def log_dropped_failure(exc: BaseException, *, model: str | None = None, tool: s
         fields['model'] = model
     if tool:
         fields['tool'] = tool
+    if agent:
+        fields['agent'] = agent
     span = current_span.get()
     if span is not None and span.trace_id:
         fields['trace_id'] = span.trace_id
@@ -1404,6 +1414,8 @@ def log_dropped_failure(exc: BaseException, *, model: str | None = None, tool: s
         culprit = f'tool {tool!r}'
     elif model:
         culprit = f'model {model!r}'
+    elif agent:
+        culprit = f'agent {agent!r}'
     else:
         culprit = 'generate'
     logger.error('%s raised, returning finish_reason=failed', culprit, exc_info=exc, **fields)

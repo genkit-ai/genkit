@@ -261,7 +261,7 @@ def define_custom_agent(
         except GenkitError as e:
             return AgentOutput(
                 finish_reason=AgentFinishReason.FAILED,
-                error=to_error_details(e),
+                error=to_error_details(e, agent=name),
                 state=(init.state if store is None and init.state is not None else None),
             )
 
