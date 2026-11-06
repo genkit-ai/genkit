@@ -197,8 +197,8 @@ export function run<T>(
   fnOrRegistry?: Registry | HasRegistry | ((input?: any) => Promise<T>),
   _?: Registry | HasRegistry
 ): Promise<T> {
-  let func;
-  let input;
+  let func: ((input?: any) => Promise<T>) | undefined;
+  let input: any;
   let hasInput = false;
   if (typeof funcOrInput === 'function') {
     func = funcOrInput;

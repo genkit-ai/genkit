@@ -203,8 +203,8 @@ export function extractMimeType(url?: string): string {
     // Not a data url, try suffix
     url.lastIndexOf('.');
     const key = url.substring(url.lastIndexOf('.') + 1);
-    if (Object.keys(KNOWN_MIME_TYPES).includes(key)) {
-      return KNOWN_MIME_TYPES[key];
+    if (key in KNOWN_MIME_TYPES) {
+      return (KNOWN_MIME_TYPES as Record<string, string>)[key];
     }
     return '';
   }
@@ -1316,12 +1316,16 @@ function aggregateMetadata<K extends keyof GenerateContentCandidate>(
   }
 
   if (isObject(chunkObj)) {
-    for (const k of Object.keys(chunkObj)) {
-      if (Array.isArray(aggObj[k]) && Array.isArray(chunkObj[k])) {
-        aggObj[k] = aggObj[k].concat(chunkObj[k]);
+    const chunkRecord = chunkObj as Record<string, unknown>;
+    const aggRecord = aggObj as Record<string, unknown>;
+    for (const k of Object.keys(chunkRecord)) {
+      if (Array.isArray(aggRecord[k]) && Array.isArray(chunkRecord[k])) {
+        aggRecord[k] = (aggRecord[k] as unknown[]).concat(
+          chunkRecord[k] as unknown[]
+        );
       } else {
         // last one wins, also handles only one being an array.
-        aggObj[k] = chunkObj[k] ?? aggObj[k];
+        aggRecord[k] = chunkRecord[k] ?? aggRecord[k];
       }
     }
   }
@@ -1427,11 +1431,12 @@ export function convertObjectKeysToSnakeCase(obj: unknown): unknown {
     return obj.map((item) => convertObjectKeysToSnakeCase(item));
   }
 
+  const objRecord = obj as Record<string, unknown>;
   const newObj: Record<string, unknown> = {};
-  for (const key in obj) {
-    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+  for (const key in objRecord) {
+    if (Object.prototype.hasOwnProperty.call(objRecord, key)) {
       const snakeCaseKey = camelToSnakeCase(key);
-      newObj[snakeCaseKey] = convertObjectKeysToSnakeCase(obj[key]);
+      newObj[snakeCaseKey] = convertObjectKeysToSnakeCase(objRecord[key]);
     }
   }
   return newObj;

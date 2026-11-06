@@ -26,7 +26,7 @@ export const METER_NAME = 'genkit';
 export const METRIC_NAME_PREFIX = 'genkit';
 const METRIC_DIMENSION_MAX_CHARS = 256;
 
-export function internalMetricNamespaceWrap(...namespaces) {
+export function internalMetricNamespaceWrap(...namespaces: string[]) {
   return [METRIC_NAME_PREFIX, ...namespaces].join('/');
 }
 

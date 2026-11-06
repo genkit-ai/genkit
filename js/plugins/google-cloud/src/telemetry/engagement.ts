@@ -74,7 +74,7 @@ class EngagementTelemetry implements Telemetry {
     };
     this.feedbackCounter.add(1, dimensions);
 
-    const metadata = {
+    const metadata: Record<string, any> = {
       ...createCommonLogAttributes(span, projectId),
       feedbackValue: attributes['genkit:metadata:feedbackValue'],
     };

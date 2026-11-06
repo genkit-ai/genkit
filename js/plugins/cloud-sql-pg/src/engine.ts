@@ -324,8 +324,8 @@ export class PostgresEngine {
    */
   testConnection(): Promise<{ currentTimestamp: Date }[]> {
     return this.pool
-      .raw<{ currentTimestamp: Date }[]>('SELECT NOW() as currentTimestamp')
-      .then((result) => result.entries[0].currentTimestamp);
+      .raw('SELECT NOW() as currentTimestamp')
+      .then((result) => result.rows);
   }
 
   /**
