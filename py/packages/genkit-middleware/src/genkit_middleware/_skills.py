@@ -32,6 +32,8 @@ from genkit.model import GenerateActionOptions
 from genkit.plugin_api import GenkitConfig
 
 _SKILLS_MARKER = 'skills-instructions'
+_SKILLS_TOOL_METADATA_KEY = 'skillsActivationTool'
+_USE_SKILL_TOOL_NAME = 'use_skill'
 _MISSING_DESCRIPTION = 'No description provided.'
 
 
@@ -44,7 +46,7 @@ class _UseSkillInput(PydanticBaseModel):
 class SkillsConfig(GenkitConfig):
     """Directories to scan for skill folders containing ``SKILL.md``."""
 
-    skill_paths: list[str] = Field(default_factory=lambda: ['skills'])
+    skill_paths: list[str] = Field(default_factory=lambda: ['.agents/skills', 'skills'])
 
 
 class Skills(Middleware[SkillsConfig]):
@@ -106,6 +108,7 @@ class Skills(Middleware[SkillsConfig]):
             'You have access to a library of skills that serve as specialized instructions/personas.',
             'Strongly prefer to use them when working on anything related to them.',
             'Only use them once to load the context.',
+            f"Call the {_USE_SKILL_TOOL_NAME} tool with a skill's name to load its instructions.",
             'Here are the available skills:',
         ]
         for skill_name in sorted(skills.keys()):
@@ -125,7 +128,10 @@ class Skills(Middleware[SkillsConfig]):
                 system_idx = i
                 break
 
-        marker_meta: dict[str, Any] = {_SKILLS_MARKER: True}
+        marker_meta: dict[str, Any] = {
+            _SKILLS_MARKER: True,
+            _SKILLS_TOOL_METADATA_KEY: _USE_SKILL_TOOL_NAME,
+        }
         new_part = Part.from_text(prompt_text, metadata=marker_meta)
 
         if system_idx is not None:
@@ -133,8 +139,9 @@ class Skills(Middleware[SkillsConfig]):
             new_content = []
             replaced = False
             for part in msg.content:
-                meta = part.metadata if part.text is not None else None
-                if isinstance(meta, dict) and meta.get(_SKILLS_MARKER):
+                meta = part.metadata if part.text is not None and isinstance(part.metadata, dict) else None
+                owner = meta.get(_SKILLS_TOOL_METADATA_KEY) if meta else None
+                if meta and meta.get(_SKILLS_MARKER) and (not isinstance(owner, str) or owner == _USE_SKILL_TOOL_NAME):
                     new_content.append(new_part)
                     replaced = True
                 else:
@@ -166,7 +173,7 @@ class Skills(Middleware[SkillsConfig]):
             except Exception as exc:
                 return f'Failed to read skill "{skill_name}": {exc}'
 
-        return [Tool(use_skill, description='Load a skill by name.')]
+        return [Tool(use_skill, name=_USE_SKILL_TOOL_NAME, description='Load a skill by name.')]
 
     async def wrap_generate(
         self,
