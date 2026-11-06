@@ -17,6 +17,10 @@ emit ` ```a2ui ` fences; the middleware rewrites them into
 `application/a2ui+json` data parts. On the next turn, those parts become text
 again so the model can see prior surfaces and button clicks.
 
+A part's data is the A2UI extension spec's message list wrapper,
+`{"messages": [...]}`, as in the Dart, JS and Go plugins. Parts written with the
+older `envelopes` key are still read.
+
 ```python
 from genkit import Genkit
 from genkit_a2ui import Surfaces, envelopes_from_parts

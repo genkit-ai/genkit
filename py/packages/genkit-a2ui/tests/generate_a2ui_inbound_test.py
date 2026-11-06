@@ -41,8 +41,12 @@ from genkit import Message, Part, Role
 
 
 @pytest.mark.asyncio
-async def test_generate_a2ui_sends_click_to_model_as_text() -> None:
-    """A button click reaches the model as text, not as an A2UI data part."""
+@pytest.mark.parametrize('key', ['messages', 'envelopes'])
+async def test_generate_a2ui_sends_click_to_model_as_text(key: str) -> None:
+    """A button click reaches the model as text, not as an A2UI data part.
+
+    Clients send ``messages``; ``envelopes`` is the pre-rename key, still read.
+    """
     ai, pm = setup()
     pm.responses = [model_ok()]
 
@@ -53,17 +57,20 @@ async def test_generate_a2ui_sends_click_to_model_as_text() -> None:
                 role=Role.USER,
                 content=[
                     text_part('User interacted with the UI…'),
-                    a2ui_data_part([
-                        {
-                            'action': {
-                                'name': 'refresh',
-                                'surfaceId': 's1',
-                                'sourceComponentId': 'btn',
-                                'timestamp': 't',
-                                'context': {'city': 'Tokyo'},
+                    a2ui_data_part(
+                        [
+                            {
+                                'action': {
+                                    'name': 'refresh',
+                                    'surfaceId': 's1',
+                                    'sourceComponentId': 'btn',
+                                    'timestamp': 't',
+                                    'context': {'city': 'Tokyo'},
+                                }
                             }
-                        }
-                    ]),
+                        ],
+                        key=key,
+                    ),
                 ],
             )
         ],
