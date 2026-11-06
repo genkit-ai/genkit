@@ -16,9 +16,9 @@
 
 import { logger } from '@genkit-ai/tools-common/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { docsList, docsSearch } from '../../src/commands/docs';
-import * as docsUtils from '../../src/utils/docs';
-import { SAMPLE_DOCS } from '../utils/docs';
+import { docsList, docsSearch } from '../../src/commands/docs.js';
+import * as docsUtils from '../../src/utils/docs.js';
+import { SAMPLE_DOCS } from '../utils/docs.js';
 
 describe('docs CLI commands', () => {
   let loggedLines: string[];

@@ -18,13 +18,16 @@ import { describe, expect, it } from 'vitest';
 import {
   enrichResultsWithScoring,
   extractMetricSummaries,
-} from '../../src/eval';
+} from '../../src/eval/index.js';
 import {
   EvalMetricSchema,
   EvalStatusEnum,
   type EvalResult,
-} from '../../src/types/eval';
-import type { EvalFnResponse, EvalResponse } from '../../src/types/evaluator';
+} from '../../src/types/eval.js';
+import type {
+  EvalFnResponse,
+  EvalResponse,
+} from '../../src/types/evaluator.js';
 
 describe('parser', () => {
   const evalRunResults: EvalResult[] = [

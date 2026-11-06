@@ -26,8 +26,12 @@ import {
   writeFile,
 } from 'fs/promises';
 import * as path from 'path';
-import { AIToolConfigResult, AIToolModule, InitConfigOptions } from '../types';
-import { GENKIT_PROMPT_PATH, initGenkitFile } from '../utils';
+import {
+  AIToolConfigResult,
+  AIToolModule,
+  InitConfigOptions,
+} from '../types.js';
+import { GENKIT_PROMPT_PATH, initGenkitFile } from '../utils.js';
 
 // GEMINI specific paths
 const GEMINI_DIR = '.gemini';

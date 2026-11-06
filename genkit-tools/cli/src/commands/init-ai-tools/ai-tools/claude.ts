@@ -18,13 +18,17 @@ import { Runtime } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
 import { existsSync, readFileSync } from 'fs';
 import { writeFile } from 'fs/promises';
-import { AIToolConfigResult, AIToolModule, InitConfigOptions } from '../types';
+import {
+  AIToolConfigResult,
+  AIToolModule,
+  InitConfigOptions,
+} from '../types.js';
 import {
   GENKIT_PROMPT_PATH,
   calculateHash,
   initGenkitFile,
   updateContentInPlace,
-} from '../utils';
+} from '../utils.js';
 
 const CLAUDE_MCP_PATH = '.mcp.json';
 const CLAUDE_PROMPT_PATH = 'CLAUDE.md';

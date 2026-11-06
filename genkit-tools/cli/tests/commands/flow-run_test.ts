@@ -24,12 +24,12 @@ import {
   vi,
   type Mock,
 } from 'vitest';
-import { flowBatchRun } from '../../src/commands/flow-batch-run';
-import { flowRun } from '../../src/commands/flow-run';
-import { runWithManager } from '../../src/utils/manager-utils';
+import { flowBatchRun } from '../../src/commands/flow-batch-run.js';
+import { flowRun } from '../../src/commands/flow-run.js';
+import { runWithManager } from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
-vi.mock('../../src/utils/manager-utils');
+vi.mock('../../src/utils/manager-utils.js');
 
 describe('flow:run and flow:batchRun validation', () => {
   beforeEach(() => {

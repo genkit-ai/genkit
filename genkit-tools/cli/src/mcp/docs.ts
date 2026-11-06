@@ -18,9 +18,9 @@ import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 import z from 'zod';
-import { loadDocs, searchDocs } from '../utils/docs';
-import { McpRunToolEvent } from './analytics';
-import { SUPPORTED_DOC_LANGUAGES, detectProjectLanguage } from './utils';
+import { loadDocs, searchDocs } from '../utils/docs.js';
+import { McpRunToolEvent } from './analytics.js';
+import { SUPPORTED_DOC_LANGUAGES, detectProjectLanguage } from './utils.js';
 
 export async function defineDocsTool(server: McpServer, projectRoot?: string) {
   const documents = await loadDocs();

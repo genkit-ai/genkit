@@ -17,14 +17,14 @@
 import { record } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { waitForRuntime } from '../utils/manager-utils';
-import { McpRunToolEvent } from './analytics';
+import { waitForRuntime } from '../utils/manager-utils.js';
+import { McpRunToolEvent } from './analytics.js';
 import {
   McpToolOptions,
   formatMcpError,
   getCommonSchema,
   resolveProjectRoot,
-} from './utils';
+} from './utils.js';
 
 export function defineRuntimeTools(server: McpServer, options: McpToolOptions) {
   server.registerTool(

@@ -22,8 +22,8 @@ import {
 } from '@genkit-ai/tools-common/utils';
 import { yellow } from 'colorette';
 import { Command, Option } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
-import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter';
+import { runWithManager } from '../utils/manager-utils.js';
+import { cleanTraceJson, formatTraceTree } from '../utils/trace-formatter.js';
 
 /**
  * Options for the `trace:get` CLI command.

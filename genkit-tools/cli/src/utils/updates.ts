@@ -20,12 +20,12 @@ import axios, { AxiosInstance } from 'axios';
 import * as clc from 'colorette';
 import { arch, platform } from 'os';
 import semver from 'semver';
-import { UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG } from '../commands/config';
-import { detectCLIRuntime } from '../utils/runtime-detector';
+import { UPDATE_NOTIFICATIONS_OPT_OUT_CONFIG_TAG } from '../commands/config.js';
+import { detectCLIRuntime } from '../utils/runtime-detector.js';
 import {
   version as currentVersion,
   name as packageName,
-} from '../utils/version';
+} from '../utils/version.js';
 
 const GCS_BUCKET_URL = 'https://storage.googleapis.com/genkit-assets-cli';
 const CLI_DOCS_URL = 'https://genkit.dev/docs/devtools/';

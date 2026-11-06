@@ -29,8 +29,8 @@ import {
   vi,
   type Mock,
 } from 'vitest';
-import { start } from '../../src/commands/start';
-import * as managerUtils from '../../src/utils/manager-utils';
+import { start } from '../../src/commands/start.js';
+import * as managerUtils from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/server');
 vi.mock('@genkit-ai/tools-common/utils', () => ({

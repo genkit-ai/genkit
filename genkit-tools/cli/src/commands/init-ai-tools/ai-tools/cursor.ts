@@ -18,12 +18,16 @@ import { Runtime } from '@genkit-ai/tools-common/manager';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, writeFile } from 'fs/promises';
 import * as path from 'path';
-import { AIToolConfigResult, AIToolModule, InitConfigOptions } from '../types';
+import {
+  AIToolConfigResult,
+  AIToolModule,
+  InitConfigOptions,
+} from '../types.js';
 import {
   GENKIT_PROMPT_PATH,
   initGenkitFile,
   initOrReplaceFile,
-} from '../utils';
+} from '../utils.js';
 
 const CURSOR_MCP_PATH = path.join('.cursor', 'mcp.json');
 const CURSOR_RULES_DIR = '.cursor/rules';

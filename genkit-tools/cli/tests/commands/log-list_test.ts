@@ -24,11 +24,11 @@ import {
   vi,
   type Mock,
 } from 'vitest';
-import { logList } from '../../src/commands/log-list';
-import { runWithManager } from '../../src/utils/manager-utils';
+import { logList } from '../../src/commands/log-list.js';
+import { runWithManager } from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
-vi.mock('../../src/utils/manager-utils');
+vi.mock('../../src/utils/manager-utils.js');
 
 describe('log:list command', () => {
   let mockManager: any;

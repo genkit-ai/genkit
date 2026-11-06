@@ -22,8 +22,8 @@ import {
   stackTraceSpans,
 } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
-import { runWithManager } from '../utils/manager-utils';
-import { parsePositiveInt, parseTraceStatus } from '../utils/option-parsers';
+import { runWithManager } from '../utils/manager-utils.js';
+import { parsePositiveInt, parseTraceStatus } from '../utils/option-parsers.js';
 
 function formatTruncated(val: any, maxLen = 100): string {
   if (val === undefined) return '';

@@ -30,7 +30,10 @@ import { Command } from 'commander';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { parse } from 'yaml';
-import { startDevProcessManager, startManager } from '../utils/manager-utils';
+import {
+  startDevProcessManager,
+  startManager,
+} from '../utils/manager-utils.js';
 
 interface TestOptions {
   supports: string;

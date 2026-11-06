@@ -28,11 +28,11 @@ import {
   vi,
   type Mock,
 } from 'vitest';
-import { traceList } from '../../src/commands/trace-list';
-import { runWithManager } from '../../src/utils/manager-utils';
+import { traceList } from '../../src/commands/trace-list.js';
+import { runWithManager } from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/utils');
-vi.mock('../../src/utils/manager-utils');
+vi.mock('../../src/utils/manager-utils.js');
 
 describe('trace:list command', () => {
   let mockManager: any;

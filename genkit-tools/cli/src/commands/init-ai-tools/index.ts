@@ -14,4 +14,4 @@
  * limitations under the License.
  */
 
-export { initAiTools } from './command';
+export { initAiTools } from './command.js';

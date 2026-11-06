@@ -16,12 +16,12 @@
 
 import * as fs from 'fs/promises';
 import { beforeEach, describe, expect, it, vi, type Mocked } from 'vitest';
-import { SERVER_HARNESS_COMMAND } from '../../src/commands/server-harness';
-import { type CLIRuntimeInfo } from '../../src/utils/runtime-detector';
+import { SERVER_HARNESS_COMMAND } from '../../src/commands/server-harness.js';
+import { type CLIRuntimeInfo } from '../../src/utils/runtime-detector.js';
 import {
   buildServerHarnessSpawnConfig,
   validateExecutablePath,
-} from '../../src/utils/spawn-config';
+} from '../../src/utils/spawn-config.js';
 
 vi.mock('fs/promises');
 const mockedFs = fs as Mocked<typeof fs>;

@@ -19,7 +19,7 @@ import {
   getErrorCode,
   getErrorDetails,
   isConnectionRefusedError,
-} from '../../src/utils/errors';
+} from '../../src/utils/errors.js';
 
 describe('errors.ts', () => {
   describe('isConnectionRefusedError', () => {
