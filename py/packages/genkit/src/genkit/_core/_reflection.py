@@ -49,6 +49,7 @@ from genkit._core._model import AgentInit, AgentInput, ModelRef
 from genkit._core._reflection_config import REFLECTION_SECRET_HEADER, secrets_equal
 from genkit._core._registry import Registry
 from genkit._core._telemetry._http import connect_developer_ui_collector
+from genkit._core._telemetry._log_exporter import enable_log_export
 
 logger = get_logger(__name__)
 
@@ -320,6 +321,7 @@ def create_reflection_asgi_app(
                 url = raw
         if url:
             connect_developer_ui_collector(url=url)
+            enable_log_export(url=url)
         return JSONResponse({}, headers={'x-genkit-version': version})
 
     async def cancel(req: Request) -> JSONResponse:
