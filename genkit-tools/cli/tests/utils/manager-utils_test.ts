@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import * as telemetryServer from '@genkit-ai/telemetry-server';
 import {
   ProcessManager,
   REFLECTION_SECRET_ENV,
@@ -22,6 +23,11 @@ import {
   type BaseRuntimeManager,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
+import getPort, { makeRange } from 'get-port';
+import { mkdtempSync, rmSync } from 'node:fs';
+import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   afterEach,
   beforeEach,
@@ -34,12 +40,80 @@ import {
 import {
   getDevEnvVars,
   resolveReflectionSecret,
+  resolveTelemetryServer,
   runWithManager,
   startDevProcessManager,
   startManager,
   waitForActionKeys,
   waitForRuntime,
 } from '../../src/utils/manager-utils';
+
+describe('resolveTelemetryServer', () => {
+  let origTelemetryServer: string | undefined;
+  let projectRoot: string;
+  let startTelemetrySpy: MockInstance<
+    typeof telemetryServer.startTelemetryServer
+  >;
+
+  beforeEach(() => {
+    projectRoot = mkdtempSync(join(tmpdir(), 'genkit-telemetry-'));
+    origTelemetryServer = process.env.GENKIT_TELEMETRY_SERVER;
+    delete process.env.GENKIT_TELEMETRY_SERVER;
+    startTelemetrySpy = vi
+      .spyOn(telemetryServer, 'startTelemetryServer')
+      .mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    rmSync(projectRoot, { recursive: true, force: true });
+    if (origTelemetryServer === undefined) {
+      delete process.env.GENKIT_TELEMETRY_SERVER;
+    } else {
+      process.env.GENKIT_TELEMETRY_SERVER = origTelemetryServer;
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('returns GENKIT_TELEMETRY_SERVER when set without starting a server', async () => {
+    process.env.GENKIT_TELEMETRY_SERVER = 'http://custom:9999';
+
+    await expect(resolveTelemetryServer({ projectRoot })).resolves.toBe(
+      'http://custom:9999'
+    );
+    expect(startTelemetrySpy).not.toHaveBeenCalled();
+  });
+
+  it('skips a port already bound on 127.0.0.1 and starts the server on 127.0.0.1', async () => {
+    const occupiedPort = await getPort({
+      port: makeRange(4033, 4999),
+      host: '127.0.0.1',
+    });
+    const blocker = net.createServer();
+    await new Promise<void>((resolve) =>
+      blocker.listen(occupiedPort, '127.0.0.1', resolve)
+    );
+
+    try {
+      const url = await resolveTelemetryServer({
+        projectRoot,
+        corsOrigin: 'http://localhost:4000',
+      });
+      const chosenPort = Number(new URL(url).port);
+
+      expect(chosenPort).not.toBe(occupiedPort);
+      expect(url).toBe(`http://127.0.0.1:${chosenPort}`);
+      expect(startTelemetrySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          port: chosenPort,
+          host: '127.0.0.1',
+          corsOrigin: 'http://localhost:4000',
+        })
+      );
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  });
+});
 
 describe('getDevEnvVars', () => {
   // Setting GENKIT_TELEMETRY_SERVER makes resolveTelemetryServer return it
