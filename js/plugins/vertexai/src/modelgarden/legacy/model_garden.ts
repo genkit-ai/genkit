@@ -104,7 +104,7 @@ export function modelGardenOpenaiCompatibleModel(
   googleAuth: GoogleAuth,
   baseUrlTemplate: string | undefined
 ): ModelAction<typeof ModelGardenModelConfigSchema> {
-  const model = SUPPORTED_OPENAI_FORMAT_MODELS[name];
+  const model = (SUPPORTED_OPENAI_FORMAT_MODELS as Record<string, any>)[name];
   if (!model) throw new Error(`Unsupported model: ${name}`);
   if (!baseUrlTemplate) {
     baseUrlTemplate =

@@ -330,7 +330,7 @@ function toAnthropicContent(
   });
 }
 
-function toAnthropicRole(role): 'user' | 'assistant' {
+function toAnthropicRole(role: string): 'user' | 'assistant' {
   if (role === 'model') {
     return 'assistant';
   }

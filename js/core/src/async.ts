@@ -117,10 +117,18 @@ export class Channel<T> implements AsyncIterable<T> {
  * A lazy promise that does not run its executor function until then is called.
  */
 export class LazyPromise<T> implements PromiseLike<T> {
-  private executor;
-  private promise;
+  private executor: (
+    resolve: (value: T | PromiseLike<T>) => void,
+    reject: (reason?: any) => void
+  ) => void | Promise<void>;
+  private promise?: Promise<T>;
 
-  constructor(executor: (resolve?, reject?) => void | Promise<void>) {
+  constructor(
+    executor: (
+      resolve: (value: T | PromiseLike<T>) => void,
+      reject: (reason?: any) => void
+    ) => void | Promise<void>
+  ) {
     this.executor = executor;
   }
 
