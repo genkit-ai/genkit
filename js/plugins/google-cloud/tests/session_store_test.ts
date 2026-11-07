@@ -915,4 +915,202 @@ describe('FirestoreSessionStore', () => {
       );
     });
   });
+  describe('deleteSession', () => {
+    /** Saves a linear chain for a session and returns the snapshot ids. */
+    async function saveChain(
+      target: FirestoreSessionStore<Custom>,
+      sessionId: string,
+      length: number,
+      notes: string[] = []
+    ): Promise<string[]> {
+      const ids: string[] = [];
+      for (let i = 0; i < length; i++) {
+        const id = `${sessionId}-snap-${i}`;
+        await target.saveSnapshot(id, () =>
+          snapshot({
+            snapshotId: id,
+            parentId: ids[i - 1],
+            state: { sessionId, custom: { counter: i, notes } },
+          })
+        );
+        ids.push(id);
+      }
+      return ids;
+    }
+
+    it('removes snapshots, shards and the pointer content', async () => {
+      const small = makeStore({ checkpointInterval: 2, shardSize: 64 });
+      const ids = await saveChain(small, 'sess-del', 5, ['n'.repeat(200)]);
+      assert.ok((await shardsCol(small).get()).size > 0);
+
+      assert.strictEqual(await small.deleteSession('sess-del'), true);
+
+      assert.strictEqual(
+        await small.getSnapshot({ sessionId: 'sess-del' }),
+        undefined
+      );
+      for (const id of ids) {
+        assert.strictEqual(
+          await small.getSnapshot({ snapshotId: id }),
+          undefined
+        );
+      }
+      assert.strictEqual((await snapshotsCol(small).get()).size, 0);
+      assert.strictEqual((await shardsCol(small).get()).size, 0);
+      // Only the content-free tombstone remains.
+      const pointer = await pointersCol(small).doc('sess-del').get();
+      assert.deepStrictEqual(Object.keys(pointer.data() ?? {}), ['deletedAt']);
+    });
+
+    it('is idempotent', async () => {
+      assert.strictEqual(await store.deleteSession('never-existed'), false);
+      // A session that never existed leaves nothing behind, not even a tombstone.
+      assert.strictEqual(
+        (await pointersCol(store).doc('never-existed').get()).exists,
+        false
+      );
+      await saveChain(store, 'sess-twice', 2);
+      assert.strictEqual(await store.deleteSession('sess-twice'), true);
+      assert.strictEqual(await store.deleteSession('sess-twice'), false);
+    });
+
+    it('leaves other sessions untouched', async () => {
+      const small = makeStore({ checkpointInterval: 2, shardSize: 64 });
+      await saveChain(small, 'sess-a', 3, ['a'.repeat(200)]);
+      const keep = await saveChain(small, 'sess-b', 3, ['b'.repeat(200)]);
+
+      await small.deleteSession('sess-a');
+
+      const leaf = await small.getSnapshot({ sessionId: 'sess-b' });
+      assert.strictEqual(leaf?.snapshotId, keep[2]);
+      assert.deepStrictEqual(leaf?.state?.custom?.notes, ['b'.repeat(200)]);
+    });
+
+    it('deletes sessions larger than one batch', async () => {
+      // ~600 shards of 2 bytes: more than a single 400-write batch.
+      const tiny = makeStore({ shardSize: 2 });
+      await saveChain(tiny, 'sess-big', 1, ['x'.repeat(1200)]);
+      assert.ok((await shardsCol(tiny).get()).size > 400);
+
+      assert.strictEqual(await tiny.deleteSession('sess-big'), true);
+
+      assert.strictEqual((await shardsCol(tiny).get()).size, 0);
+      assert.strictEqual((await snapshotsCol(tiny).get()).size, 0);
+    });
+
+    it('can be re-run after an interrupted delete', async () => {
+      const small = makeStore({ checkpointInterval: 2, shardSize: 64 });
+      await saveChain(small, 'sess-retry', 3, ['r'.repeat(200)]);
+      // Simulate a crash after the shards were removed but before the
+      // snapshot documents were.
+      await db.recursiveDelete(shardsCol(small));
+      await pointersCol(small)
+        .doc('sess-retry')
+        .set({ deletedAt: new Date().toISOString() });
+
+      assert.strictEqual(await small.deleteSession('sess-retry'), true);
+      assert.strictEqual((await snapshotsCol(small).get()).size, 0);
+    });
+
+    it('is scoped to the tenant prefix', async () => {
+      const tenant = makeStore({
+        snapshotPathPrefix: (o) => (o?.context as any)?.uid ?? 'anon',
+      });
+      const ctxA = { context: { uid: 'alice' } };
+      const ctxB = { context: { uid: 'bob' } };
+      for (const ctx of [ctxA, ctxB]) {
+        await tenant.saveSnapshot(
+          'shared-snap',
+          () =>
+            snapshot({
+              snapshotId: 'shared-snap',
+              state: { sessionId: 'shared-sess' },
+            }),
+          ctx
+        );
+      }
+
+      assert.strictEqual(await tenant.deleteSession('shared-sess', ctxA), true);
+
+      assert.strictEqual(
+        await tenant.getSnapshot({ sessionId: 'shared-sess', ...ctxA }),
+        undefined
+      );
+      assert.ok(
+        await tenant.getSnapshot({ sessionId: 'shared-sess', ...ctxB })
+      );
+    });
+
+    it('rejects writers that continue the deleted chain', async () => {
+      const [tip] = await saveChain(store, 'sess-late', 1);
+      await store.deleteSession('sess-late');
+
+      await assert.rejects(
+        () =>
+          store.saveSnapshot('late', () =>
+            snapshot({
+              snapshotId: 'late',
+              parentId: tip,
+              state: { sessionId: 'sess-late' },
+            })
+          ),
+        (e: any) => e.name === 'SessionDeletedError'
+      );
+      assert.strictEqual(
+        await store.getSnapshot({ sessionId: 'sess-late' }),
+        undefined
+      );
+    });
+
+    it('lets a fresh root snapshot start the session again', async () => {
+      await saveChain(store, 'sess-again', 2);
+      await store.deleteSession('sess-again');
+
+      await store.saveSnapshot('again-root', () =>
+        snapshot({
+          snapshotId: 'again-root',
+          state: { sessionId: 'sess-again', custom: { counter: 9 } },
+        })
+      );
+
+      const leaf = await store.getSnapshot({ sessionId: 'sess-again' });
+      assert.strictEqual(leaf?.snapshotId, 'again-root');
+      assert.strictEqual(leaf?.state?.custom?.counter, 9);
+    });
+
+    it('reports a deleted snapshot to its subscriber as aborted', async () => {
+      await store.saveSnapshot('watched', () =>
+        snapshot({
+          snapshotId: 'watched',
+          status: 'pending',
+          state: { sessionId: 'sess-watch' },
+        })
+      );
+      const seen: Array<string | undefined> = [];
+      const unsubscribe = store.onSnapshotStateChange!('watched', (snap) =>
+        seen.push(snap.status)
+      );
+      try {
+        for (let i = 0; i < 100 && seen.length === 0; i++) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.deepStrictEqual(seen, ['pending']);
+
+        await store.deleteSession('sess-watch');
+        for (let i = 0; i < 100 && !seen.includes('aborted'); i++) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        assert.strictEqual(seen[seen.length - 1], 'aborted');
+      } finally {
+        unsubscribe?.();
+      }
+    });
+
+    it('rejects an empty sessionId', async () => {
+      await assert.rejects(
+        () => store.deleteSession(' '),
+        (e: any) => e.status === 'INVALID_ARGUMENT'
+      );
+    });
+  });
 });

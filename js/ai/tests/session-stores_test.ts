@@ -25,7 +25,12 @@ import {
   FileSessionStore,
   InMemorySessionStore,
 } from '../src/session-stores.js';
-import { reserveSnapshotId, type SessionSnapshot } from '../src/session.js';
+import {
+  SessionDeletedError,
+  reserveSnapshotId,
+  type SessionSnapshot,
+  type SessionStore,
+} from '../src/session.js';
 
 initNodeFeatures();
 
@@ -655,4 +660,145 @@ describe('FileSessionStore', () => {
       assert.deepStrictEqual(snap?.state.custom, { ok: true });
     });
   });
+});
+
+describe('SessionStore.deleteSession', () => {
+  const factories: Array<[string, () => SessionStore]> = [
+    ['InMemorySessionStore', () => new InMemorySessionStore()],
+    [
+      'FileSessionStore',
+      () =>
+        new FileSessionStore(
+          fs.mkdtempSync(path.join(os.tmpdir(), 'genkit-file-store-delete-')),
+          { snapshotWatchPollIntervalMs: 20 }
+        ),
+    ],
+  ];
+
+  async function saveChain(
+    store: SessionStore,
+    sessionId: string,
+    length: number,
+    status: SessionSnapshot['status'] = 'completed'
+  ): Promise<string[]> {
+    const ids: string[] = [];
+    for (let i = 0; i < length; i++) {
+      const id = reserveSnapshotId();
+      await store.saveSnapshot(id, () => ({
+        snapshotId: id,
+        sessionId,
+        parentId: ids[i - 1],
+        createdAt: new Date().toISOString(),
+        status,
+        state: { sessionId },
+      }));
+      ids.push(id);
+    }
+    return ids;
+  }
+
+  for (const [name, make] of factories) {
+    describe(name, () => {
+      it('removes every snapshot of the session and reports true', async () => {
+        const store = make();
+        const sessionId = globalThis.crypto.randomUUID();
+        const ids = await saveChain(store, sessionId, 3);
+
+        assert.strictEqual(await store.deleteSession!(sessionId), true);
+
+        assert.strictEqual(await store.getSnapshot({ sessionId }), undefined);
+        for (const id of ids) {
+          assert.strictEqual(
+            await store.getSnapshot({ snapshotId: id }),
+            undefined
+          );
+        }
+      });
+
+      it('is idempotent: a missing or already-deleted session returns false', async () => {
+        const store = make();
+        const sessionId = globalThis.crypto.randomUUID();
+        assert.strictEqual(await store.deleteSession!(sessionId), false);
+
+        await saveChain(store, sessionId, 1);
+        assert.strictEqual(await store.deleteSession!(sessionId), true);
+        assert.strictEqual(await store.deleteSession!(sessionId), false);
+      });
+
+      it('leaves other sessions untouched', async () => {
+        const store = make();
+        const a = globalThis.crypto.randomUUID();
+        const b = globalThis.crypto.randomUUID();
+        await saveChain(store, a, 2);
+        const [keep] = await saveChain(store, b, 2);
+
+        await store.deleteSession!(a);
+
+        assert.ok(await store.getSnapshot({ sessionId: b }));
+        assert.ok(await store.getSnapshot({ snapshotId: keep }));
+      });
+
+      it('rejects an empty sessionId', async () => {
+        const store = make();
+        await assert.rejects(
+          () => store.deleteSession!('  '),
+          (e: any) => e.status === 'INVALID_ARGUMENT'
+        );
+      });
+
+      it('rejects a late writer that continues the deleted chain', async () => {
+        const store = make();
+        const sessionId = globalThis.crypto.randomUUID();
+        const [tip] = await saveChain(store, sessionId, 1);
+        await store.deleteSession!(sessionId);
+
+        const lateId = reserveSnapshotId();
+        await assert.rejects(
+          () =>
+            store.saveSnapshot(lateId, () => ({
+              snapshotId: lateId,
+              sessionId,
+              parentId: tip,
+              createdAt: new Date().toISOString(),
+              status: 'completed' as const,
+              state: { sessionId },
+            })),
+          (e: unknown) => e instanceof SessionDeletedError
+        );
+        assert.strictEqual(await store.getSnapshot({ sessionId }), undefined);
+      });
+
+      it('lets a fresh root snapshot start the session again', async () => {
+        const store = make();
+        const sessionId = globalThis.crypto.randomUUID();
+        await saveChain(store, sessionId, 2);
+        await store.deleteSession!(sessionId);
+
+        const [fresh] = await saveChain(store, sessionId, 1);
+        const got = await store.getSnapshot({ sessionId });
+        assert.strictEqual(got?.snapshotId, fresh);
+      });
+
+      it('notifies a subscriber of a deleted snapshot as aborted', async () => {
+        const store = make();
+        const sessionId = globalThis.crypto.randomUUID();
+        const [id] = await saveChain(store, sessionId, 1, 'pending');
+
+        const seen: Array<SessionSnapshot['status']> = [];
+        const unsubscribe = store.onSnapshotStateChange!(id, (snap) =>
+          seen.push(snap.status)
+        );
+        // Let the subscription observe the existing snapshot first.
+        await new Promise((r) => setTimeout(r, 100));
+
+        await store.deleteSession!(sessionId);
+        for (let i = 0; i < 50 && !seen.includes('aborted'); i++) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        unsubscribe?.();
+
+        assert.strictEqual(seen[seen.length - 1], 'aborted');
+      });
+    });
+  }
 });
