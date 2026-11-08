@@ -245,7 +245,7 @@ function defineOllamaModel(
         options.top_k = topK;
       }
       if (stopSequences !== undefined) {
-        options.stop = stopSequences.join('');
+        options.stop = stopSequences;
       }
       if (maxOutputTokens !== undefined) {
         options.num_predict = maxOutputTokens;
