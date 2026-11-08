@@ -18,13 +18,13 @@
 
 from typing import Literal, TypeAlias, cast
 
-from genkit.model import Constrained, ModelInfo, Supports
+from genkit.model import ConstrainedSupport, ModelInfo, ModelSupports
 
 # Model definitions
 CLAUDE_SONNET_4 = ModelInfo(
     label='Anthropic - Claude Sonnet 4',
     versions=['claude-sonnet-4-20250514'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
@@ -35,7 +35,7 @@ CLAUDE_SONNET_4 = ModelInfo(
 CLAUDE_OPUS_4 = ModelInfo(
     label='Anthropic - Claude Opus 4',
     versions=['claude-opus-4-20250514'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
@@ -46,78 +46,78 @@ CLAUDE_OPUS_4 = ModelInfo(
 CLAUDE_SONNET_4_5 = ModelInfo(
     label='Anthropic - Claude Sonnet 4.5',
     versions=['claude-sonnet-4-5-20250929'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_SONNET_4_6 = ModelInfo(
     label='Anthropic - Claude Sonnet 4.6',
     versions=['claude-sonnet-4-6'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_SONNET_5 = ModelInfo(
     label='Anthropic - Claude Sonnet 5',
     versions=['claude-sonnet-5'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_HAIKU_4_5 = ModelInfo(
     label='Anthropic - Claude Haiku 4.5',
     versions=['claude-haiku-4-5-20251001'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_OPUS_4_1 = ModelInfo(
     label='Anthropic - Claude Opus 4.1',
     versions=['claude-opus-4-1-20250805'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_OPUS_4_5 = ModelInfo(
     label='Anthropic - Claude Opus 4.5',
     versions=['claude-opus-4-5-20251101'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
@@ -127,39 +127,39 @@ CLAUDE_OPUS_4_5 = ModelInfo(
 CLAUDE_OPUS_4_6 = ModelInfo(
     label='Anthropic - Claude Opus 4.6',
     versions=['claude-opus-4-6'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_OPUS_4_7 = ModelInfo(
     label='Anthropic - Claude Opus 4.7',
     versions=['claude-opus-4-7'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
 CLAUDE_OPUS_4_8 = ModelInfo(
     label='Anthropic - Claude Opus 4.8',
     versions=['claude-opus-4-8'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
@@ -167,13 +167,13 @@ CLAUDE_OPUS_4_8 = ModelInfo(
 CLAUDE_FABLE_5 = ModelInfo(
     label='Anthropic - Claude Fable 5',
     versions=['claude-fable-5'],
-    supports=Supports(
+    supports=ModelSupports(
         multiturn=True,
         media=True,
         tools=True,
         system_role=True,
         output=['text', 'json'],
-        constrained=Constrained.ALL,
+        constrained=ConstrainedSupport.ALL,
     ),
 )
 
@@ -211,7 +211,7 @@ SUPPORTED_ANTHROPIC_MODELS: dict[KnownClaude, ModelInfo] = {
     'claude-fable-5': CLAUDE_FABLE_5,
 }
 
-DEFAULT_SUPPORTS = Supports(
+DEFAULT_SUPPORTS = ModelSupports(
     multiturn=True,
     media=True,
     tools=True,

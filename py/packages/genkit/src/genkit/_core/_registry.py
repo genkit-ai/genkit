@@ -33,15 +33,17 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionName,
-    ActionRunContext,
+    FlowContext,
+    ModelContext,
     SpanAttributeValue,
     create_action_key,
     parse_action_key,
     parse_dap_qualified_name,
     set_action_name,
 )
+from genkit._core._background import BackgroundAction, background_base_id
 from genkit._core._dap import DapFn, DapMetadata, DynamicActionProvider
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     EmbedRequest,
@@ -49,14 +51,10 @@ from genkit._core._model import (
     ModelResponse,
     ModelResponseChunk,
 )
+from genkit._core._operation import Operation
 from genkit._core._plugin import Plugin, resolved_action_name
-from genkit._core._typing import (
-    ActionMetadata,
-    EmbedResponse,
-    EvalResponse,
-    EvaluatorRequest,
-    Operation,
-)
+from genkit._core._tool import Tool
+from genkit._core._typing import ActionMetadata, EmbedResponse, EvalResponse, EvaluatorRequest
 
 logger = get_logger(__name__)
 
@@ -86,7 +84,8 @@ ChunkT = TypeVar('ChunkT', default=Never)
 ActionFn = (
     Callable[[], OutputT | Awaitable[OutputT]]
     | Callable[[InputT], OutputT | Awaitable[OutputT]]
-    | Callable[[InputT, ActionRunContext], OutputT | Awaitable[OutputT]]
+    | Callable[[InputT, FlowContext], OutputT | Awaitable[OutputT]]
+    | Callable[[InputT, ModelContext], OutputT | Awaitable[OutputT]]
 )
 
 
@@ -215,7 +214,7 @@ class Registry:
                 raise GenkitError(
                     status='NOT_FOUND',
                     message=f"Schema '{name}' not found",
-                    reason=RuntimeErrorReason.INVALID_INPUT,
+                    reason=ErrorReason.INVALID_INPUT,
                 )
             return schema
 
@@ -340,9 +339,19 @@ class Registry:
            action: The action instance to register.
         """
         with self._lock:
-            if action.kind not in self._entries:
-                self._entries[action.kind] = {}
-            self._entries[action.kind][action.name] = action
+            self._store_locked(action, action.name)
+
+    def _store_locked(self, action: Action, name: str) -> None:
+        """Store ``action`` under ``name``; a Tool also stores its ``tool.v2`` envelope action.
+
+        Caller holds ``self._lock``.
+        """
+        self._entries.setdefault(action.kind, {})[name] = action
+        wire = action.wire_action if isinstance(action, Tool) else None
+        if wire is not None:
+            # Keep the envelope action's name in step with a namespaced tool.
+            set_action_name(wire, name)
+            self._entries.setdefault(wire.kind, {})[name] = wire
 
     def registered_action(self, kind: ActionKind, name: str) -> Action | None:
         """Return an action that is already in this registry.
@@ -413,7 +422,7 @@ class Registry:
                 logger.exception('Error listing actions for plugin %s', plugin_name)
                 continue
             for item in advertised or []:
-                meta = item._action_metadata() if isinstance(item, Action) else item
+                meta = item._action_metadata() if isinstance(item, (Action, BackgroundAction)) else item
                 if not meta.name:
                     raise ValueError(f'Invalid ActionMetadata from {plugin_name}: name required')
                 if not meta.action_type:
@@ -421,7 +430,8 @@ class Registry:
                 key = f'/{meta.action_type}/{meta.name}'
                 catalog[key] = meta.model_copy(update={'key': key})
 
-        # 2. Concrete registered actions (local tools are ``/tool.v2/<name>``).
+        # 2. Concrete registered actions. A local tool is ``/tool/<name>`` plus its
+        #    ``/tool.v2/<name>`` envelope; the Dev UI shows the ``tool.v2`` row.
         for kind in ActionKind.__members__.values():
             for name, action in (await self.resolve_actions_by_kind(kind)).items():
                 key = create_action_key(kind, name)
@@ -571,8 +581,11 @@ class Registry:
                     # Assert for type narrowing inside closure (pyrefly doesn't propagate from outer scope)
                     assert plugin is not None
                     actions = await plugin.init()
-                    for action in actions or []:
-                        self.register_action_instance(action, namespace=plugin_name)
+                    for item in actions or []:
+                        # A background action is three registry entries.
+                        members = item.actions if isinstance(item, BackgroundAction) else [item]
+                        for action in members:
+                            self.register_action_instance(action, namespace=plugin_name)
 
                 task = asyncio.create_task(run_init())
                 loop_tasks[plugin_name] = task
@@ -598,9 +611,7 @@ class Registry:
             set_action_name(action, name)
 
         with self._lock:
-            if action.kind not in self._entries:
-                self._entries[action.kind] = {}
-            self._entries[action.kind][name] = action
+            self._store_locked(action, name)
 
     async def _trigger_lazy_loading(self, action: Action | None) -> Action | None:
         """Trigger lazy loading for an action if needed.
@@ -704,8 +715,6 @@ class Registry:
                 return await self._parent.resolve_action(kind, name)
             return None
 
-        action: Action | None = None
-
         # Namespaced request
         if '/' in name:
             plugin_name, local = name.split('/', 1)
@@ -722,14 +731,27 @@ class Registry:
                     if kind in self._entries and target in self._entries[kind]:
                         return await self._trigger_lazy_loading(self._entries[kind][target])
 
-                action = await plugin.resolve(kind, local)
-                if action is not None:
+                resolved = await plugin.resolve(kind, local)
+                if resolved is None and kind in (ActionKind.CHECK_OPERATION, ActionKind.CANCEL_OPERATION):
+                    # Check and cancel belong to the start action's background
+                    # job; a plugin only has to resolve that.
+                    resolved = await plugin.resolve(ActionKind.BACKGROUND_MODEL, background_base_id(kind, local))
+                    if not isinstance(resolved, BackgroundAction):
+                        resolved = None
+                if isinstance(resolved, BackgroundAction):
+                    # Same naming rule as below, for all three members.
+                    base = background_base_id(kind, local)
+                    resolved._rename(resolved_action_name(plugin=plugin_name, requested_id=base))
+                    for member in resolved.actions:
+                        self.register_action_instance(member, namespace=plugin_name)
+                    return await self._trigger_lazy_loading(resolved._action_for(kind))
+                if resolved is not None:
                     # The caller asked for ``target``; store and name it there
                     # so a later lookup of that id finds this action, even if
                     # the plugin returned a different name.
-                    set_action_name(action, resolved_action_name(plugin=plugin_name, requested_id=local))
-                    self.register_action_instance(action, namespace=plugin_name)
-                    return await self._trigger_lazy_loading(action)
+                    set_action_name(resolved, resolved_action_name(plugin=plugin_name, requested_id=local))
+                    self.register_action_instance(resolved, namespace=plugin_name)
+                    return await self._trigger_lazy_loading(resolved)
 
         # Final fallback: delegate to parent registry.
         if self._parent is not None:

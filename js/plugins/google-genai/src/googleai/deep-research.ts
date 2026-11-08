@@ -214,8 +214,10 @@ export type KnownModels = keyof typeof KNOWN_MODELS; // For autocomplete
 // they don't show up in autocomplete. Set `stage` on each one (keeping the
 // default `supports`).
 const HIDDEN_MODELS = {
-  // Deprecated; shuts down on Oct 23 2026 (changelog, Oct 8 2026). Replaced
-  // by deep-research-preview-04-2026 and deep-research-max-preview-04-2026.
+  // Deprecated; the shutdown date was Oct 23 2026 (changelog, Oct 8 2026),
+  // but it still accepted requests on Oct 27 2026. Remove it once the server
+  // returns 404. Replaced by deep-research-preview-04-2026 and
+  // deep-research-max-preview-04-2026.
   'deep-research-pro-preview-12-2025': commonRef(
     'deep-research-pro-preview-12-2025',
     { ...GENERIC_MODEL.info, stage: 'deprecated' }

@@ -15,7 +15,6 @@
  */
 
 import * as trpcExpress from '@trpc/server/adapters/express';
-import * as bodyParser from 'body-parser';
 import * as clc from 'colorette';
 import cors from 'cors';
 import express, { type ErrorRequestHandler } from 'express';
@@ -168,7 +167,7 @@ export function startServer(
   // TODO: migrate to streamingMutation when it becomes available in tRPC.
   app.post(
     '/api/runAction',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('runAction', projectRuntime),
     async (req, res) => {
       // Set headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
@@ -216,7 +215,7 @@ export function startServer(
 
   app.post(
     '/api/streamAction',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('streamAction', projectRuntime),
     async (req, res) => {
       // Set streaming headers but don't flush yet - wait for trace ID (if realtime telemetry enabled)
@@ -274,7 +273,7 @@ export function startServer(
 
   app.post(
     '/api/sendBidiInput',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('sendBidiInput', projectRuntime),
     (req, res) => {
       const { traceId, chunk } = req.body;
@@ -290,7 +289,7 @@ export function startServer(
 
   app.post(
     '/api/endBidiInput',
-    bodyParser.json(),
+    express.json(),
     loggedExpressRoute('endBidiInput', projectRuntime),
     (req, res) => {
       const { traceId } = req.body;
@@ -310,7 +309,7 @@ export function startServer(
 
   app.post(
     '/api/streamTrace',
-    bodyParser.json({ limit: MAX_PAYLOAD_SIZE }),
+    express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('streamTrace', projectRuntime),
     async (req, res) => {
       const { traceId } = req.body;

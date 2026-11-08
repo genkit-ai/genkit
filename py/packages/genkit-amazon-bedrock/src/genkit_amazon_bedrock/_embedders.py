@@ -37,12 +37,11 @@ rejected with ``Invalid parameter combination``. Image embedding needs
 import asyncio
 import json
 from collections.abc import Coroutine
-from typing import Any, Literal, Protocol, TypeVar, cast
+from typing import Any, Literal, Protocol, TypeAlias, TypeVar, cast
 
-import structlog
 from botocore.exceptions import BotoCoreError, ClientError
 
-from genkit import Document, Embedding, GenkitError
+from genkit import Document, Embedding, GenkitError, get_logger
 from genkit.embedder import (
     EmbedderInfo,
     EmbedderSupports,
@@ -53,7 +52,7 @@ from genkit.plugin_api import provider_error
 from genkit_amazon_bedrock._model_info import model_label, strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 # One call's result: a single vector per document, or a chunk of them for Cohere.
 _T = TypeVar('_T')
@@ -119,6 +118,18 @@ EMBEDDER_INFO: dict[str, EmbedderInfo] = {
         supports=EmbedderSupports(input=list(TEXT_ONLY)),
     ),
 }
+
+
+# Autocomplete for Bedrock.embedder(). Same set as EMBEDDER_INFO (a test pins
+# that); any other embedding ID is still accepted.
+KnownBedrockEmbedder: TypeAlias = Literal[
+    'amazon.titan-embed-text-v1',
+    'amazon.titan-embed-text-v2:0',
+    'amazon.titan-embed-image-v1',
+    'cohere.embed-english-v3',
+    'cohere.embed-multilingual-v3',
+    'amazon.nova-2-multimodal-embeddings-v1:0',
+]
 
 
 class InvokeModelTransport(Protocol):
@@ -433,9 +444,9 @@ class BedrockEmbedder:
                 mime, image = image_from_document(document)
             except GenkitError as error:
                 raise GenkitError(
-                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.original_message)}',
+                    message=f'bedrock embed: document {index}: {_without_own_prefix(error.message)}',
                     status=error.status,
-                    response_metadata=error.response_metadata,
+                    retry_after_ms=error.retry_after_ms,
                 ) from error
             if not text and not image:
                 raise GenkitError(
@@ -525,15 +536,15 @@ class BedrockEmbedder:
                     except GenkitError as error:
                         # A batch failure is opaque without the failing document,
                         # but the inner message already names the plugin. Keep
-                        # response_metadata so retry still honours Retry-After.
+                        # retry_after_ms so retry still honours Retry-After.
                         # Everything in here is the Bedrock call or its reply.
-                        detail = _without_own_prefix(error.original_message)
+                        detail = _without_own_prefix(error.message)
                         # Wrap the provider's own error, not the inner GenkitError,
                         # whose str() would repeat the whole message as the cause.
                         raise provider_error(
-                            error.cause or error,
+                            error.__cause__ or error,
                             status=error.status,
-                            retry_after_ms=(error.response_metadata or {}).get('retry_after_ms'),
+                            retry_after_ms=error.retry_after_ms,
                             message=f'bedrock embed: document {index}: {detail}',
                         ) from error
             except asyncio.CancelledError:

@@ -2,5 +2,5 @@ node_modules
 plugins/
 common/
 ui/
-jest.config.ts
+vitest.config.ts
 tsconfig.json

@@ -26,7 +26,7 @@ ai = Genkit(plugins=[VertexAI()])
 async def main() -> None:
     response = await ai.generate(
         prompt='Draw a cat in a hat',
-        model=VertexAI.gemini_image_model('gemini-2.5-flash-image'),
+        model=VertexAI.gemini_image('gemini-2.5-flash-image'),
     )
     print(response.media[0].url if response.media else response.text)
 

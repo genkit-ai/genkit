@@ -20,9 +20,9 @@ This module provides reusable error handling and base utilities for
 trace and metrics exporters, eliminating code duplication.
 """
 
-import structlog
+from genkit import get_logger
 
-logger = structlog.get_logger(__name__)
+logger = get_logger(__name__)
 
 
 class ErrorHandler:

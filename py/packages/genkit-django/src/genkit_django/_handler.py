@@ -17,53 +17,54 @@
 """Genkit Django handler for serving flows as HTTP endpoints."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
-from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, JsonResponse, StreamingHttpResponse
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from pydantic import BaseModel
 
-from genkit import ContextProvider, Genkit, GenkitError, PublicError, RequestData
-from genkit._core._action import input_from_json
-from genkit._core._context import joined_headers
-from genkit._core._error import log_served_failure, served_error_json, served_stream_error_event
+from genkit import Genkit, GenkitError, PublicError
 from genkit.plugin_api import Action
+from genkit.web import (
+    ContextProvider,
+    RequestData,
+    error_json,
+    error_sse,
+    error_status,
+    read_body,
+    result_json,
+    to_sse,
+    wants_stream,
+)
 
-logger = logging.getLogger(__name__)
-
-# Compact JSON (no spaces) for smaller wire payload.
-_JSON_SEPARATORS = (',', ':')
+logger = logging.getLogger(__name__)  # noqa: TID251
 
 
-def _to_dict(obj: Any) -> Any:  # noqa: ANN401
-    """Recursively convert Pydantic models inside ``obj`` to plain JSON-friendly types.
+def _log_failure(*, error: Exception, flow: str, where: str) -> None:
+    """Log a served-action failure to the host web server's stdlib logger, naming the action.
 
-    Flows can return a Pydantic model, a list of Pydantic models, or a dict whose
-    values are Pydantic models. Django's ``JsonResponse`` and ``json.dumps`` don't
-    know how to serialize ``BaseModel`` instances natively, so descend into lists,
-    tuples, and dicts to convert every model we find.
+    Intentionally emits to stdlib ``logging`` rather than ``genkit.get_logger``
+    because route failures happen at the HTTP boundary outside the flow span,
+    where Django ``LOGGING`` handlers, Uvicorn/Gunicorn, Sentry
+    ``LoggingIntegration``, and ``pytest`` ``caplog`` listen. 5xx errors include
+    the traceback.
     """
-    if isinstance(obj, BaseModel):
-        return obj.model_dump()
-    if isinstance(obj, list):
-        return [_to_dict(item) for item in obj]
-    if isinstance(obj, tuple):
-        return [_to_dict(item) for item in obj]
-    if isinstance(obj, dict):
-        return {k: _to_dict(v) for k, v in obj.items()}
-    return obj
+    extra = {'genkit_action': flow}
+    if error_status(error) >= 500:
+        logger.exception('served action %r %s failed', flow, where, extra=extra)
+    else:
+        logger.warning('served action %r %s failed: %s', flow, where, error, extra=extra)
 
 
 def _error_response(err: Exception, status: int | None = None) -> HttpResponse:
     """Return a JSON error body; status comes from the error unless overridden."""
-    resolved_status, body = served_error_json(error=err)
     return HttpResponse(
-        status=resolved_status if status is None else status,
-        content=body.encode('utf-8'),
+        status=error_status(err) if status is None else status,
+        content=error_json(err).encode('utf-8'),
         content_type='application/json',
     )
 
@@ -85,7 +86,7 @@ class _DjangoRequestData(RequestData):
         super().__init__(
             request=request,
             method=request.method or '',
-            headers=joined_headers(_request_headers(request).items()),
+            headers=_request_headers(request).items(),
             input=body.get('data') if body else None,
         )
 
@@ -98,13 +99,13 @@ def genkit_django_handler(
 
     ```python
     from django.urls import path
-    from genkit import ActionRunContext
+    from genkit import FlowContext
     from genkit_django import genkit_django_handler
 
 
     @genkit_django_handler(ai)
     @ai.flow()
-    async def say_hi(name: str, ctx: ActionRunContext) -> str:
+    async def say_hi(name: str, ctx: FlowContext) -> str:
         stream = ai.generate_stream(prompt=f'tell a joke about {name}')
         async for chunk in stream.stream:
             if chunk.text:
@@ -118,7 +119,7 @@ def genkit_django_handler(
     ]
     ```
 
-    Requires Django ASGI (Django 4.1+). The returned view is `csrf_exempt`
+    Requires Django ASGI (Django 5.0+). The returned view is `csrf_exempt`
     because this is a JSON API.
 
     Args:
@@ -148,13 +149,10 @@ def genkit_django_handler(
                     PublicError('INVALID_ARGUMENT', 'request body must be valid JSON'),
                 )
 
-            if not isinstance(body, dict) or 'data' not in body:
-                return _error_response(
-                    PublicError(
-                        'INVALID_ARGUMENT',
-                        'Action request must be wrapped in {"data": ...} object',
-                    ),
-                )
+            try:
+                action_input = read_body(body)
+            except PublicError as e:
+                return _error_response(e)
 
             request_data = _DjangoRequestData(request, body)
             action_context: dict[str, object] | None = None
@@ -170,35 +168,37 @@ def genkit_django_handler(
                     # Django's own denial; re-raise so it stays 403/404/400.
                     raise
                 except Exception as e:
-                    log_served_failure(adapter_logger=logger, error=e, where='context provider')
+                    _log_failure(error=e, flow=flow.name, where='context provider')
                     return _error_response(e)
 
-            accept = request_data.headers.get('accept', '')
-            stream = 'text/event-stream' in accept or request.GET.get('stream') == 'true'
             init = body.get('init')
-            action_input = input_from_json(body['data'])
 
-            if stream:
+            stream = cast(str | None, request.GET.get('stream'))
+            if wants_stream(accept=request_data.headers.get('accept'), stream=stream):
 
                 async def event_stream() -> AsyncIterator[str]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
-                        async for chunk in stream_response.stream:
-                            yield f'data: {json.dumps({"message": _to_dict(chunk)}, separators=_JSON_SEPARATORS)}\n\n'
-
-                        result = await stream_response.response
-                        yield f'data: {json.dumps({"result": _to_dict(result)}, separators=_JSON_SEPARATORS)}\n\n'
                     except Exception as e:
-                        log_served_failure(adapter_logger=logger, error=e, where='stream')
-                        yield served_stream_error_event(error=e)
+                        _log_failure(error=e, flow=flow.name, where='stream')
+                        yield error_sse(e)
+                        return
+                    # a client that hangs up closes this generator; aclosing makes
+                    # that cancel the flow right away instead of whenever it's collected.
+                    async with contextlib.aclosing(to_sse(stream_response)) as lines:
+                        async for line in lines:
+                            yield line
 
-                return StreamingHttpResponse(event_stream(), content_type='text/event-stream')
+                return StreamingHttpResponse(event_stream(), content_type='text/event-stream; charset=utf-8')
 
             try:
                 response = await flow.run(input=action_input, context=action_context, init=init)
-                return JsonResponse({'result': _to_dict(response.response)})
+                return HttpResponse(
+                    content=result_json(response.response).encode('utf-8'),
+                    content_type='application/json',
+                )
             except Exception as e:
-                log_served_failure(adapter_logger=logger, error=e, where='run')
+                _log_failure(error=e, flow=flow.name, where='run')
                 return _error_response(e)
 
         return handler

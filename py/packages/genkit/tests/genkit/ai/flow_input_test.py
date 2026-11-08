@@ -10,7 +10,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel, ConfigDict
 
-from genkit import ActionRunContext, Genkit, GenkitError
+from genkit import FlowContext, Genkit, GenkitError
 from genkit._core._reflection import create_reflection_asgi_app
 
 
@@ -20,7 +20,7 @@ async def test_await_flow_with_context_keyword_reaches_ctx_context() -> None:
     ai = Genkit()
 
     @ai.flow()
-    async def greet(name: str, ctx: ActionRunContext) -> str:
+    async def greet(name: str, ctx: FlowContext) -> str:
         return f'hello {name} as {ctx.context["auth"]["uid"]}'
 
     assert await greet('ada', context={'auth': {'uid': 'u1'}}) == 'hello ada as u1'
@@ -32,7 +32,7 @@ async def test_await_flow_without_context_keyword_sees_empty_context() -> None:
     ai = Genkit()
 
     @ai.flow()
-    async def greet(name: str, ctx: ActionRunContext) -> str:
+    async def greet(name: str, ctx: FlowContext) -> str:
         return f'hello {name} with {ctx.context!r}'
 
     assert await greet('ada') == 'hello ada with {}'
@@ -129,7 +129,7 @@ async def test_ctx_first_flow_with_no_input_uses_default_and_gets_context() -> N
     ai = Genkit()
 
     @ai.flow()
-    async def greet(ctx: ActionRunContext, name: str = 'world') -> str:
+    async def greet(ctx: FlowContext, name: str = 'world') -> str:
         return f'hello {name} as {ctx.context["auth"]["uid"]}'
 
     assert await greet(context={'auth': {'uid': 'u1'}}) == 'hello world as u1'
@@ -142,7 +142,7 @@ async def test_ctx_first_flow_with_explicit_none_raises_invalid_argument() -> No
     ai = Genkit()
 
     @ai.flow()
-    async def greet(ctx: ActionRunContext, name: str = 'world') -> str:
+    async def greet(ctx: FlowContext, name: str = 'world') -> str:
         return f'hello {name}'
 
     with pytest.raises(GenkitError) as exc:
@@ -158,7 +158,7 @@ async def test_ctx_first_flow_with_explicit_none_and_optional_input_receives_non
     ai = Genkit()
 
     @ai.flow()
-    async def greet(ctx: ActionRunContext, name: str | None = 'world') -> str:
+    async def greet(ctx: FlowContext, name: str | None = 'world') -> str:
         return f'hello {name}'
 
     assert await greet(None) == 'hello None'

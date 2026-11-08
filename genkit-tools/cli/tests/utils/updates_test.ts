@@ -20,38 +20,53 @@ import {
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
+  vi,
+  type MockedFunction,
+} from 'vitest';
 
 // Mock dependencies before importing the module
-const mockAxiosGet = jest.fn() as jest.MockedFunction<any>;
-const mockGetUserSettings = jest.fn();
-const mockLoggerDebug = jest.fn();
-const mockLoggerInfo = jest.fn();
-const mockDetectCLIRuntime = jest.fn();
-
-jest.mock('axios', () => ({
-  create: jest.fn(() => ({ get: mockAxiosGet })),
+const {
+  mockAxiosGet,
+  mockGetUserSettings,
+  mockLoggerDebug,
+  mockLoggerInfo,
+  mockDetectCLIRuntime,
+} = vi.hoisted(() => ({
+  mockAxiosGet: vi.fn() as MockedFunction<any>,
+  mockGetUserSettings: vi.fn(),
+  mockLoggerDebug: vi.fn(),
+  mockLoggerInfo: vi.fn(),
+  mockDetectCLIRuntime: vi.fn(),
 }));
 
-jest.mock('@genkit-ai/tools-common/utils', () => ({
-  getUserSettings: mockGetUserSettings,
-  logger: {
-    debug: mockLoggerDebug,
-    info: mockLoggerInfo,
-  },
-}));
+vi.mock('axios', () => {
+  const create = vi.fn(() => ({ get: mockAxiosGet }));
+  return { create, default: { create } };
+});
 
-jest.mock('../../src/utils/runtime-detector', () => ({
+vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@genkit-ai/tools-common/utils')>();
+  return {
+    ...actual,
+    getUserSettings: mockGetUserSettings,
+    logger: {
+      debug: mockLoggerDebug,
+      info: mockLoggerInfo,
+    },
+  };
+});
+
+vi.mock('../../src/utils/runtime-detector', () => ({
   detectCLIRuntime: mockDetectCLIRuntime,
 }));
 
-jest.mock('../../src/utils/version', () => ({
+vi.mock('../../src/utils/version', () => ({
   version: '1.15.0',
   name: 'genkit-cli',
 }));
 
-jest.mock('colorette', () => ({
+vi.mock('colorette', () => ({
   yellow: (text: string) => text,
   green: (text: string) => text,
   bold: (text: string) => text,
@@ -60,11 +75,15 @@ jest.mock('colorette', () => ({
   cyan: (text: string) => text,
 }));
 
-jest.mock('os', () => ({
-  ...(jest.requireActual('os') as any),
-  arch: () => 'x64',
-  platform: () => 'linux',
-}));
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>();
+  const mock = {
+    ...actual,
+    arch: () => 'x64',
+    platform: () => 'linux',
+  };
+  return { ...mock, default: mock };
+});
 
 // Now import the functions we want to test
 import {
@@ -77,7 +96,7 @@ describe('updates', () => {
   const originalEnv = process.env;
 
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     // Reset process.env
     process.env = { ...originalEnv };

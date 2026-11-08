@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = [
   "genkit",
   "genkit-anthropic",
-  "pydantic>=2.10.5",
+  "pydantic>=2.11",
   "structlog>=25.2.0",
 ]
 

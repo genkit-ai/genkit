@@ -3,7 +3,7 @@ node_modules
 /.genkit
 /src
 /tests
-jest.config.ts
+vitest.config.ts
 tsconfig.cjs.json
 tsconfig.esm.json
 tsconfig.types.json

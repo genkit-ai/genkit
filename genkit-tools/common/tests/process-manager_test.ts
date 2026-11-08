@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { describe, expect, it, vi } from 'vitest';
 import { ProcessManager } from '../src/manager/process-manager';
 import { logger } from '../src/utils';
 
@@ -134,7 +134,7 @@ describe('ProcessManager', () => {
       signalCode: null,
     });
     (manager as any).appProcess = child;
-    const terminateSpy = jest
+    const terminateSpy = vi
       .spyOn(manager as unknown as TerminationHook, 'terminateProcess')
       .mockImplementation(
         (_pid: number, callback: (error: Error | null) => void) => {
@@ -157,7 +157,7 @@ describe('ProcessManager', () => {
       signalCode: null,
     });
     (manager as any).appProcess = child;
-    const terminateSpy = jest
+    const terminateSpy = vi
       .spyOn(manager as unknown as TerminationHook, 'terminateProcess')
       .mockImplementation(
         (_pid: number, callback: (error: Error | null) => void) => {
@@ -180,7 +180,7 @@ describe('ProcessManager', () => {
       signalCode: null,
     });
     (manager as any).appProcess = child;
-    const terminateSpy = jest
+    const terminateSpy = vi
       .spyOn(manager as unknown as TerminationHook, 'terminateProcess')
       .mockImplementation(
         (_pid: number, callback: (error: Error | null) => void) => {

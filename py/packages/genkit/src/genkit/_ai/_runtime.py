@@ -223,7 +223,7 @@ class RuntimeManager:
     async def __aenter__(self) -> RuntimeManager:
         """Create the runtime directory and file."""
         try:
-            await logger.adebug(f'Ensuring runtime directory exists: {self._runtime_dir}')
+            logger.debug(f'Ensuring runtime directory exists: {self._runtime_dir}')
             _ = self._runtime_dir.mkdir(parents=True, exist_ok=True)
             if not self.lazy_write:
                 _ = self.write_runtime_file()
@@ -250,7 +250,7 @@ class RuntimeManager:
             False to indicate exceptions should propagate.
         """
         self.cleanup()
-        await logger.adebug('RuntimeManager async context exited.')
+        logger.debug('RuntimeManager async context exited.')
         return False
 
     def __enter__(self) -> RuntimeManager:

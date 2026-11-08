@@ -14,17 +14,10 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   detectRuntime,
   detectRuntimeSync,
@@ -72,7 +65,7 @@ describe('utils', () => {
         fs.mkdirSync(nestedDir, { recursive: true });
         fs.writeFileSync(path.join(projectDir, markerFile), '');
 
-        const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(nestedDir);
+        const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(nestedDir);
 
         try {
           expect(await findProjectRoot()).toEqual(projectDir);
@@ -92,7 +85,7 @@ describe('utils', () => {
       fs.writeFileSync(path.join(workspaceDir, 'package.json'), '{}');
       fs.writeFileSync(path.join(dartDir, 'pubspec.yaml'), 'name: dart_app');
 
-      const cwdSpy = jest.spyOn(process, 'cwd').mockReturnValue(dartDir);
+      const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(dartDir);
 
       try {
         expect(await findProjectRoot()).toEqual(dartDir);

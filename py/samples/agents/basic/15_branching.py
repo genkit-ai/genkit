@@ -45,7 +45,7 @@ store = InMemorySessionStore(reject_ambiguous_session=True)
 
 agent = ai.define_agent(
     name='designer',
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
     system='You help design a product landing page. Reply in two or three short sentences.',
     store=store,
 )

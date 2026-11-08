@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
+import axios from 'axios';
+import getPort from 'get-port';
 import {
   afterEach,
   beforeEach,
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
-import axios from 'axios';
-import getPort from 'get-port';
+  vi,
+  type MockInstance,
+} from 'vitest';
 import { BaseRuntimeManager } from '../src/manager/manager';
 import { startServer } from '../src/server/server';
 import * as analytics from '../src/utils/analytics';
@@ -40,22 +41,22 @@ describe('Tools Server', () => {
     mockManager = {
       projectRoot: './',
       disableRealtimeTelemetry: false,
-      runAction: jest.fn(),
-      streamTrace: jest.fn(),
-      listActions: jest.fn(),
-      listTraces: jest.fn(),
-      getTrace: jest.fn(),
-      getMostRecentRuntime: jest.fn(),
-      listRuntimes: jest.fn(),
-      onRuntimeEvent: jest.fn(),
-      cancelAction: jest.fn(),
-      stopOnce: jest.fn(async () => {}),
+      runAction: vi.fn(),
+      streamTrace: vi.fn(),
+      listActions: vi.fn(),
+      listTraces: vi.fn(),
+      getTrace: vi.fn(),
+      getMostRecentRuntime: vi.fn(),
+      listRuntimes: vi.fn(),
+      onRuntimeEvent: vi.fn(),
+      cancelAction: vi.fn(),
+      stopOnce: vi.fn(async () => {}),
     };
     serverPromise = startServer(mockManager as BaseRuntimeManager, port);
   });
 
   afterEach(async () => {
-    const exitSpy = jest
+    const exitSpy = vi
       .spyOn(process, 'exit')
       .mockImplementation((code?: any) => {
         return undefined as never;
@@ -85,7 +86,7 @@ describe('Tools Server', () => {
       { responseType: 'stream' }
     );
     streamingResponse.data.on('data', () => {});
-    const exitSpy = jest
+    const exitSpy = vi
       .spyOn(process, 'exit')
       .mockImplementation(() => undefined as never);
     shutdownInTest = true;
@@ -202,17 +203,17 @@ describe('Tools Server', () => {
   });
 
   describe('analytics events', () => {
-    let recordSpy: jest.Spied<typeof analytics.recordRequestEvent>;
+    let recordSpy: MockInstance<typeof analytics.recordRequestEvent>;
 
     beforeEach(() => {
-      recordSpy = jest
+      recordSpy = vi
         .spyOn(analytics, 'recordRequestEvent')
         .mockImplementation(() => {});
-      jest.spyOn(analytics, 'record').mockImplementation(async () => {});
+      vi.spyOn(analytics, 'record').mockImplementation(async () => {});
     });
 
     afterEach(() => {
-      jest.restoreAllMocks();
+      vi.restoreAllMocks();
     });
 
     it('should record analytics event for runAction with valid string key', async () => {
@@ -550,7 +551,7 @@ describe('Tools Server', () => {
     });
 
     it('should record analytics event for sendPageView', async () => {
-      const recordDirectSpy = jest.spyOn(analytics, 'record');
+      const recordDirectSpy = vi.spyOn(analytics, 'record');
 
       await axios.get(
         `http://localhost:${port}/api/sendPageView?input=${encodeURIComponent(
@@ -567,7 +568,7 @@ describe('Tools Server', () => {
     });
 
     it('should record analytics event for sendSelectContent', async () => {
-      const recordDirectSpy = jest.spyOn(analytics, 'record');
+      const recordDirectSpy = vi.spyOn(analytics, 'record');
 
       await axios.get(
         `http://localhost:${port}/api/sendSelectContent?input=${encodeURIComponent(

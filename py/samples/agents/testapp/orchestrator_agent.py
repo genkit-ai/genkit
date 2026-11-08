@@ -30,7 +30,7 @@ from __future__ import annotations
 from _ai import ai, reply_text
 from pydantic import BaseModel
 
-from genkit import ActionRunContext
+from genkit import FlowContext
 
 # Specialists. They're ordinary agents — the orchestrator reaches them through
 # the delegation tools below, which just run a one-shot chat against each.
@@ -73,7 +73,7 @@ orchestrator_agent = ai.define_agent(
 
 
 @ai.flow()
-async def test_orchestrator_agent(text: str, ctx: ActionRunContext) -> str:
+async def test_orchestrator_agent(text: str, ctx: FlowContext) -> str:
     chat = orchestrator_agent.chat()
     turn = chat.send_stream(text or 'Research quicksort, then write a Python implementation of it.')
     async for chunk in turn:

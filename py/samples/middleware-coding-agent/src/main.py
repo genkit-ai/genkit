@@ -29,7 +29,7 @@ skills = here / 'skills'
 
 ai = Genkit(
     plugins=[GoogleAI(), Middleware()],
-    model=GoogleAI.gemini_model('gemini-flash-latest'),
+    model=GoogleAI.gemini('gemini-flash-latest'),
 )
 
 # ToolApproval lets read-only tools run; write_file / edit_file interrupt.

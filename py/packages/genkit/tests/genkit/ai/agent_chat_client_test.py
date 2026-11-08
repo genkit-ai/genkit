@@ -18,6 +18,7 @@ import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
+import anyio
 import pytest
 from pydantic import BaseModel
 
@@ -31,12 +32,11 @@ from genkit._ai._agents._client import (
     DetachedTask,
     TurnDriver,
 )
-from genkit._ai._agents._runtime import AgentInitError, SessionRunner
+from genkit._ai._agents._runtime import AgentInitError, SessionRunner, to_error_details
 from genkit._ai._agents._types import StateManagement, TurnResult
 from genkit._ai._json_patch import apply_json_patch
-from genkit._core._action import ActionRunContext
 from genkit._core._channel import CloseableQueue
-from genkit._core._error import GenkitError, GenkitRuntimeError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -64,7 +64,7 @@ from genkit._core._typing import (
     TurnEnd,
 )
 from genkit.exp import Genkit
-from genkit.exp.agent import InMemorySessionStore
+from genkit.exp.agent import AgentContext, InMemorySessionStore
 from genkit.testing import define_scripted_model
 
 # ---------------------------------------------------------------------------
@@ -985,9 +985,14 @@ async def test_attached_turn_abort() -> None:
     ai.define_prompt(name='abortAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='abortAgent', store=store)
 
-    # We make the mock model sleep to simulate a slow response
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    # Block the first model call until the test finishes so slow CI runners
+    # cannot enter model_fn after response_cb is cleared for turn 2.
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
-        await asyncio.sleep(5)
+        started.set()
+        await release.wait()
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('Slow response finished')]),
@@ -996,42 +1001,44 @@ async def test_attached_turn_abort() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send_stream('Hello')
+    try:
+        turn = chat.send_stream('Hello')
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-    # Let it run a bit
-    await asyncio.sleep(0.1)
+        # Abort the turn client-side (stops reading the stream)
+        await turn.abort()
 
-    # Abort the turn client-side (stops reading the stream)
-    await turn.abort()
+        # Verify awaiting the turn raises CancelledError
+        with pytest.raises(asyncio.CancelledError):
+            await turn.response
 
-    # Verify awaiting the turn raises CancelledError
-    with pytest.raises(asyncio.CancelledError):
-        await turn.response
+        # Abort is a client-side detach only: the prompt was still asked, so the
+        # optimistic user message stays in history (just without a reply).
+        texts_after_abort = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts_after_abort == ['Hello']
 
-    # Abort is a client-side detach only: the prompt was still asked, so the
-    # optimistic user message stays in history (just without a reply).
-    texts_after_abort = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts_after_abort == ['Hello']
-
-    # Restore normal fast response for the second turn
-    pm.response_cb = None
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+        # Restore normal fast response for the second turn
+        pm.response_cb = None
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+            )
         )
-    )
 
-    # We can keep going; the next turn appends onto the kept history.
-    turn2 = chat.send_stream('Continue conversation')
-    res2 = await turn2.response
+        # We can keep going; the next turn appends onto the kept history.
+        turn2 = chat.send_stream('Continue conversation')
+        res2 = await turn2.response
 
-    # The detached turn's 'Hello' is still there, followed by the new exchange.
-    texts = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
-    assert res2.message is not None
-    assert res2.message.content is not None
-    assert res2.message.content[0].text == 'Second turn echo'
+        # The detached turn's 'Hello' is still there, followed by the new exchange.
+        texts = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts == ['Hello', 'Continue conversation', 'Second turn echo']
+        assert res2.message is not None
+        assert res2.message.content is not None
+        assert res2.message.content[0].text == 'Second turn echo'
+    finally:
+        release.set()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1044,8 +1051,12 @@ async def test_await_turn_under_timeout_detaches() -> None:
     ai.define_prompt(name='timeoutAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='timeoutAgent', store=InMemorySessionStore())
 
+    started = asyncio.Event()
+    release = asyncio.Event()
+
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
-        await asyncio.sleep(5)
+        started.set()
+        await release.wait()
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('too late')]),
@@ -1054,30 +1065,36 @@ async def test_await_turn_under_timeout_detaches() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send_stream('Hello')
+    try:
+        turn = chat.send_stream('Hello')
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-    # The deadline fires before the slow model responds → surfaces as TimeoutError.
-    async def _await_turn() -> None:
-        await turn.response
+        # The deadline fires before the slow model responds → surfaces as TimeoutError.
+        async def _await_turn() -> None:
+            await turn.response
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(_await_turn(), 0.2)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(_await_turn(), 0.01)
 
-    # Detach kept the optimistic prompt; the session reads as a turn with no reply.
-    texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts_after == ['Hello']
+        # Detach kept the optimistic prompt; the session reads as a turn with no reply.
+        texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts_after == ['Hello']
 
-    # And we can continue cleanly.
-    pm.response_cb = None
-    pm.responses.append(
-        ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+        # And we can continue cleanly.
+        pm.response_cb = None
+        pm.responses.append(
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Second turn echo')]),
+            )
         )
-    )
-    res2 = await chat.send('Continue conversation')
-    assert res2.message is not None
-    assert res2.message.content[0].text == 'Second turn echo'
+        res2 = await chat.send('Continue conversation')
+        assert res2.message is not None
+        assert res2.message.content is not None
+        assert res2.message.content[0].text == 'Second turn echo'
+    finally:
+        release.set()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1089,8 +1106,12 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     ai.define_prompt(name='streamTimeoutAgent', model='scriptedModel', system='Hello')
     agent = ai.define_prompt_agent(name='streamTimeoutAgent', store=InMemorySessionStore())
 
+    started = asyncio.Event()
+    release = asyncio.Event()
+
     async def slow_response(*args: Any, **kwargs: Any) -> ModelResponse:
-        await asyncio.sleep(5)
+        started.set()
+        await release.wait()
         return ModelResponse(
             finish_reason=FinishReason.STOP,
             message=Message(role=Role.MODEL, content=[Part.from_text('too late')]),
@@ -1099,17 +1120,22 @@ async def test_stream_turn_under_timeout_detaches() -> None:
     pm.response_cb = slow_response
 
     chat = agent.chat()
-    turn = chat.send_stream('Hello')
+    try:
+        turn = chat.send_stream('Hello')
+        await asyncio.wait_for(started.wait(), timeout=5.0)
 
-    async def _drain() -> None:
-        async for _chunk in turn.stream:
-            pass
+        async def _drain() -> None:
+            async for _chunk in turn.stream:
+                pass
 
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(_drain(), 0.2)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(_drain(), 0.01)
 
-    texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
-    assert texts_after == ['Hello']
+        texts_after = [p.text for m in chat.messages for p in (m.content or []) if p.text is not None]
+        assert texts_after == ['Hello']
+    finally:
+        release.set()
+        await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
@@ -1119,19 +1145,18 @@ async def test_session_abort() -> None:
 
     store = InMemorySessionStore()
 
-    tool_executed = False
-    tool_cancelled = False
+    tool_started = asyncio.Event()
+    tool_cancelled = asyncio.Event()
 
     @ai.tool()
     async def slow_tool(arg: str) -> str:
-        nonlocal tool_executed, tool_cancelled
-        tool_executed = True
         try:
-            await asyncio.sleep(10)
-            return 'Slow tool complete'
+            tool_started.set()
+            await asyncio.Future()
         except asyncio.CancelledError:
-            tool_cancelled = True
+            tool_cancelled.set()
             raise
+        return 'Slow tool complete'
 
     # Define a simple agent that uses this tool
     ai.define_prompt(name='sessionAbortAgent', model='scriptedModel', system='Use the slow tool.', tools=[slow_tool])
@@ -1152,8 +1177,7 @@ async def test_session_abort() -> None:
     task = await chat.detach('Trigger slow action')
     assert task.snapshot_id is not None
 
-    # Give it a tiny moment to start execution
-    await asyncio.sleep(0.2)
+    await asyncio.wait_for(tool_started.wait(), timeout=5.0)
 
     # Abort the running snapshot on the server (requires a store)
     status = await chat.abort()
@@ -1161,12 +1185,11 @@ async def test_session_abort() -> None:
     # detached turn was still running (spec: tests/specs/agent.yaml).
     assert status == SnapshotStatus.PENDING
 
-    # Give the background task a moment to process cancellation
-    await asyncio.sleep(0.5)
+    await asyncio.wait_for(tool_cancelled.wait(), timeout=5.0)
 
     # Verify the tool was started and successfully cancelled by the server abort!
-    assert tool_executed
-    assert tool_cancelled
+    assert tool_started.is_set()
+    assert tool_cancelled.is_set()
 
 
 @pytest.mark.asyncio
@@ -1593,7 +1616,7 @@ def _define_turns(
     store: InMemorySessionStore | None,
     state_schema: type[BaseModel] | None = None,
 ) -> Agent:
-    async def fn(session_runner: SessionRunner, _: ActionRunContext) -> AgentResult:
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
         async def turn(inp: AgentInput, __: Any) -> TurnResult | None:  # noqa: ANN401
             return await handle(session_runner, inp)
 
@@ -1640,9 +1663,9 @@ def _flaky(
     return _define_turns(ai, name, handle, store=store)
 
 
-def _assert_failed(res: Any, *, message: str) -> GenkitRuntimeError:  # noqa: ANN401
+def _assert_failed(res: Any, *, message: str) -> Failure:
     assert res.finish_reason == AgentFinishReason.FAILED
-    assert isinstance(res.error, GenkitRuntimeError)
+    assert isinstance(res.error, Failure)
     assert res.error.message == message
     assert res.message is None
     assert res.text == ''
@@ -1707,12 +1730,12 @@ async def test_send_on_failed_turn_with_reason_reads_reason() -> None:
         Genkit(),
         'failReason',
         store=InMemorySessionStore(),
-        fail=GenkitError(status='INTERNAL', message='tool died', reason=RuntimeErrorReason.TOOL_FAILED),
+        fail=GenkitError(status='INTERNAL', message='tool died', reason=ErrorReason.TOOL_FAILED),
     )
     res = await agent.chat().send('please fail now')
     err = _assert_failed(res, message='tool died')
     assert err.status == 'INTERNAL'
-    assert err.reason is RuntimeErrorReason.TOOL_FAILED
+    assert err.reason is ErrorReason.TOOL_FAILED
 
 
 @pytest.mark.asyncio
@@ -1849,7 +1872,7 @@ async def test_send_with_snapshot_id_on_agent_without_store_raises_genkit_error(
     with pytest.raises(GenkitError) as exc:
         await chat.send('hi')
     assert exc.value.status == 'FAILED_PRECONDITION'
-    assert exc.value.reason is RuntimeErrorReason.SESSION_STORE_NOT_CONFIGURED
+    assert exc.value.reason is ErrorReason.SESSION_STORE_NOT_CONFIGURED
     # Same type the client raises for client-side misuse; no wrapper in between.
     assert isinstance(exc.value, AgentInitError)
     assert chat.messages == []
@@ -1879,7 +1902,7 @@ async def test_send_over_dropped_connection_raises_unavailable_and_keeps_last_go
     with pytest.raises(GenkitError) as exc:
         await chat.send('next')
     assert exc.value.status == 'UNAVAILABLE'
-    assert isinstance(exc.value.cause, ConnectionError)
+    assert isinstance(exc.value.__cause__, ConnectionError)
     assert chat.state == {'n': 1}
     assert chat.messages == messages_before
 
@@ -1991,8 +2014,8 @@ async def test_send_with_invalid_custom_state_returns_response_with_error() -> N
     agent = _define_turns(Genkit(), 'badState', handle, store=None, state_schema=_TaskState)
     res = await agent.chat(state={'done': 'nope'}).send('hi')  # type: ignore[arg-type]
     assert res.finish_reason == AgentFinishReason.FAILED
-    assert isinstance(res.error, GenkitRuntimeError)
-    assert res.error.reason is RuntimeErrorReason.INVALID_INPUT
+    assert isinstance(res.error, Failure)
+    assert res.error.reason is ErrorReason.INVALID_INPUT
     assert res.error.status == 'INVALID_ARGUMENT'
     assert res.state is None
 
@@ -2027,6 +2050,107 @@ async def test_send_on_failed_turn_without_error_still_has_error() -> None:
 
     err = _assert_failed(res, message='Agent turn failed.')
     assert err.status == 'UNKNOWN'
+
+
+@pytest.mark.asyncio
+async def test_send_when_turn_calls_interrupting_tool_directly_returns_failed_turn() -> None:
+    """A turn body that calls an interrupting tool itself fails the turn instead of hanging.
+
+    Only generate can pause on an Interrupt. Raised straight out of a turn
+    body it would skip the runtime's `except Exception` and leave send()
+    waiting forever, so the runtime fails the turn with INTERNAL.
+    """
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        await refund_order('A-17')
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(ai, 'refundDesk', handle, store=InMemorySessionStore())
+    res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+
+    err = _assert_failed(res, message='Interrupt raised outside a tool')
+    assert err.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_turn_interrupt_marks_run_turn_span_error(exporter: Any) -> None:  # noqa: ANN401
+    """The turn's Interrupt is converted inside runTurn-N, so the span records the failure.
+
+    Converted after the span unwound, the span would see a raw Interrupt,
+    treat it as control flow, and report success while the turn FAILED.
+    """
+    ai = Genkit()
+
+    @ai.tool()
+    async def refund_order(order_id: str) -> str:
+        """Refund an order; needs approval."""
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        await refund_order('A-17')
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(ai, 'refundDeskTrace', handle, store=InMemorySessionStore())
+    res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+    _assert_failed(res, message='Interrupt raised outside a tool')
+
+    turn_spans = [span for span in exporter.get_finished_spans() if span.name == 'runTurn-1']
+    assert turn_spans
+    attrs = turn_spans[-1].attributes or {}
+    assert attrs.get('genkit:state') == 'error'
+
+
+@pytest.mark.asyncio
+async def test_send_when_turn_task_group_interrupts_returns_failed_turn() -> None:
+    """An Interrupt from a task group child in a turn body fails the turn instead of hanging.
+
+    The BaseExceptionGroup isn't an Exception, so without conversion it
+    would skip the turn loop's handler and leave send() waiting.
+    """
+    ai = Genkit()
+
+    async def check_refund_limit(order_id: str) -> None:
+        raise Interrupt({'reason': 'needs approval', 'order_id': order_id})
+
+    async def handle(session_runner: SessionRunner, inp: AgentInput) -> TurnResult | None:
+        del session_runner, inp
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(check_refund_limit, 'A-17')
+        return TurnResult(finish_reason=AgentFinishReason.STOP)
+
+    agent = _define_turns(ai, 'refundDeskGroup', handle, store=InMemorySessionStore())
+    res = await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+
+    err = _assert_failed(res, message='Interrupt raised inside a task group')
+    assert err.status == 'INTERNAL'
+
+
+@pytest.mark.asyncio
+async def test_send_when_agent_fn_raises_interrupt_outside_turn_does_not_hang() -> None:
+    """An Interrupt raised by the agent fn outside any turn settles send() with GenkitError.
+
+    No turn ran, so there is no turn result to return; send() raises like
+    any other agent fn failure instead of waiting forever.
+    """
+
+    async def fn(session_runner: SessionRunner, _: AgentContext) -> AgentResult:
+        del session_runner
+        raise Interrupt({'reason': 'needs approval'})
+
+    agent = define_custom_agent(Genkit(), 'refundDeskSetup', fn, store=InMemorySessionStore())
+    with pytest.raises(GenkitError) as exc:
+        await asyncio.wait_for(agent.chat().send('refund A-17'), timeout=2.0)
+
+    assert exc.value.status == 'INTERNAL'
+    assert 'Interrupt raised outside a tool' in str(exc.value)
 
 
 @pytest.mark.asyncio
@@ -2161,3 +2285,40 @@ async def test_send_on_failed_turn_without_snapshot_falls_back_to_last_completed
     # 3. f1 can't be resumed, so the caller is pointed at s1.
     assert res.finish_reason == AgentFinishReason.FAILED
     assert res.snapshot_id == 's1'
+
+
+class _ClientResponseError(Exception):
+    """Stands in for aiohttp.ClientResponseError, whose ``status`` is an int HTTP code."""
+
+    def __init__(self) -> None:
+        super().__init__('429, message=Too Many Requests')
+        self.status = 429
+        self.details = {'retry': 'later'}
+
+
+@pytest.mark.parametrize(
+    ('exc', 'status', 'message', 'details'),
+    [
+        (
+            GenkitError(status='NOT_FOUND', message='no order A-17', reason=ErrorReason.TOOL_NOT_FOUND),
+            'NOT_FOUND',
+            'no order A-17',
+            {'reason': 'TOOL_NOT_FOUND'},
+        ),
+        (GenkitError(status='ABORTED', message='stopped'), 'ABORTED', 'stopped', None),
+        (asyncio.CancelledError(), 'CANCELLED', 'Internal failure', None),
+        (TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
+        (asyncio.TimeoutError('kitchen printer timed out'), 'DEADLINE_EXCEEDED', 'kitchen printer timed out', None),
+        (_ClientResponseError(), 'INTERNAL', '429, message=Too Many Requests', None),
+        (ValueError('bad table number'), 'INTERNAL', 'bad table number', None),
+    ],
+)
+def test_to_error_details_classifies_status_like_go(
+    exc: BaseException, status: str, message: str, details: dict[str, Any] | None
+) -> None:
+    """Only a GenkitError names its status; a foreign int ``.status`` (aiohttp's 429) is INTERNAL."""
+    failure = to_error_details(exc)
+
+    assert failure.status == status
+    assert failure.message == message
+    assert failure.details == details

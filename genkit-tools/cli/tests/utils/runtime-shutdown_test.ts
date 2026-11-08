@@ -15,16 +15,16 @@
  */
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { waitForRuntimeShutdown } from '../../src/utils/runtime-shutdown';
 
 describe('waitForRuntimeShutdown', () => {
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('stops once on normal completion and removes signal listeners', async () => {
-    const stopOnce = jest.fn(async () => {});
+    const stopOnce = vi.fn(async () => {});
     const manager = { stopOnce } as unknown as BaseRuntimeManager;
     const before = process.listenerCount('SIGTERM');
 
@@ -40,14 +40,14 @@ describe('waitForRuntimeShutdown', () => {
       finishProcess = resolve;
     });
     let finishStop!: () => void;
-    const stopOnce = jest.fn(
+    const stopOnce = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           finishStop = resolve;
         })
     );
     const manager = { stopOnce } as unknown as BaseRuntimeManager;
-    const exit = jest
+    const exit = vi
       .spyOn(process, 'exit')
       .mockImplementation(() => undefined as never);
     const before = new Set(process.listeners('SIGTERM'));
@@ -72,7 +72,7 @@ describe('waitForRuntimeShutdown', () => {
 
   it('removes signal listeners when cleanup rejects', async () => {
     const manager = {
-      stopOnce: jest.fn(async () => {
+      stopOnce: vi.fn(async () => {
         throw new Error('cleanup failed');
       }),
     } as unknown as BaseRuntimeManager;
@@ -85,7 +85,7 @@ describe('waitForRuntimeShutdown', () => {
 
   it('preserves the process failure when runtime cleanup also fails', async () => {
     const processError = new Error('process failed');
-    const stopOnce = jest.fn(async () => {
+    const stopOnce = vi.fn(async () => {
       throw new Error('cleanup failed');
     });
     const manager = { stopOnce } as unknown as BaseRuntimeManager;
@@ -105,11 +105,11 @@ describe('waitForRuntimeShutdown', () => {
       finishProcess = resolve;
     });
     const manager = {
-      stopOnce: jest.fn(async () => {
+      stopOnce: vi.fn(async () => {
         throw new Error('cleanup failed');
       }),
     } as unknown as BaseRuntimeManager;
-    const exit = jest
+    const exit = vi
       .spyOn(process, 'exit')
       .mockImplementation(() => undefined as never);
     const before = new Set(process.listeners('SIGTERM'));

@@ -14,14 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import { RuntimeManagerV2 } from '../src/manager/manager-v2';
 import {
@@ -50,39 +43,47 @@ describe('RuntimeManagerV2', () => {
     await manager.stop();
   });
 
-  it('should accept connections and handle registration', (done) => {
+  it('should accept connections and handle registration', async () => {
     wsClient = new WebSocket(`ws://localhost:${port}`);
 
-    const unsubscribe = manager.onRuntimeEvent((event, runtime) => {
-      if (event === RuntimeEvent.ADD) {
-        expect(runtime.id).toBe('test-runtime-1');
-        expect(runtime.pid).toBe(1234);
-        expect(manager.listRuntimes().length).toBe(1);
-        unsubscribe();
-        done();
-      }
-    });
+    await new Promise<void>((resolve, reject) => {
+      const unsubscribe = manager.onRuntimeEvent((event, runtime) => {
+        if (event === RuntimeEvent.ADD) {
+          try {
+            expect(runtime.id).toBe('test-runtime-1');
+            expect(runtime.pid).toBe(1234);
+            expect(manager.listRuntimes().length).toBe(1);
+            unsubscribe();
+            resolve();
+          } catch (err) {
+            unsubscribe();
+            reject(err);
+          }
+        }
+      });
 
-    wsClient.on('open', () => {
-      const registerMessage = {
-        jsonrpc: '2.0',
-        method: 'register',
-        params: {
-          id: 'test-runtime-1',
-          pid: 1234,
-          name: 'Test Runtime',
-          genkitVersion: '0.0.1',
-          reflectionApiSpecVersion: 1,
-        },
-        id: '1',
-      };
-      wsClient.send(JSON.stringify(registerMessage));
+      wsClient.on('error', reject);
+      wsClient.on('open', () => {
+        const registerMessage = {
+          jsonrpc: '2.0',
+          method: 'register',
+          params: {
+            id: 'test-runtime-1',
+            pid: 1234,
+            name: 'Test Runtime',
+            genkitVersion: '0.0.1',
+            reflectionApiSpecVersion: 1,
+          },
+          id: '1',
+        };
+        wsClient.send(JSON.stringify(registerMessage));
+      });
     });
   });
 
   it('should allow unsubscribing from runtime events', async () => {
     wsClient = new WebSocket(`ws://localhost:${port}`);
-    const listener = jest.fn();
+    const listener = vi.fn();
 
     const unsubscribe = manager.onRuntimeEvent(listener);
 

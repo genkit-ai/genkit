@@ -10,7 +10,7 @@
     "genai",
     "generative-ai"
   ],
-  "version": "0.11.0",
+  "version": "0.12.0",
   "type": "commonjs",
   "scripts": {
     "check": "tsc",

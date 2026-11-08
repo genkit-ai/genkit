@@ -25,7 +25,7 @@ from genkit import Genkit
 from genkit_fastapi import serve_flow
 from genkit_google_genai import GoogleAI
 
-ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini_model('gemini-flash-latest'))
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 app = FastAPI()
 
 
