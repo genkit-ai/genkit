@@ -14,16 +14,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Flow decorator classes for type-safe flow registration."""
+"""Flow and tool decorator classes for type-safe registration."""
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, overload
 
-from genkit._core._action import ActionRunContext
+from pydantic import BaseModel
+
+from genkit._ai._tools import define_tool
+from genkit._core._action import FlowContext
 from genkit._core._flow import Flow, define_flow
 from genkit._core._registry import Registry
+from genkit._core._tool import Tool, ToolContext
 
 # TypeVars for generic input/output typing
 InputT = TypeVar('InputT')
@@ -53,26 +57,24 @@ class _FlowDecorator:
     #   best any arrangement can do there without breaking `(ctx: FlowContext)`.
     @overload
     def __call__(
-        self, func: Callable[[ActionRunContext[ChunkT], object], Awaitable[OutputT]]
+        self, func: Callable[[FlowContext[ChunkT], object], Awaitable[OutputT]]
     ) -> Flow[Any, OutputT, ChunkT]: ...
 
     @overload
     def __call__(
-        self, func: Callable[[InputT, ActionRunContext[ChunkT]], Awaitable[OutputT]]
+        self, func: Callable[[InputT, FlowContext[ChunkT]], Awaitable[OutputT]]
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
     def __call__(
-        self, func: Callable[[ActionRunContext[ChunkT], InputT], Awaitable[OutputT]]
+        self, func: Callable[[FlowContext[ChunkT], InputT], Awaitable[OutputT]]
     ) -> Flow[InputT, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Flow[Any, OutputT]: ...
 
     @overload
-    def __call__(
-        self, func: Callable[[ActionRunContext[ChunkT]], Awaitable[OutputT]]
-    ) -> Flow[None, OutputT, ChunkT]: ...
+    def __call__(self, func: Callable[[FlowContext[ChunkT]], Awaitable[OutputT]]) -> Flow[None, OutputT, ChunkT]: ...
 
     @overload
     def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Flow[InputT, OutputT]: ...
@@ -85,3 +87,57 @@ class _FlowDecorator:
 
     def __call__(self, func: Callable[..., Awaitable[Any]]) -> Flow[Any, Any, Any]:
         return define_flow(self._registry, func, self._name, self._description)
+
+
+class _ToolDecorator:
+    """Decorator class for tool registration, typed so ``await tool(...)`` returns the function's own type."""
+
+    def __init__(
+        self,
+        registry: Registry,
+        name: str | None,
+        description: str | None,
+        input_schema: type[BaseModel] | dict[str, object] | None,
+    ) -> None:
+        self._registry = registry
+        self._name = name
+        self._description = description
+        self._input_schema = input_schema
+
+    # Same order as define_tool's overloads: context-only before input-only,
+    # since a ``ctx`` function also fits ``[InputT]``.
+    @overload
+    def __call__(
+        self, func: Callable[[ToolContext[ChunkT], object], Awaitable[OutputT]]
+    ) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(
+        self, func: Callable[[InputT, ToolContext[ChunkT]], Awaitable[OutputT]]
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(
+        self, func: Callable[[ToolContext[ChunkT], InputT], Awaitable[OutputT]]
+    ) -> Tool[InputT, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[object], Awaitable[OutputT]]) -> Tool[Any, OutputT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]]) -> Tool[Any, OutputT, ChunkT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[InputT], Awaitable[OutputT]]) -> Tool[InputT, OutputT]: ...
+
+    @overload
+    def __call__(self, func: Callable[[], Awaitable[OutputT]]) -> Tool[None, OutputT]: ...
+
+    def __call__(self, func: Callable[..., Awaitable[Any]]) -> Tool[Any, Any, Any]:
+        return define_tool(
+            self._registry,
+            func,
+            self._name,
+            self._description,
+            input_schema=self._input_schema,
+        )

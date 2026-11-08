@@ -21,7 +21,7 @@ import pytest
 import genkit.plugin_api
 from genkit import Genkit, Message, Part, Role, get_logger
 from genkit._core._action import ActionKind, _action_context
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import ModelRequest, ModelResponse
 from genkit._core._operation import Operation
 from genkit._core._telemetry._log_exporter import build_log_record
@@ -191,10 +191,11 @@ async def test_genkit_run_tags_flow_step_action_type() -> None:
 
 
 def test_get_logger_lives_only_in_genkit() -> None:
-    """`get_logger` is app-facing: exported from `genkit`, not from `genkit.plugin_api`."""
-    assert 'get_logger' in genkit.__all__
-    assert 'get_logger' not in genkit.plugin_api.__all__
-    assert not hasattr(genkit.plugin_api, 'get_logger')
+    """`GenkitLogger` and `get_logger` live in `genkit`, not `genkit.plugin_api`."""
+    for name in ('GenkitLogger', 'get_logger'):
+        assert name in genkit.__all__
+        assert name not in genkit.plugin_api.__all__
+        assert not hasattr(genkit.plugin_api, name)
 
 
 @pytest.mark.asyncio
@@ -255,8 +256,8 @@ async def test_genkit_check_operation_no_action() -> None:
     with pytest.raises(GenkitError, match='Provided operation is missing original request information') as exc_info:
         await ai.check_operation(op)
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -366,8 +367,8 @@ async def test_check_operation_typod_key_is_invalid_argument() -> None:
     with pytest.raises(GenkitError, match='invalid Operation: Done: Extra inputs are not permitted') as exc_info:
         await ai.check_operation({'id': 'x', 'action': '/background-model/test_action', 'Done': True})
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -377,7 +378,7 @@ async def test_check_operation_dict_without_id_is_invalid_argument() -> None:
     with pytest.raises(GenkitError, match='invalid Operation: id: Field required') as exc_info:
         await ai.check_operation({'action': '/background-model/test_action', 'done': False})
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
 
 
 @pytest.mark.asyncio
@@ -389,7 +390,7 @@ async def test_check_operation_model_response_dump_is_invalid_argument() -> None
     with pytest.raises(GenkitError, match='got a ModelResponse dump; pass response.operation') as exc_info:
         await ai.check_operation(json.loads(boxed.model_dump_json()))
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
 
 
 @pytest.mark.asyncio
@@ -425,8 +426,8 @@ async def test_check_operation_boxed_response_is_invalid_argument() -> None:
     with pytest.raises(GenkitError, match='got ModelResponse; pass response.operation') as exc_info:
         await ai.check_operation(boxed)  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -436,8 +437,8 @@ async def test_check_operation_str_is_invalid_argument() -> None:
     with pytest.raises(GenkitError, match='got str, expected Operation') as exc_info:
         await ai.check_operation('not-an-op')  # type: ignore[arg-type]
     assert exc_info.value.status == 'INVALID_ARGUMENT'
-    assert exc_info.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -505,8 +506,8 @@ async def test_cancel_operation_without_cancel_is_unimplemented() -> None:
     with pytest.raises(GenkitError, match='does not support cancellation') as exc_info:
         await ai.cancel_operation(op)
     assert exc_info.value.status == 'UNIMPLEMENTED'
-    assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.UNSUPPORTED_BY_MODEL
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -526,8 +527,8 @@ async def test_background_model_cancel_without_fn_is_unimplemented() -> None:
     with pytest.raises(GenkitError, match='does not support cancellation') as exc_info:
         await action.cancel(op)
     assert exc_info.value.status == 'UNIMPLEMENTED'
-    assert exc_info.value.reason is RuntimeErrorReason.UNSUPPORTED_BY_MODEL
-    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.original_message
+    assert exc_info.value.reason is ErrorReason.UNSUPPORTED_BY_MODEL
+    assert 'UNSUPPORTED_BY_MODEL' not in exc_info.value.message
 
 
 @pytest.mark.asyncio

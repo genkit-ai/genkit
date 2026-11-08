@@ -1395,7 +1395,6 @@ function getApiKeyFromEnvVar(): string | undefined {
 }
 
 async function downloadVideo(video: MediaPart, path: string) {
-  const fetch = (await import('node-fetch')).default;
   // The key goes in a header, not the URL, so it stays out of logs.
   const videoDownloadResponse = await fetch(video.media!.url, {
     headers: { 'x-goog-api-key': getApiKeyFromEnvVar() ?? '' },
@@ -1410,7 +1409,7 @@ async function downloadVideo(video: MediaPart, path: string) {
 
   // Wait until the whole file is written, so callers can use it right away.
   await pipeline(
-    Readable.from(videoDownloadResponse.body),
+    Readable.fromWeb(videoDownloadResponse.body as any),
     fs.createWriteStream(path)
   );
 }

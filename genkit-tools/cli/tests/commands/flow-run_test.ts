@@ -21,21 +21,22 @@ import {
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
+  vi,
+  type Mock,
+} from 'vitest';
 import { flowBatchRun } from '../../src/commands/flow-batch-run';
 import { flowRun } from '../../src/commands/flow-run';
 import { runWithManager } from '../../src/utils/manager-utils';
 
-jest.mock('@genkit-ai/tools-common/utils');
-jest.mock('../../src/utils/manager-utils');
+vi.mock('@genkit-ai/tools-common/utils');
+vi.mock('../../src/utils/manager-utils');
 
 describe('flow:run and flow:batchRun validation', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
     process.exitCode = undefined;
-    (findProjectRoot as jest.Mock<any>).mockResolvedValue('/mock/project/root');
-    jest.spyOn(logger, 'error').mockImplementation((() => {}) as any);
+    (findProjectRoot as Mock<any>).mockResolvedValue('/mock/project/root');
+    vi.spyOn(logger, 'error').mockImplementation((() => {}) as any);
   });
 
   afterEach(() => {

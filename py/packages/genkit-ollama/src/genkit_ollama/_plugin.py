@@ -20,7 +20,8 @@ import asyncio
 import inspect
 import os
 import time
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -28,7 +29,7 @@ from urllib.parse import urlsplit
 import httpx
 import ollama as ollama_api
 
-from genkit import ModelResponse, get_logger
+from genkit import GenkitError, ModelResponse, get_logger
 from genkit.embedder import (
     Embedder,
     EmbedderInfo,
@@ -59,6 +60,7 @@ from genkit_ollama._models import (
     OllamaModel,
     _ResolvedModel,
 )
+from genkit_ollama._secrets import context_api_key
 
 OLLAMA_PLUGIN_NAME = 'ollama'
 logger = get_logger(__name__)
@@ -166,16 +168,38 @@ class _CallableHeaders(httpx.Auth):
     token refresh on every call.
     """
 
-    def __init__(self, source: _HeaderSource) -> None:
+    def __init__(self, source: _HeaderSource, *, api_key: str | None = None) -> None:
         self._source = source
+        self._api_key = api_key
 
     async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
         result = self._source()
         if inspect.isawaitable(result):
             result = await result
         if result:
+            if self._api_key is not None and _pins_authorization(result):
+                raise _pinned_authorization_error('returned')
             request.headers.update(result)
         yield request
+
+
+def _pins_authorization(headers: Mapping[str, str]) -> bool:
+    return any(k.lower() == 'authorization' for k in headers)
+
+
+def _pinned_authorization_error(verb: str) -> GenkitError:
+    """A ``context.secrets`` key would replace proxy auth the plugin was given.
+
+    Sending a tenant's key to a proxy that expects the plugin's token either
+    fails at the proxy or hands that proxy a key meant for someone else.
+    """
+    return GenkitError(
+        status='FAILED_PRECONDITION',
+        message=(
+            f'Ollama(request_headers=...) {verb} an Authorization header, which the context.secrets key '
+            'would replace. Drop that header to serve per-request keys.'
+        ),
+    )
 
 
 def _reject_api_path_suffix(base_url: str, *, source: str) -> None:
@@ -233,11 +257,13 @@ class Ollama(Plugin):
 
         # A dict is baked into the cached client; a callable runs per request via httpx auth.
         self.request_headers: dict[str, str] = {}
+        self._header_source: _HeaderSource | None = None
         self._auth: _CallableHeaders | None = None
         if isinstance(request_headers, dict):
             self.request_headers = dict(request_headers)
         elif request_headers is not None:
             _require_no_arg_callable(request_headers)
+            self._header_source = request_headers
             self._auth = _CallableHeaders(request_headers)
         self.timeout = timeout
         self._probes: dict[str, _ProbeResult] = {}
@@ -262,6 +288,39 @@ class Ollama(Plugin):
         if self.timeout is not None:
             kwargs['timeout'] = self.timeout
         return ollama_api.AsyncClient(**kwargs)
+
+    @asynccontextmanager
+    async def _client_for_request(self, *, api_key: str | None = None) -> AsyncIterator[ollama_api.AsyncClient]:
+        """Yield the Ollama client to use for a single request.
+
+        When no per-request api_key is given, the shared per-event-loop client
+        is yielded. A per-request key forces a fresh client: hosted Ollama
+        bills whoever's bearer token is on the request. An ``Authorization``
+        header from ``request_headers`` is proxy auth, so a per-request key
+        raises ``FAILED_PRECONDITION`` instead of replacing it. The fresh
+        client owns its own httpx connection pool and is closed on exit.
+        """
+        if api_key is None:
+            yield self.client()
+            return
+
+        if _pins_authorization(self.request_headers):
+            raise _pinned_authorization_error('pins')
+        headers = {**self.request_headers, 'Authorization': f'Bearer {api_key}'}
+        auth: httpx.Auth | None = None
+        if self._header_source is not None:
+            auth = _CallableHeaders(self._header_source, api_key=api_key)
+        kwargs: dict[str, Any] = {'host': self.base_url, 'headers': headers}
+        if auth is not None:
+            kwargs['auth'] = auth
+        if self.timeout is not None:
+            kwargs['timeout'] = self.timeout
+
+        client = ollama_api.AsyncClient(**kwargs)
+        try:
+            yield client
+        finally:
+            await client._client.aclose()
 
     async def init(self) -> list:
         """Initialize the Ollama plugin.
@@ -385,9 +444,13 @@ class Ollama(Plugin):
         )
 
         async def _run(request: ModelRequest, ctx: ModelContext | None = None) -> ModelResponse:
-            # OllamaModel wraps connection errors at the SDK boundary, so a failed
-            # media-URL fetch isn't misreported as an Ollama server outage.
-            return await model.generate(request, ctx)
+            # Core rejects a key on config before this runs. A context.secrets
+            # key authenticates this call only. OllamaModel wraps connection
+            # errors at the SDK boundary, so a failed media-URL fetch isn't
+            # misreported as an Ollama server outage.
+            api_key = context_api_key(ctx.context) if ctx is not None else None
+            async with self._client_for_request(api_key=api_key) as client:
+                return await model.generate(request, ctx, client=client)
 
         return Model(
             ollama_name(name),

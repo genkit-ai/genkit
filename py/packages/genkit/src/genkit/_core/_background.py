@@ -31,8 +31,15 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_arg
 from pydantic import BaseModel, ValidationError
 from typing_extensions import Self
 
-from genkit._core._action import Action, ActionKind, ActionRunContext, get_current_context, set_action_name
-from genkit._core._error import GenkitError, RuntimeErrorReason, StatusName
+from genkit._core._action import (
+    Action,
+    ActionKind,
+    ActionRunContext,
+    FlowContext,
+    get_current_context,
+    set_action_name,
+)
+from genkit._core._error import ErrorReason, GenkitError, StatusName
 from genkit._core._operation import Operation
 from genkit._core._schema import fixed_json_schema
 from genkit._core._typing import ActionMetadata
@@ -46,9 +53,9 @@ OutT = TypeVar('OutT')
 # Annotation-only aliases. Operation[OutT] is a concrete pydantic class at
 # runtime, so CheckOpFn[X] can't be subscripted outside an annotation; spell
 # the Callable out when you need a runtime alias.
-StartOpFn = Callable[[InT, ActionRunContext], Awaitable[Operation]]
-CheckOpFn = Callable[[Operation[OutT], ActionRunContext], Awaitable[Operation]]
-CancelOpFn = Callable[[Operation[OutT], ActionRunContext], Awaitable[Operation]]
+StartOpFn = Callable[[InT, FlowContext], Awaitable[Operation]]
+CheckOpFn = Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
+CancelOpFn = Callable[[Operation[OutT], FlowContext], Awaitable[Operation]]
 
 
 def _make_action_key(action_type: ActionKind | str, name: str) -> str:
@@ -108,9 +115,7 @@ def validate_operation(
         raise GenkitError(
             status=status,
             message=f"'{name}': invalid Operation: {first_validation_error(e)}",
-            reason=RuntimeErrorReason.INVALID_INPUT
-            if status == 'INVALID_ARGUMENT'
-            else RuntimeErrorReason.INVALID_OUTPUT,
+            reason=ErrorReason.INVALID_INPUT if status == 'INVALID_ARGUMENT' else ErrorReason.INVALID_OUTPUT,
         ) from e
 
 
@@ -130,7 +135,7 @@ def require_operation(*, value: object, output_type: type[Any] | None = None) ->
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'got {type(value).__name__}, expected Operation',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     try:
         return _operation_class(output_type).model_validate(fields)
@@ -138,7 +143,7 @@ def require_operation(*, value: object, output_type: type[Any] | None = None) ->
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'invalid Operation: {first_validation_error(e)}',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         ) from e
 
 
@@ -226,7 +231,7 @@ class BackgroundAction(Generic[InT, OutT]):
     _output_type: ClassVar[type[Any] | None] = None
     # How error messages name this kind of job.
     _noun: ClassVar[str] = 'Background action'
-    _cancel_unsupported_reason: ClassVar[RuntimeErrorReason | None] = None
+    _cancel_unsupported_reason: ClassVar[ErrorReason | None] = None
 
     start_action: Action
     check_action: Action
@@ -469,7 +474,6 @@ def _operation_action(
     metadata: dict[str, object],
     suffix: str = '',
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
-    check_start_input: Callable[[object, str], None] | None = None,
 ) -> Action:
     """An Action for start/check/cancel that validates and stamps the Operation.
 
@@ -490,8 +494,6 @@ def _operation_action(
     # wraps keeps fn's annotations on the wrapper, e.g. ModelRequest[VeoConfig].
     @wraps(fn)
     async def run_and_stamp(input: object, ctx: ActionRunContext) -> Operation:  # noqa: A002
-        if check_start_input is not None:
-            check_start_input(input, action.name)
         if isinstance(input, Operation):
             # check/cancel: the caller's handle, often reloaded from storage.
             input = validate_operation(input, output_type=output_type, name=action.name, status='INVALID_ARGUMENT')  # noqa: A001
@@ -509,6 +511,7 @@ def _operation_action(
         metadata=metadata,
         description=description,
         config_schema=config_schema,
+        _context_kind=start_kind,
     )
     return action
 
@@ -525,7 +528,6 @@ def operation_actions(
     description: str | None = None,
     label: str | None = None,
     config_schema: type[BaseModel] | dict[str, Any] | None = None,
-    check_start_input: Callable[[object, str], None] | None = None,
 ) -> tuple[Action, Action, Action | None]:
     """Build the start, check and cancel actions for a ``cls`` background job.
 
@@ -550,7 +552,6 @@ def operation_actions(
         metadata=start_meta,
         description=description or f'{cls._noun}: {label}',
         config_schema=config_schema,
-        check_start_input=check_start_input,
     )
     if not start_action.input_schema and cls._input_type is not None:
         start_action.input_schema = fixed_json_schema(cls._input_type)
@@ -597,7 +598,7 @@ async def resolve_operation_action(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message='Provided operation is missing original request information',
-            reason=RuntimeErrorReason.INVALID_INPUT,
+            reason=ErrorReason.INVALID_INPUT,
         )
     try:
         found = await lookup(registry, key)
@@ -607,13 +608,13 @@ async def resolve_operation_action(
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve {noun} from original request: {key}',
-            reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            reason=ErrorReason.ACTION_NOT_FOUND,
         ) from e
     if found is None:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=f'Failed to resolve {noun} from original request: {key}',
-            reason=RuntimeErrorReason.ACTION_NOT_FOUND,
+            reason=ErrorReason.ACTION_NOT_FOUND,
         )
     return found
 

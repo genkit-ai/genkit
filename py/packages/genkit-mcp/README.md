@@ -1,7 +1,7 @@
 # Genkit MCP Client
 
 Connects Genkit to a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio and
-exposes that server's tools as Genkit `tool.v2` actions through a dynamic action provider.
+exposes that server's tools as Genkit `tool` actions through a dynamic action provider.
 
 Tracking issue: <https://github.com/genkit-ai/genkit/issues/6194>
 
@@ -123,10 +123,13 @@ result = await ai.generate(prompt='Echo "hello".', tools=[one])
 
 `mcp_servers` takes an `mcpServers` block of stdio servers, as Claude Desktop and Cursor write it, so
 such a block can be loaded from its file: `mcp_servers=json.load(f)['mcpServers']`. An entry that is
-not a stdio entry, such as one with a `url`, `type: 'sse'` or `disabled: true`, fails the host with
-an error naming that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`
-and `type`. `await host.connect(name, entry)` takes one entry too, so a server from the same file
-can be added later: `await host.connect('git', config['mcpServers']['git'])`.
+not a stdio entry, such as one with a `url` or `type: 'sse'`, fails the host with an error naming
+that server. So does an entry with any key besides `command`, `args`, `env`, `cwd`, `type` and
+`disabled`. Some clients write `disabled: true` to switch a server off without deleting its entry.
+Such an entry is checked the same way, but its server is never started or listed.
+`await host.connect(name, entry)` takes one entry too, so a server from the same file can be added
+later: `await host.connect('git', config['mcpServers']['git'])`. Connecting a disabled entry stops
+any server of that name.
 
 An entry's `env` often holds secrets, and a traceback that renders frame locals, as Genkit's console
 logging does, can print them. Once a host is defined, the plugin keeps `env` out of its own frames.

@@ -14,23 +14,23 @@
  * limitations under the License.
  */
 
-import { afterAll } from '@jest/globals';
 import fs from 'fs';
+import { afterAll } from 'vitest';
 
 /**
  * Several test files mock filesystem behavior by directly reassigning methods
  * on the built-in `fs` module, for example:
  *
- *   fs.writeFileSync = jest.fn(() => {});
- *   fs.promises.writeFile = jest.fn(async () => undefined);
+ *   fs.writeFileSync = vi.fn(() => {});
+ *   fs.promises.writeFile = vi.fn(async () => undefined);
  *
- * `jest.restoreAllMocks()` only restores spies created via `jest.spyOn`; it does
- * NOT undo a direct property assignment. Worse, Jest does not sandbox Node's
- * built-in modules between test files in the same worker — `require('fs')`
- * returns the same shared object everywhere. So a mock assigned (and never
- * restored) in one test file silently corrupts `fs` for every test file that
- * later runs in that same worker, producing flaky, scheduling-dependent
- * failures (e.g. `fs.writeFileSync` becoming a no-op in an unrelated test).
+ * `vi.restoreAllMocks()` only restores spies created via `vi.spyOn`; it does
+ * NOT undo a direct property assignment. Worse, Node's built-in `fs` module
+ * object is shared across test files in the same worker. So a mock assigned
+ * (and never restored) in one test file silently corrupts `fs` for every test
+ * file that later runs in that same worker, producing flaky,
+ * scheduling-dependent failures (e.g. `fs.writeFileSync` becoming a no-op in an
+ * unrelated test).
  *
  * To make tests robust regardless of how they mock `fs`, snapshot the real
  * implementations once at load time (before any test mutates them) and restore

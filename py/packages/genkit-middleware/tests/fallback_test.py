@@ -16,6 +16,9 @@
 
 """Tests for Fallback middleware."""
 
+import asyncio
+import contextlib
+from collections.abc import Awaitable, Callable
 from typing import Any, NoReturn
 
 import pytest
@@ -23,6 +26,7 @@ from genkit_middleware import Fallback
 from pydantic import Field, ValidationError
 
 from genkit import (
+    ErrorReason,
     FinishReason,
     Genkit,
     GenkitError,
@@ -32,7 +36,7 @@ from genkit import (
     Part,
     Role,
 )
-from genkit.middleware import MiddlewareContext, ModelHookParams
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelConfig, ModelContext, ModelRef, ModelRequest
 from genkit.plugin_api import provider_error
 from genkit.testing import define_scripted_model
@@ -285,18 +289,16 @@ async def test_fallback_unknown_backup_model_is_not_found() -> None:
 async def test_generate_with_model_raising_connection_error_and_fallback_keeps_the_failure() -> None:
     """An unclassified ConnectionError from the model fails the call without trying `backup`."""
     ai = Genkit()
-    backup_calls = 0
 
     async def down(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         raise ConnectionError('connection refused')
 
-    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
-        nonlocal backup_calls
-        backup_calls += 1
-        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]))
-
     ai.define_model(name='primary', fn=down)
-    ai.define_model(name='backup', fn=backup)
+    backup_pm, _ = define_scripted_model(
+        ai,
+        name='backup',
+        responses=[ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]))],
+    )
 
     response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
 
@@ -305,7 +307,7 @@ async def test_generate_with_model_raising_connection_error_and_fallback_keeps_t
     assert response.error is not None
     assert response.error.status == 'INTERNAL'
     assert response.message is None
-    assert backup_calls == 0
+    assert backup_pm.request_count == 0
 
 
 @pytest.mark.asyncio
@@ -320,17 +322,16 @@ async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() 
         )
     ]
     pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')])]]
-    backup_calls = 0
-
-    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
-        nonlocal backup_calls
-        backup_calls += 1
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
-        )
-
-    ai.define_model(name='backup', fn=backup)
+    backup_pm, _ = define_scripted_model(
+        ai,
+        name='backup',
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+            )
+        ],
+    )
     prompt = ai.define_prompt(model='scriptedModel', prompt='hi')
 
     def on_chunk(_: object) -> None:
@@ -340,18 +341,82 @@ async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() 
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'model sink closed'
-    assert backup_calls == 0
+    assert response.error is not None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert backup_pm.request_count == 0
 
 
 @pytest.mark.asyncio
-async def test_fallback_stops_when_aborted() -> None:
-    """Test that fallback halts and re-raises when the abort signal is already set."""
+async def test_fallback_does_not_call_backup_when_inner_middleware_chunk_callback_raises() -> None:
+    """Fallback outside a middleware whose replaced on_chunk raises: backup never runs."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [
+        ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('Smoked Salmon Tartine')]),
+        )
+    ]
+    pm.chunks = [[ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Smoked ')])]]
+    backup_pm, _ = define_scripted_model(
+        ai,
+        name='backup',
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+            )
+        ],
+    )
+
+    class RaisingChunkRewriter(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            previous = ctx.on_chunk
+
+            def rewrite(_: ModelResponseChunk) -> None:
+                raise KeyError('dish_id')
+
+            ctx.replace_on_chunk(rewrite)
+            try:
+                return await next_fn(params, ctx)
+            finally:
+                ctx.replace_on_chunk(previous)
+
+    stream = ai.generate_stream(
+        prompt='Suggest a dish.',
+        use=[
+            Fallback(models=['backup'], statuses=['INTERNAL', 'UNKNOWN', 'UNAVAILABLE']),
+            RaisingChunkRewriter(),
+        ],
+    )
+    chunks = [chunk.text async for chunk in stream]
+    response = await stream.response
+
+    assert chunks == []
+    assert response.finish_reason == FinishReason.FAILED
+    assert response.error is not None
+    assert response.error.reason is ErrorReason.STREAM_CALLBACK_FAILED
+    assert pm.request_count == 1
+    assert backup_pm.request_count == 0
+
+
+@pytest.mark.asyncio
+async def test_fallback_halts_when_task_cancelled() -> None:
+    """Cancelling the task during backup1 unwinds via CancelledError without calling backup2."""
     ai = Genkit()
     ran: list[str] = []
+    backup1_started = asyncio.Event()
 
     async def backup1(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup1')
-        raise GenkitError(status='UNAVAILABLE', message='backup1 down')
+        backup1_started.set()
+        await asyncio.Event().wait()
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('never')]))
 
     async def backup2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup2')
@@ -364,28 +429,44 @@ async def test_fallback_stops_when_aborted() -> None:
     ai.define_model(name='backup2', fn=backup2)
 
     ctx = MiddlewareContext(ai=ai)
-    ctx.abort_signal.set()
     fallback = Fallback(models=['backup1', 'backup2'])
 
     async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
         raise GenkitError(status='UNAVAILABLE', message='primary down')
 
-    with pytest.raises(GenkitError, match='primary down'):
-        await fallback.wrap_model(_make_params(), ctx, next_fn)
+    task = asyncio.create_task(fallback.wrap_model(_make_params(), ctx, next_fn))
+    await asyncio.wait_for(backup1_started.wait(), timeout=2.0)
+    task.cancel()
 
-    assert ran == []
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+    assert ran == ['backup1']
 
 
 @pytest.mark.asyncio
-async def test_fallback_halts_subsequent_models_on_abort() -> None:
-    """Test that fallback stops calling subsequent backup models when aborted mid-sequence."""
+async def test_fallback_generate_stream_break_halts_subsequent_models() -> None:
+    """Exiting `async with ai.generate_stream(..., use=[Fallback(...)])` cancels backup1 and never calls backup2."""
     ai = Genkit()
     ran: list[str] = []
+    backup1_cancelled = asyncio.Event()
+
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        ran.append('primary')
+        raise GenkitError(status='UNAVAILABLE', message='primary down')
 
     async def backup1(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         ran.append('backup1')
-        ctx.abort_signal.set()
-        raise GenkitError(status='UNAVAILABLE', message='backup1 down')
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('backup1-chunk')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            backup1_cancelled.set()
+            raise
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('backup1')]),
+        )
 
     async def backup2(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
         ran.append('backup2')
@@ -394,19 +475,25 @@ async def test_fallback_halts_subsequent_models_on_abort() -> None:
             message=Message(role=Role.MODEL, content=[Part.from_text('backup2')]),
         )
 
+    ai.define_model(name='primary', fn=primary)
     ai.define_model(name='backup1', fn=backup1)
     ai.define_model(name='backup2', fn=backup2)
 
-    ctx = MiddlewareContext(ai=ai)
-    fallback = Fallback(models=['backup1', 'backup2'])
+    seen: list[str] = []
+    async with ai.generate_stream(
+        model='primary',
+        prompt='hi',
+        use=[Fallback(models=['backup1', 'backup2'])],
+    ) as stream:
+        async for chunk in stream:
+            seen.append(chunk.text)
+            break
+    final = await asyncio.wait_for(stream.response, timeout=2.0)
 
-    async def next_fn(_params: ModelHookParams, _ctx: MiddlewareContext) -> ModelResponse:
-        raise GenkitError(status='UNAVAILABLE', message='primary down')
-
-    with pytest.raises(GenkitError, match='backup1 down'):
-        await fallback.wrap_model(_make_params(), ctx, next_fn)
-
-    assert ran == ['backup1']
+    assert seen == ['backup1-chunk']
+    assert backup1_cancelled.is_set()
+    assert ran == ['primary', 'backup1']
+    assert final.finish_reason == FinishReason.ABORTED
 
 
 @pytest.mark.asyncio
@@ -453,7 +540,6 @@ def test_fallback_given_a_model_action_names_the_string_to_pass() -> None:
 async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_failure() -> None:
     """A model that re-raises the caller's on_chunk failure as UNAVAILABLE doesn't send the call to backup."""
     ai = Genkit()
-    backup_calls = 0
 
     async def wraps_stream_errors(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
         try:
@@ -465,16 +551,17 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
             message=Message(role=Role.MODEL, content=[Part.from_text('done')]),
         )
 
-    async def backup(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
-        nonlocal backup_calls
-        backup_calls += 1
-        return ModelResponse(
-            finish_reason=FinishReason.STOP,
-            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
-        )
-
     ai.define_model(name='wraps', fn=wraps_stream_errors)
-    ai.define_model(name='backup', fn=backup)
+    backup_pm, _ = define_scripted_model(
+        ai,
+        name='backup',
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+            )
+        ],
+    )
 
     def on_chunk(_: object) -> None:
         raise RuntimeError('model sink closed')
@@ -482,7 +569,7 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
     prompt = ai.define_prompt(model='wraps', prompt='hi')
     response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])])
 
-    assert backup_calls == 0
+    assert backup_pm.request_count == 0
     assert response.finish_reason == FinishReason.FAILED
 
 
@@ -492,3 +579,75 @@ def test_fallback_model_ref_entry_dumps_camel_case_config_keys() -> None:
     fb = Fallback(models=[ref])
     dumped = fb.config.model_dump(by_alias=True, exclude_none=True, mode='json')
     assert dumped['models'] == [{'name': 'echo/b', 'config': {'maxOutputTokens': 5, 'topK': 3}}]
+
+
+@pytest.mark.asyncio
+async def test_fallback_model_ref_entry_preserves_explicit_none_over_backup_defaults() -> None:
+    """An explicit None on a backup ModelRef overrides the backup model's non-None schema default."""
+
+    class KitchenBackupConfig(ModelConfig):
+        seed: int | None = 42
+        backup_tag: str = 'house'
+
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='down')
+
+    async def backup(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        seen.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='primary', fn=primary)
+    ai.define_model(name='backup', fn=backup, config_schema=KitchenBackupConfig)
+    ref = ModelRef(
+        name='backup',
+        config_schema=KitchenBackupConfig,
+        config=KitchenBackupConfig(seed=None, max_output_tokens=64),
+    )
+
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=[ref])])
+
+    assert response.text == 'ok'
+    assert seen == [{'seed': None, 'backup_tag': 'house', 'max_output_tokens': 64}]
+
+
+@pytest.mark.asyncio
+async def test_fallback_generate_stream_aclose_when_sdk_turns_cancel_into_error_halts_backups() -> None:
+    """When primary SDK turns `CancelledError` into `UNAVAILABLE`, `aclose()` aborts without calling backup."""
+    ai = Genkit()
+    backup_calls = 0
+
+    async def primary(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('partial')]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError as cancel_err:
+            raise GenkitError(status='UNAVAILABLE', message='sdk closed stream') from cancel_err
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('never')]),
+        )
+
+    async def backup(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(
+            finish_reason=FinishReason.STOP,
+            message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]),
+        )
+
+    ai.define_model(name='primary', fn=primary)
+    ai.define_model(name='backup', fn=backup)
+
+    stream = ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+    async with contextlib.aclosing(stream.stream) as chunks:
+        async for _ in chunks:
+            break
+
+    final = await asyncio.wait_for(stream.response, timeout=2.0)
+    assert backup_calls == 0
+    assert final.finish_reason == FinishReason.ABORTED
+    assert final.error is not None
+    assert final.error.status == 'CANCELLED'

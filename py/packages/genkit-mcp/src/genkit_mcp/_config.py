@@ -43,6 +43,9 @@ class McpStdioServerConfig(BaseModel):
             API key for example, has to be listed here even when this process
             already has it. Omitted from ``repr``.
         cwd: Working directory for the child process.
+        disabled: Whether a host leaves this server out. When it is true, a
+            host never starts or lists the server; ``None`` and false leave it
+            in.
     """
 
     model_config = ConfigDict(extra='forbid', hide_input_in_errors=True)
@@ -52,6 +55,7 @@ class McpStdioServerConfig(BaseModel):
     args: list[str] | None = Field(default=None, repr=False)
     env: dict[str, str] | None = Field(default=None, repr=False)
     cwd: str | os.PathLike[str] | None = None
+    disabled: bool | None = None
 
 
 class _McpServerCommand(TypedDict):
@@ -71,3 +75,4 @@ class McpServerEntry(_McpServerCommand, total=False):
     env: dict[str, str]
     cwd: str
     type: Literal['stdio']
+    disabled: bool

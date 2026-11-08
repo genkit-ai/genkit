@@ -19,9 +19,9 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import math
 import random
+import sys
 from collections.abc import Awaitable, Callable
 
 from pydantic import Field
@@ -29,15 +29,10 @@ from pydantic import Field
 from genkit import GenkitError, ModelResponse
 from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.plugin_api import GenkitConfig
-from genkit_middleware._errors import caused_by_caller_callback
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
 _DEFAULT_RETRY_STATUSES: list[str] = list(TRANSIENT_STATUSES)
-
-
-async def sleep_unless_stopped(seconds: float, abort_signal: asyncio.Event) -> None:
-    with contextlib.suppress(asyncio.TimeoutError):
-        await asyncio.wait_for(abort_signal.wait(), seconds)
+_sleep = asyncio.sleep
 
 
 class RetryConfig(GenkitConfig):
@@ -70,32 +65,27 @@ class Retry(Middleware[RetryConfig]):
             try:
                 return await next_fn(params, ctx)
             except Exception as e:
+                curr = asyncio.current_task()
+                if curr is not None and sys.version_info >= (3, 11) and curr.cancelling() > 0:
+                    raise
                 if attempt == self.config.max_retries:
                     raise
 
-                # The caller's own on_chunk failure is not retried. A
-                # GenkitError is retried only when its status is listed. Any
+                # A GenkitError is retried only when its status is listed. Any
                 # other exception is retried.
-                if caused_by_caller_callback(e):
-                    raise
                 if isinstance(e, GenkitError) and e.status not in self.config.statuses:
                     raise
 
                 delay_ms = current_delay_ms
-                if isinstance(e, GenkitError) and e.response_metadata is not None:
-                    retry_after_ms = e.response_metadata.get('retry_after_ms')
-                    if retry_after_ms is not None:
-                        delay_ms = max(delay_ms, retry_after_ms)
+                if isinstance(e, GenkitError) and e.retry_after_ms is not None:
+                    delay_ms = max(delay_ms, e.retry_after_ms)
 
                 if not self.config.no_jitter:
                     delay_ms += 1000.0 * math.pow(2, attempt) * random.random()
                 # The provider delay is a floor within max_delay_ms, never an override of it.
                 delay_ms = min(delay_ms, self.config.max_delay_ms)
 
-                await sleep_unless_stopped(delay_ms / 1000.0, ctx.abort_signal)
-                # Once the caller stops, every further attempt would be a model call nobody reads.
-                if ctx.abort_signal.is_set():
-                    raise
+                await _sleep(delay_ms / 1000.0)
                 current_delay_ms = min(current_delay_ms * self.config.backoff_factor, self.config.max_delay_ms)
 
         raise AssertionError('Retry loop exited without returning or raising')  # noqa: EM101

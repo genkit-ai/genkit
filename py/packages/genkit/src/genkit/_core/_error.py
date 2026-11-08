@@ -16,20 +16,26 @@
 
 """Error classes and utilities for the Genkit framework."""
 
+import builtins
+import copy
+import importlib
 import math
 import reprlib
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
-from typing import Any, ClassVar, Literal, TypedDict, cast, get_args
+from typing import Any, ClassVar, Literal, cast, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
 from pydantic.alias_generators import to_camel
+from pydantic_core import ErrorDetails
 from pydantic_core.core_schema import ErrorType
+from typing_extensions import Self
 
 from genkit._core._compat import StrEnum
-from genkit._core._typing import GenkitRuntimeError as GenkitRuntimeErrorData
+from genkit._core._typing import _RuntimeErrorWire
 
 
 class StatusCodes(IntEnum):
@@ -77,11 +83,11 @@ StatusName = Literal[
 """Canonical gRPC status name a `GenkitError` carries, e.g. `'NOT_FOUND'`."""
 
 
-class RuntimeErrorReason(StrEnum):
-    """Extra why on a classified generate failure or a helper raise.
+class ErrorReason(StrEnum):
+    """Why the framework classified a failure, beyond its status.
 
-    The message stays human. The helper that fails sets this so it
-    bubbles on the exception the caller actually catches.
+    Read it from ``GenkitError.reason`` or ``Failure.reason``. It travels in
+    ``details['reason']``; the other SDKs don't have it.
     """
 
     INVALID_SCHEMA = 'INVALID_SCHEMA'
@@ -103,32 +109,36 @@ class RuntimeErrorReason(StrEnum):
     INVALID_SESSION_ID = 'INVALID_SESSION_ID'
     INVALID_SNAPSHOT_ID = 'INVALID_SNAPSHOT_ID'
     CONNECTION_CLOSED = 'CONNECTION_CLOSED'
+    # An on_chunk callback (the caller's or one middleware installed) raised; the model isn't retried.
+    STREAM_CALLBACK_FAILED = 'STREAM_CALLBACK_FAILED'
 
 
-def runtime_error_reason(details: object) -> RuntimeErrorReason | None:
-    """Read a known stable reason from runtime error details."""
+def error_reason(details: object) -> ErrorReason | None:
+    """Read a known stable reason from error details."""
     if not isinstance(details, Mapping):
         return None
     value = cast(Mapping[str, object], details).get('reason')
     if not isinstance(value, str):
         return None
     try:
-        return RuntimeErrorReason(value)  # pyrefly: ignore[bad-return]
+        return ErrorReason(value)  # pyrefly: ignore[bad-return]
     except ValueError:
         return None
 
 
-class GenkitRuntimeError(GenkitRuntimeErrorData):
-    """Classified failure carried as data: ``response.error``, ``AgentOutput.error``, ``SessionSnapshot.error``.
+_STATUS_NAMES: frozenset[str] = frozenset(get_args(StatusName))
+_FAILURE_KEYS: frozenset[str] = frozenset({'status', 'message', 'details'})
 
-    Wire shape is the shared ``RuntimeError`` schema (status, message, details).
 
-    Plain data, not an exception: generate returns failures as values, so
-    ``raise res.error`` would make a returning call look like a throwing one.
-    ``reason`` is set when the framework classified the failure, so callers
-    can branch without parsing the message.
+class Failure(_RuntimeErrorWire):
+    """A failure value on ``response.error``, ``Operation.error``, ``AgentOutput.error``, or ``SessionSnapshot.error``.
 
-    Fields can't be reassigned. ``details`` is the dict as received.
+    Not an exception: generate and agents return failures as values. ``reason``
+    is set when the framework classified the failure.
+
+        response = await ai.generate(prompt='Refund order A-17.', tools=['refund_order'])
+        response.error.status   # => 'INTERNAL'
+        response.error.message  # => 'internal error'
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
@@ -137,17 +147,34 @@ class GenkitRuntimeError(GenkitRuntimeErrorData):
     # can't hash anyway.
     __hash__ = None  # type: ignore[assignment]
 
+    status: StatusName | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # pyrefly: ignore[bad-override]
+    details: dict[str, Any] | None = None  # pyright: ignore[reportIncompatibleVariableOverride]  # pyrefly: ignore[bad-override]
+
     @model_validator(mode='before')
     @classmethod
     def _from_wire(cls, value: object) -> object:
         # A session store built against the generated class still loads.
-        if isinstance(value, GenkitRuntimeErrorData) and not isinstance(value, cls):
-            return value.model_dump(exclude_none=True)
+        if isinstance(value, _RuntimeErrorWire) and not isinstance(value, cls):
+            value = value.model_dump(exclude_none=True)
+        # A snapshot, operation, or remote agent written by another SDK or a
+        # newer version can carry extra keys or a status this one doesn't know.
+        # Load it rather than fail the read.
+        if isinstance(value, Mapping):
+            raw = {k: v for k, v in cast(Mapping[str, object], value).items() if k in _FAILURE_KEYS}
+            status = raw.get('status')
+            if isinstance(status, str) and status not in _STATUS_NAMES:
+                raw['status'] = 'UNKNOWN'
+            # JS GenkitError.toJSON writes details of any type. Wrap a
+            # non-object value so the read succeeds and nothing is lost.
+            details = raw.get('details')
+            if details is not None and not isinstance(details, Mapping):
+                raw['details'] = {'value': details}
+            return raw
         return value
 
     @property
-    def reason(self) -> RuntimeErrorReason | None:
-        return runtime_error_reason(self.details)
+    def reason(self) -> ErrorReason | None:
+        return error_reason(self.details)
 
 
 # Mapping of status names to HTTP status codes
@@ -285,20 +312,6 @@ def retry_after_ms_from_headers(headers: object) -> float | None:
     return parse_retry_after_ms(raw)
 
 
-class Status(BaseModel):
-    """Represents a status with a name and optional message."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        frozen=True,
-        validate_assignment=True,
-        extra='forbid',
-        populate_by_name=True,
-    )
-
-    name: StatusName
-    message: str = Field(default='')
-
-
 # =============================================================================
 # Error Classes
 # =============================================================================
@@ -328,37 +341,38 @@ class ReflectionError(BaseModel):
     )
 
 
-class HttpErrorWireFormat(BaseModel):
-    """Wire format for HTTP error details."""
-
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra='allow', populate_by_name=True)
-
-    details: Any
-    message: str
-    status: str = StatusCodes.INTERNAL.name
-
-
-class ErrorResponseMetadata(TypedDict, total=False):
-    """Metadata from the HTTP response that triggered an error.
-
-    This metadata is available only in-process and is not serialized into
-    callable or reflection error wire formats.
-    """
-
-    retry_after_ms: float
-    headers: dict[str, str]
-
-
-class Interrupt(Exception):  # noqa: N818 - public Genkit name; not renamed *Error for style
-    """Pause a tool or generate so the caller can approve, reply, or restart.
+class Interrupt(BaseException):
+    """Pause a tool so the caller can approve, reply, or restart.
 
     Raise ``Interrupt(metadata)`` from a tool or from tool middleware.
-    Tracing treats this as control flow, not a failed span.
+    It is a control-flow signal like ``asyncio.CancelledError``, so it
+    subclasses ``BaseException``: an ``except Exception`` in tool code can't
+    swallow it and skip the approval. Catch ``Interrupt`` by name if a tool
+    needs to clean up, then re-raise. Raised anywhere else (a flow, an
+    agent turn body), the action fails with ``GenkitError`` INTERNAL.
+    Tracing treats it as control flow, not a failed span.
     """
 
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
-        super().__init__()
+        # Metadata goes in args so str(interrupt) and tracebacks show it.
+        if metadata is None:
+            super().__init__()
+        else:
+            super().__init__(metadata)
         self.metadata: dict[str, Any] = {} if metadata is None else metadata
+
+
+class _StreamingCallbackError(BaseException):
+    """Internal carrier for an exception raised by an ``on_chunk`` callback.
+
+    Covers the caller's callback and any callback middleware installs on
+    ``MiddlewareContext.on_chunk``. Subclasses ``BaseException`` (like
+    ``Interrupt`` and ``asyncio.CancelledError``) so ``except Exception``
+    blocks in model plugins and middleware cannot catch or retry a stream
+    callback failure. ``generate()`` unwraps ``__cause__`` and boxes the
+    original failure onto ``ModelResponse`` with reason
+    ``STREAM_CALLBACK_FAILED``.
+    """
 
 
 # Short previews of the offending value: `'acme'`, `None`, `{'dish': 'pad thai', ...}`.
@@ -384,6 +398,26 @@ def _join_problems(problems: list[str], *, total: int, max_errors: int) -> str:
     return '; '.join(clauses)
 
 
+def validation_input_is_printable(error: ValidationError) -> bool:
+    """Follow Pydantic's own decision about whether the input values are safe to print."""
+    return error.error_count() == 0 or 'input_value=' in str(error)
+
+
+def validation_problem(err: ErrorDetails, *, show_input: bool) -> str:
+    """Pydantic's message for one error, plus ``, got <value>`` when the value is worth printing.
+
+    For a missing field the input is the whole parent object, which says nothing new.
+    """
+    if err['type'] == 'missing' or not show_input:
+        return err['msg']
+    return f'{err["msg"]}, got {_value_preview.repr(err["input"])}'
+
+
+def validation_error_details(error: ValidationError) -> list[dict[str, Any]]:
+    """The ``details['errors']`` entries for a ValidationError: path, message, type."""
+    return [{'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in error.errors()]
+
+
 def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PROBLEMS) -> str:
     """One short clause per Pydantic error: where, what was expected, what came in.
 
@@ -395,14 +429,10 @@ def format_validation_error(error: ValidationError, *, max_errors: int = _MAX_PR
     Example:
         ``items[1].qty: Field required; table: Input should be a valid integer, got 'x'``
     """
-    # Follow Pydantic's own decision about whether the value is safe to print.
-    hide_input = error.error_count() > 0 and 'input_value=' not in str(error)
+    show_input = validation_input_is_printable(error)
     problems: list[str] = []
     for err in error.errors(include_url=False)[:max_errors]:
-        text = err['msg']
-        # For a missing field the input is the whole parent object, which says nothing new.
-        if err['type'] != 'missing' and not hide_input:
-            text = f'{text}, got {_value_preview.repr(err["input"])}'
+        text = validation_problem(err, show_input=show_input)
         path = _loc_path(err['loc'])
         problems.append(f'{path}: {text}' if path else text)
     return _join_problems(problems, total=error.error_count(), max_errors=max_errors)
@@ -418,22 +448,20 @@ class GenkitError(Exception):
         status: StatusName | None = None,
         cause: BaseException | None = None,
         details: Any = None,  # noqa: ANN401
-        reason: RuntimeErrorReason | None = None,
-        trace_id: str | None = None,
+        reason: ErrorReason | None = None,
         source: str | None = None,
-        response_metadata: ErrorResponseMetadata | None = None,
+        retry_after_ms: float | None = None,
     ) -> None:
         """Initialize a GenkitError.
 
         Args:
             message: The error message.
             status: The status name for this error.
-            cause: The underlying exception that caused this error.
+            cause: The underlying exception; set as ``__cause__``.
             details: Optional detail information.
             reason: Extra why when we classified the failure.
-            trace_id: A unique identifier for tracing the action execution.
-            source: Optional source of the error.
-            response_metadata: Optional HTTP response metadata for in-process use.
+            source: Optional prefix for ``str(err)``.
+            retry_after_ms: How long the provider asked callers to wait before retrying.
         """
         temp_status: StatusName
         if status:
@@ -443,7 +471,6 @@ class GenkitError(Exception):
         else:
             temp_status = 'INTERNAL'
         self.status: StatusName = temp_status
-        self.http_code: int = http_status_code(temp_status)
 
         # When this error wraps another (the common shape — the action runtime
         # catches the underlying failure and re-raises as ``GenkitError(...,
@@ -460,7 +487,7 @@ class GenkitError(Exception):
             cause_text = str(cause) if cause is not None else ''
             cause_suffix = f': {cause_text}' if cause_text and cause_text not in message else ''
         super().__init__(f'{source_prefix}{self.status}: {message}{cause_suffix}')
-        self.original_message: str = message
+        self.message: str = message
 
         if not details:
             details = {}
@@ -469,19 +496,16 @@ class GenkitError(Exception):
             details['reason'] = reason.value
         if isinstance(cause, ValidationError) and 'errors' not in details:
             details = dict(details)
-            details['errors'] = [
-                {'loc': list(err['loc']), 'message': err['msg'], 'type': err['type']} for err in cause.errors()
-            ]
-        if 'stack' not in details:
-            details['stack'] = get_error_stack(cause if cause else self)
-        if 'trace_id' not in details and trace_id:
-            details['trace_id'] = trace_id
+            details['errors'] = validation_error_details(cause)
 
         self.details: Any = details
-        self.source: str | None = source
-        self.trace_id: str | None = trace_id
-        self.cause: BaseException | None = cause
-        self.response_metadata: ErrorResponseMetadata | None = response_metadata
+        if cause is not None:
+            self.__cause__ = cause
+        # Only the cause passed as ``cause=``. ``raise ... from e`` also sets
+        # ``__cause__``, but finish-message redaction and the Dev UI message
+        # key off what the raiser chose to attach.
+        self._cause: BaseException | None = cause
+        self.retry_after_ms: float | None = retry_after_ms
         # Plugin errors built from a provider response keep their status
         # in-process (Retry, Fallback) but serve as a crash at the HTTP
         # boundary so a dead server key is not a 401 to the end caller.
@@ -491,33 +515,13 @@ class GenkitError(Exception):
         self._request_sourced: bool = False
 
     @property
-    def reason(self) -> RuntimeErrorReason | None:
-        return runtime_error_reason(self.details)
+    def reason(self) -> ErrorReason | None:
+        return error_reason(self.details)
 
-    def to_callable_serializable(self) -> HttpErrorWireFormat:
-        """Served-flow wire body; same redaction as ``error_body``.
 
-        Only a PublicError keeps its message and details. In-process code
-        that needs the real error reads ``original_message`` and ``details``.
-        """
-        body = error_body(self)
-        return HttpErrorWireFormat(
-            details=body.get('details'),
-            status=body['status'],
-            message=body['message'],
-        )
-
-    def to_serializable(self) -> ReflectionError:
-        """Returns a JSON-serializable representation of this object.
-
-        Returns:
-            A ReflectionError model instance.
-        """
-        return ReflectionError(
-            details=ReflectionErrorDetails(**self.details) if self.details else None,
-            code=StatusCodes[self.status].value,
-            message=f'{self.original_message}: {repr(self.cause)}' if self.cause else self.original_message,
-        )
+def attached_cause(error: GenkitError) -> BaseException | None:
+    """Return the exception explicitly attached via ``cause=`` on ``GenkitError``."""
+    return error._cause
 
 
 def mark_request_error(*, error: GenkitError) -> GenkitError:
@@ -593,15 +597,71 @@ def provider_error(
         status = from_http_code(code) if code is not None and code >= 400 else 'UNKNOWN'
     if retry_after_ms is None:
         retry_after_ms = retry_after_ms_from_headers(headers)
-    response_metadata: ErrorResponseMetadata | None = None
-    if retry_after_ms is not None:
-        response_metadata = {'retry_after_ms': retry_after_ms}
     # A bare TimeoutError() or httpx.ReadTimeout often has empty str(); the type
     # name at least says what failed.
     text = message if message is not None else (str(error) or type(error).__name__)
-    result = GenkitError(status=status, message=text, cause=error, response_metadata=response_metadata)
-    result.__cause__ = error
+    result = GenkitError(status=status, message=text, cause=error, retry_after_ms=retry_after_ms)
     return mark_provider_error(error=result)
+
+
+def interrupt_outside_tool_error(interrupt: Interrupt) -> GenkitError:
+    """The error an Interrupt becomes when it escapes something that isn't a tool.
+
+    Only generate's tool loop can turn an Interrupt into a pause. Anywhere
+    else it would escape ``except Exception`` handlers as a bare
+    BaseException, so the action boundary and the agent turn loop report it
+    as a failed run instead. ``__cause__`` keeps the metadata for debugging.
+    """
+    return GenkitError(status='INTERNAL', message='Interrupt raised outside a tool', cause=interrupt)
+
+
+class _NoTaskGroupError(BaseException):
+    """Never raised; stands in when no task-group exception type exists."""
+
+
+def _task_group_error() -> type[BaseException]:
+    builtin = getattr(builtins, 'BaseExceptionGroup', None)  # 3.11+
+    if builtin is not None:
+        return builtin
+    # 3.10 has no asyncio.TaskGroup; anyio task groups raise the
+    # `exceptiongroup` backport, which anyio installs there.
+    try:
+        backport = importlib.import_module('exceptiongroup')
+    except ImportError:
+        return _NoTaskGroupError
+    return backport.BaseExceptionGroup
+
+
+# What asyncio.TaskGroup / anyio raise when a child task raises a
+# BaseException. An Interrupt in a child task arrives wrapped in one of these.
+TaskGroupError: type[BaseException] = _task_group_error()
+
+
+def _group_has_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, Interrupt):
+        return True
+    children = getattr(exc, 'exceptions', None) if isinstance(exc, TaskGroupError) else None
+    return any(_group_has_interrupt(child) for child in children or ())
+
+
+def interrupt_escape_error(exc: BaseException) -> GenkitError | None:
+    """The failure for an Interrupt that reached a boundary that can't pause on it.
+
+    Returns None when ``exc`` carries no Interrupt, so the caller re-raises it
+    as is. An Interrupt inside a task group can't pause generate: the group may
+    also hold other failures, and there's no single interrupt to answer. It
+    fails the run, as it did when Interrupt was an Exception.
+    """
+    if isinstance(exc, Interrupt):
+        return interrupt_outside_tool_error(exc)
+    if isinstance(exc, TaskGroupError) and _group_has_interrupt(exc):
+        error = GenkitError(
+            status='INTERNAL',
+            message='Interrupt raised inside a task group',
+            cause=exc,
+        )
+        return error
+    return None
 
 
 class PublicError(GenkitError):
@@ -692,11 +752,11 @@ def _request_client_message(error: GenkitError) -> str:
     details = error.details if isinstance(error.details, dict) else {}
     errors = details.get('errors')
     if not isinstance(errors, list) or not errors:
-        return error.original_message
+        return error.message
     entries = [cast(dict[str, object], e) for e in cast(list[object], errors) if isinstance(e, dict)]
     problems = [_served_problem(e) for e in entries[:_MAX_PROBLEMS]]
     joined = _join_problems(problems, total=len(entries), max_errors=_MAX_PROBLEMS)
-    return f'{error.original_message}: {joined}' if joined else error.original_message
+    return f'{error.message}: {joined}' if joined else error.message
 
 
 _ANY_ADAPTER: TypeAdapter[Any] = TypeAdapter(Any)
@@ -713,7 +773,65 @@ def _client_details(details: Any) -> Any:  # noqa: ANN401
     return dumped
 
 
-def error_status(error: object) -> int:
+def _split_rendered(error: GenkitError) -> tuple[str | None, str]:
+    """Split ``str(error)`` (``[source: ]STATUS: message[: cause]``) into source and message-with-cause.
+
+    GenkitError keeps ``source`` only as a prefix on its string form, so read
+    it back from there. The first ``STATUS: message`` is the anchor; a cause
+    suffix can repeat it but always comes after.
+    """
+    text = str(error)
+    at = text.find(f'{error.status}: {error.message}')
+    if at < 0:
+        return None, error.message
+    return text[:at].removesuffix(': ') or None, text[at + len(error.status) + 2 :]
+
+
+@dataclass(frozen=True)
+class BoxedFailure:
+    """Plain-data record of a boxed turn failure for SSE error framing.
+
+    Stores only strings and JSON-safe PublicError details—never a live
+    BaseException or traceback—so a failed ModelResponse retains no frame
+    locals and survives deepcopy and pickle round-trips.
+    """
+
+    status: StatusName
+    message: str
+    is_public: bool = False
+    details: Any = None  # noqa: ANN401
+    source: str | None = None
+
+    @classmethod
+    def from_exc(cls, exc: BaseException) -> Self:
+        """Capture plain-data failure metadata from an exception without holding it."""
+        if isinstance(exc, PublicError):
+            try:
+                details = _client_details(exc.details)
+            except Exception:
+                details = None
+            return cls(status=exc.status, message=exc.message, is_public=True, details=details)
+        if isinstance(exc, GenkitError):
+            source, message = _split_rendered(exc)
+            return cls(status=exc.status, message=message, source=source)
+        text = str(exc)
+        return cls(
+            status='INTERNAL',
+            message=f'{type(exc).__name__}: {text}' if text else type(exc).__name__,
+        )
+
+    def to_exception(self) -> GenkitError:
+        """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
+        if self.is_public:
+            return PublicError(
+                self.status,
+                self.message,
+                details=copy.deepcopy(self.details) if self.details is not None else None,
+            )
+        return GenkitError(status=self.status, message=self.message, source=self.source)
+
+
+def error_status(error: Exception) -> int:
     """HTTP status to send back when a served flow fails; pairs with ``error_body``.
 
     A PublicError keeps its own status (NOT_FOUND is a 404), and a bad
@@ -722,7 +840,7 @@ def error_status(error: object) -> int:
     """
     facing = _client_facing_error(error)
     if facing is not None:
-        return facing.http_code
+        return http_status_code(facing.status)
     return 500
 
 
@@ -738,7 +856,14 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
         A ReflectionError model instance.
     """
     if isinstance(error, GenkitError):
-        ref = error.to_serializable()
+        cause = attached_cause(error)
+        raw_details = dict(error.details) if isinstance(error.details, Mapping) else {}
+        raw_details.setdefault('stack', get_error_stack(cause or error))
+        ref = ReflectionError(
+            details=ReflectionErrorDetails(**raw_details),
+            code=StatusCodes[error.status].value,
+            message=f'{error.message}: {repr(cause)}' if cause else error.message,
+        )
     else:
         ref = ReflectionError(
             message=str(error),
@@ -755,7 +880,7 @@ def get_reflection_json(error: object, *, trace_id: str | None = None) -> Reflec
     return ref.model_copy(update={'details': details})
 
 
-def error_body(error: object) -> dict[str, Any]:
+def error_body(error: Exception) -> dict[str, Any]:
     """JSON body to send back when a served flow fails.
 
     Only a PublicError's message, details, and status go on the wire; it's
@@ -778,7 +903,7 @@ def error_body(error: object) -> dict[str, Any]:
     facing = _client_facing_error(error)
     if facing is None:
         return dict(_INTERNAL_CLIENT_BODY)
-    message = facing.original_message if isinstance(facing, PublicError) else _request_client_message(facing)
+    message = facing.message if isinstance(facing, PublicError) else _request_client_message(facing)
     body: dict[str, Any] = {
         'message': message,
         'status': facing.status,
@@ -799,7 +924,7 @@ def get_error_stack(error: object) -> str | None:
     Returns:
         The stack trace string if available, None otherwise.
     """
-    if isinstance(error, Exception):
+    if isinstance(error, BaseException):
         # Stack traces are valuable for debugging; consider making this configurable
         # to enable them in development/staging and suppress in production.
         # For now, return an empty string to keep Dev UI clean as per requirements.

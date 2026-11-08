@@ -35,29 +35,25 @@ Example:
 """
 
 from genkit._ai._aio import Genkit
-from genkit._ai._formats._types import FormatDef, FormatterConfig
 from genkit._ai._prompt import (
     ModelStreamResponse,
     Prompt,
 )
-from genkit._ai._tools import (
-    MultipartToolResponse,
-    ToolContext,
-)
 from genkit._core._action import FlowContext, StreamResponse
-from genkit._core._error import GenkitError, GenkitRuntimeError, Interrupt, PublicError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
 from genkit._core._flow import Flow
-from genkit._core._logger import get_logger
+from genkit._core._logger import GenkitLogger, get_logger
 from genkit._core._model import (
     Document,
     Message,
     ModelResponse,
     ModelResponseChunk,
+    MultipartToolResponse,
     Part,
     ToolChoice,
 )
 from genkit._core._operation import Operation
-from genkit._core._tool import Tool
+from genkit._core._tool import Tool, ToolContext
 from genkit._core._typing import Embedding, FinishReason, Media, Role
 
 __all__ = [
@@ -72,7 +68,7 @@ __all__ = [
     # What came back
     'ModelResponse',
     'ModelResponseChunk',
-    'GenkitRuntimeError',
+    'Failure',
     'ModelStreamResponse',
     'StreamResponse',
     'FinishReason',
@@ -90,10 +86,8 @@ __all__ = [
     'Prompt',
     'GenkitError',
     'PublicError',
-    'RuntimeErrorReason',
-    # Custom output formats
-    'FormatDef',
-    'FormatterConfig',
+    'ErrorReason',
     # Log lines that reach the Dev UI trace panel
+    'GenkitLogger',
     'get_logger',
 ]

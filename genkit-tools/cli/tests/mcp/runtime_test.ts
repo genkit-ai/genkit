@@ -15,27 +15,19 @@
  */
 
 import { RuntimeEvent } from '@genkit-ai/tools-common/manager';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineFlowTools } from '../../src/mcp/flows';
 import { defineRuntimeTools } from '../../src/mcp/runtime';
 import { defineTraceTools } from '../../src/mcp/trace';
-import type { McpToolOptions } from '../../src/mcp/utils';
+import { McpRuntimeManager, type McpToolOptions } from '../../src/mcp/utils';
+import * as managerUtils from '../../src/utils/manager-utils';
 
-jest.mock('@genkit-ai/tools-common/utils', () => {
-  const actual = jest.requireActual('@genkit-ai/tools-common/utils') as Record<
-    string,
-    unknown
-  >;
+vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@genkit-ai/tools-common/utils')>();
   return {
     ...actual,
-    record: jest.fn(() => Promise.resolve()),
+    record: vi.fn(() => Promise.resolve()),
   };
 });
 
@@ -48,13 +40,13 @@ describe('MCP runtime tools', () => {
   beforeEach(() => {
     registeredTools = {};
     mockServer = {
-      registerTool: jest.fn((name: string, _config: any, handler: any) => {
+      registerTool: vi.fn((name: string, _config: any, handler: any) => {
         registeredTools[name] = handler;
       }),
     };
     mockMcpManager = {
-      getManagerWithDevProcess: jest.fn(),
-      getManager: jest.fn(),
+      getManagerWithDevProcess: vi.fn(),
+      getManager: vi.fn(),
     };
     options = {
       projectRoot: '/workspace',
@@ -68,7 +60,7 @@ describe('MCP runtime tools', () => {
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   it('start_runtime formats standard Error messages', async () => {
@@ -98,18 +90,18 @@ describe('MCP runtime tools', () => {
       | undefined;
     const processPromise = new Promise<void>(() => {});
     const mockRuntimeManager = {
-      listRuntimes: jest.fn().mockReturnValue([{ id: 'old-runtime' }]),
-      onRuntimeEvent: jest.fn((cb: any) => {
+      listRuntimes: vi.fn().mockReturnValue([{ id: 'old-runtime' }]),
+      onRuntimeEvent: vi.fn((cb: any) => {
         runtimeEventListener = cb;
-        return jest.fn();
+        return vi.fn();
       }),
       processManager: {
-        restart: jest.fn(async () => {
+        restart: vi.fn(async () => {
           setTimeout(() => {
             runtimeEventListener?.(RuntimeEvent.ADD, { id: 'new-runtime' });
           }, 10);
         }),
-        waitForProcess: jest.fn(() => processPromise),
+        waitForProcess: vi.fn(() => processPromise),
       },
     };
     mockMcpManager.getManager.mockResolvedValue(mockRuntimeManager);
@@ -125,11 +117,11 @@ describe('MCP runtime tools', () => {
 
   it('restart_runtime returns an error if the restarted process exits before registering', async () => {
     const mockRuntimeManager = {
-      listRuntimes: jest.fn().mockReturnValue([{ id: 'old-runtime' }]),
-      onRuntimeEvent: jest.fn(() => jest.fn()),
+      listRuntimes: vi.fn().mockReturnValue([{ id: 'old-runtime' }]),
+      onRuntimeEvent: vi.fn(() => vi.fn()),
       processManager: {
-        restart: jest.fn(async () => {}),
-        waitForProcess: jest.fn(() =>
+        restart: vi.fn(async () => {}),
+        waitForProcess: vi.fn(() =>
           Promise.reject(new Error('app process exited with code 1'))
         ),
       },
@@ -179,5 +171,157 @@ describe('MCP runtime tools', () => {
         },
       ],
     });
+  });
+});
+
+describe('McpRuntimeManager', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('reuses the telemetry server URL for a projectRoot across starts', async () => {
+    const resolveSpy = vi
+      .spyOn(managerUtils, 'resolveTelemetryServer')
+      .mockResolvedValue('http://localhost:4033');
+    const mockRuntimeManager1 = {
+      stop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    const mockRuntimeManager2 = {
+      stop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    const startDevSpy = vi
+      .spyOn(managerUtils, 'startDevProcessManager')
+      .mockResolvedValueOnce({
+        manager: mockRuntimeManager1,
+        processPromise: Promise.resolve(),
+      })
+      .mockResolvedValueOnce({
+        manager: mockRuntimeManager2,
+        processPromise: Promise.resolve(),
+      });
+    const startManagerSpy = vi
+      .spyOn(managerUtils, 'startManager')
+      .mockResolvedValue(mockRuntimeManager1);
+
+    const mcpManager = new McpRuntimeManager();
+
+    await mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+    await mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace/sub/..',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+    await mcpManager.getManager('/workspace/.');
+
+    expect(resolveSpy).toHaveBeenCalledTimes(1);
+    expect(resolveSpy).toHaveBeenCalledWith({ projectRoot: '/workspace' });
+    expect(startDevSpy).toHaveBeenNthCalledWith(
+      1,
+      '/workspace',
+      'npx',
+      ['tsx', 'src/index.ts'],
+      expect.objectContaining({
+        telemetryServerUrl: 'http://localhost:4033',
+      })
+    );
+    expect(startDevSpy).toHaveBeenNthCalledWith(
+      2,
+      '/workspace',
+      'npx',
+      ['tsx', 'src/index.ts'],
+      expect.objectContaining({
+        telemetryServerUrl: 'http://localhost:4033',
+      })
+    );
+    expect(startManagerSpy).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates concurrent telemetry server resolutions and retries after failure', async () => {
+    let resolveServer!: (url: string) => void;
+    const pendingPromise = new Promise<string>((resolve) => {
+      resolveServer = resolve;
+    });
+    const resolveSpy = vi
+      .spyOn(managerUtils, 'resolveTelemetryServer')
+      .mockRejectedValueOnce(new Error('port bind failed'))
+      .mockReturnValueOnce(pendingPromise);
+    const mockRuntimeManager = {
+      stop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    vi.spyOn(managerUtils, 'startManager').mockResolvedValue(
+      mockRuntimeManager
+    );
+
+    const mcpManager = new McpRuntimeManager();
+
+    await expect(mcpManager.getManager('/workspace')).rejects.toThrow(
+      'port bind failed'
+    );
+
+    const p1 = mcpManager.getManager('/workspace');
+    const p2 = mcpManager.getManager('/workspace');
+    resolveServer('http://localhost:4033');
+    await Promise.all([p1, p2]);
+
+    expect(resolveSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('detaches cached manager before awaiting stop() so concurrent or post-failure calls do not return a dying manager', async () => {
+    vi.spyOn(managerUtils, 'resolveTelemetryServer').mockResolvedValue(
+      'http://localhost:4033'
+    );
+    let resolveStop1!: () => void;
+    const stop1Promise = new Promise<void>((resolve) => {
+      resolveStop1 = resolve;
+    });
+    const mockRuntimeManager1 = {
+      stop: vi.fn<() => Promise<void>>().mockReturnValue(stop1Promise),
+    } as any;
+    const mockRuntimeManager2 = {
+      stop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    } as any;
+    vi.spyOn(managerUtils, 'startDevProcessManager')
+      .mockResolvedValueOnce({
+        manager: mockRuntimeManager1,
+        processPromise: Promise.resolve(),
+      })
+      .mockRejectedValueOnce(new Error('dev process failed to start'));
+    const startManagerSpy = vi
+      .spyOn(managerUtils, 'startManager')
+      .mockResolvedValue(mockRuntimeManager2);
+
+    const mcpManager = new McpRuntimeManager();
+
+    await mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+
+    const restartPromise = mcpManager.getManagerWithDevProcess({
+      projectRoot: '/workspace',
+      command: 'npx',
+      args: ['tsx', 'src/index.ts'],
+      explicitProjectRoot: false,
+    });
+
+    // While mockRuntimeManager1.stop() is still pending, a concurrent getManager
+    // call should not receive the dying mockRuntimeManager1 instance.
+    const concurrentGetPromise = mcpManager.getManager('/workspace');
+    resolveStop1();
+
+    await expect(restartPromise).rejects.toThrow('dev process failed to start');
+    const activeManager = await concurrentGetPromise;
+
+    expect(mockRuntimeManager1.stop).toHaveBeenCalledTimes(1);
+    expect(startManagerSpy).toHaveBeenCalledTimes(1);
+    expect(activeManager).toBe(mockRuntimeManager2);
   });
 });

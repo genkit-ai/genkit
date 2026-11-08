@@ -17,35 +17,36 @@
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { startServer } from '@genkit-ai/tools-common/server';
 import { logger } from '@genkit-ai/tools-common/utils';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   afterEach,
   beforeEach,
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+  vi,
+  type Mock,
+} from 'vitest';
 import { start } from '../../src/commands/start';
 import * as managerUtils from '../../src/utils/manager-utils';
 
-jest.mock('@genkit-ai/tools-common/server');
-jest.mock('@genkit-ai/tools-common/utils', () => ({
-  findProjectRoot: jest.fn(() => Promise.resolve('/mock/root')),
+vi.mock('@genkit-ai/tools-common/server');
+vi.mock('@genkit-ai/tools-common/utils', () => ({
+  findProjectRoot: vi.fn(() => Promise.resolve('/mock/root')),
   logger: {
-    warn: jest.fn(),
-    error: jest.fn(),
-    info: jest.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
   },
 }));
-jest.mock('get-port', () => ({
+vi.mock('get-port', () => ({
   __esModule: true,
-  default: jest.fn(() => Promise.resolve(4000)),
-  makeRange: jest.fn(),
+  default: vi.fn(() => Promise.resolve(4000)),
+  makeRange: vi.fn(),
 }));
-jest.mock('open');
+vi.mock('open');
 
 describe('start command', () => {
   let startDevProcessManagerSpy: any;
@@ -53,21 +54,21 @@ describe('start command', () => {
   let startServerSpy: any;
 
   beforeEach(() => {
-    jest.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
+    vi.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
       envVars: {},
       telemetryServerUrl: 'http://localhost:4033',
       reflectionV2Port: 3200,
     });
-    startDevProcessManagerSpy = jest
+    startDevProcessManagerSpy = vi
       .spyOn(managerUtils, 'startDevProcessManager')
       .mockResolvedValue({
         manager: {} as any,
         processPromise: Promise.resolve(),
       });
-    startManagerSpy = jest
+    startManagerSpy = vi
       .spyOn(managerUtils, 'startManager')
       .mockResolvedValue({} as any);
-    startServerSpy = startServer as unknown as jest.Mock;
+    startServerSpy = startServer as unknown as Mock;
 
     // Reset args and options; commander keeps them across parseAsync calls.
     start.args = [];
@@ -78,7 +79,7 @@ describe('start command', () => {
   });
 
   afterEach(() => {
-    jest.clearAllMocks();
+    vi.clearAllMocks();
   });
 
   it('should start dev process manager when args are provided', async () => {
@@ -229,7 +230,7 @@ describe('start command', () => {
     };
 
     beforeEach(() => {
-      jest.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
+      vi.spyOn(managerUtils, 'getDevEnvVars').mockResolvedValue({
         envVars: otelEnvVars,
         telemetryServerUrl: 'http://localhost:4033',
         reflectionV2Port: 3200,
@@ -286,7 +287,7 @@ describe('start command', () => {
 });
 
 /** Resolves once `spy` has been called (start never resolves without args). */
-async function waitForCall(spy: jest.Mock): Promise<void> {
+async function waitForCall(spy: Mock): Promise<void> {
   for (let i = 0; i < 50 && spy.mock.calls.length === 0; i++) {
     await new Promise((resolve) => setImmediate(resolve));
   }

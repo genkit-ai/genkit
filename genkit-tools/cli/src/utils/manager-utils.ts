@@ -56,10 +56,15 @@ export async function resolveTelemetryServer(options: {
 }): Promise<string> {
   let telemetryServerUrl = process.env.GENKIT_TELEMETRY_SERVER;
   if (!telemetryServerUrl) {
-    const telemetryPort = await getPort({ port: makeRange(4033, 4999) });
-    telemetryServerUrl = `http://localhost:${telemetryPort}`;
+    const host = '127.0.0.1';
+    const telemetryPort = await getPort({
+      port: makeRange(4033, 4999),
+      host,
+    });
+    telemetryServerUrl = `http://${host}:${telemetryPort}`;
     await startTelemetryServer({
       port: telemetryPort,
+      host,
       traceStore: new LocalFileTraceStore({
         storeRoot: options.projectRoot,
         indexRoot: options.projectRoot,
@@ -174,10 +179,12 @@ export async function getDevEnvVars(
   projectRoot: string,
   options?: DevProcessManagerOptions
 ): Promise<DevEnv> {
-  const telemetryServerUrl = await resolveTelemetryServer({
-    projectRoot,
-    corsOrigin: options?.corsOrigin,
-  });
+  const telemetryServerUrl =
+    options?.telemetryServerUrl ??
+    (await resolveTelemetryServer({
+      projectRoot,
+      corsOrigin: options?.corsOrigin,
+    }));
   const disableRealtimeTelemetry = options?.disableRealtimeTelemetry ?? false;
   const experimentalReflectionV2 = options?.experimentalReflectionV2 ?? false;
   const reflectionSecret = resolveReflectionSecret({

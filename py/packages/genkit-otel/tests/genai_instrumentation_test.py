@@ -36,11 +36,12 @@ from genkit.telemetry import SpanContext, SpanMetadata, SpanNext
 
 
 def test_content_capturing_mode_is_on_the_package_door() -> None:
-    """from genkit_otel import gives GenAiInstrumentation and ContentCapturingMode; content keys are on the class."""
+    """from genkit_otel import exposes GenAiInstrumentation, ContentCapturingMode, and OtelEventLogger."""
     import genkit_otel
-    from genkit_otel import ContentCapturingMode
+    from genkit_otel import ContentCapturingMode, OtelEventLogger
 
-    assert genkit_otel.__all__ == ['ContentCapturingMode', 'GenAiInstrumentation']
+    assert genkit_otel.__all__ == ['ContentCapturingMode', 'GenAiInstrumentation', 'OtelEventLogger']
+    assert OtelEventLogger is not None
     assert GenAiInstrumentation.CONTENT_ATTRIBUTES is CONTENT_ATTRIBUTES
     assert get_args(ContentCapturingMode) == ('NO_CONTENT', 'SPAN_ONLY', 'EVENT_ONLY', 'SPAN_AND_EVENT')
 
@@ -320,14 +321,15 @@ async def test_tool_span_skipped_when_disabled(harness) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_span_emitted_for_tool_v2_when_enabled(harness) -> None:
-    """A tool.v2 action with emit_tool_spans=True mints execute_tool <name>."""
+@pytest.mark.parametrize('kind', ['tool', 'tool.v2'])
+async def test_tool_span_emitted_for_tool_v2_when_enabled(harness, kind: str) -> None:
+    """A tool (generate) or tool.v2 (Dev UI) action with emit_tool_spans=True mints execute_tool <name>."""
     on = harness.instrumentation(emit_tool_spans=True)
 
     async def sunny(span=None):
         return 'sunny'
 
-    await on.run_in_new_span(SpanMetadata(name='weather', action_type='tool.v2'), sunny)
+    await on.run_in_new_span(SpanMetadata(name='weather', action_type=kind), sunny)
     span = harness.span_named('execute_tool weather')
     assert span is not None
     assert harness.attr(span, GenAiAttr.OPERATION_NAME) == 'execute_tool'
@@ -864,3 +866,29 @@ async def test_every_attribute_holding_content_is_in_content_attributes(harness)
         if secret in str(value)
     }
     assert holding == GenAiInstrumentation.CONTENT_ATTRIBUTES
+
+
+def test_otel_logger_resolves_once_with_scope_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without an injected logger, _otel_logger calls OTel's get_logger(scope_name) once and caches it."""
+    from genkit_otel import _genai_instrumentation
+
+    requested_scopes: list[str] = []
+
+    class _RecordedLogger:
+        def emit(self, *, event_name: str, attributes: Mapping[str, object]) -> None:
+            _ = (event_name, attributes)
+
+    recorded_logger = _RecordedLogger()
+
+    def fake_get_logger(scope_name: str) -> _RecordedLogger:
+        requested_scopes.append(scope_name)
+        return recorded_logger
+
+    monkeypatch.setattr(_genai_instrumentation, 'get_otel_logger', fake_get_logger)
+
+    instr = GenAiInstrumentation(content_capturing_mode='EVENT_ONLY', scope_name='dining-genai')
+    assert instr._otel_logger is recorded_logger
+    assert instr._otel_logger is recorded_logger
+    assert requested_scopes == ['dining-genai']

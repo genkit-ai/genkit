@@ -173,6 +173,11 @@ Setting any `google_search_*` option turns Google Search on;
 `google_search=False` next to an option raises. A nested key such as
 `thinkingConfig` raises and names the flat fields that replace it.
 
+`timeout` sets the HTTP timeout for one request, in seconds:
+`GeminiConfig(timeout=30)`. 0, negative, inf, NaN and bool raise. On `GoogleAI`,
+the Gemini API rejects server deadlines under 10 seconds with HTTP 400
+(`VertexAI` accepts shorter values).
+
 Function calling mode is controlled by `ai.generate(tool_choice=...)`, not config:
 `'auto'`, `'required'`, or `'none'`. In `'required'` mode, Gemini binds the request's
 function tools as `allowedFunctionNames`.
@@ -222,6 +227,40 @@ config = GeminiConfig.model_validate({
 `extra` can't set the fields Genkit builds from the request (`contents`,
 `systemInstruction`, `tools`, `toolConfig`, the structured-output fields of
 `generationConfig`, `cachedContent`); those raise `INVALID_ARGUMENT`.
+
+Antigravity, Interactions Lyria, and Deep Research also reject unknown keys
+and take undeclared fields in `extra`, which is merged into the Interactions
+create body (snake_case names). A nested object merges key by key. Keys match
+ignoring case and underscores, the same way the Gemini merge aligns them. A
+`None` value means unset and is skipped. Like Gemini, fields Genkit builds from
+the request raise in `extra`: the model id (`agent`, or `model` on Lyria),
+`input`, `tools` (on Deep Research and Lyria), and Lyria's `system_instruction`.
+Deep Research declares its tools as flat config fields (`google_search`,
+`url_context`, `code_execution`, `file_search_store_names`, `mcp_servers`).
+Antigravity enables `google_search`, `url_context`, and `code_execution` by
+default when `tools` is omitted; `extra={'tools': [...]}` overrides that with an
+explicit allowlist of Interactions tool dicts (`{'type': 'google_search'}`,
+`{'type': 'mcp_server', ...}`, etc.), `generate(tools=...)` appends client
+function tools after `extra['tools']` and continues stored interactions across
+turns via `previous_interaction_id` and `environment_id`, and
+`extra={'tools': []}` raises because the API reads an empty `tools` list as
+unset. Lyria takes no tools, and neither Deep Research nor Lyria supports
+function tools (`generate(tools=...)` raises). Blocks with defaults, such as
+`agent_config` and `environment`, merge key by key.
+
+`timeout` on these three configs (and in Deep Research's `check_operation` /
+`cancel_operation` `config`) is the HTTP timeout in seconds. It used to be
+milliseconds: `config={'timeout': 30000}` becomes `config={'timeout': 30}`.
+
+```python
+op = await ai.generate_operation(
+    model='googleai/deep-research-preview-04-2026',
+    prompt='Summarize recent advances in quantum error correction.',
+    config={'thinking_summaries': 'auto', 'extra': {'agent_config': {'visualization': 'auto'}}},
+)
+# create body: {..., "agent_config": {"type": "deep-research",
+#                                     "thinking_summaries": "auto", "visualization": "auto"}}
+```
 
 ### Structured output
 

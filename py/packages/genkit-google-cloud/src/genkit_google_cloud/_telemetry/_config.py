@@ -370,6 +370,13 @@ class GcpTelemetry:
             handle_logging_error(e)
 
     def _configure_metrics(self) -> None:
+        """Configure Cloud Monitoring metric export and detect GCP resource attributes.
+
+        Temporarily raises the stdlib ``logging.Logger`` level on
+        ``opentelemetry.resourcedetector.gcp_resource_detector`` during detection so
+        non-GCE environments do not emit noisy metadata-server warnings; ``genkit.get_logger``
+        returns a ``structlog`` wrapper rather than the stdlib logger OTel's detector uses.
+        """
         if self.disable_metrics:
             return
 

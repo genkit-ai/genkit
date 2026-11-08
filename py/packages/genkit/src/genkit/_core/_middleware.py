@@ -18,19 +18,16 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import re
 from collections.abc import Awaitable, Callable, Iterable
-from dataclasses import dataclass, field
 from typing import Any, ClassVar, Generic, NamedTuple, Protocol, cast, get_args, get_origin
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, PrivateAttr, ValidationError, field_validator
 from typing_extensions import TypeVar
 
 from genkit._core._action import Action
-from genkit._core._config_check import config_field_names
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError, _StreamingCallbackError
 from genkit._core._logger import get_logger
 from genkit._core._model import (
     GenerateActionOptions,
@@ -123,23 +120,18 @@ def _config_key_spellings(config_cls: type[BaseModel]) -> dict[str, str] | None:
     accepts_field_name = bool(
         config_cls.model_config.get('validate_by_name') or config_cls.model_config.get('populate_by_name')
     )
-    # config_field_names is the same walk model config folding uses; pydantic
-    # only rejects the bare field name when it has an alias and the class
-    # doesn't validate by name.
-    names = config_field_names(config_cls)
-    alias_keys = set(names) - set(fields)
+    accepted: dict[str, str] = {}
     for name, info in fields.items():
-        if name == info.alias or name == info.validation_alias:
-            alias_keys.add(name)
-        elif isinstance(info.validation_alias, AliasChoices) and name in info.validation_alias.choices:
-            alias_keys.add(name)
-    accepted = {
-        key: name
-        for key, name in names.items()
-        if key in alias_keys
-        or accepts_field_name
-        or (fields[name].alias is None and fields[name].validation_alias is None)
-    }
+        if accepts_field_name or (info.alias is None and info.validation_alias is None):
+            accepted[name] = name
+        if info.alias:
+            accepted[info.alias] = name
+        if isinstance(info.validation_alias, str):
+            accepted[info.validation_alias] = name
+        elif isinstance(info.validation_alias, AliasChoices):
+            for choice in info.validation_alias.choices:
+                if isinstance(choice, str):
+                    accepted[choice] = name
     spellings: dict[str, str] = {}
     for key, name in accepted.items():
         info = fields[name]
@@ -237,7 +229,53 @@ class ToolHookParams(BaseModel):
         return part
 
 
-@dataclass
+class _GuardedOnChunk:
+    """A chunk callback whose ``Exception`` surfaces as ``_StreamingCallbackError``.
+
+    The model sees the carrier as a ``BaseException``, so its own
+    ``except Exception`` (and Retry or Fallback outside it) can't mistake a
+    stream callback bug for a provider failure. A carrier already raised by
+    a downstream guarded callback passes through unchanged.
+    """
+
+    __slots__ = ('fn',)
+
+    def __init__(self, fn: Callable[[ModelResponseChunk], None]) -> None:
+        self.fn = fn
+
+    def __call__(self, chunk: ModelResponseChunk) -> None:
+        try:
+            self.fn(chunk)
+        except Exception as exc:
+            raise _StreamingCallbackError(str(exc)) from exc
+
+
+class _EngineOnChunk:
+    """Engine-owned chunk wrapper stored on ``ctx`` without ``_GuardedOnChunk``.
+
+    When the model calls ``ctx.send_chunk`` directly (with no ``wrap_model``
+    ``replace_on_chunk`` wrapper around it), an exception while stamping the
+    raw chunk stays a normal ``Exception`` rather than a callback failure.
+    The downstream callback it forwards to is already guarded.
+    """
+
+    __slots__ = ('fn',)
+
+    def __init__(self, fn: Callable[[ModelResponseChunk], None]) -> None:
+        self.fn = fn
+
+    def __call__(self, chunk: ModelResponseChunk) -> None:
+        self.fn(chunk)
+
+
+def _guard_on_chunk(
+    on_chunk: Callable[[ModelResponseChunk], None] | None,
+) -> Callable[[ModelResponseChunk], None] | None:
+    if on_chunk is None or isinstance(on_chunk, (_GuardedOnChunk, _EngineOnChunk)):
+        return on_chunk
+    return _GuardedOnChunk(on_chunk)
+
+
 class MiddlewareContext:
     """Per-``generate()`` runtime services shared by every middleware in ``use=[...]``.
 
@@ -246,33 +284,101 @@ class MiddlewareContext:
     find what the app defined. Inside an agent, read the session with
     ``genkit.exp.current_session()``. Also carries a copy of the call's
     ``context=`` (auth, secrets; the same dict flows and tools read as
-    ``ctx.context``), streaming hooks, and the abort signal for the whole
-    generate invocation.
+    ``ctx.context``) and streaming hooks.
+
+    A callback stored on ``on_chunk`` that raises fails the turn; see
+    ``replace_on_chunk``.
     """
 
     ai: GenkitLike
-    abort_signal: asyncio.Event = field(default_factory=asyncio.Event)
-    context: dict[str, object] = field(default_factory=dict)
-    on_chunk: Callable[[ModelResponseChunk], None] | None = None
-    telemetry_labels: dict[str, str] | None = None
+    context: dict[str, object]
+    _on_chunk: Callable[[ModelResponseChunk], None] | None
+    telemetry_labels: dict[str, str] | None
+
+    def __init__(
+        self,
+        ai: GenkitLike,
+        *,
+        context: dict[str, object] | None = None,
+        on_chunk: Callable[[ModelResponseChunk], None] | None = None,
+        telemetry_labels: dict[str, str] | None = None,
+    ) -> None:
+        self.ai = ai
+        self.context = context if context is not None else {}
+        self._on_chunk = _guard_on_chunk(on_chunk)
+        self.telemetry_labels = telemetry_labels
+
+    @property
+    def on_chunk(self) -> Callable[[ModelResponseChunk], None] | None:
+        """Streaming callback for this generate call, guarded against callback raises."""
+        return self._on_chunk
+
+    @on_chunk.setter
+    def on_chunk(self, value: Callable[[ModelResponseChunk], None] | None) -> None:
+        self._on_chunk = _guard_on_chunk(value)
 
     @property
     def is_streaming(self) -> bool:
         """True when the caller registered a streaming callback for this generate."""
-        return self.on_chunk is not None
+        return self._on_chunk is not None
 
     def send_chunk(self, chunk: ModelResponseChunk) -> None:
         """Stream a chunk to the client when ``on_chunk`` is set."""
-        if self.on_chunk is not None:
-            self.on_chunk(chunk)
+        if self._on_chunk is not None:
+            self._on_chunk(chunk)
 
     def replace_on_chunk(
         self,
         on_chunk: Callable[[ModelResponseChunk], None] | None,
     ) -> Callable[[ModelResponseChunk], None] | None:
-        """Swap the streaming callback; returns the previous callback."""
-        previous = self.on_chunk
-        self.on_chunk = on_chunk
+        """Swap the streaming callback; returns the previous callback.
+
+        Pass the returned callback back in to restore it. Assigning
+        ``ctx.on_chunk`` directly behaves the same.
+
+        If the callback you install raises, generate treats it like a raising
+        caller callback, not a model failure:
+
+        * the turn ends with ``finish_reason == FAILED`` and
+          ``error.reason == ErrorReason.STREAM_CALLBACK_FAILED``;
+        * the model is not called again: Retry and Fallback don't see it;
+        * the caller's ``async for`` over ``stream.stream`` ends without
+          raising, after the chunks sent before the failure.
+
+        Example:
+            ```python
+            # 1. A middleware that redacts card numbers in streamed text
+            class Redact(Middleware):
+                async def wrap_model(self, params, ctx, next_fn):
+                    previous = ctx.on_chunk
+
+                    def redact(chunk):
+                        previous(scrub_card_numbers(chunk))  # raises on a bug
+
+                    ctx.replace_on_chunk(redact)
+                    try:
+                        return await next_fn(params, ctx)
+                    finally:
+                        ctx.replace_on_chunk(previous)
+
+
+            # 2. Stream through it; Retry outside doesn't re-call the model
+            stream = ai.generate_stream(
+                prompt='Read back my order.',
+                use=[Retry(max_retries=2), Redact()],
+            )
+            async for chunk in stream.stream:
+                print(chunk.text)
+            # => Your order:
+
+            # 3. The turn failed on the callback, not the provider
+            response = await stream.response
+            print(response.finish_reason, response.error.reason)
+            # => failed STREAM_CALLBACK_FAILED
+            ```
+        """
+        previous = self._on_chunk
+        self._on_chunk = _guard_on_chunk(on_chunk)
         return previous
 
 
@@ -534,7 +640,7 @@ class _MiddlewareMetadata(MiddlewareDesc):
                     f'accepted keys: {", ".join(accepted) or "none"}'
                 ),
                 source='genkit.generate',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
             )
         try:
             return self._cls(**config)
@@ -544,7 +650,7 @@ class _MiddlewareMetadata(MiddlewareDesc):
                 status='INVALID_ARGUMENT',
                 message=f'Middleware "{self.name}" got invalid config',
                 source='genkit.generate',
-                reason=RuntimeErrorReason.INVALID_INPUT,
+                reason=ErrorReason.INVALID_INPUT,
                 cause=e,
             ) from e
 

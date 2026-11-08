@@ -28,8 +28,7 @@ from typing import TypeVar
 
 from genkit_google_genai._models._embedder import EmbeddingConfig
 from genkit_google_genai._models._routing import classify_family, is_imagen_model_name, strip_ref_prefixes
-from genkit_google_genai._models._sdk_config import sdk_config_error
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from genkit import GenkitError
 from genkit.embedder import EmbedderRef
@@ -44,7 +43,7 @@ FAMILY_METHOD: dict[str, str] = {
     'image': 'gemini_image',
     'gemma': 'gemma',
     'veo': 'veo',
-    'embedder': 'embedding',
+    'embedder': 'embedder',
 }
 
 # Families one plugin class serves: display name, constructor, and that class.
@@ -59,7 +58,7 @@ PLUGIN_FAMILY_METHODS: dict[str, tuple[str, str, str]] = {
 def wrong_family_error(*, plugin_class: str, method: str, family: str, local: str, actual: str) -> GenkitError:
     """Build the INVALID_ARGUMENT error naming the id and the way out."""
     if actual == 'embedder':
-        hint = f"'{local}' is an embedder; use {plugin_class}.embedding()."
+        hint = f"'{local}' is an embedder; use {plugin_class}.embedder()."
     elif actual in PLUGIN_FAMILY_METHODS:
         display, method_name, owner = PLUGIN_FAMILY_METHODS[actual]
         hint = (
@@ -113,35 +112,25 @@ def family_embedder_ref(
     *,
     namespace: str,
     plugin_class: str,
-    config: EmbeddingConfig | dict[str, object] | None,
-    version: str | None,
-) -> EmbedderRef:
-    """Strip, gate, and build an EmbedderRef for ai.embed().
+    config: EmbeddingConfig | None,
+) -> EmbedderRef[EmbeddingConfig]:
+    """Strip, gate, and build a typed ``EmbedderRef[EmbeddingConfig]`` for ``ai.embed()``.
 
-    This deliberately returns an EmbedderRef, not a ModelRef: an embedder id
-    must never end up in generate(model=...). ``config`` is validated as an
-    ``EmbeddingConfig`` and stored as a snake_case dict, the form
-    ``ai.embed()`` merges with per-call config; an invalid dict raises
-    INVALID_ARGUMENT here rather than at embed time.
+    Returns an ``EmbedderRef``, not a ``ModelRef``: an embedder id must never
+    end up in ``generate(model=...)``. ``EmbedderRef`` validates ``config``
+    against ``EmbeddingConfig`` and deep-copies it so explicit ``None`` fields
+    stay intact.
     """
     if not isinstance(name, str):
         raise GenkitError(
-            status='INVALID_ARGUMENT', message=f'{plugin_class}.embedding: embedder name must be a string.'
+            status='INVALID_ARGUMENT', message=f'{plugin_class}.embedder: embedder name must be a string.'
         )
     local = strip_ref_prefixes(name)
     if not local:
-        raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.embedding: embedder name is required.')
+        raise GenkitError(status='INVALID_ARGUMENT', message=f'{plugin_class}.embedder: embedder name is required.')
     actual = classify_family(local)
     if actual not in ('embedder', 'unknown'):
         raise wrong_family_error(
-            plugin_class=plugin_class, method='embedding', family='embedder', local=local, actual=actual
+            plugin_class=plugin_class, method='embedder', family='embedder', local=local, actual=actual
         )
-    if isinstance(config, EmbeddingConfig):
-        config = config.model_dump(exclude_none=True)
-    elif config is not None:
-        try:
-            parsed = EmbeddingConfig.model_validate(config)
-        except ValidationError as e:
-            raise sdk_config_error(action_name=f'{plugin_class}.embedding', error=e) from e
-        config = parsed.model_dump(exclude_none=True)
-    return EmbedderRef(name=f'{namespace}/{local}', config=config, version=version)
+    return EmbedderRef(name=f'{namespace}/{local}', config_schema=EmbeddingConfig, config=config)

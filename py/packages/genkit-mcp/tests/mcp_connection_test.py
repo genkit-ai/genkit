@@ -52,6 +52,8 @@ from mcp.types import (
     Tool as McpTool,
 )
 
+from genkit import get_logger
+
 ALL_TOOLS = [
     'echo',
     'second',
@@ -178,12 +180,12 @@ async def hold_in_flight(connection: McpConnection) -> Blocker:
 
 
 def rendered_for_logs(error: BaseException) -> str:
-    """Print the error's whole chain with frame locals, as structlog's default renderer does for logger.exception."""
+    """Render ``error``'s exception chain and frame locals into an isolated ``StringIO`` buffer."""
     output = io.StringIO()
     saved = structlog.get_config()
     structlog.configure(logger_factory=structlog.PrintLoggerFactory(output))
     try:
-        structlog.get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
+        get_logger('test').exception('listing failed', exc_info=(type(error), error, error.__traceback__))
     finally:
         structlog.configure(**saved)
     captured = traceback.TracebackException(type(error), error, error.__traceback__, capture_locals=True)
@@ -721,7 +723,6 @@ async def test_a_server_error_reply_reports_the_status_for_its_code(tmp_path: Pa
 
     assert isinstance(error, _ServerError)
     assert error.status == status
-    assert error.cause is reply
     assert error.__cause__ is reply
     assert f'failed with error {code}: refused' in str(error)
 
@@ -1182,5 +1183,5 @@ async def test_each_output_schema_wording_is_translated(message: str) -> None:
     session = cast(ClientSession, _RaisingSession(RuntimeError(message)))
     with pytest.raises(_ToolResultError) as raised:
         await _call_tool(session, 'echo', {}, None)
-    assert raised.value.original_message == message
+    assert raised.value.message == message
     assert isinstance(raised.value.__cause__, RuntimeError)

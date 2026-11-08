@@ -120,7 +120,7 @@ async def test_dap_tool_v2_bucket_is_not_found_by_mcp_tool_echo(registry: Regist
     """{tool.v2: [...]} is missed by mcp:tool/echo."""
 
     async def dap_fn() -> DapValue:
-        return {ActionKind.TOOL: [tool1]}
+        return {ActionKind.TOOL_V2: [tool1]}
 
     dap = define_dynamic_action_provider(registry, 'my-dap', dap_fn)
 

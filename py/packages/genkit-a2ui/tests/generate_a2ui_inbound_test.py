@@ -37,8 +37,7 @@ from helpers import (
     weather_fence,
 )
 
-from genkit import Message, Part
-from genkit._core._typing import Role
+from genkit import Message, Part, Role
 
 
 @pytest.mark.asyncio

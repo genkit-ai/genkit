@@ -55,7 +55,7 @@ from genkit._ai._prompt import (
 )
 from genkit._core._action import Action, ActionKind
 from genkit._core._dap import DapValue
-from genkit._core._error import GenkitError, RuntimeErrorReason
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import GenerateActionOptions, ModelConfig, resume_options_to_resume
 from genkit._core._registry import define_dynamic_action_provider
 from genkit._core._typing import MiddlewareRef, Role
@@ -241,9 +241,10 @@ async def test_prompt_with_kitchensink() -> None:
         description='a prompt descr',
     )
 
+    # output_constrained=True with no schema: there is nothing to constrain to, so it goes out false.
     want_txt = (
         '[ECHO] system: "pirate" user: "history" user: "hi" tools=testTool '
-        'tool_choice=required output={"format":"json","constrained":true,'
+        'tool_choice=required output={"format":"json","constrained":false,'
         '"contentType":"application/json"}'
     )
 
@@ -778,10 +779,10 @@ def _prompt_file_ai(
 
 def _assert_invalid_prompt_input(error: GenkitError, *, prompt_name: str, field: str) -> None:
     assert error.status == 'INVALID_ARGUMENT'
-    assert error.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in error.original_message
-    assert f"Invalid input for action '{prompt_name}'" in error.original_message
-    assert field in error.original_message
+    assert error.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in error.message
+    assert f"Invalid input for action '{prompt_name}'" in error.message
+    assert field in error.message
 
 
 def _text_reply(text: str) -> ModelResponse:
@@ -1997,8 +1998,8 @@ def test_parse_dotprompt_use_invalid(raw: object) -> None:
     with pytest.raises(GenkitError) as raised:
         _parse_dotprompt_use(raw)
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-    assert 'INVALID_INPUT' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_INPUT
+    assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2033,8 +2034,8 @@ async def test_load_prompt_with_use_middleware_not_registered() -> None:
         missing = await prompt(ai._registry, 'missing_mw')
         with pytest.raises(GenkitError, match='missing_mw') as raised:
             await missing()
-        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-        assert 'INVALID_INPUT' not in raised.value.original_message
+        assert raised.value.reason is ErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2051,8 +2052,8 @@ async def test_load_prompt_with_use_not_a_list_raises_invalid_input() -> None:
         with pytest.raises(GenkitError, match='must be a list') as raised:
             await prompt(ai._registry, 'bad_use')
         assert raised.value.status == 'INVALID_ARGUMENT'
-        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-        assert 'INVALID_INPUT' not in raised.value.original_message
+        assert raised.value.reason is ErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2069,8 +2070,8 @@ async def test_load_prompt_with_empty_use_entry_raises_invalid_input() -> None:
         with pytest.raises(GenkitError, match='empty string') as raised:
             await prompt(ai._registry, 'empty_use')
         assert raised.value.status == 'INVALID_ARGUMENT'
-        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-        assert 'INVALID_INPUT' not in raised.value.original_message
+        assert raised.value.reason is ErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2087,8 +2088,8 @@ async def test_load_prompt_with_use_missing_name_raises_invalid_input() -> None:
         with pytest.raises(GenkitError, match='missing required `name`') as raised:
             await prompt(ai._registry, 'no_name')
         assert raised.value.status == 'INVALID_ARGUMENT'
-        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-        assert 'INVALID_INPUT' not in raised.value.original_message
+        assert raised.value.reason is ErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2105,8 +2106,8 @@ async def test_load_prompt_with_numeric_use_entry_raises_invalid_input() -> None
         with pytest.raises(GenkitError, match='must be a string or map') as raised:
             await prompt(ai._registry, 'num_use')
         assert raised.value.status == 'INVALID_ARGUMENT'
-        assert raised.value.reason is RuntimeErrorReason.INVALID_INPUT
-        assert 'INVALID_INPUT' not in raised.value.original_message
+        assert raised.value.reason is ErrorReason.INVALID_INPUT
+        assert 'INVALID_INPUT' not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -2651,9 +2652,9 @@ async def test_define_prompt_malformed_input_schema_is_a_schema_error() -> None:
         await p.render({})
 
     assert raised.value.status == 'INVALID_ARGUMENT'
-    assert raised.value.reason is RuntimeErrorReason.INVALID_SCHEMA
-    assert "Invalid input_schema for prompt 'broken'" in raised.value.original_message
-    assert 'output_schema' not in raised.value.original_message
+    assert raised.value.reason is ErrorReason.INVALID_SCHEMA
+    assert "Invalid input_schema for prompt 'broken'" in raised.value.message
+    assert 'output_schema' not in raised.value.message
     assert pm.request_count == 0
 
 

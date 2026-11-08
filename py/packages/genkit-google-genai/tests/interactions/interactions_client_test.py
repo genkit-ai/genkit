@@ -207,8 +207,8 @@ async def test_429_retry_after_header_sets_retry_delay(http_client: MagicMock) -
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
-    assert exc_info.value.response_metadata == {'retry_after_ms': 1500.0}
-    assert isinstance(exc_info.value.cause, httpx.HTTPStatusError)
+    assert exc_info.value.retry_after_ms == 1500.0
+    assert isinstance(exc_info.value.__cause__, httpx.HTTPStatusError)
     assert exc_info.value.details['error'] == {'message': 'slow down'}
 
 
@@ -230,7 +230,7 @@ async def test_timeout_is_deadline_exceeded(http_client: MagicMock) -> None:
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'}, ClientOptions(timeout=1000))
     assert exc_info.value.status == 'DEADLINE_EXCEEDED'
-    assert exc_info.value.cause is late
+    assert exc_info.value.__cause__ is late
 
 
 @pytest.mark.asyncio
@@ -245,7 +245,7 @@ async def test_connection_refused_is_unavailable(http_client: MagicMock, failure
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'UNAVAILABLE'
-    assert exc_info.value.cause is failure
+    assert exc_info.value.__cause__ is failure
 
 
 @pytest.mark.asyncio
@@ -307,7 +307,7 @@ async def test_http_errors_mapped_to_status(
 
 
 @pytest.mark.asyncio
-async def test_error_without_retry_after_has_no_response_metadata(http_client: MagicMock) -> None:
+async def test_error_without_retry_after_has_no_retry_after_ms(http_client: MagicMock) -> None:
     http_client.request.return_value = mock_response(
         status_code=429,
         json_body={'error': {'message': 'slow down'}},
@@ -316,7 +316,7 @@ async def test_error_without_retry_after_has_no_response_metadata(http_client: M
         with pytest.raises(GenkitError) as exc_info:
             await create_interaction('key', {'model': 'lyria'})
     assert exc_info.value.status == 'RESOURCE_EXHAUSTED'
-    assert exc_info.value.response_metadata is None
+    assert exc_info.value.retry_after_ms is None
 
 
 @pytest.mark.asyncio

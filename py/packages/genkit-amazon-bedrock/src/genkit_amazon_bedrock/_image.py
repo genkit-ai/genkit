@@ -16,10 +16,11 @@
 
 """Bedrock image generation implementation (InvokeModel API).
 
-Image models predate Converse and have no unified request shape: the Amazon
-families nest their options under ``imageGenerationConfig`` while the modern
-Stability models take flat top-level fields, so routing by model ID is
-unavoidable.
+Image models predate Converse and have no unified request shape, so routing
+by model ID is unavoidable. The modern Stability models take flat top-level
+fields and get a typed config. Titan Image and Nova Canvas are retired on
+Bedrock: their IDs still route here, but the plugin builds only the prompt
+fields and the caller sends the rest through ``extra``.
 
 The legacy SDXL shape (``stable-diffusion``, ``text_prompts``/``artifacts``) is
 not supported, because every model of that shape is end-of-life on Bedrock. The
@@ -31,21 +32,24 @@ import json
 from typing import Any, Literal, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
+from pydantic import BaseModel, ValidationError
 
 from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role, get_logger
-from genkit.model import ModelConfig, ModelContext, ModelRequest
+from genkit.model import ModelContext, ModelRequest
+from genkit_amazon_bedrock._config import AmazonImageConfig, ImageConfig, StabilityImageConfig
 from genkit_amazon_bedrock._embedders import InvokeModelTransport
 from genkit_amazon_bedrock._model_info import strip_inference_profile_prefix
 from genkit_amazon_bedrock._models import _from_botocore_error, _from_client_error
 
 logger = get_logger(__name__)
 
-ImageFamily = Literal['titan_image', 'nova_canvas', 'stability']
+ImageFamily = Literal['amazon_image', 'stability']
 
 # Substring matches over the base model ID, most specific first.
 _IMAGE_FAMILY_PATTERNS: tuple[tuple[str, ImageFamily], ...] = (
-    ('titan-image', 'titan_image'),
-    ('nova-canvas', 'nova_canvas'),
+    # Titan Image and Nova Canvas, both retired on Bedrock; one request shape.
+    ('titan-image', 'amazon_image'),
+    ('nova-canvas', 'amazon_image'),
     # Not bare 'stable-image': that would swallow the stability.stable-image-*
     # editing services (inpaint, erase-object, search-replace, ...) which are
     # not text-to-image and take entirely different request bodies.
@@ -59,19 +63,86 @@ _AMAZON_IMAGE_MIME = 'image/png'
 
 _NO_IMAGES_MESSAGE = 'bedrock image: no images generated'
 
-# Both spellings of Genkit's own generation knobs: none is a Bedrock image parameter.
-_GENKIT_CONFIG_KEYS: frozenset[str] = frozenset(
-    key for name, field in ModelConfig.model_fields.items() for key in (name, field.alias) if key is not None
-)
+_FAMILY_CONFIG: dict[ImageFamily, type[ImageConfig]] = {
+    'amazon_image': AmazonImageConfig,
+    'stability': StabilityImageConfig,
+}
+
+# Every declared field but extra reaches the body; extra is merged separately.
+_STABILITY_IMAGE_FIELDS: set[str] = set(StabilityImageConfig.model_fields) - {'extra'}
 
 
-def _image_family(model_id: str) -> ImageFamily | None:
+def image_family(model_id: str) -> ImageFamily | None:
     """Routes a model ID to its image family, or None if it is not one."""
     base_id = strip_inference_profile_prefix(model_id)
     for pattern, family in _IMAGE_FAMILY_PATTERNS:
         if pattern in base_id:
             return family
     return None
+
+
+def _managed_extra_field(extra: dict[str, Any], family: ImageFamily) -> str | None:
+    """The ``extra`` key that would overwrite a field Genkit builds from the prompt, if any.
+
+    Stability takes the prompt as ``prompt``. Titan Image and Nova Canvas take
+    it as ``textToImageParams.text`` under ``taskType: TEXT_IMAGE``; other
+    ``textToImageParams`` entries (``negativeText``) are the caller's.
+    """
+    if family == 'stability':
+        return 'prompt' if 'prompt' in extra else None
+    if 'taskType' in extra:
+        return 'taskType'
+    if 'textToImageParams' in extra:
+        params = extra['textToImageParams']
+        if not isinstance(params, dict):
+            # A non-mapping would replace the whole object, prompt included.
+            return 'textToImageParams'
+        if 'text' in params:
+            return 'textToImageParams.text'
+    return None
+
+
+def _deep_merge(body: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """Merges ``extra`` over ``body``; nested objects merge key by key, other values replace."""
+    merged = dict(body)
+    for key, value in extra.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(cast(dict[str, Any], current), cast(dict[str, Any], value))
+        else:
+            merged[key] = value
+    return merged
+
+
+def merge_image_extra(body: dict[str, Any], extra: dict[str, Any], family: ImageFamily) -> dict[str, Any]:
+    """Merges ``config.extra`` into a built InvokeModel image body.
+
+    Keys are Bedrock wire names, matched exactly. Nested objects merge key by
+    key, so ``{'textToImageParams': {'negativeText': 'blurry'}}`` keeps the
+    prompt beside it, and a colliding leaf takes the caller's value. Fields
+    Genkit builds from the prompt are rejected rather than overwritten.
+
+    Args:
+        body: The body built from the prompt and declared config.
+        extra: The caller's ``extra`` mapping.
+        family: The image family the body was built for.
+
+    Returns:
+        A new body; ``body`` is not modified.
+
+    Raises:
+        GenkitError: INVALID_ARGUMENT when ``extra`` names a prompt field.
+    """
+    field = _managed_extra_field(extra, family)
+    if field is not None:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=(
+                f'bedrock image: extra field {field!r} is built by Genkit from the request '
+                'and cannot be set from config'
+            ),
+        )
+    return _deep_merge(body, extra)
 
 
 def is_image_model(model_id: str) -> bool:
@@ -83,7 +154,7 @@ def is_image_model(model_id: str) -> bool:
     Returns:
         True when the ID routes to a known image family.
     """
-    return _image_family(model_id) is not None
+    return image_family(model_id) is not None
 
 
 def image_prompt(request: ModelRequest[Any]) -> str:
@@ -110,105 +181,89 @@ def image_prompt(request: ModelRequest[Any]) -> str:
     return ''
 
 
-def build_amazon_image_body(prompt: str, config: dict[str, Any], *, include_quality: bool) -> dict[str, Any]:
+def build_amazon_image_body(prompt: str) -> dict[str, Any]:
     """Builds the InvokeModel body for Titan Image and Nova Canvas.
 
-    Only ``imageGenerationConfig`` is honoured, and only when it is a mapping;
-    every other config key is dropped. Its entries are
-    merged key-by-key over the defaults. ``image_generation_config`` is accepted
-    as an alternative spelling, as BedrockConfig accepts both casings, and the
-    camelCase key wins when a caller passes both.
+    Only the prompt fields: these models are retired on Bedrock and take no
+    typed config, so ``imageGenerationConfig`` and the rest come from
+    ``extra``, merged over the result by the caller. Bedrock applies its own
+    defaults to anything left unset.
 
     Args:
         prompt: The text prompt.
-        config: The normalized per-call config.
-        include_quality: Whether to default ``quality``; Nova Canvas takes it,
-            Titan Image does not.
 
     Returns:
         The request body to marshal.
     """
-    image_generation_config: dict[str, Any] = {
-        'numberOfImages': 1,
-        'height': 1024,
-        'width': 1024,
-        'cfgScale': 8.0,
-        'seed': 0,
-    }
-    if include_quality:
-        image_generation_config['quality'] = 'standard'
-    # Keyed on presence, not value, so the camelCase wire name wins over both.
-    key = 'imageGenerationConfig' if 'imageGenerationConfig' in config else 'image_generation_config'
-    overrides = config.get(key)
-    if isinstance(overrides, dict):
-        image_generation_config.update(overrides)
-
-    return {
-        'taskType': 'TEXT_IMAGE',
-        'textToImageParams': {'text': prompt},
-        'imageGenerationConfig': image_generation_config,
-    }
+    return {'taskType': 'TEXT_IMAGE', 'textToImageParams': {'text': prompt}}
 
 
-def build_stability_image_body(prompt: str, config: dict[str, Any]) -> dict[str, Any]:
+def build_stability_image_body(prompt: str, config: StabilityImageConfig) -> dict[str, Any]:
     """Builds the InvokeModel body for the modern Stability models.
 
-    The whole config is merged over the defaults at the top level, so a caller
-    can override ``prompt`` and ``output_format`` as well as add flat fields
-    like ``aspect_ratio`` or ``seed``. Genkit's generic generation knobs are
-    already gone by here; see ``_normalize_image_config``.
+    The declared fields are sent at the top level under their field names,
+    which are Stability's wire names, over the defaults.
 
     Args:
         prompt: The text prompt.
-        config: The normalized per-call config.
+        config: The validated per-call config.
 
     Returns:
         The request body to marshal.
     """
     body: dict[str, Any] = {'prompt': prompt, 'output_format': 'png'}
-    body.update(config)
+    body.update(config.model_dump(exclude_none=True, include=_STABILITY_IMAGE_FIELDS))
     return body
 
 
-def _image_config_dict(config: dict[str, Any]) -> dict[str, Any]:
-    """Copies a config dict, dropping Genkit's generic generation knobs."""
-    return {key: value for key, value in config.items() if key not in _GENKIT_CONFIG_KEYS}
+def image_config_class(model_id: str) -> type[ImageConfig] | None:
+    """The config class an image model takes, or None if the ID is not an image model.
+
+    Args:
+        model_id: Bedrock model ID, inference-profile ID, or ARN.
+
+    Returns:
+        The per-family config class.
+    """
+    family = image_family(model_id)
+    return _FAMILY_CONFIG[family] if family is not None else None
 
 
-def _normalize_image_config(config: Any) -> dict[str, Any]:  # noqa: ANN401
-    """Coerces the request config into a plain dict.
+def _validate_image_config(config: object, schema: type[ImageConfig]) -> ImageConfig:
+    """Coerces the request config into the family's config class.
 
-    Deliberately not ``converters.normalize_config``: that returns a
-    BedrockConfig rather than a plain dict, and its declared Converse fields
-    (``maxTokens``, ``toolChoice``, ...) would end up on an image body.
-
-    Genkit's own generation knobs (``temperature``, ``topP``, and the rest of
-    the common config) are dropped in either spelling: the framework coerces
-    every config into ModelConfig, and Bedrock's image APIs take none of them.
+    Genkit has already checked the config against ``schema`` before the
+    handler runs; this is the conversion, and the check for direct calls that
+    skip the framework.
 
     Args:
         config: The raw ``request.config`` value.
+        schema: The family's config class.
 
     Returns:
-        The config as a mutable dict, minus Genkit's generic knobs; empty when
-        none was given.
+        A ``schema`` instance; defaults when no config was given.
 
     Raises:
-        GenkitError: INVALID_ARGUMENT for unsupported config types. Failing
-            loudly beats sending a body that quietly ignores the caller's
-            settings.
+        GenkitError: INVALID_ARGUMENT for an unsupported config type or a
+            config that does not fit ``schema``.
     """
     if config is None:
-        return {}
-    if isinstance(config, dict):
-        return _image_config_dict(config)
-    dump = getattr(config, 'model_dump', None)
-    if callable(dump):
-        return _image_config_dict(cast(dict[str, Any], dump(exclude_none=True)))
-    raise GenkitError(
-        message=f'bedrock image: unexpected config type {type(config).__name__}, want a mapping or pydantic model',
-        status='INVALID_ARGUMENT',
-    )
+        return schema()
+    if isinstance(config, schema):
+        return config
+    if isinstance(config, BaseModel):
+        raw: object = config.model_dump(by_alias=True, exclude_none=True)
+    elif isinstance(config, dict):
+        raw = config
+    else:
+        raise GenkitError(
+            message=f'bedrock image: unexpected config type {type(config).__name__}, want a mapping or pydantic model',
+            status='INVALID_ARGUMENT',
+        )
+    try:
+        return schema.model_validate(raw)
+    except ValidationError as error:
+        raise GenkitError(message=f'bedrock image: invalid config: {error}', status='INVALID_ARGUMENT') from error
 
 
 def _response_images(payload: dict[str, Any]) -> list[Any]:
@@ -258,7 +313,7 @@ class BedrockImageModel:
                 usable image, and the mapped AWS status for a failed call.
         """
         # ctx is never used: there is nothing to stream, only a final response.
-        family = _image_family(self._model_id)
+        family = image_family(self._model_id)
         if family is None:
             raise GenkitError(
                 message=f'bedrock image: unsupported image generation model {self._model_id!r}',
@@ -270,19 +325,24 @@ class BedrockImageModel:
                 message='bedrock image: no text prompt found for image generation',
                 status='INVALID_ARGUMENT',
             )
-        config = _normalize_image_config(request.config)
+        config = _validate_image_config(request.config, _FAMILY_CONFIG[family])
         logger.debug('Bedrock image request', model=self._model_id, family=family)
 
-        if family == 'stability':
+        if isinstance(config, StabilityImageConfig):
             body = build_stability_image_body(prompt, config)
-            payload = await self._invoke(body)
-            # The wire body keeps the caller's casing; only the MIME is lowered.
+        else:
+            body = build_amazon_image_body(prompt)
+        # extra is the caller's escape hatch for fields the plugin doesn't
+        # model: Stability's mode, or any Titan Image / Nova Canvas option.
+        body = merge_image_extra(body, config.extra or {}, family)
+        payload = await self._invoke(body)
+
+        if family == 'stability':
+            # extra may set output_format in any casing; only the MIME is lowered.
             output_format = str(body.get('output_format') or 'png').lower()
             mime = f'image/{output_format}'
             images = self._stability_images(payload)
         else:
-            body = build_amazon_image_body(prompt, config, include_quality=family == 'nova_canvas')
-            payload = await self._invoke(body)
             mime = _AMAZON_IMAGE_MIME
             images = self._amazon_images(payload)
 

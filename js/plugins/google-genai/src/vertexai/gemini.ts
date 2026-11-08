@@ -62,6 +62,7 @@ import {
   toInteractionSteps,
   toInteractionTool,
   toInteractionToolChoice,
+  withBasicUsageStats,
 } from '../common/interaction-converters.js';
 import {
   CreateInteractionRequest,
@@ -1213,12 +1214,27 @@ async function generateWithInteractions(params: {
     imageConfig,
     // TTS models don't use the Interactions API.
     audioFormat,
+    // Not in the schema (passthrough); see jsonMode below.
+    responseMimeType,
     ...generationFields
   } = config;
   const warnDropped = (field: string) =>
     warnDroppedConfigField(modelVersion, field);
   if (audioFormat !== undefined) {
     warnDropped('audioFormat');
+  }
+  // A config `responseMimeType` (the generateContent field) of
+  // 'application/json' asks for JSON output, like `output.format: 'json'`.
+  // There's no `response_mime_type` in the Interactions `generation_config`,
+  // and other values have no equivalent.
+  const configResponseMimeType =
+    typeof responseMimeType === 'string' ? responseMimeType : undefined;
+  const jsonMode =
+    request.output?.format === 'json' ||
+    !!request.output?.schema ||
+    configResponseMimeType === 'application/json';
+  if (configResponseMimeType && !jsonMode) {
+    warnDropped('responseMimeType');
   }
 
   const systemMessage = params.systemMessage;
@@ -1260,7 +1276,9 @@ async function generateWithInteractions(params: {
     generationConfig.tool_choice = toolChoice;
   }
 
-  const store = storeFromConfig === true || pluginOptions?.store === true;
+  // The request's `store` wins over the plugin option (so a request can turn
+  // off a plugin-wide `store: true`); stateless by default.
+  const store = storeFromConfig ?? pluginOptions?.store ?? false;
   const { messages, previousInteractionId } = selectInteractionInput(
     params.messages,
     store,
@@ -1284,8 +1302,6 @@ async function generateWithInteractions(params: {
 
   // One `response_format` with an entry per output type (the deprecated
   // `response_modalities` and `generation_config.image_config` aren't sent).
-  const jsonMode =
-    request.output?.format === 'json' || !!request.output?.schema;
   const responseFormat = toInteractionResponseFormat({
     modalities:
       Array.isArray(responseModalities) && isStringArray(responseModalities)
@@ -1297,11 +1313,14 @@ async function generateWithInteractions(params: {
     videoFormat,
     json: jsonMode
       ? {
-          schema: request.output?.constrained
-            ? pluginOptions?.legacyResponseSchema
-              ? cleanSchema(request.output.schema)
-              : request.output.schema
-            : undefined,
+          // Without a schema the server answers in prose (seen live on the
+          // Gemini API); an empty schema gives JSON of any shape.
+          schema:
+            (request.output?.constrained
+              ? pluginOptions?.legacyResponseSchema
+                ? cleanSchema(request.output.schema)
+                : request.output.schema
+              : undefined) ?? {},
         }
       : undefined,
   });
@@ -1310,8 +1329,11 @@ async function generateWithInteractions(params: {
   }
 
   if (!params.streamingRequested) {
-    return fromInteractionSync(
-      await createInteraction(req, params.requestClientOptions)
+    return withBasicUsageStats(
+      fromInteractionSync(
+        await createInteraction(req, params.requestClientOptions)
+      ),
+      request.messages
     );
   }
   const result = await createInteractionStream(
@@ -1325,7 +1347,10 @@ async function generateWithInteractions(params: {
       params.sendChunk({ index: 0, content });
     }
   }
-  return fromInteractionSync(await result.response);
+  return withBasicUsageStats(
+    fromInteractionSync(await result.response),
+    request.messages
+  );
 }
 
 /**
@@ -1497,8 +1522,16 @@ export function defineModel(
         toolConfig.retrievalConfig = structuredClone(retrievalConfig);
       }
 
+      // A config `responseMimeType` (passthrough) is sent as is;
+      // 'application/json' also counts as JSON output.
+      const configResponseMimeType =
+        typeof requestConfig.responseMimeType === 'string'
+          ? requestConfig.responseMimeType
+          : undefined;
       const jsonMode =
-        request.output?.format === 'json' || !!request.output?.schema;
+        request.output?.format === 'json' ||
+        !!request.output?.schema ||
+        configResponseMimeType === 'application/json';
 
       if (toolsFromConfig) {
         tools.push(...(toolsFromConfig as any[]));
@@ -1529,7 +1562,9 @@ export function defineModel(
         generationConfig: {
           ...restOfConfig,
           candidateCount: request.candidates || undefined,
-          responseMimeType: jsonMode ? 'application/json' : undefined,
+          responseMimeType: jsonMode
+            ? 'application/json'
+            : configResponseMimeType,
         },
         tools,
         toolConfig,
@@ -1630,6 +1665,14 @@ export function defineModel(
           thoughtsTokens: response.usageMetadata?.thoughtsTokenCount,
           totalTokens: response.usageMetadata?.totalTokenCount,
           cachedContentTokens: response.usageMetadata?.cachedContentTokenCount,
+          // Same key as on the Interactions API.
+          ...(response.usageMetadata?.toolUsePromptTokenCount
+            ? {
+                custom: {
+                  toolUseTokens: response.usageMetadata.toolUsePromptTokenCount,
+                },
+              }
+            : {}),
         },
       };
     }

@@ -45,7 +45,7 @@ urlpatterns = [
 ]
 ```
 
-The view requires Django's ASGI server (Django 4.1+):
+The view requires Django's ASGI server (Django 5.0+):
 
 ```bash
 uvicorn myproject.asgi:application

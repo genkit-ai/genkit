@@ -22,7 +22,8 @@ from typing import Any, cast
 
 import boto3.session
 import pytest
-from genkit_amazon_bedrock import Bedrock, BedrockConfig
+from genkit_amazon_bedrock import Bedrock, BedrockConfig, StabilityImageConfig
+from genkit_amazon_bedrock._config import AmazonImageConfig
 from genkit_amazon_bedrock._transport import BedrockTransport
 from pydantic import ValidationError
 
@@ -56,11 +57,11 @@ def test_config_accepts_camel_case_and_rejects_unknown_fields() -> None:
     config = BedrockConfig.model_validate({
         'toolChoice': 'auto',
         'maxOutputTokens': 128,
-        'additionalModelRequestFields': {'thinking': {'type': 'enabled'}},
+        'extra': {'thinking': {'type': 'enabled'}},
     })
     assert config.tool_choice == 'auto'
     assert config.max_output_tokens == 128
-    assert config.additional_model_request_fields == {'thinking': {'type': 'enabled'}}
+    assert config.extra == {'thinking': {'type': 'enabled'}}
     # An unknown key would validate and then silently never reach the wire;
     # rejection turns that typo into an error at the call site.
     with pytest.raises(ValidationError):
@@ -103,16 +104,17 @@ async def test_resolve_ignores_non_model_kinds() -> None:
 
 @pytest.mark.asyncio
 async def test_resolve_returns_an_image_action_for_a_listed_image_model() -> None:
-    plugin = Bedrock(region='us-east-1', models=['amazon.titan-image-generator-v1'])
-    action = await plugin.resolve(ActionKind.MODEL, 'amazon.titan-image-generator-v1')
+    plugin = Bedrock(region='us-west-2', models=['stability.sd3-5-large-v1:0'])
+    action = await plugin.resolve(ActionKind.MODEL, 'stability.sd3-5-large-v1:0')
 
     assert action is not None
     assert action.metadata is not None
     model_metadata = cast(dict[str, Any], action.metadata['model'])
-    # The open image schema: a strict one would reject every family-specific
-    # override at Genkit's request validation.
-    assert model_metadata['customOptions']['properties'] == {}
-    assert model_metadata['customOptions'].get('additionalProperties') is not False
+    # Stability's own schema: its wire fields as camelCase properties, unknown keys rejected.
+    properties = model_metadata['customOptions']['properties']
+    assert {'aspectRatio', 'seed', 'negativePrompt', 'outputFormat', 'extra'} <= set(properties)
+    assert 'toolChoice' not in properties
+    assert model_metadata['customOptions'].get('additionalProperties') is False
 
 
 @pytest.mark.asyncio
@@ -126,26 +128,50 @@ async def test_resolve_classifies_an_undeclared_image_model_id() -> None:
     assert action.metadata is not None
     model_metadata = cast(dict[str, Any], action.metadata['model'])
     assert model_metadata['supports']['output'] == ['media']
-    assert model_metadata['customOptions']['properties'] == {}
+    # Retired on Bedrock and untyped: the form offers extra only.
+    assert set(model_metadata['customOptions']['properties']) == {'extra'}
 
 
 @pytest.mark.asyncio
 async def test_list_actions_lists_configured_chat_and_image_models() -> None:
     plugin = Bedrock(
         region='us-east-1',
-        models=['amazon.nova-lite-v1:0', 'amazon.titan-image-generator-v1'],
+        models=['amazon.nova-lite-v1:0', 'stability.stable-image-core-v1:1'],
     )
     actions = await plugin.list_actions()
 
     assert [a.name for a in actions] == [
         'bedrock/amazon.nova-lite-v1:0',
-        'bedrock/amazon.titan-image-generator-v1',
+        'bedrock/stability.stable-image-core-v1:1',
     ]
     assert [a.kind for a in actions] == [ActionKind.MODEL, ActionKind.MODEL]
     assert actions[1].metadata is not None
     image_metadata = cast(dict[str, Any], actions[1].metadata['model'])
     assert image_metadata['supports']['output'] == ['media']
-    assert image_metadata['customOptions']['properties'] == {}
+    assert 'aspectRatio' in image_metadata['customOptions']['properties']
+
+
+@pytest.mark.parametrize(
+    ('model_id', 'config_class'),
+    [
+        ('amazon.titan-image-generator-v1', AmazonImageConfig),
+        ('amazon.titan-image-generator-v2:0', AmazonImageConfig),
+        ('us.amazon.nova-canvas-v1:0', AmazonImageConfig),
+        ('stability.sd3-5-large-v1:0', StabilityImageConfig),
+        ('stability.stable-image-core-v1:1', StabilityImageConfig),
+        ('us.stability.stable-image-ultra-v1:1', StabilityImageConfig),
+        ('amazon.nova-lite-v1:0', BedrockConfig),
+    ],
+)
+@pytest.mark.asyncio
+async def test_each_model_registers_its_family_config_class(model_id: str, config_class: type) -> None:
+    # The registered class drives both the Dev UI form and generate()'s
+    # isinstance check, so a StabilityImageConfig sent to Titan is caught.
+    plugin = Bedrock(region='us-east-1')
+    action = await plugin.resolve(ActionKind.MODEL, model_id)
+
+    assert action is not None
+    assert action.config_schema is config_class
 
 
 @pytest.mark.asyncio
@@ -352,9 +378,9 @@ async def test_image_config_survives_the_action_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
-    # The framework coerces a raw mapping into ModelConfig, so its own knobs
-    # arrive as declared fields; only this path proves they are dropped.
+async def test_genkit_generic_config_on_an_image_action_raises() -> None:
+    # Image configs extend GenkitConfig, not ModelConfig, so temperature is an
+    # unknown key on the action itself, not just at generate().
     plugin = Bedrock(region='us-east-1', models=['stability.sd3-5-large-v1:0'])
     transport = FakeImageTransport()
     plugin._transport = cast(BedrockTransport, transport)  # noqa: SLF001
@@ -365,13 +391,12 @@ async def test_genkit_generic_config_never_reaches_the_image_body() -> None:
         'messages': [{'role': 'user', 'content': [{'text': 'a coral reef'}]}],
         'config': {'aspect_ratio': '16:9', 'temperature': 0.9},
     })
-    await action.run(request)
+    with pytest.raises(GenkitError) as exc_info:
+        await action.run(request)
 
-    assert json.loads(transport.calls[0]['body']) == {
-        'prompt': 'a coral reef',
-        'output_format': 'png',
-        'aspect_ratio': '16:9',
-    }
+    assert exc_info.value.status == 'INVALID_ARGUMENT'
+    assert 'temperature' in str(exc_info.value)
+    assert transport.calls == []
 
 
 @pytest.mark.parametrize('spelling', ['api_key', 'apiKey'])
