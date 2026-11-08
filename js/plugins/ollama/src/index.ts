@@ -527,14 +527,14 @@ function readChunks(reader) {
 function getPrompt(input: GenerateRequest): string {
   return input.messages
     .filter((m) => m.role !== 'system')
-    .map((m) => m.content.map((c) => c.text).join())
+    .map((m) => m.content.map((c) => c.text).join(''))
     .join();
 }
 
 function getSystemMessage(input: GenerateRequest): string {
   return input.messages
     .filter((m) => m.role === 'system')
-    .map((m) => m.content.map((c) => c.text).join())
+    .map((m) => m.content.map((c) => c.text).join(''))
     .join();
 }
 
