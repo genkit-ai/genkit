@@ -170,6 +170,16 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
     .describe(
       'The API version to use for the request. Both stable and beta features are available on the beta API surface.'
     ),
+  /**
+   * Beta feature flags to send with the request. A non-empty list opts into
+   * the beta API surface, the same way `apiVersion: 'beta'` does.
+   */
+  betas: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Beta feature flags to send with the request. A non-empty list enables the beta API surface.'
+    ),
   thinking: ThinkingConfigSchema.optional().describe(
     'The thinking configuration to use for the request. Thinking is a feature that allows the model to think about the request and provide a better response.'
   ),
@@ -232,11 +242,14 @@ export const MEDIA_TYPES = {
 } as const satisfies Record<string, MediaType>;
 
 /**
- * Resolve whether beta API should be used for this call.
+ * Determines whether a request should use the beta API surface.
+ *
  * Priority:
  *   1. request.config.apiVersion (per-request override - explicit stable or beta)
  *   2. pluginDefaultApiVersion (plugin-wide default)
- *   3. otherwise stable
+ *   3. a non-empty request.config.betas array - the caller is asking for a
+ *      feature that only exists on the beta surface
+ *   4. otherwise stable
  */
 export function resolveBetaEnabled(
   cfg: ClaudeConfig | undefined,
@@ -246,7 +259,8 @@ export function resolveBetaEnabled(
     return cfg.apiVersion === 'beta';
   }
   if (pluginDefaultApiVersion === 'beta') return true;
-  return false;
+  // A non-empty betas list is an explicit request for a beta-only feature.
+  return (cfg?.betas?.length ?? 0) > 0;
 }
 
 /** Plain text document source. */
