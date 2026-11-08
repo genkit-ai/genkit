@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, vi } from 'vitest';
 import * as configModule from '../../src/plugin/config';
 import type { TraceData } from '../../src/types/trace';
 import { getEvalExtractors } from '../../src/utils/eval';
@@ -28,7 +28,7 @@ const CONTEXT_TEXTS = [
 describe('eval utils', () => {
   describe('models', () => {
     it('works with default extractors', async () => {
-      const spy = jest.spyOn(configModule, 'findToolsConfig');
+      const spy = vi.spyOn(configModule, 'findToolsConfig');
       spy.mockReturnValue(Promise.resolve(null));
       // Mock trace mocks flows, but the logic of extractors should be unaffected.
       const trace = new MockTrace('My input', 'My output').getTrace();
@@ -45,7 +45,7 @@ describe('eval utils', () => {
   });
 
   it('returns default extractors when no config provided', async () => {
-    const spy = jest.spyOn(configModule, 'findToolsConfig');
+    const spy = vi.spyOn(configModule, 'findToolsConfig');
     spy.mockReturnValue(Promise.resolve(null));
     const trace = new MockTrace('My input', 'My output')
       .addSpan({
@@ -79,7 +79,7 @@ describe('eval utils', () => {
         },
       ],
     };
-    const spy = jest.spyOn(configModule, 'findToolsConfig');
+    const spy = vi.spyOn(configModule, 'findToolsConfig');
     spy.mockReturnValue(Promise.resolve(config));
     const trace = new MockTrace('My input', 42)
       .addSpan({
@@ -117,7 +117,7 @@ describe('eval utils', () => {
         },
       ],
     };
-    const spy = jest.spyOn(configModule, 'findToolsConfig');
+    const spy = vi.spyOn(configModule, 'findToolsConfig');
     spy.mockReturnValue(Promise.resolve(config));
     const trace = new MockTrace('My input', 42)
       .addSpan({
@@ -178,7 +178,7 @@ describe('eval utils', () => {
         },
       ],
     };
-    const spy = jest.spyOn(configModule, 'findToolsConfig');
+    const spy = vi.spyOn(configModule, 'findToolsConfig');
     spy.mockReturnValue(Promise.resolve(config));
     const trace = new MockTrace('My input', 42)
       .addSpan({
@@ -211,7 +211,7 @@ describe('eval utils', () => {
   });
 
   it('returns runs default extractors when trace fails', async () => {
-    const spy = jest.spyOn(configModule, 'findToolsConfig');
+    const spy = vi.spyOn(configModule, 'findToolsConfig');
     spy.mockReturnValue(Promise.resolve(null));
     const trace = new MockTrace('My input', '', 'error')
       .addSpan({

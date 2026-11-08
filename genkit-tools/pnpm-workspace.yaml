@@ -17,7 +17,6 @@ packages:
   - 'cli'
   - 'common'
   - 'telemetry-server'
-  - 'plugins/*'
 
 # Strip internal proxy tarball URLs when resolving lockfiles locally.
 pnpmfile: ../.pnpmfile.cjs

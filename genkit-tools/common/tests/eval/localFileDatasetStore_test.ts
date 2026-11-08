@@ -14,16 +14,9 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import crypto from 'crypto';
 import fs from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalFileDatasetStore } from '../../src/eval/localFileDatasetStore';
 import {
   CreateDatasetRequestSchema,
@@ -34,6 +27,37 @@ import type {
   DatasetMetadata,
   DatasetStore,
 } from '../../src/types/eval';
+
+vi.mock('fs/promises', () => ({
+  get writeFile() {
+    return fs.promises.writeFile;
+  },
+  get readFile() {
+    return fs.promises.readFile;
+  },
+  get rm() {
+    return fs.promises.rm;
+  },
+  get appendFile() {
+    return fs.promises.appendFile;
+  },
+}));
+
+vi.mock('crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('crypto')>();
+  const mock = {
+    ...actual,
+    randomUUID: vi.fn((...args: Parameters<typeof actual.randomUUID>) =>
+      actual.randomUUID(...args)
+    ),
+  };
+  return {
+    ...mock,
+    randomUUID: (...args: Parameters<typeof actual.randomUUID>) =>
+      mock.randomUUID(...args),
+    default: mock,
+  };
+});
 
 const FAKE_TIME = new Date('2024-02-03T12:05:33.243Z');
 
@@ -131,44 +155,44 @@ const SAMPLE_DATASET_METADATA_2: DatasetMetadata = {
   updateTime: FAKE_TIME.toString(),
 };
 
-jest.mock('process', () => {
+vi.mock('process', () => {
   return {
-    cwd: jest.fn(() => 'store-root'),
+    cwd: vi.fn(() => 'store-root'),
   };
 });
 
 const TEST_CASE_ID = 'test-case-1234-1234-1234';
-jest.mock('../../src/utils', () => ({
-  generateTestCaseId: jest.fn(() => TEST_CASE_ID),
+vi.mock('../../src/utils', () => ({
+  generateTestCaseId: vi.fn(() => TEST_CASE_ID),
 }));
 
-jest.useFakeTimers({ advanceTimers: true });
-jest.setSystemTime(FAKE_TIME);
+vi.useFakeTimers();
+vi.setSystemTime(FAKE_TIME);
 
 describe('localFileDatasetStore', () => {
   let DatasetStore: DatasetStore;
 
   beforeEach(() => {
     // For storeRoot setup
-    fs.existsSync = jest.fn(() => true);
-    jest.spyOn(crypto, 'randomUUID').mockReturnValueOnce('12345678' as any);
+    fs.existsSync = vi.fn(() => true);
+    vi.spyOn(crypto, 'randomUUID').mockReturnValueOnce('12345678' as any);
     LocalFileDatasetStore.reset();
     DatasetStore = LocalFileDatasetStore.getDatasetStore() as DatasetStore;
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('createDataset', () => {
     it('writes and updates index for new dataset', async () => {
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
       const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
         testCaseId: TEST_CASE_ID,
         ...s,
@@ -197,13 +221,13 @@ describe('localFileDatasetStore', () => {
     });
 
     it('writes and updates index for new dataset, testCaseIds are provided', async () => {
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
       const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s, i) => ({
         testCaseId: TEST_CASE_ID + `index${i}`,
         ...s,
@@ -233,13 +257,13 @@ describe('localFileDatasetStore', () => {
     });
 
     it('creates new dataset, with schema', async () => {
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
       const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
         testCaseId: TEST_CASE_ID,
         ...s,
@@ -264,13 +288,13 @@ describe('localFileDatasetStore', () => {
     });
 
     it('creates new dataset, with metrics', async () => {
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
       const dataset: Dataset = SAMPLE_DATASET_1_V1.map((s) => ({
         testCaseId: TEST_CASE_ID,
         ...s,
@@ -288,9 +312,9 @@ describe('localFileDatasetStore', () => {
     });
 
     it('fails request if dataset already exists', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
 
-      expect(async () => {
+      await expect(async () => {
         await DatasetStore.createDataset(CREATE_DATASET_REQUEST);
       }).rejects.toThrow();
 
@@ -298,15 +322,15 @@ describe('localFileDatasetStore', () => {
     });
 
     it('fails if datasetId is invalid', async () => {
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
 
-      expect(async () => {
+      await expect(async () => {
         await DatasetStore.createDataset({
           ...CREATE_DATASET_REQUEST,
           datasetId: 'ultracool!@#$@#$%%%!#$%datasetid',
@@ -315,13 +339,13 @@ describe('localFileDatasetStore', () => {
     });
 
     it('does not fail if datasetId starts with capitals', async () => {
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
 
       expect(async () => {
         await DatasetStore.createDataset({
@@ -334,19 +358,19 @@ describe('localFileDatasetStore', () => {
 
   describe('updateDataset', () => {
     it('succeeds for existing dataset -- append', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: SAMPLE_DATASET_METADATA_1_V1,
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       const dataset: Dataset = [...SAMPLE_DATASET_1_WITH_IDS];
-      const getDatasetSpy = jest
+      const getDatasetSpy = vi
         .spyOn(DatasetStore, 'getDataset')
         .mockImplementation(() => Promise.resolve(dataset));
 
@@ -385,19 +409,19 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing dataset -- append and replace', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: SAMPLE_DATASET_METADATA_1_V1,
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
       const dataset: Dataset = [...SAMPLE_DATASET_1_WITH_IDS];
-      const getDatasetSpy = jest
+      const getDatasetSpy = vi
         .spyOn(DatasetStore, 'getDataset')
         .mockImplementation(() => Promise.resolve(dataset));
 
@@ -447,17 +471,17 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing dataset -- with schema', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: SAMPLE_DATASET_METADATA_1_V1,
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
 
       const datasetMetadata = await DatasetStore.updateDataset({
         datasetId: SAMPLE_DATASET_ID_1,
@@ -480,17 +504,17 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing dataset -- with metrics', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: SAMPLE_DATASET_METADATA_1_V1,
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
 
       const datasetMetadata = await DatasetStore.updateDataset({
         datasetId: SAMPLE_DATASET_ID_1,
@@ -503,7 +527,7 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing dataset -- with metrics override', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: {
           ...SAMPLE_DATASET_METADATA_1_V1,
@@ -512,11 +536,11 @@ describe('localFileDatasetStore', () => {
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
 
       const datasetMetadata = await DatasetStore.updateDataset({
         datasetId: SAMPLE_DATASET_ID_1,
@@ -529,7 +553,7 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing dataset -- with metrics unset', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: {
           ...SAMPLE_DATASET_METADATA_1_V1,
@@ -538,11 +562,11 @@ describe('localFileDatasetStore', () => {
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
 
       const datasetMetadata = await DatasetStore.updateDataset({
         datasetId: SAMPLE_DATASET_ID_1,
@@ -554,7 +578,7 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing dataset -- with metrics reset', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: {
           ...SAMPLE_DATASET_METADATA_1_V1,
@@ -563,11 +587,11 @@ describe('localFileDatasetStore', () => {
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
       // For index file reads
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.appendFile = jest.fn(async () => Promise.resolve(undefined));
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.appendFile = vi.fn(async () => Promise.resolve(undefined));
 
       const datasetMetadata = await DatasetStore.updateDataset({
         datasetId: SAMPLE_DATASET_ID_1,
@@ -578,9 +602,9 @@ describe('localFileDatasetStore', () => {
     });
 
     it('fails for non existing dataset', async () => {
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
 
-      expect(async () => {
+      await expect(async () => {
         await DatasetStore.updateDataset(UPDATE_DATASET_REQUEST);
       }).rejects.toThrow();
 
@@ -590,7 +614,7 @@ describe('localFileDatasetStore', () => {
 
   describe('listDatasets', () => {
     it('succeeds for zero datasets', async () => {
-      fs.existsSync = jest.fn(() => false);
+      fs.existsSync = vi.fn(() => false);
 
       const metadatas = await DatasetStore.listDatasets();
 
@@ -598,12 +622,12 @@ describe('localFileDatasetStore', () => {
     });
 
     it('succeeds for existing datasets', async () => {
-      fs.existsSync = jest.fn(() => true);
+      fs.existsSync = vi.fn(() => true);
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: SAMPLE_DATASET_METADATA_1_V1,
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
 
@@ -622,8 +646,8 @@ describe('localFileDatasetStore', () => {
         ...s,
         testCaseId: 'id-x',
       }));
-      fs.existsSync = jest.fn(() => true);
-      fs.promises.readFile = jest.fn(async () =>
+      fs.existsSync = vi.fn(() => true);
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(dataset) as any)
       );
 
@@ -639,12 +663,12 @@ describe('localFileDatasetStore', () => {
 
   describe('deleteDataset', () => {
     it('deletes dataset and updates index', async () => {
-      fs.promises.rm = jest.fn(async () => Promise.resolve());
+      fs.promises.rm = vi.fn(async () => Promise.resolve());
       const metadataMap = {
         [SAMPLE_DATASET_ID_1]: SAMPLE_DATASET_METADATA_1_V1,
         [SAMPLE_DATASET_ID_2]: SAMPLE_DATASET_METADATA_2,
       };
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
 
@@ -679,12 +703,12 @@ describe('localFileDatasetStore', () => {
     beforeEach(() => {
       // Pretend every file exists so that, absent the guard, the operation
       // would proceed to touch the filesystem.
-      fs.existsSync = jest.fn(() => true);
-      fs.promises.readFile = jest.fn(async () =>
+      fs.existsSync = vi.fn(() => true);
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify({}) as any)
       );
-      fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
-      fs.promises.rm = jest.fn(async () => Promise.resolve());
+      fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
+      fs.promises.rm = vi.fn(async () => Promise.resolve());
     });
 
     for (const maliciousId of MALICIOUS_IDS) {
@@ -735,11 +759,11 @@ describe('localFileDatasetStore', () => {
       const metadataMap = {
         ['some-id']: SAMPLE_DATASET_METADATA_1_V1,
       };
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
 
-      expect(async () => {
+      await expect(async () => {
         await (DatasetStore as LocalFileDatasetStore).generateDatasetId(
           'some-id'
         );
@@ -747,7 +771,7 @@ describe('localFileDatasetStore', () => {
     });
 
     it('throws if datasetId is too long', async () => {
-      expect(async () => {
+      await expect(async () => {
         await (DatasetStore as LocalFileDatasetStore).generateDatasetId(
           'toolongdatasetid'.repeat(5)
         );
@@ -755,7 +779,7 @@ describe('localFileDatasetStore', () => {
     });
 
     it('throws if datasetId is invalid', async () => {
-      expect(async () => {
+      await expect(async () => {
         await (DatasetStore as LocalFileDatasetStore).generateDatasetId(
           'my@#$%@#$%datasetid'
         );
@@ -766,11 +790,11 @@ describe('localFileDatasetStore', () => {
       const metadataMap = {
         ['12345678']: SAMPLE_DATASET_METADATA_1_V1,
       };
-      fs.promises.readFile = jest.fn(async () =>
+      fs.promises.readFile = vi.fn(async () =>
         Promise.resolve(JSON.stringify(metadataMap) as any)
       );
 
-      expect(async () => {
+      await expect(async () => {
         await (DatasetStore as LocalFileDatasetStore).generateDatasetId();
       }).rejects.toThrow('Dataset ID not unique');
     });

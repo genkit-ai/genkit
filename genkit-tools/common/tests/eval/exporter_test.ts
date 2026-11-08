@@ -14,23 +14,22 @@
  * limitations under the License.
  */
 
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  jest,
-} from '@jest/globals';
 import fs from 'fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toCsv, toJson } from '../../src/eval/exporter';
 import type { EvalResult, EvalRun, EvalRunKey } from '../../src/types/eval';
 
-jest.mock('crypto', () => {
+vi.mock('fs/promises', () => ({
+  get writeFile() {
+    return fs.promises.writeFile;
+  },
+}));
+
+vi.mock('crypto', () => {
   return {
-    createHash: jest.fn().mockReturnThis(),
-    update: jest.fn().mockReturnThis(),
-    digest: jest.fn(() => 'store-root'),
+    createHash: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
+    digest: vi.fn(() => 'store-root'),
   };
 });
 
@@ -95,11 +94,11 @@ const JSON_OUTPUT_FILE = '/tmp/myAwesomeOutput.json';
 
 describe('exporter', () => {
   beforeEach(() => {
-    fs.promises.writeFile = jest.fn(async () => Promise.resolve(undefined));
+    fs.promises.writeFile = vi.fn(async () => Promise.resolve(undefined));
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('toCsv', () => {

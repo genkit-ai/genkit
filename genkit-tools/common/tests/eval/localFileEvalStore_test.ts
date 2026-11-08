@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
+import fs from 'fs';
+import * as readline from 'readline';
 import {
   afterEach,
   beforeEach,
   describe,
   expect,
   it,
-  jest,
-} from '@jest/globals';
-import fs from 'fs';
-import * as readline from 'readline';
+  vi,
+  type Mock,
+} from 'vitest';
 import { LocalFileEvalStore } from '../../src/eval/localFileEvalStore';
 import {
   EvalRunSchema,
@@ -34,9 +35,20 @@ import {
 } from '../../src/types/eval';
 
 // Mock modules
-jest.mock('readline');
-jest.mock('process', () => ({
-  cwd: jest.fn(() => 'store-root'),
+vi.mock('fs/promises', () => ({
+  get writeFile() {
+    return fs.promises.writeFile;
+  },
+  get readFile() {
+    return fs.promises.readFile;
+  },
+  get unlink() {
+    return fs.promises.unlink;
+  },
+}));
+vi.mock('readline');
+vi.mock('process', () => ({
+  cwd: vi.fn(() => 'store-root'),
 }));
 
 // Test Data
@@ -92,13 +104,13 @@ const ALL_EVAL_RUN_KEYS = {
 
 // Mock Helpers
 const mockFsExists = (exists: (path: fs.PathLike) => boolean) => {
-  fs.existsSync = jest
+  fs.existsSync = vi
     .fn<(path: fs.PathLike) => boolean>()
     .mockImplementation(exists);
 };
 
 const mockReadlineForMigration = (keys: EvalRunKey[]) => {
-  (readline.createInterface as jest.Mock).mockReturnValue({
+  (readline.createInterface as Mock).mockReturnValue({
     [Symbol.asyncIterator]: async function* () {
       for (const key of keys) {
         yield JSON.stringify(key);
@@ -108,11 +120,11 @@ const mockReadlineForMigration = (keys: EvalRunKey[]) => {
 };
 
 const mockIndexFile = (keys: Record<string, EvalRunKey>) => {
-  fs.promises.readFile = jest.fn<any>().mockResolvedValue(JSON.stringify(keys));
+  fs.promises.readFile = vi.fn<any>().mockResolvedValue(JSON.stringify(keys));
 };
 
 const mockEvalRunFile = (evalRun: EvalRun) => {
-  fs.promises.readFile = jest
+  fs.promises.readFile = vi
     .fn<any>()
     .mockImplementation(async () => JSON.stringify(evalRun));
 };
@@ -122,19 +134,19 @@ describe('localFileEvalStore', () => {
 
   beforeEach(async () => {
     LocalFileEvalStore.reset();
-    jest.clearAllMocks();
+    vi.clearAllMocks();
 
     // Setup default mocks for a clean state before each test
     mockFsExists(() => false);
-    fs.promises.writeFile = jest.fn<any>().mockResolvedValue(undefined);
-    fs.promises.unlink = jest.fn<any>().mockResolvedValue(undefined);
-    fs.writeFileSync = jest.fn<any>().mockImplementation(() => {});
+    fs.promises.writeFile = vi.fn<any>().mockResolvedValue(undefined);
+    fs.promises.unlink = vi.fn<any>().mockResolvedValue(undefined);
+    fs.writeFileSync = vi.fn<any>().mockImplementation(() => {});
 
     evalStore = await LocalFileEvalStore.getEvalStore();
   });
 
   afterEach(() => {
-    jest.restoreAllMocks();
+    vi.restoreAllMocks();
   });
 
   describe('initialization', () => {
@@ -148,7 +160,7 @@ describe('localFileEvalStore', () => {
     it('migrates to json file if txt index is found', async () => {
       LocalFileEvalStore.reset();
       mockFsExists((path) => path.toString().endsWith('index.txt'));
-      fs.createReadStream = jest.fn<any>().mockReturnValue({} as any);
+      fs.createReadStream = vi.fn<any>().mockReturnValue({} as any);
       mockReadlineForMigration([EVAL_RUN_WITH_ACTION.key]);
 
       await LocalFileEvalStore.getEvalStore();

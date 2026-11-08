@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Awaitable, Callable
 from typing import Protocol, cast
+from weakref import WeakKeyDictionary
 
 import structlog
 from structlog.typing import BindableLogger
 
 from genkit._core._environment import is_dev_environment
-from genkit._core._telemetry._log_exporter import enable_log_export
+from genkit._core._telemetry._log_exporter import LOG_EXPORT_THREAD_NAME, enable_log_export
 
 # Environment variable name
 GENKIT_LOG = 'GENKIT_LOG'
@@ -31,22 +33,40 @@ _LOG_LEVELS = {
     'fatal': logging.CRITICAL,
 }
 
-# Shared genkit start TTY. Uvicorn is our reflection health polls. httpx logs
-# INFO on every hop (Gemini generateContent, the app's own clients). Collector
-# POSTs use urllib, so they never hit this logger. GENKIT_LOG=debug turns these
-# back on.
-QUIET_LOGGERS = (
+# The reflection server runs uvicorn on this thread. uvicorn hard-codes its
+# logger names, so the reflection server's startup and health-poll access lines
+# share `uvicorn.error` / `uvicorn.access` with the app's own uvicorn server.
+REFLECTION_THREAD_NAME = 'genkit-reflection-server'
+
+# Loggers the reflection server writes to. Genkit only adds a filter that drops
+# records from REFLECTION_THREAD_NAME; levels, handlers and propagation stay as
+# the app configured them.
+REFLECTION_LOGGERS = (
     'uvicorn.access',
     'uvicorn.error',
+)
+
+# Shared genkit start TTY. httpx and httpcore log INFO on every hop (model
+# calls, the app's own clients, and Dev UI log export batches on
+# LOG_EXPORT_THREAD_NAME). GENKIT_LOG=debug turns these back on.
+QUIET_LOGGERS = (
     'httpx',
     'httpcore',
 )
+
+_genkit_quieted_levels: WeakKeyDictionary[logging.Logger, int] = WeakKeyDictionary()
 
 
 def resolve_level() -> int:
     """Resolve logging level from GENKIT_LOG environment variable."""
     raw = os.environ.get(GENKIT_LOG, 'info').strip().lower()
     return _LOG_LEVELS.get(raw, DEFAULT_LOG_LEVEL)
+
+
+def _quiet_level() -> int:
+    """Return the quiet threshold: WARNING (or stricter GENKIT_LOG), unless debug."""
+    level = resolve_level()
+    return level if level == logging.DEBUG else max(level, logging.WARNING)
 
 
 def unrecognized_level() -> str | None:
@@ -95,7 +115,7 @@ def configure_structlog_level() -> bool:
 
 
 def configure_logging(*, shared_tty: bool | None = None) -> None:
-    """Configure genkit console logging and mute reflection access logs on a shared TTY.
+    """Configure genkit console logging and mute client HTTP hops on a shared TTY.
 
     Safe to call more than once. Default console level is ``info``; override
     with ``GENKIT_LOG=debug|info|warn|error``. In ``GENKIT_ENV=dev``, debug
@@ -110,13 +130,69 @@ def configure_logging(*, shared_tty: bool | None = None) -> None:
     if not shared_tty:
         return
 
-    level = resolve_level()
-    quiet_level = level if level == logging.DEBUG else max(level, logging.WARNING)
+    quiet_level = _quiet_level()
 
     for name in QUIET_LOGGERS:
         logger = logging.getLogger(name)
-        if logger.level == logging.NOTSET:
+        if logger.level == logging.NOTSET or _genkit_quieted_levels.get(logger) == logger.level:
             logger.setLevel(quiet_level)
+            _genkit_quieted_levels[logger] = quiet_level
+        _attach_thread_filter(logger, LOG_EXPORT_THREAD_NAME)
+
+
+class ReflectionLogFilter(logging.Filter):
+    """Drop internal Genkit worker records below the quiet level by thread name.
+
+    Records from any other thread pass untouched, so the app's uvicorn startup,
+    access lines, and HTTP client logs keep the level and handlers the app
+    configured. Checks ``threading.current_thread().name`` rather than
+    ``record.threadName`` so ``logging.logThreads = False`` cannot bypass it.
+    The quiet level is WARNING, or ``GENKIT_LOG`` when it is stricter.
+    ``GENKIT_LOG=debug`` lets every record through.
+    """
+
+    def __init__(self, thread_names: frozenset[str] = frozenset({REFLECTION_THREAD_NAME})) -> None:
+        super().__init__()
+        self.thread_names = thread_names
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Return ``False`` for quiet records emitted on ``self.thread_names``."""
+        if threading.current_thread().name not in self.thread_names:
+            return True
+        return record.levelno >= _quiet_level()
+
+
+def _attach_thread_filter(logger: logging.Logger, thread_name: str) -> None:
+    """Attach a :class:`ReflectionLogFilter` for ``thread_name`` if absent."""
+    for existing in logger.filters:
+        if isinstance(existing, ReflectionLogFilter) and thread_name in existing.thread_names:
+            return
+    logger.addFilter(ReflectionLogFilter(frozenset({thread_name})))
+
+
+def has_app_uvicorn_logging() -> bool:
+    """Report whether the host application configured uvicorn loggers."""
+    for name in ('uvicorn', 'uvicorn.error', 'uvicorn.access'):
+        logger = logging.getLogger(name)
+        if logger.handlers or logger.level != logging.NOTSET:
+            return True
+    return False
+
+
+def quiet_reflection_logs() -> None:
+    """Attach :class:`ReflectionLogFilter` to the reflection server's loggers.
+
+    Safe to call more than once. Levels, handlers and propagation on those
+    loggers are left alone.
+    """
+    for name in REFLECTION_LOGGERS:
+        _attach_thread_filter(logging.getLogger(name), REFLECTION_THREAD_NAME)
+
+
+def quiet_log_export_logs() -> None:
+    """Attach :class:`ReflectionLogFilter` for the log exporter to ``QUIET_LOGGERS``."""
+    for name in QUIET_LOGGERS:
+        _attach_thread_filter(logging.getLogger(name), LOG_EXPORT_THREAD_NAME)
 
 
 def _maybe_enable_log_export() -> None:

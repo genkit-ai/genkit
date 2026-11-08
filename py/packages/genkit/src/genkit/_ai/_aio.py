@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import logging
 import signal
 import socket
 import sys
@@ -100,7 +99,14 @@ from genkit._core._dap import DapFn, DynamicActionProvider
 from genkit._core._environment import is_dev_environment
 from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._flow import Flow
-from genkit._core._logger import configure_logging, get_logger, resolve_level
+from genkit._core._logger import (
+    REFLECTION_THREAD_NAME,
+    configure_logging,
+    get_logger,
+    has_app_uvicorn_logging,
+    quiet_log_export_logs,
+    quiet_reflection_logs,
+)
 from genkit._core._middleware import Middleware
 from genkit._core._model import (
     Document,
@@ -1206,6 +1212,7 @@ class Genkit:
                 than a background thread nobody is watching.
         """
         config = self._reflection_config
+        quiet_log_export_logs()
 
         sock: socket.socket | None = None
         if config.mode == 'v1':
@@ -1219,6 +1226,7 @@ class Genkit:
             # URL-safe host (wildcard binds as loopback, IPv6 bracketed).
             host, port = sock.getsockname()[:2]
             self._reflection_server_spec = ServerSpec(scheme='http', host=advertised_reflection_host(host), port=port)
+            quiet_reflection_logs()
 
         async def _run_server() -> None:
             if config.mode == 'v2':
@@ -1243,26 +1251,29 @@ class Genkit:
                 )
 
             app = create_reflection_asgi_app(registry=self._registry, secret=config.secret)
-            level = resolve_level()
-            is_debug = level <= logging.DEBUG
-            if level <= logging.DEBUG:
-                log_level = 'debug'
-            elif level <= logging.WARNING:
-                log_level = 'warning'
-            elif level <= logging.ERROR:
-                log_level = 'error'
+            # If the application configured uvicorn loggers, leave log_config
+            # and log_level at None so uvicorn's Config doesn't re-apply
+            # dictConfig or overwrite levels; ReflectionLogFilter filters
+            # reflection records by thread. Otherwise, configure uvicorn with
+            # debug level so records reach ReflectionLogFilter (which quiets
+            # them under info and prints them under debug).
+            if has_app_uvicorn_logging():
+                uvicorn_config = uvicorn.Config(
+                    app,
+                    host=spec.host,
+                    port=spec.port,
+                    loop='asyncio',
+                    log_config=None,
+                    log_level=None,
+                )
             else:
-                log_level = 'critical'
-
-            # Pass log_level explicitly so uvicorn's internal server engine doesn't default to INFO on startup.
-            uvicorn_config = uvicorn.Config(
-                app,
-                host=spec.host,
-                port=spec.port,
-                loop='asyncio',
-                access_log=is_debug,
-                log_level=log_level,
-            )
+                uvicorn_config = uvicorn.Config(
+                    app,
+                    host=spec.host,
+                    port=spec.port,
+                    loop='asyncio',
+                    log_level='debug',
+                )
             server = ReflectionServer(uvicorn_config, ready=self._reflection_ready)
             # Dev only: the runtime file exists so a local CLI watching the
             # same filesystem can discover this runtime. Nothing is watching in
@@ -1298,7 +1309,7 @@ class Genkit:
         threading.Thread(
             target=_thread_main,
             daemon=True,
-            name='genkit-reflection-server',
+            name=REFLECTION_THREAD_NAME,
         ).start()
 
     def _initialize_registry(self, model: ModelArg | None, plugins: list[Plugin] | None) -> None:

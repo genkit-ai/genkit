@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 import { evalFlow } from '../../src/commands/eval-flow';
 
 describe('eval:flow', () => {
@@ -26,7 +26,7 @@ describe('eval:flow', () => {
   it("fails if flow isn't passed", () => {
     expect(() => {
       command.parse(['node', 'eval:flow']);
-    }).toThrowError(new Error("error: missing required argument 'flowName'"));
+    }).toThrowError("error: missing required argument 'flowName'");
   });
 
   it('fails if invalid output-format is passed', () => {
