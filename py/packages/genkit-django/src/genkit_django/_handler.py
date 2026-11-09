@@ -20,10 +20,11 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from typing import Any, cast
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
+from typing import Any, TypeVar, cast
 
 from django.core.exceptions import PermissionDenied, SuspiciousOperation
+from django.core.handlers.wsgi import WSGIRequest
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseBase, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -79,6 +80,40 @@ def _request_headers(request: HttpRequest) -> Mapping[str, str]:
     return cast(Mapping[str, str], request.headers)
 
 
+T = TypeVar('T')
+
+
+def _iter_over_async(agen: AsyncGenerator[T, None]) -> Generator[T, None, None]:
+    """Drive ``agen`` on a private event loop, one item per WSGI write.
+
+    Django's WSGIHandler drains an async streaming body to a list before it
+    sends byte one, so SSE under WSGI arrived all at once. A sync iterator
+    streams; each response gets its own loop, driven from the thread that
+    iterates the body.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        while True:
+            try:
+                item = loop.run_until_complete(anext(agen))
+            except StopAsyncIteration:
+                break
+            yield item
+    finally:
+        # The WSGI server closes this iterator when the client hangs up; close
+        # the generator so the flow is cancelled, then reap what it left.
+        try:
+            loop.run_until_complete(agen.aclose())
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.wait(pending))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
+
+
 class _DjangoRequestData(RequestData):
     """Wraps Django request data for Genkit context."""
 
@@ -119,8 +154,13 @@ def genkit_django_handler(
     ]
     ```
 
-    Requires Django ASGI (Django 5.0+). The returned view is `csrf_exempt`
-    because this is a JSON API.
+    Works under ASGI and WSGI (Django 5.0+). Under WSGI, SSE responses
+    stream through a sync iterator that drives the flow on its own event
+    loop. The returned view is `csrf_exempt` because this is a JSON API.
+
+    The view is async, so a context provider reads the user with
+    ``await request_data.request.auser()``; ``request.user`` raises
+    ``SynchronousOnlyOperation`` when the session isn't loaded yet.
 
     Args:
         ai: The Genkit instance.
@@ -176,7 +216,7 @@ def genkit_django_handler(
             stream = cast(str | None, request.GET.get('stream'))
             if wants_stream(accept=request_data.headers.get('accept'), stream=stream):
 
-                async def event_stream() -> AsyncIterator[str]:
+                async def event_stream() -> AsyncGenerator[str, None]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
                     except Exception as e:
@@ -189,7 +229,10 @@ def genkit_django_handler(
                         async for line in lines:
                             yield line
 
-                return StreamingHttpResponse(event_stream(), content_type='text/event-stream; charset=utf-8')
+                sse_body: AsyncIterator[str] | Generator[str, None, None] = (
+                    _iter_over_async(event_stream()) if isinstance(request, WSGIRequest) else event_stream()
+                )
+                return StreamingHttpResponse(sse_body, content_type='text/event-stream; charset=utf-8')
 
             try:
                 response = await flow.run(input=action_input, context=action_context, init=init)

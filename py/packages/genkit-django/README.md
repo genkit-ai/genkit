@@ -45,11 +45,18 @@ urlpatterns = [
 ]
 ```
 
-The view requires Django's ASGI server (Django 5.0+):
+The view runs under ASGI or WSGI (Django 5.0+):
 
 ```bash
 uvicorn myproject.asgi:application
+# or
+gunicorn myproject.wsgi:application --threads 8
 ```
+
+Under WSGI, each SSE response drives its flow on a private event loop in the
+worker thread, so chunks reach the client as they are produced. A streaming
+response holds its worker thread until the flow ends; size `--threads` for
+concurrent streams.
 
 ## Wire protocol
 
@@ -72,4 +79,14 @@ async def auth(request_data: RequestData) -> dict[str, object]:
 async def chat(prompt, ctx):
     user = ctx.context.get('username')
     ...
+```
+
+`request_data.request` is the Django `HttpRequest`. The view is async, so read
+the signed-in user with `await request.auser()`; `request.user` raises
+`SynchronousOnlyOperation` before the session is loaded.
+
+```python
+async def django_user(request_data: RequestData) -> dict[str, object]:
+    user = await request_data.request.auser()
+    return {'user_id': user.pk, 'is_staff': user.is_staff}
 ```

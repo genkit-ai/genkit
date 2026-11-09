@@ -18,7 +18,7 @@
 """Django Plugin for Genkit.
 
 This plugin provides Django integration for Genkit, enabling you to expose
-Genkit flows as HTTP endpoints in a Django ASGI application.
+Genkit flows as HTTP endpoints in a Django application (ASGI or WSGI).
 
 Example:
     ```python
@@ -57,8 +57,10 @@ Example:
     ```
 
 Requirements:
-    - Django 4.1+ (async views require ASGI)
-    - An ASGI server such as ``uvicorn`` or ``daphne``:
+    - Django 5.0+
+    - An ASGI server (``uvicorn``, ``daphne``) or a threaded WSGI server
+      (``gunicorn --threads``). Under WSGI, SSE responses stream from the
+      worker thread; each open stream holds one thread.
 
       ```bash
       uvicorn myproject.asgi:application

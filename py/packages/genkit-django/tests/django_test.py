@@ -21,15 +21,16 @@ import asyncio
 import json
 import logging
 import sys
+import threading
 import types
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from django.core.exceptions import PermissionDenied
 from django.core.handlers.asgi import ASGIHandler
-from django.http import HttpRequest
-from django.test import AsyncClient
+from django.http import HttpRequest, StreamingHttpResponse
+from django.test import AsyncClient, Client
 from django.test.utils import override_settings
 from django.urls import path
 from genkit_django import genkit_django_handler
@@ -499,7 +500,7 @@ async def test_django_stream_provider_401_sends_sse_internal_error(urlconf: None
 
 @pytest.mark.asyncio
 async def test_context_provider_reads_raw_django_request(urlconf: None) -> None:  # noqa: ARG001
-    """RequestData.request is the Django HttpRequest, for cookies, sessions and request.user."""
+    """RequestData.request is the Django HttpRequest, for cookies, sessions and `await request.auser()`."""
     client = AsyncClient()
     client.cookies['table'] = 'T7'
     response = await client.post('/table_from_cookie', data=json.dumps({'data': 'x'}), content_type='application/json')
@@ -585,3 +586,39 @@ async def test_django_failure_logs_name_the_flow(
     ]
     assert records[0].exc_info is not None
     assert records[1].exc_info is None
+
+
+def test_django_wsgi_sse_streams_before_the_flow_finishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under WSGI the first SSE frame is readable while the flow is still running.
+
+    Regression: Django's WSGIHandler drained the async body to a list, so the
+    client got nothing until the flow returned.
+    """
+    ai = Genkit()
+    release = threading.Event()
+
+    @genkit_django_handler(ai)
+    @ai.flow()
+    async def fire_ticket(table: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(f'{table}: fired')
+        for _ in range(300):
+            if release.is_set():
+                return f'{table}: served'
+            await asyncio.sleep(0.01)
+        return f'{table}: timed out'
+
+    module = types.ModuleType('genkit_django_wsgi_urls')
+    module.urlpatterns = [path('ticket', fire_ticket)]  # type: ignore[attr-defined]  # pyrefly: ignore[missing-attribute]
+    monkeypatch.setitem(sys.modules, 'genkit_django_wsgi_urls', module)
+
+    with override_settings(ROOT_URLCONF='genkit_django_wsgi_urls'):
+        response = Client().post(
+            '/ticket', data=json.dumps({'data': 'T7'}), content_type='application/json', HTTP_ACCEPT='text/event-stream'
+        )
+        frames = iter(cast(Iterator[bytes], cast(StreamingHttpResponse, response).streaming_content))
+        first = next(frames)
+        release.set()
+        rest = b''.join(frames)
+
+    assert first == b'data: {"message":"T7: fired"}\n\n'
+    assert rest == b'data: {"result":"T7: served"}\n\n'
