@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping, 
 from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from genkit._ai import _aio
 from genkit._ai._background_model import ensure_model_operation
@@ -992,7 +992,7 @@ class ChunkAccumulator:
         self,
         message_index: int,
         formatter: FormatHandler[Any, Any] | None,
-        schema_type: type[BaseModel] | None = None,
+        schema_type: Any = None,  # noqa: ANN401
     ) -> None:
         self.message_index = message_index
         self.formatter = formatter
@@ -1920,7 +1920,7 @@ async def call_model(
         parse = formatter.parse_message
         response._message_parser = lambda msg: parse(msg)
     schema_type = options.output.schema_type if options.output else None
-    if schema_type:
+    if schema_type is not None:
         response._schema_type = schema_type
     return response
 
@@ -2136,7 +2136,7 @@ def stamp_output(
     if formatter and response._message_parser is None:
         parse = formatter.parse_message
         response._message_parser = lambda msg: parse(msg)
-    if out and out.schema_type:
+    if out and out.schema_type is not None:
         response._schema_type = out.schema_type
     response._assert_valid_schema()
     return response

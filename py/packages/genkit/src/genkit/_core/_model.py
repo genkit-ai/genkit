@@ -35,7 +35,6 @@ from pydantic import (
     Field,
     GetJsonSchemaHandler,
     PrivateAttr,
-    RootModel,
     ValidationError,
     ValidationInfo,
     field_validator,
@@ -54,8 +53,8 @@ from genkit._core._error import BoxedFailure, ErrorReason, Failure, GenkitError
 from genkit._core._extract_json import extract_json, extract_partial_json, is_complete_json
 from genkit._core._logger import get_logger
 from genkit._core._operation import Operation
-from genkit._core._partial import construct_partial
-from genkit._core._schema import parse_schema
+from genkit._core._partial import hydrate_partial
+from genkit._core._schema import output_adapter, parse_schema
 from genkit._core._typing import (
     AgentFinishReason,
     Artifact as ArtifactData,
@@ -1500,7 +1499,8 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
     # _message_parser and _schema_type are set by the framework after construction
     # when output format parsing or schema validation is needed.
     _message_parser: Callable[[Message], object] | None = PrivateAttr(None)
-    _schema_type: type[BaseModel] | None = PrivateAttr(None)
+    # The output_schema type: a model, list[T], dataclass, Enum, Decimal, ...
+    _schema_type: Any = PrivateAttr(None)
     _failure: BoxedFailure | None = PrivateAttr(None)
     # Wire fields (must be declared for extra='forbid' to accept wire responses)
     message: Message | None = None
@@ -1642,16 +1642,25 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 self._mark_invalid_output(error.message)
                 return
 
-        # A custom format's parser can return a scalar (e.g. enum string).
-        # Skip Pydantic model validation for scalars.
-        is_custom_scalar = self._message_parser is not None and not isinstance(parsed, (dict, list))
-        if is_custom_scalar or self._schema_type is None:
+        if self._keeps_raw(parsed):
             return
 
         try:
-            _ = self._schema_type.model_validate(parsed)
+            _ = output_adapter(self._schema_type).validate_python(parsed)
         except ValidationError:
             self._mark_invalid_output('Model output did not match the requested schema.')
+
+    def _keeps_raw(self, parsed: object) -> bool:
+        """Whether ``parsed`` is returned as-is instead of validated into the schema type."""
+        if self._schema_type is None or parsed is None:
+            return True
+        # A custom format's parser can return a scalar (e.g. an enum string)
+        # that a model class can't take.
+        return (
+            self._message_parser is not None
+            and _is_model_class(self._schema_type)
+            and not isinstance(parsed, (dict, list))
+        )
 
     def _raw_parsed_output(self) -> object:
         if self._message_parser and self.message is not None:
@@ -1717,14 +1726,11 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
             except GenkitError:
                 return None
 
-        # A custom format's parser can return a scalar (e.g. enum string).
-        # Skip Pydantic model validation for scalars.
-        is_custom_scalar = self._message_parser is not None and not isinstance(parsed, (dict, list))
-        if is_custom_scalar or self._schema_type is None or parsed is None:
+        if self._keeps_raw(parsed):
             return cast(OutputT, parsed)
 
         try:
-            return cast(OutputT, self._schema_type.model_validate(parsed))
+            return cast(OutputT, output_adapter(self._schema_type).validate_python(parsed))
         except ValidationError:
             return None
 
@@ -1778,7 +1784,7 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     # construction so the constructor a plugin types is just the wire fields.
     _previous_chunks: list[Any] = PrivateAttr(default_factory=list)
     _chunk_parser: Callable[..., object] | None = PrivateAttr(default=None)
-    _schema_type: type[BaseModel] | None = PrivateAttr(default=None)
+    _schema_type: Any = PrivateAttr(default=None)
 
     @field_validator('content', mode='before')
     @classmethod
@@ -1836,6 +1842,12 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
           stay at ``None`` (or their default) until closed. Open numbers still
           pass through raw for ``datetime`` fields and for numeric ``Literal``
           values that already match a member (even if more digits may follow).
+        - Once the JSON is complete the value is validated like the final
+          response; if that fails, this is ``None``.
+
+        Other schema types hydrate the same way: ``list[Recipe]`` is a list of
+        ``Recipe``, an ``Enum`` is a member once the value is whole. A
+        dataclass or ``TypedDict`` stays a dict until the JSON closes.
 
         ``(await stream.response).output`` is the only fully validated ``Recipe``.
 
@@ -1848,20 +1860,12 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         try:
             text = self.accumulated_text
             parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(text)
-            if (
-                self._schema_type is not None
-                and isinstance(parsed, dict)
-                and not issubclass(self._schema_type, RootModel)
-            ):
-                return cast(
-                    'OutputT | None',
-                    construct_partial(
-                        schema_type=self._schema_type,
-                        data=parsed,
-                        closed=is_complete_json(text),
-                    ),
-                )
-            return cast('OutputT | None', parsed)
+            if self._schema_type is None:
+                return cast('OutputT | None', parsed)
+            return cast(
+                'OutputT | None',
+                hydrate_partial(schema=self._schema_type, data=parsed, closed=is_complete_json(text)),
+            )
         except Exception:
             # one odd chunk shouldn't end a stream whose final reply may still parse.
             logger.debug('chunk.output could not be parsed; returning None', exc_info=True)
@@ -1885,7 +1889,7 @@ def chunk_for_stream(
     index: float | None = None,
     previous_chunks: list[Any] | None = None,
     chunk_parser: Callable[..., object] | None = None,
-    schema_type: type[BaseModel] | None = None,
+    schema_type: Any = None,  # noqa: ANN401
 ) -> ModelResponseChunk[OutputT]:
     """Copy a plugin chunk and stamp stream index / parser on the copy.
 

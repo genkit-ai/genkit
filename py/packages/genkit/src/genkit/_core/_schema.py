@@ -92,6 +92,25 @@ def fixed_json_schema(cls: type) -> dict[str, Any]:
     return copy.deepcopy(_generated_schema(cls))
 
 
+@functools.lru_cache(maxsize=512)
+def _cached_output_adapter(schema_type: Any) -> TypeAdapter[Any]:  # noqa: ANN401
+    return TypeAdapter(schema_type)
+
+
+def output_adapter(schema_type: Any) -> TypeAdapter[Any]:  # noqa: ANN401
+    """The ``TypeAdapter`` that turns parsed JSON into an ``output_schema`` value.
+
+    Works for any type pydantic validates: a model, ``list[T]``, ``dict``,
+    ``Literal``, ``Annotated``, a dataclass, ``TypedDict``, ``Enum``,
+    ``Decimal``, ``UUID``, ``datetime``. Built once per type; an annotation
+    whose metadata isn't hashable gets a fresh adapter each call.
+    """
+    try:
+        return _cached_output_adapter(schema_type)
+    except TypeError:
+        return TypeAdapter(schema_type)
+
+
 def check_output_schema(json_schema: dict[str, Any]) -> None:
     """Raise if ``json_schema`` is not itself a JSON Schema.
 

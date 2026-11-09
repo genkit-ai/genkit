@@ -875,6 +875,10 @@ if res.output is None:
     ...   # the reply was incomplete; see res.error
 ```
 
+## Non-model output schemas
+
+`output_schema` now hydrates any type pydantic validates (`list[T]`, dataclasses, `TypedDict`, `Enum`, `Literal`, `Decimal`, `UUID`, `datetime`), not just `BaseModel`, so drop workarounds for the old raw JSON: index a dataclass by attribute (`res.output.name`, not `res.output['name']`), compare a plain `Enum` to its member (`Status.OPEN`, not `'OPEN'`), and do `Decimal` math instead of `float` math.
+
 ## Flow input and output validation
 
 Flow input and output are now validated against their type annotations. A flow that returns the wrong shape now raises. For served flows, `{"data": null}` means "use the default".

@@ -221,7 +221,9 @@ class GenerateCall(BaseModel):
     metadata: dict[str, Any] | None = None
 
     # OutputSettings: the type that comes back. Fixed so Prompt[In, Out] holds.
-    output_schema: type | dict[str, Any] | str | None = None
+    # Any type form pydantic validates (list[T], Literal, Annotated, ...), a
+    # JSON schema dict, or a registered name; not `type`, which rejects aliases.
+    output_schema: Any = None
     output_format: str | None = None
     output_content_type: str | None = None
     output_instructions: bool | str | None = None
@@ -343,11 +345,11 @@ class Prompt(Generic[InputT, OutputT]):
             return
 
         resolved = await lookup_prompt(self._ai._registry, self._name, self._variant)
-        # Keep a Pydantic output type the caller passed: it wins over the file's
-        # dict schema or registered name, and the type is what gives typed output.
+        # Keep an output type the caller passed: it wins over the file's dict
+        # schema or registered name, and the type is what gives typed output.
         keep: dict[str, Any] = {}
         schema = self._def.output_schema
-        if isinstance(schema, type) and issubclass(schema, BaseModel):
+        if schema is not None and not isinstance(schema, (dict, str)):
             keep['output_schema'] = schema
         original_input = self._def.input_schema
         if original_input is not None:
@@ -754,12 +756,13 @@ def resolve_output_schema(
 
     Handles three types of output_schema:
     - str: Schema name - look up JSON schema and type from registry
-    - Pydantic type: Store both JSON schema and type for runtime validation
     - dict: Raw JSON schema - convert directly
+    - Any other type (model, list[T], dataclass, Enum, ...): store both JSON
+      schema and type; the type hydrates ``.output`` through a TypeAdapter
 
     Args:
         registry: The registry to use for schema lookups.
-        output_schema: The schema to resolve (string name, Pydantic type, or dict).
+        output_schema: The schema to resolve (string name, Python type, or dict).
         output: The output config to populate with json_schema and schema_type.
     """
     if output_schema is None:
@@ -774,13 +777,11 @@ def resolve_output_schema(
         schema_type = registry.lookup_schema_type(output_schema)
         if schema_type:
             output.schema_type = schema_type
-    elif isinstance(output_schema, type) and issubclass(output_schema, BaseModel):
-        # Pydantic type - store both JSON schema and type
+    elif isinstance(output_schema, dict):
+        output.json_schema = to_json_schema(output_schema)
+    else:
         output.json_schema = to_json_schema(output_schema)
         output.schema_type = output_schema
-    else:
-        # dict (raw JSON schema)
-        output.json_schema = to_json_schema(output_schema)
 
 
 async def to_generate_options(

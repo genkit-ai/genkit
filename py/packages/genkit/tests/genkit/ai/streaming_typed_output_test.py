@@ -144,12 +144,15 @@ class TestChunkPartialOutput:
         assert _chunk('[1, 2, 3]', schema_type=Recipe).output == [1, 2, 3]
 
     def test_wrong_typed_value_does_not_raise(self) -> None:
-        # Failed validation falls back to the raw value instead of crashing
-        # the caller's loop; the final response surfaces the ValidationError.
-        out = _chunk('{"title": 123}', schema_type=Recipe).output
+        # Mid-stream, a wrong-typed value passes through raw instead of
+        # crashing the caller's loop.
+        out = _chunk('{"title": 123', schema_type=Recipe).output
         assert isinstance(out, Recipe)
         assert out.title == 123
         assert out.steps is None
+        # The closing chunk is validated like the final response: no
+        # model_construct that skipped validation, just None.
+        assert _chunk('{"title": 123}', schema_type=Recipe).output is None
 
     def test_camel_case_alias_populates_python_field(self) -> None:
         class UserProfile(BaseModel):
@@ -170,12 +173,14 @@ class TestChunkPartialOutput:
         assert isinstance(out, User)
         assert out.first_name == 'Ada'
 
-    def test_root_model_dict_stays_extracted_json(self) -> None:
+    def test_root_model_hydrates_like_the_final_response(self) -> None:
         class DictRoot(RootModel[dict[str, int]]):
             pass
 
-        out = _chunk('{"a": 1, "b": 2}', schema_type=DictRoot).output
-        assert out == {'a': 1, 'b': 2}
+        open_out = _chunk('{"a": 1, "b": 2', schema_type=DictRoot).output
+        assert isinstance(open_out, DictRoot)
+        assert open_out.root == {'a': 1, 'b': 2}
+        assert _chunk('{"a": 1, "b": 2}', schema_type=DictRoot).output == DictRoot({'a': 1, 'b': 2})
 
 
 class TestNestedAndConstrainedOutput:
@@ -195,13 +200,15 @@ class TestNestedAndConstrainedOutput:
                 return v
 
         out = _chunk(
-            '{"servings": -5, "rating": 99, "title": "lowercase"}',
+            '{"servings": -5, "rating": 99, "title": "lowercase"',
             schema_type=Strict,
         ).output
         assert isinstance(out, Strict)
         assert out.servings == -5
         assert out.rating == 99
         assert out.title == 'lowercase'
+        # Once the object closes, the same values fail validation: None.
+        assert _chunk('{"servings": -5, "rating": 99, "title": "lowercase"}', schema_type=Strict).output is None
 
     def test_union_member_is_the_matching_class(self) -> None:
         class Cat(BaseModel):
@@ -214,7 +221,7 @@ class TestNestedAndConstrainedOutput:
         class Pet(BaseModel):
             animal: Cat | Dog
 
-        out = _chunk('{"animal": {"bark": "woof"}}', schema_type=Pet).output
+        out = _chunk('{"animal": {"bark": "woof"}', schema_type=Pet).output
         assert isinstance(out, Pet)
         assert isinstance(out.animal, Dog)
         assert out.animal.bark == 'woof'
@@ -234,7 +241,7 @@ class TestNestedAndConstrainedOutput:
             by_id: Mapping[str, Item]
 
         out = _chunk(
-            '{"steps": [{"title": "mix"}], "by_id": {"a": {"name": "axe"}}}',
+            '{"steps": [{"title": "mix"}], "by_id": {"a": {"name": "axe"}}',
             schema_type=Plan,
         ).output
         assert isinstance(out, Plan)
@@ -255,7 +262,7 @@ class TestNestedAndConstrainedOutput:
             featured: tuple[Item, ...]
 
         out = _chunk(
-            '{"by_id": {"a": {"name": "axe"}}, "featured": [{"qty": 2}]}',
+            '{"by_id": {"a": {"name": "axe"}}, "featured": [{"qty": 2}]',
             schema_type=Inventory,
         ).output
         assert isinstance(out, Inventory)
@@ -270,7 +277,7 @@ class TestNestedAndConstrainedOutput:
             child: 'Node | None' = None
 
         out = _chunk(
-            '{"name": "root", "child": {"child": {"name": "leaf"}}}',
+            '{"name": "root", "child": {"child": {"name": "leaf"}}',
             schema_type=Node,
         ).output
         assert isinstance(out, Node)
@@ -283,7 +290,7 @@ class TestNestedAndConstrainedOutput:
     def test_mutually_recursive_models(self) -> None:
         """A quoted sibling in list['Post'] is a Post, with holes as None."""
         out = _chunk(
-            '{"name": "a", "posts": [{"author": {"posts": []}}]}',
+            '{"name": "a", "posts": [{"author": {"posts": []}}]',
             schema_type=Author,
         ).output
         assert isinstance(out, Author)
@@ -359,7 +366,7 @@ class TestNestedAndConstrainedOutput:
     def test_dict_quoted_post_yields_post_instances(self) -> None:
         """dict[str, 'QuotedItem'] values are QuotedItem, with holes as None."""
         out = _chunk(
-            '{"by_id": {"a": {"name": "axe"}}, "featured": []}',
+            '{"by_id": {"a": {"name": "axe"}}, "featured": []',
             schema_type=QuotedInventory,
         ).output
         assert isinstance(out, QuotedInventory)
@@ -370,7 +377,7 @@ class TestNestedAndConstrainedOutput:
     def test_tuple_quoted_post_yields_post_instances(self) -> None:
         """tuple['QuotedItem', ...] values are QuotedItem, with holes as None."""
         out = _chunk(
-            '{"by_id": {}, "featured": [{"qty": 2}]}',
+            '{"by_id": {}, "featured": [{"qty": 2}]',
             schema_type=QuotedInventory,
         ).output
         assert isinstance(out, QuotedInventory)
@@ -381,7 +388,7 @@ class TestNestedAndConstrainedOutput:
     def test_list_quoted_self_yields_node_instances(self) -> None:
         """list['NodeTree'] children are NodeTree, with holes as None."""
         out = _chunk(
-            '{"name": "root", "children": [{"children": [{"name": "leaf"}]}]}',
+            '{"name": "root", "children": [{"children": [{"name": "leaf"}]}]',
             schema_type=NodeTree,
         ).output
         assert isinstance(out, NodeTree)
@@ -394,7 +401,7 @@ class TestNestedAndConstrainedOutput:
     def test_list_quoted_unknown_name_stays_dicts(self) -> None:
         """A quoted name that is not a model stays extracted JSON; the loop does not crash."""
         out = _chunk(
-            '{"items": [{"name": "x"}]}',
+            '{"items": [{"name": "x"}]',
             schema_type=UnknownQuotedList,
         ).output
         assert isinstance(out, UnknownQuotedList)
@@ -710,15 +717,16 @@ async def test_stream_final_output_is_validated_instance() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_final_output_missing_field_is_none_after_partial_chunks() -> None:
-    """Chunks showed a Recipe with steps None, but a final reply that never sends steps gives `output is None`."""
+    """Open chunks show a Recipe with steps None; a reply that closes without steps is None, chunk and final."""
     outputs, response = await _stream_outputs(
-        ['{"title": "Fluffy Pancakes"}'],
+        ['{"title": "Fluffy Pancakes"', '}'],
         '{"title": "Fluffy Pancakes"}',
         output_schema=Recipe,
     )
 
     assert isinstance(outputs[0], Recipe)
     assert outputs[0].steps is None
+    assert outputs[1] is None
     assert response.output is None
     assert response.error is not None
 
@@ -1071,12 +1079,9 @@ class TestDefaultsAndClosedSubtreeValidation:
         assert (before_calls, after_calls) == (1, 1)
         assert b4 == Booking(guest='ANN', nights=2, total=200.0)
 
-        # If the closed root violates @model_validator, fallback still preserves @field_validator outputs.
+        # A closed root that violates @model_validator is None, not an unvalidated Booking.
         b_invalid = _chunk('{"guest": "ann", "nights": 2, "total": 999.0}', schema_type=Booking).output
-        assert isinstance(b_invalid, Booking)
-        assert b_invalid.guest == 'ANN'
-        assert b_invalid.nights == 2
-        assert b_invalid.total == 999.0
+        assert b_invalid is None
 
     def test_open_numbers_and_invalid_closed_enum_match_documented_edge_cases(self) -> None:
         class EventPayload(BaseModel):
