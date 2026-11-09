@@ -457,6 +457,28 @@ async def test_tool_arguments_nested_pydantic_serialized_as_valid_json(harness) 
 
 
 @pytest.mark.asyncio
+async def test_tool_string_arguments_and_result_are_json_encoded(harness) -> None:
+    """A str tool input and output land as JSON strings, so json.loads round-trips them."""
+    instr = harness.instrumentation(content_capturing_mode='SPAN_AND_EVENT', emit_tool_spans=True)
+
+    await instr.run_in_new_span(
+        SpanMetadata(name='confirm_order', action_type='tool', input='ORD-555'),
+        lambda span=None: _awaitable('CONFIRMED:ORD-555'),
+    )
+    span = harness.span_named('execute_tool confirm_order')
+    assert span is not None
+    assert harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS) == '"ORD-555"'
+    assert json.loads(harness.attr(span, GenAiAttr.TOOL_CALL_ARGUMENTS)) == 'ORD-555'
+    assert json.loads(harness.attr(span, GenAiAttr.TOOL_CALL_RESULT)) == 'CONFIRMED:ORD-555'
+
+    record = _operation_details_record(harness)
+    assert record is not None
+    attrs = dict(record.attributes or {})
+    assert json.loads(str(attrs[GenAiAttr.TOOL_CALL_ARGUMENTS])) == 'ORD-555'
+    assert json.loads(str(attrs[GenAiAttr.TOOL_CALL_RESULT])) == 'CONFIRMED:ORD-555'
+
+
+@pytest.mark.asyncio
 async def test_does_not_capture_action_io_by_default(harness) -> None:
     instr = harness.instrumentation()
     await _run_model(

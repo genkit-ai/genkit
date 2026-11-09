@@ -520,9 +520,11 @@ def _pick(config: Mapping[str, object], *keys: str) -> object:
 
 
 def _encode_json_value(value: object) -> str:
-    """Encode an object as a JSON string, dumping Pydantic models to dicts first."""
-    if isinstance(value, str):
-        return value
+    """Encode an object as a JSON string, dumping Pydantic models to dicts first.
+
+    Strings are encoded too (``'ORD-555'`` -> ``'"ORD-555"'``), so every JSON
+    attribute round-trips through ``json.loads``. Matches JS ``JSON.stringify``.
+    """
 
     def _json_default(obj: object) -> object:
         if isinstance(obj, BaseModel):
