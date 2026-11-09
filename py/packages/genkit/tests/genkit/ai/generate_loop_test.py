@@ -5,11 +5,14 @@
 
 """Turn-loop regressions: usage totals, max_turns validation, and friends."""
 
+import asyncio
+
 import pytest
 
 from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, ToolContext
 from genkit._ai._agents._client import agent_interrupts_from_message
 from genkit._ai._generate import augment_with_context
+from genkit._core._action import ActionRunContext
 from genkit._core._model import ModelRequest
 from genkit._core._typing import FinishReason, GenerationUsage, Role, ToolRequest
 from genkit.testing import ScriptedModel, define_scripted_model
@@ -308,3 +311,27 @@ def test_docs_context_without_extra_metadata_is_unchanged() -> None:
 
     assert augmented.messages[-1].content[-1].text is not None
     assert '- [r1]: Lentil soup\n' in augmented.messages[-1].content[-1].text
+
+
+@pytest.mark.asyncio
+async def test_child_flows_get_their_own_copy_of_the_context() -> None:
+    """Concurrent child flows writing ctx.context don't clobber each other or the parent."""
+    ai = Genkit()
+    seen: dict[str, object] = {}
+
+    @ai.flow()
+    async def tag_order(table: str, ctx: ActionRunContext) -> str:
+        ctx.context['table'] = table
+        await asyncio.sleep(0.01)
+        seen[table] = ctx.context['table']
+        return table
+
+    @ai.flow()
+    async def seat_party(n: int, ctx: ActionRunContext) -> list[str]:
+        tables = await asyncio.gather(*(tag_order(f't{i}') for i in range(n)))
+        seen['parent'] = ctx.context.get('table')
+        return list(tables)
+
+    await seat_party(3, context={'auth': {'uid': 'host-1'}})
+
+    assert seen == {'t0': 't0', 't1': 't1', 't2': 't2', 'parent': None}
