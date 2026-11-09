@@ -350,3 +350,44 @@ def test_bump_version_dry_run_leaves_files_untouched(tmp_path: Path) -> None:
     assert before == after
     assert 'genkit>=0.13.0,<2' in proc.stdout
     assert 'genkit>=0.13.0,<1' in proc.stdout
+
+
+def test_bump_transition_0_13_0_to_rc_moves_every_intra_repo_bound(tmp_path: Path) -> None:
+    """release_rc_python.yml calls bump_version X.Y.Z-rc.N; floors, caps, and pins move with the version."""
+    _make_workspace_fixture(tmp_path, '0.13.0', include_evaluators=False)
+
+    _run_bump(tmp_path, '1.0.0-rc.1')
+    assert _workspace_errors(tmp_path) == []
+
+    genkit_proj = consistency.load_pyproject(str(tmp_path / 'packages' / 'genkit' / 'pyproject.toml'))['project']
+    assert genkit_proj['version'] == '1.0.0-rc.1'
+    assert genkit_proj['optional-dependencies']['vertexai'] == ['genkit-vertexai[anthropic,openai]>=1.0.0-rc.1,<2']
+
+    openai_proj = consistency.load_pyproject(str(tmp_path / 'packages' / 'genkit-openai' / 'pyproject.toml'))['project']
+    assert openai_proj['dependencies'] == ['genkit>=1.0.0-rc.1,<2', 'openai>=1.60.0,<3']
+
+    vertex_proj = consistency.load_pyproject(str(tmp_path / 'packages' / 'genkit-vertexai' / 'pyproject.toml'))[
+        'project'
+    ]
+    assert vertex_proj['optional-dependencies']['anthropic'] == ['genkit-anthropic==1.0.0-rc.1']
+
+
+def test_rc_bump_with_unretired_zero_x_package_fails_consistency(tmp_path: Path) -> None:
+    """A 1.0 RC cut while genkit-evaluators still exists fails check_consistency, so the RC job stops before push."""
+    _make_workspace_fixture(tmp_path, '0.13.0', include_evaluators=True)
+
+    _run_bump(tmp_path, '1.0.0-rc.1')
+
+    errors = _workspace_errors(tmp_path)
+    assert any('0.x-only package (<1), which must be retired before 1.0.0-rc.1' in err for err in errors), errors
+
+
+@pytest.mark.parametrize('bad_version', ['1.0.0rc1', '1.0.0-beta.1', '1.0', 'v1.0.0'])
+def test_bump_version_rejects_malformed_versions(tmp_path: Path, bad_version: str) -> None:
+    """Only X.Y.Z and X.Y.Z-rc.N are accepted."""
+    _make_workspace_fixture(tmp_path, '0.13.0', include_evaluators=False)
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _run_bump(tmp_path, bad_version)
+
+    assert 'Invalid version format' in exc_info.value.stdout

@@ -47,12 +47,12 @@ jobs:
       - name: Pull latest & fetch tags
         run: git pull origin main && git fetch --tags
 
-      # uv used for uv lock after bump
+      # uv used by bump_version for uv lock. Unpinned like python.yml, so it
+      # can read and write the current uv.lock revision.
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           python-version: "3.12"
-          version: "0.6.6"
 
       - name: Create release branch & bump version
         id: rc
@@ -68,17 +68,15 @@ jobs:
           NEW="${TARGET}-rc.${RC_NUM}"
           BRANCH="release/py/${NEW}"
           echo "new=${NEW}" >> $GITHUB_OUTPUT
-          # Read current version from genkit; bump all packages that match
-          CUR=$(grep '^version = ' py/packages/genkit/pyproject.toml | cut -d'"' -f2)
           git config user.email "genkit-releaser@google.com" && git config user.name "genkit-releaser"
           git checkout -b "${BRANCH}"
-          cd py
-          for f in packages/*/pyproject.toml; do
-            [ -f "$f" ] && grep -q "version = \"$CUR\"" "$f" && sed -i "s/version = \"$CUR\"/version = \"$NEW\"/" "$f"
-          done
-          uv lock && cd ..
+          # bump_version moves versions, intra-repo floors and caps, and exact
+          # pins together, then runs uv lock. check_consistency fails the job
+          # before anything is pushed if a package is left behind.
+          py/bin/bump_version "$NEW"
+          python3 py/scripts/check_consistency.py
           git add py/
-          git diff --staged --quiet && { echo "::error::No version changes - $CUR may not match pyproject.toml files"; exit 1; }
+          git diff --staged --quiet && { echo "::error::bump_version made no changes"; exit 1; }
           git commit -m "chore(py): bump version to $NEW"
           git push origin HEAD:"refs/heads/${BRANCH}"
 
