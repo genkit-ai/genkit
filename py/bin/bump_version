@@ -153,7 +153,7 @@ fi
 
 # sed expressions applied to every pyproject.toml:
 #   - the version line
-#   - exact intra-repo pins (e.g. genkit-openai==X.Y.Z in genkit-vertexai's extras)
+#   - exact intra-repo pins (genkit-foo==X.Y.Z), if any package declares one
 #   - capped intra-repo ranges: floor moves to $NEW_VERSION and major cap moves
 #     to max(2, major + 1), except 0.x-only specs explicitly capped at <1 (such
 #     as genkit-evaluators), which keep <1 while on 0.x.

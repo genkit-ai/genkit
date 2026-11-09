@@ -187,16 +187,12 @@ class ModelGardenModel:
 
         async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             reject_secrets_api_key(ctx.context)
-            # Private import across packages, on purpose. The [openai] extra
-            # pins genkit-openai to this package's exact version, so Model
-            # Garden reuses the OpenAI-compatible model class instead of
-            # copying it.
-            from genkit_openai._models._model import OpenAIModel
+            from genkit_openai.plugin_api import openai_compatible_model
 
             client = await self.create_client()
             info = _openai_compat_model_info(self.name)
-            openai_model = OpenAIModel(self.name, client, supports=info.supports)
-            return await openai_model.generate(request, ctx)
+            generate = openai_compatible_model(self.name, client, supports=info.supports)
+            return await generate(request, ctx)
 
         return _generate
 

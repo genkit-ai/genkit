@@ -144,7 +144,7 @@ def _check_intra_repo_spec(
 
     dep_name = m_name.group(1)
 
-    # Exact intra-repo pins (e.g. genkit-vertexai extras importing private sibling modules).
+    # Exact intra-repo pins in extras must match the core version.
     if section.startswith('optional-dependencies.'):
         m_pin = _EXACT_PIN_RE.match(spec)
         if m_pin:

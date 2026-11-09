@@ -54,6 +54,7 @@ See Also:
 """
 
 from genkit_google_genai import VertexAI
+
 from genkit_vertexai._model_garden._plugin import ModelGarden
 
 __all__ = [

@@ -22,12 +22,7 @@ from typing import cast
 
 from anthropic import AsyncAnthropic, AsyncAnthropicVertex
 from genkit_anthropic import AnthropicConfig
-
-# Private import across packages, on purpose. genkit-anthropic and
-# genkit-vertexai release in lockstep, so Model Garden reuses the Claude
-# model class instead of copying it.
-from genkit_anthropic._model_info import get_model_info as get_anthropic_model_info
-from genkit_anthropic._models import AnthropicModel
+from genkit_anthropic.plugin_api import anthropic_model, anthropic_model_info
 from genkit_vertexai._model_garden._secrets import reject_secrets_api_key
 
 from genkit import ModelResponse
@@ -74,11 +69,8 @@ class AnthropicModelGarden:
 
         async def _generate(request: ModelRequest, ctx: ModelContext) -> ModelResponse:
             reject_secrets_api_key(ctx.context)
-            model = AnthropicModel(
-                model_name=self._model_name,
-                client=cast(AsyncAnthropic, self._runtime_client()),
-            )
-            return await model.generate(request, ctx)
+            generate = anthropic_model(self._model_name, cast(AsyncAnthropic, self._runtime_client()))
+            return await generate(request, ctx)
 
         return _generate
 
@@ -89,7 +81,7 @@ class AnthropicModelGarden:
             ModelInfo with the model's capabilities.
         """
         # Same catalog AnthropicModel reads, so Genkit and the model agree on native JSON mode.
-        catalog = get_anthropic_model_info(self._model_name).supports
+        catalog = anthropic_model_info(self._model_name).supports
         return ModelInfo(
             label=f'ModelGarden - {self.name}',
             supports=ModelSupports(

@@ -61,10 +61,9 @@ requires-python = ">=3.10"
 version = "0.13.0"
 
 [project.optional-dependencies]
-# Exact pins: Model Garden imports private modules from these packages.
-# bin/bump_version rewrites them and scripts/check_consistency.py checks them.
-anthropic = ["genkit-anthropic==0.13.0"]
-openai    = ["genkit-openai==0.13.0"]
+# Model Garden uses only the public plugin_api modules of these packages.
+anthropic = ["genkit-anthropic>=0.13.0,<2"]
+openai    = ["genkit-openai>=0.13.0,<2"]
 
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"

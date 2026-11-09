@@ -422,7 +422,7 @@ async def test_generate_model_garden_model_without_its_extra_raises_install_comm
 @pytest.mark.parametrize(
     ('model', 'missing', 'forget'),
     [
-        pytest.param(CLAUDE, 'genkit_anthropic._models', (), id='claude'),
+        pytest.param(CLAUDE, 'genkit_anthropic._models', ('genkit_anthropic.plugin_api',), id='claude'),
         pytest.param(LLAMA, 'genkit_openai._openai_plugin', ('genkit_openai',), id='llama'),
     ],
 )
@@ -431,7 +431,7 @@ async def test_generate_model_garden_broken_publisher_install_raises_import_erro
 ) -> None:
     """A publisher package that is installed but fails to import raises that import error, not the extra hint."""
     for module in forget:
-        monkeypatch.delitem(sys.modules, module)
+        monkeypatch.delitem(sys.modules, module, raising=False)
     _uninstall(monkeypatch, missing)
     ai = Genkit(plugins=[ModelGarden(project='p')])
 
