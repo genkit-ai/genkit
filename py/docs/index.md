@@ -1,7 +1,7 @@
 # API Reference
 
 !!! note
-    Full Genkit documentation is available at [genkit.dev](https://genkit.dev/python/docs/get-started/)
+    Full Genkit documentation is available at [genkit.dev](https://genkit.dev/docs/python/get-started/)
 
 ## genkit
 

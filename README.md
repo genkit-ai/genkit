@@ -8,7 +8,7 @@
 - **Python (Beta)**: Wide feature support approaching production-readiness
 - **Dart (Preview)**: Early development with core functionality
 
-It offers a unified interface for integrating AI models from providers like [Google](https://genkit.dev/docs/plugins/google-genai), [OpenAI](https://genkit.dev/docs/plugins/openai), [Anthropic](https://thefireco.github.io/genkit-plugins/docs/plugins/genkitx-anthropic), [Ollama](https://genkit.dev/docs/plugins/ollama/), and more. Rapidly build and deploy production-ready chatbots, automations, and recommendation systems using streamlined APIs for multimodal content, structured outputs, tool calling, and agentic workflows.
+It offers a unified interface for integrating AI models from providers like [Google](https://genkit.dev/docs/plugins/google-genai), [OpenAI](https://genkit.dev/docs/plugins/openai), [Anthropic](https://genkit.dev/docs/integrations/anthropic/), [Ollama](https://genkit.dev/docs/plugins/ollama/), and more. Rapidly build and deploy production-ready chatbots, automations, and recommendation systems using streamlined APIs for multimodal content, structured outputs, tool calling, and agentic workflows.
 
 > **Building with a coding agent? Install the Genkit skill first.**
 >
@@ -49,7 +49,7 @@ them, at no cost to you.
   <tr>
     <td><strong>Broad AI model support</strong></td>
     <td>Use a unified interface to integrate with hundreds of models from providers like <a href="https://genkit.dev/docs/plugins/google-genai">Google</a>, <a href="https://genkit.dev/docs/plugins/openai">
-    OpenAI</a>, <a href="https://thefireco.github.io/genkit-plugins/docs/plugins/genkitx-anthropic">
+    OpenAI</a>, <a href="https://genkit.dev/docs/integrations/anthropic/">
     Anthropic</a>, <a href="https://genkit.dev/docs/plugins/ollama">Ollama</a>, and more. Explore, compare, and use the best models for your needs.</td>
   </tr>
   <tr>
