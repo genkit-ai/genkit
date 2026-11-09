@@ -8493,11 +8493,12 @@ async def test_generate_returns_typed_output_when_schema_matches() -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_response_output_is_typed_optional() -> None:
-    """ai.generate(output_schema=City).output is typed City | None.
+async def test_model_response_output_is_typed_as_schema() -> None:
+    """ai.generate(output_schema=City).output is typed City, not City | None.
 
-    assert_type is a no-op at runtime; the ty CI job enforces it. The runtime
-    INVALID_OUTPUT / output is None behavior is covered by the INVALID_OUTPUT tests.
+    assert_type is a no-op at runtime; the ty CI job enforces it. A reply that
+    isn't a City is still None at runtime with INVALID_OUTPUT set; the type
+    doesn't model that (see tests/typecheck/output_narrowing_contract_test.py).
     """
 
     class City(BaseModel):
@@ -8515,7 +8516,9 @@ async def test_model_response_output_is_typed_optional() -> None:
 
     response = await ai.generate(prompt='a city', output_schema=City)
 
-    assert_type(response.output, City | None)
+    assert_type(response.output, City)
+    assert response.output is None
+    assert response.error is not None
 
 
 @pytest.mark.asyncio

@@ -1693,14 +1693,28 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.text
 
     @property
-    def output(self) -> OutputT | None:
-        """Parsed structured output, or None when the reply is not that shape.
+    def output(self) -> OutputT:
+        """Parsed structured output, typed as the ``output_schema`` you passed.
 
-        generate() does not throw when the text is not the schema. If you
-        asked for a schema and this is not it, read ``error`` / ``.text``.
-        Only complete JSON counts: a reply cut off mid-object is None (check
-        ``finish_reason == 'length'`` to tell a token cap from bad JSON).
+        With ``output_schema=Recipe`` this types as ``Recipe``, not
+        ``Recipe | None``, so the happy path needs no guard. With no schema,
+        or a JSON-schema dict, it types as ``Any``.
+
+        It's still ``None`` at runtime when the reply carries no output, which
+        the static type does not model:
+        - A failed turn, or a reply that doesn't match the schema: ``error``
+          is set and ``.text`` holds the raw reply.
+        - ``finish_reason`` is ``interrupted`` (check ``interrupts``),
+          ``blocked``, ``other``, or ``aborted`` (a stream you stopped).
+        - A reply cut off mid-object: only complete JSON counts (check
+          ``finish_reason == 'length'`` to tell a token cap from bad JSON).
         """
+        # One cast at the boundary: the value comes from the parser and the
+        # runtime schema type, which a type checker can't follow.
+        return cast(OutputT, self._parse_output())
+
+    def _parse_output(self) -> object:
+        """The parsed output, or None when the reply is not the requested shape."""
         # BLOCKED and FAILED carry no legitimate content at all, so there is
         # nothing to hand back even when the caller only asked for a format.
         # The rest of ABNORMAL_FINISH_REASONS can still hold usable parts (an
@@ -1727,10 +1741,10 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
                 return None
 
         if self._keeps_raw(parsed):
-            return cast(OutputT, parsed)
+            return parsed
 
         try:
-            return cast(OutputT, output_adapter(self._schema_type).validate_python(parsed))
+            return output_adapter(self._schema_type).validate_python(parsed)
         except ValidationError:
             return None
 
@@ -1824,7 +1838,7 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         """All tool response parts in this chunk."""
         return [p for p in self.content if p.tool_response is not None]
 
-    @cached_property
+    @property
     def output(self) -> OutputT | None:
         """The reply so far, parsed as far as it goes. Never raises.
 
@@ -1854,18 +1868,25 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         With no schema class, this is the JSON value so far (dict, list,
         or scalar). It's ``None`` before an object starts or while the text
         can't be parsed.
+
+        Unlike ``ModelResponse.output`` this stays ``OutputT | None``: early
+        chunks routinely have nothing to parse yet.
         """
+        # Plain property over a cached helper: some checkers (ty) drop the
+        # class type parameter from a cached_property's return type.
+        return cast('OutputT | None', self._partial_output)
+
+    @cached_property
+    def _partial_output(self) -> object:
+        """Parsed once per chunk; ``.output`` adds the static type."""
         if self.role is not None and self.role != Role.MODEL:
             return None
         try:
             text = self.accumulated_text
             parsed = self._chunk_parser(self) if self._chunk_parser else extract_partial_json(text)
             if self._schema_type is None:
-                return cast('OutputT | None', parsed)
-            return cast(
-                'OutputT | None',
-                hydrate_partial(schema=self._schema_type, data=parsed, closed=is_complete_json(text)),
-            )
+                return parsed
+            return hydrate_partial(schema=self._schema_type, data=parsed, closed=is_complete_json(text))
         except Exception:
             # one odd chunk shouldn't end a stream whose final reply may still parse.
             logger.debug('chunk.output could not be parsed; returning None', exc_info=True)

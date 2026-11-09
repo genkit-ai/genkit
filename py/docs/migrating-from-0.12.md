@@ -879,6 +879,18 @@ if res.output is None:
 
 `output_schema` now hydrates any type pydantic validates (`list[T]`, dataclasses, `TypedDict`, `Enum`, `Literal`, `Decimal`, `UUID`, `datetime`), not just `BaseModel`, so drop workarounds for the old raw JSON: index a dataclass by attribute (`res.output.name`, not `res.output['name']`), compare a plain `Enum` to its member (`Status.OPEN`, not `'OPEN'`), and do `Decimal` math instead of `float` math.
 
+## Typed `output`
+
+With `output_schema=T`, `response.output` types as `T` instead of `T | None`, for `generate`, `generate_stream`'s final response, and prompts. Read it without a guard or `cast()`. With no schema, or a JSON-schema dict, it types as `Any`. `chunk.output` stays `T | None`: early chunks have nothing to parse yet.
+
+```python
+res = await ai.generate(prompt='Suggest a dish.', output_schema=Dish)
+print(res.output.name)
+# => Smoked Salmon Tartine
+```
+
+`output` is still `None` at runtime when the reply has no output: an interrupt, a `blocked` finish, or a stream you stopped early. Check `finish_reason` or `interrupts` first if your flow allows those. Under strict pyright, an old `if res.output is None:` guard now reports `reportUnnecessaryComparison`.
+
 ## Flow input and output validation
 
 Flow input and output are now validated against their type annotations. A flow that returns the wrong shape now raises. For served flows, `{"data": null}` means "use the default".
