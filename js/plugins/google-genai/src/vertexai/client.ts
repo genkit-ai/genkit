@@ -35,6 +35,7 @@ import {
   isInteractionUrl,
   parseRetryAfterMs,
   processStream,
+  unwrapErrorBody,
   withoutHeaders,
 } from '../common/utils.js';
 import {
@@ -622,9 +623,11 @@ async function makeRequest(
       let errorMessage = errorText;
       let errorDetail: unknown;
       try {
-        const json = JSON.parse(errorText);
+        // The Interactions API sometimes wraps the error in a one-element
+        // array (e.g. a bad API key).
+        const json: any = unwrapErrorBody(JSON.parse(errorText));
         errorDetail = json;
-        if (json.error && json.error.message) {
+        if (json?.error && json.error.message) {
           errorMessage = json.error.message;
           if (Array.isArray(json.error.details)) {
             const detailsText = json.error.details

@@ -499,9 +499,15 @@ export function toInteractionGoogleSearch(
  * 400. `method` (`SEVERITY` / `PROBABILITY`) is lower-cased too.
  * `HARM_CATEGORY_UNSPECIFIED` has no equivalent and is left out. Other
  * fields are passed through.
+ *
+ * With `blockNoneAsOff` (googleAI), `BLOCK_NONE` is sent as `off`: the
+ * Gemini API rejects `block_none` with a 400 ("allowed on the Gemini
+ * Enterprise Agent Platform"; seen live Nov 2026) and `off` means the same
+ * there. The platform accepts `block_none`, so vertexAI keeps it.
  */
 export function toInteractionSafetySettings(
-  settings?: { category: string; threshold: string; method?: unknown }[]
+  settings?: { category: string; threshold: string; method?: unknown }[],
+  options?: { blockNoneAsOff?: boolean }
 ): InteractionSafetySetting[] | undefined {
   if (!settings) return undefined;
   const result = settings
@@ -509,7 +515,10 @@ export function toInteractionSafetySettings(
     .map(({ category, threshold, method, ...rest }) => ({
       ...toSnakeCaseObj(rest),
       type: category.replace(/^HARM_CATEGORY_/, '').toLowerCase(),
-      threshold: threshold.toLowerCase(),
+      threshold:
+        options?.blockNoneAsOff && threshold.toUpperCase() === 'BLOCK_NONE'
+          ? 'off'
+          : threshold.toLowerCase(),
       ...(typeof method === 'string' ? { method: method.toLowerCase() } : {}),
     }));
   return result.length ? result : undefined;
@@ -581,7 +590,9 @@ export function toInteractionSpeechConfig(
  *  - `speechConfig` is converted to `speech_config`;
  *  - `thinkingConfig.thinkingLevel` / `includeThoughts` become
  *    `thinking_level` / `thinking_summaries`. There is no `thinking_config`,
- *    so other thinking fields (e.g. `thinkingBudget`) are dropped;
+ *    so other thinking fields (e.g. `thinkingBudget`) are dropped; a budget
+ *    of 0 is reported as `thinkingConfig.thinkingBudget: 0` (it can't turn
+ *    thinking off here, which deserves its own warning);
  *  - `contextCache` (not implemented by this plugin) is dropped;
  *  - `topK` is dropped: there's no `top_k` in the Interactions
  *    `generation_config` (Gemini Enterprise Agent Platform rejects it with a
@@ -629,6 +640,14 @@ export function toInteractionGenerationConfig(
       } else if (key === 'includeThoughts' || key === 'include_thoughts') {
         result.thinking_summaries =
           typeof value === 'boolean' ? (value ? 'auto' : 'none') : value;
+      } else if (
+        (key === 'thinkingBudget' || key === 'thinking_budget') &&
+        value === 0
+      ) {
+        // Budget 0 meant "thinking off" on generateContent. There's no way
+        // to turn thinking off here, and the lowest thinking_level differs
+        // per model, so it isn't mapped: it gets its own warning.
+        onDropped?.('thinkingConfig.thinkingBudget: 0');
       } else {
         onDropped?.(`thinkingConfig.${key}`);
       }
@@ -951,7 +970,7 @@ const GoogleSearchResultSchema = z.object({
 
 const ExecutableCodeSchema = z.object({
   code: z.string(),
-  language: z.string().default('PYTHON'),
+  language: z.string().optional(),
 });
 
 const CodeExecutionResultSchema = z.object({
@@ -1101,6 +1120,11 @@ function toBuiltInToolStep(part: Part): BuiltInToolStep | undefined {
  */
 export function toInteractionSteps(messages: MessageData[]): Step[] {
   const steps: Step[] = [];
+  // IDs given to code execution calls that had none (history saved from
+  // generateContent), waiting for their results, in order (like
+  // ensureToolIds does for tool requests).
+  const pendingCodeExecutionIds: string[] = [];
+  let nextCodeExecutionId = 0;
 
   for (const message of messages) {
     const normalContent: Content[] = [];
@@ -1196,12 +1220,21 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         });
       } else if (part.custom?.executableCode) {
         const execCode = ExecutableCodeSchema.parse(part.custom.executableCode);
+        // Parts saved from generateContent have no callId: give the call an
+        // ID, and the next result without one gets the same ID.
+        let id = OptionalStringSchema.parse(part.metadata?.callId);
+        if (!id) {
+          id = `genkit-code-execution-id-${nextCodeExecutionId++}`;
+          pendingCodeExecutionIds.push(id);
+        }
         steps.push({
           type: 'code_execution_call',
-          id: z.string().parse(part.metadata?.callId),
+          id,
           arguments: {
             code: execCode.code,
-            language: execCode.language,
+            // The Interactions API takes 'python' or 'bash'; generateContent
+            // parts say 'PYTHON', which it rejects (400, seen live).
+            language: execCode.language?.toLowerCase() || 'python',
           },
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
@@ -1211,9 +1244,13 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         const execResult = CodeExecutionResultSchema.parse(
           part.custom.codeExecutionResult
         );
+        const callId =
+          OptionalStringSchema.parse(part.metadata?.callId) ||
+          pendingCodeExecutionIds.shift() ||
+          `genkit-code-execution-orphan-id-${nextCodeExecutionId++}`;
         steps.push({
           type: 'code_execution_result',
-          call_id: z.string().parse(part.metadata?.callId),
+          call_id: callId,
           result: execResult.output,
           signature: OptionalStringSchema.parse(
             part.metadata?.thoughtSignature
@@ -1380,14 +1417,15 @@ export function fromInteractionDelta(delta: StepDeltaData): Part[] {
     case 'audio':
     case 'document':
     case 'video': {
+      const mimeType = interactionMediaMimeType(delta);
       let url = delta.uri;
-      if (delta.data && delta.mime_type) {
-        url = `data:${delta.mime_type};base64,${delta.data}`;
+      if (delta.data && mimeType) {
+        url = `data:${mimeType};base64,${delta.data}`;
       }
       const part: Part = {
         media: {
           url: url || '',
-          contentType: delta.mime_type,
+          contentType: mimeType,
         },
       };
       if (
@@ -1726,17 +1764,42 @@ function getPendingFunctionCallIds(
   return pendingIds;
 }
 
+/**
+ * The content type of an Interactions media block or delta.
+ *
+ * Audio that comes with `data` but no `mime_type` is raw 16-bit PCM: the
+ * server streams single-voice TTS that way (`{type: 'audio', data,
+ * sample_rate, channels}`, seen live Nov 2026), while it labels the same
+ * audio `audio/l16; rate=24000; channels=1` in other cases (e.g. two
+ * speakers). The label is built from the `sample_rate` and `channels` it
+ * sends (24000 and 1 when missing), so the audio can be played and joined.
+ * A given `mime_type` always wins.
+ */
+function interactionMediaMimeType(media: {
+  type: string;
+  data?: string;
+  mime_type?: string;
+  sample_rate?: number;
+  channels?: number;
+}): string | undefined {
+  if (media.mime_type || media.type !== 'audio' || !media.data) {
+    return media.mime_type;
+  }
+  return `audio/l16; rate=${media.sample_rate ?? 24000}; channels=${media.channels ?? 1}`;
+}
+
 function fromMediaContent(
   content: ImageContent | AudioContent | VideoContent | DocumentContent
 ): Part {
+  const mimeType = interactionMediaMimeType(content);
   let url = content.uri;
-  if (content.data && content.mime_type) {
-    url = `data:${content.mime_type};base64,${content.data}`;
+  if (content.data && mimeType) {
+    url = `data:${mimeType};base64,${content.data}`;
   }
   return {
     media: {
       url: url || '',
-      contentType: content.mime_type,
+      contentType: mimeType,
     },
   };
 }

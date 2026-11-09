@@ -1476,6 +1476,55 @@ describe('Vertex AI Gemini', () => {
         assert.strictEqual(body.input.length, 3);
       });
 
+      it('gives tool requests and responses without a ref an ID', async () => {
+        // A history without refs (e.g. saved from a generateContent model) is
+        // rejected with a 400 when the IDs are empty (seen live).
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        await model.run({
+          messages: [
+            { role: 'user', content: [{ text: 'Weather in Paris?' }] },
+            {
+              role: 'model',
+              content: [
+                { toolRequest: { name: 'getWeather', input: { city: 'P' } } },
+                {
+                  toolRequest: {
+                    name: 'getTime',
+                    ref: 'call_1',
+                    input: { city: 'P' },
+                  },
+                },
+              ],
+            },
+            {
+              role: 'tool',
+              content: [
+                { toolResponse: { name: 'getWeather', output: 'Sunny' } },
+                {
+                  toolResponse: { name: 'getTime', ref: 'call_1', output: '9' },
+                },
+              ],
+            },
+          ],
+        });
+
+        const ids = lastRequestBody().input.flatMap(
+          (step: { type: string; id?: string; call_id?: string }) =>
+            step.type === 'function_call'
+              ? [step.id]
+              : step.type === 'function_result'
+                ? [step.call_id]
+                : []
+        );
+        assert.deepStrictEqual(ids, [
+          'genkit-auto-id-0',
+          'call_1',
+          'genkit-auto-id-0',
+          'call_1',
+        ]);
+      });
+
       it('lets a request store: true override the plugin-level store: false', async () => {
         mockFetchResponse(interactionResponse);
         const model = defineModel(interactionsModel, clientOptions, {

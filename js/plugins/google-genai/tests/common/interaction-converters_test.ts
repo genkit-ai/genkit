@@ -105,6 +105,26 @@ describe('Interaction Converters', () => {
     it('returns undefined when not set', () => {
       assert.strictEqual(toInteractionSafetySettings(undefined), undefined);
     });
+
+    it('sends BLOCK_NONE as off with blockNoneAsOff (googleAI)', () => {
+      // The Gemini API rejects block_none with a 400 (seen live, Nov 2026).
+      assert.deepStrictEqual(
+        toInteractionSafetySettings(
+          [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            {
+              category: 'HARM_CATEGORY_HATE_SPEECH',
+              threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+            },
+          ],
+          { blockNoneAsOff: true }
+        ),
+        [
+          { type: 'harassment', threshold: 'off' },
+          { type: 'hate_speech', threshold: 'block_medium_and_above' },
+        ]
+      );
+    });
   });
 
   describe('toInteractionAudioResponseFormat', () => {
@@ -1141,6 +1161,28 @@ describe('Interaction Converters', () => {
       ]);
     });
 
+    it('reports thinkingBudget: 0 as its own dropped field', () => {
+      for (const thinkingConfig of [
+        { thinkingBudget: 0 },
+        { thinking_budget: 0 },
+      ]) {
+        const dropped: string[] = [];
+        const result = toInteractionGenerationConfig(
+          { thinkingConfig },
+          (field) => dropped.push(field)
+        );
+        assert.deepStrictEqual(result, {});
+        assert.deepStrictEqual(dropped, ['thinkingConfig.thinkingBudget: 0']);
+      }
+      // Other budgets (incl. -1, automatic) keep the generic name.
+      const dropped: string[] = [];
+      toInteractionGenerationConfig(
+        { thinkingConfig: { thinkingBudget: -1 } },
+        (field) => dropped.push(field)
+      );
+      assert.deepStrictEqual(dropped, ['thinkingConfig.thinkingBudget']);
+    });
+
     it('should handle already snake_cased thinking_config', () => {
       const dropped: string[] = [];
       const result = toInteractionGenerationConfig(
@@ -1816,7 +1858,8 @@ describe('Interaction Converters', () => {
         {
           type: 'code_execution_call',
           id: 'ce1',
-          arguments: { code: 'print("hello")', language: 'PYTHON' },
+          // The Interactions API only accepts lower-case values.
+          arguments: { code: 'print("hello")', language: 'python' },
           signature: 'sig',
         },
       ]);
@@ -1845,6 +1888,110 @@ describe('Interaction Converters', () => {
           signature: 'sig',
         },
       ]);
+    });
+
+    it('continues code execution history saved from generateContent (no callIds, upper-case language)', () => {
+      // The part shapes the generateContent path produces: no callId, and
+      // language 'PYTHON', which the Interactions API rejects (400 "Supported
+      // values: 'python', 'bash'", seen live). Real generateContent
+      // signatures are accepted on the steps (seen live), so they're kept.
+      const messages: MessageData[] = [
+        { role: 'user', content: [{ text: 'Run some code.' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              custom: {
+                executableCode: { code: 'print(5117)', language: 'PYTHON' },
+              },
+              metadata: { thoughtSignature: 'sig1' },
+            },
+            {
+              custom: {
+                codeExecutionResult: {
+                  outcome: 'OUTCOME_OK',
+                  output: '5117\n',
+                },
+              },
+            },
+            { custom: { executableCode: { code: 'print(1)' } } },
+            {
+              custom: {
+                codeExecutionResult: { outcome: 'OUTCOME_OK', output: '1\n' },
+              },
+            },
+            { text: 'The answer is 5117.' },
+          ],
+        },
+      ];
+      assert.deepStrictEqual(toInteractionSteps(messages), [
+        {
+          type: 'user_input',
+          content: [{ type: 'text', text: 'Run some code.' }],
+        },
+        {
+          type: 'code_execution_call',
+          id: 'genkit-code-execution-id-0',
+          arguments: { code: 'print(5117)', language: 'python' },
+          signature: 'sig1',
+        },
+        {
+          type: 'code_execution_result',
+          call_id: 'genkit-code-execution-id-0',
+          result: '5117\n',
+          signature: undefined,
+        },
+        {
+          type: 'code_execution_call',
+          id: 'genkit-code-execution-id-1',
+          arguments: { code: 'print(1)', language: 'python' },
+          signature: undefined,
+        },
+        {
+          type: 'code_execution_result',
+          call_id: 'genkit-code-execution-id-1',
+          result: '1\n',
+          signature: undefined,
+        },
+        {
+          type: 'model_output',
+          content: [{ type: 'text', text: 'The answer is 5117.' }],
+        },
+      ]);
+    });
+
+    it('keeps existing code execution ids and the bash language, and gives a result without a call an orphan id', () => {
+      const messages: MessageData[] = [
+        {
+          role: 'model',
+          content: [
+            {
+              custom: { executableCode: { code: 'ls', language: 'bash' } },
+              metadata: { callId: 'call_1' },
+            },
+            {
+              custom: { codeExecutionResult: { output: 'a.txt\n' } },
+              metadata: { callId: 'call_1' },
+            },
+            { custom: { codeExecutionResult: { output: 'stray\n' } } },
+          ],
+        },
+      ];
+      const steps = toInteractionSteps(messages);
+      assert.deepStrictEqual(
+        steps.map((s) =>
+          s.type === 'code_execution_call'
+            ? [s.type, s.id, s.arguments.language]
+            : s.type === 'code_execution_result'
+              ? [s.type, s.call_id]
+              : [s.type]
+        ),
+        [
+          ['code_execution_call', 'call_1', 'bash'],
+          ['code_execution_result', 'call_1'],
+          ['code_execution_result', 'genkit-code-execution-orphan-id-0'],
+        ]
+      );
     });
 
     it('throws GenkitError when tool output contains non-text/image content', () => {
@@ -2079,6 +2226,21 @@ describe('Interaction Converters', () => {
           contentType: 'image/png',
         },
       });
+    });
+
+    it('labels AudioContent data without a mime_type as audio/l16', () => {
+      // Streamed single-voice TTS deltas (no mime_type) assembled into the
+      // final response's content.
+      const type = 'audio/l16; rate=24000; channels=1';
+      assert.deepStrictEqual(
+        fromInteractionContent({
+          type: 'audio',
+          data: 'AAEC',
+          channels: 1,
+          sample_rate: 24000,
+        }),
+        { media: { url: `data:${type};base64,AAEC`, contentType: type } }
+      );
     });
 
     it('should convert ImageContent with uri', () => {
@@ -2371,6 +2533,56 @@ describe('Interaction Converters', () => {
           media: { url: 'data:image/png;base64,XYZ', contentType: 'image/png' },
         },
       ]);
+    });
+
+    it('labels audio deltas without a mime_type as audio/l16', () => {
+      // Streamed single-voice TTS sends raw 16-bit PCM without a mime_type
+      // (seen live, Nov 2026, both 3.8 TTS models).
+      const delta: StepDeltaData = {
+        type: 'audio',
+        data: 'AAEC',
+        channels: 1,
+        sample_rate: 24000,
+      };
+      const type = 'audio/l16; rate=24000; channels=1';
+      assert.deepStrictEqual(fromInteractionDelta(delta), [
+        { media: { url: `data:${type};base64,AAEC`, contentType: type } },
+      ]);
+
+      // Missing rate and channels default to 24000 and 1; values sent win.
+      assert.deepStrictEqual(
+        fromInteractionDelta({ type: 'audio', data: 'AAEC' })[0].media
+          ?.contentType,
+        type
+      );
+      assert.deepStrictEqual(
+        fromInteractionDelta({
+          type: 'audio',
+          data: 'AAEC',
+          sample_rate: 16000,
+          channels: 2,
+        })[0].media?.contentType,
+        'audio/l16; rate=16000; channels=2'
+      );
+    });
+
+    it('keeps the mime_type of an audio delta when given', () => {
+      assert.deepStrictEqual(
+        fromInteractionDelta({
+          type: 'audio',
+          data: 'AAEC',
+          mime_type: 'audio/wav',
+          sample_rate: 24000,
+        }),
+        [
+          {
+            media: {
+              url: 'data:audio/wav;base64,AAEC',
+              contentType: 'audio/wav',
+            },
+          },
+        ]
+      );
     });
 
     it('returns no parts for tool step deltas (emitted when the step stops)', () => {

@@ -910,6 +910,39 @@ describe('Google AI Gemini', () => {
         assert.ok(String(budgetWarnings[0].args[0]).includes('thinkingLevel'));
       });
 
+      it("warns that thinkingBudget: 0 can't turn thinking off (Interactions API)", async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        // An unlisted model (routed to Interactions) not used by other tests,
+        // since the warning is only logged once per model and field.
+        const model = defineModel(
+          'gemini-thinking-budget-zero-test',
+          defaultPluginOptions
+        );
+        const request = {
+          ...minimalRequest,
+          config: { thinkingConfig: { thinkingBudget: 0 } },
+        };
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request);
+        mockFetchResponse(defaultApiResponse);
+        await model.run(request);
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.deepStrictEqual(apiRequest.generation_config, {});
+        const budgetWarnings = warnStub
+          .getCalls()
+          .map((c) => String(c.args[0]))
+          .filter((m) => m.includes('thinkingBudget'));
+        assert.deepStrictEqual(budgetWarnings, [
+          "thinkingConfig.thinkingBudget: 0 (thinking off) was ignored: 'gemini-thinking-budget-zero-test' " +
+            "can't turn thinking off (the Interactions API has no thinking budget). For the least " +
+            "thinking, set thinkingConfig.thinkingLevel to the model's lowest level ('LOW', or " +
+            "'MINIMAL' where the model supports it).",
+        ]);
+      });
+
       it('drops topK with one warning per model (Interactions API)', async () => {
         const warnStub = sinon.stub(logger, 'warn');
         // An unlisted model (routed to Interactions) not used by other tests,
@@ -1383,6 +1416,84 @@ describe('Google AI Gemini', () => {
         );
       });
 
+      it('streams single-voice TTS audio sent without a mime_type as audio/l16, joined in one part', async () => {
+        const model = defineModel(
+          'gemini-3.8-flash-lite-tts',
+          defaultPluginOptions
+        );
+        // The event shapes seen live (Nov 2026, one voice, no audioFormat):
+        // the audio deltas have no mime_type, only channels and sample_rate.
+        const pcm = [
+          [1, 2],
+          [3, 4],
+          [5, 6],
+        ];
+        const events = [
+          { event_type: 'interaction.created', interaction: {} },
+          {
+            event_type: 'step.start',
+            index: 0,
+            step: { type: 'model_output' },
+          },
+          ...pcm.map((bytes) => ({
+            event_type: 'step.delta',
+            index: 0,
+            delta: {
+              type: 'audio',
+              data: Buffer.from(bytes).toString('base64'),
+              channels: 1,
+              sample_rate: 24000,
+            },
+          })),
+          { event_type: 'step.stop', index: 0 },
+          {
+            event_type: 'interaction.completed',
+            interaction: { status: 'completed' },
+          },
+        ];
+        const encoder = new TextEncoder();
+        fetchStub.resolves(
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                for (const event of events) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`
+                    )
+                  );
+                }
+                controller.close();
+              },
+            }),
+            {
+              status: 200,
+              headers: { 'Content-Type': 'text/event-stream' },
+            }
+          )
+        );
+
+        const type = 'audio/l16; rate=24000; channels=1';
+        const chunkUrls: string[] = [];
+        const response = await model.run(minimalRequest, {
+          onChunk: (chunk) =>
+            chunkUrls.push(...chunk.content.map((p) => p.media?.url ?? '')),
+        });
+
+        assert.strictEqual(chunkUrls.length, 3);
+        for (const url of chunkUrls) {
+          assert.ok(url.startsWith(`data:${type};base64,`), url);
+        }
+        const content = response.result.message?.content ?? [];
+        assert.strictEqual(content.length, 1);
+        assert.strictEqual(content[0].media?.contentType, type);
+        const url = content[0].media?.url ?? '';
+        assert.deepStrictEqual(
+          Buffer.from(url.substring(url.indexOf(',') + 1), 'base64'),
+          Buffer.from([1, 2, 3, 4, 5, 6])
+        );
+      });
+
       it('removes a C2PA ID3 tag from streamed audio/l16, in the chunks and the final WAV', async () => {
         const model = defineModel(
           'gemini-3.8-flash-lite-tts',
@@ -1586,36 +1697,10 @@ describe('Google AI Gemini', () => {
         assert.deepStrictEqual(apiRequest.response_format, { type: 'audio' });
       });
 
-      it('drops permissive safetySettings on an Interactions model (default behavior)', async () => {
-        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
-        mockFetchResponse(defaultApiResponse);
-        const request: GenerateRequest<typeof GeminiConfigSchema> = {
-          ...minimalRequest,
-          config: {
-            safetySettings: [
-              {
-                category: 'HARM_CATEGORY_HATE_SPEECH',
-                threshold: 'BLOCK_NONE',
-              },
-              {
-                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                threshold: 'BLOCK_NONE',
-              },
-              {
-                category: 'HARM_CATEGORY_UNSPECIFIED',
-                threshold: 'BLOCK_LOW_AND_ABOVE',
-              },
-            ],
-          },
-        };
-        await model.run(request);
-
-        const body = JSON.parse(fetchStub.lastCall.args[1].body);
-        assert.strictEqual(body.safety_settings, undefined);
-        assert.strictEqual(body.generation_config?.safety_settings, undefined);
-      });
-
-      it('throws for blocking safetySettings on an Interactions model', async () => {
+      it('sends safetySettings on an Interactions model (BLOCK_NONE as off)', async () => {
+        // The Gemini API accepts safety_settings on interactions, lower case
+        // without the HARM_CATEGORY_ prefix, but rejects block_none with a
+        // 400 (seen live, Nov 2026); off means the same there.
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         const request: GenerateRequest<typeof GeminiConfigSchema> = {
@@ -1630,31 +1715,51 @@ describe('Google AI Gemini', () => {
                 category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
                 threshold: 'BLOCK_ONLY_HIGH',
               },
+              {
+                category: 'HARM_CATEGORY_HARASSMENT',
+                threshold: 'BLOCK_LOW_AND_ABOVE',
+              },
+              {
+                category: 'HARM_CATEGORY_UNSPECIFIED',
+                threshold: 'BLOCK_LOW_AND_ABOVE',
+              },
             ],
           },
         };
-        await assert.rejects(
-          () => model.run(request),
-          (err: any) => {
-            assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-            assert.ok(
-              err.message.includes(
-                "safetySettings with blocking thresholds are not supported for model 'gemini-flash-latest'"
-              )
-            );
-            // Only the offending setting is reported.
-            assert.deepStrictEqual(err.detail, {
-              safetySettings: [
-                {
-                  category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                  threshold: 'BLOCK_ONLY_HIGH',
-                },
-              ],
-            });
-            return true;
-          }
+        await model.run(request);
+
+        const body: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
         );
-        sinon.assert.notCalled(fetchStub);
+        assert.deepStrictEqual(body.safety_settings, [
+          { type: 'hate_speech', threshold: 'off' },
+          { type: 'dangerous_content', threshold: 'block_only_high' },
+          { type: 'harassment', threshold: 'block_low_and_above' },
+        ]);
+        assert.strictEqual(
+          (body.generation_config as any)?.safety_settings,
+          undefined
+        );
+      });
+
+      it('sends no safety_settings on an Interactions model when none are set', async () => {
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          ...minimalRequest,
+          config: {
+            safetySettings: [
+              {
+                category: 'HARM_CATEGORY_UNSPECIFIED',
+                threshold: 'BLOCK_LOW_AND_ABOVE',
+              },
+            ],
+          },
+        });
+        const body: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.strictEqual(body.safety_settings, undefined);
       });
 
       describe('TTS on an unlisted model (routed to Interactions)', () => {
@@ -2114,6 +2219,58 @@ describe('Google AI Gemini', () => {
         assert.strictEqual(apiRequest.store, false);
         assert.strictEqual(apiRequest.previous_interaction_id, undefined);
         assert.strictEqual((apiRequest.input as any[]).length, 3);
+      });
+
+      it('gives tool requests and responses without a ref an ID (Interactions API)', async () => {
+        // A history without refs (e.g. saved from a generateContent model) is
+        // rejected with a 400 when the IDs are empty (seen live).
+        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
+        mockFetchResponse(defaultApiResponse);
+        await model.run({
+          messages: [
+            { role: 'user', content: [{ text: 'Weather in Paris?' }] },
+            {
+              role: 'model',
+              content: [
+                { toolRequest: { name: 'getWeather', input: { city: 'P' } } },
+                {
+                  toolRequest: {
+                    name: 'getTime',
+                    ref: 'call_1',
+                    input: { city: 'P' },
+                  },
+                },
+              ],
+            },
+            {
+              role: 'tool',
+              content: [
+                { toolResponse: { name: 'getWeather', output: 'Sunny' } },
+                {
+                  toolResponse: { name: 'getTime', ref: 'call_1', output: '9' },
+                },
+              ],
+            },
+          ],
+        });
+
+        const apiRequest: CreateInteractionRequest = JSON.parse(
+          fetchStub.lastCall.args[1].body
+        );
+        assert.ok(Array.isArray(apiRequest.input));
+        const ids = apiRequest.input.flatMap((step) =>
+          step.type === 'function_call'
+            ? [step.id]
+            : step.type === 'function_result'
+              ? [step.call_id]
+              : []
+        );
+        assert.deepStrictEqual(ids, [
+          'genkit-auto-id-0',
+          'call_1',
+          'genkit-auto-id-0',
+          'call_1',
+        ]);
       });
 
       it('lets a request store: true override plugin store: false (Interactions API)', async () => {
