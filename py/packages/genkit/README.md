@@ -19,8 +19,11 @@ Vertex AI, Cloud Trace, and Firestore are there if you want them. So are OpenAI,
 ## Install
 
 ```bash
+uv init my-genkit-app && cd my-genkit-app
 uv add genkit genkit-google-genai
 ```
+
+Using pip instead: `pip install genkit genkit-google-genai`.
 
 ```python
 from pydantic import BaseModel, Field

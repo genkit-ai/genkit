@@ -16,47 +16,67 @@ Build production-ready AI applications in Python with type-safe flows, structure
 
 ## Quick Start
 
-Get started in three simple steps:
-
-1. **Install the SDK and your preferred model provider:**
+1. **Create a project and install the SDK with a model provider:**
 ```bash
+uv init my-genkit-app && cd my-genkit-app
 uv add genkit genkit-google-genai
 ```
 
-2. **Set your API key:**
+Using pip instead: `pip install genkit genkit-google-genai`.
+
+2. **Set your API key** (get one from [Google AI Studio](https://aistudio.google.com/app/apikey)):
 ```bash
 export GEMINI_API_KEY="your-api-key"
 ```
 
-3. **Create your AI application:**
+3. **Write `app.py`:**
 ```python
 from genkit import Genkit
 from genkit_google_genai import GoogleAI
 
 # 1. Initialize Genkit with the Google AI (Gemini) plugin
-ai = Genkit(plugins=[GoogleAI()])
+ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
 
-# 2. Define a type-safe tool
-@ai.tool(description="Get current weather for a city")
-def get_weather(city: str) -> str:
-    return f"Sunny, 72°F in {city}"
 
-# 3. Define a flow
+# 2. Define a tool. Tools are async; wrap blocking I/O in asyncio.to_thread.
+@ai.tool(description='Get current weather for a city')
+async def get_weather(city: str) -> str:
+    return f'Sunny, 72°F in {city}'
+
+
+# 3. Define a flow. Flows take a single input argument.
 @ai.flow()
 async def plan_trip(destination: str) -> str:
     response = await ai.generate(
-        model="googleai/gemini-flash-latest",
-        prompt=f"Suggest activities in {destination} given the weather.",
+        prompt=f'Suggest activities in {destination} given the weather.',
         tools=[get_weather],
     )
-    return response.text  # => "Based on the sunny weather in Seattle..."
+    return response.text
+
+
+# 4. Call the flow from the script entry point
+if __name__ == '__main__':
+    print(ai.run_main(plan_trip('Seattle')))
+    # => Since it's sunny and 72°F in Seattle, here are some activities...
 ```
+
+4. **Run it:**
+```bash
+uv run app.py
+```
+
+5. **Open the Developer UI** (needs Node.js and the Genkit CLI, `npm install -g genkit-cli`):
+```bash
+genkit start -- uv run app.py
+```
+
+`genkit start` sets `GENKIT_ENV=dev`, which turns on the reflection server. `ai.run_main()` keeps the process alive so the Dev UI can run `plan_trip` and show its traces. Without `genkit start`, `run_main()` returns as soon as the flow does.
 
 ## Why Genkit?
 
 - **Type-Safe by Design:** Leverage Python type annotations and Pydantic models for structured inputs, outputs, and tool definitions.
 - **Multi-Model Provider API:** Switch effortlessly between Google Gemini, Anthropic Claude, OpenAI, Ollama, Vertex AI, and Amazon Bedrock with a unified API.
-- **Pluggable Observability:** Under `genkit start`, `Genkit()` fills the Developer UI Traces tab over HTTP. If you start the app yourself after `genkit start`, the collector URL arrives on the reflection handshake.
+- **Pluggable Observability:** Run your app under `genkit start -- uv run app.py` and the Developer UI Traces tab shows every flow, model, and tool call. Export to OpenTelemetry backends with `genkit-otel`.
 - **Deploy Anywhere:** Expose flows as standard ASGI/WSGI applications compatible with FastAPI, Flask, Django, Cloud Run, or any serverless platform.
 
 ---
@@ -69,6 +89,7 @@ This section covers onboarding and common development workflows for contributing
 - **Python 3.10+**
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/):** Fast Python package and project manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - **[just](https://github.com/casey/just#installation):** Modern command runner (`brew install just` or `cargo install just`)
+- **[Node.js](https://nodejs.org/) and the Genkit CLI:** Required for `genkit start` and the Developer UI (`npm install -g genkit-cli`). The `genkit` Python package does not ship a `genkit` command.
 
 ### Workspace Structure
 ```
@@ -107,7 +128,7 @@ genkit start -- uv run <entrypoint.py>
 Open the Dev UI in your browser to interact with registered flows and agents directly.
 
 ### Documentation & Maintenance
-- **API Reference:** For complete class and method signatures, see [docs/index.md](docs/index.md).
+- **API Reference:** For complete class and method signatures, see [python.api.genkit.dev](https://python.api.genkit.dev). Guides live at [genkit.dev](https://genkit.dev/docs/python/get-started/).
 - **Migration Guides:** Upgrading between versions, see [docs/migrating-from-0.12.md](docs/migrating-from-0.12.md).
 - **Contributing & Standards:** For coding conventions, commit guidelines, and type-checking rules, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Release Playbook:** For maintainer release procedures, see [docs/release_playbook.md](docs/release_playbook.md).
