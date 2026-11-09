@@ -660,8 +660,27 @@ class Part(GenkitModel):
         output: Any | None = None,  # noqa: ANN401
         ref: str | None = None,
         metadata: dict[str, Any] | None = None,
+        content: Sequence[Part] | None = None,
     ) -> Part:
-        return cls(tool_response=ToolResponse(name=name, output=output, ref=ref), metadata=metadata)
+        """Build a tool-response part, e.g. for a manual tool loop.
+
+        ``content`` carries media the model should see next to ``output``
+        (a screenshot, a chart). A ``MultipartToolResponse`` passed as
+        ``output`` is unwrapped the way the engine does it: its ``output``,
+        ``content``, and ``metadata`` land in their own slots instead of being
+        serialized as JSON text.
+        """
+        if isinstance(output, MultipartToolResponse):
+            multipart = cast('MultipartToolResponse[Any]', output)
+            if content is None:
+                content = multipart.content
+            if metadata is None:
+                metadata = multipart.metadata
+            output = multipart.output
+        wire = (
+            [as_part(p).model_dump(mode='json', by_alias=True, exclude_none=True) for p in content] if content else None
+        )
+        return cls(tool_response=ToolResponse(name=name, output=output, ref=ref, content=wire), metadata=metadata)
 
     @classmethod
     def from_data(cls, data: Any, metadata: dict[str, Any] | None = None) -> Part:  # noqa: ANN401

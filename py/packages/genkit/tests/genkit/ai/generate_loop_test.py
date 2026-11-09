@@ -10,7 +10,18 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import Document, Genkit, Interrupt, Message, ModelResponse, ModelResponseChunk, Part, Tool, ToolContext
+from genkit import (
+    Document,
+    Genkit,
+    Interrupt,
+    Message,
+    ModelResponse,
+    ModelResponseChunk,
+    MultipartToolResponse,
+    Part,
+    Tool,
+    ToolContext,
+)
 from genkit._ai._agents._client import agent_interrupts_from_message
 from genkit._ai._generate import CallScope, augment_with_context, generate_action
 from genkit._core._action import ActionRunContext
@@ -471,3 +482,26 @@ def test_reasoning_accessors_stay_out_of_text() -> None:
     assert response.text == 'Safe.'
     assert chunk.reasoning == 'Thinking'
     assert ModelResponse().reasoning == ''
+
+
+def test_from_tool_response_carries_media_content() -> None:
+    chart = Part.from_media('data:image/png;base64,iVBOR', content_type='image/png')
+
+    part = Part.from_tool_response(name='sales_chart', ref='c1', output={'total': 42}, content=[chart])
+
+    assert part.tool_response is not None
+    assert part.tool_response.output == {'total': 42}
+    assert part.tool_response.content == [{'media': {'url': 'data:image/png;base64,iVBOR', 'contentType': 'image/png'}}]
+
+
+def test_from_tool_response_unwraps_a_multipart_output() -> None:
+    chart = Part.from_media('data:image/png;base64,iVBOR', content_type='image/png')
+    multipart = MultipartToolResponse(output={'total': 42}, content=[chart], metadata={'cached': True})
+
+    part = Part.from_tool_response(name='sales_chart', ref='c1', output=multipart)
+
+    assert part.tool_response is not None
+    assert part.tool_response.output == {'total': 42}
+    assert part.tool_response.content is not None
+    assert len(part.tool_response.content) == 1
+    assert part.metadata == {'cached': True}
