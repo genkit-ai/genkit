@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import threading
+import traceback
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -49,6 +50,8 @@ from genkit._core._model import AgentInit, AgentInput, ModelRef
 from genkit._core._reflection_config import REFLECTION_SECRET_HEADER, secrets_equal
 from genkit._core._registry import Registry
 from genkit._core._telemetry._http import connect_developer_ui_collector
+from genkit._core._telemetry._instrumentation import flush_instrumentations
+from genkit._core._telemetry._log_exporter import enable_log_export
 
 logger = get_logger(__name__)
 
@@ -171,6 +174,9 @@ class ActionRunner:
             payload: dict[str, Any] = {'result': result}
             if output.trace_id:
                 payload['telemetry'] = {'traceId': output.trace_id, 'spanId': output.span_id}
+            # Export the root span before answering, as v2 and JS do, so the
+            # Dev UI trace view is complete when the response lands.
+            await asyncio.to_thread(flush_instrumentations)
             self.queue.put_nowait(json.dumps(payload))
         except asyncio.CancelledError:
             raise
@@ -182,6 +188,11 @@ class ActionRunner:
             # terminal noise.
             logger.debug('Action failed: %s: %s', type(e).__name__, e, exc_info=True)
             error = get_reflection_json(interrupt_escape_error(e) or e, trace_id=self.trace_id)
+            if error.details is not None and not error.details.stack and e.__traceback__:
+                # Same as v2: `genkit flow:run` prints this, so give it Python frames.
+                stack = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+                error = error.model_copy(update={'details': error.details.model_copy(update={'stack': stack})})
+            await asyncio.to_thread(flush_instrumentations)
             self.queue.put_nowait(json.dumps({'error': error.model_dump(by_alias=True)}))
         finally:
             self.trace_ready.set()
@@ -235,6 +246,25 @@ class ReflectionAuthMiddleware:
         await self._app(scope, receive, send)
 
 
+_REFLECTION_API_SPEC_VERSION = 1
+
+
+def _warn_on_spec_version_mismatch(spec_version: object) -> None:
+    """Same warnings as JS ``/api/notify`` when CLI and runtime disagree."""
+    if spec_version == _REFLECTION_API_SPEC_VERSION:
+        return
+    if not isinstance(spec_version, int | float) or spec_version < _REFLECTION_API_SPEC_VERSION:
+        logger.warning(
+            'WARNING: Genkit CLI version may be outdated. Please update `genkit-cli` to the latest version.'
+        )
+    else:
+        logger.warning(
+            'Genkit CLI is newer than runtime library. Some feature may not be supported. '
+            'Consider upgrading your runtime library version (debug info: expected '
+            f'{_REFLECTION_API_SPEC_VERSION}, got {spec_version}).'
+        )
+
+
 def create_reflection_asgi_app(
     registry: Registry,
     on_startup: LifecycleHook | None = None,
@@ -244,7 +274,16 @@ def create_reflection_asgi_app(
 ) -> Starlette:
     active_actions: dict[str, asyncio.Task[Any]] = {}
 
-    async def health(_: Request) -> JSONResponse:
+    async def health(req: Request) -> Response:
+        requested_id = req.query_params.get('id')
+        if requested_id:
+            server = req.scope.get('server')
+            port = server[1] if server else None
+            runtime_id = f'{os.getpid()}-{port}' if port else str(os.getpid())
+            if requested_id != runtime_id:
+                # Matches JS: a stale runtime file pointing at a reused port
+                # must not look healthy to the CLI.
+                return Response('Invalid runtime ID', status_code=503)
         await registry.initialize_all_plugins()
         return JSONResponse({'status': 'OK'})
 
@@ -314,12 +353,16 @@ def create_reflection_asgi_app(
             body = await req.json()
         except Exception:
             body = None
+        spec_version: object = None
         if isinstance(body, dict):
             raw = body.get('telemetryServerUrl')
             if isinstance(raw, str) and raw:
                 url = raw
+            spec_version = body.get('reflectionApiSpecVersion')
         if url:
             connect_developer_ui_collector(url=url)
+            enable_log_export(url=url)
+        _warn_on_spec_version_mismatch(spec_version)
         return JSONResponse({}, headers={'x-genkit-version': version})
 
     async def cancel(req: Request) -> JSONResponse:
@@ -333,7 +376,13 @@ def create_reflection_asgi_app(
 
     async def run(req: Request) -> Response:
         payload = await req.json()
-        key = payload['key']
+        key = payload.get('key') if isinstance(payload, dict) else None
+        if not isinstance(key, str) or not key:
+            return JSONResponse(
+                {'error': 'key is required'},
+                status_code=400,
+                headers={'x-genkit-version': version},
+            )
         action = await resolve_runnable_key(registry, key)
         if not action:
             return JSONResponse({'error': f'Action not found: {key}'}, status_code=404)
