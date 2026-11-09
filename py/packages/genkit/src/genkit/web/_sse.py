@@ -59,7 +59,9 @@ def _frame_value(obj: object) -> object:
     # Gated on the wrapper types, so a user model with a `raw` field goes out whole.
     if isinstance(obj, (AgentChunk, AgentResponse)) and obj.raw is not None:
         obj = obj.raw
-    return to_jsonable_python(obj, by_alias=True, exclude_none=True)
+    # NaN/Infinity go out as null, the same as tool outputs and model
+    # messages (mode='json'), instead of crashing allow_nan=False with a 500.
+    return to_jsonable_python(obj, by_alias=True, exclude_none=True, inf_nan_mode='null')
 
 
 def _dumps(value: object) -> str:

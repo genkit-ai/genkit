@@ -17,7 +17,6 @@
 """Tests for serving flows over HTTP with genkit.web."""
 
 import datetime
-import logging
 import uuid
 
 import pytest
@@ -183,13 +182,9 @@ async def test_web_encoders_emit_unescaped_utf8() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('bad_float', [float('nan'), float('inf'), float('-inf')])
-async def test_web_encoders_reject_non_finite_floats(
-    bad_float: float,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Out-of-range floats raise ValueError in result_json and frame as a redacted 500 error in to_sse."""
-    with pytest.raises(ValueError, match='Out of range float values are not JSON compliant'):
-        result_json(bad_float)
+async def test_web_encoders_send_non_finite_floats_as_null(bad_float: float) -> None:
+    """Out-of-range floats go out as null, like tool outputs and JS JSON.stringify, not a 500."""
+    assert result_json(bad_float) == '{"result":null}'
 
     ai = Genkit()
 
@@ -197,10 +192,6 @@ async def test_web_encoders_reject_non_finite_floats(
     async def compute_score() -> float:
         return bad_float
 
-    with caplog.at_level(logging.ERROR):
-        lines = [line async for line in to_sse(compute_score.stream())]
+    lines = [line async for line in to_sse(compute_score.stream())]
 
-    assert lines == ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
-    assert [(r.levelname, r.getMessage(), r.exc_info is not None) for r in caplog.records] == [
-        ('ERROR', "served action 'compute_score' stream failed", True),
-    ]
+    assert lines == ['data: {"result":null}\n\n']

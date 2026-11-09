@@ -32,6 +32,7 @@ from typing import (
     ClassVar,
     Generic,
     NamedTuple,
+    NoReturn,
     Union,
     cast,
     get_args,
@@ -283,6 +284,15 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
     def __aiter__(self) -> StoppableStream[ChunkT_co]:
         # `async for chunk in result` reads `.stream`, so `aiter(result) is result.stream`.
         return self._stream
+
+    def __iter__(self) -> NoReturn:
+        # 0.12 returned a (stream, response) tuple; unpacking this object
+        # otherwise fails with an opaque "not iterable".
+        raise TypeError(
+            'StreamResponse is not a (stream, response) tuple. Since 0.13: '
+            '`result = flow.stream(...)`, then `async for chunk in result.stream` '
+            'and `await result.response`.'
+        )
 
     async def aclose(self) -> None:
         """Close the stream and release any underlying resources."""
