@@ -22,13 +22,17 @@ import {
   getCallableJSON,
   getHttpStatus,
 } from '../src/error.js';
+import { StreamNotFoundError } from '../src/streaming.js';
 
 // A query string makes Node load a second, independent instance of the module.
 const errorSpecifier = '../src/error.js?copy=2';
+const streamingSpecifier = '../src/streaming.js?copy=2';
 let other: typeof import('../src/error.js');
+let otherStreaming: typeof import('../src/streaming.js');
 
 before(async () => {
   other = await import(errorSpecifier);
+  otherStreaming = await import(streamingSpecifier);
 });
 
 describe('GenkitError from another copy of the module', () => {
@@ -61,5 +65,24 @@ describe('GenkitError from another copy of the module', () => {
       status: 'PERMISSION_DENIED',
       message: 'nope',
     });
+  });
+});
+
+describe('StreamNotFoundError from another copy of the module', () => {
+  it('is a StreamNotFoundError and GenkitError here', () => {
+    assert.notStrictEqual(
+      otherStreaming.StreamNotFoundError,
+      StreamNotFoundError
+    );
+    const err = new otherStreaming.StreamNotFoundError('gone');
+    assert.ok(err instanceof StreamNotFoundError);
+    assert.ok(err instanceof GenkitError);
+    assert.ok(err instanceof other.GenkitError);
+  });
+
+  it('is recognised the same way in the other direction', () => {
+    const err = new StreamNotFoundError('gone');
+    assert.ok(err instanceof otherStreaming.StreamNotFoundError);
+    assert.ok(err instanceof other.GenkitError);
   });
 });
