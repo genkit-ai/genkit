@@ -382,7 +382,7 @@ function compatOverride(ctx: {
 
 const PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean']);
 
-/** Formats validated by both ajv-formats and @cfworker/json-schema. */
+/** Formats validated by @cfworker/json-schema. */
 const VALIDATED_FORMATS = new Set([
   'date-time',
   'date',
@@ -468,6 +468,20 @@ const COMBINATOR_KEYWORDS = new Set(['anyOf', 'oneOf', 'not']);
 /**
  * Reduces the validator's full error tree to one error per actual problem.
  */
+/**
+ * The validator reports `instanceLocation` as a URI fragment: JSON pointer
+ * escapes plus percent-encoding (`my key` becomes `my%20key`).
+ */
+function decodePointerSegment(segment: string): string {
+  let decoded = segment;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    // Not percent-encoded after all; use as is.
+  }
+  return decoded.replace(/~1/g, '/').replace(/~0/g, '~');
+}
+
 function toValidationErrorDetails(
   errors: OutputUnit[]
 ): ValidationErrorDetail[] {
@@ -483,6 +497,18 @@ function toValidationErrorDetails(
   kept = kept.filter(
     (e) => !WRAPPER_KEYWORDS.has(e.keyword) || !kept.some((o) => under(o, e))
   );
+  // A failed `then`/`else` is reported on the `if` keyword ("Instance does not
+  // match "then" schema"), while its specific errors sit under the sibling
+  // `then`/`else` location.
+  kept = kept.filter((e) => {
+    if (e.keyword !== 'if') return true;
+    const parent = e.keywordLocation.slice(0, -'/if'.length);
+    return !kept.some(
+      (o) =>
+        o.keywordLocation.startsWith(`${parent}/then/`) ||
+        o.keywordLocation.startsWith(`${parent}/else/`)
+    );
+  });
   const seen = new Set<string>();
   const details: ValidationErrorDetail[] = [];
   for (const e of kept) {
@@ -490,7 +516,7 @@ function toValidationErrorDetails(
       .replace(/^#\/?/, '')
       .split('/')
       .filter((p) => p !== '')
-      .map((p) => p.replace(/~1/g, '/').replace(/~0/g, '~'))
+      .map((p) => decodePointerSegment(p))
       .join('.');
     const detail = { path: path || '(root)', message: e.error };
     const key = `${detail.path}\0${detail.message}`;
