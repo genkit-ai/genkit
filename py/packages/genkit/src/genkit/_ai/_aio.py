@@ -1897,7 +1897,7 @@ class Genkit:
             # 3. Await the final response
             final = await result.response
             print(final.finish_reason)
-            # => FinishReason.STOP
+            # => stop
             ```
         """
         initial_msgs: list[Message] = []
