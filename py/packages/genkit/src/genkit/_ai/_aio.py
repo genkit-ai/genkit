@@ -1033,7 +1033,7 @@ class Genkit:
         name: str | None = None,
         *,
         variant: str | None = None,
-        model: str | ModelRef[BaseModel] | Action | None = None,
+        model: str | ModelRef[Any] | Action | None = None,
         config: Mapping[str, Any] | BaseModel | ModelConfigDict | None = None,
         description: str | None = None,
         system: str | list[Part] | None = None,
@@ -1463,7 +1463,7 @@ class Genkit:
     async def _embedder_and_options(
         self,
         *,
-        embedder: str | EmbedderRef[BaseModel] | None,
+        embedder: str | EmbedderRef[Any] | None,
         config: object,
     ) -> tuple[Action[EmbedRequest, EmbedResponse, Never], dict[str, Any]]:
         """Resolve the embedder, check the call config, and layer the options.
@@ -1608,7 +1608,7 @@ class Genkit:
     async def generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | Action | None = None,
+        model: str | ModelRef[Any] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1805,7 +1805,7 @@ class Genkit:
     def generate_stream(
         self,
         *,
-        model: str | ModelRef[BaseModel] | Action | None = None,
+        model: str | ModelRef[Any] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
@@ -1890,7 +1890,7 @@ class Genkit:
     async def _generate(
         self,
         *,
-        model: str | ModelRef[BaseModel] | Action | None = None,
+        model: str | ModelRef[Any] | Action | None = None,
         prompt: str | list[Part] | None = None,
         system: str | list[Part] | None = None,
         messages: list[Message] | None = None,
