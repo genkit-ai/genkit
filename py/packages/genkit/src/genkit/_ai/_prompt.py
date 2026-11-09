@@ -94,6 +94,7 @@ from genkit._core._typing import (
 )
 
 ModelStreamingCallback = StreamingCallback
+"""Callback for ``on_chunk=``: called with each ``ModelResponseChunk`` as it streams."""
 
 logger = get_logger(__name__)
 

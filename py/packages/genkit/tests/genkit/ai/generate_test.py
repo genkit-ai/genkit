@@ -859,6 +859,7 @@ def test_middleware_and_plugin_api_surface_and_metadata_symmetry() -> None:
         'GenerateHookParams',
         'Middleware',
         'MiddlewareContext',
+        'MiddlewareRef',
         'ModelHookParams',
         'ToolHookParams',
     ]

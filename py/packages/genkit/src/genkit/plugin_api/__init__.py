@@ -17,9 +17,9 @@
 """Framework primitives for plugin authors."""
 
 # Base class and framework primitives
-from genkit._core._action import Action, ActionKind
+from genkit._core._action import Action, ActionKind, ActionResponse, ActionRunContext
 from genkit._core._background import BackgroundAction
-from genkit._core._base import GenkitConfig
+from genkit._core._base import GenkitConfig, GenkitModel
 from genkit._core._compat import StrEnum
 from genkit._core._constants import GENKIT_USER_AGENT
 from genkit._core._dap import DynamicActionProvider
@@ -27,13 +27,18 @@ from genkit._core._environment import is_dev_environment
 from genkit._core._error import StatusName, provider_error
 from genkit._core._loop_cache import loop_local_client
 from genkit._core._plugin import Plugin
-from genkit._core._schema import to_json_schema
+from genkit._core._schema import custom_options_schema, to_json_schema
+from genkit._core._typing import ActionMetadata
 
 __all__ = [
     # Base class and framework primitives
     'Plugin',
     'GenkitConfig',
+    'GenkitModel',
     'Action',
+    'ActionMetadata',
+    'ActionResponse',
+    'ActionRunContext',
     'BackgroundAction',
     'ActionKind',
     'DynamicActionProvider',
@@ -50,4 +55,5 @@ __all__ = [
     'is_dev_environment',
     # Schema utilities
     'to_json_schema',
+    'custom_options_schema',
 ]

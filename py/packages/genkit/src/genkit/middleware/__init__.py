@@ -70,10 +70,12 @@ from genkit._core._middleware import (
     ModelHookParams,
     ToolHookParams,
 )
+from genkit._core._typing import MiddlewareRef
 
 __all__ = [
     'GenerateHookParams',
     'Middleware',
+    'MiddlewareRef',
     'MiddlewareContext',
     'ModelHookParams',
     'ToolHookParams',

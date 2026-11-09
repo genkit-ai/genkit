@@ -49,6 +49,6 @@ See Also:
 """
 
 from ._openai_plugin import OpenAI
-from ._typing import OpenAIConfig
+from ._typing import OpenAIConfig, PromptCacheRetention, ReasoningEffort, ServiceTier, Verbosity
 
-__all__ = ['OpenAI', 'OpenAIConfig']
+__all__ = ['OpenAI', 'OpenAIConfig', 'PromptCacheRetention', 'ReasoningEffort', 'ServiceTier', 'Verbosity']

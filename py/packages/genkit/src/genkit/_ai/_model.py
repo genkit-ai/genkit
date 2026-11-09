@@ -70,6 +70,11 @@ from genkit._core._typing import GenerationCommonConfig, ModelInfo
 # Type alias for model functions (must be async)
 # Use ctx.send_chunk() for streaming
 ModelFn = Callable[[ModelRequest, ModelContext], Awaitable[ModelResponse[Any]]]
+"""Signature of the function passed to ``define_model``.
+
+An async function taking the ``ModelRequest`` and a ``ModelContext``; stream
+with ``ctx.send_chunk(...)`` and return the final ``ModelResponse``.
+"""
 
 logger = get_logger(__name__)
 

@@ -20,6 +20,7 @@ Annotations on public classes resolve with ``typing.get_type_hints`` (FastAPI
 and Pydantic introspect them), and the generic session types parametrize.
 """
 
+import importlib
 import typing
 
 import pytest
@@ -55,3 +56,37 @@ def test_generation_usage_from_messages_counts_characters() -> None:
 
     assert usage.input_characters == len('Table for two')
     assert usage.output_characters == len('Booked')
+
+
+@pytest.mark.parametrize(
+    ('module', 'names'),
+    [
+        (
+            'genkit',
+            [
+                'ActionResponse',
+                'ModelConfig',
+                'ModelConfigDict',
+                'ModelStreamingCallback',
+                'Resource',
+                'StatusName',
+                'StoppableStream',
+                'ToolRequest',
+                'ToolResponse',
+            ],
+        ),
+        ('genkit.middleware', ['MiddlewareRef']),
+        ('genkit.model', ['ModelFn']),
+        (
+            'genkit.plugin_api',
+            ['ActionMetadata', 'ActionResponse', 'ActionRunContext', 'GenkitModel', 'custom_options_schema'],
+        ),
+        ('genkit.exp.agent', ['BidiConnection', 'DetachedTask', 'AgentInitError', 'select_leaf']),
+    ],
+)
+def test_signature_types_are_exported(module: str, names: list[str]) -> None:
+    """Types that appear in public signatures import from a public module."""
+    mod = importlib.import_module(module)
+    for name in names:
+        assert name in mod.__all__, f'{module}.{name}'
+        assert hasattr(mod, name)

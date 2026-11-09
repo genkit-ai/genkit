@@ -36,16 +36,20 @@ Example:
 
 from genkit._ai._aio import Genkit
 from genkit._ai._prompt import (
+    ModelStreamingCallback,
     ModelStreamResponse,
     Prompt,
 )
-from genkit._core._action import FlowContext, StreamResponse
-from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError
+from genkit._core._action import ActionResponse, FlowContext, StreamResponse
+from genkit._core._channel import StoppableStream
+from genkit._core._error import ErrorReason, Failure, GenkitError, Interrupt, PublicError, StatusName
 from genkit._core._flow import Flow
 from genkit._core._logger import GenkitLogger, get_logger
 from genkit._core._model import (
     Document,
     Message,
+    ModelConfig,
+    ModelConfigDict,
     ModelResponse,
     ModelResponseChunk,
     MultipartToolResponse,
@@ -54,7 +58,7 @@ from genkit._core._model import (
 )
 from genkit._core._operation import Operation
 from genkit._core._tool import Tool, ToolContext
-from genkit._core._typing import Embedding, FinishReason, Media, Role
+from genkit._core._typing import Embedding, FinishReason, Media, Resource, Role, ToolRequest, ToolResponse
 
 __all__ = [
     'Genkit',
@@ -63,14 +67,21 @@ __all__ = [
     'Role',
     'Part',
     'Media',
+    'Resource',
     'Document',
     'ToolChoice',
+    # Model config
+    'ModelConfig',
+    'ModelConfigDict',
     # What came back
     'ModelResponse',
     'ModelResponseChunk',
     'Failure',
     'ModelStreamResponse',
+    'ModelStreamingCallback',
     'StreamResponse',
+    'StoppableStream',
+    'ActionResponse',
     'FinishReason',
     # Embed, evaluate, and background jobs
     'Embedding',
@@ -78,6 +89,8 @@ __all__ = [
     # Tools and HITL
     'Tool',
     'ToolContext',
+    'ToolRequest',
+    'ToolResponse',
     'Interrupt',
     'MultipartToolResponse',
     # Flows, prompts, errors
@@ -87,6 +100,7 @@ __all__ = [
     'GenkitError',
     'PublicError',
     'ErrorReason',
+    'StatusName',
     # Log lines that reach the Dev UI trace panel
     'GenkitLogger',
     'get_logger',

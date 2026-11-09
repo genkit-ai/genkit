@@ -19,6 +19,7 @@
 from genkit._ai._background_model import BackgroundModel
 from genkit._ai._model import (
     Model,
+    ModelFn,
 )
 from genkit._core._action import ModelContext
 from genkit._core._model import (
@@ -42,6 +43,7 @@ from genkit._core._typing import (
 __all__ = [
     # Models, request and context types
     'Model',
+    'ModelFn',
     'BackgroundModel',
     'GenerateActionOptions',
     'ModelContext',
