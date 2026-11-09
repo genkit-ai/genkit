@@ -191,11 +191,34 @@ def _usage_from_metadata(usage_metadata: Any) -> GenerationUsage:  # noqa: ANN40
 
 def _custom_from_feedback(
     feedback: genai_types.GenerateContentResponsePromptFeedback | None,
+    candidate_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """The response's ``custom`` payload: the prompt feedback the service sent, if any."""
-    if feedback is None:
-        return None
-    return {'promptFeedback': feedback.model_dump(mode='json', by_alias=True, exclude_none=True)}
+    """The response's ``custom`` payload: prompt feedback and candidate metadata the service sent, if any."""
+    custom: dict[str, Any] = dict(candidate_metadata or {})
+    if feedback is not None:
+        custom['promptFeedback'] = feedback.model_dump(mode='json', by_alias=True, exclude_none=True)
+    return custom or None
+
+
+# Candidate fields copied onto ModelResponse.custom under their wire (camelCase) names.
+_CANDIDATE_CUSTOM_FIELDS = ('grounding_metadata', 'url_context_metadata', 'citation_metadata', 'logprobs_result')
+
+
+def _candidate_metadata(candidate: genai_types.Candidate | None) -> dict[str, Any]:
+    """Grounding, URL context, citation and logprobs metadata on *candidate*, keyed by wire name."""
+    if candidate is None:
+        return {}
+    out: dict[str, Any] = {}
+    for field in _CANDIDATE_CUSTOM_FIELDS:
+        value = getattr(candidate, field, None)
+        if value is None:
+            continue
+        dumped = value.model_dump(mode='json', by_alias=True, exclude_none=True)
+        if dumped:
+            out[to_camel(field)] = dumped
+    if candidate.avg_logprobs is not None:
+        out['avgLogprobs'] = candidate.avg_logprobs
+    return out
 
 
 def _no_candidates_response(
@@ -2134,7 +2157,7 @@ class GeminiModel:
             ),
             finish_reason=finish_reason,
             usage=_usage_from_metadata(response.usage_metadata),
-            custom=_custom_from_feedback(response.prompt_feedback),
+            custom=_custom_from_feedback(response.prompt_feedback, _candidate_metadata(response.candidates[0])),
         )
 
     async def _streaming_generate(
@@ -2164,6 +2187,8 @@ class GeminiModel:
         finish_reason = FinishReason.UNKNOWN
         usage_metadata: Any = None
         prompt_feedback: genai_types.GenerateContentResponsePromptFeedback | None = None
+        # Grounding and citation metadata ride on later chunks; keep the latest of each.
+        candidate_metadata: dict[str, Any] = {}
         saw_chunk = False
         saw_candidates = False
         try:
@@ -2194,6 +2219,7 @@ class GeminiModel:
                     fr = response_chunk.candidates[0].finish_reason
                     if fr:
                         finish_reason = _to_finish_reason(fr)
+                    candidate_metadata.update(_candidate_metadata(response_chunk.candidates[0]))
                 if response_chunk.usage_metadata is not None:
                     usage_metadata = response_chunk.usage_metadata
                 if response_chunk.prompt_feedback is not None:
@@ -2218,7 +2244,7 @@ class GeminiModel:
             ),
             finish_reason=finish_reason,
             usage=_usage_from_metadata(usage_metadata),
-            custom=_custom_from_feedback(prompt_feedback),
+            custom=_custom_from_feedback(prompt_feedback, candidate_metadata),
         )
 
     @cached_property
