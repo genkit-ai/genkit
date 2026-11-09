@@ -204,7 +204,7 @@ If you're a coding agent, replace each enum member with its string value. The va
 
 Every removed name, and what to use instead:
 
-- **Model enums** (`KnownGemini*`, `KnownGpt`, `KnownClaude`, `*Version`, `GeminiEmbeddingModels`, `VertexEmbeddingModels`): pass the model name as a string, such as `'openai/gpt-4o'`.
+- **Model enums** (`KnownGeminiModels`, `KnownGemini*`, `KnownGpt`, `KnownClaude`, `*Version`, `GeminiEmbeddingModels`, `VertexEmbeddingModels`): pass a typed ref such as `GoogleAI.gemini('gemini-flash-latest')` or `OpenAI.gpt('gpt-4o')`, or the model name as a string, such as `'openai/gpt-4o'`.
 - **Name helpers** (`bedrock_name`, `anthropic_name`, `ollama_name`, `openai_model`, `genkit_eval_name`, `package_name`): use the full `'plugin/model'` string.
 - **`Candidate`**: use the response's `message`.
 - **`Document.data`, `Document.data_type`, `Document.from_data()`**: build a `Document` with its constructor.
@@ -778,7 +778,10 @@ model = openai_model('gpt-4o')
 **New:**
 
 ```python
-model = 'openai/gpt-4o'
+from genkit_openai import OpenAI
+
+model = OpenAI.gpt('gpt-4o')  # typed ref; autocompletes and binds OpenAIConfig
+model = 'openai/gpt-4o'       # plain string also works
 ```
 
 ## Ollama
@@ -907,8 +910,10 @@ from genkit.middleware import Middleware, MiddlewareContext
 @ai.middleware
 class PiiRedact(Middleware[Cfg]):
     name = 'pii_redact'
-    async def model(self, params, ctx: MiddlewareContext, next_fn): ...
+    async def wrap_model(self, params, ctx: MiddlewareContext, next_fn): ...
 ```
+
+Hooks are now `wrap_generate`, `wrap_model`, and `wrap_tool`. A method still named `model` is never called; the class inherits the pass-through `wrap_model` and the request goes to the provider unchanged, with no error.
 
 `tools()` returns `Tool` handles. `GenerateMiddleware`, `MiddlewareRef`, `MiddlewarePlugin` and `new_middleware` are removed.
 

@@ -57,7 +57,7 @@ Example:
     ```
 
 Requirements:
-    - Django 4.1+ (async views require ASGI)
+    - Django 5.0+ (async views require ASGI)
     - An ASGI server such as ``uvicorn`` or ``daphne``:
 
       ```bash
