@@ -371,24 +371,18 @@ function getModelMiddleware(options: {
   const middleware: ModelMiddlewareArgument[] = options.use || [];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
   const constratedSimulator = simulateConstrainedGeneration();
-  middleware.push(
-    (
-      req: z.infer<typeof GenerateRequestSchema>,
-      next: (
-        req?: z.infer<typeof GenerateRequestSchema>
-      ) => Promise<z.infer<typeof GenerateResponseSchema>>
-    ) => {
-      if (
-        !options?.supports?.constrained ||
-        options?.supports?.constrained === 'none' ||
-        (options?.supports?.constrained === 'no-tools' &&
-          (req.tools?.length ?? 0) > 0)
-      ) {
-        return constratedSimulator(req, next);
-      }
-      return next(req);
+  const constrained: ModelMiddleware = (req, next) => {
+    if (
+      !options?.supports?.constrained ||
+      options?.supports?.constrained === 'none' ||
+      (options?.supports?.constrained === 'no-tools' &&
+        (req.tools?.length ?? 0) > 0)
+    ) {
+      return constratedSimulator(req, next);
     }
-  );
+    return next(req);
+  };
+  middleware.push(constrained);
 
   return middleware;
 }

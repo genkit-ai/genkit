@@ -27,6 +27,7 @@ import { ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import { openAICompatible, PluginOptions } from '../index.js';
 import { defineCompatOpenAIModel } from '../model.js';
+import { lookup } from '../utils.js';
 import {
   DeepSeekChatCompletionConfigSchema,
   deepSeekModelRef,
@@ -62,7 +63,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
       .filter((model) => model.object === 'model')
       .map((model: OpenAI.Model) => {
         const modelRef =
-          (SUPPORTED_DEEPSEEK_MODELS as Record<string, any>)[model.id] ??
+          lookup(SUPPORTED_DEEPSEEK_MODELS, model.id) ??
           deepSeekModelRef({
             name: model.id,
           });

@@ -6,6 +6,6 @@
     "outDir": "./out-tsc/app",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "../../handlebars-cjs.d.ts"],
+  "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.spec.ts"]
 }

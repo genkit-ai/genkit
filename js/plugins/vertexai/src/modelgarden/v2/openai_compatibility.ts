@@ -233,7 +233,9 @@ export function toOpenAiMessages(
   return openAiMsgs;
 }
 
-const finishReasonMap: Record<string, CandidateData['finishReason']> = {
+const finishReasonMap: Partial<
+  Record<ChatCompletion.Choice['finish_reason'], CandidateData['finishReason']>
+> = {
   length: 'length',
   stop: 'stop',
   tool_calls: 'stop',

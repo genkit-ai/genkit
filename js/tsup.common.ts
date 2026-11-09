@@ -129,7 +129,7 @@ export const defaultOptions = {
   clean: true,
   shims: true,
   outDir: 'lib',
-  entry: ['src/**/*.ts', '!src/**/*.d.ts'],
+  entry: ['src/**/*.ts'],
   bundle: false,
   treeshake: false,
   esbuildPlugins: [rewriteRelativeImportsForEsm],

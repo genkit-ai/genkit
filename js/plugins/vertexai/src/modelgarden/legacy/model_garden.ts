@@ -18,7 +18,7 @@ import { z, type Genkit, type ModelReference } from 'genkit';
 import { modelRef, type GenerateRequest, type ModelAction } from 'genkit/model';
 import type { GoogleAuth } from 'google-auth-library';
 import OpenAI from 'openai';
-import { getGenkitClientHeader } from '../../common/index.js';
+import { getGenkitClientHeader, lookup } from '../../common/index.js';
 import {
   OpenAIConfigSchema,
   openaiCompatibleModel,
@@ -104,7 +104,7 @@ export function modelGardenOpenaiCompatibleModel(
   googleAuth: GoogleAuth,
   baseUrlTemplate: string | undefined
 ): ModelAction<typeof ModelGardenModelConfigSchema> {
-  const model = (SUPPORTED_OPENAI_FORMAT_MODELS as Record<string, any>)[name];
+  const model = lookup(SUPPORTED_OPENAI_FORMAT_MODELS, name);
   if (!model) throw new Error(`Unsupported model: ${name}`);
   if (!baseUrlTemplate) {
     baseUrlTemplate =

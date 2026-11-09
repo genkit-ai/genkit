@@ -338,7 +338,12 @@ export function toOpenAIMessages(
   return apiMessages;
 }
 
-const finishReasonMap: Record<string, GenerateResponseData['finishReason']> = {
+const finishReasonMap: Partial<
+  Record<
+    ChatCompletion.Choice['finish_reason'],
+    GenerateResponseData['finishReason']
+  >
+> = {
   length: 'length',
   stop: 'stop',
   tool_calls: 'stop',

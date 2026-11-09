@@ -59,7 +59,7 @@ import {
 } from 'genkit/model/middleware';
 import { runInNewSpan } from 'genkit/tracing';
 import { GoogleAuth } from 'google-auth-library';
-import { getGenkitClientHeader } from './common/index.js';
+import { getGenkitClientHeader, lookup } from './common/index.js';
 import type { PluginOptions } from './common/types.js';
 import { handleCacheIfNeeded } from './context-caching/index.js';
 import { extractCacheConfig } from './context-caching/utils.js';
@@ -332,10 +332,11 @@ function nearestGeminiModelRef(
     version,
     Object.keys(SUPPORTED_GEMINI_MODELS)
   );
-  if (matchingKey) {
-    return (SUPPORTED_GEMINI_MODELS as Record<string, any>)[
-      matchingKey
-    ].withConfig({
+  const matched = matchingKey
+    ? lookup(SUPPORTED_GEMINI_MODELS, matchingKey)
+    : undefined;
+  if (matched) {
+    return matched.withConfig({
       ...options,
       version,
     });
@@ -1102,9 +1103,7 @@ export function defineGeminiKnownModel(
 ): ModelAction {
   const modelName = `vertexai/${name}`;
 
-  const model: ModelReference<z.ZodTypeAny> = (
-    SUPPORTED_GEMINI_MODELS as Record<string, any>
-  )[name];
+  const model = lookup(SUPPORTED_GEMINI_MODELS, name);
   if (!model) throw new Error(`Unsupported model: ${name}`);
 
   return defineGeminiModel({
@@ -1142,7 +1141,7 @@ export function defineGeminiModel({
   debugTraces?: boolean;
 }): ModelAction {
   const middlewares: ModelMiddleware[] = [];
-  if ((SUPPORTED_V1_MODELS as Record<string, any>)[version]) {
+  if (lookup(SUPPORTED_V1_MODELS, version)) {
     middlewares.push(simulateSystemPrompt());
   }
   if (modelInfo?.supports?.media) {
@@ -1183,7 +1182,7 @@ export function defineGeminiModel({
 
       // Handle system instructions separately
       let systemInstruction: Content | undefined = undefined;
-      if (!(SUPPORTED_V1_MODELS as Record<string, any>)[version]) {
+      if (!lookup(SUPPORTED_V1_MODELS, version)) {
         const systemMessage = messages.find((m) => m.role === 'system');
         if (systemMessage) {
           messages.splice(messages.indexOf(systemMessage), 1);

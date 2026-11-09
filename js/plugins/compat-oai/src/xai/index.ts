@@ -31,6 +31,7 @@ import {
 } from '../image.js';
 import { openAICompatible, PluginOptions } from '../index.js';
 import { defineCompatOpenAIModel } from '../model.js';
+import { lookup } from '../utils.js';
 import { SUPPORTED_IMAGE_MODELS, xaiImageModelRef } from './grok-image.js';
 import {
   grokRequestBuilder,
@@ -66,7 +67,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
       .map((model: OpenAI.Model) => {
         if (model.id.includes('image')) {
           const modelRef =
-            (SUPPORTED_IMAGE_MODELS as Record<string, any>)[model.id] ??
+            lookup(SUPPORTED_IMAGE_MODELS, model.id) ??
             xaiImageModelRef({ name: model.id });
           return modelActionMetadata({
             name: modelRef.name,
@@ -75,7 +76,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           });
         } else {
           const modelRef =
-            (SUPPORTED_LANGUAGE_MODELS as Record<string, any>)[model.id] ??
+            lookup(SUPPORTED_LANGUAGE_MODELS, model.id) ??
             xaiModelRef({ name: model.id });
           return modelActionMetadata({
             name: modelRef.name,

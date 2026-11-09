@@ -19,6 +19,12 @@
 // declarations at types/index.d.ts. Keeping this shim at the js/ root lets
 // js/tsconfig.json keep skipLibCheck off so tsc validates Genkit's emitted
 // .d.ts files across workspace packages.
+// Note: 'handlebars' cannot be re-exported directly here because pnpm does not
+// hoist transitive dependencies to js/node_modules/.
+// TODO(https://github.com/google/dotprompt): Fix dotprompt's emitted index.d.ts
+// so it imports 'handlebars' instead of 'handlebars/dist/cjs/handlebars.js'
+// (which also hits downstream consumers using strict + skipLibCheck: false),
+// then remove this shim.
 declare module 'handlebars/dist/cjs/handlebars.js' {
   namespace Handlebars {
     export interface TemplateDelegate<T = any> {
