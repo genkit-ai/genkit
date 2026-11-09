@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import copy
 import inspect
+import json
 import secrets
 import time
 import weakref
@@ -674,10 +675,20 @@ def last_user_message(*, messages: list[Message]) -> Message | None:
 
 
 def context_item_template(d: Document, index: int) -> str:
-    """Render a document as a citation line for context injection."""
+    """Render a document as a citation line for context injection.
+
+    Metadata other than the ``ref``/``id`` used as the citation key goes out
+    as JSON on the line, so the model can cite sources and pages that exist
+    instead of inventing them. Media parts are attached separately by
+    ``augment_with_context``.
+    """
     out = '- '
     ref = (d.metadata and (d.metadata.get('ref') or d.metadata.get('id'))) or index
-    out += f'[{ref}]: '
+    out += f'[{ref}]'
+    extra = {k: v for k, v in (d.metadata or {}).items() if k not in ('ref', 'id')}
+    if extra:
+        out += ' ' + json.dumps(extra, default=str, ensure_ascii=False, separators=(', ', ': '))
+    out += ': '
     out += text_from_content(d.content) + '\n'
     return out
 
@@ -713,6 +724,10 @@ def augment_with_context(
     if context_idx >= 0:
         meta = user_message.content[context_idx].metadata or {}
         if not meta.get('pending'):
+            logger.warning(
+                'docs= not injected: the last user message already has a context part',
+                docs=len(request.docs),
+            )
             return request
 
     # Render all documents as a single formatted text string
@@ -726,6 +741,15 @@ def augment_with_context(
 
     text_content = (preface or '') + ''.join(rendered_docs) + '\n'
     text_part = Part.from_text(text_content, metadata={'purpose': 'context'})
+    # Images, PDFs, and audio in a Document reach the model as media parts
+    # right after the citation text, instead of being dropped by the text render.
+    media_parts = [
+        Part(media=part.media, metadata={'purpose': 'context'})
+        for doc_data in request.docs
+        for part in doc_data.content
+        if part.media is not None
+    ]
+    context_parts = [text_part, *media_parts]
 
     # Safe-mutation via deep copy
     new_req = copy.deepcopy(request)
@@ -733,9 +757,9 @@ def augment_with_context(
     assert new_user is not None
 
     if context_idx >= 0:
-        new_user.content[context_idx] = text_part
+        new_user.content[context_idx : context_idx + 1] = context_parts
     else:
-        new_user.content.append(text_part)
+        new_user.content.extend(context_parts)
 
     return new_req
 

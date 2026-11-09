@@ -7,8 +7,10 @@
 
 import pytest
 
-from genkit import Genkit, Interrupt, Message, ModelResponse, Part, ToolContext
+from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, ToolContext
 from genkit._ai._agents._client import agent_interrupts_from_message
+from genkit._ai._generate import augment_with_context
+from genkit._core._model import ModelRequest
 from genkit._core._typing import FinishReason, GenerationUsage, Role, ToolRequest
 from genkit.testing import ScriptedModel, define_scripted_model
 
@@ -269,3 +271,40 @@ async def test_omitted_system_keeps_the_saved_persona() -> None:
     assert pm.last_request is not None
     assert pm.last_request.messages[0].role == Role.SYSTEM
     assert pm.last_request.messages[0].text == 'You are the host.'
+
+
+def test_docs_context_keeps_metadata_and_media() -> None:
+    """Citation metadata goes out with the doc, and media parts are not dropped."""
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('Which dishes are vegan?')])],
+        docs=[
+            Document(
+                content=[
+                    Part.from_text('Lentil soup'),
+                    Part.from_media('gs://menu/soup.png', content_type='image/png'),
+                ],
+                metadata={'id': 'menu-7', 'source': 'menu.pdf', 'page': 3},
+            )
+        ],
+    )
+
+    augmented = augment_with_context(request)
+
+    user = augmented.messages[-1]
+    context = [p for p in user.content if (p.metadata or {}).get('purpose') == 'context']
+    assert context[0].text is not None
+    assert '- [menu-7] {"source": "menu.pdf", "page": 3}: Lentil soup' in context[0].text
+    assert context[1].media is not None
+    assert context[1].media.url == 'gs://menu/soup.png'
+
+
+def test_docs_context_without_extra_metadata_is_unchanged() -> None:
+    request = ModelRequest(
+        messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+        docs=[Document.from_text('Lentil soup', metadata={'ref': 'r1'})],
+    )
+
+    augmented = augment_with_context(request)
+
+    assert augmented.messages[-1].content[-1].text is not None
+    assert '- [r1]: Lentil soup\n' in augmented.messages[-1].content[-1].text
