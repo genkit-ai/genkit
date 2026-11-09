@@ -2108,17 +2108,39 @@ class Genkit:
 
     async def run(
         self,
-        *,
         name: str,
         fn: Callable[[], Awaitable[T]],
+        *,
         metadata: dict[str, Any] | None = None,
     ) -> T:
-        """Run a function as a discrete traced step within a flow."""
-        if not inspect.iscoroutinefunction(fn):
-            raise TypeError('fn must be a coroutine function')
+        """Run a function as a discrete traced step within a flow.
+
+        ``fn`` takes no arguments and returns an awaitable, so ``async def``
+        functions, ``lambda: fetch(i)``, and callables with an ``async def
+        __call__`` all work. Same shape as JS ``ai.run('step', fn)``.
+
+        Example:
+            ```python
+            # 1. Each fan-out step gets its own span in the trace
+            menus = await asyncio.gather(*[ai.run(f'fetch-{i}', lambda i=i: fetch_menu(i)) for i in range(3)])
+
+            # 2. Keyword form still works
+            total = await ai.run(name='sum', fn=lambda: sum_prices(menus))
+            ```
+        """
+        if not callable(fn):
+            raise TypeError(f'fn must be callable, got {type(fn).__name__}')
 
         async def body(_span: object) -> T:
-            return await fn()
+            result = fn()
+            if not inspect.isawaitable(result):
+                # Steps stay async like tools and flows; blocking work goes
+                # through asyncio.to_thread.
+                raise TypeError(
+                    'fn must return an awaitable: pass an async def, a lambda returning a coroutine, '
+                    'or wrap blocking work in asyncio.to_thread'
+                )
+            return await result
 
         attributes = {metadata_key(k): str(v) for k, v in (metadata or {}).items()}
         return await run_in_new_span(name, body, action_type='flowStep', attributes=attributes)

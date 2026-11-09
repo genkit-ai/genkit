@@ -158,8 +158,18 @@ async def test_genkit_run() -> None:
     def sync_fn() -> str:
         return 'hello'
 
-    with pytest.raises(TypeError, match='fn must be a coroutine function'):
+    with pytest.raises(TypeError, match='fn must return an awaitable'):
         await ai.run(name='test3', fn=sync_fn)  # type: ignore[arg-type]
+
+    # JS/Go shape: positional name and fn, lambdas, async-callable instances.
+    assert await ai.run('test4', async_fn) == 'world'
+    assert await ai.run('test5', lambda: async_fn()) == 'world'
+
+    class Fetch:
+        async def __call__(self) -> str:
+            return 'menu'
+
+    assert await ai.run('test6', Fetch()) == 'menu'
 
 
 @pytest.mark.asyncio
