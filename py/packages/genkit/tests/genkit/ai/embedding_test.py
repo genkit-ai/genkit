@@ -363,6 +363,39 @@ async def test_embed_many(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry
 
 
 @pytest.mark.asyncio
+async def test_embed_many_accepts_a_tuple_of_documents(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry]) -> None:
+    """content takes any sequence; a tuple of Documents reaches the embedder in order."""
+    genkit_instance, registry = mock_genkit_instance
+
+    async def fake_embedder_fn(request: EmbedRequest) -> EmbedResponse:
+        return EmbedResponse(embeddings=[Embedding(embedding=[1.0]), Embedding(embedding=[2.0])])
+
+    registry.register_action(
+        name='menu-embedder',
+        kind='embedder',
+        fn=fake_embedder_fn,
+        metadata=Embedder('menu-embedder', fake_embedder_fn).metadata,
+        description='Embeds menu items',
+    )
+
+    menu = (Document.from_text('Smoked salmon'), Document.from_text('Tartine'))
+    response = await genkit_instance.embed_many(embedder='menu-embedder', content=menu)
+
+    assert [e.embedding for e in response] == [[1.0], [2.0]]
+    embed_action = await registry.resolve_action('embedder', 'menu-embedder')
+    assert embed_action.run.call_args[0][0].input == list(menu)
+
+
+@pytest.mark.asyncio
+async def test_embed_many_rejects_a_bare_string(mock_genkit_instance: tuple[Genkit, MockGenkitRegistry]) -> None:
+    """A str is a Sequence[str] to the checker; embed_many raises instead of embedding each character."""
+    genkit_instance, _ = mock_genkit_instance
+
+    with pytest.raises(TypeError, match='use embed'):
+        await genkit_instance.embed_many(embedder='menu-embedder', content='Smoked salmon')
+
+
+@pytest.mark.asyncio
 async def test_embed_many_strings_with_metadata_attach_it_to_every_document(
     mock_genkit_instance: tuple[Genkit, MockGenkitRegistry],
 ) -> None:

@@ -2018,14 +2018,19 @@ class Genkit:
         self,
         *,
         embedder: str | EmbedderRef[EmbedderRefConfigT],
-        content: list[str] | list[Document],
+        content: Sequence[str | Document],
         metadata: dict[str, object] | None = None,
         config: EmbedderRefConfigT | Mapping[str, Any] | None = None,
     ) -> list[Embedding]:
         """Generate vector embeddings for multiple documents in a single batch call.
 
+        ``content`` is any sequence (list, tuple, ...) of strings or
+        ``Document``s; one embedding comes back per item, in order. A bare
+        ``str`` raises ``TypeError``; use ``embed`` for one item.
         ``config`` and ``metadata`` work the same as on ``embed``.
         """
+        if isinstance(content, str):
+            raise TypeError('embed_many() takes a sequence of strings or Documents, not a str; use embed() for one.')
         if metadata is not None and any(isinstance(item, Document) for item in content):
             raise TypeError(_DOCUMENT_METADATA_CONFLICT)
 
