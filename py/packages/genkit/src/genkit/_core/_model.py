@@ -1188,12 +1188,21 @@ def count_message_usage(messages: Sequence[Message], response: Message) -> dict[
     }
 
 
-class SessionState(GenkitModel):
-    """Session state whose conversation uses Message and Artifact."""
+# Custom session state type. Defaults to Any so a bare SessionState /
+# SessionSnapshot is the untyped wire shape.
+SessionStateT = TypeVar('SessionStateT', default=Any)
+
+
+class SessionState(GenkitModel, Generic[SessionStateT]):
+    """Session state whose conversation uses Message and Artifact.
+
+    ``SessionState[CartState]`` validates ``custom`` as ``CartState``; a bare
+    ``SessionState`` leaves it as the stored JSON value.
+    """
 
     session_id: str | None = None
     messages: list[Message] | None = None
-    custom: Any | None = Field(default=None)
+    custom: SessionStateT | None = Field(default=None)
     artifacts: list[Artifact] | None = None
     usage: GenerationUsage | None = None
 
@@ -1224,8 +1233,11 @@ def as_session_state(value: object) -> SessionState:
     return SessionState.model_validate(value)
 
 
-class SessionSnapshot(GenkitModel):
-    """Snapshot whose state uses the public SessionState type."""
+class SessionSnapshot(GenkitModel, Generic[SessionStateT]):
+    """Snapshot whose state uses the public SessionState type.
+
+    ``SessionSnapshot[CartState]`` types ``state.custom`` as ``CartState``.
+    """
 
     snapshot_id: str
     session_id: str | None = None
@@ -1236,7 +1248,7 @@ class SessionSnapshot(GenkitModel):
     status: SnapshotStatus | None = None
     finish_reason: AgentFinishReason | None = None
     error: Failure | None = None
-    state: SessionState | None = None
+    state: SessionState[SessionStateT] | None = None
 
     @field_validator('state', mode='before')
     @classmethod

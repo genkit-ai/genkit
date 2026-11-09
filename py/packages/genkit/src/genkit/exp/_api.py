@@ -30,18 +30,17 @@ from genkit._ai._agents._base import (
     define_prompt_agent,
 )
 from genkit._ai._agents._runtime import AgentFn
-from genkit._ai._agents._session import SessionStore, StateT, get_current_session
+from genkit._ai._agents._session import Session, SessionStore, StateT, get_current_session
 from genkit._ai._agents._types import ChunkTransform, StateTransform
 from genkit._ai._aio import Genkit as StableGenkit
 from genkit._core._action import Action, ActionKind
 from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._middleware import Middleware
 from genkit._core._model import ModelConfigDict, ModelRef, ModelRefConfigT, Part
-from genkit._core._protocols import SessionLike
 from genkit._core._tool import Tool
 
 
-def current_session() -> SessionLike | None:
+def current_session() -> Session[Any] | None:
     """Return the active agent session, or None if not inside a session."""
     return get_current_session()
 

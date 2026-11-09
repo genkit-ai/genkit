@@ -58,6 +58,7 @@ from genkit._ai._agents._session_stores._util import (
     apply_save,
     iterate_statuses,
     require_one_selector,
+    select_leaf,
     session_id_of,
 )
 from genkit._ai._agents._transports._http import HttpAgentTransport, remote_agent
@@ -68,6 +69,7 @@ from genkit._ai._agents._types import (
     TurnResult,
 )
 from genkit._ai._json_patch import apply_json_patch, diff_json
+from genkit._core._action import BidiConnection
 from genkit._core._model import (
     AgentInit,
     AgentInput,
@@ -99,6 +101,7 @@ __all__ = [
     'AgentResponse',
     'DetachedTask',
     'AgentTransport',
+    'BidiConnection',
     'HttpAgentTransport',
     'remote_agent',
     # Agent function protocol
@@ -121,6 +124,7 @@ __all__ = [
     'apply_save',
     'iterate_statuses',
     'require_one_selector',
+    'select_leaf',
     'session_id_of',
     # JSON Patch helpers
     'apply_json_patch',

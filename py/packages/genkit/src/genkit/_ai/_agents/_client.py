@@ -25,7 +25,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, G
 from dataclasses import dataclass, field
 from typing import Any, Generic, Protocol, TypeVar, cast
 
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar as TypeVarExt
 
 from genkit._ai._agents._runtime import AgentInitError, seeded_init_fields
@@ -51,11 +51,10 @@ from genkit._core._model import (
     Message,
     Part,
     Resume,
-    SessionSnapshot as SessionSnapshotVeneer,
-    SessionState as SessionStateVeneer,
+    SessionSnapshot,
+    SessionState,
     as_message,
     as_part,
-    as_session_state,
     resume_options_to_resume,
 )
 from genkit._core._typing import (
@@ -98,25 +97,25 @@ class _TurnCheckpoint:
     resume_snapshot_id: str | None
 
 
-class SessionState(SessionStateVeneer, Generic[StateT]):
-    """Session state generic over custom state."""
+def _typed_snapshot(
+    raw: SessionSnapshot | None,
+    state_schema: type[StateT] | None,
+) -> SessionSnapshot[StateT] | None:
+    """Re-read a stored snapshot with ``state.custom`` validated as ``state_schema``.
 
-    custom: StateT | None = None
-
-
-class SessionSnapshot(SessionSnapshotVeneer, Generic[StateT]):
-    """Session snapshot generic over custom state."""
-
-    # Narrows the wire model's plain SessionState to the typed one so snap.state.custom
-    # reads as the declared model; the runtime shape is identical (same JSON fields).
-    state: SessionState[StateT] | None = None  # pyright: ignore[reportIncompatibleVariableOverride] # pyrefly: ignore[bad-override]
-
-    @field_validator('state', mode='before')
-    @classmethod
-    def _wrap_state(cls, v: object) -> object:
-        if v is None:
-            return v
-        return SessionState.model_validate(as_session_state(v).model_dump(mode='json', by_alias=True))
+    A settled snapshot whose state doesn't fit raises; a pending one keeps the
+    raw value, since the turn may still be writing it.
+    """
+    if raw is None:
+        return None
+    snap = SessionSnapshot[StateT].model_validate_json(raw.model_dump_json(by_alias=True))
+    if snap.state is not None and snap.state.custom is not None and state_schema is not None:
+        try:
+            snap.state.custom = state_schema.model_validate(snap.state.custom)
+        except Exception:
+            if snap.status is not None and snap.status in TERMINAL_SNAPSHOT_STATUSES:
+                raise
+    return snap
 
 
 # ===========================================================================
@@ -158,7 +157,7 @@ class AgentTransport(Protocol, Generic[StateT_co]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshotVeneer | None:
+    ) -> SessionSnapshot | None:
         """Retrieves a session snapshot from the server store."""
         ...
 
@@ -559,7 +558,7 @@ class AgentAPI(Protocol, Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshotVeneer | None:
+    ) -> SessionSnapshot[StateT] | None:
         """Reads a stored snapshot without starting a session.
 
         Pass exactly one of ``snapshot_id`` or ``session_id``. A session
@@ -669,15 +668,17 @@ class AgentClient(Generic[StateT]):
         *,
         snapshot_id: str | None = None,
         session_id: str | None = None,
-    ) -> SessionSnapshotVeneer | None:
+    ) -> SessionSnapshot[StateT] | None:
         """Reads a stored snapshot without starting a session.
 
         Pass exactly one of ``snapshot_id`` or ``session_id``. A session
         lookup returns the newest row even when that turn failed or was
         aborted. ``chat(session_id=)`` is how you continue from the last
-        good turn.
+        good turn. With ``state_schema``, ``state.custom`` comes back as
+        that model.
         """
-        return await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
+        raw = await self._transport.get_snapshot(snapshot_id=snapshot_id, session_id=session_id)
+        return _typed_snapshot(raw, self._state_schema)
 
     async def abort(self, snapshot_id: str) -> SnapshotStatus | None:
         """Aborts a running snapshot on the server.
@@ -1231,11 +1232,12 @@ class AgentChat(Generic[StateT]):
         wire = resume_options_to_resume(resume_respond=respond, resume_restart=restart, resume_metadata=metadata)
         return self.send_stream(AgentInput(resume=wire or Resume(metadata=metadata)))
 
-    async def get_snapshot(self) -> SessionSnapshotVeneer | None:
+    async def get_snapshot(self) -> SessionSnapshot[StateT] | None:
         """Reads the current snapshot from the server store, if store-backed."""
         if not self._snapshot_id:
             return None
-        return await self._transport.get_snapshot(snapshot_id=self._snapshot_id)
+        raw = await self._transport.get_snapshot(snapshot_id=self._snapshot_id)
+        return _typed_snapshot(raw, self._state_schema)
 
     async def detach(self, input: str | AgentInput) -> DetachedTask[StateT]:  # noqa: A002
         """Runs a turn in the background on the server and returns a poll handle."""
@@ -1306,13 +1308,13 @@ class AgentChat(Generic[StateT]):
     # Internal (transport / runtime wiring)
     # ------------------------------------------------------------------
 
-    def _load_from_snapshot(self, snapshot: SessionSnapshotVeneer) -> None:
+    def _load_from_snapshot(self, snapshot: SessionSnapshot) -> None:
         self._snapshot_id = snapshot.snapshot_id
         self._resume_snapshot_id = snapshot.snapshot_id
         if snapshot.state is not None:
             self._set_state(snapshot.state)
 
-    def _set_state(self, state: SessionStateVeneer) -> None:
+    def _set_state(self, state: SessionState) -> None:
         snapshot = state.model_copy(deep=True)
         self._session_id = snapshot.session_id
         self._messages = list(snapshot.messages or [])
@@ -1561,17 +1563,8 @@ class DetachedTask(Generic[StateT]):
         self._transport = transport
         self._state_schema = state_schema
 
-    def _parse_snapshot(self, raw: SessionSnapshotVeneer | None) -> SessionSnapshot[StateT] | None:
-        if raw is None:
-            return None
-        snap = SessionSnapshot[StateT].model_validate_json(raw.model_dump_json(by_alias=True))
-        if snap.state is not None and snap.state.custom is not None and self._state_schema is not None:
-            try:
-                snap.state.custom = self._state_schema.model_validate(snap.state.custom)
-            except Exception:
-                if snap.status is not None and snap.status in TERMINAL_SNAPSHOT_STATUSES:
-                    raise
-        return snap
+    def _parse_snapshot(self, raw: SessionSnapshot | None) -> SessionSnapshot[StateT] | None:
+        return _typed_snapshot(raw, self._state_schema)
 
     async def poll(self, interval: float = 1.0) -> AsyncIterator[SessionSnapshot[StateT]]:
         """Yields the task's snapshot every ``interval`` seconds until it settles.
