@@ -57,14 +57,6 @@ readme = "README.md"
 requires-python = ">=3.10"
 version = "0.13.0"
 
-[project.optional-dependencies]
-dev = [
-  "pytest>=8.3.4",
-  "pytest-asyncio>=0.25.2",
-  "pytest-cov>=6.0.0",
-  "pytest-xdist>=3.6.1",
-]
-
 [project.urls]
 "Bug Tracker"   = "https://github.com/genkit-ai/genkit/issues"
 Changelog       = "https://github.com/genkit-ai/genkit/releases"
@@ -79,3 +71,12 @@ requires      = ["hatchling"]
 [tool.hatch.build.targets.wheel]
 only-include = ["src/genkit_a2ui"]
 sources      = ["src"]
+
+# Test tools stay out of the published wheel metadata (PEP 735).
+[dependency-groups]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-asyncio>=0.25.2",
+  "pytest-cov>=6.0.0",
+  "pytest-xdist>=3.6.1",
+]

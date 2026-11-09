@@ -6,6 +6,8 @@ dependencies = [
   "genkit",
   "genkit-fastapi",
   "genkit-google-genai",
+  "fastapi>=0.100.0",
+  "pydantic>=2.11",
   "python-dotenv>=1.0.0",
   "uvicorn[standard]>=0.34.0",
 ]

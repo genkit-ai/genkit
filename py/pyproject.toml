@@ -149,7 +149,7 @@ anthropic-sample     = { workspace = true }
 basic-flows          = { workspace = true }
 context              = { workspace = true }
 django-hello         = { workspace = true }
-dynamic-tools        = { workspace = true }
+multipart-tools      = { workspace = true }
 evaluators           = { workspace = true }
 fastapi-bugbot       = { workspace = true }
 flask-hello          = { workspace = true }
