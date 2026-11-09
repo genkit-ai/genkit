@@ -136,18 +136,14 @@ HEADER = '''# Copyright {year} Google LLC
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from collections.abc import Sequence  # noqa: TC003 - get_type_hints(GenerationUsage.from_messages) needs it
+from typing import Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, RootModel, field_validator
 from pydantic.alias_generators import to_camel
 
 from genkit._core._base import GenkitConfig, GenkitModel
 from genkit._core._compat import StrEnum
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from genkit._core import _model
 
 '''
 
@@ -442,11 +438,14 @@ def _emit_model(
         lines.extend([
             '',
             '    @classmethod',
-            '    def from_messages(cls, messages: Sequence[_model.Message], response: _model.Message) -> GenerationUsage:',
+            # Annotated with the wire MessageData (defined here), not
+            # _model.Message: _model imports this module, so its names can't
+            # resolve here and typing.get_type_hints() would raise NameError.
+            '    def from_messages(cls, messages: Sequence[MessageData], response: MessageData) -> GenerationUsage:',
             '        """Character and media counts for the request messages and the model reply."""',
-            '        from genkit._core._model import count_message_usage  # noqa: PLC0415 - _model imports this module',
+            '        from genkit._core._model import as_message, count_message_usage  # noqa: PLC0415 - _model imports this module',
             '',
-            '        return cls.model_validate(count_message_usage(messages, response))',
+            '        return cls.model_validate(count_message_usage([as_message(m) for m in messages], as_message(response)))',
         ])
     if name in ('EvalFnResponse', 'EvaluatorResponse'):
         lines.extend([
@@ -589,7 +588,7 @@ def generate(schema_path: Path, _out: Path) -> str:
     ])
 
     content = '\n'.join(out)
-    # _model.Message is the public Message (GenerationUsage.from_messages), not the wire type.
+    # Schema refs to Message are the wire MessageData; the public Message lives in _model.
     content = re.sub(r'(?<!_model\.)\bMessage\b(?!Data)', 'MessageData', content)
     return content + '\n'
 

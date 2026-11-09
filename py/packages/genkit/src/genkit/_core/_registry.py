@@ -28,6 +28,7 @@ from dotpromptz import Dotprompt
 from pydantic import BaseModel
 from typing_extensions import Never, TypeVar
 
+from genkit._core import _background
 from genkit._core._action import (
     GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
@@ -952,3 +953,9 @@ def define_dynamic_action_provider(
     # recover the cache and helpers via ``getattr(action, ATTR, None)``.
     setattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, dap)
     return dap
+
+
+# _background imports Registry only for type checking (this module imports it at
+# runtime). Bind the name there so typing.get_type_hints() can resolve
+# BackgroundAction.lookup's `registry: Registry` (FastAPI/Pydantic introspection).
+_background.Registry = Registry

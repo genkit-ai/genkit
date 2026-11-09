@@ -252,10 +252,10 @@ class BackgroundAction(Generic[InT, OutT]):
         self,
         name: str,
         start: StartOpFn[InT],
-        check: CheckOpFn[OutT],
+        check: Callable[[Operation[OutT], FlowContext], Awaitable[Operation]],
         *,
         kind: ActionKind,
-        cancel: CancelOpFn[OutT] | None = None,
+        cancel: Callable[[Operation[OutT], FlowContext], Awaitable[Operation]] | None = None,
         metadata: dict[str, Any] | None = None,
         description: str | None = None,
     ) -> None:
