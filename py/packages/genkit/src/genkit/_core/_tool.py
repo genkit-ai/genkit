@@ -26,7 +26,7 @@ from types import UnionType
 from typing import Any, Union, cast, get_args, get_origin, overload
 
 from pydantic import BaseModel, TypeAdapter
-from typing_extensions import TypeVar
+from typing_extensions import Self, TypeVar
 
 from genkit._core._action import (
     Action,
@@ -330,6 +330,90 @@ class Tool(Action[InputT, OutputT, ChunkT, None]):
 
     # One overload per handler shape, same as ``ai.tool`` / ``define_tool``, so
     # ``Tool(place_order)`` infers ``Tool[Order, Receipt, Step]`` from the function.
+    # ty reads the ``__new__`` overloads; pyright, mypy and pyrefly read the
+    # self-typed ``__init__`` overloads. Keep the two lists in step.
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[ToolContext[_C], object], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[Any, _O, _C]: ...
+
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[_I, ToolContext[_C]], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[_I, _O, _C]: ...
+
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[ToolContext[_C], _I], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[_I, _O, _C]: ...
+
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[object], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[Any, _O, Any]: ...
+
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[ToolContext[_C]], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[None, _O, _C]: ...
+
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[_I], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[_I, _O, Any]: ...
+
+    @overload
+    def __new__(
+        cls,
+        func: Callable[[], Awaitable[_O]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[None, _O, Any]: ...
+
+    def __new__(
+        cls,
+        func: Callable[..., Awaitable[Any]],
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        input_schema: type[BaseModel] | dict[str, object] | None = None,
+    ) -> Tool[Any, Any, Any]:
+        """Allocate the tool; ``__init__`` does the work."""
+        del func, name, description, input_schema
+        return super().__new__(cls)
+
     @overload
     def __init__(
         self: Tool[Any, _O, _C],
@@ -372,7 +456,7 @@ class Tool(Action[InputT, OutputT, ChunkT, None]):
 
     @overload
     def __init__(
-        self: Tool[Any, _O, _C],
+        self: Tool[None, _O, _C],
         func: Callable[[ToolContext[_C]], Awaitable[_O]],
         *,
         name: str | None = None,
@@ -536,6 +620,11 @@ class Tool(Action[InputT, OutputT, ChunkT, None]):
 
 class _ActionTool(Tool[InputT, OutputT, ChunkT]):
     """A ``Tool`` view over a plain ``Action`` with no ``tool.v2`` companion."""
+
+    def __new__(cls, action: Action[InputT, OutputT, ChunkT, Any]) -> Self:
+        """Allocate the view; skips ``Tool.__new__``'s function overloads."""
+        del action
+        return object.__new__(cls)
 
     def __init__(self, action: Action[InputT, OutputT, ChunkT, Any]) -> None:
         self._wire_action = None

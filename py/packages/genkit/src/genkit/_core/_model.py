@@ -1779,6 +1779,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     _previous_chunks: list[Any] = PrivateAttr(default_factory=list)
     _chunk_parser: Callable[..., object] | None = PrivateAttr(default=None)
     _schema_type: type[BaseModel] | None = PrivateAttr(default=None)
+    # .output is parsed once per chunk. A plain @property over a private cache
+    # rather than @cached_property: ty loses OutputT through cached_property on
+    # a generic model and types every chunk.output as None.
+    _output_parsed: bool = PrivateAttr(default=False)
+    _output_cache: Any = PrivateAttr(default=None)
 
     @field_validator('content', mode='before')
     @classmethod
@@ -1818,7 +1823,7 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         """All tool response parts in this chunk."""
         return [p for p in self.content if p.tool_response is not None]
 
-    @cached_property
+    @property
     def output(self) -> OutputT | None:
         """The reply so far, parsed as far as it goes. Never raises.
 
@@ -1843,6 +1848,12 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         or scalar). It's ``None`` before an object starts or while the text
         can't be parsed.
         """
+        if not self._output_parsed:
+            self._output_cache = self._parse_output()
+            self._output_parsed = True
+        return cast('OutputT | None', self._output_cache)
+
+    def _parse_output(self) -> OutputT | None:
         if self.role is not None and self.role != Role.MODEL:
             return None
         try:
