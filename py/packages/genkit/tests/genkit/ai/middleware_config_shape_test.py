@@ -168,6 +168,7 @@ async def test_middleware_replacing_config_fails_naming_middleware_and_what_it_p
         model='strict',
         prompt='hi',
         use=[_middleware('Rewrite', [], _replace_with(value)), _middleware('Inner', inner)],
+        raise_on_error=False,
     )
 
     assert response.finish_reason == FinishReason.FAILED
@@ -190,7 +191,9 @@ async def test_middleware_bad_config_value_fails_naming_middleware_and_field(cha
     """temperature='hot', set in place or via model_copy, fails naming Rewrite and temperature; the model never runs."""
     ai, model = _ai()
 
-    response = await ai.generate(model='strict', prompt='hi', use=[_middleware('Rewrite', [], change)])
+    response = await ai.generate(
+        model='strict', prompt='hi', use=[_middleware('Rewrite', [], change)], raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -218,7 +221,10 @@ async def test_middleware_incomplete_nested_dict_fails_naming_the_field() -> Non
     ai, model = _nested_ai()
 
     response = await ai.generate(
-        model='nested', prompt='hi', use=[_middleware('Rewrite', [], _set_field('task_budget', {}))]
+        model='nested',
+        prompt='hi',
+        use=[_middleware('Rewrite', [], _set_field('task_budget', {}))],
+        raise_on_error=False,
     )
 
     assert response.finish_message is not None
@@ -234,7 +240,10 @@ async def test_middleware_unknown_config_key_via_model_copy_fails_naming_the_key
     ai, model = _ai()
 
     response = await ai.generate(
-        model='strict', prompt='hi', use=[_middleware('Rewrite', [], _copy_with({'temprature': 0.1}))]
+        model='strict',
+        prompt='hi',
+        use=[_middleware('Rewrite', [], _copy_with({'temprature': 0.1}))],
+        raise_on_error=False,
     )
 
     assert response.finish_message == (
@@ -253,6 +262,7 @@ async def test_middleware_replacing_config_blames_the_layer_that_did_it() -> Non
         model='strict',
         prompt='hi',
         use=[_middleware('Outer', []), _middleware('Inner', [], _replace_with({'temperature': 0.1}))],
+        raise_on_error=False,
     )
 
     assert response.finish_message is not None
@@ -371,6 +381,7 @@ async def test_outer_retry_does_not_take_the_blame_for_inner_swap() -> None:
         model='strict',
         prompt='hi',
         use=[_retry_once(), _middleware('Inner', [], _replace_with({'temperature': 0.1}))],
+        raise_on_error=False,
     )
 
     assert response.finish_message == (
@@ -388,6 +399,7 @@ async def test_outer_retry_with_bad_value_left_in_place_still_names_inner() -> N
         model='strict',
         prompt='hi',
         use=[_retry_once(), _middleware('Inner', [], _set_once('temperature', 'hot'))],
+        raise_on_error=False,
     )
 
     assert response.finish_message is not None
@@ -424,7 +436,11 @@ async def test_middleware_bad_edit_inside_a_list_fails_naming_the_item() -> None
     ai, model = _ai()
 
     response = await ai.generate(
-        model='strict', prompt='hi', config={'stop_sequences': ['END']}, use=[_middleware('Rewrite', [], _append_stop)]
+        model='strict',
+        prompt='hi',
+        config={'stop_sequences': ['END']},
+        use=[_middleware('Rewrite', [], _append_stop)],
+        raise_on_error=False,
     )
 
     assert response.finish_message is not None
@@ -442,6 +458,7 @@ async def test_middleware_bad_edit_inside_a_nested_model_fails_naming_the_field(
         prompt='hi',
         config={'task_budget': {'total': 1}},
         use=[_middleware('Rewrite', [], _set_nested_total)],
+        raise_on_error=False,
     )
 
     assert response.finish_message is not None
@@ -475,7 +492,10 @@ async def test_middleware_change_runs_model_validators_naming_the_changed_field(
     ai.define_model(name='menu', fn=fn, config_schema=AllergyConfig)
 
     response = await ai.generate(
-        model='menu', prompt='hi', use=[_middleware('Guard', [], _set_field('strict_allergy_check', True))]
+        model='menu',
+        prompt='hi',
+        use=[_middleware('Guard', [], _set_field('strict_allergy_check', True))],
+        raise_on_error=False,
     )
 
     assert response.finish_message == (

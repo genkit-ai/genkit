@@ -136,7 +136,7 @@ async def test_invalid_output_logs_model_finish_reason(monkeypatch: pytest.Monke
     ]
 
     with capture_logs() as entries:
-        response = await ai.generate(prompt='hi', output_schema={'type': 'object'})
+        response = await ai.generate(prompt='hi', output_schema={'type': 'object'}, raise_on_error=False)
     assert response.finish_reason == FinishReason.STOP
     assert response.error is not None
 
@@ -282,6 +282,7 @@ async def test_schema_mismatch_logs_when_debug_enabled(monkeypatch: pytest.Monke
                 messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
                 output=GenerateActionOutputConfig(format='json'),
             ),
+            raise_on_error=False,
         )
 
     assert response.message is not None
@@ -417,6 +418,7 @@ async def test_tool_stream_callback_failure_fails_generate(monkeypatch: pytest.M
             tools=['echo'],
         ),
         on_chunk=on_chunk,
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'sink closed'
@@ -451,6 +453,7 @@ async def test_model_stream_callback_failure_returns_closed_history() -> None:
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
         ),
         on_chunk=on_chunk,
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'model sink closed'
@@ -492,6 +495,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
             messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
             tools=['hold'],
         ),
+        raise_on_error=False,
     )
 
     def on_chunk(chunk: object) -> None:
@@ -508,6 +512,7 @@ async def test_resumed_tool_stream_callback_failure_returns_closed_history() -> 
             resume=Resume(respond=[reply]),
         ),
         on_chunk=on_chunk,
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'resume sink closed'
@@ -542,7 +547,7 @@ async def test_crashing_model_logs_the_hidden_cause_once() -> None:
     ai.define_model(name='crash', fn=crashing)
 
     with capture_logs() as entries:
-        response = await ai.generate(model='crash', prompt='hi')
+        response = await ai.generate(model='crash', prompt='hi', raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -569,7 +574,9 @@ async def test_crashing_tool_is_named_and_logged_once() -> None:
     pm.responses = [_tool_turn('check_allergens')]
 
     with capture_logs() as entries:
-        response = await ai.generate(model='scriptedModel', prompt='hi', tools=['check_allergens'])
+        response = await ai.generate(
+            model='scriptedModel', prompt='hi', tools=['check_allergens'], raise_on_error=False
+        )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -596,7 +603,7 @@ async def test_crashing_restarted_tool_is_logged_once() -> None:
         raise RuntimeError('kitchen printer jammed')
 
     pm.responses = [_tool_turn('hold')]
-    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['hold'])
+    first = await ai.generate(model='scriptedModel', prompt='hi', tools=['hold'], raise_on_error=False)
 
     with capture_logs() as entries:
         response = await generate_action(
@@ -607,6 +614,7 @@ async def test_crashing_restarted_tool_is_logged_once() -> None:
                 tools=['hold'],
                 resume=Resume(restart=[first.interrupts[0].restart()]),
             ),
+            raise_on_error=False,
         )
 
     assert response.finish_reason == FinishReason.FAILED
@@ -630,7 +638,9 @@ async def test_published_tool_error_is_not_logged() -> None:
     pm.responses = [_tool_turn('check_allergens')]
 
     with capture_logs() as entries:
-        response = await ai.generate(model='scriptedModel', prompt='hi', tools=['check_allergens'])
+        response = await ai.generate(
+            model='scriptedModel', prompt='hi', tools=['check_allergens'], raise_on_error=False
+        )
 
     assert response.error is not None
     assert response.error.message == 'we do not serve peanuts'
@@ -656,7 +666,7 @@ async def test_readonly_exception_still_boxes_and_logs() -> None:
     ai.define_model(name='crash', fn=crashing)
 
     with capture_logs() as entries:
-        response = await ai.generate(model='crash', prompt='hi')
+        response = await ai.generate(model='crash', prompt='hi', raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None

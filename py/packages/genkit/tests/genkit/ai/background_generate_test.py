@@ -151,7 +151,7 @@ async def test_generate_keeps_operation_when_wrap_model_drops_ticket(ai: Genkit)
     """A hook that drops a billed ticket still leaves the handle to check or cancel."""
     register_bg_model(ai)
 
-    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsOperation()])
+    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsOperation()], raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert 'did not return an operation' in response.finish_message
@@ -194,7 +194,7 @@ async def test_generate_keeps_operation_when_wrap_generate_drops_ticket(ai: Genk
     """A wrap_generate that rebuilds without the ticket still leaves the handle."""
     register_bg_model(ai)
 
-    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()])
+    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[DropsGenerate()], raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert 'did not return an operation' in response.finish_message
@@ -241,7 +241,9 @@ async def test_generate_keeps_operation_when_wrap_generate_raises_after_start(ai
     """A hook that starts then raises still leaves the ticket to check or cancel."""
     register_bg_model(ai)
 
-    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[RaisesAfterStart()])
+    response = await ai.generate(
+        model='bg-model', prompt='a cat surfing', use=[RaisesAfterStart()], raise_on_error=False
+    )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'hook after start'
     assert response.error is not None
@@ -275,7 +277,9 @@ async def test_generate_keeps_operation_when_wrap_model_raises_after_start(ai: G
     """A wrap_model that starts then raises still leaves the ticket to check or cancel."""
     register_bg_model(ai)
 
-    response = await ai.generate(model='bg-model', prompt='a cat surfing', use=[RaisesAfterStartModel()])
+    response = await ai.generate(
+        model='bg-model', prompt='a cat surfing', use=[RaisesAfterStartModel()], raise_on_error=False
+    )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'hook after start'
     assert response.error is not None
@@ -430,7 +434,7 @@ async def test_generate_background_start_without_operation_returns_closed_histor
 
     _register_raw_background(ai, name='boxed-bg', start=start)
 
-    response = await ai.generate(model='boxed-bg', prompt='a cat')
+    response = await ai.generate(model='boxed-bg', prompt='a cat', raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert "'boxed-bg' did not return an operation" in response.finish_message
@@ -482,7 +486,7 @@ async def test_generate_operation_raises_the_boxed_error_when_start_never_ran(ai
     """A boxed failure with no ticket is that failure, not 'did not return an operation'."""
     register_bg_model(ai)
 
-    boxed = await ai.generate(model='bg-model', prompt='a cat', use=[DenyStart()])
+    boxed = await ai.generate(model='bg-model', prompt='a cat', use=[DenyStart()], raise_on_error=False)
     assert boxed.error is not None
     assert boxed.operation is None
     assert boxed.finish_message == 'internal error'
@@ -490,7 +494,9 @@ async def test_generate_operation_raises_the_boxed_error_when_start_never_ran(ai
     with pytest.raises(GenkitError) as ei:
         await ai.generate_operation(model='bg-model', prompt='a cat', use=[DenyStart()])
 
-    assert ei.value.message == boxed.error.message
+    # In process the raise keeps the hook's own text; the boxed finish_message
+    # is the scrubbed copy a served flow could put in a 200.
+    assert ei.value.message == 'RuntimeError: nope'
     assert ei.value.status == boxed.error.status
     assert 'did not return an operation' not in ei.value.message
 
@@ -504,7 +510,7 @@ async def test_generate_chat_model_returning_operation_returns_closed_history(ai
 
     ai.define_model(name='plain', fn=cast(Any, model_fn))
 
-    response = await ai.generate(model='plain', prompt='hi')
+    response = await ai.generate(model='plain', prompt='hi', raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert 'define_background_model' in response.finish_message
@@ -528,7 +534,7 @@ async def test_generate_chat_model_returning_dict_returns_closed_history(ai: Gen
 
     ai.define_model(name='plain-dict', fn=model_fn)
 
-    response = await ai.generate(model='plain-dict', prompt='hi')
+    response = await ai.generate(model='plain-dict', prompt='hi', raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert "Model 'plain-dict' did not return a ModelResponse" in response.finish_message
@@ -551,7 +557,7 @@ async def test_generate_chat_model_returning_none_returns_closed_history(ai: Gen
 
     ai.define_model(name='plain-none', fn=model_fn)
 
-    response = await ai.generate(model='plain-none', prompt='hi')
+    response = await ai.generate(model='plain-none', prompt='hi', raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert "Model 'plain-none' did not return a ModelResponse" in response.finish_message
@@ -579,7 +585,7 @@ async def test_generate_chat_model_returning_response_with_operation_returns_clo
 
     ai.define_model(name='plain', fn=model_fn)
 
-    response = await ai.generate(model='plain', prompt='hi')
+    response = await ai.generate(model='plain', prompt='hi', raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
     assert 'define_background_model' in response.finish_message

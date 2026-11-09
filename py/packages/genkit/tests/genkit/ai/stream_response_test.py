@@ -177,7 +177,7 @@ async def test_generate_stream_first_turn_failure_ends_loop_and_resolves_failed(
 
     ai.define_model(name='broken', fn=broken)
 
-    result = ai.generate_stream(model='broken', prompt='Suggest a dish.')
+    result = ai.generate_stream(model='broken', prompt='Suggest a dish.', raise_on_error=False)
     chunks = [chunk async for chunk in result]
     response = await result.response
 
@@ -208,7 +208,9 @@ async def test_generate_stream_tool_failure_resolves_failed() -> None:
         ],
     )
 
-    result = ai.generate_stream(model='scriptedModel', prompt='Can you make soup?', tools=['check_pantry'])
+    result = ai.generate_stream(
+        model='scriptedModel', prompt='Can you make soup?', tools=['check_pantry'], raise_on_error=False
+    )
     _ = [chunk async for chunk in result]
     response = await result.response
 

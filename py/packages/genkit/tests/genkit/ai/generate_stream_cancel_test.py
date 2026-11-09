@@ -299,7 +299,7 @@ async def test_generate_stream_model_fails_midway_ends_loop_and_response_is_fail
     """A model that raises after one chunk ends the `async for` normally; `.response` is FAILED."""
     ai, _ = setup(fail_midway=True)
 
-    stream = ai.generate_stream(model='slow', prompt='hi')
+    stream = ai.generate_stream(model='slow', prompt='hi', raise_on_error=False)
     seen = [chunk.text async for chunk in stream]
     response = await settle(stream.response)
 
@@ -381,7 +381,7 @@ async def test_generate_stream_consumer_exception_under_async_with_cancels_model
 async def test_generate_stream_timeout_under_async_with_cancels_model_and_response_is_aborted() -> None:
     """A `wait_for` deadline on a task inside `async with ai.generate_stream(...):` cancels the model."""
     ai, model = setup()
-    stream = ai.generate_stream(model='slow', prompt='hi')
+    stream = ai.generate_stream(model='slow', prompt='hi', raise_on_error=False)
 
     async def read_slowly() -> None:
         async with stream:

@@ -994,7 +994,7 @@ async def test_prompt_call_max_turns_overrides_prompt() -> None:
     pm.responses = [_tool_call_reply('oven', str(i)) for i in range(6)]
     p = ai.define_prompt(prompt='hi', tools=['oven'], max_turns=5)
 
-    res = await p(max_turns=1)
+    res = await p(max_turns=1, raise_on_error=False)
 
     assert res.finish_reason == FinishReason.ABORTED
     assert pm.request_count == 2
@@ -1245,11 +1245,11 @@ def test_no_fixed_field_is_a_per_call_option() -> None:
 
 @pytest.mark.parametrize('method', [Prompt.__call__, Prompt.stream, Prompt.render])
 def test_prompt_call_keywords_are_exactly_prompt_generate_options(method: Callable[..., object]) -> None:
-    """The public keywords are PromptGenerateOptions (plus on_chunk on __call__), nothing more."""
+    """The public keywords are PromptGenerateOptions (plus on_chunk and raise_on_error), nothing more."""
     params = inspect.signature(method).parameters
     keywords = {name for name, p in params.items() if p.kind is inspect.Parameter.KEYWORD_ONLY}
 
-    assert keywords - {'on_chunk'} == PromptGenerateOptions.__optional_keys__
+    assert keywords - {'on_chunk', 'raise_on_error'} == PromptGenerateOptions.__optional_keys__
 
 
 class _StopAtPrepareError(Exception):
@@ -1615,7 +1615,7 @@ async def test_prompt_max_turns_applies_without_call_override() -> None:
     pm.responses = [_tool_call_reply('oven', str(i)) for i in range(6)]
     p = ai.define_prompt(prompt='hi', tools=['oven'], max_turns=1)
 
-    res = await p()
+    res = await p(raise_on_error=False)
 
     assert res.finish_reason == FinishReason.ABORTED
     assert pm.request_count == 2

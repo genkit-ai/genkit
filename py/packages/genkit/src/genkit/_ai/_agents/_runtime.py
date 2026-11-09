@@ -1124,11 +1124,14 @@ async def generate_prompt_agent_turn(
     def on_chunk(chunk: ModelResponseChunk) -> None:
         ctx.send_chunk(AgentStreamChunk(model_chunk=chunk))
 
+    # Boxed on purpose: the agent persists the closed history and reports
+    # the failure on AgentOutput.error / the session snapshot.
     response = await generate_action(
         scope,
         options,
         on_chunk=on_chunk,
         context=ctx.context,
+        raise_on_error=False,
     )
 
     if response.finish_reason == FinishReason.INTERRUPTED:

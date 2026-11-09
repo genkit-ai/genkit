@@ -432,12 +432,14 @@ class Prompt(Generic[InputT, OutputT]):
         resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         on_chunk: ModelStreamingCallback | None = None,
+        raise_on_error: bool = True,
     ) -> ModelResponse[OutputT]:
         """Render the prompt with ``input`` as template variables, run it, and return the response.
 
         Keywords take the same names as ``ai.generate``. An omitted (or ``None``)
         keyword keeps the prompt's value; ``tools=[]``, ``use=[]`` and ``docs=[]``
         clear the prompt's list for this call. ``config`` merges per key.
+        A failed turn raises unless ``raise_on_error=False``, as in ``ai.generate``.
         """
         opts = PromptGenerateOptions(
             model=model,
@@ -454,7 +456,13 @@ class Prompt(Generic[InputT, OutputT]):
             resume_restart=resume_restart,
             resume_metadata=resume_metadata,
         )
-        return await self._run(input=input, opts=opts, on_chunk=on_chunk, caller_stopped=None)
+        return await self._run(
+            input=input,
+            opts=opts,
+            on_chunk=on_chunk,
+            caller_stopped=None,
+            raise_on_error=raise_on_error,
+        )
 
     async def _run(
         self,
@@ -463,6 +471,7 @@ class Prompt(Generic[InputT, OutputT]):
         opts: PromptGenerateOptions,
         on_chunk: ModelStreamingCallback | None,
         caller_stopped: asyncio.Event | None,
+        raise_on_error: bool = True,
     ) -> ModelResponse[OutputT]:
         prepared = await prepare_prompt(prompt=self, input=input, opts=opts)
         result = await generate_action(
@@ -472,6 +481,7 @@ class Prompt(Generic[InputT, OutputT]):
             # Same context the template already rendered, so {{@auth}} and tools agree.
             context=prepared.context,
             caller_stopped=caller_stopped,
+            raise_on_error=raise_on_error,
         )
         return cast(ModelResponse[OutputT], result)
 
@@ -492,6 +502,7 @@ class Prompt(Generic[InputT, OutputT]):
         resume_respond: Part | list[Part] | None = None,
         resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
+        raise_on_error: bool = True,
     ) -> ModelStreamResponse[OutputT]:
         """Stream the prompt execution. Same keywords as ``__call__``, minus ``on_chunk``.
 
@@ -524,6 +535,7 @@ class Prompt(Generic[InputT, OutputT]):
                 opts=opts,
                 on_chunk=lambda c: send_chunk(cast('ModelResponseChunk[OutputT]', c)),
                 caller_stopped=caller_stopped,
+                raise_on_error=raise_on_error,
             )
 
         initial_msgs = list(messages) if isinstance(messages, list) else []

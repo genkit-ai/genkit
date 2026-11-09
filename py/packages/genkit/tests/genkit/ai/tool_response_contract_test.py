@@ -98,7 +98,7 @@ async def _generate_tool_turn(
     ai: Genkit, pm: ScriptedModel, *, name: str, tool_input: object | None = None
 ) -> ModelResponse:
     pm.responses = [_model_calls_tool(name=name, ref='t1', tool_input=tool_input), _ok()]
-    return await ai.generate(prompt='go', tools=[name])
+    return await ai.generate(prompt='go', tools=[name], raise_on_error=False)
 
 
 @pytest.mark.asyncio

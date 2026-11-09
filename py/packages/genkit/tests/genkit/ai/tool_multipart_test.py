@@ -398,6 +398,7 @@ async def test_unserializable_tool_output_is_invalid_argument() -> None:
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'snap'}]})],
             tools=['screenshot'],
         ),
+        raise_on_error=False,
     )
     assert ran
     assert response.finish_reason == FinishReason.FAILED

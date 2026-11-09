@@ -186,12 +186,14 @@ async def test_generate_stream_and_prompt_stream_to_sse_redact_and_log_provider_
     ai.define_model(name='vertex_denied', fn=vertex_denied)
     menu_prompt = ai.define_prompt(name='menu_prompt', model='vertex_denied', prompt='Suggest dinner.')
 
-    in_proc = await ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.').response
+    in_proc = await ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.', raise_on_error=False).response
     assert in_proc.finish_reason == FinishReason.FAILED
     assert 'secret-proj-123' in (in_proc.finish_message or '')
 
     with caplog.at_level(logging.ERROR):
-        gen_lines = await _lines(to_sse(ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.')))
+        gen_lines = await _lines(
+            to_sse(ai.generate_stream(model='vertex_denied', prompt='Suggest dinner.', raise_on_error=False))
+        )
         prompt_lines = await _lines(to_sse(menu_prompt.stream()))
 
     expected = ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
@@ -316,14 +318,18 @@ async def test_generate_stream_to_sse_undeclared_tool_and_bare_failed_turn_redac
         ],
     )
 
-    in_proc = await ai.generate_stream(model='scriptedModel', prompt='Check billing.').response
+    in_proc = await ai.generate_stream(model='scriptedModel', prompt='Check billing.', raise_on_error=False).response
     assert in_proc.finish_reason == FinishReason.FAILED
     assert in_proc._failure is None
     assert in_proc.finish_message == 'Tool internal_billing_tool not found'
 
     with caplog.at_level(logging.ERROR):
-        missing_tool_lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.')))
-        bare_failed_lines = await _lines(to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.')))
+        missing_tool_lines = await _lines(
+            to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.', raise_on_error=False))
+        )
+        bare_failed_lines = await _lines(
+            to_sse(ai.generate_stream(model='scriptedModel', prompt='Check billing.', raise_on_error=False))
+        )
 
     expected = ['data: {"error":{"message":"Internal Error","status":"INTERNAL"}}\n\n']
     assert missing_tool_lines == expected
@@ -547,7 +553,9 @@ async def test_generate_stream_to_sse_public_error_details_keep_failure_immutabl
         ],
     )
 
-    handle = ai.generate_stream(model='scriptedModel', prompt='Where is A-1042?', tools=['lookup_order'])
+    handle = ai.generate_stream(
+        model='scriptedModel', prompt='Where is A-1042?', tools=['lookup_order'], raise_on_error=False
+    )
     with caplog.at_level(logging.WARNING):
         lines = await _lines(to_sse(handle))
 

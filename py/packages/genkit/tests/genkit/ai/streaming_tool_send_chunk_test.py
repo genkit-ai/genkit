@@ -1054,7 +1054,7 @@ async def test_generate_stream_max_turns_after_send_chunk_keeps_chunk_off_messag
         return '72F'
 
     pm.responses = [_model_calls(('lookup', 'r1')), _model_calls(('lookup', 'r2'))]
-    chunks, response = await _collect_stream(ai, prompt='keep going', tools=[lookup], max_turns=1)
+    chunks, response = await _collect_stream(ai, prompt='keep going', tools=[lookup], max_turns=1, raise_on_error=False)
 
     assert [p.tool_response.output for p in _partial_parts(chunks) if p.tool_response] == ['live']
     assert all(not p.is_partial for p in _message_tool_response_parts(response.messages))
@@ -1093,7 +1093,7 @@ async def test_generate_stream_tool_failure_after_send_chunk_emits_no_final_tool
         raise RuntimeError('deployment failed')
 
     pm.responses = [_model_calls(('deploy', 'r1'))]
-    chunks, response = await _collect_stream(ai, prompt='go', tools=[deploy])
+    chunks, response = await _collect_stream(ai, prompt='go', tools=[deploy], raise_on_error=False)
 
     assert [p.tool_response.output for p in _partial_parts(chunks) if p.tool_response] == ['started']
     assert _final_parts(chunks) == []
@@ -1178,7 +1178,7 @@ async def test_generate_stream_error_on_final_tool_response_fails_generate() -> 
         return 'done'
 
     pm.responses = [_model_calls(('deploy', 'r1')), _model_says('ok')]
-    chunks, response = await _collect_stream(ai, prompt='go', tools=[deploy], use=[BoomOnFinal()])
+    chunks, response = await _collect_stream(ai, prompt='go', tools=[deploy], use=[BoomOnFinal()], raise_on_error=False)
     assert [p.tool_response.output for p in _partial_parts(chunks) if p.tool_response] == ['live']
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None

@@ -686,7 +686,7 @@ async def test_generate_missing_required_top_level_field_fails_the_turn() -> Non
     """A required field no layer or middleware supplies fails the turn; the model never runs."""
     ai, fn = _ai_with_model(config_schema=RequiredTopConfig, name='needs')
 
-    response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2})
+    response = await ai.generate(model='needs', prompt='hi', config={'temperature': 0.2}, raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None

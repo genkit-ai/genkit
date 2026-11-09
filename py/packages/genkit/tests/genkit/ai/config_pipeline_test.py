@@ -344,7 +344,7 @@ async def test_typed_class_that_cannot_build_from_defaults_raises() -> None:
     with pytest.raises(GenkitError, match=r"booking: config 'party_size': Field required") as err:
         await action.run(cast(Any, {'messages': [], 'config': None}))
     assert err.value.status == 'INVALID_ARGUMENT'
-    response = await ai.generate(model='booking', prompt='a table for two')
+    response = await ai.generate(model='booking', prompt='a table for two', raise_on_error=False)
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
     assert "booking: config 'party_size': Field required" in response.error.message
@@ -890,7 +890,7 @@ async def test_missing_required_field_fails_the_same_way_typed_or_untyped() -> N
     ai.define_model(name='walk_in', fn=untyped, config_schema=ReservationConfig)
 
     for name in ('booking', 'walk_in'):
-        response = await ai.generate(model=name, prompt='a table for two')
+        response = await ai.generate(model=name, prompt='a table for two', raise_on_error=False)
         assert response.finish_reason == FinishReason.FAILED
         assert response.error is not None
         assert response.error.status == 'INVALID_ARGUMENT'

@@ -508,6 +508,46 @@ async def book_trip(trip: Trip) -> Booking:
             await release(hold)
 ```
 
+## Failed generate calls raise (1.0)
+
+Starting in 1.0, `ai.generate`, `ai.generate_stream`, and calling or streaming a prompt raise the error behind a failed turn instead of returning a response with `finish_reason == FAILED` and `text == ''`. This matches JS `generate()`. The boxed return predates 0.13; it was never a deliberate Python-only contract.
+
+What raises:
+
+- **Provider errors**: a bad or rotated API key, a retired model ID, 429, 503, timeouts.
+- **Tool and middleware exceptions**: a `PublicError` stays a `PublicError`, so a served flow returns its status instead of 200 `{"result": ""}`.
+- **`max_turns` exhaustion**: `GenkitError` with status `ABORTED`, reason `MAX_TURNS_EXCEEDED`.
+- **Output that fails `output_schema`**: `GenkitError` with status `INTERNAL`, reason `INVALID_OUTPUT`.
+- **Resume errors**: an invalid `resume_respond` / `resume_restart` raises `FAILED_PRECONDITION`.
+
+For streams, `async for chunk in result.stream` raises after the chunks already sent, and so does `await result.response`. Closing a stream yourself (`aclose()`, `async with`) still resolves `.response` to an `ABORTED` response.
+
+Pass `raise_on_error=False` (JS `throwOnError: false`) to keep the boxed response. Agents and the Dev UI `generate` action stay boxed.
+
+**Old:**
+
+```python
+res = await ai.generate(prompt='Suggest a dish.')
+if res.error is not None:
+    return fallback_menu()
+return res.text
+```
+
+**New:**
+
+```python
+try:
+    res = await ai.generate(prompt='Suggest a dish.')
+except GenkitError:
+    return fallback_menu()
+return res.text
+
+# or keep the 0.13 shape
+res = await ai.generate(prompt='Suggest a dish.', raise_on_error=False)
+if res.error is not None:
+    return fallback_menu()
+```
+
 ## Returned errors
 
 `response.error` (and `.error` on operations and agent results) is now typed `Failure`, a public type you can import. It has the same fields as before: `status`, `message`, `details` and `reason`. The reason enum is renamed from `RuntimeErrorReason` to `ErrorReason`.
@@ -870,10 +910,12 @@ Prompt input is now validated, and defaults from `.prompt` files are filled in.
 If a JSON reply is cut off, `response.output` is now `None` and `response.error` reports `INVALID_OUTPUT`. Before, you could get a partial object. Check for `None` where you read `output`.
 
 ```python
-res = await ai.generate(prompt=p, output_schema=City)
+res = await ai.generate(prompt=p, output_schema=City, raise_on_error=False)
 if res.output is None:
     ...   # the reply was incomplete; see res.error
 ```
+
+In 1.0, without `raise_on_error=False`, an incomplete reply raises `GenkitError` with reason `INVALID_OUTPUT` instead.
 
 ## Flow input and output validation
 

@@ -477,6 +477,7 @@ async def test_interrupt_inside_task_group_fails_the_turn() -> None:
             tools=['refund_order'],
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'refund my order'}]})],
         ),
+        raise_on_error=False,
     )
     assert r.finish_reason == FinishReason.FAILED
     assert r.error is not None
@@ -1370,6 +1371,7 @@ async def test_resume_without_matching_replies_is_still_resendable() -> None:
             messages=messages,
             resume=Resume(),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -1399,6 +1401,7 @@ async def test_resume_on_empty_messages_is_still_resendable() -> None:
             messages=[],
             resume=Resume(),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -1422,6 +1425,7 @@ async def test_resume_on_user_turn_is_still_resendable() -> None:
             messages=[Message.model_validate({'role': 'user', 'content': [{'text': 'only user'}]})],
             resume=Resume(),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -1451,6 +1455,7 @@ async def test_resume_on_text_only_model_turn_is_still_resendable() -> None:
             ],
             resume=Resume(),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -1488,6 +1493,7 @@ async def test_resume_on_tool_turn_is_still_resendable() -> None:
             ],
             resume=Resume(),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -1647,6 +1653,7 @@ async def test_resume_rejects_hollow_pending_content() -> None:
             messages=_with_shot_pending(first, pendingContent=[{}]),
             resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -1674,6 +1681,7 @@ async def test_resume_rejects_text_and_media_pending_content() -> None:
             ),
             resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -1698,6 +1706,7 @@ async def test_resume_rejects_non_dict_pending_metadata() -> None:
             messages=_with_shot_pending(first, pendingMetadata='cam'),
             resume=Resume(respond=[first.interrupts[0].respond({'approved': True})]),
         ),
+        raise_on_error=False,
     )
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -1861,6 +1870,7 @@ async def test_generate_action_resume_rejects_paused_part() -> None:
             messages=list(first.messages),
             resume=Resume(restart=[first.interrupts[0]]),
         ),
+        raise_on_error=False,
     )
     assert again.finish_reason == FinishReason.FAILED
     assert again.finish_message is not None

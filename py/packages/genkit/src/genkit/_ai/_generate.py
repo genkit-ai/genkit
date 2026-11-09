@@ -794,7 +794,12 @@ def start_generate_stream(
 
 
 def define_generate_action(ai: _aio.Genkit) -> None:
-    """Register the generation action triggered by the Dev UI."""
+    """Register the generation action triggered by the Dev UI.
+
+    Stays boxed: it calls ``run_generate`` directly, not ``generate_action``,
+    so a failed turn comes back as ``finish_reason=FAILED`` with ``error``
+    set and the Dev UI can render the partial history.
+    """
 
     async def generate_action_fn(
         input: GenerateActionOptions,
@@ -826,6 +831,7 @@ async def generate_action(
     current_turn: int = 0,
     context: dict[str, Any] | None = None,
     caller_stopped: asyncio.Event | None = None,
+    raise_on_error: bool = True,
 ) -> ModelResponse:
     """Open the user-facing ``generate`` span and delegate to the engine.
 
@@ -836,6 +842,12 @@ async def generate_action(
     With no ``context``, the run uses the enclosing action's (e.g. the flow
     calling ``ai.generate`` or a prompt). Tools would inherit it anyway, but
     middleware only sees what's passed here.
+
+    With ``raise_on_error`` (the default, JS ``throwOnError``), a turn that
+    ends with ``response.error`` set raises that failure instead of returning
+    it. A stream the caller closed (``caller_stopped``) still returns its
+    boxed ``ABORTED`` response. ``raise_on_error=False`` returns the boxed
+    response for every failure; the agent runtime uses it.
     """
     if context is None:
         context = get_current_context()
@@ -852,9 +864,37 @@ async def generate_action(
         )
         if result.error is not None:
             set_span_state('error')
+            if raise_on_error and not (caller_stopped is not None and caller_stopped.is_set()):
+                raise failure_exception(result)
         return result
 
     return await run_in_new_span('generate', body, action_type='util', input=options)
+
+
+def failure_exception(response: ModelResponse) -> GenkitError:
+    """The exception a failed turn raises under ``raise_on_error=True``.
+
+    A turn boxed from an exception carries ``_failure``, so the caller gets
+    that error back (a ``PublicError`` stays a ``PublicError``). Failures the
+    loop classified itself (``max_turns``, a missing tool, structured output
+    that fails its schema) have no exception behind them and raise from
+    ``response.error``.
+    """
+    failure = response.error
+    if response._failure is not None:
+        exc = response._failure.to_exception()
+        # to_exception keeps status and message only. Put the loop's reason
+        # (TOOL_FAILED, ...) back so err.reason matches response.error.reason.
+        if not isinstance(exc, PublicError) and not exc.details and failure is not None and failure.details:
+            exc.details = dict(failure.details)
+        return exc
+    if failure is None:
+        return GenkitError(status='INTERNAL', message=response.finish_message or 'generation failed')
+    return GenkitError(
+        status=failure.status or 'INTERNAL',
+        message=failure.message or response.finish_message or 'generation failed',
+        details=dict(failure.details) if failure.details else None,
+    )
 
 
 async def run_generate(

@@ -715,6 +715,7 @@ async def test_stream_final_output_missing_field_is_none_after_partial_chunks() 
         ['{"title": "Fluffy Pancakes"}'],
         '{"title": "Fluffy Pancakes"}',
         output_schema=Recipe,
+        raise_on_error=False,
     )
 
     assert isinstance(outputs[0], Recipe)
@@ -730,6 +731,7 @@ async def test_stream_cut_off_final_output_is_none() -> None:
         ['{"title": "Fluffy Pancakes", "steps": ["mi'],
         '{"title": "Fluffy Pancakes", "steps": ["mi',
         output_schema=Recipe,
+        raise_on_error=False,
     )
 
     assert isinstance(outputs[0], Recipe)
