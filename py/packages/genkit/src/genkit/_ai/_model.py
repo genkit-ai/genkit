@@ -31,6 +31,7 @@ from genkit._core._action import (
     ActionKind,
     ModelContext,
     get_func_description,
+    with_request_annotation,
 )
 from genkit._core._config_check import (
     check_config_values,
@@ -493,7 +494,9 @@ class Model(Action[ModelRequest, ModelResponse, ModelResponseChunk]):
         super().__init__(
             kind=ActionKind.MODEL,
             name=name,
-            fn=fn,
+            # An unannotated request parameter would get the raw JSON dict from
+            # a Dev UI or CLI run; give it ModelRequest, like Embedder does.
+            fn=with_request_annotation(fn, ModelRequest, kind=ActionKind.MODEL),
             metadata=model_meta,
             description=get_func_description(fn, description),
             config_schema=config_schema,

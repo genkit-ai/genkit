@@ -244,6 +244,57 @@ def _finish_state(
     return finish_reason, failure_message
 
 
+# The field a non-object tool input rides under on the wire, as in genkit-google-genai.
+_TOOL_INPUT_FIELD = 'input'
+
+
+def _is_wrapped_tool_schema(schema: dict[str, Any] | None) -> bool:
+    """True for a non-empty schema that is not an object (``{'type': 'string'}``)."""
+    if not schema:
+        return False
+    schema_type = schema.get('type')
+    if schema_type is None:
+        # anyOf/oneOf/$ref roots: only an object schema is safe to send as-is.
+        return not ('properties' in schema or '$ref' in schema)
+    return schema_type != 'object'
+
+
+def _wrapped_tool_names(tools: list[ToolDefinition] | None) -> frozenset[str]:
+    return frozenset(t.name for t in tools or [] if _is_wrapped_tool_schema(t.input_schema))
+
+
+def _map_tool_requests(message: Message, wrapped: frozenset[str], wrap: bool) -> Message:
+    if not wrapped:
+        return message
+    changed = False
+    content: list[Part] = []
+    for part in message.content:
+        req = part.tool_request
+        if req is not None and req.name in wrapped:
+            if wrap:
+                new_input: object = {_TOOL_INPUT_FIELD: req.input}
+            elif isinstance(req.input, dict) and set(req.input) == {_TOOL_INPUT_FIELD}:
+                new_input = cast(dict[str, Any], req.input)[_TOOL_INPUT_FIELD]
+            else:
+                content.append(part)
+                continue
+            content.append(Part(tool_request=req.model_copy(update={'input': new_input}), metadata=part.metadata))
+            changed = True
+        else:
+            content.append(part)
+    return message.model_copy(update={'content': content}) if changed else message
+
+
+def _wrap_tool_inputs(messages: list[Message], wrapped: frozenset[str]) -> list[Message]:
+    """Replay earlier calls to scalar-input tools in the wrapped wire shape."""
+    return [_map_tool_requests(m, wrapped, wrap=True) for m in messages]
+
+
+def _unwrap_tool_inputs(message: Message, wrapped: frozenset[str]) -> Message:
+    """Hand scalar-input tools their bare value, not ``{'input': value}``."""
+    return _map_tool_requests(message, wrapped, wrap=False)
+
+
 class OpenAIModel:
     """Handles OpenAI API interactions for the Genkit plugin."""
 
@@ -304,6 +355,14 @@ class OpenAIModel:
         result = []
         for tool_definition in tools:
             parameters = tool_definition.input_schema or {}
+            if _is_wrapped_tool_schema(parameters):
+                # Function parameters must be an object; a scalar tool input
+                # (``async def tool(city: str)``) rides under one field.
+                parameters = {
+                    'type': 'object',
+                    'properties': {_TOOL_INPUT_FIELD: parameters},
+                    'required': [_TOOL_INPUT_FIELD],
+                }
             if parameters:
                 parameters = _ensure_strict_json_schema(parameters, path=(), root=parameters)
 
@@ -445,7 +504,8 @@ class OpenAIModel:
         Returns:
             A dictionary representing the OpenAI request configuration.
         """
-        messages = self._get_messages(request.messages)
+        wrapped = _wrapped_tool_names(request.tools)
+        messages = self._get_messages(_wrap_tool_inputs(request.messages, wrapped) if wrapped else request.messages)
 
         # For models that only support json_object mode, inject the schema
         # into the messages so the model knows the expected output structure.
@@ -513,7 +573,7 @@ class OpenAIModel:
             failure_message=_failure_message(choice.model_extra),
         )
 
-        genkit_message = MessageConverter.to_genkit(message)
+        genkit_message = _unwrap_tool_inputs(MessageConverter.to_genkit(message), _wrapped_tool_names(request.tools))
         # An empty message is the answer when the model was blocked or cut off; at a clean stop it is unreadable.
         if not genkit_message.content and finish_reason is FinishReason.STOP:
             raise ValueError('Unable to determine content part')
@@ -622,8 +682,9 @@ class OpenAIModel:
 
         accumulated_content: list[Part] = [*reasoning_parts, *text_parts]
         if tool_calls:
-            message = MessageConverter.to_genkit(
-                DictMessageAdapter({'tool_calls': tool_calls.values(), 'role': Role.MODEL})
+            message = _unwrap_tool_inputs(
+                MessageConverter.to_genkit(DictMessageAdapter({'tool_calls': tool_calls.values(), 'role': Role.MODEL})),
+                _wrapped_tool_names(request.tools),
             )
             accumulated_content.extend(message.content)
 

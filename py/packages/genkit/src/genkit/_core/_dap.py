@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from genkit._core._action import (
+    GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR,
     Action,
     ActionKind,
     create_action_key,
@@ -59,6 +60,10 @@ class DynamicActionProvider:
         cache_ttl_millis: int | None = None,
     ) -> None:
         self.action = action
+        # Stamp the provider on its action so a ``dap.action`` returned from
+        # ``Plugin.init()`` expands in ``list_actions`` and DAP-qualified lookups,
+        # not only one registered through ``define_dynamic_action_provider``.
+        setattr(action, GENKIT_DYNAMIC_ACTION_PROVIDER_ATTR, self)
         self._dap_fn = dap_fn
         self._cache: tuple[DapValue, float] | None = None
         self._fetch_tasks: dict[asyncio.AbstractEventLoop, asyncio.Task[DapValue]] = {}

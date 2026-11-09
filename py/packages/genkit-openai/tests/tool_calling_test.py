@@ -155,3 +155,58 @@ async def test_generate_stream_with_tool_calls(sample_request: ModelRequest) -> 
 
     accumulated_output = reduce(lambda res, tool_call: res + tool_call.tool_request.input, collected_chunks, '')
     assert json.loads(accumulated_output) == {'a': 1}
+
+
+@pytest.mark.asyncio
+async def test_scalar_tool_schema_is_wrapped_and_round_trips(make_completion: Callable[..., ChatCompletion]) -> None:
+    """`async def tool(city: str)` sends an object schema and gets the bare string back."""
+    from genkit import Message, Part, Role
+    from genkit._core._typing import ToolRequest
+    from genkit.model import ToolDefinition
+
+    completion = make_completion(
+        choice={
+            'finish_reason': 'tool_calls',
+            'message': {
+                'role': 'assistant',
+                'content': None,
+                'tool_calls': [
+                    {
+                        'id': 'call1',
+                        'type': 'function',
+                        'function': {'name': 'current_weather', 'arguments': '{"input": "Paris"}'},
+                    }
+                ],
+            },
+        }
+    )
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=completion)
+    model = OpenAIModel(model='gpt-4', client=mock_client)
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part.from_text('weather?')]),
+            Message(
+                role=Role.MODEL,
+                content=[Part(tool_request=ToolRequest(ref='call0', name='current_weather', input='Oslo'))],
+            ),
+        ],
+        tools=[
+            ToolDefinition(
+                name='current_weather', description='Weather', input_schema={'type': 'string'}, output_schema=None
+            )
+        ],
+    )
+
+    response = await model._generate(request)
+
+    sent = mock_client.chat.completions.create.call_args.kwargs
+    params = sent['tools'][0]['function']['parameters']
+    assert params['type'] == 'object'
+    assert params['properties']['input'] == {'type': 'string'}
+    assert params['required'] == ['input']
+    replayed = sent['messages'][1]['tool_calls'][0]['function']['arguments']
+    assert json.loads(replayed) == {'input': 'Oslo'}
+    assert response.message is not None
+    assert response.message.content[0].tool_request is not None
+    assert response.message.content[0].tool_request.input == 'Paris'
