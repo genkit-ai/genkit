@@ -138,10 +138,10 @@ class Channel(Generic[T_co, R]):
             self._close_future.add_done_callback(_handle_done)
 
     async def _pop(self) -> T_co:
+        # The close future ends the stream; None is an ordinary chunk
+        # (FlowContext[str | None]), same as on the get_nowait fast path.
         r = await self.queue.get()
         self.queue.task_done()
-        if r is None:
-            raise StopAsyncIteration
         return r
 
 

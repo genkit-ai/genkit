@@ -271,3 +271,22 @@ async def test_channel_anext_timeout_does_not_lose_next_chunk() -> None:
     assert await anext(channel) == 'second'
     with pytest.raises(StopAsyncIteration):
         await anext(channel)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('with_close_future', [False, True], ids=['open', 'with_close_future'])
+async def test_channel_none_chunk_on_the_wait_path_is_delivered(with_close_future: bool) -> None:
+    """A None chunk that arrives while the reader waits is a chunk, as on the fast path, not EOF."""
+    channel: Channel[str | None, str] = Channel()
+    done: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+    if with_close_future:
+        channel.set_close_future(done)
+
+    waiting = asyncio.create_task(channel.__anext__())
+    await asyncio.sleep(0)
+    channel.send(None)
+    assert await waiting is None
+
+    channel.send('after')
+    assert await channel.__anext__() == 'after'
+    done.set_result('end')
