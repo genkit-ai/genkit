@@ -113,14 +113,11 @@ def test_googleai_initialization_from_env() -> None:
 
 
 def test_googleai_initialization_without_api_key() -> None:
-    """Test GoogleAI plugin raises error without API key."""
+    """A keyless GoogleAI loads; the missing key surfaces on the first call instead."""
     with patch.dict(os.environ, {}, clear=True):
-        with pytest.raises(ValueError) as exc_info:
-            GoogleAI()
-        assert 'GEMINI_API_KEY environment variable not set' in str(exc_info.value)
-        assert 'Obtain an API key from Google AI Studio' in str(exc_info.value)
-        assert 'https://aistudio.google.com/app/apikey' in str(exc_info.value)
-        assert 'https://genkit.dev/docs/python/integrations/google-genai/' in str(exc_info.value)
+        plugin = GoogleAI()
+    assert plugin._plugin_api_key() is None
+    assert plugin._has_plugin_auth() is False
 
 
 def test_vertexai_initialization() -> None:

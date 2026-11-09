@@ -383,7 +383,9 @@ ai = Genkit(plugins=[OpenAI(api_key=os.environ['OPENAI_API_KEY'])])
 await ai.generate(model=m, prompt=p, context={'secrets': {'api_key': user_key}})
 ```
 
-Vertex AI Model Garden authenticates with ADC and rejects a per-request key. `ai.embed()` takes no `context`, so embedders always use the plugin's key.
+Vertex AI Model Garden authenticates with ADC and rejects a per-request key. `ai.embed()` and `ai.embed_many()` take the same `context=`, so a tenant key reaches Google AI, Vertex AI, and OpenAI embedders too.
+
+`GoogleAI()` reads `GEMINI_API_KEY`, then `GOOGLE_API_KEY`, then `GOOGLE_GENAI_API_KEY`, and no longer raises when none is set. A keyless plugin serves only requests that carry `context={'secrets': {'api_key': ...}}`; a request without one fails with `FAILED_PRECONDITION`. `secrets` that hold only app secrets (no `api_key`) fall back to the plugin key instead of failing.
 
 ## Flow contexts
 

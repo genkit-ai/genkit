@@ -30,7 +30,7 @@ from genkit_google_genai._interactions._converters import (
 from genkit_google_genai._interactions._options import ClientOptions
 from genkit_google_genai._models._routing import strip_ref_prefixes
 from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
-from genkit_google_genai._models._secrets import context_api_key
+from genkit_google_genai._models._secrets import context_api_key, missing_api_key_error
 
 from genkit import GenkitError, Message
 from genkit.model import ModelRequest
@@ -67,13 +67,7 @@ def api_key_for_context(context: dict[str, Any], plugin_api_key: str | None) -> 
     """Tenant key from context.secrets, else the plugin or env key."""
     api_key = context_api_key(context) or plugin_api_key or get_api_key_from_env()
     if not api_key:
-        raise GenkitError(
-            status='FAILED_PRECONDITION',
-            message=(
-                'Please pass in the API key or set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable.\n'
-                'For more details see https://genkit.dev/docs/plugins/google-genai/'
-            ),
-        )
+        raise missing_api_key_error()
     return api_key
 
 

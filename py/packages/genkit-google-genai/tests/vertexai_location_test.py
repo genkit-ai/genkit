@@ -674,7 +674,8 @@ class TestResolveRequestClient:
         assert exc.value.status == 'INVALID_ARGUMENT'
 
     @pytest.mark.asyncio
-    async def test_empty_secrets_is_invalid_argument(self) -> None:
+    async def test_secrets_without_api_key_uses_plugin_client(self) -> None:
+        """App secrets with no api_key fall back to the plugin key, as in genkit-openai."""
         client = MagicMock()
         client.vertexai = False
         model = GeminiModel(
@@ -682,9 +683,9 @@ class TestResolveRequestClient:
             client,
             client_kwargs={'vertexai': False, 'api_key': 'plugin-key'},
         )
-        with pytest.raises(GenkitError, match='context.secrets') as exc:
-            await model._resolve_request_client(_text_request(), context={'secrets': {}})
-        assert exc.value.status == 'INVALID_ARGUMENT'
+        for secrets in ({}, {'db_password': 'hunter2'}, {'api_key': ''}):
+            resolved = await model._resolve_request_client(_text_request(), context={'secrets': secrets})
+            assert resolved is client
 
     @pytest.mark.asyncio
     async def test_secrets_api_key_surrounding_whitespace_stripped(self) -> None:
@@ -786,7 +787,7 @@ class TestPluginModelWiring:
         assert action is not None
         with patch('genkit_google_genai._google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
-            await action._fn(_text_request(), MagicMock())
+            await action._fn(_text_request(), MagicMock(context={}))
         kwargs = mock_model.call_args.kwargs
         assert kwargs['client_kwargs'] is plugin._client_kwargs
         assert kwargs['base_url_pinned'] is plugin._base_url_pinned
@@ -802,7 +803,7 @@ class TestPluginModelWiring:
         assert action is not None
         with patch('genkit_google_genai._google.GeminiModel') as mock_model:
             mock_model.return_value.generate = AsyncMock(return_value=MagicMock())
-            await action._fn(_text_request(), MagicMock())
+            await action._fn(_text_request(), MagicMock(context={}))
         kwargs = mock_model.call_args.kwargs
         assert kwargs['client_kwargs'] is plugin._client_kwargs
 

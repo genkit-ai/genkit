@@ -756,15 +756,13 @@ class TestVeoContextClient:
         assert opts.api_version == 'v1'
 
     @pytest.mark.asyncio
-    async def test_empty_secrets_pocket_is_invalid_argument(self) -> None:
-        veo = VeoModel('veo-3.1-generate-001', MagicMock())
-        for pocket in ({}, {'api_key': None}, {'api_key': ''}):
-            with pytest.raises(GenkitError) as raised:
-                await veo.start(
-                    _text_request(),
-                    ModelContext(context={'secrets': pocket}),
-                )
-            assert raised.value.status == 'INVALID_ARGUMENT'
+    async def test_secrets_without_api_key_uses_plugin_client(self) -> None:
+        """App secrets with no api_key fall back to the plugin client."""
+        plugin_client = MagicMock()
+        veo = VeoModel('veo-3.1-generate-001', plugin_client)
+        for pocket in ({}, {'api_key': None}, {'api_key': ''}, {'db_password': 'hunter2'}):
+            client = veo._client_for_context(ModelContext(context={'secrets': pocket}))
+            assert client is plugin_client
 
     @pytest.mark.asyncio
     async def test_top_level_api_key_is_invalid_argument(self) -> None:

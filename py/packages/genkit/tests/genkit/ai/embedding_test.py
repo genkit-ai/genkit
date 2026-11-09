@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from genkit import Document, Genkit, GenkitError
+from genkit import Document, FlowContext, Genkit, GenkitError
 from genkit._core._action import Action, ActionResponse
 from genkit._core._schema import to_json_schema
 from genkit._core._typing import ActionMetadata, Embedding, EmbedResponse
@@ -823,3 +823,23 @@ def test_embed_request_options_schema_is_an_object() -> None:
     schema = to_json_schema(EmbedRequest)
 
     assert schema['properties']['options']['type'] == 'object'
+
+
+@pytest.mark.asyncio
+async def test_embed_and_embed_many_pass_context_to_embedder() -> None:
+    """context= reaches the embedder as ctx.context, so a provider can bill the tenant key."""
+    ai = Genkit()
+    seen: list[dict[str, Any]] = []
+
+    async def menu_embedder(request: EmbedRequest, ctx: FlowContext[Any]) -> EmbedResponse:
+        seen.append(ctx.context)
+        return EmbedResponse(embeddings=[Embedding(embedding=[0.1]) for _ in request.input])
+
+    ai.define_embedder('menu', menu_embedder)
+    tenant = {'secrets': {'api_key': 'tenant-key'}}
+
+    await ai.embed(embedder='menu', content='Smoked Salmon Tartine', context=tenant)
+    await ai.embed_many(embedder='menu', content=['Mushroom Risotto'], context=tenant)
+    await ai.embed(embedder='menu', content='no context')
+
+    assert seen == [tenant, tenant, {}]

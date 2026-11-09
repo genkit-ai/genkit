@@ -26,6 +26,25 @@ from genkit import GenkitError
 
 SECRETS_SLOT = "Pass the key as context={'secrets': {'api_key': ...}}."
 
+MISSING_API_KEY_MESSAGE = (
+    '\n[Genkit] No Gemini API key found.\n\n'
+    'To get started with Google AI models:\n'
+    '1. Obtain an API key from Google AI Studio: https://aistudio.google.com/app/apikey\n'
+    '2. Set your key in the terminal environment:\n'
+    '   export GEMINI_API_KEY="your-api-key"\n'
+    '   (GOOGLE_API_KEY and GOOGLE_GENAI_API_KEY are also read, in that order.)\n'
+    "   Or pass a per-request key as context={'secrets': {'api_key': ...}}.\n\n"
+    'Documentation: https://genkit.dev/docs/python/integrations/google-genai/\n'
+)
+
+
+def missing_api_key_error() -> GenkitError:
+    """No plugin key, no credentials, and no ``context.secrets.api_key``.
+
+    ``FAILED_PRECONDITION`` matches JS ``MISSING_API_KEY_ERROR``.
+    """
+    return GenkitError(status='FAILED_PRECONDITION', message=MISSING_API_KEY_MESSAGE)
+
 
 def misplaced_key_error() -> GenkitError:
     return GenkitError(
@@ -61,6 +80,10 @@ def context_api_key(context: dict[str, Any]) -> str | None:
     context is rejected so it cannot silently fall through to the
     plugin client. ``generate(..., config={'api_key': ...})`` is the
     same leftover — reject it on the request too.
+
+    Returns ``None`` when ``secrets`` holds only app secrets; the call
+    then falls back to the plugin key, as in genkit-openai and
+    genkit-anthropic.
     """
     extra = context.get('config')
     if isinstance(extra, dict) and (extra.get('api_key') is not None or extra.get('apiKey') is not None):
@@ -79,11 +102,6 @@ def context_api_key(context: dict[str, Any]) -> str | None:
     key = string_secret(secrets.get('api_key'))
     if key is None:
         key = string_secret(secrets.get('apiKey'))
-    if key is None:
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'context.secrets is set but has no api_key. {SECRETS_SLOT}',
-        )
     return key
 
 

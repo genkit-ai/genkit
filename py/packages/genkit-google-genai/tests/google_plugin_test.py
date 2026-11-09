@@ -127,13 +127,11 @@ class TestGoogleAIInit(unittest.TestCase):
         self.assertFalse(plugin._vertexai)
         self.assertIsInstance(runtime_client, MagicMock)
 
-    def test_init_raises_value_error_no_api_key(self) -> None:
-        """Test using credentials parameter."""
-        with (
-            patch.dict(os.environ, {'GEMINI_API_KEY': ''}, clear=True),
-            self.assertRaisesRegex(ValueError, r'GEMINI_API_KEY environment variable not set'),
-        ):
-            GoogleAI()
+    def test_init_without_api_key_does_not_raise(self) -> None:
+        """No key and no credentials still constructs; calls need context.secrets."""
+        with patch.dict(os.environ, {'GEMINI_API_KEY': ''}, clear=True):
+            plugin = GoogleAI()
+        self.assertIsNone(plugin._client_kwargs['api_key'])
 
 
 @patch('google.genai.client.Client')

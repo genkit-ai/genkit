@@ -62,7 +62,7 @@ from google.genai.types import HttpOptions, HttpRetryOptions, Model as GenaiMode
 from pydantic import BaseModel
 
 import genkit_google_genai._constants as const
-from genkit import GenkitError, ModelResponse, Operation, get_logger
+from genkit import FlowContext, GenkitError, ModelResponse, Operation, get_logger
 from genkit.embedder import Embedder, EmbedderRef, EmbedRequest, EmbedResponse
 from genkit.model import (
     BackgroundModel,
@@ -130,6 +130,7 @@ from genkit_google_genai._models._interactions_registry import (
     list_known_deep_research_models,
     list_known_lyria_models,
 )
+from genkit_google_genai._models._interactions_utils import get_api_key_from_env
 from genkit_google_genai._models._model_refs import (
     family_embedder_ref,
     family_model_ref,
@@ -139,7 +140,8 @@ from genkit_google_genai._models._routing import (
     is_unsupported_image_model_name,
     strip_ref_prefixes,
 )
-from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
+from genkit_google_genai._models._sdk_config import check_timeout_seconds, copy_http_options, timeout_seconds_to_ms
+from genkit_google_genai._models._secrets import context_api_key, missing_api_key_error
 from genkit_google_genai._models._veo import (
     KnownGoogleAIVeo,
     KnownVertexAIVeo,
@@ -272,11 +274,51 @@ def _plugin_client(client_kwargs: dict[str, Any]) -> genai.Client:
         raise_auth_error(e)
 
 
-def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
-    """Construct a GeminiModel using the plugin's loop-local client."""
+def _tenant_client_kwargs(kwargs: dict[str, Any], api_key: str) -> dict[str, Any]:
+    """Plugin kwargs rebuilt on a ``context.secrets`` key.
+
+    Same shape GeminiModel and VeoModel use for a tenant key: no
+    credentials, project, location, or plugin ``base_url``.
+    """
+    tenant = dict(kwargs)
+    tenant['api_key'] = api_key
+    tenant['credentials'] = None
+    tenant.pop('project', None)
+    tenant.pop('location', None)
+    plugin_opts = tenant.get('http_options')
+    opts = copy_http_options(plugin_opts) if plugin_opts is not None else HttpOptions()
+    opts.base_url = None
+    tenant['http_options'] = opts
+    return tenant
+
+
+def _call_client(
+    plugin: GoogleAI | VertexAI, context: dict[str, Any] | None, *, prefer_secret: bool = False
+) -> genai.Client:
+    """Client for one action call.
+
+    Order: ``context.secrets.api_key``, then the plugin key or credentials,
+    else ``FAILED_PRECONDITION``. The plugin client is only built when the
+    plugin has auth: ``genai.Client(api_key=None)`` raises ``ValueError``.
+
+    Gemini and Veo re-read the secret and clone their own request client,
+    so they get the plugin client when it exists (``prefer_secret=False``).
+    The embedder has no such step and asks for the tenant client directly.
+    """
+    secret = context_api_key(context or {})
+    has_auth = plugin._has_plugin_auth()
+    if secret is not None and (prefer_secret or not has_auth):
+        return _plugin_client(_tenant_client_kwargs(plugin._loop_client_kwargs(), secret))
+    if has_auth:
+        return plugin._runtime_client()
+    raise missing_api_key_error()
+
+
+def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str, context: dict[str, Any] | None = None) -> GeminiModel:
+    """Construct a GeminiModel on the plugin's loop-local client, or a tenant client when the plugin has no key."""
     return GeminiModel(
         clean_name,
-        plugin._runtime_client(),
+        _call_client(plugin, context),
         client_kwargs=plugin._loop_client_kwargs(),
         base_url_pinned=plugin._base_url_pinned,
         legacy_response_schema=plugin._legacy_response_schema,
@@ -314,14 +356,15 @@ def vertexai_name(name: str) -> str:
 
 def _create_embedder_action(
     name: str,
-    client_getter: Callable[[], genai.Client],
+    client_getter: Callable[[dict[str, Any]], genai.Client],
     plugin_name: str,
 ) -> Action:
     """Create an Action object for an embedder.
 
     Args:
         name: The embedder id without the plugin prefix.
-        client_getter: Function returning the loop-local Google GenAI client.
+        client_getter: Takes the call's context and returns the client: a
+            tenant client for ``context.secrets.api_key``, else the plugin's.
         plugin_name: The name of the plugin (googleai or vertexai).
 
     Returns:
@@ -335,10 +378,10 @@ def _create_embedder_action(
         is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
     )
 
-    async def _run(request: EmbedRequest[EmbeddingConfig]) -> EmbedResponse:
+    async def _run(request: EmbedRequest[EmbeddingConfig], ctx: FlowContext[Any]) -> EmbedResponse:
         embedder_client = GoogleEmbedder(
             version=name,
-            client=client_getter(),
+            client=client_getter(ctx.context),
             is_vertex=(plugin_name == VERTEXAI_PLUGIN_NAME),
         )
         return await embedder_client.generate(request)
@@ -348,7 +391,7 @@ def _create_embedder_action(
 
 def _create_veo_background_model(
     name: str,
-    client_getter: Callable[[], genai.Client],
+    client_getter: Callable[[dict[str, Any]], genai.Client],
     plugin_name: str,
     client_kwargs: Callable[[], dict[str, Any]] | None = None,
 ) -> BackgroundModel:
@@ -361,7 +404,8 @@ def _create_veo_background_model(
 
     Args:
         name: The model id without the plugin prefix.
-        client_getter: Function returning the loop-local Google GenAI client.
+        client_getter: Takes the call's context and returns the plugin's
+            loop-local client, or a tenant client when the plugin has no key.
         plugin_name: The name of the plugin (googleai or vertexai).
         client_kwargs: Returns the plugin-level client kwargs for the running
             loop, cloned when a call overrides the key or endpoint.
@@ -372,11 +416,11 @@ def _create_veo_background_model(
     full_name = f'{plugin_name}/{name}'
 
     async def _start(request: ModelRequest[VeoConfig], ctx: ModelContext) -> Operation:
-        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs() if client_kwargs else None)
+        veo = VeoModel(name, client_getter(ctx.context), client_kwargs=client_kwargs() if client_kwargs else None)
         return await veo.start(request, ctx)
 
     async def _check(op: Operation, ctx: ModelContext) -> Operation:
-        veo = VeoModel(name, client_getter(), client_kwargs=client_kwargs() if client_kwargs else None)
+        veo = VeoModel(name, client_getter(ctx.context), client_kwargs=client_kwargs() if client_kwargs else None)
         return await veo.check(op, ctx)
 
     return BackgroundModel(
@@ -600,8 +644,11 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
 
         Args:
             api_key: The API key for authenticating with the Google AI service.
-                If not provided, it defaults to reading from the 'GEMINI_API_KEY'
-                environment variable.
+                If not provided, reads ``GEMINI_API_KEY``, then ``GOOGLE_API_KEY``,
+                then ``GOOGLE_GENAI_API_KEY``. With no key and no ``credentials``
+                the plugin still loads: each call then needs
+                ``context={'secrets': {'api_key': ...}}``, and a call without
+                one raises ``GenkitError`` with ``FAILED_PRECONDITION``.
             credentials: Google Cloud credentials for authentication.
                 Defaults to None, in which case the client uses default authentication
                 mechanisms (e.g., application default credentials or API key).
@@ -663,22 +710,10 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 ``responseSchema`` field instead of ``responseJsonSchema``,
                 converted to its format; a schema that cannot be converted
                 raises ``INVALID_ARGUMENT``. Defaults to False.
-
-        Raises:
-            ValueError: If `api_key` is not provided and the 'GEMINI_API_KEY'
-                environment variable is not set.
         """
-        api_key = api_key if api_key else os.getenv('GEMINI_API_KEY')
-        if not api_key and credentials is None:
-            msg = (
-                '\n[Genkit] GEMINI_API_KEY environment variable not set.\n\n'
-                'To get started with Google AI models:\n'
-                '1. Obtain an API key from Google AI Studio: https://aistudio.google.com/app/apikey\n'
-                '2. Set your key in the terminal environment:\n'
-                '   export GEMINI_API_KEY="your-api-key"\n\n'
-                'Documentation: https://genkit.dev/docs/python/integrations/google-genai/\n'
-            )
-            raise ValueError(msg)
+        # A missing key is not an error here: BYOK gateways boot keyless and
+        # pass context.secrets per call. _call_client raises on the first call.
+        api_key = api_key or get_api_key_from_env()
 
         self._client_kwargs: dict[str, Any] = {
             'vertexai': self._vertexai,
@@ -727,13 +762,29 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         raw = self._client_kwargs.get('api_key')
         return raw if isinstance(raw, str) else None
 
+    def _has_plugin_auth(self) -> bool:
+        """True when the plugin can build its own client (a key or credentials)."""
+        return bool(self._client_kwargs.get('api_key')) or self._client_kwargs.get('credentials') is not None
+
+    async def _listed_models(self) -> GenaiModels:
+        """Models from the API, or none for a keyless plugin (no key to list with)."""
+        if not self._has_plugin_auth():
+            return GenaiModels()
+        return await _list_genai_models(self._runtime_client(), is_vertex=False)
+
+    def _call_client(self, context: dict[str, Any]) -> genai.Client:
+        return _call_client(self, context)
+
+    def _embed_client(self, context: dict[str, Any]) -> genai.Client:
+        return _call_client(self, context, prefer_secret=True)
+
     async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
 
         Returns:
             Actions and background models for known/supported models.
         """
-        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
+        genai_models = await self._listed_models()
 
         actions: list[Action | BackgroundAction[Any, Any]] = []
         # Gemini Models
@@ -818,7 +869,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         Returns:
             BackgroundModel for the Veo model.
         """
-        return _create_veo_background_model(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME, self._loop_client_kwargs)
+        return _create_veo_background_model(name, self._call_client, GOOGLEAI_PLUGIN_NAME, self._loop_client_kwargs)
 
     def _resolve_model(self, name: str) -> Action | None:
         """Create an Action object for a Google AI model.
@@ -860,26 +911,26 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         if is_tts_model(name):
 
             async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(name):
 
             async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(name):
 
             async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
         async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
-            return await _new_gemini(self, name).generate(request, ctx)
+            return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
         return _model_action(action_name, _run, model_info, GeminiConfig)
 
@@ -892,7 +943,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         Returns:
             Action object for the embedder.
         """
-        return _create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME)
+        return _create_embedder_action(name, self._embed_client, GOOGLEAI_PLUGIN_NAME)
 
     async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Generate a list of available actions or models.
@@ -902,7 +953,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         """
         if self._list_actions_cache is not None:
             return self._list_actions_cache
-        genai_models = await _list_genai_models(self._runtime_client(), is_vertex=False)
+        genai_models = await self._listed_models()
         actions_list: list[Action | BackgroundAction[Any, Any]] = []
 
         for name in genai_models.gemini:
@@ -913,7 +964,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
             actions_list.append(
                 _create_veo_background_model(
                     name,
-                    self._runtime_client,
+                    self._call_client,
                     GOOGLEAI_PLUGIN_NAME,
                     client_kwargs=self._loop_client_kwargs,
                 )
@@ -935,7 +986,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 actions_list.append(model_action)
 
         for name in genai_models.embedders:
-            actions_list.append(_create_embedder_action(name, self._runtime_client, GOOGLEAI_PLUGIN_NAME))
+            actions_list.append(_create_embedder_action(name, self._embed_client, GOOGLEAI_PLUGIN_NAME))
 
         self._list_actions_cache = actions_list
         return actions_list
@@ -1202,6 +1253,16 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         """Client kwargs carrying this loop's client from ``http_client_factory``, if one was given."""
         return _with_loop_http_client(self._client_kwargs, self._http_client_factory)
 
+    def _has_plugin_auth(self) -> bool:
+        # Vertex falls back to ADC; the client itself reports missing credentials.
+        return True
+
+    def _call_client(self, context: dict[str, Any]) -> genai.Client:
+        return _call_client(self, context)
+
+    def _embed_client(self, context: dict[str, Any]) -> genai.Client:
+        return _call_client(self, context, prefer_secret=True)
+
     async def init(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Initialize the plugin.
 
@@ -1286,7 +1347,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         Returns:
             BackgroundModel for the Veo model.
         """
-        return _create_veo_background_model(name, self._runtime_client, VERTEXAI_PLUGIN_NAME, self._loop_client_kwargs)
+        return _create_veo_background_model(name, self._call_client, VERTEXAI_PLUGIN_NAME, self._loop_client_kwargs)
 
     def _resolve_evaluator(self, name: str) -> Action | None:
         """Create an Action object for a Vertex AI evaluator.
@@ -1368,7 +1429,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             )
 
             async def _run_tuned(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_tuned, model_info, GeminiConfig)
 
@@ -1378,26 +1439,26 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         if is_tts_model(name):
 
             async def _run_tts(request: ModelRequest[GeminiTtsConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_tts, model_info, GeminiTtsConfig)
 
         if is_image_model(name):
 
             async def _run_image(request: ModelRequest[GeminiImageConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_image, model_info, GeminiImageConfig)
 
         if is_gemma_model(name):
 
             async def _run_gemma(request: ModelRequest[GemmaConfig], ctx: ModelContext) -> ModelResponse:
-                return await _new_gemini(self, name).generate(request, ctx)
+                return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
             return _model_action(action_name, _run_gemma, model_info, GemmaConfig)
 
         async def _run(request: ModelRequest[GeminiConfig], ctx: ModelContext) -> ModelResponse:
-            return await _new_gemini(self, name).generate(request, ctx)
+            return await _new_gemini(self, name, ctx.context).generate(request, ctx)
 
         return _model_action(action_name, _run, model_info, GeminiConfig)
 
@@ -1410,7 +1471,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
         Returns:
             Action object for the embedder.
         """
-        return _create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME)
+        return _create_embedder_action(name, self._embed_client, VERTEXAI_PLUGIN_NAME)
 
     async def list_actions(self) -> list[Action | BackgroundAction[Any, Any]]:
         """Generate a list of available actions or models.
@@ -1431,7 +1492,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
             actions_list.append(
                 _create_veo_background_model(
                     name,
-                    self._runtime_client,
+                    self._call_client,
                     VERTEXAI_PLUGIN_NAME,
                     client_kwargs=self._loop_client_kwargs,
                 )
@@ -1442,7 +1503,7 @@ class VertexAI(GoogleFamilyRefs, Plugin):
                 actions_list.append(action)
 
         for name in VERTEX_KNOWN_EMBEDDERS:
-            actions_list.append(_create_embedder_action(name, self._runtime_client, VERTEXAI_PLUGIN_NAME))
+            actions_list.append(_create_embedder_action(name, self._embed_client, VERTEXAI_PLUGIN_NAME))
 
         if self._project:
             actions_list.extend(
