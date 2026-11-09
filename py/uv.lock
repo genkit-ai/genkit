@@ -1501,6 +1501,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/9c/34f6962f9b9e9c71f6e5ed806e0d0ff03c9d1b0b2340088a0cf4bce09b18/flask-3.1.3-py3-none-any.whl", hash = "sha256:f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c", size = 103424, upload-time = "2026-02-19T05:00:56.027Z" },
 ]
 
+[package.optional-dependencies]
+async = [
+    { name = "asgiref" },
+]
+
 [[package]]
 name = "flask-hello"
 version = "0.2.0"
@@ -1780,14 +1785,14 @@ name = "genkit-flask"
 version = "0.13.0"
 source = { editable = "packages/genkit-flask" }
 dependencies = [
-    { name = "flask" },
+    { name = "flask", extra = ["async"] },
     { name = "genkit" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "flask", specifier = ">=3.1.3" },
+    { name = "flask", extras = ["async"], specifier = ">=3.1.3" },
     { name = "genkit", editable = "packages/genkit" },
     { name = "pydantic", specifier = ">=2.11" },
 ]

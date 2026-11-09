@@ -21,15 +21,18 @@ import asyncio
 import json
 import logging
 import threading
+import urllib.request
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
-from flask import Flask, abort
+from flask import Flask, abort, g, request
 from genkit_flask import genkit_flask_handler
 from genkit_flask._handler import _iter_over_async
 from pydantic import BaseModel
+from werkzeug.serving import make_server
 
 from genkit import FlowContext, Genkit, GenkitError, PublicError
 from genkit.plugin_api import provider_error
@@ -498,44 +501,121 @@ def test_flask_streaming_client_disconnect_cancels_flow() -> None:
     assert cleanup_finished.is_set()
 
 
-def test_flask_iter_over_async_skips_aclose_when_loop_closed() -> None:
-    """Closing `_iter_over_async` after `loop.close()` does not raise `RuntimeError` or leak an unawaited coroutine."""
-    loop = asyncio.new_event_loop()
+def test_flask_iter_over_async_closes_its_loop_after_cleanup() -> None:
+    """Closing early runs the source's async `finally:` on the private loop, then closes that loop."""
+    seen_loops: list[asyncio.AbstractEventLoop] = []
+    cleaned_up = threading.Event()
 
-    async def source() -> AsyncIterator[str]:
-        yield 'first'
-        yield 'second'
+    async def source() -> AsyncGenerator[str, None]:
+        seen_loops.append(asyncio.get_running_loop())
+        try:
+            yield 'first'
+            yield 'second'
+        finally:
+            await asyncio.sleep(0)
+            cleaned_up.set()
 
-    sync_iter = _iter_over_async(source(), loop)
+    sync_iter = _iter_over_async(source())
     assert next(sync_iter) == 'first'
-    loop.close()
-
     with warnings.catch_warnings():
         warnings.simplefilter('error', RuntimeWarning)
         sync_iter.close()
 
+    assert cleaned_up.is_set()
+    assert seen_loops[0].is_closed()
 
-def test_flask_iter_over_async_skips_aclose_when_loop_running() -> None:
-    """Closing `_iter_over_async` while `loop` is busy does not raise `RuntimeError` or leak a coroutine."""
-    loop = asyncio.new_event_loop()
 
-    async def source() -> AsyncIterator[str]:
-        yield 'first'
-        yield 'second'
+def test_flask_iter_over_async_cancels_tasks_the_source_left_behind() -> None:
+    """A background task the source spawned is cancelled before the private loop closes."""
+    task_cancelled = threading.Event()
 
-    sync_iter = _iter_over_async(source(), loop)
-    assert next(sync_iter) == 'first'
+    async def linger() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            task_cancelled.set()
+            raise
 
-    async def close_while_busy() -> None:
-        assert loop.is_running()
-        with warnings.catch_warnings():
-            warnings.simplefilter('error', RuntimeWarning)
-            sync_iter.close()
+    async def source() -> AsyncGenerator[str, None]:
+        asyncio.get_running_loop().create_task(linger())
+        yield 'only'
 
+    assert list(_iter_over_async(source())) == ['only']
+    assert task_cancelled.is_set()
+
+
+def _serve(app: Flask) -> tuple[Any, str]:
+    server = make_server('127.0.0.1', 0, app, threaded=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, f'http://127.0.0.1:{server.server_port}'
+
+
+def _post_sse(url: str, payload: object, headers: dict[str, str] | None = None) -> tuple[int, list[str]]:
+    req = urllib.request.Request(  # noqa: S310 - loopback test server
+        url,
+        data=json.dumps({'data': payload}).encode(),
+        headers={'Content-Type': 'application/json', 'Accept': 'text/event-stream', **(headers or {})},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - loopback test server
+        return resp.status, [line.decode().strip() for line in resp if line.strip()]
+
+
+def test_flask_concurrent_sse_streams_on_threaded_wsgi_server_all_succeed() -> None:
+    """Eight SSE requests at once on a threaded WSGI server each stream to completion.
+
+    Regression: one loop shared by every stream made 7 of 8 fail with
+    "This event loop is already running".
+    """
+    ai = Genkit()
+    app = Flask(__name__)
+
+    @app.post('/countdown')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def countdown(start: int, ctx: FlowContext) -> str:
+        for n in range(start, 0, -1):
+            ctx.send_chunk(n)
+            await asyncio.sleep(0.01)
+        return f'liftoff from {start}'
+
+    server, base = _serve(app)
     try:
-        loop.run_until_complete(close_while_busy())
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda i: _post_sse(f'{base}/countdown', 5 + i), range(8)))
     finally:
-        loop.close()
+        server.shutdown()
+
+    for i, (status, events) in enumerate(results):
+        assert status == 200
+        assert events[-1] == f'data: {{"result":"liftoff from {5 + i}"}}'
+        assert len(events) == 5 + i + 1
+
+
+def test_flask_streamed_flow_can_read_flask_g_and_request() -> None:
+    """`flask.g` and `flask.request` stay readable inside a flow served over SSE."""
+    ai = Genkit()
+    app = Flask(__name__)
+
+    @app.before_request
+    def tag_request() -> None:
+        g.request_id = request.headers.get('X-Request-Id', 'missing')
+
+    @app.post('/whoami')
+    @genkit_flask_handler(ai)
+    @ai.flow()
+    async def whoami(_: str, ctx: FlowContext) -> str:
+        ctx.send_chunk(g.request_id)
+        return request.headers['X-Request-Id']
+
+    server, base = _serve(app)
+    try:
+        status, events = _post_sse(f'{base}/whoami', 'x', {'X-Request-Id': 'order-1042'})
+    finally:
+        server.shutdown()
+
+    assert status == 200
+    assert events == ['data: {"message":"order-1042"}', 'data: {"result":"order-1042"}']
 
 
 def test_flask_failure_logs_name_the_flow(caplog: pytest.LogCaptureFixture) -> None:

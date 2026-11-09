@@ -20,11 +20,10 @@ import asyncio
 import contextlib
 import json
 import logging
-from asyncio import AbstractEventLoop
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Generator
-from typing import Any, TypeVar, cast
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
+from typing import Any, cast
 
-from flask import Response, request
+from flask import Response, request, stream_with_context
 from werkzeug.exceptions import HTTPException
 
 from genkit import Genkit, GenkitError, PublicError
@@ -76,42 +75,39 @@ def _parse_request_json() -> object:
         raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
 
 
-T = TypeVar('T')
+def _iter_over_async(agen: AsyncGenerator[str, None]) -> Generator[str, None, None]:
+    """Drive ``agen`` on a private event loop owned by this response.
 
-
-def _create_loop() -> AbstractEventLoop:
-    """Creates a new asyncio event loop or returns the current one."""
-    try:
-        return asyncio.get_event_loop()
-    except Exception:
-        return asyncio.new_event_loop()
-
-
-def _iter_over_async(ait: AsyncIterable[T], loop: AbstractEventLoop) -> Generator[T, None, None]:
-    """Synchronously iterates over an AsyncIterable using a specified event loop."""
-    ait_iter = ait.__aiter__()
-
-    async def get_next() -> tuple[bool, T | None]:
-        try:
-            obj = await ait_iter.__anext__()
-            return False, obj
-        except StopAsyncIteration:
-            return True, None
-
+    WSGI servers iterate the body on a worker thread after the async view has
+    returned and asgiref has closed the view's loop. Each response gets its own
+    loop, driven from whichever thread iterates it, so concurrent streams never
+    share a loop (a shared loop fails with "This event loop is already
+    running"). Tasks the flow starts copy the iterating thread's context, which
+    ``stream_with_context`` has pushed, so ``flask.g`` and ``flask.request``
+    work inside the flow.
+    """
+    loop = asyncio.new_event_loop()
     try:
         while True:
-            done, obj = loop.run_until_complete(get_next())
-            if done:
+            try:
+                item = loop.run_until_complete(anext(agen))
+            except StopAsyncIteration:
                 break
-            assert obj is not None
-            yield obj
+            yield item
     finally:
         # Werkzeug closes this iterator when the client hangs up. The async side
         # only runs while we drive the loop, so close it here or the flow never
-        # hears about it.
-        aclose = getattr(ait_iter, 'aclose', None)
-        if aclose is not None and not loop.is_closed() and not loop.is_running():
-            loop.run_until_complete(aclose())
+        # hears about it, then reap what it left behind before the loop goes.
+        try:
+            loop.run_until_complete(agen.aclose())
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.wait(pending))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
 
 
 class _FlaskRequestData(RequestData):
@@ -155,7 +151,6 @@ def genkit_flask_handler(
     ```
 
     """
-    loop = _create_loop()
 
     def decorator(flow: Action) -> Callable[..., Awaitable[Response]]:
         if not isinstance(flow, Action):
@@ -192,7 +187,7 @@ def genkit_flask_handler(
             init = input_data.get('init')
             if wants_stream(accept=request_data.headers.get('accept'), stream=request.args.get('stream')):
 
-                async def async_gen() -> AsyncIterator[str]:
+                async def async_gen() -> AsyncGenerator[str, None]:
                     try:
                         stream_response = flow.stream(input=action_input, context=action_context, init=init)
                     except Exception as e:
@@ -205,7 +200,9 @@ def genkit_flask_handler(
                         async for line in lines:
                             yield line
 
-                return Response(_iter_over_async(async_gen(), loop), mimetype='text/event-stream')
+                # pyrefly can't solve Flask's AnyStr overload for a str generator.
+                sse_body = stream_with_context(_iter_over_async(async_gen()))  # pyrefly: ignore[no-matching-overload]
+                return Response(sse_body, mimetype='text/event-stream')
             try:
                 response = await flow.run(input=action_input, context=action_context, init=init)
                 return Response(response=result_json(response.response), mimetype='application/json')
