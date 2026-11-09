@@ -1972,9 +1972,13 @@ async def call_model(
     # request the caller made instead of a rebuilt subset of it.
     call.request = request
 
+    sent: list[ModelRequest] = []
+
     async def run_action(params: ModelHookParams, c: MiddlewareContext) -> ModelResponse:
         # After they stop, another model call would be billed and thrown away.
         raise_if_stopped(call.caller_stopped)
+        # What the provider actually received, after every wrap_model edit.
+        sent.append(params.request)
         if is_debug_enabled(logger):
             logger.debug(
                 'calling model',
@@ -2032,7 +2036,9 @@ async def call_model(
             ),
             name=turn_model.name,
         )
-    response.request = request
+    # Echo the request the model saw, not the pre-middleware one: a wrap_model
+    # that redacts PII must not see the raw text come back on response.request.
+    response.request = sent[-1] if sent else request
     formatter = resolved.formatter
     if formatter:
         parse = formatter.parse_message

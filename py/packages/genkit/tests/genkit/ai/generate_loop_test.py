@@ -505,3 +505,36 @@ def test_from_tool_response_unwraps_a_multipart_output() -> None:
     assert part.tool_response.content is not None
     assert len(part.tool_response.content) == 1
     assert part.metadata == {'cached': True}
+
+
+@pytest.mark.asyncio
+async def test_response_request_is_what_the_model_received() -> None:
+    """A wrap_model that strips sensitive docs must not see them echoed on response.request.
+
+    Messages on response.request stay the resendable history by design; scrub
+    those in wrap_generate.
+    """
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_answers('ok')]
+
+    class DropPatientDocs(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            return await next_fn(ModelHookParams(request=params.request.model_copy(update={'docs': None})), ctx)
+
+    response = await ai.generate(
+        prompt='summarize',
+        docs=[Document.from_text('patient SSN 123-45-6789')],
+        use=[DropPatientDocs()],
+    )
+
+    assert pm.last_request is not None
+    assert pm.last_request.docs is None
+    assert response.request is not None
+    assert response.request.docs is None
+    assert [m.text for m in response.request.messages] == ['summarize']
