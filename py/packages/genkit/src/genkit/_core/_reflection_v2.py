@@ -79,6 +79,7 @@ from genkit._core._typing import (
 logger = get_logger(__name__)
 
 GENKIT_REFLECTION_API_SPEC_VERSION = 1
+_MAX_MESSAGE_BYTES = 100 * 1024 * 1024
 
 JSON_RPC_METHOD_NOT_FOUND = -32601
 JSON_RPC_INVALID_PARAMS = -32602
@@ -179,6 +180,9 @@ class ReflectionServerV2:
                     self.ws_url,
                     ping_interval=20,
                     ping_timeout=20,
+                    # websockets defaults to 1 MiB; one screenshot in runAction or
+                    # GoogleAI's listActions exceeds that. Match the CLI's 100 MiB.
+                    max_size=_MAX_MESSAGE_BYTES,
                 ) as ws:
                     self.ws = ws
                     attempt = 0
@@ -288,6 +292,9 @@ class ReflectionServerV2:
             envs=['dev'],
             secret=self.secret,
         ).model_dump(by_alias=True, exclude_none=True)
+        # The generated schema types these as float; send integers like JS.
+        params['pid'] = os.getpid()
+        params['reflectionApiSpecVersion'] = GENKIT_REFLECTION_API_SPEC_VERSION
         try:
             result = await self.send_request('register', params)
             if isinstance(result, dict) and (telemetry_url := result.get('telemetryServerUrl')):

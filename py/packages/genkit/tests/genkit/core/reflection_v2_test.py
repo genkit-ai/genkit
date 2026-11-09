@@ -170,9 +170,11 @@ async def test_reflection_server_v2_register(fake_manager: FakeReflectionManager
         assert isinstance(params, dict)
         assert params.get('name') == 'test-app'
         assert params.get('id')
-        assert isinstance(params.get('pid'), (int, float))
+        # Integers on the wire, like JS (the generated schema types them as float).
+        assert type(params.get('pid')) is int
         assert str(params.get('genkitVersion', '')).startswith('py/')
-        assert isinstance(params.get('reflectionApiSpecVersion'), (int, float))
+        assert params.get('reflectionApiSpecVersion') == 1
+        assert type(params.get('reflectionApiSpecVersion')) is int
         envs = params.get('envs')
         assert isinstance(envs, list) and envs == ['dev']
     finally:
@@ -1140,5 +1142,37 @@ async def test_reflection_server_v2_run_bidi_action_context_reaches_agent(
         assert resp.get('id') == 'bidi-ctx'
         assert resp.get('error') is None
         assert resp['result']['result'] == {'context': caller}
+    finally:
+        await _stop_client(client, task)
+
+
+@pytest.mark.asyncio
+async def test_reflection_v2_accepts_messages_over_one_mib(fake_manager: FakeReflectionManager) -> None:
+    """A runAction carrying a screenshot (>1 MiB) must not close the socket with 1009."""
+    registry = Registry()
+
+    async def measure(data: str) -> int:
+        return len(data)
+
+    registry.register_action_from_instance(Action(ActionKind.CUSTOM, 'test/measure', measure))
+    payload = 'x' * (3 * 1024 * 1024 // 2)
+
+    client, task = await _run_client_lifecycle(registry, fake_manager)
+    try:
+        await ack_register(fake_manager)
+        await fake_manager.write_rpc({
+            'jsonrpc': '2.0',
+            'method': 'runAction',
+            'params': {'key': '/custom/test/measure', 'input': payload},
+            'id': 'big',
+        })
+        resp: dict[str, Any] | None = None
+        while resp is None:
+            msg = await fake_manager.read_rpc(timeout=5.0)
+            if msg.get('method') == 'runActionState':
+                continue
+            resp = msg
+        assert resp.get('id') == 'big'
+        assert resp['result']['result'] == len(payload)
     finally:
         await _stop_client(client, task)
