@@ -37,11 +37,11 @@ them in the Dev UI and to name them in a ``.prompt`` file's ``use:``.
 
 from genkit.middleware import Middleware as GenkitMiddleware
 from genkit.plugin_api import Action, ActionKind, Plugin
-from genkit_middleware._fallback import Fallback
-from genkit_middleware._filesystem import Filesystem
-from genkit_middleware._retry import Retry
-from genkit_middleware._skills import Skills
-from genkit_middleware._tool_approval import ToolApproval
+from genkit_middleware._fallback import Fallback, FallbackConfig, FallbackModelEntry
+from genkit_middleware._filesystem import Filesystem, FilesystemConfig
+from genkit_middleware._retry import Retry, RetryConfig
+from genkit_middleware._skills import Skills, SkillsConfig
+from genkit_middleware._tool_approval import ToolApproval, ToolApprovalConfig
 
 
 class Middleware(Plugin):
@@ -97,9 +97,15 @@ class Middleware(Plugin):
 
 __all__ = [
     'Fallback',
+    'FallbackConfig',
+    'FallbackModelEntry',
     'Filesystem',
+    'FilesystemConfig',
     'Middleware',
     'Retry',
+    'RetryConfig',
     'Skills',
+    'SkillsConfig',
     'ToolApproval',
+    'ToolApprovalConfig',
 ]

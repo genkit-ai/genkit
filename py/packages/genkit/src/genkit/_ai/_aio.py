@@ -1326,7 +1326,11 @@ class Genkit:
                 if isinstance(plugin, Plugin):  # pyright: ignore[reportUnnecessaryIsInstance]
                     self._registry.register_plugin(plugin)
                 else:
-                    raise ValueError(f'Invalid {plugin=} provided to Genkit: must be of type `genkit.ai.Plugin`')
+                    raise ValueError(
+                        f'Invalid {plugin=} provided to Genkit: must be a `genkit.plugin_api.Plugin` instance. '
+                        'Middleware classes such as `genkit.middleware.Middleware` subclasses go in `use=[...]`; '
+                        'register the `genkit_middleware.Middleware()` plugin in `plugins=[...]`.'
+                    )
 
     def _register_plugin_middleware(self, plugins: list[Plugin] | None) -> None:
         """Register middleware classes returned by ``Plugin.list_middleware``."""
