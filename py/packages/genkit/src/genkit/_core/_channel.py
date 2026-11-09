@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
+import weakref
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Coroutine
 from typing import Any, Generic, TypeVar
 
@@ -182,14 +184,32 @@ def mirror_result(task: asyncio.Future[_ResultT], pick: Callable[[_ResultT], _Pi
     return mirror
 
 
+_pending_stops: set[asyncio.Task[None]] = set()
+
+
+def _spawn_stop(stop: Callable[[], Awaitable[None]]) -> None:
+    task = asyncio.ensure_future(stop())
+    _pending_stops.add(task)
+    task.add_done_callback(_pending_stops.discard)
+
+
 class StoppableStream(AsyncIterator[T]):
     """Single-pass ``AsyncIterator`` over a run's chunks, with explicit ``aclose()``.
 
-    ``__aiter__`` returns ``self`` (``aiter(s) is s``), so reading zero chunks,
-    pulling individual chunks with ``await anext(s)``, or exiting a bare
-    ``async for`` without closing leaves the background run going. Closing via
+    ``__aiter__`` returns ``self`` (``aiter(s) is s``). Closing via
     ``async with`` or ``await s.aclose()`` stops the run if it hasn't finished
-    and waits for cleanup.
+    and waits for cleanup. Without a close, the run is also stopped when:
+
+    - the task reading it is cancelled while waiting for a chunk and ends
+      cancelled (a web adapter cancelling the flow on client disconnect, a
+      failing ``TaskGroup``). A timeout around one ``__anext__()`` (an SSE
+      heartbeat tick) doesn't count: the reader carries on.
+    - the reader started iterating, then dropped the stream unfinished (a bare
+      ``async for`` that hits ``break``, then lets the stream go out of scope).
+
+    Both stops are scheduled on the loop; use ``async with`` to wait for
+    cleanup. Reading zero chunks leaves the run going, so
+    ``await s.response`` alone still works.
     """
 
     def __init__(self, *, chunks: AsyncIterable[T], stop: Callable[[], Awaitable[None]] | None) -> None:
@@ -197,6 +217,9 @@ class StoppableStream(AsyncIterator[T]):
         self._source: AsyncIterator[T] | None = None
         self._stop = stop
         self._finished = False
+        self._stopped = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._watched: weakref.WeakSet[asyncio.Task[Any]] = weakref.WeakSet()
 
     @override
     def __aiter__(self) -> Self:
@@ -208,16 +231,53 @@ class StoppableStream(AsyncIterator[T]):
             raise StopAsyncIteration
         if self._source is None:
             self._source = self._chunks.__aiter__()
+            self._loop = asyncio.get_running_loop()
         try:
             return await self._source.__anext__()
         except StopAsyncIteration:
             self._finished = True
             raise
+        except asyncio.CancelledError:
+            self._stop_if_reader_dies()
+            raise
+
+    def _stop_if_reader_dies(self) -> None:
+        """Stop the run once the cancelled reader task ends cancelled.
+
+        A cancelled `async for` never calls aclose(), so the run would keep
+        generating (and calling tools) with nobody reading. The decision waits
+        for the task to end because a timeout around a single __anext__()
+        also cancels it, and that reader keeps going.
+        """
+        task = asyncio.current_task()
+        if self._stop is None or task is None or task in self._watched:
+            return
+        # A task whose whole job is this one __anext__() (wait_for before
+        # 3.12, ensure_future(anext(s))) is a poll, not the reader.
+        if getattr(task.get_coro(), 'cr_code', None) is StoppableStream.__anext__.__code__:
+            return
+        self._watched.add(task)
+        task.add_done_callback(self._on_reader_done)
+
+    def _on_reader_done(self, task: asyncio.Task[Any]) -> None:
+        if task.cancelled() and not (self._stop is None or self._stopped or self._finished):
+            self._stopped = True
+            _spawn_stop(self._stop)
+
+    def __del__(self) -> None:
+        # A bare `async for` that breaks never calls aclose(). Once the reader
+        # lets go of a stream it started reading, stop the run.
+        if self._stop is None or self._stopped or self._finished or self._loop is None:
+            return
+        self._stopped = True
+        with contextlib.suppress(RuntimeError):  # loop already closed
+            self._loop.call_soon_threadsafe(_spawn_stop, self._stop)
 
     async def aclose(self) -> None:
         """Stop the run if it hasn't finished, and wait for it to end."""
         if self._finished:
             return
+        self._stopped = True
         target = self._source if self._source is not None else self._chunks
         source_aclose = getattr(target, 'aclose', None)
         if source_aclose is not None:

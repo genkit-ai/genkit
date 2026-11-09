@@ -237,9 +237,10 @@ class StreamResponse(Generic[ChunkT_co, OutputT_co]):
       ``await result.aclose()``) stops the run and awaits ``finally:`` cleanup;
       ``.response`` then raises
       ``GenkitError`` with status ``CANCELLED`` (``ModelStreamResponse``
-      resolves with ``finish_reason == ABORTED`` instead). Reading to the end
-      or leaving a bare ``async for`` without closing doesn't stop the run.
-      See ``Action.stream``.
+      resolves with ``finish_reason == ABORTED`` instead). A reader cancelled
+      mid-``async for`` (e.g. a client disconnect) also stops the run, and so
+      does dropping a stream left unfinished after ``break``. Not iterating at
+      all leaves the run going. See ``Action.stream``.
 
     Example:
         ```python
@@ -1296,9 +1297,11 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         Iterate ``.stream`` for chunks and await ``.response`` for the output.
         Closing early via ``async with my_flow.stream(x) as res:`` (or
         ``await res.aclose()``) cancels the run and awaits ``finally:`` cleanup,
-        and ``.response`` then raises ``GenkitError`` with status ``CANCELLED``. Python does not tear down an
-        ``AsyncIterator`` on ``break`` alone, so wrap the stream in ``async with``
-        when exiting early should cancel the action.
+        and ``.response`` then raises ``GenkitError`` with status ``CANCELLED``. Cancelling
+        the reader mid-``async for`` stops the run the same way. Python does not
+        tear down an ``AsyncIterator`` on ``break`` alone: the run stops once the
+        stream is dropped, so wrap it in ``async with`` when the stop should
+        happen (and finish) right at the ``break``.
 
         Example:
             async with my_flow.stream(x) as res:
