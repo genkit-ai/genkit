@@ -19,7 +19,8 @@
     "check": "tsc",
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
-    "build": "npm-run-all build:clean check compile",
+    "build": "npm-run-all build:clean check compile check:public-types",
+    "check:public-types": "tsc -p tsconfig.public-types.json --noEmit",
     "build:watch": "tsup-node --watch",
     "test": "firebase emulators:exec 'jest --verbose' --config tests/emulator/firebase.json"
   },
