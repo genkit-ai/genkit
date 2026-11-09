@@ -323,8 +323,9 @@ def test_docs_context_without_extra_metadata_is_unchanged() -> None:
 
     augmented = augment_with_context(request)
 
-    assert augmented.messages[-1].content[-1].text is not None
-    assert '- [r1]: Lentil soup\n' in augmented.messages[-1].content[-1].text
+    text = augmented.messages[-1].content[-1].text
+    assert text is not None
+    assert '- [r1]: Lentil soup\n' in text
 
 
 @pytest.mark.asyncio
@@ -438,7 +439,7 @@ def test_tool_accepts_an_async_callable_instance() -> None:
     assert tool.name == 'allergy_check'
 
     with pytest.raises(TypeError, match='must be async'):
-        Tool(SyncCheck(), name='sync_check')
+        Tool(SyncCheck(), name='sync_check')  # pyright: ignore[reportCallIssue, reportArgumentType]  # pyrefly: ignore[no-matching-overload]
 
 
 @pytest.mark.asyncio
