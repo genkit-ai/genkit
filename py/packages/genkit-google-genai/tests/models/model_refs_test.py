@@ -53,9 +53,8 @@ from genkit import GenkitError
 from genkit.embedder import EmbedderRef
 from genkit.model import ModelRef
 
+_VERTEXAI_ONLY = {'gemini-2.5-flash', 'gemini-2.5-pro'}
 _SHARED_GEMINI = {
-    'gemini-2.5-flash',
-    'gemini-2.5-pro',
     'gemini-2.5-flash-lite',
     'gemini-3-flash-preview',
     'gemini-3.1-flash-lite',
@@ -67,6 +66,7 @@ _SHARED_GEMINI = {
     'gemini-3.8-flash',
 }
 _GOOGLEAI_LATEST = {'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-pro-latest'}
+_GOOGLEAI_ONLY = _GOOGLEAI_LATEST | {'gemini-3.5-flash-lite'}
 _SHARED_TTS = {
     'gemini-2.5-flash-preview-tts',
     'gemini-2.5-pro-preview-tts',
@@ -87,18 +87,13 @@ _RETIRED_GEMINI = {
 _RETIRED_IMAGE = {'gemini-2.5-flash-image-preview', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview'}
 
 _BACKEND_IDS: dict[tuple[type, str], set[str] | None] = {
-    (GoogleAI, 'gemini'): _SHARED_GEMINI | _GOOGLEAI_LATEST,
-    (VertexAI, 'gemini'): _SHARED_GEMINI,
+    (GoogleAI, 'gemini'): _SHARED_GEMINI | _GOOGLEAI_ONLY,
+    (VertexAI, 'gemini'): _SHARED_GEMINI | _VERTEXAI_ONLY,
     (GoogleAI, 'gemini_tts'): _SHARED_TTS,
     (VertexAI, 'gemini_tts'): _SHARED_TTS,
     (GoogleAI, 'gemini_image'): _SHARED_IMAGE,
     (VertexAI, 'gemini_image'): _SHARED_IMAGE,
     (GoogleAI, 'gemma'): {
-        'gemma-3-1b-it',
-        'gemma-3-4b-it',
-        'gemma-3-12b-it',
-        'gemma-3-27b-it',
-        'gemma-3n-e4b-it',
         'gemma-4-26b-a4b-it',
         'gemma-4-31b-it',
     },
@@ -380,8 +375,8 @@ class TestKnownIdLiterals:
         googleai = set(get_args(KnownGoogleAIGemini))
         vertexai = set(get_args(KnownVertexAIGemini))
         assert googleai | vertexai <= registered
-        assert registered - googleai == _RETIRED_GEMINI
-        assert registered - vertexai == _RETIRED_GEMINI | _GOOGLEAI_LATEST
+        assert registered - googleai == _RETIRED_GEMINI | _VERTEXAI_ONLY
+        assert registered - vertexai == _RETIRED_GEMINI | _GOOGLEAI_ONLY
         assert not any(is_tts_model(value) or is_image_model(value) or is_gemma_model(value) for value in googleai)
 
     def test_known_gemini_image_matches_catalog(self) -> None:

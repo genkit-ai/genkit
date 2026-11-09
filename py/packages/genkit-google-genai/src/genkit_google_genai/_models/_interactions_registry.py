@@ -65,6 +65,7 @@ LYRIA_INFO = ModelInfo(
 KnownLyria: TypeAlias = Literal[
     'lyria-3-clip-preview',
     'lyria-3-pro-preview',
+    'lyria-3.5',
 ]
 
 KNOWN_LYRIA_MODELS: tuple[str, ...] = get_args(KnownLyria)
@@ -103,6 +104,7 @@ ANTIGRAVITY_INFO = ModelInfo(
 
 KNOWN_ANTIGRAVITY_MODELS: dict[str, ModelInfo] = {
     'antigravity-preview-09-2026': ANTIGRAVITY_INFO,
+    'antigravity-preview-latest': ANTIGRAVITY_INFO,
 }
 
 
