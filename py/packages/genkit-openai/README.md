@@ -41,6 +41,8 @@ if __name__ == '__main__':
     ai.run_main(main())
 ```
 
+Later snippets use `await` and show only the call; run them inside `async def main()` as above.
+
 Set `OPENAI_API_KEY` in the environment, or pass `api_key=` to `OpenAI()`.
 `base_url=` points the plugin at another OpenAI-compatible server. Pass the URL
 up to and including `/v1`; the SDK appends `/chat/completions`. Any other

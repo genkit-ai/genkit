@@ -40,6 +40,8 @@ if __name__ == '__main__':
     ai.run_main(main())
 ```
 
+Later snippets use `await` and show only the call; run them inside `async def main()` as above.
+
 Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.
 `base_url=` points the plugin at another server. Pass the origin with no `/v1`
 suffix; the SDK appends `/v1/messages`. Any other `AsyncAnthropic` setting goes

@@ -125,6 +125,8 @@ if __name__ == '__main__':
     ai.run_main(main())
 ```
 
+Later snippets use `await` and show only the call; run them inside `async def main()` as above.
+
 The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,
 served over Converse, including models that take image or document input),
 `Bedrock.stability` (IMAGE, the Stability text-to-image models), and
