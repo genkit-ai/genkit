@@ -27,6 +27,7 @@ from typing import Any, Generic, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ValidationError
+from pydantic_core import to_jsonable_python
 
 from genkit._ai._agents._preamble import PREAMBLE_KEY, coerce_message
 from genkit._ai._agents._session import (
@@ -285,7 +286,7 @@ AgentFn = Callable[
 # ---------------------------------------------------------------------------
 
 
-def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, agent_name: str) -> None:  # noqa: ANN401
+def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, agent_name: str) -> Any:  # noqa: ANN401
     """Reject custom state that doesn't match the agent's declared shape.
 
     Runs at load time on the state about to seed a turn — whether it came from a
@@ -293,11 +294,14 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
     fast with a clear error instead of surfacing deep inside a tool. No-ops when
     no schema is declared, and skips a never-set state so a required field doesn't
     trip a session that simply hasn't written state yet.
+
+    Returns the validated model: a snapshot stores ``custom`` as a JSON dict,
+    and tools on the next turn read ``state.cart``, not ``state['cart']``.
     """
     if state_schema is None or custom is None:
-        return
+        return custom
     try:
-        state_schema.model_validate(custom)
+        return state_schema.model_validate(custom)
     except ValidationError as e:
         # Surface the per-field failures and the expected shape so the caller can
         # see exactly what was wrong, not just that something was.
@@ -310,6 +314,18 @@ def validate_custom_state(*, custom: Any, state_schema: type[BaseModel] | None, 
             },
             reason=ErrorReason.INVALID_INPUT,
         ) from e
+
+
+def validated_state(
+    state: SessionState | None, *, state_schema: type[BaseModel] | None, agent_name: str
+) -> SessionState | None:
+    """The session state to seed a turn with, ``custom`` validated into the schema type."""
+    if state is None:
+        return None
+    custom = validate_custom_state(custom=state.custom, state_schema=state_schema, agent_name=agent_name)
+    if custom is state.custom:
+        return state
+    return state.model_copy(update={'custom': custom})
 
 
 class AgentInitError(PublicError):
@@ -447,10 +463,7 @@ async def load_session(
                 ),
                 reason=ErrorReason.SNAPSHOT_NOT_RESUMABLE,
             )
-        validate_custom_state(
-            custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
-        )
-        return Session(initial_state=snap.state), snap
+        return Session(initial_state=validated_state(snap.state, state_schema=state_schema, agent_name=name)), snap
 
     session_id = init.session_id
     if store is not None and not session_id:
@@ -462,10 +475,7 @@ async def load_session(
         snap = await store.get_snapshot(session_id=session_id, context=ctx)
         snap = await walk_back_to_resumable(store=store, snapshot=snap)
         if snap is not None:
-            validate_custom_state(
-                custom=snap.state.custom if snap.state else None, state_schema=state_schema, agent_name=name
-            )
-            return Session(initial_state=snap.state), snap
+            return Session(initial_state=validated_state(snap.state, state_schema=state_schema, agent_name=name)), snap
         return (
             Session(
                 initial_state=SessionState(
@@ -478,8 +488,7 @@ async def load_session(
         )
 
     if init.state is not None:
-        validate_custom_state(custom=init.state.custom, state_schema=state_schema, agent_name=name)
-        return Session(initial_state=init.state), None
+        return Session(initial_state=validated_state(init.state, state_schema=state_schema, agent_name=name)), None
 
     return Session(), None
 
@@ -553,7 +562,8 @@ class AgentRuntime:
         if self.detached:
             return
 
-        transformed = await self.client_custom()
+        # JSON Patch diffs dicts; a BaseModel state would diff as one opaque value.
+        transformed = to_jsonable_python(await self.client_custom(), by_alias=True, exclude_none=True)
         if self.first_custom_patch_in_turn:
             # Send full state on the first patch of a turn to re-base the client.
             ops: list[JsonPatchOperation] = [

@@ -73,7 +73,8 @@ async def test_load_session_client_managed_validates_state() -> None:
     valid = AgentInit(state=SessionState(custom={'title': 'x'}))
     session, snap = await load_session(init=valid, store=None, agent_name='a', state_schema=TaskState)
     assert snap is None
-    assert (await session.get_custom()) == {'title': 'x'}
+    # Seeded as the schema type, so tools read state.title, not state['title'].
+    assert (await session.get_custom()) == TaskState(title='x')
 
     bad = AgentInit(state=SessionState(custom={'done': True}))  # missing required title
     with pytest.raises(GenkitError) as exc:
@@ -97,3 +98,26 @@ async def test_load_session_validates_snapshot_custom() -> None:
     with pytest.raises(GenkitError) as exc:
         await load_session(init=AgentInit(session_id=session_id), store=store, agent_name='a', state_schema=TaskState)
     assert exc.value.status == INVALID_ARGUMENT
+
+
+@pytest.mark.asyncio
+async def test_load_session_reload_seeds_the_validated_model() -> None:
+    """A snapshot stores custom as JSON; the next turn gets the schema type back."""
+    store = InMemorySessionStore()
+    session_id = 'sess-cart'
+    snap = SessionSnapshot(
+        snapshot_id='snap-1',
+        parent_id=None,
+        created_at='2026-06-18T12:00:00Z',
+        status=SnapshotStatus.COMPLETED,
+        state=SessionState(session_id=session_id, messages=[], artifacts=[], custom={'title': 'tartine'}),
+    )
+    await store.save_snapshot(snap.snapshot_id, lambda _existing: snap)
+
+    session, _ = await load_session(
+        init=AgentInit(session_id=session_id), store=store, agent_name='a', state_schema=TaskState
+    )
+
+    custom = await session.get_custom()
+    assert isinstance(custom, TaskState)
+    assert custom.title == 'tartine'
