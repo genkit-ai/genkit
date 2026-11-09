@@ -264,6 +264,20 @@ class ToolContext(ActionRunContext[ChunkT]):
 
         await list_allergies('Ana', context={'auth': {'uid': 'diner-42'}})
         # => 'Ana (diner-42): shellfish'
+
+    On a restart after an interrupt, ``is_resumed()`` is ``True`` and
+    ``resumed_metadata`` is the dict passed to
+    ``interrupt.restart(resumed_metadata=...)``, or ``{}`` when the restart
+    carried none. On a first run, ``resumed_metadata`` is ``None``. Check
+    ``is_resumed()`` to branch, and read keys from ``resumed_metadata``:
+
+        @ai.tool()
+        async def refund_order(order_id: str, ctx: ToolContext) -> str:
+            # Interrupt is exported from genkit
+            if not ctx.is_resumed():
+                raise Interrupt({'reason': 'needs approval'})
+            approved = ctx.resumed_metadata.get('approved_by')
+            return f'Refunded {order_id} (approved by {approved})'
     """
 
     def __init__(
@@ -288,7 +302,11 @@ class ToolContext(ActionRunContext[ChunkT]):
         self.original_input = original_input
 
     def is_resumed(self) -> bool:
-        """Return True if this execution is resuming after an interrupt."""
+        """Return True if this run is a restart after an interrupt.
+
+        Same as ``self.resumed_metadata is not None``. An empty ``{}`` still
+        counts as resumed.
+        """
         return self.resumed_metadata is not None
 
 
