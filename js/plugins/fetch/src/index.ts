@@ -454,7 +454,6 @@ export function fetchHandler<
   return (request: Request) => handleActionRequest(request, action, options);
 }
 
-// Empty, so clients cannot mistake a missing route for an action's NOT_FOUND.
 function notFound(): Response {
   return new Response(null, { status: 404 });
 }

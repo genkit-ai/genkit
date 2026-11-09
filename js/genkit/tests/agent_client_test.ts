@@ -590,8 +590,7 @@ describe('remoteAgent', () => {
     assert.equal(mock.requests.length, 1);
   });
 
-  it('keeps the wait route after a NOT_FOUND nested under error', async () => {
-    // The error envelope of @genkit-ai/next's appRoute.
+  it('keeps the wait route after a NOT_FOUND in an {error: {status}} envelope', async () => {
     mock.onNext(
       () =>
         new Response(
