@@ -28,9 +28,10 @@ from genkit_google_genai._models._gemini import GeminiModel
 from genkit_google_genai._models._utils import PartConverter
 from google import genai
 from google.genai import types as genai_types
+from pydantic import BaseModel
 
 from genkit import Genkit, Message, Part, Role
-from genkit.model import ModelRequest, ToolDefinition
+from genkit.model import ModelRequest, OutputConfig, ToolDefinition, ToolRequest, ToolResponse
 
 
 def _fake_gemini_api(bodies: list[dict[str, Any]]) -> Callable[..., Awaitable[httpx.Response]]:
@@ -47,6 +48,10 @@ def _fake_gemini_api(bodies: list[dict[str, Any]]) -> Callable[..., Awaitable[ht
         )
 
     return send
+
+
+class Dish(BaseModel):
+    dish: str
 
 
 def _app(monkeypatch: pytest.MonkeyPatch, bodies: list[dict[str, Any]]) -> Genkit:
@@ -181,3 +186,72 @@ async def test_server_side_tool_parts_round_trip() -> None:
     rehydrated = Part.model_validate_json(genkit_call.model_dump_json(by_alias=True))
     assert await PartConverter.to_gemini(rehydrated) == tool_call
     assert await PartConverter.to_gemini(genkit_response) == tool_response
+
+
+# -- tool_choice='required' (PR3-09) --
+
+
+@pytest.mark.asyncio
+async def test_required_with_output_schema_omits_json_mode_on_first_turn() -> None:
+    """ANY mode plus responseMimeType=application/json is a Gemini 400; the schema waits for the answer turn."""
+    client = MagicMock(spec=genai.Client)
+    client.vertexai = False
+    model = GeminiModel('gemini-flash-latest', client)
+    request = _tool_request(
+        tool_choice='required',
+        output=OutputConfig(format='json', json_schema=Dish.model_json_schema(), constrained=True),
+    )
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.tool_config is not None and cfg.tool_config.function_calling_config is not None
+    assert cfg.tool_config.function_calling_config.mode == genai_types.FunctionCallingConfigMode.ANY
+    assert cfg.response_mime_type is None
+    assert cfg.response_json_schema is None
+
+
+@pytest.mark.asyncio
+async def test_required_relaxes_to_auto_after_tool_responses() -> None:
+    """After the tools answer, ANY would only allow another call and loop to max_turns; the turn goes AUTO."""
+    client = MagicMock(spec=genai.Client)
+    client.vertexai = False
+    model = GeminiModel('gemini-flash-latest', client)
+    messages = [
+        Message(role=Role.USER, content=[Part.from_text('Is the pho in stock?')]),
+        Message(role=Role.MODEL, content=[Part(tool_request=ToolRequest(name='lookup_menu', ref='1', input={}))]),
+        Message(role=Role.TOOL, content=[Part(tool_response=ToolResponse(name='lookup_menu', ref='1', output='in stock'))]),
+    ]
+    request = _tool_request(
+        messages=messages,
+        tool_choice='required',
+        output=OutputConfig(format='json', json_schema=Dish.model_json_schema(), constrained=True),
+    )
+
+    cfg = await model._genkit_to_googleai_cfg(request)
+
+    assert cfg is not None
+    assert cfg.tool_config is not None and cfg.tool_config.function_calling_config is not None
+    assert cfg.tool_config.function_calling_config.mode == genai_types.FunctionCallingConfigMode.AUTO
+    assert cfg.tool_config.function_calling_config.allowed_function_names is None
+    assert cfg.response_mime_type == 'application/json'
+    assert cfg.response_json_schema == Dish.model_json_schema()
+
+
+@pytest.mark.asyncio
+async def test_required_end_to_end_returns_structured_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ai.generate with required + output_schema: turn 1 sends ANY without JSON mode."""
+    bodies: list[dict[str, Any]] = []
+    ai = _app(monkeypatch, bodies)
+
+    await ai.generate(
+        model='googleai/gemini-flash-latest',
+        prompt='Is the pho in stock?',
+        tools=['lookup_menu'],
+        tool_choice='required',
+        output_schema=Dish,
+    )
+
+    first = bodies[0]
+    assert first['toolConfig']['functionCallingConfig']['mode'] == 'ANY'
+    assert 'responseMimeType' not in first.get('generationConfig', {})

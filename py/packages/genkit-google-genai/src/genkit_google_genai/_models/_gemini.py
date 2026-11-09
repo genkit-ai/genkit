@@ -400,6 +400,23 @@ def _tool_config(tool_choice: str, function_tools: list[genai_types.Tool]) -> ge
     return genai_types.ToolConfig(function_calling_config=calling)
 
 
+def _effective_tool_choice(request: ModelRequest) -> str | None:
+    """The request's tool_choice, with 'required' relaxed to 'auto' once tools have answered.
+
+    Gemini's ANY mode only allows a function call, so keeping 'required' on
+    the turn after the tool responses loops until max_turns and never
+    produces the final answer. 'required' forces the first call; later turns
+    may answer.
+    """
+    choice = request.tool_choice
+    if choice != 'required':
+        return choice
+    last = next((m for m in reversed(request.messages) if m.role != Role.SYSTEM), None)
+    if last is not None and any(p.tool_response is not None for p in last.content):
+        return 'auto'
+    return choice
+
+
 def _pop_prefixed(config: dict[str, Any], prefix: str) -> dict[str, Any]:
     """Pop every ``<prefix>name`` key from *config*, returned as ``{name: value}``."""
     return {key[len(prefix) :]: config.pop(key) for key in [k for k in config if k.startswith(prefix)]}
@@ -2414,6 +2431,7 @@ class GeminiModel:
         tools.extend(function_tools)
 
         has_output = bool(request.output_format or request.output_schema or request.output_content_type)
+        tool_choice = _effective_tool_choice(request) if function_tools else None
 
         if cfg is not None or tools or system_instruction or has_output or leftovers or extra or timeout is not None:
             if cfg is None:
@@ -2436,7 +2454,10 @@ class GeminiModel:
                 supports_constrained = model_supports_constrained == ConstrainedSupport.ALL or (
                     model_supports_constrained == ConstrainedSupport.NO_TOOLS and not request.tools
                 )
-                if supports_constrained:
+                # In ANY mode the turn can only be a function call, and Gemini
+                # rejects JSON mode next to it. The schema applies on the
+                # follow-up turn, where tool_choice is back to 'auto'.
+                if supports_constrained and tool_choice != 'required':
                     self._apply_output_config(cfg, request)
 
             if tools:
@@ -2445,8 +2466,8 @@ class GeminiModel:
                 # callables and warns about every FunctionDeclaration.
                 cfg.automatic_function_calling = genai_types.AutomaticFunctionCallingConfig(disable=True)
 
-            if request.tool_choice and function_tools:
-                cfg.tool_config = _tool_config(request.tool_choice, function_tools)
+            if tool_choice:
+                cfg.tool_config = _tool_config(tool_choice, function_tools)
 
             if self._needs_server_side_tool_invocations(tools):
                 # Gemini 3 rejects built-in tools (google_search, url_context,
