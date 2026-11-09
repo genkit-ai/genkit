@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from collections.abc import Awaitable, Callable
 from typing import Protocol, cast
@@ -102,7 +103,16 @@ def configure_structlog_level() -> bool:
     """
     if _app_chose_level():
         return False
-    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(resolve_level()))
+    if structlog.is_configured():
+        structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(resolve_level()))
+    else:
+        # structlog's default factory prints to stdout, which corrupts
+        # `python cli.py | jq .`. Logs go to stderr; an app that already
+        # picked a logger factory keeps it.
+        structlog.configure(
+            wrapper_class=structlog.make_filtering_bound_logger(resolve_level()),
+            logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+        )
     ignored = unrecognized_level()
     if ignored is not None:
         get_logger(__name__).warning(

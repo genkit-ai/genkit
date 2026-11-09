@@ -470,16 +470,15 @@ class Registry:
             value: The value to be registered. Can be of any non-serializable
                 type.
 
-        Raises:
-            ValueError: If a value with the given kind and name is already
-            registered.
+        Registering the same kind and name again replaces the value.
         """
         with self._lock:
             if kind not in self._value_by_kind_and_name:
                 self._value_by_kind_and_name[kind] = {}
 
             if name in self._value_by_kind_and_name[kind]:
-                raise ValueError(f'value for kind "{kind}" and name "{name}" is already registered')
+                # Re-running a notebook cell re-registers; overwrite like flows/tools do.
+                logger.debug(f'Overwriting value for kind "{kind}" and name "{name}"')
 
             self._value_by_kind_and_name[kind][name] = value
 
@@ -821,15 +820,17 @@ class Registry:
             schema: The schema data (JSON schema format).
             schema_type: Optional Pydantic model class for runtime validation.
 
-        Raises:
-            ValueError: If a schema with the given name is already registered.
+        Registering the same name again replaces the schema.
         """
         with self._lock:
             if name in self._schemas_by_name:
-                raise ValueError(f'Schema "{name}" is already registered')
+                # Re-running a notebook cell re-registers; overwrite like flows/tools do.
+                logger.debug(f'Overwriting schema "{name}"')
             self._schemas_by_name[name] = schema
             if schema_type is not None:
                 self._schema_types_by_name[name] = schema_type
+            else:
+                self._schema_types_by_name.pop(name, None)
             logger.debug(f'Registered schema "{name}"')
 
     def lookup_schema(self, name: str) -> dict[str, object] | None:

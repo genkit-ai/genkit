@@ -804,10 +804,12 @@ class Genkit:
     def define_value(self, *, kind: str, name: str, value: object) -> None:
         """Store ``value`` under ``kind`` and ``name`` for later ``lookup_value``.
 
+        Defining the same kind and name again replaces the value, so a
+        re-run notebook cell does not fail.
+
         Raises:
             ValueError: ``kind`` is one Genkit owns (use ``define_middleware``,
-                ``define_format``, or ``Genkit(model=...)``), ``value`` is None,
-                or a value is already defined under this kind and name.
+                ``define_format``, or ``Genkit(model=...)``), or ``value`` is None.
         """
         if kind in _CORE_VALUE_KINDS:
             raise ValueError(f'define_value kind {kind!r} is reserved; use {_CORE_VALUE_KINDS[kind]} instead.')

@@ -183,15 +183,30 @@ def test_lookup_value_unknown_returns_none() -> None:
     assert ai.lookup_value(kind='other-kind', name='banner') is None
 
 
-def test_define_value_same_name_twice_raises() -> None:
-    """Defining the same kind and name twice raises ValueError and the first value stays."""
+def test_define_value_same_name_twice_overwrites() -> None:
+    """Re-running a notebook cell redefines the value instead of raising."""
     ai = Genkit()
     ai.define_value(kind='catalog', name='banner', value='first')
+    ai.define_value(kind='catalog', name='banner', value='second')
 
-    with pytest.raises(ValueError, match='already registered'):
-        ai.define_value(kind='catalog', name='banner', value='second')
+    assert ai.lookup_value(kind='catalog', name='banner') == 'second'
 
-    assert ai.lookup_value(kind='catalog', name='banner') == 'first'
+
+def test_define_schema_same_name_twice_overwrites() -> None:
+    from pydantic import BaseModel
+
+    class Dish(BaseModel):
+        name: str
+
+    class DishV2(BaseModel):
+        name: str
+        allergens: list[str]
+
+    ai = Genkit()
+    ai.define_schema('Dish', Dish)
+    ai.define_schema('Dish', DishV2)
+
+    assert ai._registry.lookup_schema_type('Dish') is DishV2
 
 
 def test_define_value_requires_keywords() -> None:
