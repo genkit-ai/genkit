@@ -378,7 +378,7 @@ describe('annotateSchema()', () => {
     const json = toJsonSchema({ schema: z.object({ root: NodeSchema }) });
     // The recursive definition is emitted once under definitions/$defs.
     const defs = json.definitions ?? json.$defs;
-    const def = Object.values(defs ?? {})[0] as any;
+    const def = Object.values(defs ?? {})[0];
     assert.strictEqual(def.properties.name['x-hint'], 'name');
   });
 
