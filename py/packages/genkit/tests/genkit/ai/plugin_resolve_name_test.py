@@ -354,3 +354,31 @@ async def test_check_operation_saved_handle_checks_on_a_fresh_app() -> None:
     assert checked.id == 'job-1'
     assert checked.done is True
     assert checked.action == '/background-model/myplug/veo-x'
+
+
+class AdvertisingPlugin(RecordingPlugin):
+    """Advertises models the way a vLLM-style plugin would: bare and prefixed ids."""
+
+    async def list_actions(self) -> list[Action]:
+        return [
+            _answering_model('meta-llama/Llama-3.3-70B', 'listed'),
+            _answering_model('myplug/already-prefixed', 'listed'),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_list_actions_prefixes_unprefixed_slash_ids() -> None:
+    """Advertised keys use the same plugin prefix as `init()`, so the Dev UI can run them."""
+    plugin = AdvertisingPlugin(serves={'meta-llama/Llama-3.3-70B', 'already-prefixed'})
+    ai = Genkit(plugins=[plugin])
+
+    catalog = await ai._registry.list_actions()
+
+    assert '/model/myplug/meta-llama/Llama-3.3-70B' in catalog
+    assert '/model/meta-llama/Llama-3.3-70B' not in catalog
+    assert catalog['/model/myplug/meta-llama/Llama-3.3-70B'].name == 'myplug/meta-llama/Llama-3.3-70B'
+    assert '/model/myplug/already-prefixed' in catalog
+    assert '/model/myplug/myplug/already-prefixed' not in catalog
+    action = await ai._registry.resolve_action_by_key('/model/myplug/meta-llama/Llama-3.3-70B')
+    assert action is not None
+    assert action.name == 'myplug/meta-llama/Llama-3.3-70B'

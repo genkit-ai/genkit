@@ -427,8 +427,11 @@ class Registry:
                     raise ValueError(f'Invalid ActionMetadata from {plugin_name}: name required')
                 if not meta.action_type:
                     raise ValueError(f'Invalid ActionMetadata from {plugin_name}: action_type required')
-                key = f'/{meta.action_type}/{meta.name}'
-                catalog[key] = meta.model_copy(update={'key': key})
+                # Same prefix rule as ``register_action_instance`` in ``init()`` so
+                # the advertised key resolves through ``resolve_action``.
+                name = meta.name if meta.name.startswith(f'{plugin_name}/') else f'{plugin_name}/{meta.name}'
+                key = f'/{meta.action_type}/{name}'
+                catalog[key] = meta.model_copy(update={'key': key, 'name': name})
 
         # 2. Concrete registered actions. A local tool is ``/tool/<name>`` plus its
         #    ``/tool.v2/<name>`` envelope; the Dev UI shows the ``tool.v2`` row.
