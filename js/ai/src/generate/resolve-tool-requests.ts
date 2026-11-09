@@ -37,14 +37,17 @@ import {
   ToolInterruptError,
   isToolRequest,
   resolveTools,
+  type MultipartToolAction,
   type ToolAction,
   type ToolRunOptions,
 } from '../tool.js';
 import { type GenerateMiddlewareDef } from './middleware.js';
 
-export function toToolMap(tools: ToolAction[]): Record<string, ToolAction> {
+export function toToolMap(
+  tools: (ToolAction | MultipartToolAction)[]
+): Record<string, ToolAction | MultipartToolAction> {
   assertValidToolNames(tools);
-  const out: Record<string, ToolAction> = {};
+  const out: Record<string, ToolAction | MultipartToolAction> = {};
   for (const tool of tools) {
     const name = tool.__action.name;
     const shortName = name.substring(name.lastIndexOf('/') + 1);
@@ -54,7 +57,9 @@ export function toToolMap(tools: ToolAction[]): Record<string, ToolAction> {
 }
 
 /** Ensures that each tool has a unique name. */
-export function assertValidToolNames(tools: ToolAction[]) {
+export function assertValidToolNames(
+  tools: (ToolAction | MultipartToolAction)[]
+) {
   const nameMap: Record<string, string> = {};
   for (const tool of tools) {
     const name = tool.__action.name;
@@ -186,7 +191,7 @@ export function toPendingOutput(
 export async function resolveToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
-  toolMap: Record<string, ToolAction>,
+  toolMap: Record<string, ToolAction | MultipartToolAction>,
   middleware: GenerateMiddlewareDef[] = [],
   runOptions?: ToolRunOptions
 ): Promise<{
@@ -282,7 +287,7 @@ export async function resolveToolRequest(
 export async function resolveToolRequests(
   rawRequest: GenerateActionOptions,
   generatedMessage: MessageData,
-  tools: ToolAction[],
+  tools: (ToolAction | MultipartToolAction)[],
   middleware: GenerateMiddlewareDef[] = [],
   options?: ToolResolveOptions
 ): Promise<{
@@ -375,7 +380,7 @@ function findCorrespondingToolResponse(
 async function resolveResumedToolRequest(
   rawRequest: GenerateActionOptions,
   part: ToolRequestPart,
-  toolMap: Record<string, ToolAction>,
+  toolMap: Record<string, ToolAction | MultipartToolAction>,
   middleware: GenerateMiddlewareDef[] = [],
   options?: ToolResolveOptions
 ): Promise<{
@@ -476,7 +481,7 @@ async function resolveResumedToolRequest(
 export async function resolveResumeOption(
   registry: Registry,
   rawRequest: GenerateActionOptions,
-  tools: ToolAction[],
+  tools: (ToolAction | MultipartToolAction)[],
   middleware: GenerateMiddlewareDef[] = [],
   options?: ToolResolveOptions
 ): Promise<{

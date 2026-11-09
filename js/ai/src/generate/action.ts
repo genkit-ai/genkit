@@ -69,7 +69,12 @@ import {
   resolveResources,
   type ResourceAction,
 } from '../resource.js';
-import { resolveTools, toToolDefinition, type ToolAction } from '../tool.js';
+import {
+  resolveTools,
+  toToolDefinition,
+  type MultipartToolAction,
+  type ToolAction,
+} from '../tool.js';
 import { GenerateMiddlewareDef, resolveMiddleware } from './middleware.js';
 import {
   ToolFailureError,
@@ -1091,7 +1096,7 @@ function loopError(failure: LoopFailure): GenerationResponseError {
 
 async function actionToGenerateRequest(
   options: GenerateActionOptions,
-  resolvedTools: ToolAction[] | undefined,
+  resolvedTools: (ToolAction | MultipartToolAction)[] | undefined,
   resolvedFormat: Formatter | undefined,
   model: ModelAction
 ): Promise<GenerateRequest> {
