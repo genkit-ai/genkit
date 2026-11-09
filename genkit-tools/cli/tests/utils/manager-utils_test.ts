@@ -23,7 +23,7 @@ import {
   type BaseRuntimeManager,
 } from '@genkit-ai/tools-common/manager';
 import { logger } from '@genkit-ai/tools-common/utils';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import { mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -85,7 +85,7 @@ describe('resolveTelemetryServer', () => {
 
   it('skips a port already bound on 127.0.0.1 and starts the server on 127.0.0.1', async () => {
     const occupiedPort = await getPort({
-      port: makeRange(4033, 4999),
+      port: portNumbers(4033, 4999),
       host: '127.0.0.1',
     });
     const blocker = net.createServer();

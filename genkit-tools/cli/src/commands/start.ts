@@ -22,7 +22,7 @@ import { startServer } from '@genkit-ai/tools-common/server';
 import { findProjectRoot, logger } from '@genkit-ai/tools-common/utils';
 import { Command } from 'commander';
 import fs from 'fs';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import open from 'open';
 import {
   EXPERIMENTAL_AUTH_OPTION_HELP,
@@ -204,7 +204,7 @@ export const start = new Command('start')
     }
     if (!options.noui) {
       const port =
-        options.port ?? (await getPort({ port: makeRange(4000, 4099) }));
+        options.port ?? (await getPort({ port: portNumbers(4000, 4099) }));
       startServer(manager, port, options.host);
       if (options.open) {
         const openHost =
