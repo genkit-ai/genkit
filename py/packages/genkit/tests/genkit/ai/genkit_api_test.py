@@ -139,6 +139,54 @@ def test_run_main_ctrl_c_after_a_clean_main_exits() -> None:
     assert _printed_result(output) is None, output
 
 
+_RUN_MAIN_OFF_MAIN_THREAD_SCRIPT = """
+import threading
+
+from genkit import Genkit
+
+ai = Genkit()
+
+
+async def main() -> str:
+    return 'done'
+
+
+outcome: list[str] = []
+
+
+def worker() -> None:
+    # Stand in for the reflection server going away, so run_main returns.
+    threading.Timer(1.0, ai._reflection_stopped.set).start()
+    try:
+        outcome.append(ai.run_main(main()))
+    except BaseException as e:
+        outcome.append(f'{type(e).__name__}: {e}')
+
+
+thread = threading.Thread(target=worker)
+thread.start()
+thread.join(20)
+print('RESULT', outcome[0] if outcome else 'hung', flush=True)
+"""
+
+
+def test_run_main_with_reflection_works_off_the_main_thread() -> None:
+    """run_main on a worker thread with reflection on returns instead of raising set_wakeup_fd errors."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith('GENKIT_')}
+    env |= {'GENKIT_REFLECTION_ENABLED': 'true', 'GENKIT_REFLECTION_PORT': str(_free_port())}
+
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, '-c', _RUN_MAIN_OFF_MAIN_THREAD_SCRIPT],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    output = proc.stdout + proc.stderr
+    assert _printed_result(output) == 'RESULT done', output
+
+
 @pytest.mark.asyncio
 async def test_genkit_run() -> None:
     """Test Genkit.run method."""

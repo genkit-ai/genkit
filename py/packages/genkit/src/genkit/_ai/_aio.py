@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import signal
 import socket
@@ -1399,14 +1400,22 @@ class Genkit:
             # Block until Ctrl+C, SIGTERM, or the reflection server stops,
             # keeping the daemon reflection thread alive. The receiver is open
             # before the ready line, so a signal sent once it prints is ours,
-            # not asyncio's default SIGINT handling.
+            # not asyncio's default SIGINT handling. Signal handlers can only
+            # be installed on the main thread; off it (a worker thread, a
+            # Celery task), wait on the reflection server alone.
+            on_main_thread = threading.current_thread() is threading.main_thread()
             try:
-                with anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM) as sigs:
+                with (
+                    anyio.open_signal_receiver(signal.SIGINT, signal.SIGTERM)
+                    if on_main_thread
+                    else contextlib.nullcontext(None)
+                ) as sigs:
                     logger.info(self._reflection_ready_message())
                     async with anyio.create_task_group() as tg:
 
                         async def _handle_signal(tg_: anyio.abc.TaskGroup) -> None:  # type: ignore[name-defined]
                             nonlocal stop_signal
+                            assert sigs is not None
                             async for sig in sigs:
                                 stop_signal = sig
                                 tg_.cancel_scope.cancel()
@@ -1421,7 +1430,8 @@ class Genkit:
                             logger.warning('Reflection server stopped; returning from run_main.')
                             tg_.cancel_scope.cancel()
 
-                        tg.start_soon(_handle_signal, tg)
+                        if sigs is not None:
+                            tg.start_soon(_handle_signal, tg)
                         tg.start_soon(_handle_reflection_stopped, tg)
                         await anyio.sleep_forever()
             except anyio.get_cancelled_exc_class():
