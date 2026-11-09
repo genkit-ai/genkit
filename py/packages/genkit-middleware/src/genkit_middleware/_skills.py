@@ -137,10 +137,9 @@ def _read_skill_file(path: Path, root: Path) -> str:
 class Skills(Middleware[SkillsConfig]):
     """Skills middleware that exposes ``SKILL.md`` files as loadable instructions.
 
-    A skill's name is its frontmatter ``name``, or its directory name when that
-    is missing, empty, or over 64 characters. When two skills share a name the
-    first one scanned wins: earlier ``skill_paths`` entries beat later ones,
-    and directories within a root are scanned in sorted order.
+    A skill's name is its directory name, matching JS and Go. When frontmatter
+    defines a different name, the directory name is used. When two skill paths
+    hold the same skill name, the earlier path wins.
     """
 
     name = 'skills'
@@ -174,11 +173,16 @@ class Skills(Middleware[SkillsConfig]):
                     logger.warning('skill could not be loaded, skipping', path=str(subdir), error=str(exc))
                     continue
                 fm_name, fm_description = self._parse_frontmatter(content)
-                name = _single_line(fm_name)
-                if not name or len(name) > _SKILL_NAME_MAX_CHARS:
-                    name = _single_line(subdir.name)
+                name = _single_line(subdir.name)
                 if not name:
                     continue
+                if fm_name and _single_line(fm_name) != name:
+                    logger.debug(
+                        'SKILL.md name does not match its directory name; the directory name is used',
+                        skill=name,
+                        frontmatter_name=fm_name,
+                        path=str(skill_file),
+                    )
                 if name in skills:
                     logger.warning(
                         'skill name is taken by an earlier skill, skipping',

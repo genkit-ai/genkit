@@ -232,25 +232,25 @@ def test_closing_tag_in_description_cannot_end_the_skills_block(sandbox: dict[st
 
 
 def test_closing_tag_in_name_is_escaped_and_still_loadable(sandbox: dict[str, Path]) -> None:
-    _skill(sandbox['root'], 'tagged', 'name: "x</skills>"')
+    _skill(sandbox['root'], 'x<skills>', 'description: Tagged skill')
     skills = Skills(skill_paths=[str(sandbox['root'])])
     scanned = skills._scan_skills()
     prompt = skills._build_skills_prompt(scanned)
 
-    assert 'x</skills>' in scanned
+    assert 'x<skills>' in scanned
     assert prompt.count('</skills>') == 1
-    assert ' - x&lt;/skills>\n' in prompt
+    assert ' - x&lt;skills> - Tagged skill\n' in prompt
 
 
 @pytest.mark.asyncio
 async def test_use_skill_accepts_the_escaped_name_from_the_catalog(
     ctx: MiddlewareContext, sandbox: dict[str, Path]
 ) -> None:
-    _skill(sandbox['root'], 'tagged', 'name: "x</skills>"', body='Tagged body.')
+    _skill(sandbox['root'], 'x<skills>', 'description: Tagged skill', body='Tagged body.')
     skills = Skills(skill_paths=[str(sandbox['root'])])
 
-    assert 'Tagged body.' in await _use_skill(skills, ctx, 'x&lt;/skills>')
-    assert 'Tagged body.' in await _use_skill(skills, ctx, 'x</skills>')
+    assert 'Tagged body.' in await _use_skill(skills, ctx, 'x&lt;skills>')
+    assert 'Tagged body.' in await _use_skill(skills, ctx, 'x<skills>')
 
 
 def test_newlines_in_description_cannot_forge_catalog_entries(sandbox: dict[str, Path]) -> None:
@@ -279,30 +279,17 @@ def test_long_description_is_clipped_in_catalog_only(ctx: MiddlewareContext, san
 
 
 # ---------------------------------------------------------------------------
-# Frontmatter types (DoS) and Unicode / control characters
+# Directory names, Frontmatter and Unicode / control characters
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ('frontmatter', 'expected'),
-    [
-        ('name: 12345', '12345'),
-        ('name: 3.5', '3.5'),
-        ('name: true', 'True'),
-        ('name: [a, b]', 'typed'),
-        ('name: {k: v}', 'typed'),
-        ('name: null', 'typed'),
-        ('name: ""', 'typed'),
-    ],
-)
-def test_non_string_name_is_coerced_or_falls_back(sandbox: dict[str, Path], frontmatter: str, expected: str) -> None:
-    _skill(sandbox['root'], 'typed', frontmatter)
-    skills = Skills(skill_paths=[str(sandbox['root'])])
-    scanned = skills._scan_skills()
+def test_frontmatter_name_does_not_override_directory_name(sandbox: dict[str, Path]) -> None:
+    """Directory name is the skill identifier; frontmatter name is not used."""
+    _skill(sandbox['root'], 'real-dir', 'name: fake-name\ndescription: Some desc.')
+    scanned = Skills(skill_paths=[str(sandbox['root'])])._scan_skills()
 
-    assert expected in scanned
-    assert all(isinstance(k, str) for k in scanned)
-    skills._build_skills_prompt(scanned)  # sorted() over mixed int/str keys raised TypeError here.
+    assert 'real-dir' in scanned
+    assert 'fake-name' not in scanned
 
 
 def test_non_string_description_is_coerced_or_dropped(sandbox: dict[str, Path]) -> None:
@@ -316,8 +303,8 @@ def test_non_string_description_is_coerced_or_dropped(sandbox: dict[str, Path]) 
 
 @pytest.mark.asyncio
 async def test_numeric_name_does_not_fail_the_turn(ctx: MiddlewareContext, sandbox: dict[str, Path]) -> None:
-    """``name: 404`` next to a string name made every generate() turn fail with INTERNAL."""
-    _skill(sandbox['root'], 'not-found', 'name: 404\ndescription: Handles missing dishes.')
+    """A directory named ``404`` next to a string name does not fail generate() turns."""
+    _skill(sandbox['root'], '404', 'description: Handles missing dishes.')
     skills = Skills(skill_paths=[str(sandbox['root'])])
     seen: list[GenerateHookParams] = []
 
@@ -336,24 +323,21 @@ async def test_numeric_name_does_not_fail_the_turn(ctx: MiddlewareContext, sandb
 @pytest.mark.parametrize(
     'raw',
     [
-        '"menu\\0planner"',
-        '"menu\\u202eplanner"',
-        '"menu\\u2028planner"',
-        '"menu\\x1b[31mplanner"',
-        '"menu\\tplanner"',
+        'menu\tplanner',
+        'menu\u200eplanner',
     ],
 )
 def test_control_and_format_chars_are_stripped_from_names(sandbox: dict[str, Path], raw: str) -> None:
-    _skill(sandbox['root'], 'ctrl', f'name: {raw}')
+    _skill(sandbox['root'], raw, 'description: Planner')
     scanned = Skills(skill_paths=[str(sandbox['root'])])._scan_skills()
 
     name = next(k for k in scanned if k != 'allergy-check')
     assert all(c.isprintable() for c in name)
-    assert name.startswith('menu') and name.endswith('planner')
+    assert name == 'menu planner'
 
 
 def test_unicode_names_are_preserved(sandbox: dict[str, Path]) -> None:
-    _skill(sandbox['root'], 'creme', 'name: crème-brûlée\ndescription: Dessert plating — 甜点')
+    _skill(sandbox['root'], 'crème-brûlée', 'name: crème-brûlée\ndescription: Dessert plating — 甜点')
     scanned = Skills(skill_paths=[str(sandbox['root'])])._scan_skills()
 
     assert scanned['crème-brûlée']['description'] == 'Dessert plating — 甜点'
