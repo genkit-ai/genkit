@@ -9,6 +9,8 @@ import os
 import pathlib
 import tempfile
 
+import pytest
+
 from genkit._ai._runtime import RuntimeManager
 from genkit._core._reflection import ServerSpec
 
@@ -63,3 +65,40 @@ def test_runtime_manager() -> None:
             runtime_path = rm.write_runtime_file()
             assert pathlib.Path(new_dir).exists()
             assert runtime_path.exists()
+
+
+def test_find_project_root_matches_cli_markers(tmp_path: pathlib.Path) -> None:
+    """Runtime files land where the CLI's ``findProjectRoot`` looks."""
+    from genkit._ai._runtime import find_project_root
+
+    project = tmp_path / 'repo'
+    sub = project / 'services' / 'api'
+    sub.mkdir(parents=True)
+    (project / 'pyproject.toml').write_text('')
+
+    assert find_project_root(sub) == project
+    (sub.parent / 'go.mod').write_text('')
+    assert find_project_root(sub) == sub.parent
+
+
+def test_find_project_root_falls_back_to_start(tmp_path: pathlib.Path) -> None:
+    from genkit._ai._runtime import find_project_root
+
+    bare = tmp_path / 'no' / 'markers'
+    bare.mkdir(parents=True)
+    root = find_project_root(bare)
+    # A marker above tmp_path (e.g. a pyproject in a parent) is a legitimate hit.
+    assert root == bare or bare.is_relative_to(root)
+
+
+def test_runtime_manager_defaults_to_project_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    project = tmp_path / 'repo'
+    sub = project / 'src' / 'app'
+    sub.mkdir(parents=True)
+    (project / 'requirements.txt').write_text('')
+    monkeypatch.chdir(sub)
+
+    with RuntimeManager(spec=ServerSpec(port=3100)) as rm:
+        path = rm.write_runtime_file()
+        assert path.parent == project / '.genkit' / 'runtimes'
+    assert not path.exists()

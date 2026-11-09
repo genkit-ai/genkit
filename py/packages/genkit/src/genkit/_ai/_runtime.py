@@ -36,6 +36,35 @@ from genkit._core._reflection import ServerSpec
 logger = get_logger(__name__)
 
 DEFAULT_RUNTIME_DIR_NAME = '.genkit/runtimes'
+
+# Same list as the CLI's ``findProjectRoot`` (genkit-tools/common/src/utils/utils.ts).
+# The CLI reads ``.genkit/runtimes`` under that root, so the runtime file has to
+# land there too.
+PROJECT_ROOT_MARKERS: tuple[str, ...] = (
+    'package.json',
+    'go.mod',
+    'pyproject.toml',
+    'requirements.txt',
+    'pom.xml',
+    'build.gradle',
+    'build.gradle.kts',
+    'pubspec.yaml',
+)
+
+
+def find_project_root(start: Path | None = None) -> Path:
+    """Nearest ancestor of ``start`` (default cwd) holding a project marker.
+
+    Mirrors the CLI: walk up from cwd, stop before the filesystem root, and
+    fall back to cwd when no marker is found.
+    """
+    cwd = Path(start) if start is not None else Path.cwd()
+    current = cwd
+    while current != Path(current.anchor):
+        if any((current / marker).exists() for marker in PROJECT_ROOT_MARKERS):
+            return current
+        current = current.parent
+    return cwd
 ACTIVE_CLEANUPS: list[Callable[[], None]] = []
 # RLock so a SIGINT/SIGTERM mid-update can re-enter: signal handlers run on the
 # main thread, and a plain Lock would deadlock if that thread already holds it.
@@ -204,7 +233,8 @@ class RuntimeManager:
         Args:
             spec: The server specification for the reflection server.
             runtime_dir: The directory to store the runtime file in.
-                         Defaults to .genkit/runtimes in the current directory.
+                         Defaults to .genkit/runtimes under the project root,
+                         found the same way the CLI finds it.
             lazy_write: If True, the runtime file will not be written immediately
                         on context entry. It must be written manually by calling
                         write_runtime_file().
@@ -213,7 +243,7 @@ class RuntimeManager:
         self.spec: ServerSpec = spec
         self._secret: str | None = secret
         if runtime_dir is None:
-            self._runtime_dir: Path = Path(Path.cwd()) / DEFAULT_RUNTIME_DIR_NAME
+            self._runtime_dir: Path = find_project_root() / DEFAULT_RUNTIME_DIR_NAME
         else:
             self._runtime_dir = Path(runtime_dir)
 
