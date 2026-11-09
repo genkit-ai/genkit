@@ -21,6 +21,7 @@ import {
   z,
   type Action,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
 } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -255,7 +256,7 @@ export interface RetrieverParams<
 > {
   retriever: RetrieverArgument<CustomOptions>;
   query: string | DocumentData;
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /**
@@ -310,7 +311,7 @@ export interface IndexerParams<
 > {
   indexer: IndexerArgument<CustomOptions>;
   documents: Array<DocumentData>;
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /**

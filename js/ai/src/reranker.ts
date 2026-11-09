@@ -20,6 +20,7 @@ import {
   z,
   type Action,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
 } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -190,7 +191,7 @@ export interface RerankerParams<
   reranker: RerankerArgument<CustomOptions>;
   query: string | DocumentData;
   documents: DocumentData[];
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /** Union type for specifying a reranker: by name string, action, or reference. */

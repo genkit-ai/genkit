@@ -20,6 +20,7 @@ import {
   z,
   type Action,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
 } from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
@@ -147,7 +148,7 @@ export interface EvaluatorParams<
   evaluator: EvaluatorArgument<DataPoint, CustomOptions>;
   dataset: Dataset<DataPoint>;
   evalRunId?: string;
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /** Configuration options for defining an evaluator via {@link defineEvaluator}. */

@@ -30,7 +30,7 @@ import {
   type ActionFnArg,
   type BidiAction,
   type GenkitSchema,
-  type InferOutput,
+  type InferInput,
   type SpanFailureMarks,
 } from '@genkit-ai/core';
 import { Channel } from '@genkit-ai/core/async';
@@ -2538,7 +2538,7 @@ export function definePromptAgent<
      * prompt be reused/customized across multiple agents (e.g. supplying a
      * different `role` or `tone` to a shared dotprompt template).
      */
-    promptInput?: InferOutput<I>;
+    promptInput?: InferInput<I>;
     stateSchema?: GenkitSchema<State>;
     store?: SessionStore<State>;
     clientTransform?: ClientTransform<State>;
@@ -2866,7 +2866,7 @@ export interface AgentConfig<
    * definition power differently-customized agents (e.g. supplying a different
    * `role` or `tone`). Type-checked against the prompt's `input.schema`.
    */
-  promptInput?: InferOutput<I>;
+  promptInput?: InferInput<I>;
 }
 
 /**

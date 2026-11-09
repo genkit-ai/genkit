@@ -393,7 +393,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
     promise: Promise<ExecutablePrompt<InferInput<I>, O, CustomOptions>>
   ) {
     const executablePrompt = (async (
-      input?: InferOutput<I>,
+      input?: InferInput<I>,
       opts?: PromptGenerateOptions<O, CustomOptions>
     ): Promise<GenerateResponse<InferOutput<O>>> => {
       return (await promise)(input, opts);
@@ -402,7 +402,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
     executablePrompt.ref = { name };
 
     executablePrompt.render = async (
-      input?: InferOutput<I>,
+      input?: InferInput<I>,
       opts?: PromptGenerateOptions<O, CustomOptions>
     ): Promise<GenerateOptions<O, CustomOptions>> => {
       return (await promise).render(input, opts) as Promise<
@@ -411,7 +411,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
     };
 
     executablePrompt.stream = (
-      input?: InferOutput<I>,
+      input?: InferInput<I>,
       opts?: PromptGenerateOptions<O, CustomOptions>
     ): GenerateStreamResponse<InferOutput<O>> => {
       let channel = new Channel<GenerateResponseChunk>();
