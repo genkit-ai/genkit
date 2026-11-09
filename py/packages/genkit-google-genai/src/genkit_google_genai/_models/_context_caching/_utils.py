@@ -19,10 +19,7 @@
 import hashlib
 import json
 
-from genkit_google_genai._models._context_caching._constants import (
-    CONTEXT_CACHE_SUPPORTED_MODELS,
-    INVALID_ARGUMENT_MESSAGES,
-)
+from genkit_google_genai._models._context_caching._constants import INVALID_ARGUMENT_MESSAGES
 from google.genai import types as genai_types
 
 from genkit import GenkitError, get_logger
@@ -62,7 +59,7 @@ def validate_context_cache_request(request: ModelRequest, model_name: str) -> bo
     Returns:
         True if the context cache request could be processed for the request, False otherwise
     """
-    if not model_name or model_name not in CONTEXT_CACHE_SUPPORTED_MODELS:
+    if not model_name:
         raise GenkitError(
             status='INVALID_ARGUMENT',
             message=INVALID_ARGUMENT_MESSAGES['modelVersion'],
@@ -72,10 +69,11 @@ def validate_context_cache_request(request: ModelRequest, model_name: str) -> bo
             status='INVALID_ARGUMENT',
             message=INVALID_ARGUMENT_MESSAGES['tools'],
         )
-    # TODO(#4360): add this check when code execution is added to Genkit
-    # if request.config and request.config.get("codeExecution"):
-    #     raise GenkitError(
-    #         status="INVALID_ARGUMENT",
-    #         message=INVALID_ARGUMENT_MESSAGES["codeExecution"],
-    #     )
+    config = request.config
+    code_execution = config.get('code_execution') if isinstance(config, dict) else getattr(config, 'code_execution', None)
+    if code_execution:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=INVALID_ARGUMENT_MESSAGES['codeExecution'],
+        )
     return True

@@ -17,18 +17,10 @@
 
 """Constants for context caching."""
 
-CONTEXT_CACHE_SUPPORTED_MODELS = [
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-001',
-    'gemini-3-flash-preview',
-]
-
+# No model allowlist: the set of cache-capable models changes with every
+# release, and the API rejects a model that can't cache with a clear error.
 INVALID_ARGUMENT_MESSAGES = {
-    'modelVersion': (
-        'Model version is required for context caching. Supported models: '
-        + ', '.join(CONTEXT_CACHE_SUPPORTED_MODELS)
-        + '.'
-    ),
+    'modelVersion': 'Model version is required for context caching.',
     'tools': 'Context caching cannot be used simultaneously with tools.',
     'codeExecution': 'Context caching cannot be used simultaneously with code execution.',
 }

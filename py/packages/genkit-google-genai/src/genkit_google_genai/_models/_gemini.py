@@ -593,7 +593,8 @@ class GeminiConfig(ModelConfig):
     context_cache: bool | None = Field(
         default=None,
         description=(
-            'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly.'
+            'Context caching allows you to save and reuse precomputed input tokens that you wish to use repeatedly. '
+            "Mark the last message to cache with metadata={'cache': True}. False ignores those markers."
         ),
     )
 
@@ -2304,6 +2305,8 @@ class GeminiModel:
         """
         request_contents: list[genai_types.Content] = []
         cache = None
+        # context_cache=False turns off metadata['cache'] markers for this call.
+        use_cache = getattr(request.config, 'context_cache', None) is not False
 
         for msg in request.messages:
             if msg.role == Role.SYSTEM:
@@ -2318,7 +2321,7 @@ class GeminiModel:
             role = 'model' if msg.role in (Role.MODEL, 'model') else 'user'
             request_contents.append(genai_types.Content(parts=content_parts, role=role))
 
-            if msg.metadata and msg.metadata.get('cache'):
+            if use_cache and msg.metadata and msg.metadata.get('cache'):
                 cache = await self._retrieve_cached_content(
                     request=request,
                     model_name=model_name,
