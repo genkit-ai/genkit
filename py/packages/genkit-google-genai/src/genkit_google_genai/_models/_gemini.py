@@ -222,6 +222,35 @@ def _candidate_metadata(candidate: genai_types.Candidate | None) -> dict[str, An
     return out
 
 
+def _coalesce_stream_parts(parts: list[Part]) -> list[Part]:
+    """Join the text and reasoning fragments a stream delivers into whole parts.
+
+    Adjacent parts of the same kind merge while the earlier one carries no
+    metadata; the merged part takes the later part's metadata, so a
+    thought signature that closes a block stays on it. Empty text with no
+    metadata is dropped. Other parts pass through in order.
+    """
+    out: list[Part] = []
+    for part in parts:
+        kind = 'text' if part.text is not None else 'reasoning' if part.reasoning is not None else None
+        if kind == 'text' and not part.text and not part.metadata:
+            continue
+        prev = out[-1] if out else None
+        if (
+            kind is not None
+            and prev is not None
+            and not prev.metadata
+            and (prev.text is not None if kind == 'text' else prev.reasoning is not None)
+        ):
+            if kind == 'text':
+                out[-1] = Part.from_text((prev.text or '') + (part.text or ''), metadata=part.metadata)
+            else:
+                out[-1] = Part.from_reasoning((prev.reasoning or '') + (part.reasoning or ''), metadata=part.metadata)
+            continue
+        out.append(part)
+    return out or [Part.from_text('')]
+
+
 def _no_candidates_response(
     feedback: genai_types.GenerateContentResponsePromptFeedback | None,
     usage_metadata: Any,  # noqa: ANN401
@@ -2260,7 +2289,7 @@ class GeminiModel:
         return ModelResponse(
             message=Message(
                 role=Role.MODEL,
-                content=accumulated_content,
+                content=_coalesce_stream_parts(accumulated_content),
             ),
             finish_reason=finish_reason,
             usage=_usage_from_metadata(usage_metadata),
@@ -2316,12 +2345,14 @@ class GeminiModel:
             content_parts: list[genai_types.Part] = []
             for p in msg.content:
                 converted = await PartConverter.to_gemini(p, tools=tools)
-                if isinstance(converted, list):
-                    content_parts.extend(converted)
-                else:
-                    content_parts.append(converted)
+                for gemini_part in converted if isinstance(converted, list) else [converted]:
+                    # A part Gemini has no field for (Part.data, say) converts
+                    # to an empty Part(), which the API rejects.
+                    if gemini_part.model_dump(exclude_none=True):
+                        content_parts.append(gemini_part)
             role = 'model' if msg.role in (Role.MODEL, 'model') else 'user'
-            request_contents.append(genai_types.Content(parts=content_parts, role=role))
+            if content_parts:
+                request_contents.append(genai_types.Content(parts=content_parts, role=role))
 
             if use_cache and msg.metadata and msg.metadata.get('cache'):
                 cache = await self._retrieve_cached_content(
