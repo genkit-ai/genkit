@@ -115,9 +115,14 @@ from genkit_amazon_bedrock import Bedrock, BedrockConfig
 claude = Bedrock.text('us.anthropic.claude-sonnet-4-5-20250929-v1:0', config=BedrockConfig(max_output_tokens=512))
 
 # 2. Generate
-response = await ai.generate(model=claude, prompt='Pair a wine with mushroom risotto.')
-print(response.text)
-# => A dry white such as a Pinot Grigio ...
+async def main() -> None:
+    response = await ai.generate(model=claude, prompt='Pair a wine with mushroom risotto.')
+    print(response.text)
+    # => A dry white such as a Pinot Grigio ...
+
+
+if __name__ == '__main__':
+    ai.run_main(main())
 ```
 
 The constructors follow Bedrock's output modalities: `Bedrock.text` (TEXT,

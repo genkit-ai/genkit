@@ -34,8 +34,15 @@ Example:
 
     # All subsequent Genkit actions automatically export telemetry
     ai = Genkit(plugins=[GoogleAI()], model=GoogleAI.gemini('gemini-flash-latest'))
-    await ai.generate(prompt='Hello, world!')
-    # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
+
+
+    async def main() -> None:
+        await ai.generate(prompt='Hello, world!')
+        # => Traces exported asynchronously to Cloud Trace (latency, tokens, status)
+
+
+    if __name__ == '__main__':
+        ai.run_main(main())
     ```
 
 Requirements:

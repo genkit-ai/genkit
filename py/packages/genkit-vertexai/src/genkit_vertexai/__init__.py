@@ -30,14 +30,19 @@ Example:
     )
 
     # 2. Call models under the modelgarden/ namespace (not vertexai/)
-    res = await ai.generate(
-        model='modelgarden/anthropic/claude-3-5-sonnet-v2@20241022',
-        prompt='Explain recursion in 10 words.',
-    )
+    async def main() -> None:
+        res = await ai.generate(
+            model='modelgarden/anthropic/claude-sonnet-4-6',
+            prompt='Explain recursion in 10 words.',
+        )
 
-    # 3. Inspect output shapes directly
-    print(res.text)
-    # => A function calling itself until reaching a base stopping condition.
+        # 3. Inspect output shapes directly
+        print(res.text)
+        # => A function calling itself until reaching a base stopping condition.
+
+
+    if __name__ == '__main__':
+        ai.run_main(main())
     ```
 
 Requirements:

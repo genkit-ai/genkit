@@ -26,11 +26,18 @@ from genkit_anthropic import Anthropic
 
 ai = Genkit(plugins=[Anthropic()])
 
-res = await ai.generate(
-    model=Anthropic.claude('claude-sonnet-4-6'),
-    prompt='Explain recursion in 10 words.',
-)
-print(res.text)
+
+async def main() -> None:
+    res = await ai.generate(
+        model=Anthropic.claude('claude-sonnet-4-6'),
+        prompt='Explain recursion in 10 words.',
+    )
+    print(res.text)
+    # => A function that solves a problem by calling itself repeatedly.
+
+
+if __name__ == '__main__':
+    ai.run_main(main())
 ```
 
 Set `ANTHROPIC_API_KEY` in the environment, or pass `api_key=` to `Anthropic()`.

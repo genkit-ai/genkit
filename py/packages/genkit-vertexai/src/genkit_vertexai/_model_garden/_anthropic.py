@@ -48,7 +48,7 @@ class AnthropicModelGarden:
 
         Args:
             model: The name of the specific model to be used from Model Garden
-                in the way <publisher>/<model> (e.g., 'anthropic/claude-3-5-sonnet-v2@20241022').
+                in the way <publisher>/<model> (e.g., 'anthropic/claude-sonnet-4-6').
             location: The Google Cloud region where the Model Garden service
                 is hosted (e.g., 'us-central1').
             project: The Google Cloud project ID where the Model Garden

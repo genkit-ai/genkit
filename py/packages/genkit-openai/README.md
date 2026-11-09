@@ -27,11 +27,18 @@ from genkit_openai import OpenAI
 
 ai = Genkit(plugins=[OpenAI()])
 
-res = await ai.generate(
-    model=OpenAI.gpt('gpt-5.2'),
-    prompt='Suggest 2 catchy names for an AI newsletter.',
-)
-print(res.text)
+
+async def main() -> None:
+    res = await ai.generate(
+        model=OpenAI.gpt('gpt-5.2'),
+        prompt='Suggest 2 catchy names for an AI newsletter.',
+    )
+    print(res.text)
+    # => 1. The Neural Brief  2. Prompt & Circumstance
+
+
+if __name__ == '__main__':
+    ai.run_main(main())
 ```
 
 Set `OPENAI_API_KEY` in the environment, or pass `api_key=` to `OpenAI()`.
@@ -53,8 +60,8 @@ OpenAI(
 before the request is sent, so a typo fails by name:
 
 ```python
-res = await ai.generate(
-    model='openai/gpt-4o',
+res = await ai.generate(  # inside async def main()
+    model=OpenAI.gpt('gpt-4o'),
     prompt='Write a haiku about the sea.',
     config={
         'temperature': 0.2,
@@ -82,8 +89,8 @@ To bill a call to someone else's OpenAI account, pass their key in
 text-to-speech, and transcription models:
 
 ```python
-res = await ai.generate(
-    model='openai/gpt-4o',
+res = await ai.generate(  # inside async def main()
+    model=OpenAI.gpt('gpt-4o'),
     prompt='hi',
     context={'secrets': {'api_key': tenant_key}},
 )
