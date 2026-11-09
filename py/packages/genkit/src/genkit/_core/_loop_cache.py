@@ -17,16 +17,41 @@
 """Per-event-loop caching for long-lived async clients."""
 
 import asyncio
+import contextlib
 import functools
+import inspect
 import threading
 import weakref
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, overload
+from collections.abc import AsyncGenerator, Callable
+from typing import TYPE_CHECKING, Any, Generic, NamedTuple, TypeVar, cast, overload
 
 from typing_extensions import Self
 
+from genkit._core._logger import get_logger
+
+logger = get_logger(__name__)
+
 T = TypeVar('T')
 S = TypeVar('S')
+
+
+async def _aclose_client(client: object) -> None:
+    """Close an async client if it exposes an async close; ignore anything else."""
+    # httpx.AsyncClient.aclose, AsyncOpenAI/AsyncAnthropic.close, genai.Client.aio.aclose.
+    for owner, name in ((client, 'aclose'), (client, 'close'), (getattr(client, 'aio', None), 'aclose')):
+        close = getattr(owner, name, None)
+        if close is not None and inspect.iscoroutinefunction(close):
+            try:
+                await close()
+            except Exception as e:  # noqa: BLE001 - best-effort cleanup at loop shutdown
+                logger.debug('loop_local_client: closing cached client failed', error=e)
+            return
+
+
+class _Entry(NamedTuple):
+    loop: weakref.ref[asyncio.AbstractEventLoop]
+    value: object
+    finalizer: AsyncGenerator[None, None]
 
 
 class _LoopLocal(Generic[S, T]):
@@ -42,20 +67,63 @@ class _LoopLocal(Generic[S, T]):
 
     def __init__(self, factory: Callable[..., T]) -> None:
         self._factory = factory
-        self._by_loop: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, T] = weakref.WeakKeyDictionary()
+        # Keyed by id(loop), not weakly by the loop: a cached client's
+        # keep-alive transport points back at its loop, so a weak key never
+        # dies and every closed loop stayed pinned with its sockets.
+        self._by_loop: dict[int, _Entry] = {}
         self._lock = threading.Lock()
         self._name: str | None = None
         functools.update_wrapper(self, factory, updated=())  # pyright: ignore[reportArgumentType]
 
     def __call__(self) -> T:
         loop = asyncio.get_running_loop()
+        key = id(loop)
         with self._lock:
-            existing = self._by_loop.get(loop)
-            if existing is not None:
-                return existing
+            entry = self._by_loop.get(key)
+            if entry is not None and entry.loop() is loop:
+                return cast(T, entry.value)
+            stale = self._pop_dead_locked()
             created = self._factory()
-            self._by_loop[loop] = created
-            return created
+            finalizer = self._finalize_on_shutdown(key, loop, created)
+            self._by_loop[key] = _Entry(weakref.ref(loop), created, finalizer)
+        for old in stale:
+            _close_finalizer_now(old.finalizer)
+        # Run the finalizer to its first yield on this loop's thread. That
+        # registers it with the loop's async-generator hooks, so
+        # loop.shutdown_asyncgens() (asyncio.run, uvloop.run, asgiref) closes
+        # it while the loop can still await the client's close.
+        with contextlib.suppress(StopIteration):
+            finalizer.asend(None).send(None)
+        return created
+
+    def _pop_dead_locked(self) -> list[_Entry]:
+        """Drop entries whose loop closed without running shutdown_asyncgens()."""
+        dead = [k for k, e in self._by_loop.items() if (lp := e.loop()) is None or lp.is_closed()]
+        return [self._by_loop.pop(k) for k in dead]
+
+    def _forget(self, key: int, value: object) -> None:
+        with self._lock:
+            entry = self._by_loop.get(key)
+            if entry is not None and entry.value is value:
+                del self._by_loop[key]
+
+    async def _finalize_on_shutdown(
+        self, key: int, loop: asyncio.AbstractEventLoop, value: object
+    ) -> AsyncGenerator[None, None]:
+        loop_ref = weakref.ref(loop)
+        del loop
+        try:
+            yield
+        finally:
+            self._forget(key, value)
+            # Only await on the client's own loop. A finalizer closed from
+            # another loop (its own loop already closed) just drops the client.
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not None and running is loop_ref():
+                await _aclose_client(value)
 
     def __set_name__(self, owner: type, name: str) -> None:
         self._name = name
@@ -87,6 +155,12 @@ class _LoopLocal(Generic[S, T]):
 def loop_local_client(factory: Callable[[], T]) -> Callable[[], T]: ...
 @overload
 def loop_local_client(factory: Callable[[S], T]) -> _LoopLocal[S, T]: ...
+def _close_finalizer_now(finalizer: AsyncGenerator[None, None]) -> None:
+    """Finish a finalizer whose loop is gone, so GC doesn't hand it to a closed loop."""
+    with contextlib.suppress(StopIteration, RuntimeError):
+        finalizer.aclose().send(None)
+
+
 def loop_local_client(factory: Callable[..., T]) -> Any:  # noqa: ANN401
     """Cache a long-lived client per event loop. Use it as a decorator on a factory.
 
@@ -96,8 +170,12 @@ def loop_local_client(factory: Callable[..., T]) -> Any:  # noqa: ANN401
     runs on a second loop. Each loop gets its own client, built on first use
     there and returned on every later call there.
 
-    The client is shared, so don't close it; it lives as long as its loop. For a
-    client scoped to one call, skip the cache and use
+    The client is shared, so don't close it; it lives as long as its loop.
+    When the loop shuts down through ``asyncio.run`` (or anything else that
+    calls ``loop.shutdown_asyncgens()``), Genkit awaits the client's
+    ``aclose()`` or async ``close()`` and drops it, so a closed loop doesn't
+    pin its sockets. A loop closed without that step is dropped the next time
+    the getter runs. For a client scoped to one call, skip the cache and use
     ``async with httpx.AsyncClient() as client:`` inside the call.
 
     ```python

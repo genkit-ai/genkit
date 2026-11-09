@@ -570,6 +570,10 @@ class Registry:
         # loop) never awaits a Task created on the main application loop.
         loop = asyncio.get_running_loop()
         with self._lock:
+            # A Task holds its loop, so the weak key never dies on its own.
+            # Drop closed loops here or every asyncio.run() pins one.
+            for ended in [known for known in self._plugin_init_tasks if known.is_closed()]:
+                del self._plugin_init_tasks[ended]
             loop_tasks = self._plugin_init_tasks.setdefault(loop, {})
             task = loop_tasks.get(plugin_name)
             if task is None:
