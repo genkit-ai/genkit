@@ -29,6 +29,7 @@ Example:
         plugins=[ModelGarden(project='my-project', location='us-central1')],
     )
 
+
     # 2. Call models under the modelgarden/ namespace (not vertexai/)
     async def main() -> None:
         res = await ai.generate(
