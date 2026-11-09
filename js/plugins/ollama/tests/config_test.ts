@@ -30,6 +30,7 @@ describe('Ollama stop sequences', () => {
         let request: { options: { stop?: string[] } } | undefined;
         t.mock.method(globalThis, 'fetch', async (url, init) => {
           assert.strictEqual(url, `http://stub/api/${type}`);
+          assert.ok(init?.body, 'Ollama request should include a body');
           request = JSON.parse(init.body);
           return new Response(
             JSON.stringify({
