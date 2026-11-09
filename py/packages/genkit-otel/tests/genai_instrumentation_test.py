@@ -27,12 +27,14 @@ from genkit_otel._gen_ai_attributes import (
     CONTENT_ATTRIBUTES,
     GEN_AI_OPERATION_DETAILS_EVENT,
     GenAiAttr,
+    GenAiMetric,
     GenkitAttr,
 )
 from opentelemetry._logs import LogRecord
+from opentelemetry.sdk.metrics.export import MetricsData
 from opentelemetry.trace import StatusCode
 
-from genkit import FinishReason, Interrupt, Message, ModelResponse, Part, Role
+from genkit import Failure, FinishReason, Interrupt, Message, ModelResponse, Part, Role
 from genkit.model import GenerationUsage, ModelRequest, OutputConfig
 from genkit.telemetry import SpanContext, SpanMetadata, SpanNext
 
@@ -75,6 +77,13 @@ def _model_response(
         message=message or Message(role=Role.MODEL, content=[Part.from_text('ok')]),
         usage=usage,
     )
+
+
+def _returning(value: object) -> SpanNext[object]:
+    async def next_fn(span: SpanContext | None = None) -> object:
+        return value
+
+    return next_fn
 
 
 async def _run_model(
@@ -184,6 +193,64 @@ async def test_records_error_status_and_type_on_throw(harness) -> None:
 
 
 @pytest.mark.asyncio
+async def test_returned_failure_marks_chat_span_error(harness) -> None:
+    """A model that returns error=Failure(...) instead of raising still gets an ERROR chat span."""
+    instr = harness.instrumentation()
+    response = ModelResponse(
+        finish_reason=FinishReason.FAILED,
+        message=Message(role=Role.MODEL, content=[]),
+        error=Failure(status='UNAVAILABLE', message='503 Service Unavailable'),
+    )
+
+    result = await _run_model(instr, 'googleai/gemini-flash-latest', _model_request(), _returning(response))
+
+    assert result is response
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert span.status.description == '503 Service Unavailable'
+    assert harness.attr(span, GenAiAttr.ERROR_TYPE) == 'UNAVAILABLE'
+    assert list(harness.attr(span, GenAiAttr.RESPONSE_FINISH_REASONS)) == ['error']
+    duration = [
+        dict(point.attributes or {})
+        for resource in (harness.metrics.get_metrics_data() or MetricsData(resource_metrics=[])).resource_metrics
+        for scope in resource.scope_metrics
+        for metric in scope.metrics
+        if metric.name == GenAiMetric.OPERATION_DURATION
+        for point in metric.data.data_points
+    ]
+    assert [attrs.get(GenAiAttr.ERROR_TYPE) for attrs in duration] == ['UNAVAILABLE']
+
+
+@pytest.mark.asyncio
+async def test_failed_finish_reason_without_error_uses_other_error_type(harness) -> None:
+    """finish_reason=failed with no error payload falls back to the semconv _OTHER error.type."""
+    instr = harness.instrumentation()
+    await _run_model(
+        instr,
+        'googleai/gemini-flash-latest',
+        _model_request(),
+        _returning(_model_response(finish_reason=FinishReason.FAILED)),
+    )
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert span.status.status_code == StatusCode.ERROR
+    assert harness.attr(span, GenAiAttr.ERROR_TYPE) == '_OTHER'
+    assert list(harness.attr(span, GenAiAttr.RESPONSE_FINISH_REASONS)) == ['error']
+
+
+@pytest.mark.asyncio
+async def test_successful_response_leaves_chat_span_unset(harness) -> None:
+    """A normal stop response keeps status UNSET and writes no error.type."""
+    instr = harness.instrumentation()
+    await _run_model(instr, 'googleai/gemini-flash-latest', _model_request(), _returning(_model_response()))
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert span.status.status_code == StatusCode.UNSET
+    assert harness.attr(span, GenAiAttr.ERROR_TYPE) is None
+
+
+@pytest.mark.asyncio
 async def test_does_not_capture_content_by_default(harness) -> None:
     instr = harness.instrumentation()
     await _run_model(
@@ -290,7 +357,7 @@ async def test_event_capture_encodes_non_json_values_without_failing_the_call(ha
     )
     response = _model_response()
 
-    result = await _run_model(instr, 'googleai/gemini-flash-latest', request, lambda span=None: _awaitable(response))
+    result = await _run_model(instr, 'googleai/gemini-flash-latest', request, _returning(response))
 
     assert result is response
     span = harness.span_named('chat gemini-flash-latest')
