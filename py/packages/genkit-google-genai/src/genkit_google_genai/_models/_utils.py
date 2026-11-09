@@ -158,6 +158,9 @@ class PartConverter:
 
     EXECUTABLE_CODE = 'executableCode'
     CODE_EXECUTION_RESULT = 'codeExecutionResult'
+    # Server-side (built-in) tool invocations, as in the JS plugin.
+    GEMINI_TOOL_CALL = 'geminiToolCall'
+    GEMINI_TOOL_RESPONSE = 'geminiToolResponse'
     OUTCOME = 'outcome'
     OUTPUT = 'output'
     LANGUAGE = 'language'
@@ -367,6 +370,16 @@ class PartConverter:
                     output=custom_data[cls.CODE_EXECUTION_RESULT][cls.OUTPUT],
                 )
             )
+        if part.custom and cls.GEMINI_TOOL_CALL in part.custom:
+            return genai.types.Part(
+                tool_call=genai.types.ToolCall.model_validate(part.custom[cls.GEMINI_TOOL_CALL]),
+                thought_signature=cls._extract_thought_signature(part.metadata),
+            )
+        if part.custom and cls.GEMINI_TOOL_RESPONSE in part.custom:
+            return genai.types.Part(
+                tool_response=genai.types.ToolResponse.model_validate(part.custom[cls.GEMINI_TOOL_RESPONSE]),
+                thought_signature=cls._extract_thought_signature(part.metadata),
+            )
         return genai.types.Part()
 
     @classmethod
@@ -452,6 +465,20 @@ class PartConverter:
                     cls.OUTPUT: part.code_execution_result.output,
                 }
             })
+        if part.tool_call:
+            # A built-in tool the server ran (include_server_side_tool_invocations).
+            # Kept wire-shaped so the next turn can send it back unchanged.
+            return Part(
+                custom={cls.GEMINI_TOOL_CALL: part.tool_call.model_dump(mode='json', by_alias=True, exclude_none=True)},
+                metadata=cls._encode_thought_signature(part.thought_signature),
+            )
+        if part.tool_response:
+            return Part(
+                custom={
+                    cls.GEMINI_TOOL_RESPONSE: part.tool_response.model_dump(mode='json', by_alias=True, exclude_none=True)
+                },
+                metadata=cls._encode_thought_signature(part.thought_signature),
+            )
 
         return Part.from_text('')
 

@@ -2441,9 +2441,21 @@ class GeminiModel:
 
             if tools:
                 cfg.tools = cast(genai_types.ToolListUnion, tools)
+                # Genkit runs tools itself. google-genai's AFC only runs Python
+                # callables and warns about every FunctionDeclaration.
+                cfg.automatic_function_calling = genai_types.AutomaticFunctionCallingConfig(disable=True)
 
             if request.tool_choice and function_tools:
                 cfg.tool_config = _tool_config(request.tool_choice, function_tools)
+
+            if self._needs_server_side_tool_invocations(tools):
+                # Gemini 3 rejects built-in tools (google_search, url_context,
+                # code_execution, file_search) next to function declarations
+                # unless the request opts in to server-side tool invocations.
+                # The Gemini API only; Vertex AI has no such field.
+                if cfg.tool_config is None:
+                    cfg.tool_config = genai_types.ToolConfig()
+                cfg.tool_config.include_server_side_tool_invocations = True
 
             cfg.system_instruction = genai_types.Content(parts=system_instruction) if system_instruction else None
             cfg = attach_leftovers(cfg, leftovers, nest='generationConfig')
@@ -2481,6 +2493,14 @@ class GeminiModel:
 
     # Keys that may not be supported by older google-genai SDK versions.
     _SDK_GATED_KEYS = frozenset(['image_config', 'thinking_config', 'response_modalities'])
+
+    def _needs_server_side_tool_invocations(self, tools: list[genai_types.Tool]) -> bool:
+        """Whether *tools* mixes function declarations with built-in tools on the Gemini API."""
+        if self._client.vertexai:
+            return False
+        has_functions = any(tool.function_declarations for tool in tools)
+        has_builtin = any(not tool.function_declarations for tool in tools)
+        return has_functions and has_builtin
 
     def _apply_output_config(self, cfg: genai_types.GenerateContentConfig, request: ModelRequest) -> None:
         """Set the response MIME type and schema for the request's output format.
