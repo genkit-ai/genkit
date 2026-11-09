@@ -65,6 +65,7 @@ from genkit._core._action import (
     Action,
     ActionKind,
     ActionRunContext,
+    _action_context,  # pyright: ignore[reportPrivateUsage]
     create_action_key,
     get_current_context,
     parse_action_key,
@@ -890,6 +891,15 @@ async def generate_action(
         context = get_current_context()
 
     async def body(_span: SpanContext) -> ModelResponse:
+        # Middleware and hooks calling Genkit.current_context() see the
+        # context this generate runs with, not None or a stale outer one.
+        token = _action_context.set(context)
+        try:
+            return await run_body()
+        finally:
+            _action_context.reset(token)
+
+    async def run_body() -> ModelResponse:
         result = await run_generate(
             scope=scope,
             options=options,

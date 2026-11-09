@@ -6,6 +6,7 @@
 """Turn-loop regressions: usage totals, max_turns validation, and friends."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 
 import pytest
 
@@ -16,6 +17,7 @@ from genkit._core._action import ActionRunContext
 from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._typing import FinishReason, GenerationUsage, Role, ToolRequest
+from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.testing import ScriptedModel, define_scripted_model
 
 
@@ -426,3 +428,27 @@ def test_tool_accepts_an_async_callable_instance() -> None:
 
     with pytest.raises(TypeError, match='must be async'):
         Tool(SyncCheck(), name='sync_check')
+
+
+@pytest.mark.asyncio
+async def test_middleware_sees_the_context_passed_to_generate() -> None:
+    """Genkit.current_context() inside a hook is the generate call's context."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_answers('ok')]
+    seen: list[object] = []
+
+    class AuditTenant(Middleware):
+        async def wrap_model(
+            self,
+            params: ModelHookParams,
+            ctx: MiddlewareContext,
+            next_fn: Callable[[ModelHookParams, MiddlewareContext], Awaitable[ModelResponse]],
+        ) -> ModelResponse:
+            seen.append(Genkit.current_context())
+            return await next_fn(params, ctx)
+
+    await ai.generate(prompt='hi', context={'tenant': 'bistro-9'}, use=[AuditTenant()])
+
+    assert seen == [{'tenant': 'bistro-9'}]
+    assert Genkit.current_context() is None
