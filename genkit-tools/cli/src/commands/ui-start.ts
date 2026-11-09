@@ -28,7 +28,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import * as clc from 'colorette';
 import { Command } from 'commander';
 import fs from 'fs/promises';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import open from 'open';
 import path from 'path';
 import { detectCLIRuntime } from '../utils/runtime-detector.js';
@@ -62,7 +62,7 @@ export const uiStart = new Command('ui:start')
         return;
       }
     } else {
-      port = await getPort({ port: makeRange(4000, 4099) });
+      port = await getPort({ port: portNumbers(4000, 4099) });
     }
     const serversDir = await findServersDir(await findProjectRoot());
     const toolsJsonPath = path.join(serversDir, 'tools.json');

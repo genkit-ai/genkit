@@ -15,7 +15,7 @@
  */
 
 import EventEmitter from 'events';
-import getPort, { makeRange } from 'get-port';
+import getPort, { portNumbers } from 'get-port';
 import path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
 import {
@@ -221,7 +221,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
     host: string = DEFAULT_REFLECTION_V2_HOST
   ): Promise<{ port: number }> {
     if (!port) {
-      port = await getPort({ host, port: makeRange(3200, 3400) });
+      port = await getPort({ host, port: portNumbers(3200, 3400) });
     }
     if (!this.reflectionSecret && !isLoopbackHost(host)) {
       logger.warn(

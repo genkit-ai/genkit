@@ -287,7 +287,7 @@ export async function startTelemetryServer(params: {
     }
   );
 
-  api.post(
+  api.post<{ parentTraceId?: string; parentSpanId?: string }>(
     [
       '/api/otlp',
       '/api/otlp/v1/traces',
