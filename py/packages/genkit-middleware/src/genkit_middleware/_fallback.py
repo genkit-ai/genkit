@@ -23,13 +23,14 @@ import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from genkit import GenkitError, ModelResponse, ModelResponseChunk
 from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
 from genkit.model import ModelRef, ModelRequest
 from genkit.plugin_api import Action, GenkitConfig
 from genkit_middleware._statuses import TRANSIENT_STATUSES
+from genkit_middleware._streaming import watch_stream
 
 # Everything Retry would retry, plus failures another model may not have:
 # this model doesn't exist or can't do what the request asks.
@@ -86,15 +87,87 @@ def config_from_ref(model: ModelRef[Any]) -> dict[str, Any] | None:
     return bag or None
 
 
-def fallback_request_config(entry: str | FallbackModelEntry) -> dict[str, Any] | None:
-    """A string entry uses the model's defaults; a ref entry uses only its config."""
-    if isinstance(entry, str):
+# Generation settings every provider understands (GenerationCommonConfig).
+_PORTABLE_CONFIG_KEYS: dict[str, str] = {
+    'temperature': 'temperature',
+    'max_output_tokens': 'max_output_tokens',
+    'maxOutputTokens': 'max_output_tokens',
+    'top_k': 'top_k',
+    'topK': 'top_k',
+    'top_p': 'top_p',
+    'topP': 'top_p',
+    'stop_sequences': 'stop_sequences',
+    'stopSequences': 'stop_sequences',
+}
+
+
+def _config_dict(config: object) -> dict[str, Any]:
+    if isinstance(config, BaseModel):
+        return config.model_dump(exclude_none=True)
+    if isinstance(config, dict):
+        return {k: v for k, v in cast(dict[str, Any], config).items() if v is not None}
+    return {}
+
+
+def _accepted_keys(schema: object) -> set[str] | None:
+    """Keys a backup model's config class validates, or None when it has none."""
+    if not (isinstance(schema, type) and issubclass(schema, BaseModel)):
         return None
-    return entry.config
+    keys: set[str] = set()
+    for name, info in schema.model_fields.items():
+        keys.add(name)
+        for alias in (info.alias, info.validation_alias, info.serialization_alias):
+            if isinstance(alias, str):
+                keys.add(alias)
+    return keys
+
+
+def inherited_config(primary: object, backup_schema: object) -> dict[str, Any]:
+    """The caller's config, narrowed to what the backup model accepts.
+
+    Keys the backup's config class declares carry over as-is, so
+    ``max_output_tokens`` and ``temperature`` survive a failover. A backup
+    with no config class gets only the portable generation keys, so a
+    provider-specific key (``safety_settings``) does not fail validation.
+    ``version`` and ``extra`` belong to the primary's provider, so they never
+    carry over.
+    """
+    source = _config_dict(primary)
+    # version names the primary's model; extra is that provider's passthrough.
+    source.pop('version', None)
+    source.pop('extra', None)
+    accepted = _accepted_keys(backup_schema)
+    if accepted is not None:
+        return {k: v for k, v in source.items() if k in accepted}
+    return {_PORTABLE_CONFIG_KEYS[k]: v for k, v in source.items() if k in _PORTABLE_CONFIG_KEYS}
+
+
+def fallback_request_config(
+    entry: str | FallbackModelEntry,
+    *,
+    primary: object = None,
+    backup_schema: object = None,
+) -> dict[str, Any] | None:
+    """A ref entry uses only its own config; a string entry inherits the caller's.
+
+    Matches JS: ``normalizedModel.config ?? req.config``, narrowed so the
+    backup model can validate it.
+    """
+    if isinstance(entry, FallbackModelEntry) and entry.config is not None:
+        return entry.config
+    return inherited_config(primary, backup_schema) or None
 
 
 class Fallback(Middleware[FallbackConfig]):
-    """Fallback middleware to try alternative models on failure."""
+    """Fallback middleware to try alternative models on failure.
+
+    A backup named by string inherits the caller's config, narrowed to keys
+    the backup accepts; a ``ModelRef`` backup uses only its own config. Once
+    an attempt has streamed chunks, its failure is raised rather than failed
+    over. Backups run directly, not through middleware listed after
+    ``Fallback``, so ``use=[Fallback(...), Retry(...)]`` retries only the
+    primary; ``use=[Retry(...), Fallback(...)]`` retries the whole sequence.
+    """
 
     name = 'fallback'
     description = 'Falls back to alternative models on failure'
@@ -122,9 +195,12 @@ class Fallback(Middleware[FallbackConfig]):
         """Try the primary model, then fall back to alternates on retryable errors."""
         last_error: Exception | None = None
         try:
-            return await next_fn(params, ctx)
+            with watch_stream(ctx) as stream:
+                return await next_fn(params, ctx)
         except Exception as exc:
-            if not self._should_fall_back(exc):
+            # Once chunks reached the caller, a backup's answer would be
+            # spliced onto the failed one; surface the failure instead.
+            if stream.committed or not self._should_fall_back(exc):
                 raise
             last_error = exc
 
@@ -137,19 +213,21 @@ class Fallback(Middleware[FallbackConfig]):
             # it into its own class like any other call. A copy of the primary's
             # typed request would pass a dict straight through when both models
             # share a config class.
-            fallback_request = ModelRequest.model_validate(
-                {**dict(params.request), 'config': fallback_request_config(entry) or {}},
+            config = fallback_request_config(
+                entry, primary=params.request.config, backup_schema=fallback_action.config_schema
             )
+            fallback_request = ModelRequest.model_validate({**dict(params.request), 'config': config or {}})
             try:
-                result = await fallback_action._run(
-                    input=fallback_request,
-                    context=ctx.context,
-                    on_chunk=on_chunk,
-                )
+                with watch_stream(ctx) as stream:
+                    result = await fallback_action._run(
+                        input=fallback_request,
+                        context=ctx.context,
+                        on_chunk=ctx.on_chunk if on_chunk is not None else None,
+                    )
                 return result.response  # type: ignore[return-value]
             except Exception as e2:
                 last_error = e2
-                if not self._should_fall_back(e2):
+                if stream.committed or not self._should_fall_back(e2):
                     raise
 
         raise last_error

@@ -114,7 +114,7 @@ class ThinkingConfig(ModelConfig):
 
 @pytest.mark.asyncio
 async def test_fallback_to_other_model_sends_only_the_entry_config() -> None:
-    """When the primary fails, a string backup runs with that model's defaults — no thinkingConfig."""
+    """A string backup inherits the keys its config class accepts (temperature), not thinkingConfig."""
     ai = Genkit()
     seen: list[object] = []
 
@@ -144,7 +144,7 @@ async def test_fallback_to_other_model_sends_only_the_entry_config() -> None:
     assert len(seen) == 1
     assert _config_value(seen[0], 'thinkingConfig') is None
     assert _config_value(seen[0], 'thinking_config') is None
-    assert _config_value(seen[0], 'temperature') is None
+    assert _config_value(seen[0], 'temperature') == 0.2
     assert _config_value(seen[0], 'version') is None
     assert _config_value(seen[0], 'extra') is None
 
@@ -211,12 +211,15 @@ async def test_fallback_ref_entry_config_reaches_fallback_model() -> None:
     ('entry', 'temperature'),
     [
         (ModelRef(name='backup', config_schema=ThinkingConfig, config=ThinkingConfig(temperature=0.2)), 0.2),
-        ('backup', None),
+        ('backup', 0.9),
     ],
     ids=['ref_entry', 'string_entry'],
 )
 async def test_fallback_backup_with_same_config_class_gets_that_class(entry: object, temperature: float | None) -> None:
-    """A backup that shares the primary's config class gets a ThinkingConfig, not a dict or None."""
+    """A backup that shares the primary's config class gets a ThinkingConfig.
+
+    A ref entry runs with its own config; a string entry inherits the caller's.
+    """
     ai = Genkit()
     seen: list[object] = []
 
@@ -651,3 +654,85 @@ async def test_fallback_generate_stream_aclose_when_sdk_turns_cancel_into_error_
     assert final.finish_reason == FinishReason.ABORTED
     assert final.error is not None
     assert final.error.status == 'CANCELLED'
+
+
+@pytest.mark.asyncio
+async def test_fallback_string_entry_keeps_portable_caller_config() -> None:
+    """`max_output_tokens` survives a failover to a backup with no config class."""
+    ai = Genkit()
+    seen: list[object] = []
+
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='down')
+
+    async def backup(request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        seen.append(request.config)
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('ok')]))
+
+    ai.define_model(name='gem', fn=primary, config_schema=ThinkingConfig)
+    ai.define_model(name='plain', fn=backup)
+
+    await ai.generate(
+        model='gem',
+        prompt='hi',
+        config={'maxOutputTokens': 64, 'temperature': 0.1, 'thinkingConfig': {'thinkingBudget': 0}},
+        use=[Fallback(models=['plain'])],
+    )
+
+    assert _config_value(seen[0], 'max_output_tokens') == 64
+    assert _config_value(seen[0], 'temperature') == 0.1
+    assert _config_value(seen[0], 'thinkingConfig') is None
+    assert _config_value(seen[0], 'thinking_config') is None
+
+
+@pytest.mark.asyncio
+async def test_fallback_does_not_fail_over_after_chunks_reached_the_caller() -> None:
+    """Mid-stream failure surfaces instead of splicing the backup's answer onto partial JSON."""
+    ai = Genkit()
+    backup_calls = 0
+
+    async def primary(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('{"dish": "Sal')]))
+        raise GenkitError(status='UNAVAILABLE', message='RST_STREAM')
+
+    async def backup(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        nonlocal backup_calls
+        backup_calls += 1
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('{"dish": "Tartine"}')]))
+
+    ai.define_model(name='primary', fn=primary)
+    ai.define_model(name='backup', fn=backup)
+
+    async with ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])]) as stream:
+        chunks = [c.text async for c in stream]
+    try:
+        response = await stream.response
+    except GenkitError:
+        pass
+    else:
+        assert response.finish_reason == FinishReason.FAILED
+
+    assert chunks == ['{"dish": "Sal']
+    assert backup_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fallback_before_first_chunk_streams_the_backup() -> None:
+    ai = Genkit()
+
+    async def primary(_request: ModelRequest, _ctx: ModelContext) -> ModelResponse:
+        raise GenkitError(status='UNAVAILABLE', message='503')
+
+    async def backup(_request: ModelRequest, ctx: ModelContext) -> ModelResponse:
+        ctx.send_chunk(ModelResponseChunk(role=Role.MODEL, content=[Part.from_text('Tartine')]))
+        return ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('Tartine')]))
+
+    ai.define_model(name='primary', fn=primary)
+    ai.define_model(name='backup', fn=backup)
+
+    async with ai.generate_stream(model='primary', prompt='hi', use=[Fallback(models=['backup'])]) as stream:
+        chunks = [c.text async for c in stream]
+    response = await stream.response
+
+    assert chunks == ['Tartine']
+    assert response.text == 'Tartine'

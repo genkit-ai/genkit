@@ -28,6 +28,7 @@ from pydantic import Field
 
 from genkit import GenkitError, ModelResponse
 from genkit.middleware import Middleware, MiddlewareContext, ModelHookParams
+from genkit_middleware._streaming import watch_stream
 from genkit.plugin_api import GenkitConfig
 from genkit_middleware._statuses import TRANSIENT_STATUSES
 
@@ -63,12 +64,17 @@ class Retry(Middleware[RetryConfig]):
 
         for attempt in range(self.config.max_retries + 1):
             try:
-                return await next_fn(params, ctx)
+                with watch_stream(ctx) as stream:
+                    return await next_fn(params, ctx)
             except Exception as e:
                 curr = asyncio.current_task()
                 if curr is not None and sys.version_info >= (3, 11) and curr.cancelling() > 0:
                     raise
                 if attempt == self.config.max_retries:
+                    raise
+                # The caller already has part of this answer; a retry would
+                # append a second one to it.
+                if stream.committed:
                     raise
 
                 # A GenkitError is retried only when its status is listed. Any
