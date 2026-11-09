@@ -396,3 +396,36 @@ def test_reflection_server_configures_logging_when_app_has_none() -> None:
             lg.handlers = handlers
             lg.filters = filters
             lg.propagate = propagate
+
+
+def test_exhausted_port_range_names_the_cause(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Instance #101 gets an actionable message, not a bare EADDRINUSE."""
+    real_bind = socket.socket.bind
+
+    def busy(self: socket.socket, addr: Any) -> None:  # noqa: ANN401
+        raise OSError(48, 'Address already in use')
+
+    monkeypatch.setattr(socket.socket, 'bind', busy)
+    try:
+        with pytest.raises(OSError, match='reuse one instance') as exc:
+            Genkit._bind_reflection_socket('127.0.0.1', 3100, pinned=False)  # pyright: ignore[reportPrivateUsage]
+    finally:
+        monkeypatch.setattr(socket.socket, 'bind', real_bind)
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+@pytest.mark.asyncio
+async def test_run_main_inside_running_loop_points_to_await() -> None:
+    """Jupyter already runs a loop: say `await main()` and don't leak an unawaited coroutine."""
+    import warnings
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+        ai = Genkit()
+
+    async def main() -> str:
+        return 'Smoked Salmon Tartine'
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', RuntimeWarning)
+        with pytest.raises(RuntimeError, match=r'await main\(\)'):
+            ai.run_main(main())

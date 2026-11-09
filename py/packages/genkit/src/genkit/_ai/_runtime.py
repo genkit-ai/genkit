@@ -123,10 +123,26 @@ def _remove_file(file_path: Path | None) -> bool:
     try:
         if file_path.exists():
             file_path.unlink()
+        _remove_empty_runtime_dirs(file_path.parent)
         return True
     except Exception as e:
         print(f'Error deleting {file_path}: {e}')  # noqa: T201 - atexit handler, logger unavailable
         return False
+
+
+def _remove_empty_runtime_dirs(runtime_dir: Path) -> None:
+    """Drop ``.genkit/runtimes`` and ``.genkit`` if this process left them empty.
+
+    ``rmdir`` only removes an empty directory, so another runtime's file or
+    the CLI's traces keep them in place.
+    """
+    for directory in (runtime_dir, runtime_dir.parent):
+        if directory.name not in ('runtimes', '.genkit'):
+            return
+        try:
+            directory.rmdir()
+        except OSError:
+            return
 
 
 def _register_atexit_cleanup_handler(path_to_remove: Path | None) -> None:
@@ -342,3 +358,6 @@ class RuntimeManager:
             logger.debug(f'Cleaning up runtime file: {self._runtime_file_path}')
             _ = _remove_file(self._runtime_file_path)
             self._runtime_file_path = None
+        else:
+            # lazy_write: the directory exists but no file was ever written.
+            _remove_empty_runtime_dirs(self._runtime_dir)

@@ -102,3 +102,25 @@ def test_runtime_manager_defaults_to_project_root(tmp_path: pathlib.Path, monkey
         path = rm.write_runtime_file()
         assert path.parent == project / '.genkit' / 'runtimes'
     assert not path.exists()
+
+
+def test_runtime_manager_removes_empty_runtime_dirs(tmp_path: pathlib.Path) -> None:
+    """Exiting leaves no empty `.genkit/runtimes` behind in the project."""
+    runtime_dir = tmp_path / '.genkit' / 'runtimes'
+    with RuntimeManager(spec=ServerSpec(port=3100), runtime_dir=runtime_dir):
+        assert runtime_dir.exists()
+    assert not (tmp_path / '.genkit').exists()
+
+    with RuntimeManager(spec=ServerSpec(port=3100), runtime_dir=runtime_dir, lazy_write=True):
+        assert runtime_dir.exists()
+    assert not (tmp_path / '.genkit').exists()
+
+
+def test_runtime_manager_keeps_dirs_with_other_files(tmp_path: pathlib.Path) -> None:
+    runtime_dir = tmp_path / '.genkit' / 'runtimes'
+    runtime_dir.mkdir(parents=True)
+    (tmp_path / '.genkit' / 'traces.json').write_text('{}')
+    with RuntimeManager(spec=ServerSpec(port=3100), runtime_dir=runtime_dir):
+        pass
+    assert not runtime_dir.exists()
+    assert (tmp_path / '.genkit' / 'traces.json').exists()

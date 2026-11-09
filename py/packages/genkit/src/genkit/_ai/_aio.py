@@ -1199,7 +1199,15 @@ class Genkit:
                 continue
             sock.listen(2048)
             return sock
-        raise last or OSError(f'no available port in range {port}-{port + 99}')
+        if pinned:
+            raise last or OSError(f'port {port} is not available')
+        # Each Genkit() with reflection on holds one port; a notebook that
+        # re-runs `ai = Genkit(...)` exhausts the range.
+        raise OSError(
+            f'No free reflection port in {port}-{port + 99}. Each Genkit() instance with the Dev UI '
+            'reflection server on (GENKIT_ENV=dev) holds one port; reuse one instance instead of '
+            'creating a new one per cell or request.'
+        ) from last
 
     def _start_reflection_background(self) -> None:
         """Start the Dev UI reflection server in a background daemon thread.
@@ -1383,6 +1391,19 @@ class Genkit:
             #    stays up for the Dev UI until you press Ctrl+C.
             ```
         """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            # Jupyter, IPython, and async frameworks already run a loop, and
+            # asyncio.run would fail with a raw RuntimeError plus an
+            # unawaited-coroutine warning.
+            coro.close()
+            raise RuntimeError(
+                'ai.run_main() cannot be called from a running event loop (Jupyter, IPython, or an async '
+                'framework). Use `await main()` instead.'
+            )
         if not self._reflection_config.enabled:
             return run_loop(coro)
 
