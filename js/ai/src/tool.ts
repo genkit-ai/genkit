@@ -639,6 +639,9 @@ function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
     {
       ...config,
       outputSchema: MultipartToolResponseSchema,
+      // The action returns the `{ output, content }` envelope; the tool's own
+      // output JSON schema (which would take priority) describes `output` only.
+      outputJsonSchema: undefined,
       actionType: 'tool.v2',
       metadata: {
         ...(config.metadata || {}),

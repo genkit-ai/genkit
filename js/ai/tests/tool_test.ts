@@ -216,6 +216,23 @@ describe('defineInterrupt', () => {
       });
     });
 
+    it('validates multipart output against the tool outputJsonSchema only for `output`', async () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'jsonOut',
+          description: 'test',
+          multipart: true,
+          outputJsonSchema: { type: 'string' },
+        },
+        async () => ({ output: 'main output', content: [{ text: 'part 1' }] })
+      );
+      assert.deepStrictEqual(await t({}), {
+        output: 'main output',
+        content: [{ text: 'part 1' }],
+      });
+    });
+
     it('should define a multipart tool returning metadata', async () => {
       const t = defineTool(
         registry,

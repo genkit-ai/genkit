@@ -567,10 +567,11 @@ export function action<
           name: actionName,
           // Seed input (and init) up front so the realtime "pending" span
           // export carries them; both are already resolved by this point.
-          // `init` is stored raw (like `input`) so the tracing layer serializes
-          // them consistently.
-          input,
-          ...(options?.init !== undefined ? { init: options.init } : {}),
+          // Both are recorded as the caller sent them (pre-parse): transforms
+          // aren't idempotent, so replaying a parsed input (Dev UI rerun,
+          // trace replay) could fail or apply them twice.
+          input: rawInput,
+          ...(rawOptions?.init !== undefined ? { init: rawOptions.init } : {}),
         },
         labels: {
           [SPAN_TYPE_ATTR]: 'action',

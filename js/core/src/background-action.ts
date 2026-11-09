@@ -20,7 +20,12 @@ import { Action, ActionMetadata, Middleware, action } from './action.js';
 import { ActionContext } from './context.js';
 import { GenkitError } from './error.js';
 import { ActionType, Registry } from './registry.js';
-import { toJsonSchema, type GenkitSchema, type InferOutput } from './schema.js';
+import {
+  toJsonSchema,
+  type GenkitSchema,
+  type InferInput,
+  type InferOutput,
+} from './schema.js';
 
 /**
  * Zod schema of an opration representing a background task.
@@ -66,7 +71,7 @@ export interface BackgroundAction<
   readonly supportsCancel: boolean;
 
   start(
-    input?: InferOutput<I>,
+    input?: InferInput<I>,
     options?: RunOptions
   ): Promise<Operation<InferOutput<O>>>;
 
@@ -146,7 +151,7 @@ class BackgroundActionImpl<
   }
 
   async start(
-    input?: InferOutput<I>,
+    input?: InferInput<I>,
     options?: RunOptions
   ): Promise<Operation<InferOutput<O>>> {
     return await this.startAction(input, options);
@@ -236,7 +241,7 @@ export type BackgroundActionParams<
   outputSchema?: O;
   outputJsonSchema?: JSONSchema7;
   metadata?: Record<string, any>;
-  use?: Middleware<InferOutput<I>, InferOutput<O>>[];
+  use?: Middleware<InferInput<I>, InferOutput<O>>[];
   streamSchema?: S;
 };
 
@@ -309,7 +314,7 @@ export function backgroundAction<
       // wraps the start action, which actually returns an Operation<O>.
       // Previously hidden by zod v3's `any` inference; needs a proper fix.
       use: config.use as unknown as
-        | Middleware<InferOutput<I>, Operation<InferOutput<O>>>[]
+        | Middleware<InferInput<I>, Operation<InferOutput<O>>>[]
         | undefined,
     },
     async (input, options) => {
@@ -324,7 +329,6 @@ export function backgroundAction<
       name: `${config.name}/check`,
       description: config.description,
       inputSchema: OperationSchema,
-      inputJsonSchema: config.inputJsonSchema,
       outputSchema: OperationSchema,
       metadata: {
         ...config.metadata,
@@ -350,7 +354,6 @@ export function backgroundAction<
         name: `${config.name}/cancel`,
         description: config.description,
         inputSchema: OperationSchema,
-        inputJsonSchema: config.inputJsonSchema,
         outputSchema: OperationSchema,
         metadata: {
           ...config.metadata,

@@ -614,4 +614,37 @@ describe('action schema parsing', () => {
       JSON.stringify({ hits: ['z'], more: false })
     );
   });
+
+  it('records the raw input and init on the span, so replays work', async () => {
+    const length = z.object({ n: z.string().transform((s) => s.length) });
+    const act = action(
+      {
+        name: 'replayable',
+        actionType: 'custom',
+        inputSchema: length,
+        initSchema: length,
+      },
+      async (input, { init }) => input.n + (init?.n ?? 0)
+    );
+    assert.strictEqual(
+      await act.run({ n: 'abc' }, { init: { n: 'de' } }).then((r) => r.result),
+      5
+    );
+    const span = spanExporter.exportedSpans.find(
+      (s) => s.attributes['genkit:name'] === 'replayable'
+    );
+    const recordedInput = JSON.parse(
+      span?.attributes['genkit:input'] as string
+    );
+    assert.deepStrictEqual(recordedInput, { n: 'abc' });
+    assert.strictEqual(
+      span?.attributes['genkit:init'],
+      JSON.stringify({ n: 'de' })
+    );
+    // Re-running with the recorded input applies the transform once.
+    assert.strictEqual(
+      (await act.run(recordedInput, { init: { n: '' } })).result,
+      3
+    );
+  });
 });
