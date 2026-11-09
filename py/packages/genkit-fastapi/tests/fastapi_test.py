@@ -18,11 +18,13 @@
 """Tests for the FastAPI plugin."""
 
 import asyncio
+import dataclasses
 import datetime
 import functools
 import json
 import logging
-from collections.abc import MutableMapping
+import types
+from collections.abc import Callable, MutableMapping
 from typing import Any, cast
 
 import pytest
@@ -261,6 +263,88 @@ def test_context_dependency_value_reaches_action() -> None:
     client = TestClient(app)
 
     response = client.post('/whoami', json={'data': 'x'})
+
+    assert response.status_code == 200
+    assert response.json()['result'] == 'user-123'
+
+
+class _Principal(BaseModel):
+    uid: str
+    roles: list[str]
+
+
+@dataclasses.dataclass
+class _DinerSession:
+    uid: str
+    table: int
+
+
+@pytest.mark.parametrize(
+    'make_context',
+    [
+        pytest.param(lambda: _Principal(uid='user-123', roles=['chef']), id='pydantic'),
+        pytest.param(lambda: _DinerSession(uid='user-123', table=7), id='dataclass'),
+        pytest.param(lambda: types.MappingProxyType({'uid': 'user-123'}), id='mapping'),
+    ],
+)
+def test_context_dependency_non_dict_value_reaches_action(make_context: Callable[[], object]) -> None:
+    """A Pydantic model, dataclass, or Mapping from Depends becomes the action context, not None.
+
+    Regression: anything but a dict was dropped silently, so the flow ran with
+    no auth principal.
+    """
+    ai = Genkit()
+
+    @ai.flow()
+    async def whoami(_: str, ctx: FlowContext) -> str:
+        return str(ctx.context.get('uid'))
+
+    async def principal() -> object:
+        return make_context()
+
+    app = FastAPI()
+    app.include_router(serve_flow(whoami, base_path='/whoami', context_dependency=principal))
+
+    response = TestClient(app).post('/whoami', json={'data': 'x'})
+
+    assert response.status_code == 200
+    assert response.json()['result'] == 'user-123'
+
+
+def test_context_dependency_unsupported_value_fails_loudly() -> None:
+    """A dependency returning e.g. a str raises TypeError instead of running with no context."""
+    ai = Genkit()
+    ran = False
+
+    @ai.flow()
+    async def whoami(_: str) -> str:
+        nonlocal ran
+        ran = True
+        return 'ran'
+
+    async def token() -> str:
+        return 'user-123'
+
+    app = FastAPI()
+    app.include_router(serve_flow(whoami, base_path='/whoami', context_dependency=token))
+
+    with pytest.raises(TypeError, match='context_dependency must return a dict'):
+        TestClient(app).post('/whoami', json={'data': 'x'})
+    assert not ran
+
+
+def test_handler_context_provider_pydantic_value_reaches_action() -> None:
+    """genkit_fastapi_handler keeps a Pydantic model context_provider value too."""
+    ai = Genkit()
+    app = FastAPI()
+
+    @app.post('/whoami')
+    @genkit_fastapi_handler(ai, context_provider=lambda _: _Principal(uid='user-123', roles=[]))  # type: ignore[arg-type,return-value]
+    @ai.flow()
+    async def whoami(_: str, ctx: FlowContext) -> str:
+        return str(ctx.context.get('uid'))
+
+    response = TestClient(app).post('/whoami', json={'data': 'x'})
 
     assert response.status_code == 200
     assert response.json()['result'] == 'user-123'

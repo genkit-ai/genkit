@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
@@ -27,6 +28,7 @@ from typing import Any, TypeVar, cast
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from genkit import Genkit, GenkitError, PublicError
@@ -79,6 +81,29 @@ async def _read_json_request_body(*, request: Request) -> object:
         return json.loads((await request.body()).decode('utf-8'))
     except (json.JSONDecodeError, UnicodeDecodeError) as err:
         raise PublicError('INVALID_ARGUMENT', 'request body must be valid JSON') from err
+
+
+def _context_dict(value: object, *, source: str) -> dict[str, object] | None:
+    """Turn a context provider's or dependency's return value into the action context.
+
+    ``dict`` passes through; any other ``Mapping``, a Pydantic model, or a
+    dataclass becomes a shallow dict of its fields, so nested values (a
+    ``User`` principal, a DB session) keep their types. ``None`` means no
+    context. Anything else raises ``TypeError`` instead of silently running
+    the action with no auth context.
+    """
+    if value is None or isinstance(value, dict):
+        return cast(dict[str, object] | None, value)
+    if isinstance(value, Mapping):
+        return {str(k): v for k, v in cast(Mapping[object, object], value).items()}
+    if isinstance(value, BaseModel):
+        return dict(value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {f.name: getattr(value, f.name) for f in dataclasses.fields(value)}
+    raise TypeError(
+        f'{source} must return a dict, Mapping, Pydantic model, or dataclass to use as the action context; '
+        f'got {type(value).__name__}'
+    )
 
 
 def _log_failure(*, error: Exception, flow: str, where: str) -> None:
@@ -271,8 +296,7 @@ def genkit_fastapi_handler(
                     context = context_provider(request_data)
                     if asyncio.iscoroutine(context):
                         context = await context
-                    if isinstance(context, dict):
-                        action_context = context
+                    action_context = _context_dict(context, source='context_provider')
                 except StarletteHTTPException:
                     # FastAPI and Starlette HTTPException share this base; FastAPI
                     # handles it so a 401 from context_provider stays a 401.
@@ -317,7 +341,7 @@ def _mount_action(
             return await _handle_action_request(
                 request=request,
                 action=action,
-                context=context if isinstance(context, dict) else None,
+                context=_context_dict(context, source='context_dependency'),
                 extract_input=extract_input,
                 resolve_init=resolve_init,
                 empty_status=empty_status,
