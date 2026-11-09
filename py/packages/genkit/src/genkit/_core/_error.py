@@ -787,6 +787,10 @@ def _split_rendered(error: GenkitError) -> tuple[str | None, str]:
     return text[:at].removesuffix(': ') or None, text[at + len(error.status) + 2 :]
 
 
+def _known_reason(reason: object) -> ErrorReason | None:
+    return reason if isinstance(reason, ErrorReason) else None
+
+
 @dataclass(frozen=True)
 class BoxedFailure:
     """Plain-data record of a boxed turn failure for SSE error framing.
@@ -801,6 +805,10 @@ class BoxedFailure:
     is_public: bool = False
     details: Any = None  # noqa: ANN401
     source: str | None = None
+    # Kept so to_exception() re-raises what Retry middleware and callers read:
+    # the provider's Retry-After hint and the machine-readable reason.
+    retry_after_ms: float | None = None
+    reason: ErrorReason | None = None
 
     @classmethod
     def from_exc(cls, exc: BaseException) -> Self:
@@ -810,10 +818,22 @@ class BoxedFailure:
                 details = _client_details(exc.details)
             except Exception:
                 details = None
-            return cls(status=exc.status, message=exc.message, is_public=True, details=details)
+            return cls(
+                status=exc.status,
+                message=exc.message,
+                is_public=True,
+                details=details,
+                retry_after_ms=exc.retry_after_ms,
+            )
         if isinstance(exc, GenkitError):
             source, message = _split_rendered(exc)
-            return cls(status=exc.status, message=message, source=source)
+            return cls(
+                status=exc.status,
+                message=message,
+                source=source,
+                retry_after_ms=exc.retry_after_ms,
+                reason=_known_reason(exc.reason),
+            )
         text = str(exc)
         return cls(
             status='INTERNAL',
@@ -823,12 +843,21 @@ class BoxedFailure:
     def to_exception(self) -> GenkitError:
         """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
         if self.is_public:
-            return PublicError(
+            public = PublicError(
                 self.status,
                 self.message,
                 details=copy.deepcopy(self.details) if self.details is not None else None,
             )
-        return GenkitError(status=self.status, message=self.message, source=self.source)
+            # A PublicError's reason already rides in its details.
+            public.retry_after_ms = self.retry_after_ms
+            return public
+        return GenkitError(
+            status=self.status,
+            message=self.message,
+            source=self.source,
+            retry_after_ms=self.retry_after_ms,
+            reason=self.reason,
+        )
 
 
 def error_status(error: Exception) -> int:

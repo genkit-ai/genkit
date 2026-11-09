@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 import pytest
 
 from genkit import Genkit, ModelResponse
+from genkit._core._error import BoxedFailure, ErrorReason, GenkitError, PublicError
 from genkit._core._typing import FinishReason
 from genkit.testing import define_scripted_model
 from genkit.web import to_sse
@@ -103,3 +104,29 @@ async def test_unpacking_a_stream_response_explains_the_0_13_shape() -> None:
     with pytest.raises(TypeError, match='result.stream'):
         stream, response = result  # type: ignore[misc]
     await result.response
+
+
+def test_boxed_failure_keeps_retry_after_and_reason() -> None:
+    """to_exception() re-raises the Retry-After hint and reason Retry middleware reads."""
+    original = GenkitError(
+        status='RESOURCE_EXHAUSTED',
+        message='quota',
+        retry_after_ms=1500.0,
+        reason=ErrorReason.TOOL_FAILED,
+    )
+
+    again = BoxedFailure.from_exc(original).to_exception()
+
+    assert again.status == 'RESOURCE_EXHAUSTED'
+    assert again.retry_after_ms == 1500.0
+    assert again.reason is ErrorReason.TOOL_FAILED
+
+
+def test_boxed_public_failure_keeps_retry_after() -> None:
+    original = PublicError('RESOURCE_EXHAUSTED', 'slow down')
+    original.retry_after_ms = 2000.0
+
+    again = BoxedFailure.from_exc(original).to_exception()
+
+    assert isinstance(again, PublicError)
+    assert again.retry_after_ms == 2000.0
