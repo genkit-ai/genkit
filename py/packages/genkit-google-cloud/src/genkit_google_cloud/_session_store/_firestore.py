@@ -42,14 +42,25 @@ from datetime import datetime, timezone
 from typing import Any, Generic, Literal
 
 from google.api_core import exceptions as google_exceptions
-from google.cloud import firestore
-from google.cloud.firestore import (
-    AsyncClient,
-    AsyncCollectionReference,
-    AsyncDocumentReference,
-    AsyncTransaction,
-    DocumentSnapshot,
-)
+
+try:
+    from google.cloud import firestore
+    from google.cloud.firestore import (
+        AsyncClient,
+        AsyncCollectionReference,
+        AsyncDocumentReference,
+        AsyncTransaction,
+        DocumentSnapshot,
+    )
+except ImportError as e:
+    # Only a missing google-cloud-firestore gets the install hint; a broken
+    # transitive dependency keeps its own error.
+    if e.name not in ('google.cloud', 'google.cloud.firestore'):
+        raise
+    raise ModuleNotFoundError(
+        "FirestoreSessionStore needs google-cloud-firestore: uv add 'genkit-google-cloud[firestore]'",
+        name='google.cloud.firestore',
+    ) from e
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 

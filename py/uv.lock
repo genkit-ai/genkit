@@ -1799,7 +1799,6 @@ source = { editable = "packages/genkit-google-cloud" }
 dependencies = [
     { name = "genkit" },
     { name = "genkit-otel" },
-    { name = "google-cloud-firestore" },
     { name = "google-cloud-logging" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-gcp-logging" },
@@ -1810,11 +1809,16 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
+[package.optional-dependencies]
+firestore = [
+    { name = "google-cloud-firestore" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-otel", editable = "packages/genkit-otel" },
-    { name = "google-cloud-firestore", specifier = ">=2.14.0" },
+    { name = "google-cloud-firestore", marker = "extra == 'firestore'", specifier = ">=2.14.0" },
     { name = "google-cloud-logging", specifier = ">=3.10.0" },
     { name = "opentelemetry-api", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-gcp-logging", specifier = ">=1.9.0a0" },
@@ -1824,6 +1828,7 @@ requires-dist = [
     { name = "strenum", marker = "python_full_version < '3.11'", specifier = ">=0.4.15" },
     { name = "typing-extensions", specifier = ">=4.0" },
 ]
+provides-extras = ["firestore"]
 
 [[package]]
 name = "genkit-google-genai"
@@ -1983,7 +1988,7 @@ dependencies = [
     { name = "genkit-evaluators" },
     { name = "genkit-fastapi" },
     { name = "genkit-flask" },
-    { name = "genkit-google-cloud" },
+    { name = "genkit-google-cloud", extra = ["firestore"] },
     { name = "genkit-google-genai" },
     { name = "genkit-mcp" },
     { name = "genkit-middleware" },
@@ -2053,7 +2058,7 @@ requires-dist = [
     { name = "genkit-evaluators", editable = "packages/genkit-evaluators" },
     { name = "genkit-fastapi", editable = "packages/genkit-fastapi" },
     { name = "genkit-flask", editable = "packages/genkit-flask" },
-    { name = "genkit-google-cloud", editable = "packages/genkit-google-cloud" },
+    { name = "genkit-google-cloud", extras = ["firestore"], editable = "packages/genkit-google-cloud" },
     { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
     { name = "genkit-mcp", editable = "packages/genkit-mcp" },
     { name = "genkit-middleware", editable = "packages/genkit-middleware" },

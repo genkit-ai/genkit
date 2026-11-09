@@ -70,6 +70,13 @@ stored as a snapshot, sessions survive restarts and resume across
 processes, and status subscriptions enable features like a cross-process
 stop button.
 
+It needs the `firestore` extra; telemetry-only installs skip the Firestore
+and gRPC dependencies:
+
+```bash
+uv add 'genkit-google-cloud[firestore]'
+```
+
 ```python
 from genkit.exp import Genkit
 from genkit_google_cloud.exp import FirestoreSessionStore
