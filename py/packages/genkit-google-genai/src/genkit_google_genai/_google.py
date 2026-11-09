@@ -270,6 +270,19 @@ def _plugin_client(client_kwargs: dict[str, Any]) -> genai.Client:
         return genai.client.Client(**client_kwargs)
     except GOOGLE_AUTH_ERRORS as e:
         raise_auth_error(e)
+    except ValueError as e:
+        # Vertex AI with no project, API key or ADC project: google-genai
+        # raises a bare ValueError naming its own arguments.
+        if client_kwargs.get('vertexai') and not client_kwargs.get('project') and not client_kwargs.get('api_key'):
+            raise GenkitError(
+                status='FAILED_PRECONDITION',
+                message=(
+                    'VertexAI has no Google Cloud project. Pass VertexAI(project=...), set '
+                    'GOOGLE_CLOUD_PROJECT, or run `gcloud auth application-default login` with a default project.'
+                ),
+                cause=e,
+            ) from e
+        raise
 
 
 def _new_gemini(plugin: GoogleAI | VertexAI, clean_name: str) -> GeminiModel:
