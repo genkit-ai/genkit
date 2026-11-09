@@ -405,3 +405,46 @@ async def test_generate_gemini_http_media_status_errors_omit_query_string_and_us
         assert 's3cr3t' not in text
         assert 'pw' not in text
     sdk.aio.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('served', ['application/octet-stream', 'binary/octet-stream', 'image/jpeg'])
+async def test_generate_gemini_http_media_caller_content_type_wins(
+    gemini: tuple[Genkit, MagicMock], served: str
+) -> None:
+    """An explicit content_type beats the host's header; S3/R2 serve application/octet-stream."""
+    ai, sdk = gemini
+
+    with _serve(lambda request: httpx.Response(200, headers={'content-type': served}, content=PNG)):
+        response = await _describe(ai, 'https://bucket.r2.example/menu.png', 'image/png')
+
+    assert response.finish_reason == FinishReason.STOP
+    sent = _sent_media(sdk)
+    assert sent.inline_data is not None
+    assert sent.inline_data.mime_type == 'image/png'
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_http_media_without_caller_type_skips_generic_header(
+    gemini: tuple[Genkit, MagicMock],
+) -> None:
+    """With no caller type, a specific served type is used with its parameters stripped; octet-stream is not."""
+    ai, sdk = gemini
+
+    with _serve(lambda request: httpx.Response(200, headers={'content-type': 'image/webp; charset=binary'}, content=PNG)):
+        await ai.generate(
+            model='googleai/gemini-2.5-flash',
+            messages=[Message(role=Role.USER, content=[Part.from_media(url='https://cdn.example/a.webp')])],
+        )
+    sent = _sent_media(sdk)
+    assert sent.inline_data is not None
+    assert sent.inline_data.mime_type == 'image/webp'
+
+    with _serve(lambda request: httpx.Response(200, headers={'content-type': 'application/octet-stream'}, content=PNG)):
+        await ai.generate(
+            model='googleai/gemini-2.5-flash',
+            messages=[Message(role=Role.USER, content=[Part.from_media(url='https://cdn.example/a')])],
+        )
+    sent = _sent_media(sdk)
+    assert sent.inline_data is not None
+    assert sent.inline_data.mime_type == 'image/jpeg'

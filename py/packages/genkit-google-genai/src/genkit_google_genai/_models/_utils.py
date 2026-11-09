@@ -318,8 +318,14 @@ class PartConverter:
                 # middleware (JS parity) once model middleware is implemented.
                 # The Gemini API cannot fetch arbitrary HTTP URLs via file_uri,
                 # so we must download the content and send it as inline_data.
-                data, mime_type = await cls._download_image(url)
-                mime_type = mime_type or part.media.content_type or 'image/jpeg'
+                data, served_type = await cls._download_image(url)
+                # The caller's content_type wins: object stores (S3, R2, GCS)
+                # often serve application/octet-stream, which Gemini rejects.
+                mime_type = (
+                    _media_type(part.media.content_type)
+                    or _media_type(served_type, skip_generic=True)
+                    or 'image/jpeg'
+                )
                 return genai.types.Part(
                     inline_data=genai.types.Blob(
                         mime_type=mime_type,
@@ -597,3 +603,17 @@ def _redact_url(url: str) -> str:
 
 def _media_too_large(url: str) -> GenkitError:
     return GenkitError(status='INVALID_ARGUMENT', message=f'media at {_redact_url(url)} is larger than 20MB')
+
+
+# Media types that say nothing about the content; a caller's or the URI's type is better.
+_GENERIC_MEDIA_TYPES = frozenset({'application/octet-stream', 'binary/octet-stream', 'application/x-binary'})
+
+
+def _media_type(value: str | None, *, skip_generic: bool = False) -> str | None:
+    """*value* without parameters (``; charset=...``), lowercased; None if empty or generic when *skip_generic*."""
+    if not value:
+        return None
+    media_type = value.split(';', 1)[0].strip().lower()
+    if not media_type or (skip_generic and media_type in _GENERIC_MEDIA_TYPES):
+        return None
+    return media_type
