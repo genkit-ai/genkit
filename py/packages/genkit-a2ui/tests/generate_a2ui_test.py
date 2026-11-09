@@ -218,6 +218,7 @@ async def test_generate_a2ui_strict_fails_the_turn_on_bad_block() -> None:
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validation='strict')],
+        raise_on_error=False,
     )
     assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='NotAThing')
 
@@ -234,6 +235,7 @@ async def test_generate_stream_strict_fails_the_turn_on_bad_block() -> None:
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validation='strict')],
+        raise_on_error=False,
     )
     streamed_envs: list[dict[str, Any]] = []
     async for chunk in stream.stream:
@@ -267,6 +269,7 @@ async def test_strict_refusal_keeps_the_tokens_the_turn_cost() -> None:
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validation='strict')],
+        raise_on_error=False,
     )
 
     assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='NotAThing')
@@ -537,6 +540,7 @@ async def test_generate_a2ui_strict_fails_on_malformed_json_fence() -> None:
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validation='strict')],
+        raise_on_error=False,
     )
     assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='failed to parse envelope block as JSON')
 
@@ -566,6 +570,7 @@ async def test_generate_a2ui_strict_fails_on_missing_root() -> None:
         model='scriptedModel',
         prompt=WEATHER_PROMPT,
         use=[Surfaces(validation='strict')],
+        raise_on_error=False,
     )
     assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='id "root"')
 

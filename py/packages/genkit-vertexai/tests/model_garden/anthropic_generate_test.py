@@ -36,7 +36,9 @@ async def test_generate_model_garden_claude_secrets_key_fails_invalid_argument(
     """Model Garden bills the Google Cloud project, so a per-request Anthropic key fails instead of being ignored."""
     ai = _genkit()
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant-key'}})
+    response = await ai.generate(
+        model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant-key'}}, raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None

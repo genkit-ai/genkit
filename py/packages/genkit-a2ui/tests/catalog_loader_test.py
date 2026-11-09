@@ -125,6 +125,7 @@ async def test_generate_unknown_catalog_fails_the_turn_before_the_model() -> Non
         model='scriptedModel',
         prompt='banner',
         use=[Surfaces(catalog=BANNER_CATALOG.id)],
+        raise_on_error=False,
     )
     assert_dead_turn(
         response,
@@ -156,6 +157,7 @@ async def test_generate_strict_rejects_a_component_the_loaded_catalog_lacks() ->
         model='scriptedModel',
         prompt='weather',
         use=[Surfaces(catalog=BANNER_CATALOG.id, validation='strict')],
+        raise_on_error=False,
     )
     assert_dead_turn(response, reason=ErrorReason.INVALID_OUTPUT, match='not in catalog')
 

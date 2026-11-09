@@ -75,10 +75,11 @@ class Surfaces(Middleware[SurfacesConfig]):
     aborted / failed / unknown / other) is left alone — the stop is the result,
     not a salvaged card.
 
-    Under `validation='strict'` a bad fence fails the turn: generate returns a
-    response with `finish_reason` failed, no `message`, and the reason on
-    `error`. `messages` ends at the user turn, so a retry does not feed the
-    hallucinated surface back to the model.
+    Under `validation='strict'` a bad fence fails the turn: generate raises.
+    With `raise_on_error=False` it returns a response with `finish_reason`
+    failed, no `message`, and the reason on `error`. `messages` ends at the
+    user turn, so a retry does not feed the hallucinated surface back to the
+    model.
     """
 
     name = 'surfaces'

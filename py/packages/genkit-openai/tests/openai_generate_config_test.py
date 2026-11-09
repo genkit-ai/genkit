@@ -266,7 +266,7 @@ async def test_generate_openai_media_model_rejects_version(
     ai: Genkit, server: _OpenAIServer, model: str, prompt: Any
 ) -> None:
     """`config={'version': ...}` on an image or audio model fails INVALID_ARGUMENT instead of pinning or being sent."""
-    response = await ai.generate(model=model, prompt=prompt, config={'version': 'pinned'})
+    response = await ai.generate(model=model, prompt=prompt, config={'version': 'pinned'}, raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -393,7 +393,7 @@ async def test_plugin_without_key_and_no_tenant_key_raises_naming_both(
     keyless_ai: Genkit, server: _OpenAIServer
 ) -> None:
     """No plugin key and no secrets key fails FAILED_PRECONDITION naming both places a key can go; nothing is sent."""
-    response = await keyless_ai.generate(model='openai/gpt-4o', prompt='hi')
+    response = await keyless_ai.generate(model='openai/gpt-4o', prompt='hi', raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -465,7 +465,9 @@ async def test_generate_openai_top_level_context_api_key_is_ignored(ai: Genkit, 
 @pytest.mark.asyncio
 async def test_generate_openai_non_dict_secrets_raises_invalid_argument(ai: Genkit, server: _OpenAIServer) -> None:
     """`context={'secrets': 'sk-tenant'}` fails INVALID_ARGUMENT instead of running on the plugin key."""
-    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': 'sk-tenant'})
+    response = await ai.generate(
+        model='openai/gpt-4o', prompt='hi', context={'secrets': 'sk-tenant'}, raise_on_error=False
+    )
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
@@ -486,7 +488,9 @@ async def test_generate_openai_invalid_secrets_api_key_raises_invalid_argument(
     ai: Genkit, server: _OpenAIServer, api_key: object, reason: str
 ) -> None:
     """A secrets key that is set but unusable fails INVALID_ARGUMENT instead of falling back to the plugin key."""
-    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': api_key}})
+    response = await ai.generate(
+        model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': api_key}}, raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -615,7 +619,9 @@ async def test_openai_client_options_authorization_header_still_refuses_tenant_k
         ]
     )
 
-    response = await ai.generate(model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}})
+    response = await ai.generate(
+        model='openai/gpt-4o', prompt='hi', context={'secrets': {'api_key': 'sk-tenant'}}, raise_on_error=False
+    )
 
     assert response.error is not None
     assert response.error.status == 'FAILED_PRECONDITION'

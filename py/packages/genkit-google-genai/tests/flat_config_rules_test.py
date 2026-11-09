@@ -149,7 +149,7 @@ async def test_search_start_time_without_end_time_raises(sent: _Sent) -> None:
     """A time range needs both ends; the Gemini API rejects one."""
     config = GeminiConfig(google_search_start_time=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
-    response = await _googleai().generate(model=_GEMINI, prompt='hi', config=config)
+    response = await _googleai().generate(model=_GEMINI, prompt='hi', config=config, raise_on_error=False)
 
     assert re.search('set google_search_start_time and google_search_end_time together', _failure(response))
     assert sent.bodies == []
@@ -200,7 +200,9 @@ async def test_search_time_range_whole_second_end_is_unchanged(sent: _Sent) -> N
 @pytest.mark.asyncio
 async def test_file_search_top_k_without_store_names_raises(sent: _Sent) -> None:
     """File Search options with no store to search name the missing field."""
-    response = await _googleai().generate(model=_GEMINI, prompt='hi', config=GeminiConfig(file_search_top_k=5))
+    response = await _googleai().generate(
+        model=_GEMINI, prompt='hi', config=GeminiConfig(file_search_top_k=5), raise_on_error=False
+    )
 
     assert re.search('file_search_top_k needs file_search_store_names', _failure(response))
     assert sent.bodies == []
@@ -273,7 +275,7 @@ async def test_vertex_only_setting_raises_on_gemini_api(
     sent: _Sent, model: str, config: GeminiConfig, field: str
 ) -> None:
     """The plugin names the flat field instead of letting google-genai raise on the nested one."""
-    response = await _googleai().generate(model=model, prompt='hi', config=config)
+    response = await _googleai().generate(model=model, prompt='hi', config=config, raise_on_error=False)
 
     assert re.search(f'{re.escape(field)}.*Vertex AI only', _failure(response))
     assert sent.bodies == []
@@ -293,7 +295,9 @@ async def test_vertex_only_setting_raises_on_gemini_api(
 @pytest.mark.asyncio
 async def test_gemini_api_only_file_search_raises_on_vertex_ai(sent: _Sent, config: GeminiConfig, field: str) -> None:
     """File Search is Gemini-API-only; Vertex AI rejects it naming the flat field."""
-    response = await _vertexai().generate(model='vertexai/gemini-2.5-flash', prompt='hi', config=config)
+    response = await _vertexai().generate(
+        model='vertexai/gemini-2.5-flash', prompt='hi', config=config, raise_on_error=False
+    )
 
     assert re.search(f'{re.escape(field)}: Gemini API only, not supported on Vertex AI', _failure(response))
     assert sent.bodies == []

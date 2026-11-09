@@ -281,7 +281,9 @@ async def test_generate_ollama_secrets_key_with_pinned_authorization_fails_preco
     """A static `Authorization` in `request_headers` is proxy auth; a secrets key fails instead of replacing it."""
     ai = make_ai(request_headers={header_name: 'Bearer plugin'})
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
+    response = await ai.generate(
+        model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}}, raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -300,7 +302,9 @@ async def test_generate_ollama_secrets_key_with_callable_authorization_fails_pre
 
     ai = make_ai(request_headers=headers)
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}})
+    response = await ai.generate(
+        model=MODEL, prompt='hi', context={'secrets': {'api_key': 'tenant'}}, raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -395,7 +399,9 @@ async def test_generate_ollama_unusable_secrets_key_raises_invalid_argument(serv
     """A `context.secrets.api_key` that is set but blank, not a string, or has whitespace fails; nothing is sent."""
     ai = make_ai()
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': value}})
+    response = await ai.generate(
+        model=MODEL, prompt='hi', context={'secrets': {'api_key': value}}, raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None

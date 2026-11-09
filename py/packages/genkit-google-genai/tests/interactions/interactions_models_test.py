@@ -1713,7 +1713,7 @@ async def test_generate_extra_cannot_set_fields_built_from_the_request(
     """The model id, input, and Lyria's system_instruction / tools are reserved; extra can't replace them."""
     patcher, create_calls, _, _ = patch_interactions(f'genkit_google_genai._models.{mod}', create_result=_TEXT_REPLY)
     with patcher:
-        response = await googleai.generate(model=model, prompt='hi', config={'extra': {key: 'x'}})
+        response = await googleai.generate(model=model, prompt='hi', config={'extra': {key: 'x'}}, raise_on_error=False)
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
@@ -1748,7 +1748,7 @@ async def test_generate_lyria_function_tools_raise_instead_of_being_dropped(goog
         'genkit_google_genai._models._interactions_lyria', create_result=_TEXT_REPLY
     )
     with patcher:
-        response = await googleai.generate(model=_LYRIA, prompt='hi', tools=['todays_specials'])
+        response = await googleai.generate(model=_LYRIA, prompt='hi', tools=['todays_specials'], raise_on_error=False)
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
@@ -2048,6 +2048,7 @@ async def test_generate_antigravity_extra_empty_tools_list_raises_and_sends_noth
             model=_ANTIGRAVITY,
             prompt='hi',
             config=AntigravityConfig(extra={key: []}),
+            raise_on_error=False,
         )
 
     assert response.error is not None
@@ -2072,6 +2073,7 @@ async def test_generate_antigravity_extra_non_list_tools_raises_and_sends_nothin
             model=_ANTIGRAVITY,
             prompt='hi',
             config={'extra': {'tools': bad_tools}},
+            raise_on_error=False,
         )
 
     assert response.error is not None

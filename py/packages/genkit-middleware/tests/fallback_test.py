@@ -276,7 +276,7 @@ async def test_fallback_unknown_backup_model_is_not_found() -> None:
 
     ai.define_model(name='primary', fn=down)
 
-    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['nope'])])
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['nope'])], raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'No model named "nope" is registered on this app.'
@@ -300,7 +300,7 @@ async def test_generate_with_model_raising_connection_error_and_fallback_keeps_t
         responses=[ModelResponse(message=Message(role=Role.MODEL, content=[Part.from_text('from backup')]))],
     )
 
-    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])])
+    response = await ai.generate(model='primary', prompt='hi', use=[Fallback(models=['backup'])], raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'internal error'
@@ -337,7 +337,7 @@ async def test_prompt_with_failing_on_chunk_and_fallback_does_not_call_backup() 
     def on_chunk(_: object) -> None:
         raise RuntimeError('model sink closed')
 
-    response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])])
+    response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])], raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message == 'model sink closed'
@@ -393,6 +393,7 @@ async def test_fallback_does_not_call_backup_when_inner_middleware_chunk_callbac
             Fallback(models=['backup'], statuses=['INTERNAL', 'UNKNOWN', 'UNAVAILABLE']),
             RaisingChunkRewriter(),
         ],
+        raise_on_error=False,
     )
     chunks = [chunk.text async for chunk in stream]
     response = await stream.response
@@ -567,7 +568,7 @@ async def test_fallback_does_not_switch_when_model_wraps_the_callers_on_chunk_fa
         raise RuntimeError('model sink closed')
 
     prompt = ai.define_prompt(model='wraps', prompt='hi')
-    response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])])
+    response = await prompt(on_chunk=on_chunk, use=[Fallback(models=['backup'])], raise_on_error=False)
 
     assert backup_pm.request_count == 0
     assert response.finish_reason == FinishReason.FAILED

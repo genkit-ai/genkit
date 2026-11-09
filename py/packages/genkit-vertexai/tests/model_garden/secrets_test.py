@@ -42,7 +42,9 @@ async def test_generate_model_garden_claude_secrets_api_key_fails_invalid_argume
     ai = model_garden_app()
 
     with patch('genkit_vertexai._model_garden._anthropic.AsyncAnthropicVertex') as vertex_client:
-        response = await ai.generate(model=CLAUDE_MODEL, prompt='hi', context={'secrets': {key_name: 'tenant-key'}})
+        response = await ai.generate(
+            model=CLAUDE_MODEL, prompt='hi', context={'secrets': {key_name: 'tenant-key'}}, raise_on_error=False
+        )
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'

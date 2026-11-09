@@ -95,6 +95,7 @@ async def _describe(ai: Genkit, url: str, content_type: str = 'image/png') -> An
                 content=[Part.from_text('describe'), Part.from_media(url=url, content_type=content_type)],
             )
         ],
+        raise_on_error=False,
     )
 
 

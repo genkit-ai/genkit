@@ -394,6 +394,7 @@ async def test_generate_with_failing_model_and_retry_retries_unclassified_error_
         model='down',
         prompt='hi',
         use=[Retry(max_retries=2, statuses=['UNAVAILABLE'], initial_delay_ms=0, no_jitter=True)],
+        raise_on_error=False,
     )
 
     assert response.finish_reason == FinishReason.FAILED
@@ -424,6 +425,7 @@ async def test_retry_does_not_retry_when_caller_on_chunk_raises() -> None:
     response = await prompt(
         on_chunk=on_chunk,
         use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)],
+        raise_on_error=False,
     )
 
     assert pm.request_count == 1
@@ -484,6 +486,7 @@ async def test_retry_does_not_retry_when_inner_middleware_chunk_callback_raises(
     stream = ai.generate_stream(
         prompt='Suggest a dish.',
         use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True), _RaisingChunkRewriter()],
+        raise_on_error=False,
     )
     chunks = [chunk.text async for chunk in stream]
     response = await stream.response
@@ -607,7 +610,9 @@ async def test_retry_does_not_retry_when_model_wraps_the_callers_on_chunk_failur
         raise ValueError('model sink closed')
 
     prompt = ai.define_prompt(model='wraps', prompt='hi')
-    response = await prompt(on_chunk=on_chunk, use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)])
+    response = await prompt(
+        on_chunk=on_chunk, use=[Retry(max_retries=2, initial_delay_ms=0, no_jitter=True)], raise_on_error=False
+    )
 
     assert calls == 1
     assert response.finish_reason == FinishReason.FAILED

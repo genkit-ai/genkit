@@ -216,7 +216,7 @@ async def test_plugin_without_key_and_no_tenant_key_raises_naming_both() -> None
     api = FakeClaudeApi()
     ai = _genkit(api, api_key=None)
 
-    response = await ai.generate(model=MODEL, prompt='hi')
+    response = await ai.generate(model=MODEL, prompt='hi', raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -301,7 +301,7 @@ async def test_generate_claude_blank_secrets_key_fails_instead_of_using_plugin_k
     api = FakeClaudeApi()
     ai = _genkit(api, api_key=plugin_key)
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': secrets})
+    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': secrets}, raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -356,7 +356,9 @@ async def test_generate_claude_secrets_key_on_client_that_cannot_swap_key_fails(
     api = FakeClaudeApi()
     ai = _genkit(api, **client_params)
 
-    response = await ai.generate(model=MODEL, prompt='hi', context={'secrets': {'api_key': TENANT_KEY}})
+    response = await ai.generate(
+        model=MODEL, prompt='hi', context={'secrets': {'api_key': TENANT_KEY}}, raise_on_error=False
+    )
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
@@ -455,6 +457,7 @@ async def test_generate_claude_thinking_rejects_tool_choice_required(config: Ant
         tools=['lookup_menu'],
         tool_choice='required',
         config=config,
+        raise_on_error=False,
     )
 
     assert response.finish_reason == FinishReason.FAILED
@@ -595,7 +598,7 @@ async def test_generate_layered_thinking_without_any_budget_fails_before_send(
     ai = _genkit(api)
     claude = Anthropic.claude('claude-sonnet-4-6', config=AnthropicConfig(**default) if default else None)
 
-    response = await ai.generate(model=claude, prompt='hi', config=call_config)
+    response = await ai.generate(model=claude, prompt='hi', config=call_config, raise_on_error=False)
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'
@@ -658,7 +661,7 @@ async def test_middleware_edit_of_claude_setting_is_validated(
             edit(params.request.config)
             return await next_fn(params, ctx)
 
-    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()])
+    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()], raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.finish_message is not None
@@ -687,7 +690,7 @@ async def test_middleware_edit_that_breaks_a_merged_rule_fails_before_send(
             edit(params.request.config)
             return await next_fn(params, ctx)
 
-    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()])
+    response = await ai.generate(model=MODEL, prompt='hi', config=config, use=[Tune()], raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None

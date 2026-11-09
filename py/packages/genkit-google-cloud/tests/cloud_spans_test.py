@@ -862,7 +862,7 @@ async def test_generate_that_raises_with_span_only_env_has_no_prompt_in_cloud_tr
 
     ai.define_model(_MODEL, boom)
     with _cloud_trace() as cloud:
-        response = await ai.generate(prompt=_PROMPT, model=_MODEL)
+        response = await ai.generate(prompt=_PROMPT, model=_MODEL, raise_on_error=False)
         _force_flush()
 
     assert response.finish_reason == FinishReason.FAILED

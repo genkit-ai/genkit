@@ -142,6 +142,7 @@ async def test_required_tool_choice_persists_on_followup_turn() -> None:
         tools=['lookup_menu', 'check_allergens'],
         tool_choice='required',
         max_turns=1,
+        raise_on_error=False,
     )
 
     assert len(server.bodies) == 2

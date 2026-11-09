@@ -181,7 +181,7 @@ async def test_generate_bedrock_image_extra_prompt_field_fails_invalid_argument(
     """An `extra` key that would overwrite the prompt fails with INVALID_ARGUMENT and sends nothing."""
     ai, transport = bedrock_app()
 
-    response = await ai.generate(model=model, prompt='a reef', config={'extra': extra})
+    response = await ai.generate(model=model, prompt='a reef', config={'extra': extra}, raise_on_error=False)
 
     assert response.error is not None
     assert response.error.status == 'INVALID_ARGUMENT'

@@ -74,6 +74,7 @@ async def _describe(ai: Genkit, url: str) -> Any:  # noqa: ANN401
                 content=[Part.from_text('describe'), Part.from_media(url=url, content_type='image/png')],
             )
         ],
+        raise_on_error=False,
     )
 
 

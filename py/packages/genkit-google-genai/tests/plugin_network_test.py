@@ -471,7 +471,7 @@ async def test_no_max_retries_makes_one_attempt() -> None:
     api = FlakyGoogleApi(failures=1)
     ai = Genkit(plugins=[GoogleAI(api_key='k', http_client_factory=api.client)])
 
-    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.')
+    response = await ai.generate(model='googleai/gemini-2.5-flash', prompt='Suggest a dish.', raise_on_error=False)
 
     assert response.finish_reason == FinishReason.FAILED
     assert response.error is not None
