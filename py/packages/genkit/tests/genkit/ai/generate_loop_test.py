@@ -226,3 +226,46 @@ def test_agent_interrupt_exposes_the_interrupt_payload() -> None:
     [intr] = agent_interrupts_from_message(message)
 
     assert intr.metadata == {'reason': 'needs approval'}
+
+
+@pytest.mark.asyncio
+async def test_system_with_saved_history_replaces_the_old_persona() -> None:
+    """Handing a saved chat to a new persona sends one system message, the new one."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_answers('Bonjour'), _answers('Bill: $42')]
+
+    first = await ai.generate(system='You are the host.', prompt='Hi')
+    await ai.generate(system='You are the cashier.', messages=first.messages, prompt='Check please')
+
+    assert pm.last_request is not None
+    roles = [m.role for m in pm.last_request.messages]
+    assert roles == [Role.SYSTEM, Role.USER, Role.MODEL, Role.USER]
+    assert pm.last_request.messages[0].text == 'You are the cashier.'
+
+
+@pytest.mark.asyncio
+async def test_empty_system_clears_the_saved_persona() -> None:
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_answers('Bonjour'), _answers('ok')]
+
+    first = await ai.generate(system='You are the host.', prompt='Hi')
+    await ai.generate(system='', messages=first.messages, prompt='Thanks')
+
+    assert pm.last_request is not None
+    assert [m.role for m in pm.last_request.messages] == [Role.USER, Role.MODEL, Role.USER]
+
+
+@pytest.mark.asyncio
+async def test_omitted_system_keeps_the_saved_persona() -> None:
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_answers('Bonjour'), _answers('ok')]
+
+    first = await ai.generate(system='You are the host.', prompt='Hi')
+    await ai.generate(messages=first.messages, prompt='Thanks')
+
+    assert pm.last_request is not None
+    assert pm.last_request.messages[0].role == Role.SYSTEM
+    assert pm.last_request.messages[0].text == 'You are the host.'

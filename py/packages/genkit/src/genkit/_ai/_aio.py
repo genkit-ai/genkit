@@ -1855,12 +1855,7 @@ class Genkit:
         """
         initial_msgs: list[Message] = []
         if not isinstance(messages, str):
-            if system:
-                initial_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
-            if messages:
-                initial_msgs.extend(messages)
-            if prompt:
-                initial_msgs.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
+            initial_msgs = call_messages(system=system, messages=messages, prompt=prompt)
 
         async def _run_generate(
             send_chunk: Callable[[ModelResponseChunk], None],
@@ -1937,13 +1932,7 @@ class Genkit:
         # strings passed at call time are content, not templates: braces may be
         # JSON, code, or another template. templates are what you define up
         # front (define_prompt, .prompt files, define_agent's system).
-        resolved_msgs: list[Message] = []
-        if system:
-            resolved_msgs.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
-        if messages:
-            resolved_msgs.extend(messages)
-        if prompt:
-            resolved_msgs.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
+        resolved_msgs = call_messages(system=system, messages=messages, prompt=prompt)
         options = await to_generate_options(
             registry=registry,
             call=GenerateCall(
@@ -2343,3 +2332,28 @@ class Genkit:
         if not response.operation:
             raise missing_operation_error(name=model_action.name)
         return as_model_operation(response.operation, name=model_action.name, status='INTERNAL')
+
+
+def call_messages(
+    *,
+    system: str | list[Part] | None,
+    messages: list[Message] | None,
+    prompt: str | list[Part] | None,
+) -> list[Message]:
+    """History for one generate call: system, then messages, then prompt.
+
+    A ``system=`` passed with ``messages=`` replaces the system messages that
+    lead that history (a saved chat's turn-1 persona) instead of stacking a
+    second one in front of it. ``system=''`` clears them.
+    """
+    history = list(messages or [])
+    out: list[Message] = []
+    if system is not None:
+        while history and history[0].role == Role.SYSTEM:
+            history.pop(0)
+        if system:
+            out.append(Message(role=Role.SYSTEM, content=parts_from_prompt(system)))
+    out.extend(history)
+    if prompt:
+        out.append(Message(role=Role.USER, content=parts_from_prompt(prompt)))
+    return out
