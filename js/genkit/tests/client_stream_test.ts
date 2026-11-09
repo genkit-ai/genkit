@@ -26,39 +26,50 @@ function sse(event: unknown): Uint8Array {
 
 /**
  * A `fetch` replacement that serves the given byte chunks as the body of a
- * 200 response and then reports the end of the stream.
+ * real 200 `Response` (backed by a `ReadableStream`) and then closes it.
  *
- * The body reader fails if it is read again many times after it reported
- * `done`. A client that ignores `done` would otherwise spin forever in
- * microtasks, which starves the event loop (timers never fire), so neither a
- * test timeout nor `Promise.race` could rescue it. Failing the read turns that
- * into an ordinary test failure.
+ * The body reader is wrapped so that it fails if it is read again many times
+ * after it reported `done`. A client that ignores `done` would otherwise spin
+ * forever in microtasks, which starves the event loop (timers never fire), so
+ * neither a test timeout nor `Promise.race` could rescue it. Failing the read
+ * turns that into an ordinary test failure.
  */
 function mockStreamingFetch(chunks: Uint8Array[]) {
   const maxReadsAfterDone = 100;
   return async (_url: string | URL | Request, _init?: RequestInit) => {
-    const queue = [...chunks];
-    let readsAfterDone = 0;
-    return {
-      status: 200,
-      headers: new Headers(),
-      body: {
-        getReader: () => ({
-          read: async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
-            const value = queue.shift();
-            if (value) {
-              return { done: false, value };
-            }
-            if (++readsAfterDone > maxReadsAfterDone) {
-              throw new Error(
-                `read() called ${readsAfterDone} times after the stream was done`
-              );
-            }
-            return { done: true, value: undefined };
-          },
-        }),
-      },
-    } as unknown as Response;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(chunk);
+          }
+          controller.close();
+        },
+      }),
+      { status: 200 }
+    );
+    const body = response.body!;
+    const getReader = body.getReader.bind(
+      body
+    ) as () => ReadableStreamDefaultReader<Uint8Array>;
+    body.getReader = ((): ReadableStreamDefaultReader<Uint8Array> => {
+      const reader = getReader();
+      const read = reader.read.bind(reader);
+      let done = false;
+      let readsAfterDone = 0;
+      reader.read = async () => {
+        if (done && ++readsAfterDone > maxReadsAfterDone) {
+          throw new Error(
+            `read() called ${readsAfterDone} times after the stream was done`
+          );
+        }
+        const result = await read();
+        done = result.done;
+        return result;
+      };
+      return reader;
+    }) as typeof body.getReader;
+    return response;
   };
 }
 
@@ -184,6 +195,21 @@ describe('streamFlow', () => {
       assert.strictEqual(error, undefined);
       assert.strictEqual(streamError, undefined);
       assert.deepStrictEqual(chunks, ['a', 'b']);
+      assert.strictEqual(value, 'done');
+    });
+
+    it('resolves on the result of a Next.js response that ends with END', async () => {
+      // The bytes the Next.js `appRoute` handler sends on success.
+      globalThis.fetch = mockStreamingFetch([
+        encoder.encode('data: {"message":"a"}\n\n'),
+        encoder.encode('data: {"result":"done"}\n\nEND'),
+      ]);
+
+      const { chunks, value, error, streamError } = await run();
+
+      assert.strictEqual(error, undefined);
+      assert.strictEqual(streamError, undefined);
+      assert.deepStrictEqual(chunks, ['a']);
       assert.strictEqual(value, 'done');
     });
   });

@@ -140,9 +140,7 @@ async function __flowRunEnvelope({
   while (true) {
     const result = await reader.read();
     if (result.done) {
-      // The server closed the stream without sending a `result` (or `error`)
-      // event; fall through to the "did not terminate correctly" error below
-      // instead of reading from a finished stream forever.
+      // Server closed without a result or error frame.
       break;
     }
     // `stream: true` keeps the bytes of a multi-byte character that is split
