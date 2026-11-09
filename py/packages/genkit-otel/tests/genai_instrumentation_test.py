@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import datetime
 import json
 from collections.abc import Mapping
 from typing import get_args
@@ -269,6 +270,37 @@ async def test_span_and_event_writes_both(harness) -> None:
     assert span is not None
     assert 'hello' in harness.attr(span, GenAiAttr.INPUT_MESSAGES)
     assert GEN_AI_OPERATION_DETAILS_EVENT in _event_names(harness)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['EVENT_ONLY', 'SPAN_AND_EVENT'])
+async def test_event_capture_encodes_non_json_values_without_failing_the_call(harness, mode: str) -> None:
+    """A datetime in message history lands as ISO 8601 and the model call still returns."""
+    instr = harness.instrumentation(content_capturing_mode=mode)
+    delivered_at = datetime.datetime(2026, 11, 8, 12, 0, tzinfo=datetime.timezone.utc)
+    request = _model_request(
+        messages=[
+            Message(role=Role.USER, content=[Part.from_text('when did my order arrive?')]),
+            Message(role=Role.MODEL, content=[Part.from_tool_request('delivery_status', input={})]),
+            Message(
+                role=Role.TOOL,
+                content=[Part.from_tool_response('delivery_status', output={'delivered_at': delivered_at})],
+            ),
+        ]
+    )
+    response = _model_response()
+
+    result = await _run_model(instr, 'googleai/gemini-flash-latest', request, lambda span=None: _awaitable(response))
+
+    assert result is response
+    span = harness.span_named('chat gemini-flash-latest')
+    assert span is not None
+    assert span.status.status_code == StatusCode.UNSET
+    record = _operation_details_record(harness)
+    assert record is not None
+    raw = str(dict(record.attributes or {})[GenAiAttr.INPUT_MESSAGES])
+    assert '2026-11-08T12:00:00Z' in raw
+    assert isinstance(json.loads(raw), list)
 
 
 @pytest.mark.asyncio

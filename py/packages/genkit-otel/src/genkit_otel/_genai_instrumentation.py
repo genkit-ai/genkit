@@ -28,6 +28,7 @@ from opentelemetry.metrics import Meter
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.util.types import AttributeValue
 from pydantic import BaseModel
+from pydantic_core import to_jsonable_python
 
 from genkit import Interrupt, ModelResponse, get_logger as get_genkit_logger
 from genkit.model import ModelRequest
@@ -318,8 +319,8 @@ class GenAiInstrumentation(Instrumentation):
             _set_json_attribute(span, GenAiAttr.TOOL_CALL_RESULT, output)
         if self._capture_on_event:
             event_attrs: dict[str, AttributeValue] = {
-                GenAiAttr.TOOL_CALL_ARGUMENTS: _encode_json_value(input),
-                GenAiAttr.TOOL_CALL_RESULT: _encode_json_value(output),
+                GenAiAttr.TOOL_CALL_ARGUMENTS: _safe_encode_json(input),
+                GenAiAttr.TOOL_CALL_RESULT: _safe_encode_json(output),
             }
             _emit_operation_details(self._otel_logger, event_attrs)
 
@@ -379,11 +380,11 @@ class GenAiInstrumentation(Instrumentation):
         if self._capture_on_event:
             event_attrs: dict[str, AttributeValue] = {}
             if input_messages is not None:
-                event_attrs[GenAiAttr.INPUT_MESSAGES] = json.dumps(input_messages.messages)
+                event_attrs[GenAiAttr.INPUT_MESSAGES] = _safe_encode_json(input_messages.messages)
                 if input_messages.system_instructions:
-                    event_attrs[GenAiAttr.SYSTEM_INSTRUCTIONS] = json.dumps(input_messages.system_instructions)
+                    event_attrs[GenAiAttr.SYSTEM_INSTRUCTIONS] = _safe_encode_json(input_messages.system_instructions)
             if output_messages:
-                event_attrs[GenAiAttr.OUTPUT_MESSAGES] = json.dumps(output_messages)
+                event_attrs[GenAiAttr.OUTPUT_MESSAGES] = _safe_encode_json(output_messages)
             _emit_operation_details(self._otel_logger, event_attrs)
 
     def _record_error(self, span: Span, exc: BaseException) -> None:
@@ -529,19 +530,24 @@ def _encode_json_value(value: object) -> str:
     def _json_default(obj: object) -> object:
         if isinstance(obj, BaseModel):
             return obj.model_dump(mode='json')
-        return str(obj)
+        # datetime -> ISO 8601, UUID/Decimal -> str, dataclass -> dict.
+        return to_jsonable_python(obj, fallback=str)
 
     return json.dumps(value, default=_json_default)
+
+
+def _safe_encode_json(value: object) -> str:
+    """``_encode_json_value`` that never raises: telemetry must not fail the action."""
+    try:
+        return _encode_json_value(value)
+    except Exception as exc:  # noqa: BLE001 - any encode failure becomes a placeholder.
+        return f'Unable to encode: {exc}'
 
 
 def _set_json_attribute(span: Span, key: str, value: object) -> None:
     if value is None:
         return
-    try:
-        encoded = _encode_json_value(value)
-    except (TypeError, ValueError) as exc:
-        encoded = f'Unable to encode: {exc}'
-    span.set_attribute(key, encoded)
+    span.set_attribute(key, _safe_encode_json(value))
 
 
 def _emit_operation_details(otel_logger: OtelEventLogger, attributes: Mapping[str, AttributeValue]) -> None:
