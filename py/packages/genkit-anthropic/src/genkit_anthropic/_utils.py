@@ -269,7 +269,11 @@ def build_cache_usage(
         cache_read_input_tokens: Tokens read from existing cache entries.
 
     Returns:
-        GenerationUsage with token, character, and cache counts.
+        GenerationUsage with token, character, and cache counts. Cache reads
+        map to ``cached_content_tokens`` and cache writes to
+        ``cache_write_tokens``, the fields other plugins fill; ``custom`` keeps
+        Anthropic's own key names. ``input_tokens`` stays Anthropic's count,
+        which excludes both.
     """
     custom: dict[str, float] = {}
     if cache_creation_input_tokens:
@@ -285,5 +289,7 @@ def build_cache_usage(
         output_characters=basic_usage.output_characters,
         input_images=basic_usage.input_images,
         output_images=basic_usage.output_images,
+        cached_content_tokens=cache_read_input_tokens or None,
+        cache_write_tokens=cache_creation_input_tokens or None,
         custom=custom if custom else None,
     )

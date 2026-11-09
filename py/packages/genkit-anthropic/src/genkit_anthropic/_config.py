@@ -219,6 +219,9 @@ class AnthropicConfig(ModelConfig):
     # (api_version).
     CREATE_KWARGS: ClassVar[frozenset[str]] = frozenset({'temperature', 'top_k', 'top_p', 'stop_sequences'})
 
+    # Anthropic's documented ranges; out-of-range values fail before the request.
+    common_field_bounds = {'temperature': (0.0, 1.0), 'top_p': (0.0, 1.0)}
+
     thinking: ThinkingMode | None = Field(
         default=None,
         description='Extended thinking mode. A thinking_budget alone means enabled.',
