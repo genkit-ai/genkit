@@ -464,7 +464,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
         |---|---|---|
         | Gemini / Gemma | MODEL | ``googleai/gemini-flash-latest`` |
         | Embedders | EMBEDDER | ``googleai/gemini-embedding-001`` |
-        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-3.1-generate-preview`` |
+        | Veo (Video) | BACKGROUND_MODEL | ``googleai/veo-3.1-generate-001`` |
 
     Example:
         ```python

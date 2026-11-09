@@ -651,7 +651,9 @@ class GeminiConfig(ModelConfig):
         default=None,
         description=(
             'For Gemini 3 and later - the thinking level. A higher level is associated with more '
-            'detailed thinking, which is needed for solving more complex tasks. Not with thinking_budget.'
+            'detailed thinking, which is needed for solving more complex tasks. Not with thinking_budget. '
+            'Supported levels vary by model: gemini-3.8-flash and gemini-3.1-pro-preview reject MINIMAL '
+            'with INVALID_ARGUMENT. Gemini 2.5 models reject thinking_level; use thinking_budget.'
         ),
     )
     thinking_budget: int | None = Field(
@@ -778,7 +780,7 @@ class GeminiImageConfig(GeminiConfig):
 
         # 2. Generate architectural artwork with specified aspect ratio and size
         res = await ai.generate(
-            model=GoogleAI.gemini_image('gemini-2.5-flash-preview-image-generation'),
+            model=GoogleAI.gemini_image('gemini-3.1-flash-image'),
             prompt='A modern minimalist espresso bar with warm cedar accents.',
             config=GeminiImageConfig(
                 aspect_ratio='16:9',
