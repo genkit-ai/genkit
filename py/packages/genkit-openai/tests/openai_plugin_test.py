@@ -34,7 +34,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from openai.types import Model
 from openai.types.chat import ChatCompletion
 
-from genkit import Document, Genkit, GenkitError, Message, ModelResponse, Part, Role
+from genkit import Document, FlowContext, Genkit, GenkitError, Message, ModelResponse, Part, Role
 from genkit.embedder import EmbedRequest, EmbedResponse
 from genkit.model import ConstrainedSupport, ModelSupports
 from genkit.plugin_api import Action, ActionKind, loop_local_client
@@ -330,7 +330,7 @@ def _embedding_client(embedding: list[float] | None = None) -> MagicMock:
 async def _run_embedder(client: MagicMock, options: dict[str, Any] | None = None) -> EmbedResponse:
     """Run the embedder action function against a stub client."""
     action = _plugin_with(client)._create_embedder_action('text-embedding-3-small')
-    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options or {}))
+    return await action._fn(EmbedRequest(input=[Document.from_text('hello')], options=options or {}), FlowContext())
 
 
 @pytest.mark.asyncio
@@ -587,3 +587,44 @@ async def test_embed_openai_double_prefixed_id_sends_prefixed_model() -> None:
     await ai.embed(embedder='openai/openai/text-embedding-3-small', content='hi')
 
     assert client.embeddings.create.call_args.kwargs['model'] == 'openai/text-embedding-3-small'
+
+
+@pytest.mark.asyncio
+async def test_embedder_client_uses_context_secret_over_plugin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tenant key on context.secrets bills the tenant, not the plugin key."""
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    plugin = OpenAI(api_key='sk-plugin')
+
+    assert plugin._embed_client({'secrets': {'api_key': 'sk-tenant'}}).api_key == 'sk-tenant'
+    assert plugin._embed_client({'secrets': {'crm_token': 'crm-123'}}).api_key == 'sk-plugin'
+    assert plugin._embed_client({}).api_key == 'sk-plugin'
+
+
+@pytest.mark.asyncio
+async def test_keyless_embedder_serves_context_secret_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    plugin = OpenAI()
+
+    assert plugin._embed_client({'secrets': {'api_key': 'sk-tenant'}}).api_key == 'sk-tenant'
+    with pytest.raises(GenkitError) as raised:
+        plugin._embed_client({})
+    assert raised.value.status == 'FAILED_PRECONDITION'
+
+
+@pytest.mark.asyncio
+async def test_embedder_action_reads_ctx_context() -> None:
+    """The embedder action hands ctx.context to the client resolver."""
+    client = _embedding_client()
+    plugin = _plugin_with(client)
+    seen: list[dict[str, Any]] = []
+
+    def resolve(context: dict[str, Any]) -> MagicMock:
+        seen.append(context)
+        return client
+
+    plugin._embed_client = resolve  # type: ignore[method-assign]
+    action = plugin._create_embedder_action('text-embedding-3-small')
+    tenant = {'secrets': {'api_key': 'sk-tenant'}}
+    await action._fn(EmbedRequest(input=[Document.from_text('hello')], options={}), FlowContext(context=tenant))
+
+    assert seen == [tenant]

@@ -27,7 +27,7 @@ from openai import APIError, AsyncOpenAI
 from openai.types import Model as OpenAIModelEntry
 from pydantic import BaseModel
 
-from genkit import Embedding, GenkitError, ModelResponse
+from genkit import Embedding, FlowContext, GenkitError, ModelResponse
 from genkit.embedder import (
     Embedder,
     EmbedderInfo,
@@ -452,7 +452,10 @@ class OpenAI(Plugin):
         each get their own copy instead of swapping the key on a shared client.
         A plugin built without a key serves only callers who bring one.
         """
-        key = context_api_key(ctx.context)
+        return self._client_for_context(ctx.context)
+
+    def _client_for_context(self, context: dict[str, Any]) -> AsyncOpenAI:
+        key = context_api_key(context)
         if self._has_plugin_key():
             client = self._runtime_client()
             return self._with_tenant_key(client, key) if key else client
@@ -483,22 +486,12 @@ class OpenAI(Plugin):
         tenant.project = None
         return tenant
 
-    def _embed_client(self) -> AsyncOpenAI:
-        """The plugin's client for embedders, which run on the plugin's key only.
+    def _embed_client(self, context: dict[str, Any]) -> AsyncOpenAI:
+        """Same key order as models: ``context.secrets``, then the plugin key.
 
-        ``Genkit.embed()`` takes no ``context``, so a ``context.secrets`` key
-        can't reach an embedder.
+        ``Genkit.embed(context=...)`` carries the tenant key here.
         """
-        if not self._has_plugin_key():
-            raise GenkitError(
-                status='FAILED_PRECONDITION',
-                message=(
-                    "OpenAI embedders need the plugin's API key: set OPENAI_API_KEY or pass "
-                    'OpenAI(api_key=...). embed() takes no context, so context.secrets keys '
-                    "don't reach embedders."
-                ),
-            )
-        return self._runtime_client()
+        return self._client_for_context(context)
 
     def _create_model_action(self, name: str) -> Action:
         """Create an Action object for an OpenAI model.
@@ -573,7 +566,7 @@ class OpenAI(Plugin):
             },
         )
 
-        async def embed_fn(request: EmbedRequest) -> EmbedResponse:
+        async def embed_fn(request: EmbedRequest, ctx: FlowContext[Any]) -> EmbedResponse:
             """Embedder function that calls OpenAI embeddings API."""
             # Extract text from document content
             texts = []
@@ -601,7 +594,7 @@ class OpenAI(Plugin):
                 encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
-            client = self._embed_client()
+            client = self._embed_client(ctx.context)
             try:
                 if dimensions is not None and encoding_format is not None:
                     response = await client.embeddings.create(
