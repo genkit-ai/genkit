@@ -1352,6 +1352,15 @@ class OutputConfig(GenkitModel):
     constrained: bool | None = None
     content_type: str | None = None
 
+    @property
+    def schema(self) -> dict[str, Any] | None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        """Read-only alias for ``json_schema``, matching the wire key and JS.
+
+        Shadows Pydantic's deprecated ``BaseModel.schema()`` classmethod so
+        ``request.output.schema`` returns the schema dict, or ``None``.
+        """
+        return self.json_schema
+
 
 class ModelRequest(GenkitModel, Generic[ModelRequestConfigT]):
     """Hand-written model request with veneer types and flat output accessors.

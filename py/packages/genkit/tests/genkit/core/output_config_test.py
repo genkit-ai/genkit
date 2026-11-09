@@ -70,3 +70,18 @@ def test_as_output_config_unwraps_output_config_data() -> None:
     assert isinstance(cfg, OutputConfigData) is False
     assert cfg.json_schema == _SAMPLE
     assert cfg.model_dump() == {'schema': _SAMPLE}
+
+
+def test_schema_property_reads_json_schema() -> None:
+    """``request.output.schema`` must not resolve to ``BaseModel.schema``."""
+    assert OutputConfig().schema is None
+    assert OutputConfig.model_validate({'schema': _SAMPLE}).schema == _SAMPLE
+
+
+def test_request_output_schema_on_plain_text_request() -> None:
+    from genkit._core._model import ModelRequest
+
+    plain = ModelRequest.model_validate({'messages': []})
+    assert plain.output.schema is None
+    structured = ModelRequest.model_validate({'messages': [], 'output': {'format': 'json', 'schema': _SAMPLE}})
+    assert structured.output.schema == _SAMPLE
