@@ -980,11 +980,11 @@ describe('Agent', () => {
       });
       assert.ok(snapshot, 'snapshot should exist');
       assert.ok(
-        snapshot!.state.sessionId,
+        snapshot.state?.sessionId,
         'sessionId should be persisted in snapshot state'
       );
       assert.match(
-        snapshot!.state.sessionId!,
+        snapshot.state.sessionId,
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
       );
     });
@@ -1016,7 +1016,7 @@ describe('Agent', () => {
       const snapshot1 = await store.getSnapshot({
         snapshotId: firstSnapshotId,
       });
-      const firstSessionId = snapshot1!.state.sessionId!;
+      const firstSessionId = snapshot1?.state?.sessionId;
       assert.ok(firstSessionId, 'First turn should have sessionId');
 
       // Turn 2: resume from snapshot
@@ -1033,7 +1033,7 @@ describe('Agent', () => {
         snapshotId: output2.snapshotId!,
       });
       assert.strictEqual(
-        snapshot2!.state.sessionId,
+        snapshot2?.state?.sessionId,
         firstSessionId,
         'sessionId should be preserved across turns via snapshot'
       );
@@ -1748,7 +1748,7 @@ describe('Agent', () => {
       resolveBlock();
       session.close();
       const start = Date.now();
-      let settled = snapshot;
+      let settled: SessionSnapshot | undefined = snapshot;
       while (settled?.status === 'aborting' && Date.now() - start < 5000) {
         await new Promise((r) => setTimeout(r, 20));
         settled = await store.getSnapshot({ snapshotId: snapshotId! });
@@ -1907,7 +1907,7 @@ describe('Agent', () => {
         output.snapshotId!,
         'completed'
       );
-      assert.ok(snapDone.state.messages);
+      assert.ok(snapDone.state?.messages);
       assert.strictEqual(snapDone.state.messages.length, 1);
       assert.strictEqual(
         snapDone.state.messages[0].content[0].text,
@@ -2019,7 +2019,7 @@ describe('Agent', () => {
       });
       session1.close(); // IMPORTANT: close the stream so it doesn't hang!
 
-      for await (const chunk of session1.stream) {
+      for await (const _ of session1.stream) {
       }
       const output1 = await session1.output;
 
@@ -2066,7 +2066,7 @@ describe('Agent', () => {
       });
       session2.close(); // IMPORTANT: close the stream so it doesn't hang!
 
-      for await (const chunk of session2.stream) {
+      for await (const _ of session2.stream) {
       }
       const output2 = await session2.output;
 
@@ -2147,7 +2147,7 @@ describe('Agent', () => {
       });
       session1.close();
 
-      for await (const chunk of session1.stream) {
+      for await (const _ of session1.stream) {
       }
       const output1 = await session1.output;
 
@@ -2201,7 +2201,7 @@ describe('Agent', () => {
       });
       session2.close();
 
-      for await (const chunk of session2.stream) {
+      for await (const _ of session2.stream) {
       }
       const output2 = await session2.output;
 
@@ -3103,25 +3103,19 @@ describe('Agent', () => {
       const snapshot = await flow.getSnapshotData({
         snapshotId: output.snapshotId!,
       });
-      assert.ok(snapshot);
-      assert.strictEqual(
-        (snapshot!.state.custom as any).publicField,
-        'visible'
-      );
-      assert.strictEqual(
-        (snapshot!.state.custom as any).secretField,
-        undefined
-      );
+      assert.ok(snapshot?.state);
+      assert.strictEqual((snapshot.state.custom as any).publicField, 'visible');
+      assert.strictEqual((snapshot.state.custom as any).secretField, undefined);
       // Messages were stripped
-      assert.strictEqual(snapshot!.state.messages, undefined);
+      assert.strictEqual(snapshot.state.messages, undefined);
 
       // But the raw store should still have the full state
       const rawSnapshot = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
       assert.ok(rawSnapshot);
-      assert.strictEqual(rawSnapshot!.state.custom?.secretField, 'top-secret');
-      assert.ok(rawSnapshot!.state.messages);
+      assert.strictEqual(rawSnapshot.state?.custom?.secretField, 'top-secret');
+      assert.ok(rawSnapshot.state?.messages);
     });
 
     it('should transform snapshot state in getSnapshotDataAction for server-managed agents', async () => {
@@ -4181,9 +4175,9 @@ Now respond to the latest message.`,
       assert.strictEqual(snapshot?.error?.status, 'UNAVAILABLE');
       assert.strictEqual(snapshot?.error?.message, 'model melted');
       assert.strictEqual(snapshot?.parentId, undefined);
-      assert.strictEqual((snapshot!.state.custom as any).count, 1);
+      assert.strictEqual((snapshot?.state?.custom as any).count, 1);
       assert.deepStrictEqual(
-        snapshot!.state.messages.map((m) => m.content[0].text),
+        snapshot?.state?.messages?.map((m) => m.content[0].text),
         ['hi']
       );
     });
@@ -4333,7 +4327,7 @@ Now respond to the latest message.`,
       const failedRow = await store.getSnapshot({
         snapshotId: output.snapshotId!,
       });
-      assert.strictEqual((failedRow!.state.custom as any).count, 1);
+      assert.strictEqual((failedRow?.state?.custom as any).count, 1);
       // The failed row is also the session's latest: nothing was written on
       // top of it, so resuming by sessionId lands on the same state.
       const latest = await store.getSnapshot({ sessionId: output.sessionId! });
@@ -4642,8 +4636,9 @@ Now respond to the latest message.`,
         snapshotId: committedSnapshotId!,
       });
       assert.strictEqual(lastGood?.status, 'completed');
-      assert.strictEqual((lastGood!.state.custom as any).count, 1);
-      const sessionId = lastGood!.state.sessionId!;
+      assert.strictEqual((lastGood?.state?.custom as any).count, 1);
+      const sessionId = lastGood?.state?.sessionId;
+      assert.ok(sessionId);
       const latest = await store.getSnapshot({ sessionId });
       assert.strictEqual(latest?.snapshotId, committedSnapshotId);
 
@@ -4665,7 +4660,7 @@ Now respond to the latest message.`,
       const resumed = await store.getSnapshot({
         snapshotId: resumeOutput.snapshotId!,
       });
-      assert.strictEqual((resumed!.state.custom as any).count, 2);
+      assert.strictEqual((resumed?.state?.custom as any).count, 2);
       assert.strictEqual(resumed?.parentId, committedSnapshotId);
     });
 
@@ -4723,7 +4718,7 @@ Now respond to the latest message.`,
       assert.strictEqual(failedSnap?.status, 'failed');
       assert.strictEqual(failedSnap?.parentId, firstSnapshotId);
       assert.strictEqual(failedSnap?.error?.message, 'committed boom');
-      assert.strictEqual((failedSnap!.state.custom as any).count, 2);
+      assert.strictEqual((failedSnap?.state?.custom as any).count, 2);
 
       const resumeWith = async (init: {
         sessionId?: string;
@@ -4749,15 +4744,17 @@ Now respond to the latest message.`,
 
       // The failed row is the session's latest, and resuming by sessionId
       // continues from it as it stands rather than walking past it.
+      const failedSessionId = failedSnap?.state?.sessionId;
+      assert.ok(failedSessionId);
       const bySession = await resumeWith({
-        sessionId: failedSnap!.state.sessionId!,
+        sessionId: failedSessionId,
       });
-      assert.strictEqual((bySession.state.custom as any).count, 3);
+      assert.strictEqual((bySession.state?.custom as any).count, 3);
       assert.strictEqual(bySession.parentId, failedSnapshotId);
 
       // So does naming it by snapshotId.
       const bySnapshot = await resumeWith({ snapshotId: failedSnapshotId });
-      assert.strictEqual((bySnapshot.state.custom as any).count, 3);
+      assert.strictEqual((bySnapshot.state?.custom as any).count, 3);
       assert.strictEqual(bySnapshot.parentId, failedSnapshotId);
     });
 
@@ -4853,7 +4850,7 @@ Now respond to the latest message.`,
       const resumedRow = await store.getSnapshot({
         snapshotId: resumed.snapshotId!,
       });
-      assert.strictEqual((resumedRow!.state.custom as any).count, 2);
+      assert.strictEqual((resumedRow?.state?.custom as any).count, 2);
       assert.strictEqual(resumedRow?.parentId, snapshotId);
 
       // An aborting row is one whose worker is winding down toward the
@@ -5040,7 +5037,7 @@ Now respond to the latest message.`,
       assert.strictEqual(failedRow?.status, 'failed');
       assert.strictEqual(failedRow?.error?.status, 'INTERNAL');
       assert.deepStrictEqual(
-        failedRow?.state.messages.map((m) => m.role),
+        failedRow?.state?.messages?.map((m) => m.role),
         ['user']
       );
 
@@ -5067,7 +5064,7 @@ Now respond to the latest message.`,
       assert.strictEqual(finalRow?.status, 'completed');
       assert.strictEqual(finalRow?.parentId, failed.snapshotId);
       assert.deepStrictEqual(
-        finalRow?.state.messages.map((m) => m.role),
+        finalRow?.state?.messages?.map((m) => m.role),
         ['user', 'model', 'tool', 'model']
       );
     });
@@ -5108,7 +5105,7 @@ Now respond to the latest message.`,
       // The rejected completion is not a message to continue from.
       const row = await store.getSnapshot({ snapshotId: failed.snapshotId! });
       assert.deepStrictEqual(
-        row?.state?.messages.map((m) => m.role),
+        row?.state?.messages?.map((m) => m.role),
         ['user']
       );
 
@@ -5125,7 +5122,7 @@ Now respond to the latest message.`,
         snapshotId: output.snapshotId!,
       });
       assert.deepStrictEqual(
-        finalRow?.state?.messages.map((m) => m.role),
+        finalRow?.state?.messages?.map((m) => m.role),
         ['user', 'model']
       );
       assert.strictEqual(modelCalls, 2);
@@ -5158,7 +5155,7 @@ Now respond to the latest message.`,
       const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
       assert.strictEqual(row?.status, 'failed');
       assert.deepStrictEqual(
-        row?.state?.messages.map((m) => m.role),
+        row?.state?.messages?.map((m) => m.role),
         ['user']
       );
     });
@@ -5261,7 +5258,7 @@ Now respond to the latest message.`,
       assert.strictEqual(output.snapshotId, turnEnds[0].snapshotId);
       const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
       assert.strictEqual(row?.status, 'completed');
-      assert.strictEqual((row!.state.custom as any).count, 1);
+      assert.strictEqual((row?.state?.custom as any).count, 1);
       const latest = await store.getSnapshot({ sessionId: output.sessionId! });
       assert.strictEqual(latest?.snapshotId, output.snapshotId);
     });
@@ -5463,7 +5460,7 @@ Now respond to the latest message.`,
       assert.strictEqual(row?.error?.status, 'CANCELLED');
       // The unfinished round went whole: the conversation ends at the seam.
       assert.deepStrictEqual(
-        row?.state?.messages.map((m) => m.role),
+        row?.state?.messages?.map((m) => m.role),
         ['user']
       );
 
@@ -5482,7 +5479,7 @@ Now respond to the latest message.`,
       assert.strictEqual(finalRow?.status, 'completed');
       assert.strictEqual(finalRow?.parentId, stopped.snapshotId);
       assert.deepStrictEqual(
-        finalRow?.state?.messages.map((m) => m.role),
+        finalRow?.state?.messages?.map((m) => m.role),
         ['user', 'model', 'tool', 'model']
       );
     });
@@ -5526,7 +5523,8 @@ Now respond to the latest message.`,
       const row = await store.getSnapshot({ snapshotId: output.snapshotId! });
       assert.strictEqual(row?.status, 'aborted');
       assert.strictEqual(row?.finishReason, 'aborted');
-      const roles = row!.state!.messages.map((m) => m.role);
+      assert.ok(row?.state?.messages);
+      const roles = row.state.messages.map((m) => m.role);
       assert.strictEqual(roles[0], 'user');
       assert.strictEqual(roles[roles.length - 1], 'tool');
     });
@@ -5846,9 +5844,12 @@ Now respond to the latest message.`,
       await first.send('one');
       const firstSnapshot = first.snapshotId!;
       assert.ok(firstSnapshot, 'the first turn reports its snapshot');
-      const sessionId = (await store.getSnapshot({
-        snapshotId: firstSnapshot,
-      }))!.state.sessionId!;
+      const sessionId = (
+        await store.getSnapshot({
+          snapshotId: firstSnapshot,
+        })
+      )?.state?.sessionId;
+      assert.ok(sessionId);
 
       // No baseline snapshot: the failed output names the previous row, which
       // is not this turn's, and the turn-end chunk says the turn rolled back.
@@ -6069,7 +6070,7 @@ Now respond to the latest message.`,
       assert.strictEqual(snapshot.error?.status, 'CANCELLED');
       assert.strictEqual(snapshot.error?.message, 'stopped');
       assert.deepStrictEqual(
-        snapshot.state?.messages.map((m) => m.content[0].text),
+        snapshot.state?.messages?.map((m) => m.content[0].text),
         ['first', 'ack']
       );
 
@@ -6080,7 +6081,7 @@ Now respond to the latest message.`,
       const row = await store.getSnapshot({ snapshotId: resumed.snapshotId! });
       assert.strictEqual(row?.parentId, task.snapshotId);
       assert.deepStrictEqual(
-        row?.state?.messages.map((m) => m.content[0].text),
+        row?.state?.messages?.map((m) => m.content[0].text),
         ['first', 'ack', 'carry on', 'ack']
       );
     });
@@ -6383,7 +6384,7 @@ Now respond to the latest message.`,
       });
 
       // Type-level checks (ex. rejecting `context` on transports that do not
-      // declare it) live in `tests/types/`, checked by `tsconfig.types-test.json`.
+      // declare it) live in `tests/types/`, checked by `tsconfig.test.json`.
     });
   });
 });
@@ -6627,7 +6628,7 @@ describe('detach finalize', () => {
     // The state through the committed turn: the blocked turn's message rolled
     // back with the turn, which committed nothing.
     assert.deepStrictEqual(
-      snap?.state?.messages.map((m) => m.content[0].text),
+      snap?.state?.messages?.map((m) => m.content[0].text),
       ['first', 'ack']
     );
 
@@ -6646,7 +6647,7 @@ describe('detach finalize', () => {
     });
     assert.strictEqual(row?.parentId, output.snapshotId);
     assert.deepStrictEqual(
-      row?.state?.messages.map((m) => m.content[0].text),
+      row?.state?.messages?.map((m) => m.content[0].text),
       ['first', 'ack', 'carry on', 'ack']
     );
   });
@@ -6790,7 +6791,7 @@ describe('detach finalize', () => {
       'completed'
     );
     assert.deepStrictEqual(
-      snap.state?.messages.map((m) => m.content[0].text),
+      snap.state?.messages?.map((m) => m.content[0].text),
       ['go', 'ack']
     );
   });

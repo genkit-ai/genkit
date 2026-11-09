@@ -42,11 +42,10 @@ describe('evaluate', () => {
       });
 
       assert.strictEqual(response.length, 1);
-      assert.strictEqual(response[0].evaluation.score, 'Much bonk');
-      assert.strictEqual(
-        response[0].evaluation.details?.reasoning,
-        'Because I said so!'
-      );
+      const evaluation = response[0].evaluation;
+      assert.ok(!Array.isArray(evaluation));
+      assert.strictEqual(evaluation.score, 'Much bonk');
+      assert.strictEqual(evaluation.details?.reasoning, 'Because I said so!');
     });
   });
 });
