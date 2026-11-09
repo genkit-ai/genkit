@@ -853,8 +853,9 @@ async def test_resume_restart_runs_tool_second_time_and_resolved_interrupt_on_mo
             'content': [
                 {'text': 'x'},
                 {
-                    'toolRequest': {'ref': 'p1', 'name': 'pay', 'input': {}},
-                    'metadata': {'resolvedInterrupt': {'hold': True}},
+                    # History keeps the input the restart ran with.
+                    'toolRequest': {'ref': 'p1', 'name': 'pay', 'input': {'ok': True}},
+                    'metadata': {'replacedInput': {}, 'resolvedInterrupt': {'hold': True}},
                 },
             ],
         },
@@ -1021,8 +1022,8 @@ async def test_mixed_resume_one_respond_one_restart() -> None:
                     'metadata': {'resolvedInterrupt': {'tool': 'a'}},
                 },
                 {
-                    'toolRequest': {'ref': 'rb', 'name': 'b', 'input': {}},
-                    'metadata': {'resolvedInterrupt': {'tool': 'b'}},
+                    'toolRequest': {'ref': 'rb', 'name': 'b', 'input': {'ok': True}},
+                    'metadata': {'replacedInput': {}, 'resolvedInterrupt': {'tool': 'b'}},
                 },
             ],
         },

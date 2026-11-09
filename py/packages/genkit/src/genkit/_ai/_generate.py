@@ -2933,6 +2933,7 @@ async def resolve_resumed_tool(
                 message=f'Tool {tool_req.name} not found',
                 reason=ErrorReason.TOOL_NOT_FOUND,
             )
+        ran_request, metadata, interrupt = restarted_tool_request(original=tool_req_root, restart=restart_trp)
         try:
             executed = await run_restart(
                 tool=tool,
@@ -2943,22 +2944,13 @@ async def resolve_resumed_tool(
         except TOOL_RAISES as e:
             intr = interrupt_from_exc(e)
             if intr is not None:
-                return (interrupt_request_part(tool_req_root, intr), None)
+                # Paused again on the input it actually ran with, so the next
+                # answer (and the history) sees the approved input.
+                return (interrupt_request_part(Part(tool_request=ran_request, metadata=metadata), intr), None)
             log_dropped_failure(e, tool=tool_req.name)
             raise
-        metadata = dict(tool_req_root.metadata) if tool_req_root.metadata else {}
-        interrupt = metadata.get('interrupt')
-        if interrupt:
-            del metadata['interrupt']
         return (
-            Part(
-                tool_request=ToolRequest(
-                    name=tool_req.name,
-                    ref=tool_req.ref,
-                    input=tool_req.input,
-                ),
-                metadata={**metadata, 'resolvedInterrupt': interrupt},
-            ),
+            Part(tool_request=ran_request, metadata={**metadata, 'resolvedInterrupt': interrupt}),
             executed,
         )
 
@@ -3052,6 +3044,26 @@ async def run_restart(
         ),
         metadata=multipart.metadata,
     )
+
+
+def restarted_tool_request(*, original: Part, restart: Part) -> tuple[ToolRequest, dict[str, Any], object]:
+    """The tool request history keeps for a restart: the input the tool ran with.
+
+    ``restart(replace_input=...)`` swaps the input. History, the model's next
+    turn, and the audit trail all read the approved input; the model's
+    original one stays on ``metadata['replacedInput']``. Returns the request,
+    its metadata without ``interrupt``, and the interrupt payload.
+    """
+    original_req = original.tool_request
+    restart_req = restart.tool_request
+    assert original_req is not None and restart_req is not None
+    metadata = dict(original.metadata) if original.metadata else {}
+    interrupt = metadata.pop('interrupt', None)
+    restart_meta = restart.metadata or {}
+    if 'replacedInput' in restart_meta:
+        metadata['replacedInput'] = restart_meta['replacedInput']
+    ran = ToolRequest(name=original_req.name, ref=original_req.ref, input=restart_req.input)
+    return ran, metadata, interrupt
 
 
 def matching_restart(

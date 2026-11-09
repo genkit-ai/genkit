@@ -7,9 +7,10 @@
 
 import pytest
 
-from genkit import Genkit, Message, ModelResponse, Part
+from genkit import Genkit, Interrupt, Message, ModelResponse, Part, ToolContext
+from genkit._ai._agents._client import agent_interrupts_from_message
 from genkit._core._typing import FinishReason, GenerationUsage, Role, ToolRequest
-from genkit.testing import define_scripted_model
+from genkit.testing import ScriptedModel, define_scripted_model
 
 
 def _calls_tool(*, ref: str, usage: GenerationUsage | None = None) -> ModelResponse:
@@ -102,3 +103,126 @@ async def test_total_usage_stays_off_when_no_model_reported_usage() -> None:
     response = await ai.generate(prompt='hello')
 
     assert response.total_usage is None
+
+
+def _transfer_request(amount: int) -> ModelResponse:
+    return ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(
+            role=Role.MODEL,
+            content=[Part(tool_request=ToolRequest(name='transfer', input={'days': amount}, ref='t1'))],
+        ),
+    )
+
+
+def _hitl_app() -> tuple[Genkit, ScriptedModel, list[object]]:
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    ran_with: list[object] = []
+
+    @ai.tool(name='transfer')
+    async def transfer(inp: dict, ctx: ToolContext) -> str:
+        if not ctx.is_resumed():
+            raise Interrupt({'reason': 'needs approval', 'days': inp['days']})
+        ran_with.append(inp)
+        return f'booked {inp["days"]} days'
+
+    return ai, pm, ran_with
+
+
+@pytest.mark.asyncio
+async def test_restart_replace_input_is_the_input_history_keeps() -> None:
+    """The model's next turn and the audit trail see the approved input, not the original."""
+    ai, pm, ran_with = _hitl_app()
+    pm.responses = [_transfer_request(7), _answers('booked')]
+
+    paused = await ai.generate(prompt='book 7 days', tools=['transfer'])
+    assert paused.finish_reason == FinishReason.INTERRUPTED
+    intr = paused.interrupts[0]
+    assert intr.metadata is not None
+    assert intr.metadata['interrupt'] == {'reason': 'needs approval', 'days': 7}
+
+    done = await ai.generate(
+        messages=paused.messages,
+        tools=['transfer'],
+        resume_restart=intr.restart(replace_input={'days': 5}),
+    )
+
+    assert ran_with == [{'days': 5}]
+    assert done.text == 'booked'
+    model_turn = next(m for m in done.messages if m.role == Role.MODEL and m.content[0].tool_request is not None)
+    part = model_turn.content[0]
+    assert part.tool_request is not None
+    assert part.tool_request.input == {'days': 5}
+    assert part.metadata is not None
+    assert part.metadata['replacedInput'] == {'days': 7}
+    assert part.metadata['resolvedInterrupt'] == {'reason': 'needs approval', 'days': 7}
+    assert 'interrupt' not in part.metadata
+    assert 'resumed' not in part.metadata
+    # The model reads the approved input on the turn after the restart.
+    assert pm.last_request is not None
+    sent = next(m for m in pm.last_request.messages if m.role == Role.MODEL)
+    assert sent.content[0].tool_request is not None
+    assert sent.content[0].tool_request.input == {'days': 5}
+
+
+@pytest.mark.asyncio
+async def test_restart_without_replace_input_keeps_the_model_input() -> None:
+    ai, pm, ran_with = _hitl_app()
+    pm.responses = [_transfer_request(7), _answers('booked')]
+
+    paused = await ai.generate(prompt='book 7 days', tools=['transfer'])
+    done = await ai.generate(
+        messages=paused.messages,
+        tools=['transfer'],
+        resume_restart=paused.interrupts[0].restart(),
+    )
+
+    assert ran_with == [{'days': 7}]
+    model_turn = next(m for m in done.messages if m.role == Role.MODEL and m.content[0].tool_request is not None)
+    assert model_turn.content[0].tool_request is not None
+    assert model_turn.content[0].tool_request.input == {'days': 7}
+    assert 'replacedInput' not in (model_turn.content[0].metadata or {})
+
+
+@pytest.mark.asyncio
+async def test_restart_that_pauses_again_keeps_the_replaced_input() -> None:
+    """A second approval step sees the input the restart ran with."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+
+    @ai.tool(name='transfer')
+    async def transfer(inp: dict, ctx: ToolContext) -> str:
+        raise Interrupt({'reason': 'second approver', 'days': inp['days']})
+
+    pm.responses = [_transfer_request(7)]
+    paused = await ai.generate(prompt='book 7 days', tools=['transfer'])
+    again = await ai.generate(
+        messages=paused.messages,
+        tools=['transfer'],
+        resume_restart=paused.interrupts[0].restart(replace_input={'days': 5}),
+    )
+
+    assert again.finish_reason == FinishReason.INTERRUPTED
+    part = again.interrupts[0]
+    assert part.tool_request is not None
+    assert part.tool_request.input == {'days': 5}
+    assert part.metadata is not None
+    assert part.metadata['interrupt'] == {'reason': 'second approver', 'days': 5}
+    assert part.metadata['replacedInput'] == {'days': 7}
+
+
+def test_agent_interrupt_exposes_the_interrupt_payload() -> None:
+    message = Message(
+        role=Role.MODEL,
+        content=[
+            Part(
+                tool_request=ToolRequest(name='transfer', input={'days': 7}, ref='t1'),
+                metadata={'interrupt': {'reason': 'needs approval'}},
+            )
+        ],
+    )
+
+    [intr] = agent_interrupts_from_message(message)
+
+    assert intr.metadata == {'reason': 'needs approval'}
