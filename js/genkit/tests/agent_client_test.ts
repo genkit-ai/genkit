@@ -614,8 +614,21 @@ describe('remoteAgent', () => {
     assert.equal(mock.requests.length, 2);
   });
 
-  it('polls getSnapshot when the wait route answers an empty 404', async () => {
-    mock.onNext(() => new Response(null, { status: 404 }));
+  it("polls getSnapshot when the wait route answers Fastify's default 404", async () => {
+    mock.onNext(
+      () =>
+        new Response(
+          JSON.stringify({
+            message: 'Route POST:/api/a/waitForSnapshot not found',
+            error: 'Not Found',
+            statusCode: 404,
+          }),
+          {
+            status: 404,
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          }
+        )
+    );
     mock.onNext((req) => {
       assert.equal(req.url, '/api/a/getSnapshot');
       return jsonResponse({
