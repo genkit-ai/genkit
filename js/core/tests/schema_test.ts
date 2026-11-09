@@ -799,3 +799,27 @@ describe('parseSchema() with z.void()', () => {
     );
   });
 });
+
+describe('validation errors with Standard Schemas', () => {
+  it('keeps the validation error when JSON schema conversion throws', () => {
+    const base = fakeStandardSchema();
+    const schema: GenkitSchema<{ k: number }, { k: number }> = {
+      '~standard': {
+        ...base['~standard'],
+        jsonSchema: {
+          input: () => {
+            throw new Error('unsupported target');
+          },
+          output: () => {
+            throw new Error('unsupported target');
+          },
+        },
+      },
+    };
+    assert.throws(
+      () => parseSchema({}, { schema }),
+      (e: unknown) =>
+        e instanceof ValidationError && /k must be a number/.test(e.message)
+    );
+  });
+});

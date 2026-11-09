@@ -555,10 +555,23 @@ function throwOnFailure<T>(
     throw new ValidationError({
       data,
       errors: result.errors,
-      schema: toJsonSchema(options),
+      schema: jsonSchemaForError(options),
     });
   }
   return result.data;
+}
+
+/**
+ * The JSON schema shown in a validation error. Best effort: a Standard Schema
+ * library may refuse to produce JSON schema (e.g. for the requested draft),
+ * and that must not mask the actual validation error.
+ */
+function jsonSchemaForError(options: ProvidedSchema): JSONSchema | undefined {
+  try {
+    return toJsonSchema(options);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

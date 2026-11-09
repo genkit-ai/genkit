@@ -372,14 +372,15 @@ export const valibotFlow = ai.defineFlow(
     name: 'valibotFlow',
     inputSchema: toStandardJsonSchema(
       v.object({
-        id: v.pipe(v.string(), v.minLength(1)),
-        tags: v.optional(v.array(v.string())),
+        id: v.pipe(v.string(), v.trim(), v.minLength(1)),
+        // Defaults and transforms run, same as for zod schemas.
+        tags: v.optional(v.array(v.string()), []),
       })
     ),
   },
   async ({ id, tags }) => {
     const record = await valibotLookup({ id });
-    return { ...record, tags: tags ?? [] };
+    return { ...record, tags };
   }
 );
 
