@@ -1671,6 +1671,11 @@ class Genkit:
             print(res.text)
             print(res.output)
 
+        ``max_turns`` caps tool rounds (default 5, as in JS): the model may
+        call tools that many times and then reply, so a run uses at most
+        ``max_turns + 1`` model calls. Past the cap the response is ``ABORTED``
+        with reason ``MAX_TURNS_EXCEEDED``.
+
         ``prompt`` and ``system`` strings are sent exactly as written. Braces
         are content (JSON, code, or another template), not Handlebars. If a
         generate string used to rely on a registered partial (``{{> persona}}``),
