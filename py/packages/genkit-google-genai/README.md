@@ -93,24 +93,24 @@ async def check_inventory(ingredient: str) -> dict[str, int]:
     return {'pesto': 12, 'pine_nuts': 4}
 
 
-# 3. Generate with flat thinking, safety, search grounding, and a tool
+# 3. Generate with flat thinking and safety settings, and let the model call the tool
 async def main() -> None:
     res = await ai.generate(
         model=GoogleAI.gemini('gemini-flash-latest'),
-        prompt='Check pesto inventory and cite current safety storage guidelines.',
+        prompt='How many jars of pesto do we have, and how should opened jars be stored?',
         tools=[check_inventory],
+        tool_choice='auto',
         config=GeminiConfig(
             thinking_level='HIGH',
             include_thoughts=True,
             safety_settings=[
                 {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_ONLY_HIGH'},
             ],
-            google_search=True,
         ),
     )
     print(res.text)
-    # => Inventory verified: 12 jars of pesto in stock. Storage guidelines
-    #    require refrigeration at 40°F (4°C) or below after opening.
+    # => We have 12 jars of pesto in stock. Refrigerate opened jars and use
+    #    them within 7 to 10 days.
 
 
 if __name__ == '__main__':
