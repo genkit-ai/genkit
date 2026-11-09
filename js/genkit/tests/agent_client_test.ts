@@ -590,6 +590,45 @@ describe('remoteAgent', () => {
     assert.equal(mock.requests.length, 1);
   });
 
+  it('keeps the wait route after a NOT_FOUND nested under error', async () => {
+    // The error envelope of @genkit-ai/next's appRoute.
+    mock.onNext(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: { status: 'NOT_FOUND', message: 'no such snapshot' },
+          }),
+          { status: 404, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    const agent = remoteAgent({ url: '/api/a' });
+    await assert.rejects(agent.waitForSnapshot('nope'), /no such snapshot/);
+    assert.equal(mock.requests.length, 1);
+
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/waitForSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'completed' },
+      });
+    });
+    assert.equal((await agent.waitForSnapshot('bg-1'))?.status, 'completed');
+    assert.equal(mock.requests.length, 2);
+  });
+
+  it('polls getSnapshot when the wait route answers an empty 404', async () => {
+    mock.onNext(() => new Response(null, { status: 404 }));
+    mock.onNext((req) => {
+      assert.equal(req.url, '/api/a/getSnapshot');
+      return jsonResponse({
+        result: { snapshotId: 'bg-1', createdAt: '2026', status: 'completed' },
+      });
+    });
+    const agent = remoteAgent({ url: '/api/a' });
+    const snap = await agent.waitForSnapshot('bg-1', { intervalMs: 1 });
+    assert.equal(snap?.status, 'completed');
+    assert.equal(mock.requests.length, 2);
+  });
+
   it('honors a custom waitForSnapshotUrl and forwards the abort signal', async () => {
     mock.onNext((req) => {
       assert.equal(req.url, '/wait-here');
