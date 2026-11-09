@@ -253,6 +253,9 @@ jobs:
       - name: Build and verify distributions
         run: ./py/bin/build_dists
 
+      - name: Install each wheel in an isolated venv
+        run: ./py/bin/check_isolated_wheels
+
       - name: Verify wheel contents
         run: |
           cd py
