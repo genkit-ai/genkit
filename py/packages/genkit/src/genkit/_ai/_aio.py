@@ -1671,7 +1671,7 @@ class Genkit:
             print(res.text)
             print(res.output)
 
-        ``max_turns`` caps tool rounds (default 5, as in JS): the model may
+        ``max_turns`` caps tool rounds (default 50, matching Go): the model may
         call tools that many times and then reply, so a run uses at most
         ``max_turns + 1`` model calls. Past the cap the response is ``ABORTED``
         with reason ``MAX_TURNS_EXCEEDED``.

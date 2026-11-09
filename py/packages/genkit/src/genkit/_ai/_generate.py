@@ -126,10 +126,9 @@ from genkit._core._typing import (
     ToolResponse,
 )
 
-# Tool rounds allowed when the caller sets no max_turns; same default as JS
-# maxTurns. Each round is a paid model call, so a model that keeps calling
-# tools stops after this many instead of 50.
-DEFAULT_MAX_TURNS = 5
+# Tool rounds allowed when the caller sets no max_turns; matches Go default.
+# Each round is a paid model call; a run stops after this many turns.
+DEFAULT_MAX_TURNS = 50
 
 # Interrupt is a BaseException so a tool's `except Exception` can't swallow it.
 # The engine still catches it wherever a raise becomes a result.
