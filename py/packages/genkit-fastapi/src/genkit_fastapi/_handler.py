@@ -213,8 +213,22 @@ async def _handle_action_request(
             return Response(status_code=empty_status)
         return Response(content=result_json(response.response), media_type='application/json')
     except Exception as e:
+        if (http_error := _http_exception(e)) is not None:
+            # The flow's own HTTPException(403) keeps its status and detail,
+            # the same as one raised from a context provider.
+            raise http_error from None
         _log_failure(error=e, flow=action_obj.name, where='run')
         return json_error_response(e)
+
+
+def _http_exception(error: BaseException) -> StarletteHTTPException | None:
+    """The Starlette/FastAPI HTTPException behind a flow failure, if any."""
+    seen: BaseException | None = error
+    while seen is not None:
+        if isinstance(seen, StarletteHTTPException):
+            return seen
+        seen = seen.__cause__
+    return None
 
 
 def genkit_fastapi_handler(

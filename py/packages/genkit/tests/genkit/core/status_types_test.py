@@ -16,8 +16,6 @@
 
 """Unit tests for status_types module."""
 
-import pytest
-
 from genkit._core._error import (
     StatusCodes,
     from_http_code,
@@ -89,6 +87,5 @@ def test_from_http_code() -> None:
 
 
 def test_http_status_code_invalid_input() -> None:
-    """Tests http_status_code function with invalid input."""
-    with pytest.raises(KeyError):
-        http_status_code('INVALID_STATUS')  # type: ignore[arg-type]
+    """An unknown status name maps to 500 instead of raising KeyError mid-response."""
+    assert http_status_code('INVALID_STATUS') == 500  # type: ignore[arg-type]

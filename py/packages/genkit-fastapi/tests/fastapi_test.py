@@ -1401,3 +1401,41 @@ async def test_fastapi_streaming_client_disconnect_cancels_flow() -> None:
     assert bodies == [b'data: {"message":1}\n\n']
     assert flow_cancelled.is_set()
     await asyncio.wait_for(cleanup_finished.wait(), timeout=1.0)
+
+
+def test_flow_raising_http_exception_keeps_its_status_and_detail() -> None:
+    """HTTPException(403) raised inside a served flow answers 403 with its detail, not 500."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def cancel_order(order_id: str) -> str:
+        raise HTTPException(status_code=403, detail=f'order {order_id} belongs to another diner')
+
+    app = FastAPI()
+    app.include_router(serve_flow(cancel_order))
+
+    response = TestClient(app).post('/cancel_order', json={'data': 'A-1042'})
+
+    assert response.status_code == 403
+    assert response.json() == {'detail': 'order A-1042 belongs to another diner'}
+
+
+def test_flow_raising_public_error_429_streams_an_error_frame() -> None:
+    """PublicError(429) inside a streamed flow ends with a RESOURCE_EXHAUSTED error frame."""
+    ai = Genkit()
+
+    @ai.flow()
+    async def reserve(_: str, ctx: FlowContext) -> str:
+        ctx.send_chunk('checking tables')
+        raise PublicError(429, 'Too many reservations; retry in a minute')
+
+    app = FastAPI()
+    app.include_router(serve_flow(reserve))
+
+    response = TestClient(app).post('/reserve', json={'data': 'x'}, headers={'accept': 'text/event-stream'})
+
+    frames = [line for line in response.text.splitlines() if line]
+    assert frames == [
+        'data: {"message":"checking tables"}',
+        'data: {"error":{"message":"Too many reservations; retry in a minute","status":"RESOURCE_EXHAUSTED"}}',
+    ]

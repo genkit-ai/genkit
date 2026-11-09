@@ -734,3 +734,24 @@ def test_genkit_error_with_empty_validation_error_has_no_trailing_colon() -> Non
     )
 
     assert str(error) == 'INVALID_ARGUMENT: title missing'
+
+
+def test_public_error_accepts_an_http_status_code() -> None:
+    """PublicError(429, ...) maps to RESOURCE_EXHAUSTED and serves as 429 instead of raising KeyError."""
+    err = genkit.PublicError(429, 'Too many orders; retry in a minute')
+
+    assert err.status == 'RESOURCE_EXHAUSTED'
+    assert error_status(err) == 429
+    assert error_body(err) == {'message': 'Too many orders; retry in a minute', 'status': 'RESOURCE_EXHAUSTED'}
+
+
+@pytest.mark.parametrize('status', ['TOO_MANY_REQUESTS', 418, True])
+def test_public_error_rejects_an_unknown_status(status: object) -> None:
+    """A status that names nothing raises at construction, not later while the response is written."""
+    with pytest.raises(ValueError, match='PublicError'):
+        genkit.PublicError(status, 'nope')  # type: ignore[arg-type]
+
+
+def test_http_status_code_falls_back_to_500_for_unknown_names() -> None:
+    """A status name outside the map serves as 500 rather than raising KeyError mid-stream."""
+    assert error_mod.http_status_code('NOT_A_STATUS') == 500  # type: ignore[arg-type]

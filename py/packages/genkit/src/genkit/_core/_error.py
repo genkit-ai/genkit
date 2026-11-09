@@ -217,9 +217,9 @@ def http_status_code(status: StatusName) -> int:
         status: The status name to get the HTTP code for.
 
     Returns:
-        The corresponding HTTP status code.
+        The corresponding HTTP status code, or 500 for a name outside the map.
     """
-    return _STATUS_CODE_MAP[status]
+    return _STATUS_CODE_MAP.get(status, 500)
 
 
 def http_code(code: object) -> int | None:
@@ -672,15 +672,30 @@ class PublicError(GenkitError):
     other GenkitError is 500 Internal Error on the wire.
     """
 
-    def __init__(self, status: StatusName, message: str, details: Any = None) -> None:  # noqa: ANN401
+    def __init__(self, status: StatusName | int, message: str, details: Any = None) -> None:  # noqa: ANN401
         """Initialize a PublicError.
 
         Args:
-            status: The status name for this error.
+            status: The status name for this error, or an HTTP status code
+                (``429`` becomes ``'RESOURCE_EXHAUSTED'``).
             message: The error message.
             details: Optional details to include.
+
+        Raises:
+            ValueError: ``status`` is not a status name or a mapped HTTP code.
         """
-        super().__init__(status=status, message=message, details=details)
+        super().__init__(status=_public_status(status), message=message, details=details)
+
+
+def _public_status(status: object) -> StatusName:
+    if isinstance(status, int) and not isinstance(status, bool):
+        name = _HTTP_CODE_TO_STATUS.get(status)
+        if name is None:
+            raise ValueError(f'PublicError: HTTP status {status} has no Genkit status name')
+        return name
+    if isinstance(status, str) and status in _STATUS_CODE_MAP:
+        return cast(StatusName, status)
+    raise ValueError(f"PublicError: unknown status {status!r}; use a name such as 'NOT_FOUND' or an HTTP code")
 
 
 _INTERNAL_CLIENT_BODY: dict[str, Any] = {'message': 'Internal Error', 'status': 'INTERNAL'}
