@@ -48,10 +48,8 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// SETUP: Genkit client
-	g := genkit.Init(ctx)
-
-	host, err := NewMCPHost(g, MCPHostOptions{
+	// SETUP: Host without a Genkit instance
+	host, err := NewHost(MCPHostOptions{
 		Name: "test-host",
 	})
 	if err != nil {
@@ -59,7 +57,7 @@ func TestMCPConnectionAndTranslation(t *testing.T) {
 	}
 
 	// TEST: Connect to MCP server
-	err = host.Connect(ctx, g, "test-server", MCPClientOptions{
+	err = host.ConnectServer(ctx, "test-server", MCPClientOptions{
 		Name: "test-server",
 		Stdio: &StdioConfig{
 			Command: serverBinary,

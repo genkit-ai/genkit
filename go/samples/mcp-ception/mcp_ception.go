@@ -143,7 +143,7 @@ func mcpSelfConnection() {
 	// Server process is spawned automatically via stdio
 
 	// Create MCP Host that connects to our Genkit server
-	host, err := mcp.NewMCPHost(g, mcp.MCPHostOptions{
+	host, err := mcp.NewHost(mcp.MCPHostOptions{
 		Name: "mcp-ception-host",
 		MCPServers: []mcp.MCPServerConfig{
 			{
@@ -187,7 +187,7 @@ func mcpSelfConnection() {
 
 	// Get tools from our Genkit server
 	logger.FromContext(ctx).Info("Getting tools from Genkit MCP server")
-	tools, err := host.GetActiveTools(ctx, g)
+	tools, err := host.ActiveTools(ctx)
 	if err != nil {
 		logger.FromContext(ctx).Error("Failed to get tools", "error", err)
 		return
