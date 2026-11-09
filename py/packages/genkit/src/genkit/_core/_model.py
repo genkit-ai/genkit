@@ -923,6 +923,7 @@ def reject_unanswered_interrupts(
                     f'resume part for {name!r} is still an interrupt; '
                     'use Part.restart(...) or Part.respond(...) before generate.'
                 ),
+                reason=ErrorReason.INVALID_RESUME,
             )
     for part in respond or []:
         if part.tool_request is not None and part.tool_response is None:
@@ -930,6 +931,7 @@ def reject_unanswered_interrupts(
             raise GenkitError(
                 status='INVALID_ARGUMENT',
                 message=(f'resume_respond got the paused request for {name!r}; answer it with Part.respond(output)'),
+                reason=ErrorReason.INVALID_RESUME,
             )
 
 

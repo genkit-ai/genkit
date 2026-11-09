@@ -1925,6 +1925,17 @@ class Genkit:
             raise TypeError('messages must be a list of Message; pass text with prompt=')
         # Before GenerateCall, whose lax int field turns True into 1.
         check_max_turns(max_turns)
+        if prompt and (resume_respond or resume_restart):
+            # A resume answers the model's last tool request; a new user turn
+            # after it would fail INVALID_RESUME only after the model ran.
+            raise GenkitError(
+                status='INVALID_ARGUMENT',
+                message=(
+                    'prompt= cannot be combined with resume_respond/resume_restart; '
+                    'pass the paused history as messages= and resume without a new prompt'
+                ),
+                reason=ErrorReason.INVALID_RESUME,
+            )
 
         scope = CallScope(self)
         registry = scope.registry

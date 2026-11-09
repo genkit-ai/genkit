@@ -304,7 +304,8 @@ async def call_tool_fn(
     function through here, so resume metadata reaches it either way.
     """
     resumed_meta = _tool_resumed_metadata.get()
-    if resumed_meta:
+    # A bare restart() resumes with {}; it is still a resume.
+    if resumed_meta is not None:
         # Record resumed metadata on the current span for observability.
         set_custom_metadata_attributes({'resumed': resumed_meta})
     # The ctx parameter always receives this ToolContext, whatever context

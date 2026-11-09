@@ -13,7 +13,7 @@ from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, To
 from genkit._ai._agents._client import agent_interrupts_from_message
 from genkit._ai._generate import CallScope, augment_with_context, generate_action
 from genkit._core._action import ActionRunContext
-from genkit._core._error import GenkitError
+from genkit._core._error import ErrorReason, GenkitError
 from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._typing import FinishReason, GenerationUsage, Role, ToolRequest
 from genkit.testing import ScriptedModel, define_scripted_model
@@ -367,3 +367,44 @@ async def test_max_turns_accepts_a_whole_float_from_dotprompt() -> None:
     )
 
     assert response.text == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_prompt_with_resume_fails_before_the_model_runs() -> None:
+    ai, pm, _ = _hitl_app()
+    pm.responses = [_transfer_request(7)]
+    paused = await ai.generate(prompt='book 7 days', tools=['transfer'])
+    calls = pm.request_count
+
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(
+            prompt='also add breakfast',
+            messages=paused.messages,
+            tools=['transfer'],
+            resume_restart=paused.interrupts[0].restart(),
+        )
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+    assert raised.value.reason is ErrorReason.INVALID_RESUME
+    assert pm.request_count == calls
+
+
+@pytest.mark.asyncio
+async def test_bare_restart_still_reads_as_resumed() -> None:
+    """restart() with no metadata resumes with {}; the tool must still see a resume."""
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    seen: list[object] = []
+
+    @ai.tool(name='transfer')
+    async def transfer(inp: dict, ctx: ToolContext) -> str:
+        if not ctx.is_resumed():
+            raise Interrupt({'reason': 'approve'})
+        seen.append(ctx.resumed_metadata)
+        return 'ok'
+
+    pm.responses = [_transfer_request(7), _answers('done')]
+    paused = await ai.generate(prompt='book', tools=['transfer'])
+    await ai.generate(messages=paused.messages, tools=['transfer'], resume_restart=paused.interrupts[0].restart())
+
+    assert len(seen) == 1
