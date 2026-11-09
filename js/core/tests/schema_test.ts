@@ -18,10 +18,12 @@ import Ajv from 'ajv';
 import * as assert from 'assert';
 import { afterEach, describe, it, mock } from 'node:test';
 
+import { z as z3 } from 'zod/v3';
 import { setGenkitRuntimeConfig } from '../src/config.js';
 import {
   ValidationError,
   annotateSchema,
+  assertGenkitSchema,
   parseSchema,
   toJsonSchema,
   toZodSchema,
@@ -616,5 +618,41 @@ describe('Standard Schema (GenkitSchema)', () => {
   it('returns zod schemas as is', () => {
     const schema = z.string();
     assert.strictEqual(toZodSchema(schema), schema);
+  });
+});
+
+describe('unsupported schemas', () => {
+  it('rejects zod v3 schemas with a clear error', () => {
+    assert.throws(
+      () =>
+        toJsonSchema(
+          // Typed as GenkitSchema, like a prebuilt plugin's JS would pass it.
+          { schema: z3.object({ a: z3.string() }) as unknown as GenkitSchema },
+          'X'
+        ),
+      /X is not supported: found a zod v3 schema/
+    );
+  });
+
+  it('rejects zod v4 schemas with nested zod v3 schemas', () => {
+    const schema = z.object({ a: z.string() }).extend({
+      // A plugin extending a genkit schema with its own zod v3.
+      seed: z3.number().optional() as unknown as z.ZodOptional<z.ZodNumber>,
+    });
+    assert.throws(
+      () => toJsonSchema({ schema }, 'X'),
+      /X is not supported: found a zod v3 schema/
+    );
+  });
+
+  it('rejects objects that are not Standard Schemas', () => {
+    assert.throws(
+      () => assertGenkitSchema({ type: 'object' }, 'X'),
+      /X is not supported: it must implement Standard Schema/
+    );
+  });
+
+  it('accepts zod v4 schemas', () => {
+    assertGenkitSchema(z.string(), 'X');
   });
 });

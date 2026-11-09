@@ -21,6 +21,7 @@ import { Channel, lazy } from './async.js';
 import { getContext, runWithContext, type ActionContext } from './context.js';
 import type { ActionType, Registry } from './registry.js';
 import {
+  assertGenkitSchema,
   isZodSchema,
   parseSchema,
   type GenkitSchema,
@@ -481,6 +482,21 @@ export function action<
     typeof config.name === 'string'
       ? config.name
       : `${config.name.pluginId}/${config.name.actionId}`;
+  // Fail early, naming the action, for schemas genkit can't use (typically a
+  // plugin bundling zod v3).
+  for (const key of [
+    'inputSchema',
+    'outputSchema',
+    'streamSchema',
+    'initSchema',
+  ] as const) {
+    if (config[key]) {
+      assertGenkitSchema(
+        config[key],
+        `${key} of ${config.actionType} "${actionName}"`
+      );
+    }
+  }
   const actionMetadata = {
     key: `/${config.actionType}/${actionName}`,
     name: actionName,

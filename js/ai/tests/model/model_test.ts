@@ -23,10 +23,13 @@ import { initNodeFeatures } from '@genkit-ai/core/node';
 import assert from 'assert';
 import { Registry } from 'genkit/registry';
 import { describe, it } from 'node:test';
+import { z } from 'zod';
+import { z as z3 } from 'zod/v3';
 import {
   defineModel,
   GenerateResponseChunkData,
   GenerateResponseData,
+  GenerationCommonConfigSchema,
   model,
 } from '../../src/model.js';
 
@@ -167,5 +170,28 @@ describe('model', () => {
       assert.deepStrictEqual(response, GENERATE_RESPONSE);
       assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
     });
+  });
+});
+
+describe('model configSchema checks', () => {
+  it('names the model when its config schema mixes in zod v3', () => {
+    const registry = new Registry();
+    assert.throws(
+      () =>
+        defineModel(
+          registry,
+          {
+            name: 'legacy',
+            // A plugin extending a genkit schema with its own zod v3.
+            configSchema: GenerationCommonConfigSchema.extend({
+              seed: z3
+                .number()
+                .optional() as unknown as z.ZodOptional<z.ZodNumber>,
+            }),
+          },
+          async () => GENERATE_RESPONSE
+        ),
+      /configSchema of model "legacy" is not supported: found a zod v3 schema/
+    );
   });
 });

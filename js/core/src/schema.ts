@@ -41,6 +41,10 @@ export type JSONSchema = JSONSchemaType<any> | any;
  * implements Standard Schema and Standard JSON Schema
  * (https://standardschema.dev). Zod 4.2+ and ArkType schemas qualify as is;
  * Valibot schemas via `toStandardJsonSchema()` from `@valibot/to-json-schema`.
+ *
+ * Non-zod schemas are meant for end-user surfaces: flows, tools and agent
+ * custom state. Plugin-facing schemas (model/embedder config, etc.) should
+ * stay zod.
  */
 export interface GenkitSchema<Input = any, Output = Input> {
   readonly '~standard': StandardSchemaV1.Props<Input, Output> &
@@ -115,6 +119,70 @@ function foreignJsonSchema(schema: GenkitSchema): JSONSchema {
   return schema['~standard'].jsonSchema.input({ target: 'draft-07' });
 }
 
+/**
+ * Throws a descriptive error unless `schema` implements Standard Schema and
+ * Standard JSON Schema. Only a couple of property reads, so it's cheap enough
+ * to run whenever an action is defined. The common failure is a plugin that
+ * bundles its own zod v3.
+ *
+ * @param label describes where the schema came from, used in the error.
+ */
+export function assertGenkitSchema(
+  schema: unknown,
+  label: string
+): asserts schema is GenkitSchema {
+  const std = (schema as Partial<GenkitSchema> | null | undefined)?.[
+    '~standard'
+  ];
+  if (
+    typeof std?.validate === 'function' &&
+    typeof std.jsonSchema?.input === 'function'
+  ) {
+    return;
+  }
+  throw unsupportedSchemaError(label, isZod3Schema(schema));
+}
+
+function isZod3Schema(schema: unknown): boolean {
+  return (
+    typeof schema === 'object' &&
+    schema !== null &&
+    '_def' in schema &&
+    !('_zod' in schema)
+  );
+}
+
+/**
+ * Whether a zod v4 schema has zod v3 schemas nested in it, e.g.
+ * `GenerationCommonConfigSchema.extend({ seed: z3.number() })`. Only called
+ * after JSON schema conversion has already failed, so cost doesn't matter.
+ */
+function containsZod3Schema(root: unknown): boolean {
+  const seen = new Set<unknown>();
+  const visit = (value: unknown): boolean => {
+    if (typeof value !== 'object' || value === null || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    if (isZod3Schema(value)) return true;
+    if ('_zod' in value) {
+      return visit((value as z.core.$ZodType)._zod.def);
+    }
+    const children = Array.isArray(value) ? value : Object.values(value);
+    return children.some(visit);
+  };
+  return visit(root);
+}
+
+function unsupportedSchemaError(label: string, zod3: boolean): GenkitError {
+  return new GenkitError({
+    status: 'INVALID_ARGUMENT',
+    message: zod3
+      ? `${label} is not supported: found a zod v3 schema. Genkit requires zod 4.2+ (or another Standard Schema library that implements Standard JSON Schema). If this schema comes from a plugin, the plugin needs to be upgraded to a version compatible with this version of Genkit.`
+      : `${label} is not supported: it must implement Standard Schema and Standard JSON Schema (https://standardschema.dev), e.g. a zod 4.2+ or ArkType schema.`,
+  });
+}
+
 const jsonSchemas = new WeakMap<GenkitSchema, JSONSchema>();
 const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
 const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
@@ -168,33 +236,42 @@ export class ValidationError extends GenkitError {
 /**
  * Converts a Zod schema into a JSON schema, utilizing an in-memory cache for known objects.
  * @param options Provide a json schema and/or zod schema. JSON schema has priority.
+ * @param label Describes where the schema came from (e.g. `configSchema of
+ *   model "foo"`), used in the error if the schema isn't supported.
  * @returns A JSON schema.
  */
-export function toJsonSchema({
-  jsonSchema,
-  schema,
-}: ProvidedSchema): JSONSchema | undefined {
+export function toJsonSchema(
+  { jsonSchema, schema }: ProvidedSchema,
+  label = 'schema'
+): JSONSchema | undefined {
   // if neither jsonSchema or schema is present return undefined
   if (!jsonSchema && !schema) return null;
   if (jsonSchema) return jsonSchema;
   if (jsonSchemas.has(schema!)) return jsonSchemas.get(schema!)!;
-  if (!isZodSchema(schema!)) {
-    const out = foreignJsonSchema(schema!);
-    jsonSchemas.set(schema!, out);
+  assertGenkitSchema(schema, label);
+  if (!isZodSchema(schema)) {
+    const out = foreignJsonSchema(schema);
+    jsonSchemas.set(schema, out);
     return out;
   }
   // Note: the JSON schema cache is keyed by instance, so annotations added via
   // annotateSchema after the first conversion are not reflected.
-  const outSchema = z.toJSONSchema(schema!, {
-    target: 'draft-07',
-    // JSON schema is used to validate raw (pre-parse) data and to describe
-    // inputs to models/tools, so describe the input side of transforms/defaults.
-    io: 'input',
-    // z.bigint(), z.symbol(), etc. become {} instead of throwing.
-    unrepresentable: 'any',
-    override: compatOverride,
-  });
-  jsonSchemas.set(schema!, outSchema);
+  let outSchema: JSONSchema;
+  try {
+    outSchema = z.toJSONSchema(schema, {
+      target: 'draft-07',
+      // JSON schema is used to validate raw (pre-parse) data and to describe
+      // inputs to models/tools, so describe the input side of transforms/defaults.
+      io: 'input',
+      // z.bigint(), z.symbol(), etc. become {} instead of throwing.
+      unrepresentable: 'any',
+      override: compatOverride,
+    });
+  } catch (e) {
+    if (containsZod3Schema(schema)) throw unsupportedSchemaError(label, true);
+    throw e;
+  }
+  jsonSchemas.set(schema, outSchema);
   return outSchema;
 }
 

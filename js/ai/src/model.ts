@@ -202,7 +202,10 @@ function modelActionOptions<
       model: {
         label,
         customOptions: options.configSchema
-          ? toJsonSchema({ schema: options.configSchema })
+          ? toJsonSchema(
+              { schema: options.configSchema },
+              `configSchema of model "${options.name}"`
+            )
           : undefined,
         versions: options.versions,
         supports: options.supports,
@@ -329,7 +332,10 @@ export function backgroundModel<
       model: {
         label,
         customOptions: options.configSchema
-          ? toJsonSchema({ schema: options.configSchema })
+          ? toJsonSchema(
+              { schema: options.configSchema },
+              `configSchema of model "${options.name}"`
+            )
           : undefined,
         versions: options.versions,
         supports: options.supports,
@@ -435,7 +441,10 @@ export function modelActionMetadata({
       model: {
         ...info,
         customOptions: configSchema
-          ? toJsonSchema({ schema: configSchema })
+          ? toJsonSchema(
+              { schema: configSchema },
+              `configSchema of model "${name}"`
+            )
           : undefined,
       },
     },

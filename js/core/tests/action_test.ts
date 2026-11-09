@@ -18,6 +18,7 @@ import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { z } from 'zod';
+import { z as z3 } from 'zod/v3';
 import { action, defineAction, defineActionAsync } from '../src/action.js';
 import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
@@ -475,5 +476,22 @@ describe('action', () => {
     const act = await actPromise;
 
     assert.strictEqual(act.__action.key, '/custom/asyncKeyedAction');
+  });
+});
+
+describe('action schema checks', () => {
+  it('names the action when a schema is zod v3', () => {
+    assert.throws(
+      () =>
+        action(
+          {
+            name: 'legacy',
+            actionType: 'tool',
+            inputSchema: z3.object({ q: z3.string() }) as unknown as z.ZodType,
+          },
+          async () => null
+        ),
+      /inputSchema of tool "legacy" is not supported: found a zod v3 schema/
+    );
   });
 });

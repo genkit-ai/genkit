@@ -155,7 +155,10 @@ function embedderActionOptions<
       info: options.info,
       embedder: {
         customOptions: options.configSchema
-          ? toJsonSchema({ schema: options.configSchema })
+          ? toJsonSchema(
+              { schema: options.configSchema },
+              `configSchema of embedder "${options.name}"`
+            )
           : undefined,
       },
     },
@@ -371,7 +374,10 @@ export function embedderActionMetadata({
       embedder: {
         ...info,
         customOptions: configSchema
-          ? toJsonSchema({ schema: configSchema })
+          ? toJsonSchema(
+              { schema: configSchema },
+              `configSchema of embedder "${name}"`
+            )
           : undefined,
       },
     },
