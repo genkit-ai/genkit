@@ -23,7 +23,9 @@ import { getGenkitRuntimeConfig } from './config.js';
 import { GenkitError } from './error.js';
 
 import type { Registry } from './registry.js';
-const ajv = new Ajv();
+// External schemas (including MCP tool schemas) may contain custom formats.
+// Ignore formats we do not know while still validating registered formats.
+const ajv = new Ajv({ strictSchema: false });
 addFormats(ajv);
 
 export { z }; // provide a consistent zod to use throughout genkit
