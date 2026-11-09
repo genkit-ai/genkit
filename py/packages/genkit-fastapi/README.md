@@ -121,10 +121,12 @@ app = FastAPI()
 
 @ai.flow()
 async def ask_chef(prompt: str, ctx: FlowContext[str]) -> str:
-    stream = ai.generate_stream(prompt=prompt)
-    async for chunk in stream:
-        ctx.send_chunk(chunk.text)
-    return (await stream.response).text
+    result = ai.generate_stream(prompt=prompt)
+    # The context manager closes the model stream if the client disconnects.
+    async with result.stream as chunks:
+        async for chunk in chunks:
+            ctx.send_chunk(chunk.text)
+    return (await result.response).text
 
 
 @app.post('/chat/stream')

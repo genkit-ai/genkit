@@ -6,6 +6,7 @@ Google AI Studio; video uses Vertex (`VertexAI.veo`).
 
 ```bash
 export GEMINI_API_KEY=your-api-key
+export GOOGLE_CLOUD_PROJECT=your-project-id  # Veo runs on Vertex AI
 gcloud auth application-default login
 uv sync
 uv run src/main.py

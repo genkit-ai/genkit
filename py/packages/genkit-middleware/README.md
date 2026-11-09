@@ -27,6 +27,8 @@ This plugin provides concrete middleware implementations for common use cases:
 
 Import the middleware classes you need and pass instances directly into `use=[]`:
 
+The snippets in this README use `await`; run them inside an `async def main()` and call `ai.run_main(main())`.
+
 ```python
 from genkit import Genkit
 from genkit_google_genai import GoogleAI
@@ -136,18 +138,24 @@ first = await ai.generate(
 ```
 
 When a non-allowed tool is called, execution is interrupted. Approve and re-run the
-tool by restarting it with ``resumed_metadata`` that includes ``tool_approved``:
+tool by restarting it with `resumed_metadata` that includes `tool_approved`. Pass the
+history in `messages=` and leave out `prompt=`: a new prompt appends a user turn after
+the pending tool request, and the resume fails with `FAILED_PRECONDITION`.
 
 ```python
 response = await ai.generate(
     model=GoogleAI.gemini('gemini-flash-latest'),
-    prompt='Delete the database',
     messages=list(first.messages),
     tools=['delete_database'],
     use=[approval],
     resume_restart=first.interrupts[0].restart(resumed_metadata={'tool_approved': True}),
 )
+print(response.text)
+# => The database has been deleted.
 ```
+
+Inside the tool, `ctx.is_resumed()` is `True` on the approved re-run and
+`ctx.resumed_metadata` holds the dict you passed (`{'tool_approved': True}`).
 
 ### Skills
 

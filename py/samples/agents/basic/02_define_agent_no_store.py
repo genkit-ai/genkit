@@ -46,6 +46,7 @@ async def main() -> None:
     # streaming (or abort/timeout handles); awaiting turn.response skips the stream.
     out = await turn.response
     assert out.text
+    print(out.text)
 
     # No store means no snapshot to reload. Resume by handing back the
     # messages / state / artifacts you kept.
@@ -56,7 +57,9 @@ async def main() -> None:
     messages, state, artifacts = chat.messages, chat.state, chat.artifacts
 
     resumed = agent.chat(messages=messages, state=state, artifacts=artifacts)
-    await resumed.send('What is my name? One word.')
+    reply = await resumed.send('What is my name? One word.')
+    print(reply.text)
+    # => Ada
 
 
 if __name__ == '__main__':
