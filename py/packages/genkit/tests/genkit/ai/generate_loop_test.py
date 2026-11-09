@@ -11,9 +11,10 @@ import pytest
 
 from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, ToolContext
 from genkit._ai._agents._client import agent_interrupts_from_message
-from genkit._ai._generate import augment_with_context
+from genkit._ai._generate import CallScope, augment_with_context, generate_action
 from genkit._core._action import ActionRunContext
-from genkit._core._model import ModelRequest
+from genkit._core._error import GenkitError
+from genkit._core._model import GenerateActionOptions, ModelRequest
 from genkit._core._typing import FinishReason, GenerationUsage, Role, ToolRequest
 from genkit.testing import ScriptedModel, define_scripted_model
 
@@ -335,3 +336,34 @@ async def test_child_flows_get_their_own_copy_of_the_context() -> None:
     await seat_party(3, context={'auth': {'uid': 'host-1'}})
 
     assert seen == {'t0': 't0', 't1': 't1', 't2': 't2', 'parent': None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bad', [True, False, float('nan'), float('inf'), 2.5])
+async def test_max_turns_rejects_non_whole_numbers(bad: object) -> None:
+    """max_turns=True used to run as 1; nan leaked a raw ValidationError."""
+    ai = Genkit(model='scriptedModel')
+    define_scripted_model(ai)
+
+    with pytest.raises(GenkitError) as raised:
+        await ai.generate(prompt='hi', max_turns=bad)  # type: ignore[arg-type]
+
+    assert raised.value.status == 'INVALID_ARGUMENT'
+
+
+@pytest.mark.asyncio
+async def test_max_turns_accepts_a_whole_float_from_dotprompt() -> None:
+    ai = Genkit(model='scriptedModel')
+    pm, _ = define_scripted_model(ai)
+    pm.responses = [_answers('ok')]
+
+    response = await generate_action(
+        CallScope(ai),
+        GenerateActionOptions(
+            model='scriptedModel',
+            messages=[Message(role=Role.USER, content=[Part.from_text('hi')])],
+            max_turns=3.0,
+        ),
+    )
+
+    assert response.text == 'ok'

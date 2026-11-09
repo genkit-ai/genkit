@@ -58,6 +58,7 @@ from genkit._ai._formats._builtin import built_in_formats
 from genkit._ai._formats._types import Formatter
 from genkit._ai._generate import (
     CallScope,
+    check_max_turns,
     define_generate_action,
     generate_action,
     register_middleware,
@@ -1922,6 +1923,8 @@ class Genkit:
         """
         if isinstance(messages, str):
             raise TypeError('messages must be a list of Message; pass text with prompt=')
+        # Before GenerateCall, whose lax int field turns True into 1.
+        check_max_turns(max_turns)
 
         scope = CallScope(self)
         registry = scope.registry

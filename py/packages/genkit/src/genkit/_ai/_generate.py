@@ -764,6 +764,30 @@ def augment_with_context(
     return new_req
 
 
+def check_max_turns(max_turns: object) -> None:
+    """max_turns is a whole, non-negative count of tool rounds.
+
+    ``True`` would pass as 1 and ``nan`` would fail deep in validation, so
+    both get the same INVALID_ARGUMENT as a negative count. ``3.0`` (what
+    dotprompt's float field carries) is fine.
+    """
+    if max_turns is None:
+        return
+    whole = isinstance(max_turns, int) or (isinstance(max_turns, float) and max_turns.is_integer())
+    if isinstance(max_turns, bool) or not whole:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'max turns must be a whole number, got {max_turns!r}',
+            reason=ErrorReason.INVALID_INPUT,
+        )
+    if cast(float, max_turns) < 0:
+        raise GenkitError(
+            status='INVALID_ARGUMENT',
+            message=f'max turns cannot be negative, got {max_turns}',
+            reason=ErrorReason.INVALID_INPUT,
+        )
+
+
 def raise_if_stopped(caller_stopped: asyncio.Event | None) -> None:
     if caller_stopped is not None and caller_stopped.is_set():
         raise GenkitError(status='CANCELLED', message='Generation aborted.')
@@ -906,12 +930,7 @@ async def run_generate(
     )
     if caller_stopped is not None and caller_stopped.is_set():
         return box_aborted_turn(messages=list(options.messages or []))
-    if options.max_turns is not None and options.max_turns < 0:
-        raise GenkitError(
-            status='INVALID_ARGUMENT',
-            message=f'max turns cannot be negative, got {options.max_turns}',
-            reason=ErrorReason.INVALID_INPUT,
-        )
+    check_max_turns(options.max_turns)
     # The veneer already checked ahead of its span. /util/generate (Dev UI,
     # reflection) starts here, so it fails before middleware or the model runs.
     reject_config_api_key(options.config)
