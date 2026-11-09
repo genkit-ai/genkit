@@ -10,7 +10,7 @@ import warnings
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from genkit import FinishReason, Message, ModelResponse, ModelResponseChunk, Part, Role
+from genkit import FinishReason, Media, Message, ModelResponse, ModelResponseChunk, Part, Role
 from genkit._ai._model import text_from_content
 from genkit._core import _typing as wire
 from genkit._core._action import ActionRunContext
@@ -388,6 +388,55 @@ def test_response_wrapper_interrupts() -> None:
             metadata={'interrupt': {'banana': 'yes'}},
         )
     ]
+
+
+def test_response_media_is_first_media_part() -> None:
+    """ModelResponse.media is the first media part; media_parts keeps all of them in order."""
+    resp = ModelResponse(
+        message=Message(
+            role='model',
+            content=[
+                Part.from_text('here you go'),
+                Part.from_media('data:image/png;base64,AAA', 'image/png'),
+                Part.from_media('data:audio/wav;base64,BBB', 'audio/wav'),
+            ],
+        )
+    )
+
+    assert resp.media == Media(url='data:image/png;base64,AAA', content_type='image/png')
+    assert resp.media_parts == [
+        Media(url='data:image/png;base64,AAA', content_type='image/png'),
+        Media(url='data:audio/wav;base64,BBB', content_type='audio/wav'),
+    ]
+
+
+def test_response_media_is_none_without_media() -> None:
+    """A text-only reply or a missing message gives None, not an IndexError."""
+    text_only = ModelResponse(message=Message(role='model', content=[Part.from_text('no image')]))
+
+    assert text_only.media is None
+    assert text_only.media_parts == []
+    assert ModelResponse().media is None
+    assert ModelResponse().media_parts == []
+
+
+def test_message_media_is_first_media_part() -> None:
+    """Message.media is the first media part, or None."""
+    msg = Message(
+        role='model',
+        content=[Part.from_text('a'), Part.from_media('https://example.com/a.png', 'image/png')],
+    )
+
+    assert msg.media == Media(url='https://example.com/a.png', content_type='image/png')
+    assert Message(role='model', content=[Part.from_text('a')]).media is None
+
+
+def test_chunk_media_is_first_media_part() -> None:
+    """ModelResponseChunk.media is the first media part in this chunk, or None."""
+    chunk = ModelResponseChunk(content=[Part.from_media('https://example.com/b.png', 'image/png')])
+
+    assert chunk.media == Media(url='https://example.com/b.png', content_type='image/png')
+    assert ModelResponseChunk(content=[Part.from_text('b')]).media is None
 
 
 def test_model_action_metadata() -> None:

@@ -125,7 +125,8 @@ async def test_generate_bedrock_image_extra_key_overrides_built_field() -> None:
 
     body = json.loads(transport.invoke_calls[0]['body'])
     assert body['output_format'] == 'jpeg'
-    assert response.media[0].content_type == 'image/jpeg'
+    assert response.media is not None
+    assert response.media.content_type == 'image/jpeg'
 
 
 @pytest.mark.asyncio

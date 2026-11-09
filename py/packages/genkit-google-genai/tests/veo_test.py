@@ -54,7 +54,7 @@ def _sdk_op(
 def _media(output: object) -> list:
     assert isinstance(output, ModelResponse)
     assert output.finish_reason == FinishReason.STOP
-    return output.media
+    return output.media_parts
 
 
 def _text_request(*, config: object | None = None) -> ModelRequest:

@@ -280,7 +280,8 @@ async def test_a_refs_config_is_applied_under_the_call_config() -> None:
     assert transport.bodies() == [
         {'prompt': 'A food truck at dusk.', 'output_format': 'jpeg', 'seed': 42, 'aspect_ratio': '16:9'}
     ]
-    assert response.media[0].content_type == 'image/jpeg'
+    assert response.media is not None
+    assert response.media.content_type == 'image/jpeg'
 
 
 @pytest.mark.asyncio

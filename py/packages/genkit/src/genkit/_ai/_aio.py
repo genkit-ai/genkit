@@ -2189,7 +2189,7 @@ class Genkit:
             # 3. Poll until done; output is a ModelResponse
             while not op.done:
                 op = await ai.check_operation(op)
-            print(op.output.media[0].url)
+            print(op.output.media.url)
             # => https://storage.googleapis.com/.../risotto.mp4
             ```
         """

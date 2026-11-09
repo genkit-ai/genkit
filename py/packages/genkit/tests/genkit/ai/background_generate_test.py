@@ -609,7 +609,8 @@ def test_model_response_views_see_message_set_after_first_read() -> None:
     assert resp.text == ''
     assert resp.interrupts == []
     assert resp.tool_requests == []
-    assert resp.media == []
+    assert resp.media is None
+    assert resp.media_parts == []
     assert resp.output is None
 
     resp.message = Message(
@@ -1371,7 +1372,8 @@ def test_model_response_operation_output_survives_json_round_trip() -> None:
     reloaded = Operation[ModelResponse].model_validate_json(op.model_dump_json(by_alias=True))
 
     assert isinstance(reloaded.output, ModelResponse)
-    assert reloaded.output.media[0].url == 'https://cdn.example/promo.mp4'
+    assert reloaded.output.media is not None
+    assert reloaded.output.media.url == 'https://cdn.example/promo.mp4'
 
 
 def test_bare_operation_output_stays_untyped() -> None:
@@ -1412,7 +1414,8 @@ async def test_check_that_assigns_a_dict_output_returns_a_model_response(ai: Gen
 
     assert type(op) is Operation[ModelResponse]
     assert isinstance(op.output, ModelResponse)
-    assert op.output.media[0].url == 'https://cdn.example/r1.mp4'
+    assert op.output.media is not None
+    assert op.output.media.url == 'https://cdn.example/r1.mp4'
 
 
 @pytest.mark.asyncio

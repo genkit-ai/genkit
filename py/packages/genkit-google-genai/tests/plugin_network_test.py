@@ -585,7 +585,8 @@ async def test_veo_start_and_check_overrides_use_http_client_factory(monkeypatch
 
     assert done.done is True
     assert isinstance(done.output, ModelResponse)
-    assert done.output.media[0].url == 'https://example.com/out.mp4'
+    assert done.output.media is not None
+    assert done.output.media.url == 'https://example.com/out.mp4'
     assert [
         (r.method, str(r.url), r.headers['x-team'])
         for r in api.requests

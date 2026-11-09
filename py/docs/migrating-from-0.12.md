@@ -875,6 +875,10 @@ if res.output is None:
     ...   # the reply was incomplete; see res.error
 ```
 
+## Response media
+
+`response.media` is now the first media part (`Media | None`), matching JS, Go and agent results; `Message` and `ModelResponseChunk` get the same `.media`. Replace `response.media[0]` with `response.media`, and use `response.media_parts` for the full list. `Document.media` is still a list.
+
 ## Flow input and output validation
 
 Flow input and output are now validated against their type annotations. A flow that returns the wrong shape now raises. For served flows, `{"data": null}` means "use the default".

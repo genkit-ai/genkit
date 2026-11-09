@@ -326,7 +326,7 @@ response = await ai.generate(
     model=Bedrock.stability('stability.sd3-5-large-v1:0'),
     prompt='A tabby cat asleep on a sunlit windowsill, watercolour.',
 )
-image = response.media[0].url  # data:image/png;base64,...
+image = response.media.url  # data:image/png;base64,...
 ```
 
 The plugin infers the route from the ID: the image IDs below take the
@@ -363,7 +363,7 @@ response = await ai.generate(
 #           'aspect_ratio': '16:9', 'seed': 42, 'negative_prompt': 'blurry'}
 
 # 2. The media part's MIME type follows output_format
-print(response.media[0].content_type)
+print(response.media.content_type)
 # => image/jpeg
 ```
 

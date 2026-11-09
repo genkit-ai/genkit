@@ -243,7 +243,7 @@ class Bedrock(Plugin):
                 prompt='A food truck at dusk, string lights.',
                 config=StabilityImageConfig(aspect_ratio='16:9', output_format='jpeg'),
             )
-            print(response.media[0].content_type)
+            print(response.media.content_type)
             # => image/jpeg
             ```
         """

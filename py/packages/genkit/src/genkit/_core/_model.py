@@ -956,6 +956,11 @@ class Message(GenkitModel):
         return text_from_message(self)
 
     @property
+    def media(self) -> Media | None:
+        """The first media part in this message, or ``None``."""
+        return next((p.media for p in self.content if p.media is not None), None)
+
+    @property
     def tool_requests(self) -> list[Part]:
         """All tool request parts in this message."""
         return [p for p in self.content if p.tool_request is not None]
@@ -1752,7 +1757,17 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.tool_requests
 
     @property
-    def media(self) -> list[Media]:
+    def media(self) -> Media | None:
+        """The first media part in the response message, or ``None``.
+
+        Use ``media_parts`` when the model returns more than one.
+        """
+        if self.message is None:
+            return None
+        return self.message.media
+
+    @property
+    def media_parts(self) -> list[Media]:
         """All media parts in the response message."""
         if self.message is None:
             return []
@@ -1807,6 +1822,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
         if self._previous_chunks:
             prior = ''.join(p.text for chunk in self._previous_chunks for p in chunk.content if p.text)
         return prior + self.text
+
+    @property
+    def media(self) -> Media | None:
+        """The first media part in this chunk, or ``None``."""
+        return next((p.media for p in self.content if p.media is not None), None)
 
     @property
     def tool_requests(self) -> list[Part]:
