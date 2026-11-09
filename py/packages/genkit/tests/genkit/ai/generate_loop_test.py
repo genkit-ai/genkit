@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, ToolContext
+from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, Tool, ToolContext
 from genkit._ai._agents._client import agent_interrupts_from_message
 from genkit._ai._generate import CallScope, augment_with_context, generate_action
 from genkit._core._action import ActionRunContext
@@ -408,3 +408,21 @@ async def test_bare_restart_still_reads_as_resumed() -> None:
     await ai.generate(messages=paused.messages, tools=['transfer'], resume_restart=paused.interrupts[0].restart())
 
     assert len(seen) == 1
+
+
+def test_tool_accepts_an_async_callable_instance() -> None:
+    """A class with `async def __call__` is an async tool; sync callables still fail."""
+
+    class AllergyCheck:
+        async def __call__(self, dish: str) -> str:
+            return f'{dish}: nut-free'
+
+    class SyncCheck:
+        def __call__(self, dish: str) -> str:
+            return dish
+
+    tool = Tool(AllergyCheck(), name='allergy_check')
+    assert tool.name == 'allergy_check'
+
+    with pytest.raises(TypeError, match='must be async'):
+        Tool(SyncCheck(), name='sync_check')

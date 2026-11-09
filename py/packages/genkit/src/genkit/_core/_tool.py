@@ -436,13 +436,14 @@ class Tool(Action[InputT, OutputT, ChunkT, None]):
             ephemeral = Tool(lookup_price, name='lookup_price')
             res = await ai.generate(prompt='Price of SKU-1?', tools=[ephemeral])
         """
-        if not inspect.iscoroutinefunction(func):
+        # A callable instance with `async def __call__` is async too.
+        if not (inspect.iscoroutinefunction(func) or inspect.iscoroutinefunction(type(func).__call__)):
             raise TypeError(f'Tool function must be async. Got sync function: {getattr(func, "__name__", repr(func))}')
         tool_name = name if name is not None else getattr(func, '__name__', None)
         if tool_name is None:
             raise ValueError(f'Cannot infer a tool name from {func!r}; pass name= explicitly.')
         tool_description = get_func_description(func, description)
-        typed_func = cast(Callable[..., Awaitable[OutputT]], func)
+        typed_func: Callable[..., Awaitable[OutputT]] = func
         self._wire_action = None
 
         async def tool_fn(raw_input: object, ctx: ActionRunContext[Any]) -> OutputT:
