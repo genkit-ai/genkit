@@ -39,6 +39,7 @@ from genkit_google_genai._models._sdk_config import (
     dump_family_config,
     reject_bool_timeout,
     sdk_config_error,
+    server_timeout_header,
     split_sdk_fields,
     timeout_seconds_to_ms,
 )
@@ -546,7 +547,8 @@ class GeminiConfig(ModelConfig):
         default=None,
         description=(
             'HTTP timeout for this request, in seconds (positive, finite). Overrides the plugin timeout for this call. '
-            'The Gemini API rejects deadlines under 10s with HTTP 400; Vertex AI accepts shorter values.'
+            'The Gemini API rejects server deadlines under 10s, so the plugin sends a 10s server deadline there '
+            'and enforces the shorter timeout locally.'
         ),
     )
 
@@ -2502,7 +2504,9 @@ class GeminiModel:
                 headers = {
                     key: val for key, val in (http_options.headers or {}).items() if key.lower() != 'x-server-timeout'
                 }
-                headers['X-Server-Timeout'] = str(math.ceil(ms / 1000))
+                # The Gemini API rejects X-Server-Timeout under 10s with a 400;
+                # the header is floored there and httpx still enforces `ms`.
+                headers['X-Server-Timeout'] = server_timeout_header(ms, vertexai=bool(self._client.vertexai))
                 http_options.headers = headers
                 cfg.http_options = http_options
             return cfg

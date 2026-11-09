@@ -139,7 +139,11 @@ from genkit_google_genai._models._routing import (
     is_unsupported_image_model_name,
     strip_ref_prefixes,
 )
-from genkit_google_genai._models._sdk_config import check_timeout_seconds, timeout_seconds_to_ms
+from genkit_google_genai._models._sdk_config import (
+    GEMINI_API_MIN_SERVER_TIMEOUT_SECONDS,
+    check_timeout_seconds,
+    timeout_seconds_to_ms,
+)
 from genkit_google_genai._models._veo import (
     KnownGoogleAIVeo,
     KnownVertexAIVeo,
@@ -703,6 +707,7 @@ class GoogleAI(GoogleFamilyRefs, Plugin):
                 headers=headers,
                 timeout=timeout,
                 max_retries=max_retries,
+                min_server_timeout=GEMINI_API_MIN_SERVER_TIMEOUT_SECONDS,
             ),
         }
         self._http_client_factory = _loop_local_http_client(http_client_factory)
@@ -1526,6 +1531,7 @@ def _plugin_http_options(
     headers: Mapping[str, str] | None = None,
     timeout: float | None = None,
     max_retries: int | None = None,
+    min_server_timeout: int | None = None,
 ) -> HttpOptions:
     """Build the SDK's HttpOptions from the plugin's network arguments.
 
@@ -1541,6 +1547,11 @@ def _plugin_http_options(
     ``max_retries`` follows the OpenAI and Anthropic SDKs (retries after the
     first attempt) and maps onto ``HttpRetryOptions.attempts``, which counts
     the first attempt. google-genai's backoff and status codes are kept.
+
+    ``min_server_timeout`` is the smallest ``X-Server-Timeout`` the backend
+    accepts. google-genai derives that header from ``timeout``; below the
+    floor the header is pinned to the floor and the local deadline stays
+    ``timeout``.
     """
     checked_timeout = check_timeout_seconds(timeout)
     if max_retries is not None and (
@@ -1559,6 +1570,14 @@ def _plugin_http_options(
             merged[name] = f'{caller} {GENKIT_USER_AGENT}'
         else:
             merged[name] = caller
+
+    if (
+        checked_timeout is not None
+        and min_server_timeout is not None
+        and checked_timeout < min_server_timeout
+        and not any(k.lower() == 'x-server-timeout' for k in merged)
+    ):
+        merged['X-Server-Timeout'] = str(min_server_timeout)
 
     return HttpOptions(
         base_url=base_url or None,

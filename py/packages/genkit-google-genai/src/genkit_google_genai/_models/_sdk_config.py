@@ -245,6 +245,23 @@ def check_timeout_seconds(value: object) -> float | None:
     return float(value)
 
 
+# The Gemini API answers 400 to an X-Server-Timeout under 10 seconds instead
+# of timing out. Vertex AI accepts shorter deadlines.
+GEMINI_API_MIN_SERVER_TIMEOUT_SECONDS = 10
+
+
+def server_timeout_header(timeout_ms: int, *, vertexai: bool) -> str:
+    """``X-Server-Timeout`` for a request whose local deadline is *timeout_ms*.
+
+    On the Gemini API the header never goes under the API's 10 second floor;
+    the local httpx deadline still fires at *timeout_ms*.
+    """
+    seconds = math.ceil(timeout_ms / 1000)
+    if not vertexai:
+        seconds = max(seconds, GEMINI_API_MIN_SERVER_TIMEOUT_SECONDS)
+    return str(seconds)
+
+
 def reject_bool_timeout(value: object) -> object:
     """Before-validator: pydantic turns ``True`` into ``1.0`` before an after-validator sees it."""
     if isinstance(value, bool):
