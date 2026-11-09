@@ -19,9 +19,14 @@
 Provides sandboxed file operations — ``list_files``, ``read_file``,
 ``write_file``, ``edit_file`` — confined to a configurable root directory.
 
+Paths resolve against the root. An absolute path is accepted only when it
+already points inside the root. Symlinks are resolved before the containment
+check, so a link that points outside the root is refused.
+
 ``read_file`` queues file content as user messages so the tool response stays
-small. Tool errors are queued the same way so the model can self-correct on
-the next turn.
+small. Tool errors come back as the tool's own response, with the host root
+path redacted, so the model can self-correct without a user turn landing
+between the tool response and the next model turn.
 
 Each ``generate()`` gets a fresh middleware instance with its own message
 queue; ``wrap_generate`` drains queued messages into the request before the
@@ -34,6 +39,7 @@ import asyncio
 import base64
 import mimetypes
 import os
+import stat
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -73,8 +79,8 @@ class _ReadFileInput(PydanticBaseModel):
     """Input for read_file tool."""
 
     file_path: str
-    offset: int = 0
-    limit: int = 0
+    offset: int = Field(default=0, ge=0, description='1-based line to start from; 0 reads from the top.')
+    limit: int = Field(default=0, ge=0, description='Number of lines to read; 0 reads to the end.')
 
 
 class _WriteFileInput(PydanticBaseModel):
@@ -103,6 +109,19 @@ _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB — absolute ceiling for readin
 _MAX_READ_SLICE_BYTES = 256 * 1024  # 256 KB — max bytes returned per slice
 
 
+def _attr_text(value: str) -> str:
+    """Escape text placed in a double-quoted attribute of the ``<read_file>`` wrapper."""
+    return (
+        value
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('"', '&quot;')
+        .replace('\n', ' ')
+        .replace('\r', ' ')
+    )
+
+
 class FilesystemConfig(GenkitConfig):
     """Sandbox root and write/tool naming options."""
 
@@ -120,8 +139,8 @@ class Filesystem(Middleware[FilesystemConfig]):
     """Filesystem middleware with sandboxed file operations.
 
     Contributes ``list_files``, ``read_file``, and optionally ``write_file``
-    and ``edit_file``. Tool errors are queued as user messages so the model
-    can self-correct on the next turn.
+    and ``edit_file``. Tool errors are returned as the tool response so the
+    model can self-correct on the next turn.
     """
 
     name = 'filesystem'
@@ -147,17 +166,57 @@ class Filesystem(Middleware[FilesystemConfig]):
             names |= {self._tool_name('write_file'), self._tool_name('edit_file')}
         return frozenset(names)
 
-    def _resolve_safe(self, rel: str) -> str:
-        """Resolve ``rel`` to an absolute path, raising ValueError if it escapes root."""
-        rel = rel.strip().lstrip('/').lstrip('\\')
-        if not rel:
-            rel = '.'
-        candidate = os.path.realpath(os.path.join(self._root_abs, rel))
-        c_norm = os.path.normcase(candidate)
+    def _contains(self, abs_path: str) -> bool:
+        """Whether a resolved absolute path is the root or under it."""
+        c_norm = os.path.normcase(abs_path)
         root_norm = os.path.normcase(self._root_abs)
-        if c_norm != root_norm and not c_norm.startswith(root_norm + os.sep):
-            raise ValueError(f'Path {rel!r} escapes the root directory.')
+        return c_norm == root_norm or c_norm.startswith(root_norm.rstrip(os.sep) + os.sep)
+
+    def _resolve_safe(self, path: str) -> str:
+        """Resolve a model-supplied path to a real absolute path inside the root.
+
+        A relative path resolves against the root. An absolute path is used
+        as-is and must already be inside the root: ``/etc/hosts`` is refused,
+        not rewritten to ``{root}/etc/hosts``. Raises ValueError otherwise.
+        """
+        path = path.strip()
+        if '\x00' in path:
+            raise ValueError(f'Path {path!r} contains a NUL byte.')
+        candidate = os.path.realpath(os.path.join(self._root_abs, path or '.'))
+        if not self._contains(candidate):
+            if os.path.isabs(path):
+                raise ValueError(f'Absolute path {path!r} escapes the root directory; use a path relative to the root.')
+            raise ValueError(f'Path {path!r} escapes the root directory.')
         return candidate
+
+    def _redact(self, text: str) -> str:
+        """Rewrite host root paths in an error message relative to the root."""
+        roots: set[str] = {self._root_abs, os.path.abspath(self.config.root_dir)}
+        for root in sorted(roots, key=lambda r: len(r), reverse=True):
+            if root == os.path.dirname(root):
+                continue  # A filesystem root ('/') is no secret, and replacing it mangles every path.
+            text = text.replace(root + os.sep, '').replace(root, '.')
+        return text
+
+    def _describe(self, abs_path: str) -> tuple[bool, int] | None:
+        """Return ``(is_directory, size_bytes)`` for a listing entry.
+
+        Uses ``lstat``, so a symlink is described by its target only when the
+        target is inside the root. A symlink out of the root, or an entry that
+        can't be stat'ed, is left out instead of leaking the target's type and
+        size.
+        """
+        try:
+            st = os.lstat(abs_path)
+            if stat.S_ISLNK(st.st_mode):
+                target = os.path.realpath(abs_path)
+                if not self._contains(target):
+                    return None
+                st = os.stat(target)
+        except OSError:
+            return None
+        is_dir = stat.S_ISDIR(st.st_mode)
+        return is_dir, 0 if is_dir else st.st_size
 
     def _enqueue_parts(self, parts: list[Part]) -> None:
         """Append parts to the pending user message for the next model turn."""
@@ -174,40 +233,44 @@ class Filesystem(Middleware[FilesystemConfig]):
 
         results: list[dict[str, Any]] = []
         if recursive:
+            # os.walk doesn't follow links: a symlinked directory is listed, never descended.
             for root, dirs, files in os.walk(abs_dir):
                 dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
                 for name in sorted(files):
                     abs_path = os.path.join(root, name)
-                    try:
-                        stat = os.stat(abs_path)
-                        rel = os.path.relpath(abs_path, abs_dir)
-                        results.append({'path': rel, 'is_directory': False, 'size_bytes': stat.st_size})
-                    except OSError:
+                    info = self._describe(abs_path)
+                    if info is None:
                         continue
+                    is_dir, size = info
+                    rel = os.path.relpath(abs_path, abs_dir)
+                    results.append({'path': rel, 'is_directory': is_dir, 'size_bytes': size})
                 for name in dirs:
-                    rel = os.path.relpath(os.path.join(root, name), abs_dir)
+                    abs_path = os.path.join(root, name)
+                    if self._describe(abs_path) is None:
+                        continue
+                    rel = os.path.relpath(abs_path, abs_dir)
                     results.append({'path': rel, 'is_directory': True, 'size_bytes': 0})
         else:
             for name in sorted(os.listdir(abs_dir)):
-                abs_path = os.path.join(abs_dir, name)
-                try:
-                    stat = os.stat(abs_path)
-                    is_dir = os.path.isdir(abs_path)
-                    results.append({'path': name, 'is_directory': is_dir, 'size_bytes': 0 if is_dir else stat.st_size})
-                except OSError:
+                info = self._describe(os.path.join(abs_dir, name))
+                if info is None:
                     continue
+                is_dir, size = info
+                results.append({'path': name, 'is_directory': is_dir, 'size_bytes': size})
 
         return results
 
     def _read_file_impl(self, file_path: str, offset: int, limit: int) -> str:
         """Read a file and enqueue its content as a user message."""
+        if offset < 0 or limit < 0:
+            raise ValueError(f'offset and limit must be >= 0 (got offset={offset}, limit={limit}).')
         abs_path = self._resolve_safe(file_path)
         if not os.path.isfile(abs_path):
             raise ValueError(f'File not found: {file_path!r}')
 
-        stat = os.stat(abs_path)
-        if stat.st_size > _MAX_FILE_SIZE_BYTES:
-            raise ValueError(f'File too large ({stat.st_size:,} bytes; max {_MAX_FILE_SIZE_BYTES:,}).')
+        stat_result = os.stat(abs_path)
+        if stat_result.st_size > _MAX_FILE_SIZE_BYTES:
+            raise ValueError(f'File too large ({stat_result.st_size:,} bytes; max {_MAX_FILE_SIZE_BYTES:,}).')
 
         mime_type, _ = mimetypes.guess_type(abs_path)
         is_image = bool(mime_type and mime_type.startswith('image/'))
@@ -233,10 +296,11 @@ class Filesystem(Middleware[FilesystemConfig]):
         if len(sliced.encode()) > _MAX_READ_SLICE_BYTES:
             raise ValueError(f'Slice too large ({len(sliced):,} chars). Use offset/limit to read smaller sections.')
 
+        path_attr = _attr_text(file_path)
         if offset > 0 or limit > 0:
-            wrapped = f'<read_file path="{file_path}" lines="{start + 1}-{end}">\n{sliced}\n</read_file>'
+            wrapped = f'<read_file path="{path_attr}" lines="{start + 1}-{end}">\n{sliced}\n</read_file>'
         else:
-            wrapped = f'<read_file path="{file_path}" totalLines="{total}">\n{sliced}\n</read_file>'
+            wrapped = f'<read_file path="{path_attr}" totalLines="{total}">\n{sliced}\n</read_file>'
 
         self._enqueue_parts([Part.from_text(wrapped)])
         return f'File {file_path} read successfully. Content queued as user message.'
@@ -363,13 +427,16 @@ class Filesystem(Middleware[FilesystemConfig]):
         ctx: MiddlewareContext,
         next_fn: Callable[[ToolHookParams, MiddlewareContext], Awaitable[MultipartToolResponse]],
     ) -> MultipartToolResponse:
-        """Catch filesystem tool errors and enqueue them as user messages."""
+        """Return filesystem tool errors as the tool response, host paths redacted.
+
+        The error stays in the tool turn, as in JS. Queueing it as a user
+        message put a user turn between the tool response and the next model
+        turn, and carried the absolute host root into the conversation.
+        """
         if params.tool.name not in self._filesystem_tool_names():
             return await next_fn(params, ctx)
 
         try:
             return await next_fn(params, ctx)
         except Exception as exc:
-            error_msg = f'Tool "{params.tool.name}" failed: {exc}'
-            self._enqueue_parts([Part.from_text(error_msg)])
-            return MultipartToolResponse(output='Tool call failed; see user message below for details.')
+            return MultipartToolResponse(output=f'Tool "{params.tool.name}" failed: {self._redact(str(exc))}')
