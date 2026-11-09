@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import copy
 import inspect
 import re
 from collections.abc import Awaitable, Callable, Iterable
@@ -477,6 +478,7 @@ class Middleware(Generic[TConfig]):
         # Handle the case where no config type is specified, e.g. class Logging(Middleware):
         # This means there is no user-facing configuration for the middleware.
         cls.Config = config_cls or _EmptyMiddlewareConfig
+        _reject_legacy_hooks(cls)
 
     def __init__(self, *, config: TConfig | None = None, **kwargs: Any) -> None:  # noqa: ANN401
         if config is not None:
@@ -547,9 +549,37 @@ class Middleware(Generic[TConfig]):
         return await next_fn(params, ctx)
 
 
+# 0.12 hook names and their 0.13+ replacements.
+_LEGACY_HOOKS: dict[str, str] = {'model': 'wrap_model', 'generate': 'wrap_generate', 'tool': 'wrap_tool'}
+
+
+def _reject_legacy_hooks(cls: type[Middleware]) -> None:
+    """Fail at class definition when a 0.12 hook name would be a silent no-op.
+
+    A guardrail written as ``async def model(...)`` inherits the no-op
+    ``wrap_model`` and never runs. Only plain functions are checked, so a
+    ``model`` property or attribute stays legal, as does defining both names.
+    """
+    for legacy, hook in _LEGACY_HOOKS.items():
+        if not inspect.isfunction(cls.__dict__.get(legacy)):
+            continue
+        if getattr(cls, hook) is not getattr(Middleware, hook):
+            continue
+        raise TypeError(
+            f'{cls.__name__} defines `{legacy}()`, a 0.12 middleware hook that no longer runs. '
+            f'Rename it to `{hook}(self, params, ctx, next_fn)`.'
+        )
+
+
 def _copy_middleware_instance(impl: Middleware) -> Middleware:
-    """Return a fresh instance with the same config; internal hook state is not copied."""
-    return type(impl)(config=impl._config.model_copy(deep=True))
+    """Per-call shallow copy of a middleware instance.
+
+    Keeps ``__init__`` state and the config object as the caller built them, so
+    a custom ``__init__``, a client, or a ``re.Pattern`` with flags survives.
+    Rebinding an attribute in a hook does not leak into the caller's instance;
+    mutating a shared container does, by design.
+    """
+    return copy.copy(impl)
 
 
 class MiddlewareDef(Protocol):

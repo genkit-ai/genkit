@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
+from pydantic_core import PydanticSerializationError
 
 from genkit._ai import _aio
 from genkit._ai._background_model import ensure_model_operation
@@ -295,6 +296,9 @@ def register_middleware(
     refs: list[MiddlewareRef] = []
     # Build the class→name index once so resolving the use list is O(M+N).
     cls_index = middleware_class_index(registry)
+    # (ref name, instance) per entry, so resolve can hand back the caller's
+    # instance instead of rebuilding it from serialized config.
+    inline: list[tuple[str, Middleware | None]] = []
     for i, entry in enumerate(use):
         if isinstance(entry, Middleware):
             # Prefer the registered name so traces show ``concise_reply_mw``
@@ -313,11 +317,25 @@ def register_middleware(
                     mw_cls._middleware_metadata(reg_name),
                 )
             # Dump keys that match the schema and that the config class validates.
-            config = _dump_middleware_ref_config(entry.config)
+            # The ref is for traces and the Dev UI; a config that is not JSON
+            # (a callable, a client) still runs because resolve uses the instance.
+            try:
+                config = _dump_middleware_ref_config(entry.config)
+            except PydanticSerializationError:
+                config = None
             refs.append(MiddlewareRef(name=reg_name, config=config))
+            inline.append((reg_name, entry))
         else:
             refs.append(entry)
+            inline.append((entry.name, None))
+    if any(mw is not None for _, mw in inline):
+        registry.register_value(_INLINE_MIDDLEWARE_KIND, _INLINE_MIDDLEWARE_KEY, inline)
     return refs
+
+
+# Child-registry slot for the instances behind this call's inline ``use=[...]``.
+_INLINE_MIDDLEWARE_KIND = 'genkit:inline-middleware'
+_INLINE_MIDDLEWARE_KEY = 'use'
 
 
 def resolve_middleware_from_use(
@@ -331,8 +349,19 @@ def resolve_middleware_from_use(
     """
     if not use:
         return []
+    inline = registry.lookup_value(_INLINE_MIDDLEWARE_KIND, _INLINE_MIDDLEWARE_KEY)
+    instances: list[tuple[str, Middleware | None]] = (
+        cast(list[tuple[str, Middleware | None]], inline)
+        if isinstance(inline, list) and len(inline) == len(use)
+        else []
+    )
     out: list[Middleware] = []
-    for entry in use:
+    for i, entry in enumerate(use):
+        if instances and instances[i][0] == entry.name and instances[i][1] is not None:
+            # Inline use=[Mw(...)]: keep the caller's instance (custom __init__,
+            # clients, compiled regex flags, callables) rather than rebuild it.
+            out.append(cast(Middleware, instances[i][1]))
+            continue
         defn = registry.lookup_value('middleware', entry.name)
         if defn is None:
             raise GenkitError(
