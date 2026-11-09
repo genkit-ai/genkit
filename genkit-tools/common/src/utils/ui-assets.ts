@@ -18,7 +18,7 @@ import AdmZip from 'adm-zip';
 import axios from 'axios';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
-import { logger } from './logger';
+import { logger } from './logger.js';
 
 interface DownloadAndExtractOptions {
   fileUrl: string;

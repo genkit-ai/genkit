@@ -25,9 +25,9 @@ import {
   vi,
   type MockInstance,
 } from 'vitest';
-import { BaseRuntimeManager } from '../src/manager/manager';
-import { startServer } from '../src/server/server';
-import * as analytics from '../src/utils/analytics';
+import { BaseRuntimeManager } from '../src/manager/manager.js';
+import { startServer } from '../src/server/server.js';
+import * as analytics from '../src/utils/analytics.js';
 
 describe('Tools Server', () => {
   let port: number;

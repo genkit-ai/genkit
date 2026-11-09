@@ -24,31 +24,31 @@ import {
   record,
 } from '@genkit-ai/tools-common/utils';
 import { Command, program } from 'commander';
-import { config } from './commands/config';
-import { devTestModel } from './commands/dev-test-model';
-import { docsList, docsRead, docsSearch } from './commands/docs';
-import { evalExtractData } from './commands/eval-extract-data';
-import { evalFlow } from './commands/eval-flow';
-import { evalRun } from './commands/eval-run';
-import { flowBatchRun } from './commands/flow-batch-run';
-import { flowRun } from './commands/flow-run';
-import { initAiTools } from './commands/init-ai-tools/index';
-import { logList } from './commands/log-list';
-import { mcp } from './commands/mcp';
-import { getPluginCommands, getPluginSubCommand } from './commands/plugins';
+import { config } from './commands/config.js';
+import { devTestModel } from './commands/dev-test-model.js';
+import { docsList, docsRead, docsSearch } from './commands/docs.js';
+import { evalExtractData } from './commands/eval-extract-data.js';
+import { evalFlow } from './commands/eval-flow.js';
+import { evalRun } from './commands/eval-run.js';
+import { flowBatchRun } from './commands/flow-batch-run.js';
+import { flowRun } from './commands/flow-run.js';
+import { initAiTools } from './commands/init-ai-tools/index.js';
+import { logList } from './commands/log-list.js';
+import { mcp } from './commands/mcp.js';
+import { getPluginCommands, getPluginSubCommand } from './commands/plugins.js';
 import {
   SERVER_HARNESS_COMMAND,
   serverHarness,
-} from './commands/server-harness';
-import { start } from './commands/start';
-import { startFlutter } from './commands/start-flutter';
-import { traceGet } from './commands/trace-get';
-import { traceList } from './commands/trace-list';
-import { uiStart } from './commands/ui-start';
-import { uiStop } from './commands/ui-stop';
-import { detectCLIRuntime } from './utils/runtime-detector';
-import { showUpdateNotification } from './utils/updates';
-import { version } from './utils/version';
+} from './commands/server-harness.js';
+import { startFlutter } from './commands/start-flutter.js';
+import { start } from './commands/start.js';
+import { traceGet } from './commands/trace-get.js';
+import { traceList } from './commands/trace-list.js';
+import { uiStart } from './commands/ui-start.js';
+import { uiStop } from './commands/ui-stop.js';
+import { detectCLIRuntime } from './utils/runtime-detector.js';
+import { showUpdateNotification } from './utils/updates.js';
+import { version } from './utils/version.js';
 
 /**
  * All commands need to be directly registered in this list.

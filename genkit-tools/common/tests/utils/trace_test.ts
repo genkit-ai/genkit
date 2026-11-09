@@ -15,9 +15,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { TraceData } from '../../src/types';
-import { getSpanStatus, stackTraceSpans } from '../../src/utils';
-import { BASE_FLOW_SPAN_ID, MockTrace } from './trace';
+import type { TraceData } from '../../src/types/index.js';
+import { getSpanStatus, stackTraceSpans } from '../../src/utils/index.js';
+import { BASE_FLOW_SPAN_ID, MockTrace } from './trace.js';
 
 const TEST_TRACE: TraceData = {
   traceId: '7c273c22b219d077c6731a10d46b7d40',

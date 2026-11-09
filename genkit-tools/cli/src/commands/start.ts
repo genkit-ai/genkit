@@ -30,8 +30,8 @@ import {
   getDevEnvVars,
   startDevProcessManager,
   startManager,
-} from '../utils/manager-utils';
-import { parsePort } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parsePort } from '../utils/option-parsers.js';
 
 interface RunOptions {
   /** --experimental-auth. */

@@ -16,8 +16,8 @@
 
 import fs from 'fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { toCsv, toJson } from '../../src/eval/exporter';
-import type { EvalResult, EvalRun, EvalRunKey } from '../../src/types/eval';
+import { toCsv, toJson } from '../../src/eval/exporter.js';
+import type { EvalResult, EvalRun, EvalRunKey } from '../../src/types/eval.js';
 
 vi.mock('fs/promises', () => ({
   get writeFile() {

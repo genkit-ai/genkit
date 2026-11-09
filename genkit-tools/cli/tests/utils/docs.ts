@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { Doc } from '../../src/utils/docs';
+import type { Doc } from '../../src/utils/docs.js';
 
 export const SAMPLE_DOCS: Record<string, Doc> = {
   'js/flows.md': {

@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { evalFlow } from '../../src/commands/eval-flow';
+import { evalFlow } from '../../src/commands/eval-flow.js';
 
 describe('eval:flow', () => {
   const command = evalFlow.exitOverride().configureOutput({

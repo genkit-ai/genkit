@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import { describe, it } from 'node:test';
-import { logDataFromOtlp, traceDataFromOtlp } from '../src/utils/otlp';
+import { logDataFromOtlp, traceDataFromOtlp } from '../src/utils/otlp.js';
 
 describe('otlp-traces', () => {
   it('should transform OTLP payload to TraceData', () => {

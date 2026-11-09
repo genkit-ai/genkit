@@ -16,12 +16,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
-import { RuntimeManagerV2 } from '../src/manager/manager-v2';
+import { RuntimeManagerV2 } from '../src/manager/manager-v2.js';
 import {
   REFLECTION_AUTH_ERROR_CODE,
   REFLECTION_SECRET_ENV,
-} from '../src/manager/reflection-auth';
-import { RuntimeEvent } from '../src/manager/types';
+} from '../src/manager/reflection-auth.js';
+import { RuntimeEvent } from '../src/manager/types.js';
 
 describe('RuntimeManagerV2', () => {
   let manager: RuntimeManagerV2;

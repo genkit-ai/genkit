@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-import type { DatasetStore, EvalStore } from '../types/eval';
-import { LocalFileDatasetStore } from './localFileDatasetStore';
-import { LocalFileEvalStore } from './localFileEvalStore';
-export { InferenceDataset, InferenceDatasetSchema } from '../types/eval';
-export * from './evaluate';
-export * from './exporter';
-export * from './parser';
-export * from './validate';
+import type { DatasetStore, EvalStore } from '../types/eval.js';
+import { LocalFileDatasetStore } from './localFileDatasetStore.js';
+import { LocalFileEvalStore } from './localFileEvalStore.js';
+export { InferenceDataset, InferenceDatasetSchema } from '../types/eval.js';
+export * from './evaluate.js';
+export * from './exporter.js';
+export * from './parser.js';
+export * from './validate.js';
 
 export async function getEvalStore(): Promise<EvalStore> {
   return await LocalFileEvalStore.getEvalStore();

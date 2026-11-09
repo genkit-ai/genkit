@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import type { SpanData, TraceData } from '../../src/types/trace';
+import type { SpanData, TraceData } from '../../src/types/trace.js';
 
 export const TRACE_ID = '7c273c22b219d077c6731a10d46b7d40';
 export const BASE_FLOW_SPAN_ID = '22b219d077c67';

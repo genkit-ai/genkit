@@ -18,8 +18,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { ProcessManager } from '../src/manager/process-manager';
-import { logger } from '../src/utils';
+import { ProcessManager } from '../src/manager/process-manager.js';
+import { logger } from '../src/utils/index.js';
 
 describe('ProcessManager', () => {
   it('should start and stop a process successfully', async () => {

@@ -57,11 +57,11 @@ vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
   };
 });
 
-vi.mock('../../src/utils/runtime-detector', () => ({
+vi.mock('../../src/utils/runtime-detector.js', () => ({
   detectCLIRuntime: mockDetectCLIRuntime,
 }));
 
-vi.mock('../../src/utils/version', () => ({
+vi.mock('../../src/utils/version.js', () => ({
   version: '1.15.0',
   name: 'genkit-cli',
 }));
@@ -90,7 +90,7 @@ import {
   getCurrentVersion,
   getLatestVersionFromNpm,
   showUpdateNotification,
-} from '../../src/utils/updates';
+} from '../../src/utils/updates.js';
 
 describe('updates', () => {
   const originalEnv = process.env;

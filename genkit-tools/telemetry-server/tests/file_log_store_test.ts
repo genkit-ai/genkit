@@ -20,7 +20,7 @@ import * as fs from 'fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { LocalFileLogStore } from '../src/file-log-store';
+import { LocalFileLogStore } from '../src/file-log-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

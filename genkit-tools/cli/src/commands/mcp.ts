@@ -20,9 +20,9 @@ import {
   forceStderr,
 } from '@genkit-ai/tools-common/utils';
 import { Command, Option } from 'commander';
-import { startMcpServer } from '../mcp/server';
-import { EXPERIMENTAL_AUTH_OPTION_HELP } from '../utils/manager-utils';
-import { parseNonNegativeInt } from '../utils/option-parsers';
+import { startMcpServer } from '../mcp/server.js';
+import { EXPERIMENTAL_AUTH_OPTION_HELP } from '../utils/manager-utils.js';
+import { parseNonNegativeInt } from '../utils/option-parsers.js';
 
 interface McpOptions {
   /** --experimental-auth. */

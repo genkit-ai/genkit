@@ -15,10 +15,10 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import * as configModule from '../../src/plugin/config';
-import type { TraceData } from '../../src/types/trace';
-import { getEvalExtractors } from '../../src/utils/eval';
-import { MockTrace } from './trace';
+import * as configModule from '../../src/plugin/config.js';
+import type { TraceData } from '../../src/types/trace.js';
+import { getEvalExtractors } from '../../src/utils/eval.js';
+import { MockTrace } from './trace.js';
 
 const CONTEXT_TEXTS = [
   'are about 10 times larger, making them particularly difficult for humans to ignore.',

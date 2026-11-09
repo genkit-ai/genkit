@@ -24,8 +24,8 @@ import {
   REFLECTION_V2_HOST_OPTION_HELP,
   getDevEnvVars,
   startDevProcessManager,
-} from '../utils/manager-utils';
-import { parsePort } from '../utils/option-parsers';
+} from '../utils/manager-utils.js';
+import { parsePort } from '../utils/option-parsers.js';
 
 interface FlutterRunOptions {
   /** --experimental-auth. */

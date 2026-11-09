@@ -18,16 +18,19 @@ import { randomUUID } from 'crypto';
 import fs from 'fs';
 import { readFile, rm, writeFile } from 'fs/promises';
 import path from 'path';
-import type { CreateDatasetRequest, UpdateDatasetRequest } from '../types/apis';
+import type {
+  CreateDatasetRequest,
+  UpdateDatasetRequest,
+} from '../types/apis.js';
 import {
   DatasetSchema,
   type Dataset,
   type DatasetMetadata,
   type DatasetStore,
   type InferenceDataset,
-} from '../types/eval';
-import { generateTestCaseId } from '../utils';
-import { logger } from '../utils/logger';
+} from '../types/eval.js';
+import { generateTestCaseId } from '../utils/index.js';
+import { logger } from '../utils/logger.js';
 
 /**
  * A local, file-based DatasetStore implementation.
