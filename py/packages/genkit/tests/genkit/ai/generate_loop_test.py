@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from genkit import Document, Genkit, Interrupt, Message, ModelResponse, Part, Tool, ToolContext
+from genkit import Document, Genkit, Interrupt, Message, ModelResponse, ModelResponseChunk, Part, Tool, ToolContext
 from genkit._ai._agents._client import agent_interrupts_from_message
 from genkit._ai._generate import CallScope, augment_with_context, generate_action
 from genkit._core._action import ActionRunContext
@@ -452,3 +452,22 @@ async def test_middleware_sees_the_context_passed_to_generate() -> None:
 
     assert seen == [{'tenant': 'bistro-9'}]
     assert Genkit.current_context() is None
+
+
+def test_reasoning_accessors_stay_out_of_text() -> None:
+    message = Message(
+        role=Role.MODEL,
+        content=[
+            Part.from_reasoning('Check allergens first. '),
+            Part.from_reasoning('Nuts: none.'),
+            Part.from_text('Safe.'),
+        ],
+    )
+    response = ModelResponse(message=message)
+    chunk = ModelResponseChunk(role=Role.MODEL, content=[Part.from_reasoning('Thinking')])
+
+    assert message.reasoning == 'Check allergens first. Nuts: none.'
+    assert response.reasoning == message.reasoning
+    assert response.text == 'Safe.'
+    assert chunk.reasoning == 'Thinking'
+    assert ModelResponse().reasoning == ''

@@ -958,6 +958,11 @@ class Message(GenkitModel):
         return text_from_message(self)
 
     @property
+    def reasoning(self) -> str:
+        """All reasoning (thinking) parts concatenated; ``''`` when the model sent none."""
+        return ''.join(p.reasoning for p in self.content if p.reasoning is not None)
+
+    @property
     def tool_requests(self) -> list[Part]:
         """All tool request parts in this message."""
         return [p for p in self.content if p.tool_request is not None]
@@ -1686,6 +1691,13 @@ class ModelResponse(GenkitModel, Generic[OutputT]):
         return self.message.text
 
     @property
+    def reasoning(self) -> str:
+        """The reply's reasoning (thinking) text, kept out of ``.text``. Same as JS ``response.reasoning``."""
+        if self.message is None:
+            return ''
+        return self.message.reasoning
+
+    @property
     def output(self) -> OutputT | None:
         """Parsed structured output, or None when the reply is not that shape.
 
@@ -1801,6 +1813,11 @@ class ModelResponseChunk(GenkitModel, Generic[OutputT]):
     def text(self) -> str:
         """Text content of this chunk."""
         return ''.join(p.text for p in self.content if p.text is not None)
+
+    @property
+    def reasoning(self) -> str:
+        """Reasoning (thinking) text in this chunk."""
+        return ''.join(p.reasoning for p in self.content if p.reasoning is not None)
 
     @property
     def accumulated_text(self) -> str:
