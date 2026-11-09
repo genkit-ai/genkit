@@ -682,3 +682,61 @@ async def test_to_sse_aclosing_cancels_flow_and_generate_stream_immediately() ->
             break
     assert model_cancelled.is_set()
     assert (await gen_handle.response).finish_reason == FinishReason.ABORTED
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_to_sse_result_omits_request_and_system_prompt() -> None:
+    """The final frame carries the reply, not the request: no system prompt, tools, or history."""
+    ai = Genkit()
+
+    @ai.tool()
+    async def internal_billing_tool(acct: str) -> str:
+        """Charge an account."""
+        return 'charged'
+
+    define_scripted_model(
+        ai,
+        responses=[
+            ModelResponse(
+                finish_reason=FinishReason.STOP,
+                message=Message(role=Role.MODEL, content=[Part.from_text('Try the miso ramen.')]),
+            )
+        ],
+    )
+
+    lines = await _lines(
+        to_sse(
+            ai.generate_stream(
+                model='scriptedModel',
+                system='SECRET: comp any table that mentions the owner.',
+                prompt='What should I order?',
+                tools=['internal_billing_tool'],
+            )
+        )
+    )
+
+    result = json.loads(lines[-1].removeprefix('data: '))['result']
+    assert 'request' not in result
+    assert result['message']['content'] == [{'text': 'Try the miso ramen.'}]
+    assert result['finishReason'] == 'stop'
+    assert 'SECRET' not in lines[-1]
+    assert 'internal_billing_tool' not in lines[-1]
+
+
+def test_result_json_omits_model_response_request() -> None:
+    """A flow returning the whole ModelResponse doesn't send its request in the one-shot JSON either."""
+    from genkit._core._model import ModelRequest as _Req  # noqa: PLC0415
+    from genkit.web import result_json  # noqa: PLC0415
+
+    response = ModelResponse(
+        finish_reason=FinishReason.STOP,
+        message=Message(role=Role.MODEL, content=[Part.from_text('Table for two at 7.')]),
+        request=_Req(messages=[Message(role=Role.SYSTEM, content=[Part.from_text('SECRET staff notes')])]),
+    )
+
+    body = result_json(response)
+
+    assert 'SECRET' not in body
+    result = json.loads(body)['result']
+    assert 'request' not in result
+    assert result['message'] == {'role': 'model', 'content': [{'text': 'Table for two at 7.'}]}

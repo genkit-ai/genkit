@@ -60,6 +60,10 @@ def _frame_value(obj: object) -> object:
     # Gated on the wrapper types, so a user model with a `raw` field goes out whole.
     if isinstance(obj, (AgentChunk, AgentResponse)) and obj.raw is not None:
         obj = obj.raw
+    if isinstance(obj, ModelResponse):
+        # `request` is the server's side of the call: system prompt, tool
+        # definitions, retrieved docs, full history. Never put it on the wire.
+        return to_jsonable_python(obj, by_alias=True, exclude_none=True, exclude={'request'})
     return to_jsonable_python(obj, by_alias=True, exclude_none=True)
 
 
@@ -98,10 +102,10 @@ async def to_sse(handle: StreamHandle) -> AsyncGenerator[str, None]:
     ``Internal Error``. These are the frames ``serve_flow``,
     ``handle_genkit_request`` and ``serve_agent`` send.
 
-    The result goes out as the run returned it. ``ai.generate_stream()``,
-    ``prompt.stream()``, and flows returning a whole ``ModelResponse`` send its
-    ``request`` too (system prompt, tools, docs, history), so stream a flow
-    returning ``response.text`` or ``response.output`` from a served route.
+    A ``ModelResponse`` result (``ai.generate_stream()``, ``prompt.stream()``,
+    a flow returning the whole response) goes out without its ``request``, so
+    the system prompt, tool definitions, and retrieved docs stay on the server.
+    The message, usage, and finish reason are sent as usual.
 
     ``.response`` is read only after the stream drains, so a handle that fails
     or is never iterated doesn't leave an un-awaited result behind.
