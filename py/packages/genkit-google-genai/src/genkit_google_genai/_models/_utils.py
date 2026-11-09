@@ -48,10 +48,13 @@ kept in mind when modifying media handling or tool conversion logic:
 """
 
 import base64
+import binascii
+import re
+import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import urlparse, urlsplit, urlunsplit
+from urllib.parse import unquote_to_bytes, urlparse, urlsplit, urlunsplit
 
 import httpx
 from google import genai
@@ -290,14 +293,10 @@ class PartConverter:
         if part.media is not None:
             url = part.media.url
             if url.startswith(cls.DATA):
-                # Extract mime type and data from data:mime_type;base64,data
-                metadata, data_str = url.split(',', 1)
-                mime_type = part.media.content_type or metadata.split(':', 1)[1].split(';', 1)[0]
-                data = base64.b64decode(data_str)
-
+                uri_mime, data = _decode_data_uri(url)
                 return genai.types.Part(
                     inline_data=genai.types.Blob(
-                        mime_type=mime_type,
+                        mime_type=_media_type(part.media.content_type) or uri_mime or 'application/octet-stream',
                         data=data,
                     )
                 )
@@ -335,6 +334,9 @@ class PartConverter:
 
             # Non-HTTP, non-data URIs (e.g. gs://, Files API URIs) are
             # passed through as file_data — the Gemini API can resolve these.
+            # Local paths and raw base64 are not URIs; refuse them here rather
+            # than send them to Gemini and get them echoed back in a 400.
+            _reject_non_uri_media(url)
             return genai.types.Part(
                 file_data=genai.types.FileData(
                     mime_type=part.media.content_type,
@@ -570,21 +572,40 @@ class PartConverter:
                     ) from sanitized
                 raise sanitized from None
             encoding = response.headers.get('content-encoding', '').strip().lower()
-            if encoding not in ('', 'identity'):
+            if encoding not in ('', 'identity', 'gzip', 'x-gzip', 'deflate'):
                 raise GenkitError(
                     status='INVALID_ARGUMENT',
                     message=(
                         f'media at {_redact_url(url)} sent unsupported '
-                        f'Content-Encoding {encoding!r}; expected uncompressed bytes'
+                        f'Content-Encoding {encoding!r}; expected identity, gzip or deflate'
                     ),
                 )
             declared = response.headers.get('content-length', '')
             if declared.isdigit() and int(declared) > _MAX_MEDIA_DOWNLOAD_BYTES:
                 raise _media_too_large(url)
+            # Some CDNs gzip despite Accept-Encoding: identity. Decompress here,
+            # bounded, so the cap applies to the decompressed size and a small
+            # compressed body can't expand past it in one step.
+            decoder = _bounded_decoder(encoding)
+            chunks = response.aiter_raw()
+            if response.is_stream_consumed:
+                # Already read (mock transports): httpx has decoded it.
+                decoder, chunks = None, response.aiter_bytes()
             body = bytearray()
-            chunks = response.aiter_bytes() if response.is_stream_consumed else response.aiter_raw()
             async for chunk in chunks:
-                body.extend(chunk)
+                if decoder is None:
+                    body.extend(chunk)
+                else:
+                    data = chunk
+                    while data:
+                        body.extend(decoder.decompress(data, _MAX_MEDIA_DOWNLOAD_BYTES + 1 - len(body)))
+                        if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                            raise _media_too_large(url)
+                        data = decoder.unconsumed_tail
+                if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
+                    raise _media_too_large(url)
+            if decoder is not None:
+                body.extend(decoder.flush())
                 if len(body) > _MAX_MEDIA_DOWNLOAD_BYTES:
                     raise _media_too_large(url)
             return bytes(body), response.headers.get('content-type')
@@ -605,6 +626,16 @@ def _media_too_large(url: str) -> GenkitError:
     return GenkitError(status='INVALID_ARGUMENT', message=f'media at {_redact_url(url)} is larger than 20MB')
 
 
+def _bounded_decoder(encoding: str) -> Any:  # noqa: ANN401
+    """A zlib decompressobj for a gzip/deflate Content-Encoding, or None for identity."""
+    if encoding in ('gzip', 'x-gzip'):
+        return zlib.decompressobj(16 + zlib.MAX_WBITS)
+    if encoding == 'deflate':
+        # RFC 9110 deflate is zlib-wrapped; 32 + MAX_WBITS also accepts gzip headers.
+        return zlib.decompressobj(32 + zlib.MAX_WBITS)
+    return None
+
+
 # Media types that say nothing about the content; a caller's or the URI's type is better.
 _GENERIC_MEDIA_TYPES = frozenset({'application/octet-stream', 'binary/octet-stream', 'application/x-binary'})
 
@@ -617,3 +648,51 @@ def _media_type(value: str | None, *, skip_generic: bool = False) -> str | None:
     if not media_type or (skip_generic and media_type in _GENERIC_MEDIA_TYPES):
         return None
     return media_type
+
+
+def _invalid_media(message: str) -> GenkitError:
+    return GenkitError(status='INVALID_ARGUMENT', message=message)
+
+
+def _decode_data_uri(url: str) -> tuple[str | None, bytes]:
+    """The media type and bytes of an RFC 2397 ``data:`` URI.
+
+    Raises:
+        GenkitError: INVALID_ARGUMENT for a URI with no ``,`` or a payload
+            that doesn't decode. The payload is not echoed back.
+    """
+    header, sep, payload = url.partition(',')
+    if not sep:
+        raise _invalid_media("media data: URI has no ',' before its payload; expected data:<type>;base64,<data>")
+    params = header[len('data:') :].split(';')
+    is_base64 = any(p.strip().lower() == 'base64' for p in params[1:])
+    try:
+        data = base64.b64decode(payload) if is_base64 else unquote_to_bytes(payload)
+    except (binascii.Error, ValueError) as e:
+        raise _invalid_media('media data: URI payload is not valid base64') from e
+    return _media_type(params[0]), data
+
+
+# A Windows drive path (C:\x or C:/x) parses as a one-letter URI scheme.
+_WINDOWS_PATH = re.compile(r'^[A-Za-z]:[\\/]')
+# Longer than any real URI without a scheme; most likely raw base64.
+_MAX_SCHEMELESS_MEDIA_URL = 2048
+
+
+def _reject_non_uri_media(url: str) -> None:
+    """Raise for media URLs Gemini can't resolve: ``file://``, local paths, raw base64.
+
+    The message names the problem, not the value, so a path or payload
+    isn't echoed into logs and traces.
+    """
+    scheme = urlsplit(url).scheme.lower() if not _WINDOWS_PATH.match(url) else ''
+    if scheme == 'file' or (not scheme and (url.startswith(('/', './', '../', '~')) or _WINDOWS_PATH.match(url))):
+        raise _invalid_media(
+            'media url is a local file path; Gemini cannot read local files. '
+            'Read the bytes and pass a data: URI, or upload the file and pass its URI.'
+        )
+    if not scheme and len(url) > _MAX_SCHEMELESS_MEDIA_URL:
+        raise _invalid_media(
+            f'media url has no scheme and is {len(url)} characters long; '
+            'pass inline bytes as a data:<type>;base64,<data> URI.'
+        )

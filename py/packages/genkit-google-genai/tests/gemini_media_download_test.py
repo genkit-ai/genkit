@@ -18,6 +18,7 @@
 
 import base64
 import gzip
+import zlib
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -317,31 +318,76 @@ async def test_generate_gemini_youtube_url_is_sent_as_file_uri(gemini: tuple[Gen
 
 
 @pytest.mark.asyncio
-async def test_generate_gemini_local_file_path_media_is_not_opened(
+async def test_generate_gemini_local_file_path_media_is_rejected_unread(
     gemini: tuple[Genkit, MagicMock], tmp_path: Path
 ) -> None:
-    """A path to a real file on the server is passed as a file URI; its bytes are never read or sent."""
+    """A local path or file:// URI is INVALID_ARGUMENT; the file is never read and the path isn't echoed."""
     ai, sdk = gemini
     secret = tmp_path / 'cat.png'
     secret.write_bytes(b'server-side secret')
 
-    for url in (str(secret), secret.as_uri()):
+    for url in (str(secret), secret.as_uri(), './cat.png', '~/cat.png', 'C:\\Users\\chef\\cat.png'):
         with _no_download():
             response = await _describe(ai, url)
 
-        assert response.finish_reason == FinishReason.STOP
-        assert response.text == 'ok'
-        sent = _sent_media(sdk)
-        assert sent.inline_data is None
-        assert sent.file_data is not None
-        assert sent.file_data.file_uri == url
+        assert response.finish_reason == FinishReason.FAILED
+        assert response.error is not None
+        assert response.error.status == 'INVALID_ARGUMENT'
+        assert response.finish_message is not None
+        assert 'local file path' in response.finish_message
+        assert 'cat.png' not in response.finish_message
+    sdk.aio.models.generate_content.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_generate_gemini_http_media_rejects_gzip_content_encoding_without_decompressing(
+async def test_generate_gemini_raw_base64_media_is_rejected(gemini: tuple[Genkit, MagicMock]) -> None:
+    """Raw base64 passed as a URL is INVALID_ARGUMENT pointing at data: URIs, without echoing the payload."""
+    ai, sdk = gemini
+    payload = base64.b64encode(PNG * 40).decode()
+
+    response = await _describe(ai, payload)
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.finish_message is not None
+    assert 'data:' in response.finish_message
+    assert payload[:40] not in response.finish_message
+    sdk.aio.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('url', ['data:image/png;base64', 'data:image/png;base64,%%%not-base64'])
+async def test_generate_gemini_malformed_data_uri_is_invalid_argument(
+    gemini: tuple[Genkit, MagicMock], url: str
+) -> None:
+    """A data: URI with no comma or a payload that doesn't decode is INVALID_ARGUMENT, not a raw ValueError."""
+    ai, sdk = gemini
+
+    response = await _describe(ai, url)
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    sdk.aio.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_percent_encoded_data_uri_is_decoded(gemini: tuple[Genkit, MagicMock]) -> None:
+    """A data: URI without ;base64 carries percent-encoded bytes (RFC 2397)."""
+    ai, sdk = gemini
+
+    await _describe(ai, 'data:text/plain,Pesto%20contains%20pine%20nuts', 'text/plain')
+
+    sent = _sent_media(sdk)
+    assert sent.inline_data is not None
+    assert sent.inline_data.data == b'Pesto contains pine nuts'
+    assert sent.inline_data.mime_type == 'text/plain'
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_http_media_gzip_over_cap_after_decompressing_is_rejected(
     gemini: tuple[Genkit, MagicMock],
 ) -> None:
-    """`_media_client` sends `Accept-Encoding: identity` and rejects gzip responses before decompressing."""
+    """`_media_client` asks for identity; a gzip body that expands past 20MB is rejected at the cap."""
     ai, sdk = gemini
     seen_headers: list[dict[str, str]] = []
 
@@ -448,3 +494,42 @@ async def test_generate_gemini_http_media_without_caller_type_skips_generic_head
     sent = _sent_media(sdk)
     assert sent.inline_data is not None
     assert sent.inline_data.mime_type == 'image/jpeg'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('encoding', ['gzip', 'deflate'])
+async def test_generate_gemini_http_media_compressed_under_cap_is_decompressed(
+    gemini: tuple[Genkit, MagicMock], encoding: str
+) -> None:
+    """A CDN that compresses anyway: the decompressed bytes are what Gemini receives."""
+    ai, sdk = gemini
+    body = gzip.compress(PNG) if encoding == 'gzip' else zlib.compress(PNG)
+
+    with _serve(
+        lambda request: httpx.Response(
+            200, headers={'content-type': 'image/png', 'content-encoding': encoding}, content=body
+        )
+    ):
+        response = await _describe(ai, 'https://cdn.example/menu.png')
+
+    assert response.finish_reason == FinishReason.STOP
+    sent = _sent_media(sdk)
+    assert sent.inline_data is not None
+    assert sent.inline_data.data == PNG
+
+
+@pytest.mark.asyncio
+async def test_generate_gemini_http_media_unsupported_encoding_is_rejected(gemini: tuple[Genkit, MagicMock]) -> None:
+    """Encodings the plugin can't bound (br, zstd) stay INVALID_ARGUMENT."""
+    ai, sdk = gemini
+
+    with _serve(
+        lambda request: httpx.Response(200, headers={'content-type': 'image/png', 'content-encoding': 'br'}, content=PNG)
+    ):
+        response = await _describe(ai, 'https://cdn.example/menu.png')
+
+    assert response.error is not None
+    assert response.error.status == 'INVALID_ARGUMENT'
+    assert response.finish_message is not None
+    assert "'br'" in response.finish_message
+    sdk.aio.models.generate_content.assert_not_called()
