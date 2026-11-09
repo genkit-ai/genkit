@@ -1500,6 +1500,10 @@ def _transform_prompt_metadata(
                 if isinstance(output, dict) and 'instructions' in output
                 else (raw_output.get('instructions') if isinstance(raw_output, dict) else None)
             ),
+            # Same raw fallback: frontmatter `constrained: false` and
+            # `contentType` must reach the request.
+            'constrained': _output_key(output, raw_output, 'constrained'),
+            'contentType': _output_key(output, raw_output, 'contentType'),
         },
         'input': {
             'default': input_cfg.get('default') if isinstance(input_cfg, dict) else None,
@@ -1512,6 +1516,23 @@ def _transform_prompt_metadata(
         'use': parsed_use,
         'messages': template,
     }
+
+
+def file_constrained(output: dict[str, Any]) -> bool | None:
+    """Frontmatter `constrained:` wins; a schema with no setting asks for native JSON mode."""
+    constrained = output.get('constrained')
+    if isinstance(constrained, bool):
+        return constrained
+    return True if output.get('jsonSchema') else None
+
+
+def _output_key(output: object, raw_output: object, key: str) -> Any:  # noqa: ANN401
+    for source in (output, raw_output):
+        if isinstance(source, dict):
+            value = cast(dict[str, Any], source).get(key)
+            if value is not None:
+                return value
+    return None
 
 
 def load_prompt(ai: _aio.Genkit, path: Path, filename: str, prefix: str = '', ns: str = '') -> None:
@@ -1571,7 +1592,8 @@ def load_prompt(ai: _aio.Genkit, path: Path, filename: str, prefix: str = '', ns
             input_schema=metadata.get('input', {}).get('jsonSchema'),
             input_default=file_default if isinstance(file_default, dict) else None,
             output_schema=output_schema,
-            output_constrained=True if metadata.get('output', {}).get('jsonSchema') else None,
+            output_constrained=file_constrained(metadata.get('output', {})),
+            output_content_type=metadata.get('output', {}).get('contentType'),
             output_format=metadata.get('output', {}).get('format'),
             output_instructions=metadata.get('output', {}).get('instructions'),
             messages=metadata.get('messages'),
