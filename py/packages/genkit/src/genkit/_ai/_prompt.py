@@ -25,7 +25,7 @@ import weakref
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast
+from typing import Any, ClassVar, Generic, NamedTuple, TypedDict, TypeVar, cast, overload
 
 from dotpromptz import (
     DataArgument,
@@ -78,6 +78,7 @@ from genkit._core._model import (
     Document,
     GenerateActionOptions,
     Message,
+    ModelConfigDict,
     OutputConfig,
     Part,
     ToolChoice,
@@ -99,6 +100,9 @@ logger = get_logger(__name__)
 # TypeVars for generic input/output typing
 InputT = TypeVar('InputT')
 OutputT = TypeVar('OutputT')
+# Method-scoped stand-ins for the self-typed __call__/stream overloads.
+_InT = TypeVar('_InT')
+_OutT = TypeVar('_OutT')
 
 
 class PromptSettings(TypedDict, total=False):
@@ -414,12 +418,16 @@ class Prompt(Generic[InputT, OutputT]):
         )
         return call.model_copy(update={'model': resolved.name, 'config': resolved.config})
 
+    # A prompt defined with input_schema takes that input (or a dict of
+    # template variables); a prompt without one takes none. Same self-typed
+    # split as Action.__call__.
+    @overload
     async def __call__(
-        self,
-        input: InputT | dict[str, Any] | None = None,
+        self: Prompt[None, _OutT],
+        input: None = None,
         *,
         model: ModelArg | Action | None = None,
-        config: Mapping[str, Any] | BaseModel | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
@@ -432,7 +440,48 @@ class Prompt(Generic[InputT, OutputT]):
         resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
         on_chunk: ModelStreamingCallback | None = None,
-    ) -> ModelResponse[OutputT]:
+    ) -> ModelResponse[_OutT]: ...
+
+    @overload
+    async def __call__(
+        self: Prompt[_InT, _OutT],
+        input: _InT | dict[str, Any],
+        *,
+        model: ModelArg | Action | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        docs: list[Document] | None = None,
+        use: Sequence[Middleware] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        on_chunk: ModelStreamingCallback | None = None,
+    ) -> ModelResponse[_OutT]: ...
+
+    async def __call__(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        *,
+        model: ModelArg | Action | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        docs: list[Document] | None = None,
+        use: Sequence[Middleware] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+        on_chunk: ModelStreamingCallback | None = None,
+    ) -> ModelResponse[Any]:
         """Render the prompt with ``input`` as template variables, run it, and return the response.
 
         Keywords take the same names as ``ai.generate``. An omitted (or ``None``)
@@ -475,12 +524,13 @@ class Prompt(Generic[InputT, OutputT]):
         )
         return cast(ModelResponse[OutputT], result)
 
+    @overload
     def stream(
-        self,
-        input: InputT | dict[str, Any] | None = None,
+        self: Prompt[None, _OutT],
+        input: None = None,
         *,
         model: ModelArg | Action | None = None,
-        config: Mapping[str, Any] | BaseModel | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,
@@ -492,7 +542,46 @@ class Prompt(Generic[InputT, OutputT]):
         resume_respond: Part | list[Part] | None = None,
         resume_restart: Part | list[Part] | None = None,
         resume_metadata: dict[str, Any] | None = None,
-    ) -> ModelStreamResponse[OutputT]:
+    ) -> ModelStreamResponse[_OutT]: ...
+
+    @overload
+    def stream(
+        self: Prompt[_InT, _OutT],
+        input: _InT | dict[str, Any],
+        *,
+        model: ModelArg | Action | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        docs: list[Document] | None = None,
+        use: Sequence[Middleware] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+    ) -> ModelStreamResponse[_OutT]: ...
+
+    def stream(
+        self,
+        input: InputT | dict[str, Any] | None = None,
+        *,
+        model: ModelArg | Action | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
+        messages: list[Message] | None = None,
+        tools: Sequence[str | Tool] | None = None,
+        tool_choice: ToolChoice | None = None,
+        docs: list[Document] | None = None,
+        use: Sequence[Middleware] | None = None,
+        max_turns: int | None = None,
+        context: dict[str, Any] | None = None,
+        return_tool_requests: bool | None = None,
+        resume_respond: Part | list[Part] | None = None,
+        resume_restart: Part | list[Part] | None = None,
+        resume_metadata: dict[str, Any] | None = None,
+    ) -> ModelStreamResponse[Any]:
         """Stream the prompt execution. Same keywords as ``__call__``, minus ``on_chunk``.
 
         Iterate ``.stream`` on the returned response for chunks; there's no
@@ -535,7 +624,7 @@ class Prompt(Generic[InputT, OutputT]):
         input: InputT | dict[str, Any] | None = None,
         *,
         model: ModelArg | Action | None = None,
-        config: Mapping[str, Any] | BaseModel | None = None,
+        config: ModelConfigDict | Mapping[str, Any] | BaseModel | None = None,
         messages: list[Message] | None = None,
         tools: Sequence[str | Tool] | None = None,
         tool_choice: ToolChoice | None = None,

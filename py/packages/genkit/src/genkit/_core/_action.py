@@ -37,6 +37,7 @@ from typing import (
     get_args,
     get_origin,
     get_type_hints,
+    overload,
 )
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -813,6 +814,12 @@ InputT = TypeVar('InputT', default=Any)
 OutputT = TypeVar('OutputT', default=Any)
 ChunkT = TypeVar('ChunkT', default=Any)
 InitT = TypeVar('InitT', default=Any)
+# Method-scoped stand-ins for the class parameters in the self-typed call
+# overloads below. A self annotation can't reuse the class-scoped TypeVars.
+_InT = TypeVar('_InT')
+_OutT = TypeVar('_OutT')
+_ChunkT = TypeVar('_ChunkT')
+_InitT = TypeVar('_InitT')
 
 # Generic streaming callback - use Callable[[ChunkT], None] for typed chunks
 # This untyped version is for internal use where chunk type is unknown
@@ -1161,19 +1168,57 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
         else:
             self._input_type = cast(TypeAdapter[InputT], TypeAdapter(input_schema))
 
-    async def __call__(self, input: InputT | None = NO_INPUT, *, context: dict[str, Any] | None = None) -> OutputT:
+    @overload
+    async def __call__(
+        self: 'Action[None, _OutT, Any, Any]',
+        input: None = None,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> _OutT: ...
+
+    @overload
+    async def __call__(
+        self: 'Action[_InT, _OutT, Any, Any]',
+        input: _InT,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> _OutT: ...
+
+    async def __call__(self, input: Any = NO_INPUT, *, context: dict[str, Any] | None = None) -> Any:  # noqa: ANN401
         """Call the action directly, returning just the response value."""
         return (await self.run(input, context=context)).response
 
+    @overload
+    async def run(
+        self: 'Action[None, _OutT, _ChunkT, _InitT]',
+        input: None = None,
+        *,
+        on_chunk: Callable[[_ChunkT], None] | None = None,
+        context: dict[str, Any] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+        init: _InitT | None = None,
+    ) -> ActionResponse[_OutT]: ...
+
+    @overload
+    async def run(
+        self: 'Action[_InT, _OutT, _ChunkT, _InitT]',
+        input: _InT,
+        *,
+        on_chunk: Callable[[_ChunkT], None] | None = None,
+        context: dict[str, Any] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+        init: _InitT | None = None,
+    ) -> ActionResponse[_OutT]: ...
+
     async def run(
         self,
-        input: InputT | None = NO_INPUT,
+        input: Any = NO_INPUT,  # noqa: ANN401
         *,
         on_chunk: Callable[[ChunkT], None] | None = None,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
-    ) -> ActionResponse[OutputT]:
+    ) -> ActionResponse[Any]:
         """Run the action and return its result with trace ids.
 
         Args:
@@ -1262,14 +1307,34 @@ class Action(Generic[InputT, OutputT, ChunkT, InitT]):
             if token is not None:
                 _action_context.reset(token)
 
+    @overload
+    def stream(
+        self: 'Action[None, _OutT, _ChunkT, _InitT]',
+        input: None = None,
+        *,
+        context: dict[str, Any] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+        init: _InitT | None = None,
+    ) -> StreamResponse[_ChunkT, _OutT]: ...
+
+    @overload
+    def stream(
+        self: 'Action[_InT, _OutT, _ChunkT, _InitT]',
+        input: _InT,
+        *,
+        context: dict[str, Any] | None = None,
+        telemetry_labels: dict[str, object] | None = None,
+        init: _InitT | None = None,
+    ) -> StreamResponse[_ChunkT, _OutT]: ...
+
     def stream(
         self,
-        input: InputT | None = NO_INPUT,
+        input: Any = NO_INPUT,  # noqa: ANN401
         *,
         context: dict[str, Any] | None = None,
         telemetry_labels: dict[str, object] | None = None,
         init: InitT | None = None,
-    ) -> StreamResponse[ChunkT, OutputT]:
+    ) -> StreamResponse[Any, Any]:
         """Return a ``StreamResponse``: iterate ``.stream`` for chunks, await ``.response`` for the result.
 
         Takes the same keyword arguments as ``run``, minus ``on_chunk``. If the
