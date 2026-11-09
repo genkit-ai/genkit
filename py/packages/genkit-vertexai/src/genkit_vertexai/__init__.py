@@ -16,8 +16,12 @@
 
 """Vertex AI Plugin for Genkit.
 
-This plugin provides integration with Google Cloud's Vertex AI platform,
-including Model Garden for accessing third-party models.
+This package exports two plugins:
+
+- ``VertexAI``: Gemini, Veo, TTS, and embedders under ``vertexai/``. Same class
+  as ``genkit_google_genai.VertexAI``, re-exported here.
+- ``ModelGarden``: third-party Model Garden models (Claude, Llama, Mistral)
+  under ``modelgarden/``.
 
 Example:
     ```python
@@ -49,8 +53,10 @@ See Also:
     - Vertex AI Model Garden: https://cloud.google.com/vertex-ai/docs/model-garden
 """
 
+from genkit_google_genai import VertexAI
 from genkit_vertexai._model_garden._plugin import ModelGarden
 
 __all__ = [
     'ModelGarden',
+    'VertexAI',
 ]

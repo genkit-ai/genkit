@@ -45,9 +45,10 @@ classifiers = [
 ]
 dependencies = [
   "genkit>=0.13.0,<2",
+  "genkit-google-genai>=0.13.0,<2",
   "google-auth[requests]>=2.14.1",
 ]
-description = "Vertex AI and Model Garden on Genkit"
+description = "Vertex AI (Gemini, Veo, embedders) and Model Garden on Genkit"
 keywords = [
   "genkit",
   "vertex-ai",

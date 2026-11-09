@@ -1948,6 +1948,7 @@ version = "0.13.0"
 source = { editable = "packages/genkit-vertexai" }
 dependencies = [
     { name = "genkit" },
+    { name = "genkit-google-genai" },
     { name = "google-auth", extra = ["requests"] },
 ]
 
@@ -1963,6 +1964,7 @@ openai = [
 requires-dist = [
     { name = "genkit", editable = "packages/genkit" },
     { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
+    { name = "genkit-google-genai", editable = "packages/genkit-google-genai" },
     { name = "genkit-openai", marker = "extra == 'openai'", editable = "packages/genkit-openai" },
     { name = "google-auth", extras = ["requests"], specifier = ">=2.14.1" },
 ]

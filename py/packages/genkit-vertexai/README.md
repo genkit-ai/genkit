@@ -1,6 +1,12 @@
 # Genkit Vertex AI Plugin
 
-Integrate Genkit with Google Cloud Vertex AI Model Garden.
+Two plugins for Google Cloud Vertex AI:
+
+- **`VertexAI`**: Gemini, Veo, TTS, and embedders under `vertexai/`. It is
+  `genkit_google_genai.VertexAI`, re-exported here; `genkit-vertexai` depends
+  on `genkit-google-genai`, so either import works.
+- **`ModelGarden`**: third-party Model Garden models (Claude, Llama, Mistral)
+  under `modelgarden/`. Needs a publisher extra, see below.
 
 > **Building with a coding agent? Install the Genkit Python skill first.**
 >
@@ -14,7 +20,13 @@ Integrate Genkit with Google Cloud Vertex AI Model Garden.
 
 ## Installation
 
-Install the extra for the Model Garden publishers you call:
+`VertexAI` needs no extra:
+
+```bash
+uv add genkit-vertexai
+```
+
+For `ModelGarden`, install the extra for the publishers you call:
 
 ```bash
 uv add 'genkit-vertexai[anthropic]'          # Claude
@@ -22,10 +34,30 @@ uv add 'genkit-vertexai[openai]'             # Llama, Mistral, and other OpenAI-
 uv add 'genkit-vertexai[anthropic,openai]'   # both
 ```
 
-The package without an extra serves no models. Calling a model without its
+Without an extra, `ModelGarden` serves no models. Calling a model without its
 extra raises an error naming the command to run.
 
 ## Usage
+
+### Gemini on Vertex AI
+
+```python
+from genkit import Genkit
+from genkit_vertexai import VertexAI
+
+# 1. Initialize with your Google Cloud project
+ai = Genkit(plugins=[VertexAI(project='my-project', location='us-central1')])
+
+# 2. Call Gemini under the vertexai/ namespace
+res = await ai.generate(model='vertexai/gemini-2.5-flash', prompt='Suggest a dish.')
+print(res.text)
+# => Smoked Salmon Tartine
+```
+
+See the [genkit-google-genai README](../genkit-google-genai/README.md) for
+the full `VertexAI` model and config reference.
+
+### Model Garden
 
 ```python
 from genkit import Genkit
