@@ -103,15 +103,6 @@ class Flow(Action[InputT, OutputT, ChunkT, None]):
         description: str | None = None,
     ) -> None: ...
 
-    @overload
-    def __init__(
-        self,
-        func: Callable[..., Awaitable[OutputT]],
-        *,
-        name: str | None = None,
-        description: str | None = None,
-    ) -> None: ...
-
     def __init__(
         self,
         func: Callable[..., Awaitable[Any]],

@@ -367,13 +367,6 @@ class Genkit:
         /,
     ) -> Flow[None, OutputT]: ...
 
-    @overload
-    def flow(
-        self,
-        func: Callable[..., Awaitable[OutputT]],
-        /,
-    ) -> Flow[Any, OutputT, Any]: ...
-
     def flow(
         self,
         name: str | Callable[..., Awaitable[Any]] | None = None,
@@ -495,7 +488,7 @@ class Genkit:
         self,
         func: Callable[[ToolContext[ChunkT]], Awaitable[OutputT]],
         /,
-    ) -> Tool[Any, OutputT, ChunkT]: ...
+    ) -> Tool[None, OutputT, ChunkT]: ...
 
     @overload
     def tool(

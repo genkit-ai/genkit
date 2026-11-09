@@ -284,8 +284,8 @@ def _define_tool(
 #   shapes come first and catch them; a real ``ToolContext`` param can't take
 #   an ``object``, so it skips them.
 # - The context-only shape comes before input-only because a ``ctx`` function
-#   also fits ``[InputT]``. It still returns ``Tool[Any, ...]`` so that shape
-#   keeps accepting an input.
+#   also fits ``[InputT]``. It returns ``Tool[None, ...]``, like a context-only
+#   flow: the function takes no input, so a direct call passes none.
 # - ty types ``(ctx, x: Any)`` as Unknown: the typing spec's overload rule for
 #   Any arguments makes it ambiguous, and no order fixes that.
 @overload
@@ -340,7 +340,7 @@ def define_tool(
     description: str | None = None,
     *,
     input_schema: type[BaseModel] | dict[str, object] | None = None,
-) -> _Tool[Any, ToolOutputT, ToolChunkT]: ...
+) -> _Tool[None, ToolOutputT, ToolChunkT]: ...
 
 
 @overload
