@@ -23,7 +23,7 @@ import math
 import reprlib
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from enum import IntEnum
 from typing import Any, ClassVar, Literal, cast, get_args
@@ -806,34 +806,41 @@ class BoxedFailure:
     is_public: bool = False
     details: Any = None  # noqa: ANN401
     source: str | None = None
+    cause: BaseException | None = field(default=None, compare=False, hash=False)
 
     @classmethod
     def from_exc(cls, exc: BaseException) -> Self:
-        """Capture plain-data failure metadata from an exception without holding it."""
+        """Capture plain-data failure metadata from an exception, keeping the cause for chaining."""
+        cause = exc.__cause__ if isinstance(exc, GenkitError) and exc.__cause__ else exc
         if isinstance(exc, PublicError):
             try:
                 details = _client_details(exc.details)
             except Exception:
                 details = None
-            return cls(status=exc.status, message=exc.message, is_public=True, details=details)
+            return cls(status=exc.status, message=exc.message, is_public=True, details=details, cause=cause)
         if isinstance(exc, GenkitError):
             source, message = _split_rendered(exc)
-            return cls(status=exc.status, message=message, source=source)
+            return cls(status=exc.status, message=message, source=source, cause=cause)
         text = str(exc)
         return cls(
             status='INTERNAL',
             message=f'{type(exc).__name__}: {text}' if text else type(exc).__name__,
+            cause=cause,
         )
 
     def to_exception(self) -> GenkitError:
         """Reconstruct a fresh GenkitError or PublicError for SSE logging and wire framing."""
         if self.is_public:
-            return PublicError(
+            err = PublicError(
                 self.status,
                 self.message,
                 details=copy.deepcopy(self.details) if self.details is not None else None,
             )
-        return GenkitError(status=self.status, message=self.message, source=self.source)
+        else:
+            err = GenkitError(status=self.status, message=self.message, source=self.source)
+        if self.cause is not None:
+            err.__cause__ = self.cause
+        return err
 
 
 def error_status(error: Exception) -> int:
