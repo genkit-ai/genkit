@@ -12,20 +12,19 @@ from collections.abc import Awaitable, Callable, Mapping
 import pytest
 
 from genkit._core._action import Action
-from genkit._core._telemetry._instrumentation import (
-    flush_instrumentations,
-    set_custom_metadata_attributes,
-    set_span_state,
-)
+from genkit._core._telemetry import _instrumentation as core_instrumentation
 from genkit.plugin_api import ActionKind
 from genkit.telemetry import (
     FlushableInstrumentation,
     SpanContext,
     SpanMetadata,
     configure_instrumentation,
+    flush_instrumentations,
     is_instrumented_by,
     reset_instrumentation,
     run_in_new_span,
+    set_custom_metadata_attributes,
+    set_span_state,
 )
 
 
@@ -328,6 +327,21 @@ def test_telemetry_exports_provider_types() -> None:
         assert name in telemetry.__all__
         assert getattr(telemetry, name) is not None
     assert 'instrumentations' not in telemetry.__all__
+
+
+def test_span_metadata_and_lifecycle_helpers_are_public() -> None:
+    """App code stamps tenant metadata and flushes on shutdown via genkit.telemetry, not genkit._core."""
+    import genkit.telemetry as telemetry
+
+    for name in (
+        'set_custom_metadata_attributes',
+        'set_span_state',
+        'SpanState',
+        'flush_instrumentations',
+        'dispose_instrumentations',
+    ):
+        assert name in telemetry.__all__
+        assert getattr(telemetry, name) is getattr(core_instrumentation, name)
 
 
 def test_flush_instrumentations_flushes_flushable() -> None:

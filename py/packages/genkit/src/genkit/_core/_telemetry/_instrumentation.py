@@ -41,6 +41,7 @@ T_co = TypeVar('T_co', covariant=True)
 
 SpanAttributeValue = str | bool | int | float
 SpanState = Literal['success', 'error']
+"""Value written to ``genkit:state``. ``error`` marks a span whose action returned a failure."""
 
 
 class SpanNext(Protocol[T_co]):

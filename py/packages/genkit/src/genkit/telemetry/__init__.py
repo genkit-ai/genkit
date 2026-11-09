@@ -19,6 +19,8 @@
 Application code should call :class:`genkit.Genkit`. ``genkit start``
 records to the Developer UI. ``configure_instrumentation`` is the hook
 for a recording backend; ``reset_instrumentation`` starts over between tests.
+``set_custom_metadata_attributes`` stamps the active span (``tenant_id``),
+and ``flush_instrumentations`` drains exports before a serverless shutdown.
 """
 
 from genkit._core._telemetry._instrumentation import (
@@ -28,10 +30,15 @@ from genkit._core._telemetry._instrumentation import (
     SpanContext,
     SpanMetadata,
     SpanNext,
+    SpanState,
     configure_instrumentation,
+    dispose_instrumentations,
+    flush_instrumentations,
     is_instrumented_by,
     reset_instrumentation,
     run_in_new_span,
+    set_custom_metadata_attributes,
+    set_span_state,
 )
 
 __all__ = [
@@ -42,8 +49,15 @@ __all__ = [
     'SpanContext',
     'SpanMetadata',
     'SpanNext',
+    'SpanState',
     'configure_instrumentation',
     'run_in_new_span',
+    # Active-span metadata
+    'set_custom_metadata_attributes',
+    'set_span_state',
+    # Lifecycle
+    'dispose_instrumentations',
+    'flush_instrumentations',
     # Testing & test-inspection helpers
     'is_instrumented_by',
     'reset_instrumentation',

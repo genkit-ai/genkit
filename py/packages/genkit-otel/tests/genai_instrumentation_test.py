@@ -1008,3 +1008,60 @@ def test_otel_logger_resolves_once_with_scope_name(
     assert instr._otel_logger is recorded_logger
     assert instr._otel_logger is recorded_logger
     assert requested_scopes == ['dining-genai']
+
+
+class _RecordingProvider:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.flushes = 0
+        self.fail = fail
+
+    def force_flush(self) -> bool:
+        self.flushes += 1
+        if self.fail:
+            raise RuntimeError('collector unreachable')
+        return True
+
+
+def test_flush_instrumentations_force_flushes_global_otel_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """flush_instrumentations() reaches GenAiInstrumentation and force-flushes every global OTel provider."""
+    from genkit_otel import _genai_instrumentation
+
+    from genkit.telemetry import (
+        FlushableInstrumentation,
+        configure_instrumentation,
+        flush_instrumentations,
+        reset_instrumentation,
+    )
+
+    tracer_provider = _RecordingProvider()
+    meter_provider = _RecordingProvider()
+    logger_provider = _RecordingProvider()
+    monkeypatch.setattr(_genai_instrumentation.trace_api, 'get_tracer_provider', lambda: tracer_provider)
+    monkeypatch.setattr(_genai_instrumentation.metrics_api, 'get_meter_provider', lambda: meter_provider)
+    monkeypatch.setattr(_genai_instrumentation, 'get_logger_provider', lambda: logger_provider)
+
+    instr = GenAiInstrumentation()
+    assert isinstance(instr, FlushableInstrumentation)
+    reset_instrumentation()
+    configure_instrumentation(instr)
+    try:
+        flush_instrumentations()
+    finally:
+        reset_instrumentation()
+
+    assert (tracer_provider.flushes, meter_provider.flushes, logger_provider.flushes) == (1, 1, 1)
+
+
+def test_flush_skips_proxy_providers_and_swallows_flush_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A provider without force_flush is skipped; one that raises doesn't stop the rest or reach the caller."""
+    from genkit_otel import _genai_instrumentation
+
+    failing = _RecordingProvider(fail=True)
+    healthy = _RecordingProvider()
+    monkeypatch.setattr(_genai_instrumentation.trace_api, 'get_tracer_provider', object)
+    monkeypatch.setattr(_genai_instrumentation.metrics_api, 'get_meter_provider', lambda: failing)
+    monkeypatch.setattr(_genai_instrumentation, 'get_logger_provider', lambda: healthy)
+
+    GenAiInstrumentation().flush()
+
+    assert (failing.flushes, healthy.flushes) == (1, 1)

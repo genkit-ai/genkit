@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from typing import ClassVar, Protocol, TypeVar
 
 from opentelemetry import metrics as metrics_api, trace as trace_api
-from opentelemetry._logs import get_logger as get_otel_logger
+from opentelemetry._logs import get_logger as get_otel_logger, get_logger_provider
 from opentelemetry.metrics import Meter
 from opentelemetry.trace import Span, SpanKind, StatusCode, Tracer
 from opentelemetry.util.types import AttributeValue
@@ -167,6 +167,26 @@ class GenAiInstrumentation(Instrumentation):
         if self._cached_logger is None:
             self._cached_logger = get_otel_logger(self.scope_name)
         return self._cached_logger
+
+    def flush(self) -> None:
+        """Force-flush the global OTel tracer, meter, and logger providers.
+
+        ``genkit.telemetry.flush_instrumentations()`` calls this, so a
+        serverless handler can drain buffered spans before the process
+        freezes. Providers without ``force_flush`` (the API's proxy
+        defaults) are skipped. Providers behind an injected ``tracer``,
+        ``meter``, or ``otel_logger`` aren't reachable from here; flush
+        those on the provider you built.
+        """
+        providers = (trace_api.get_tracer_provider(), metrics_api.get_meter_provider(), get_logger_provider())
+        for provider in providers:
+            force_flush = getattr(provider, 'force_flush', None)
+            if not callable(force_flush):
+                continue
+            try:
+                force_flush()
+            except Exception:  # noqa: BLE001 - shutdown flush must not raise into the app.
+                logger.warning('OpenTelemetry %s.force_flush() failed', type(provider).__name__, exc_info=True)
 
     async def run_in_new_span(
         self,
