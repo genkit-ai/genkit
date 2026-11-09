@@ -24,7 +24,6 @@ from typing import Protocol
 from pydantic_core import to_jsonable_python
 
 from genkit._ai._agents._client import AgentChunk, AgentResponse
-from genkit._ai._prompt import ModelStreamResponse
 from genkit._core._error import GenkitError, Interrupt, TaskGroupError, error_body, error_status, interrupt_escape_error
 from genkit._core._model import ModelResponse
 from genkit._core._typing import FinishReason
@@ -142,13 +141,11 @@ async def to_sse(handle: StreamHandle) -> AsyncGenerator[str, None]:
             if aclose is not None:
                 await aclose()
         result = await handle.response
-        # ModelStreamResponse boxes turn failures onto .response instead of raising
-        # from .stream; re-raise here so SSE callers get the error frame and log.
-        if (
-            isinstance(handle, ModelStreamResponse)
-            and isinstance(result, ModelResponse)
-            and result.finish_reason == FinishReason.FAILED
-        ):
+        # Generate boxes turn failures onto the response instead of raising.
+        # Whatever handle carried it (generate_stream, prompt.stream, or a flow
+        # that returns the whole ModelResponse), re-raise here so SSE callers
+        # get the error frame and log instead of {"result": ...} with no text.
+        if isinstance(result, ModelResponse) and result.finish_reason == FinishReason.FAILED:
             raise (
                 result._failure.to_exception()
                 if result._failure is not None
