@@ -160,3 +160,16 @@ class TestJsonlFormatInstructions:
 
         assert fmt.instructions is not None
         assert '"type": "object"' in fmt.instructions
+
+
+class _MenuSection(BaseModel):
+    name: str
+    subsections: 'list[_MenuSection]' = []
+
+
+def test_recursive_item_schema_does_not_recurse_forever() -> None:
+    """``jsonl`` accepts a self-referencing object item schema."""
+    fmt = JsonlFormat().handle(TypeAdapter(list[_MenuSection]).json_schema())
+
+    assert fmt.instructions is not None
+    assert '"$ref": "#/$defs/_MenuSection"' in fmt.instructions

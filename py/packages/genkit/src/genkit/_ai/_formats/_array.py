@@ -89,7 +89,7 @@ class ArrayFormat(Formatter):
         if resolved_schema and resolved_schema.get('type') != 'array':
             raise GenkitError(
                 status='INVALID_ARGUMENT',
-                message="Must supply an 'array' schema type when using the 'items' parser format.",
+                message="Must supply an 'array' schema type when using the 'array' parser format.",
                 reason=ErrorReason.INVALID_SCHEMA,
             )
 

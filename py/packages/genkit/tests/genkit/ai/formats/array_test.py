@@ -153,3 +153,23 @@ class TestArrayFormatInstructions:
 
         assert fmt.instructions is not None
         assert '"type": "object"' in fmt.instructions
+
+
+class _MenuSection(BaseModel):
+    name: str
+    subsections: 'list[_MenuSection]' = []
+
+
+def test_recursive_item_schema_keeps_refs_instead_of_recursing() -> None:
+    """A self-referencing item model stops at the cycle and keeps ``$defs`` so the ref resolves."""
+    fmt = ArrayFormat().handle(TypeAdapter(list[_MenuSection]).json_schema())
+
+    assert fmt.instructions is not None
+    assert '"$ref": "#/$defs/_MenuSection"' in fmt.instructions
+    assert '"$defs"' in fmt.instructions
+
+
+def test_non_array_schema_error_names_array_format() -> None:
+    """The error names the ``array`` format the caller asked for."""
+    with pytest.raises(GenkitError, match="when using the 'array' parser format"):
+        ArrayFormat().handle({'type': 'object'})
