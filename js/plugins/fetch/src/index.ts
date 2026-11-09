@@ -455,7 +455,10 @@ export function fetchHandler<
 }
 
 function notFound(): Response {
-  return new Response(null, { status: 404 });
+  return new Response('No action matched the request path.', {
+    status: 404,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  });
 }
 
 /**
@@ -465,7 +468,7 @@ function notFound(): Response {
  * @param actions - Array of actions (or ActionWithOptions) to expose; each is routed by path (action name or options.path)
  * @param pathPrefix - Optional path prefix to strip from the URL (e.g., '/api')
  * @returns A handler function that takes a Request and returns a Promise<Response>.
- * A path that matches no action gets a 404 with an empty body.
+ * A path that matches no action gets a 404 with a plain-text body.
  *
  * @example
  * ```typescript

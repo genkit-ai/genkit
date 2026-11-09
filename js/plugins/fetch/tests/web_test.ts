@@ -804,7 +804,14 @@ describe('fetchHandlers (path routing)', () => {
     });
     const response = await fetchHandlers([flow])(request);
     assert.strictEqual(response.status, 404);
-    assert.strictEqual(await response.text(), '');
+    assert.strictEqual(
+      response.headers.get('Content-Type'),
+      'text/plain; charset=utf-8'
+    );
+    assert.strictEqual(
+      await response.text(),
+      'No action matched the request path.'
+    );
   });
 
   it('should route to flow by name', async () => {
@@ -864,7 +871,14 @@ describe('fetchHandlers (path routing)', () => {
     });
     const response = await fetchHandlers([flow], '/api/genkit')(request);
     assert.strictEqual(response.status, 404);
-    assert.strictEqual(await response.text(), '');
+    assert.strictEqual(
+      response.headers.get('Content-Type'),
+      'text/plain; charset=utf-8'
+    );
+    assert.strictEqual(
+      await response.text(),
+      'No action matched the request path.'
+    );
   });
 });
 
