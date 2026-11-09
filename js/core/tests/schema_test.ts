@@ -213,6 +213,34 @@ describe('toJsonSchema() zod v3 output compat', () => {
     assert.strictEqual(json.propertyNames, undefined);
     assert.deepStrictEqual(json.additionalProperties, { type: 'number' });
   });
+
+  it('keeps oneOf for non-discriminated oneOf unions (z.xor)', () => {
+    const json = toJsonSchema({ schema: z.xor([z.string(), z.number()]) });
+    assert.strictEqual(json.anyOf, undefined);
+    assert.strictEqual(json.oneOf.length, 2);
+  });
+
+  it('prefers the outer description when collapsing nullable primitives', () => {
+    const json = toJsonSchema({
+      schema: z.string().describe('inner').nullable().describe('outer'),
+    });
+    assert.deepStrictEqual(json.type, ['string', 'null']);
+    assert.strictEqual(json.description, 'outer');
+  });
+
+  it('keeps the pattern for formats the validators do not know', () => {
+    for (const schema of [z.cuid(), z.ulid(), z.base64(), z.nanoid()]) {
+      const json = toJsonSchema({ schema });
+      assert.strictEqual(typeof json.pattern, 'string', json.format);
+    }
+  });
+
+  it('drops the pattern for formats the validators check', () => {
+    for (const schema of [z.email(), z.uuid(), z.url(), z.iso.date()]) {
+      const json = toJsonSchema({ schema });
+      assert.strictEqual(json.pattern, undefined, json.format);
+    }
+  });
 });
 
 describe('annotateSchema()', () => {

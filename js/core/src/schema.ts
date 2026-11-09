@@ -124,10 +124,15 @@ function compatOverride(ctx: {
     // v4 treats dates as unrepresentable. Data crosses the wire as ISO strings.
     jsonSchema.type = 'string';
     jsonSchema.format = 'date-time';
-  } else if (def.type === 'union' && jsonSchema.oneOf) {
+  } else if (
+    def.type === 'union' &&
+    'discriminator' in def &&
+    jsonSchema.oneOf
+  ) {
     // Discriminated unions emit `oneOf` in v4. Several providers (Gemini,
     // OpenAI structured outputs) only support `anyOf`; the branches are
-    // disjoint by construction, so `anyOf` is equivalent.
+    // disjoint by construction, so `anyOf` is equivalent. Other `oneOf`
+    // unions (`z.xor()`) can overlap, so they are left alone.
     jsonSchema.anyOf = jsonSchema.oneOf;
     delete jsonSchema.oneOf;
   } else if (
@@ -147,14 +152,16 @@ function compatOverride(ctx: {
       delete jsonSchema.maximum;
   } else if (
     def.type === 'string' &&
-    jsonSchema.format !== undefined &&
+    typeof jsonSchema.format === 'string' &&
+    VALIDATED_FORMATS.has(jsonSchema.format) &&
     typeof jsonSchema.pattern === 'string'
   ) {
     // String formats (datetime, email, uuid, ...) also emit zod's internal
     // regex as `pattern`. `format` alone is what v3 emitted, is validated by
-    // ajv-formats/cfworker, and keeps validation errors readable. A
-    // user-supplied `.regex()` on top of a format is emitted under `allOf`
-    // and is not affected.
+    // ajv-formats/cfworker, and keeps validation errors readable. Formats the
+    // validators don't know (cuid, ulid, base64, ...) keep the pattern, since
+    // it's their only check. A user-supplied `.regex()` on top of a format is
+    // emitted under `allOf` and is not affected.
     delete jsonSchema.pattern;
   } else if (def.type === 'nullable') {
     collapseNullablePrimitive(jsonSchema);
@@ -162,6 +169,25 @@ function compatOverride(ctx: {
 }
 
 const PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean']);
+
+/** Formats validated by both ajv-formats and @cfworker/json-schema. */
+const VALIDATED_FORMATS = new Set([
+  'date-time',
+  'date',
+  'time',
+  'duration',
+  'email',
+  'hostname',
+  'ipv4',
+  'ipv6',
+  'uri',
+  'uri-reference',
+  'uri-template',
+  'uuid',
+  'json-pointer',
+  'relative-json-pointer',
+  'regex',
+]);
 
 /**
  * v4 emits `anyOf: [{ type: 'string', description }, { type: 'null' }]` for a
@@ -188,8 +214,11 @@ function collapseNullablePrimitive(jsonSchema: z.core.JSONSchema.BaseSchema) {
   ) {
     return;
   }
+  // Keys on the nullable itself (e.g. `.nullable().describe()`) win over the
+  // inner schema's.
+  const { anyOf: _, ...outer } = jsonSchema;
   delete jsonSchema.anyOf;
-  Object.assign(jsonSchema, inner, { type: [inner.type, 'null'] });
+  Object.assign(jsonSchema, inner, outer, { type: [inner.type, 'null'] });
 }
 
 /**
