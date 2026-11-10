@@ -45,10 +45,10 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "default": "./lib/index.js",
+      "types": "./lib/index.d.ts",
       "import": "./lib/index.mjs",
-      "types": "./lib/index.d.ts"
+      "require": "./lib/index.js",
+      "default": "./lib/index.js"
     }
   }
 }
