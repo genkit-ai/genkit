@@ -56,6 +56,7 @@ from pydantic import ValidationError
 from structlog.testing import capture_logs
 
 from genkit import get_logger
+from genkit._core._error import attached_cause, get_reflection_json  # noqa: TID251
 
 ALL_TOOLS = [
     'echo',
@@ -753,7 +754,7 @@ async def test_any_other_failure_is_reported_as_a_protocol_error(tmp_path: Path)
 
     assert isinstance(error, _ProtocolError)
     assert error.status == 'INTERNAL'
-    assert error.cause is failure
+    assert attached_cause(error) is failure
     assert error.__cause__ is failure
     assert "MCP request to 'fake' (" in str(error)
     assert 'failed with RuntimeError' in str(error)
@@ -780,7 +781,7 @@ async def test_a_malformed_reply_is_a_protocol_error_without_the_server_env(
             await asyncio.wait_for(send(connection), timeout=LIMIT)
         assert answered.value.status == 'INTERNAL'
         assert isinstance(answered.value.__cause__, ValidationError)
-        assert answered.value.cause is answered.value.__cause__
+        assert attached_cause(answered.value) is answered.value.__cause__
         assert connection._state is _ConnectionState.OPEN
         assert is_running(await server_pid(tmp_path / 'server.pid'))
     finally:
@@ -1065,9 +1066,9 @@ async def test_startup_failure_is_terminal_and_names_the_server_and_why(tmp_path
     assert f"MCP connection to 'catalog' ({str(missing)!r}) failed" in str(failure.value)
     cause = failure.value.__cause__
     assert isinstance(cause, OSError)
-    assert failure.value.cause is cause
+    assert attached_cause(failure.value) is cause
     assert str(cause) in str(failure.value)
-    assert repr(cause) in failure.value.to_serializable().message
+    assert repr(cause) in get_reflection_json(failure.value).message
     assert connection._state is _ConnectionState.FAILED
 
     with pytest.raises(_ConnectionFailedError, match='failed'):
@@ -1122,7 +1123,7 @@ async def test_a_request_timeout_fails_that_call_alone(tmp_path: Path) -> None:
         assert timed_out.value.status == 'DEADLINE_EXCEEDED'
         assert isinstance(timed_out.value.__cause__, McpError)
         assert timed_out.value.__cause__.error.code == 408
-        assert timed_out.value.cause is timed_out.value.__cause__
+        assert attached_cause(timed_out.value) is timed_out.value.__cause__
         assert str(timed_out.value.__cause__) in str(timed_out.value)
 
         assert connection._state is _ConnectionState.OPEN
