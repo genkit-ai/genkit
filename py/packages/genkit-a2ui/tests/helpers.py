@@ -77,8 +77,8 @@ def no_root_fence(*, catalog_id: str = BASIC_CATALOG_ID) -> str:
     ])
 
 
-def a2ui_data_part(envelopes: list[dict[str, Any]]) -> Part:
-    return Part.from_data({'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
+def a2ui_data_part(envelopes: list[dict[str, Any]], *, key: str = 'messages') -> Part:
+    return Part.from_data({key: envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
 
 
 def text_part(text: str) -> Part:
@@ -119,7 +119,7 @@ def envelopes(content: list[Part]) -> list[dict[str, Any]]:
         data = part.data
         if not isinstance(data, dict):
             continue
-        raw = data.get('envelopes')
+        raw = data.get('messages')
         if isinstance(raw, list):
             out.extend(env for env in raw if isinstance(env, dict))
     return out

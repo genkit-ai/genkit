@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from genkit import Part
 
@@ -26,7 +27,12 @@ from ._types import A2UI_MIME_TYPE, Envelope
 
 
 def a2ui_part(envelopes: list[Envelope]) -> Part:
-    return Part.from_data({'envelopes': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
+    """Wraps envelopes in an A2UI data part.
+
+    The list sits under the A2UI extension spec's own ``messages`` wrapper
+    (``{"messages": [...]}``), the same key the Dart, JS and Go plugins use.
+    """
+    return Part.from_data({'messages': envelopes}, metadata={'mimeType': A2UI_MIME_TYPE})
 
 
 def has_a2ui_mime(*, part: Part) -> bool:
@@ -36,11 +42,24 @@ def has_a2ui_mime(*, part: Part) -> bool:
     return metadata.get('mimeType') == A2UI_MIME_TYPE
 
 
-def is_a2ui_part(part: Part) -> bool:
-    if not has_a2ui_mime(part=part):
-        return False
+def _messages_of(part: Part) -> list[Any] | None:
+    """The message list in an A2UI part's data.
+
+    ``messages``, or ``envelopes`` for a part written before the rename (still
+    read, so persisted sessions and older clients keep working). A
+    ``messages`` key that is present but ``None`` falls back too.
+    """
     data = part.data
-    return isinstance(data, dict) and 'envelopes' in data
+    if not isinstance(data, dict):
+        return None
+    raw = data.get('messages')
+    if raw is None:
+        raw = data.get('envelopes')
+    return raw if isinstance(raw, list) else None
+
+
+def is_a2ui_part(part: Part) -> bool:
+    return has_a2ui_mime(part=part) and _messages_of(part) is not None
 
 
 def envelopes_from_parts(parts: Sequence[Part] | None) -> list[Envelope]:
@@ -48,15 +67,9 @@ def envelopes_from_parts(parts: Sequence[Part] | None) -> list[Envelope]:
         return []
     out: list[Envelope] = []
     for part in parts:
-        if not is_a2ui_part(part):
+        if not has_a2ui_mime(part=part):
             continue
-        data = part.data
-        if not isinstance(data, dict):
-            continue
-        raw_envelopes = data.get('envelopes')
-        if not isinstance(raw_envelopes, list):
-            continue
-        for item in raw_envelopes:
+        for item in _messages_of(part) or []:
             if isinstance(item, dict):
                 out.append(item)
     return out
