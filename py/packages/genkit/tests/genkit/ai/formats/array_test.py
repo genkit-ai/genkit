@@ -153,3 +153,32 @@ class TestArrayFormatInstructions:
 
         assert fmt.instructions is not None
         assert '"type": "object"' in fmt.instructions
+
+
+@pytest.mark.parametrize(
+    'text, expected',
+    [
+        ('["red", "green"]', ['red', 'green']),
+        ('[12, -3.5, 1e2]', [12, -3.5, 100]),
+        ('[true, false, null]', [True, False, None]),
+        ('[[1, 2], [], [{"id": 1}]]', [[1, 2], [], [{'id': 1}]]),
+        ('["a,]b", {"text": "[x]"}]', ['a,]b', {'text': '[x]'}]),
+        ("['a]b', 'c\\'d']", ['a]b', "c'd"]),
+    ],
+)
+def test_streaming_preserves_array_values_at_every_split(text: str, expected: list[object]) -> None:
+    fmt = ArrayFormat().handle({'type': 'array', 'items': {}})
+    for split in range(1, len(text)):
+        first = ModelResponseChunk(content=[Part.from_text(text[:split])])
+        second = ModelResponseChunk(content=[Part.from_text(text[split:])])
+        output = fmt.parse_chunk(chunk_for_stream(first, index=0, previous_chunks=[]))
+        output += fmt.parse_chunk(chunk_for_stream(second, index=0, previous_chunks=[first]))
+        assert output == expected, split
+
+
+def test_streaming_waits_for_a_number_delimiter() -> None:
+    fmt = ArrayFormat().handle({'type': 'array', 'items': {'type': 'number'}})
+    first = ModelResponseChunk(content=[Part.from_text('[1')])
+    second = ModelResponseChunk(content=[Part.from_text('2, 3]')])
+    assert fmt.parse_chunk(chunk_for_stream(first, index=0, previous_chunks=[])) == []
+    assert fmt.parse_chunk(chunk_for_stream(second, index=0, previous_chunks=[first])) == [12, 3]
