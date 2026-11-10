@@ -17,6 +17,7 @@
 import {
   action,
   toZodSchema,
+  wireObject,
   z,
   type Action,
   type GenkitSchema,
@@ -48,7 +49,7 @@ export const RankedDocumentMetadataSchema = z
   })
   .passthrough(); // Allows other properties in 'metadata' with any type
 
-export const RankedDocumentDataSchema = z.object({
+export const RankedDocumentDataSchema = wireObject({
   content: z.array(PartSchema),
   metadata: RankedDocumentMetadataSchema,
 });
@@ -73,13 +74,13 @@ export class RankedDocument extends Document implements RankedDocumentData {
   }
 }
 
-const RerankerRequestSchema = z.object({
+const RerankerRequestSchema = wireObject({
   query: DocumentDataSchema,
   documents: z.array(DocumentDataSchema),
   options: z.any().optional(),
 });
 
-const RerankerResponseSchema = z.object({
+const RerankerResponseSchema = wireObject({
   documents: z.array(RankedDocumentDataSchema),
 });
 type RerankerResponse = z.infer<typeof RerankerResponseSchema>;

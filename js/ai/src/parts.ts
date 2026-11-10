@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import { z } from '@genkit-ai/core';
+import { wireObject, z } from '@genkit-ai/core';
 
-const EmptyPartSchema = z.object({
+const EmptyPartSchema = wireObject({
   text: z.never().optional(),
   media: z.never().optional(),
   toolRequest: z.never().optional(),
@@ -57,7 +57,7 @@ export type ReasoningPart = z.infer<typeof ReasoningPartSchema>;
 /**
  * Zod schema of media.
  */
-export const MediaSchema = z.object({
+export const MediaSchema = wireObject({
   /** The media content type. Inferred from data uri if not provided. */
   contentType: z.string().optional(),
   /** A `data:` or `https:` uri containing the media content.  */
@@ -81,7 +81,7 @@ export type MediaPart = z.infer<typeof MediaPartSchema>;
 /**
  * Zod schema of a tool request.
  */
-export const ToolRequestSchema = z.object({
+export const ToolRequestSchema = wireObject({
   /** The call id or reference for a specific request. */
   ref: z.string().optional(),
   /** The name of the tool to call. */
@@ -110,7 +110,7 @@ export type ToolRequestPart = z.infer<typeof ToolRequestPartSchema>;
 /**
  * Zod schema of a tool response.
  */
-const ToolResponseSchemaBase = z.object({
+const ToolResponseSchemaBase = wireObject({
   /** The call id or reference for a specific request. */
   ref: z.string().optional(),
   /** The name of the tool. */
@@ -175,7 +175,7 @@ export type CustomPart = z.infer<typeof CustomPartSchema>;
  * Zod schema of a resource part.
  */
 export const ResourcePartSchema = EmptyPartSchema.extend({
-  resource: z.object({
+  resource: wireObject({
     uri: z.string(),
   }),
 });
@@ -205,7 +205,7 @@ export const PartSchema = z.union([
 export type Part = z.infer<typeof PartSchema>;
 
 /** Zod schema for a multipart tool response containing structured output, content parts, and metadata. */
-export const MultipartToolResponseSchema = z.object({
+export const MultipartToolResponseSchema = wireObject({
   output: z.unknown().optional(),
   content: z.array(PartSchema).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),

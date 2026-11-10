@@ -29,6 +29,7 @@ import {
   toJsonSchema,
   toZodSchema,
   validateSchema,
+  wireObject,
   z,
   type GenkitSchema,
 } from '../src/schema.js';
@@ -796,6 +797,57 @@ describe('parseSchema() with z.void()', () => {
     assert.strictEqual(
       await parseSchemaAsync(null, { schema: z.void() }),
       null
+    );
+  });
+});
+
+describe('wireObject()', () => {
+  const shape = { a: z.string(), n: z.number().optional() };
+  const Wire = wireObject(shape);
+
+  it('keeps unknown keys when parsing, also in derived schemas', () => {
+    const data = { a: 'x', extra: 1 };
+    const schemas = [
+      Wire,
+      Wire.extend({ b: z.string().optional() }),
+      Wire.pick({ a: true }),
+      Wire.omit({ n: true }),
+      Wire.partial(),
+    ];
+    for (const schema of schemas) {
+      assert.deepStrictEqual(parseSchema(data, { schema }), data);
+    }
+  });
+
+  it('keeps unknown keys in nested wire objects', () => {
+    const schema = wireObject({
+      items: z.array(z.union([Wire, wireObject({ b: z.boolean() })])),
+    });
+    const data = {
+      items: [
+        { a: 'x', extra: 1 },
+        { b: true, extra: 2 },
+      ],
+      extra: 3,
+    };
+    assert.deepStrictEqual(parseSchema(data, { schema }), data);
+  });
+
+  it('still validates known keys', () => {
+    assert.throws(
+      () => parseSchema({ a: 1, extra: 1 }, { schema: Wire }),
+      ValidationError
+    );
+  });
+
+  it('has the JSON schema of a plain z.object', () => {
+    assert.deepStrictEqual(
+      toJsonSchema({ schema: Wire }),
+      toJsonSchema({ schema: z.object(shape) })
+    );
+    assert.deepStrictEqual(
+      toJsonSchema({ schema: Wire.extend({ b: z.string() }) }),
+      toJsonSchema({ schema: z.object(shape).extend({ b: z.string() }) })
     );
   });
 });

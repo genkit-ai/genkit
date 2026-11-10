@@ -211,6 +211,32 @@ export function annotateSchema<T extends z.ZodType>(
   return schema;
 }
 
+// One shared catchall instance marks wireObject schemas. It survives
+// `.extend()`, `.pick()`, etc., so derived schemas are recognized too.
+const WIRE_CATCHALL = z.unknown();
+
+/**
+ * `z.object` for framework wire types (Part, Message, GenerateRequest, ...).
+ *
+ * Unknown keys survive parsing, so data produced by plugins or by a newer
+ * runtime isn't silently dropped when it passes through an action. Typed as a
+ * plain `z.object` on purpose: `z.looseObject` would add an index signature to
+ * every inferred wire type (losing excess property checks), while data with
+ * extra keys is still a valid value of the closed type. The JSON schema is
+ * also that of a plain `z.object` (see compatOverride).
+ *
+ * Not meant for user-facing or config schemas; those keep standard zod
+ * semantics.
+ */
+export function wireObject<T extends z.core.$ZodLooseShape>(
+  shape: T
+): z.ZodObject<z.core.util.Writeable<T>, z.core.$strip> {
+  return z.object(shape).catchall(WIRE_CATCHALL) as unknown as z.ZodObject<
+    z.core.util.Writeable<T>,
+    z.core.$strip
+  >;
+}
+
 /**
  * Wrapper object for various ways schema can be provided.
  */
@@ -304,6 +330,11 @@ function compatOverride(ctx: {
     // v4 treats dates as unrepresentable. Data crosses the wire as ISO strings.
     jsonSchema.type = 'string';
     jsonSchema.format = 'date-time';
+  } else if (def.type === 'object' && def.catchall === WIRE_CATCHALL) {
+    // wireObject is loose only at runtime; describe it like the plain
+    // z.object it is typed as. Omitting `additionalProperties` allows extra
+    // keys just the same, and keeps wire type JSON schemas free of noise.
+    delete jsonSchema.additionalProperties;
   } else if (
     def.type === 'union' &&
     'discriminator' in def &&

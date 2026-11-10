@@ -22,6 +22,7 @@ import { GenkitError } from './error.js';
 import { ActionType, Registry } from './registry.js';
 import {
   toJsonSchema,
+  wireObject,
   type GenkitSchema,
   type InferInput,
   type InferOutput,
@@ -30,7 +31,7 @@ import {
 /**
  * Zod schema of an opration representing a background task.
  */
-export const OperationSchema = z.object({
+export const OperationSchema = wireObject({
   action: z.string().optional(),
   id: z.string(),
   done: z.boolean().optional(),
