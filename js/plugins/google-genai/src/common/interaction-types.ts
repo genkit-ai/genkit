@@ -287,6 +287,13 @@ export declare interface AudioContent {
   uri?: string;
   /** The mime type of the audio. */
   mime_type?: string;
+  /**
+   * Sample rate and channels: sent on streamed audio deltas (copied onto the
+   * content when the stream is assembled), e.g. single-voice TTS, which has
+   * no `mime_type`.
+   */
+  sample_rate?: number;
+  channels?: number;
 }
 
 /**
@@ -740,7 +747,7 @@ export declare type ResponseModality =
 
 /**
  * A safety setting: the threshold for blocking one harm category.
- * vertexAI only (googleAI rejects `safety_settings` with a 400).
+ * Both platforms accept it; the Gemini API rejects `block_none` (use `off`).
  */
 export declare interface InteractionSafetySetting {
   /** The harm category, e.g. `hate_speech`. */
@@ -812,7 +819,7 @@ export declare interface CreateInteractionRequest {
   agent_config?: InteractionsAgentConfig;
   /** */
   service_tier?: ServiceTier;
-  /** Safety settings. vertexAI only (googleAI rejects it with a 400). */
+  /** Safety settings (`block_none` is vertexAI only; googleAI uses `off`). */
   safety_settings?: InteractionSafetySetting[];
   /**
    * Key-value labels for billing and cost tracking. vertexAI only (accepted

@@ -488,6 +488,18 @@ export function interactionErrorCodeToGenkitStatus(
 }
 
 /**
+ * Unwraps an error body sent as a one-element JSON array. The Interactions API
+ * sometimes wraps its error that way: a bad API key gives
+ * `[{"error": {"code": 400, "message": "API key not valid. ..."}}]` (seen
+ * with the Dart plugin, Nov 2026). Anything else is returned as is.
+ *
+ * @param json A parsed error body.
+ */
+export function unwrapErrorBody(json: unknown): unknown {
+  return Array.isArray(json) && json.length === 1 ? json[0] : json;
+}
+
+/**
  * Builds an error for leftover, unparsed Interactions stream text. When the
  * model is overloaded (or otherwise fails), the API may return a plain JSON
  * error body (e.g. `{"error":{"code":"service_unavailable","message":"..."}}`)
@@ -500,7 +512,7 @@ export function interactionErrorCodeToGenkitStatus(
  */
 export function parseInteractionStreamErrorText(text: string): Error {
   try {
-    const json = JSON.parse(text);
+    const json: any = unwrapErrorBody(JSON.parse(text));
     const apiError = json?.error;
     if (
       apiError &&
@@ -923,6 +935,24 @@ const DROPPED_CONFIG_FIELD_HINTS: Record<string, string> = {
     " Use thinkingConfig.thinkingLevel ('LOW' | 'MEDIUM' | 'HIGH') instead.",
 };
 
+/**
+ * Config fields with their own warning text (instead of "<field> is not
+ * supported by '<model>' and was ignored.").
+ */
+const DROPPED_CONFIG_FIELD_MESSAGES: Record<string, (model: string) => string> =
+  {
+    // generateContent turned thinking off with a budget of 0. Not mapped to a
+    // level: the lowest level differs per model (MINIMAL isn't accepted by
+    // every model, LOW would raise thinking on models that default lower),
+    // and some models can't turn thinking off at all.
+    'thinkingConfig.thinkingBudget: 0': (model) =>
+      `thinkingConfig.thinkingBudget: 0 (thinking off) was ignored: ` +
+      `'${model}' can't turn thinking off (the Interactions API has no ` +
+      'thinking budget). For the least thinking, set ' +
+      "thinkingConfig.thinkingLevel to the model's lowest level ('LOW', or " +
+      "'MINIMAL' where the model supports it).",
+  };
+
 /** `model:field` pairs that have already been warned about. */
 const warnedDroppedConfigFields = new Set<string>();
 
@@ -934,9 +964,12 @@ export function warnDroppedConfigField(model: string, field: string) {
   const key = `${model}:${field}`;
   if (warnedDroppedConfigFields.has(key)) return;
   warnedDroppedConfigFields.add(key);
+  const message = DROPPED_CONFIG_FIELD_MESSAGES[field];
   logger.warn(
-    `${field} is not supported by '${model}' and was ignored.` +
-      (DROPPED_CONFIG_FIELD_HINTS[field] ?? '')
+    message
+      ? message(model)
+      : `${field} is not supported by '${model}' and was ignored.` +
+          (DROPPED_CONFIG_FIELD_HINTS[field] ?? '')
   );
 }
 

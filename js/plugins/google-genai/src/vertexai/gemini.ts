@@ -51,6 +51,7 @@ import {
 import {
   applyLatLngToGoogleMapsTools,
   createInteractionChunkConverter,
+  ensureToolIds,
   fromInteractionSync,
   mergeStreamedAudio,
   selectInteractionInput,
@@ -1291,7 +1292,11 @@ async function generateWithInteractions(params: {
     tools: tools.length ? tools : undefined,
     generation_config: generationConfig,
     stream: params.streamingRequested,
-    input: withoutUnsupportedResentSteps(toInteractionSteps(messages)),
+    // Tool requests/responses without a ref (e.g. a history saved from
+    // generateContent) get IDs: the API rejects empty ones (400).
+    input: withoutUnsupportedResentSteps(
+      toInteractionSteps(ensureToolIds(messages))
+    ),
     store,
     safety_settings: toInteractionSafetySettings(safetySettings),
     labels: toGeminiLabels(labels),

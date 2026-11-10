@@ -428,8 +428,8 @@ ai.defineFlow('agentic-video-understanding', async () => {
   return { text, toolUseTokens: usage.custom?.toolUseTokens };
 });
 
-// Safety settings are supported on the platform (unlike the Gemini API's
-// Interactions API). The plugin sends them in the Interactions format.
+// Safety settings on an Interactions model. The plugin sends them in the
+// Interactions format.
 ai.defineFlow('safety-settings', async () => {
   const { text, finishReason } = await ai.generate({
     model: vertexAI.model('gemini-3.8-flash'),

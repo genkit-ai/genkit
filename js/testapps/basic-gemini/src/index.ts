@@ -373,6 +373,33 @@ ai.defineFlow('basic-hi', async () => {
   return text;
 });
 
+// Safety settings on an Interactions model. The plugin sends them in the
+// Interactions format; BLOCK_NONE goes out as `off` (the Gemini API has no
+// block_none there).
+ai.defineFlow('safety-settings', async () => {
+  const { text, finishReason } = await ai.generate({
+    model: googleAI.model('gemini-3.8-flash'),
+    prompt: 'Write a friendly two-line poem about autumn leaves.',
+    config: {
+      safetySettings: [
+        {
+          category: 'HARM_CATEGORY_HARASSMENT',
+          threshold: 'BLOCK_LOW_AND_ABOVE',
+        },
+        {
+          category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
+          threshold: 'BLOCK_MEDIUM_AND_ABOVE',
+        },
+        {
+          category: 'HARM_CATEGORY_HATE_SPEECH',
+          threshold: 'BLOCK_NONE',
+        },
+      ],
+    },
+  });
+  return { text, finishReason };
+});
+
 ai.defineFlow('basic-hi-flex-tier', async () => {
   const { text } = await ai.generate({
     model: googleAI.model('gemini-flash-lite-latest'),

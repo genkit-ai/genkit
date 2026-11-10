@@ -396,6 +396,46 @@ describe('Google AI Client', () => {
       );
     });
 
+    it('reads an error body wrapped in a one-element array', async () => {
+      // A bad API key on the Interactions API returns the error in a list
+      // (seen live with the Dart plugin, Nov 2026).
+      mockFetchResponse(
+        [
+          {
+            error: {
+              code: 400,
+              message: 'API key not valid. Please pass a valid API key.',
+              status: 'INVALID_ARGUMENT',
+            },
+          },
+        ],
+        false,
+        400,
+        'Bad Request'
+      );
+      await assert.rejects(createInteraction(apiKey, request), (err: any) => {
+        assert.strictEqual(err.name, 'GenkitError');
+        assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+        assert.ok(
+          err.message.endsWith(
+            '] API key not valid. Please pass a valid API key.'
+          ),
+          err.message
+        );
+        assert.ok(!err.message.includes('[{'), err.message);
+        return true;
+      });
+    });
+
+    it('maps the Interactions code of an error body wrapped in an array', async () => {
+      await expectStatus(
+        [{ error: { code: 'model_not_found', message: 'no such model' } }],
+        400,
+        'Bad Request',
+        'NOT_FOUND'
+      );
+    });
+
     it('detects Interactions URLs by path segment', () => {
       const { isInteractionUrl } = TEST_ONLY;
       assert.strictEqual(
