@@ -83,7 +83,11 @@ class _ServerError(_ClientError):
 
 
 class _ProtocolError(_ClientError):
-    """The server answered in a way the protocol does not allow. Status ``INTERNAL``."""
+    """One request failed without a JSON-RPC error, such as on a malformed reply. Status ``INTERNAL``.
+
+    This includes a server whose ``tools/list`` cursors never terminate.
+    ``__cause__`` carries what the MCP SDK raised, when there is one.
+    """
 
 
 class _ToolResultError(_ClientError):
