@@ -15,7 +15,7 @@
  */
 
 import * as assert from 'assert';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import { streamFlow } from '../src/client/client.js';
 
 function mockSseFetch(body: string) {
@@ -34,7 +34,7 @@ describe('streamFlow SSE parser', () => {
     globalThis.fetch = originalFetch;
   });
 
-  it('parses spec-compliant events without a space after "data:"', async () => {
+  it('parses data events without a space after "data:"', async () => {
     const body =
       `data:${JSON.stringify({ message: 'a' })}\n\n` +
       `data:${JSON.stringify({ message: 'b' })}\n\n` +
@@ -55,14 +55,11 @@ describe('streamFlow SSE parser', () => {
     globalThis.fetch = mockSseFetch(body) as typeof fetch;
 
     const response = streamFlow({ url: 'http://example.com/flow' });
-    await assert.rejects(
-      async () => {
-        for await (const _ of response.stream) {
-          // drain
-        }
-      },
-      /unknown chunk format/
-    );
+    await assert.rejects(async () => {
+      for await (const _ of response.stream) {
+        // drain
+      }
+    }, /unknown chunk format/);
   });
 
   it('parses events with the conventional "data: " prefix', async () => {
@@ -78,5 +75,36 @@ describe('streamFlow SSE parser', () => {
     }
     assert.deepStrictEqual(chunks, ['a']);
     assert.strictEqual(await response.output, 'done');
+  });
+  it('throws the server error from an error frame', async () => {
+    const body =
+      `data: ${JSON.stringify({ message: 'a' })}\n\n` +
+      `error: ${JSON.stringify({
+        error: { status: 'INTERNAL', message: 'Internal Error' },
+      })}\n\n`;
+    globalThis.fetch = mockSseFetch(body) as typeof fetch;
+
+    const response = streamFlow({ url: 'http://example.com/flow' });
+    await assert.rejects(response.output, /^Error: INTERNAL: Internal Error/);
+    await assert.rejects(async () => {
+      for await (const _ of response.stream) {
+        // drain
+      }
+    }, /^Error: INTERNAL: Internal Error/);
+  });
+
+  it('throws on an error frame without the error wrapper', async () => {
+    const body =
+      `data: ${JSON.stringify({ message: 'a' })}\n\n` +
+      `error: ${JSON.stringify({ status: 'INTERNAL', message: 'Internal Error' })}\n\nEND`;
+    globalThis.fetch = mockSseFetch(body) as typeof fetch;
+
+    const response = streamFlow({ url: 'http://example.com/flow' });
+    await assert.rejects(response.output, /^Error: INTERNAL: Internal Error/);
+    await assert.rejects(async () => {
+      for await (const _ of response.stream) {
+        // drain
+      }
+    }, /^Error: INTERNAL: Internal Error/);
   });
 });
