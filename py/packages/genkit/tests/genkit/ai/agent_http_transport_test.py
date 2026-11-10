@@ -103,3 +103,8 @@ def test_parse_stream_line_empty_returns_none() -> None:
 def test_parse_stream_line_invalid_json() -> None:
     with pytest.raises(json.JSONDecodeError):
         parse_stream_line('data: not-json')
+
+
+@pytest.mark.parametrize('line', [':', ': keep-alive', ':ping', ': {"result": {}}'])
+def test_parse_stream_line_ignores_sse_comments(line: str) -> None:
+    assert parse_stream_line(line) is None

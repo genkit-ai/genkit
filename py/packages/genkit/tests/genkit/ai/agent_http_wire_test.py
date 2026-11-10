@@ -318,3 +318,26 @@ async def test_remote_chat_send_connection_refused_raises_unavailable_and_keeps_
             await chat.send('book a table for 4')
     assert exc.value.status == 'UNAVAILABLE'
     assert chat.messages == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('leading_comment', [False, True])
+async def test_run_turn_preserves_chunks_and_result_across_sse_comments(leading_comment: bool) -> None:
+    chunk = 'data: {"message": {"modelChunk": {"content": [{"text": "partial"}]}}}\n\n'
+    body = (': keep-alive\n\n' if leading_comment else '') + chunk + ': ping\n\n' + RESULT_LINE + '\n\n'
+    transport = HttpAgentTransport(url=URL, state_management='server')
+    async with _mock_client(lambda _req: httpx.Response(200, text=body)) as client:
+        with mock.patch('genkit._ai._agents._transports._http._agent_client', return_value=client):
+            stream, output = await transport.run_turn(
+                agent_input=AgentInput(message=Message(role='user', content=[Part.from_text('hi')])),
+                init=AgentInit(snapshot_id='snap-1'),
+            )
+            try:
+                chunks = [item async for item in stream]
+            finally:
+                result = await output
+    assert len(chunks) == 1
+    assert chunks[0].model_chunk is not None
+    assert chunks[0].model_chunk.content[0].text == 'partial'
+    assert result.message is not None
+    assert result.message.content[0].text == 'ok'
