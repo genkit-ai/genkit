@@ -139,27 +139,29 @@ async function __flowRunEnvelope({
     // If buffer includes the delimiter that means we are still receiving chunks.
     while (buffer.includes(__flowStreamDelimiter)) {
       const event = buffer.substring(0, buffer.indexOf(__flowStreamDelimiter));
-      // Per the SSE spec, the space after `data:` is optional, so strip the
-      // prefix and then at most one leading space.
-      // https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation
-      let payload = event.startsWith('data:')
-        ? event.substring('data:'.length)
-        : event;
-      if (payload.startsWith(' ')) {
-        payload = payload.substring(1);
+      const colon = event.indexOf(':');
+      const field = colon === -1 ? event : event.substring(0, colon);
+      let value = colon === -1 ? '' : event.substring(colon + 1);
+      // SSE allows one optional space after the field name.
+      if (value.startsWith(' ')) {
+        value = value.substring(1);
       }
-      const chunk = JSON.parse(payload);
+      if (field !== 'data' && field !== 'error') {
+        throw new Error('unknown event format: ' + event);
+      }
+      const chunk = JSON.parse(value);
       if (!chunk || typeof chunk !== 'object') {
         throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
+      }
+      if (field === 'error') {
+        throw flowStreamError(chunk.error ?? chunk);
       }
       if (chunk.hasOwnProperty('message')) {
         sendChunk(chunk.message);
       } else if (chunk.hasOwnProperty('result')) {
         return chunk.result;
       } else if (chunk.hasOwnProperty('error')) {
-        throw new Error(
-          `${chunk.error.status}: ${chunk.error.message}\n${chunk.error.details}`
-        );
+        throw flowStreamError(chunk.error);
       } else {
         throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
       }
@@ -169,6 +171,10 @@ async function __flowRunEnvelope({
     }
   }
   throw new Error('stream did not terminate correctly');
+}
+
+function flowStreamError(error: any): Error {
+  return new Error(`${error.status}: ${error.message}\n${error.details}`);
 }
 
 /**
