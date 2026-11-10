@@ -138,8 +138,6 @@ class Channel(Generic[T_co, R]):
     async def _pop(self) -> T_co:
         r = await self.queue.get()
         self.queue.task_done()
-        if r is None:
-            raise StopAsyncIteration
         return r
 
 
