@@ -1,0 +1,28 @@
+{
+  "name": "box-testapp",
+  "version": "1.0.0",
+  "description": "Genkit in a Box: run a shell tool in a box while the agent stays outside.",
+  "main": "lib/index.js",
+  "scripts": {
+    "start": "node lib/index.js",
+    "compile": "tsc",
+    "build": "pnpm build:clean && pnpm compile",
+    "build:clean": "rimraf ./lib",
+    "build:watch": "tsc --watch",
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@genkit-ai/box": "workspace:*",
+    "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/middleware": "workspace:*",
+    "genkit": "workspace:*"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3"
+  }
+}
