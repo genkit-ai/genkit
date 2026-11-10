@@ -231,7 +231,13 @@ def _from_veo_operation(*, api_op: genai_types.GenerateVideosOperation) -> Opera
 
     raw_payload: dict[str, Any] | None = None
     if hasattr(response, 'model_dump'):
-        raw_payload = response.model_dump(by_alias=True, exclude_none=True)
+        # Inline video bytes already reach the caller as a data URL in the media part.
+        raw_payload = response.model_dump(
+            mode='json',
+            by_alias=True,
+            exclude_none=True,
+            exclude={'generated_videos': {'__all__': {'video': {'video_bytes'}}}},
+        )
     elif isinstance(response, dict):
         raw_payload = response
 
