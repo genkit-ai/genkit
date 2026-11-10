@@ -4,7 +4,7 @@
     "preinstall": "npx only-allow pnpm",
     "build": "pnpm build:libs",
     "build:all": "pnpm build:libs && pnpm build:docsnippets && pnpm build:testapps",
-    "build:libs": "pnpm build:core && pnpm build:genkit && pnpm build:noncore ",
+    "build:libs": "pnpm -r --workspace-concurrency -1 -F \"./(core|ai|flow|genkit|plugins/**)\" build",
     "build:core": "pnpm -r --workspace-concurrency 1 -F core -F ai -F flow build",
     "build:genkit": "pnpm -F genkit build",
     "build:noncore": "pnpm -r --workspace-concurrency -1 -F \"./plugins/**\" build",
