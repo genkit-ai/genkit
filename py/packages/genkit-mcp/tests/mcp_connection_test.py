@@ -1203,7 +1203,7 @@ async def test_a_timed_out_call_is_cancelled_on_the_server(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_close_sends_no_cancellation_for_a_call_in_flight(tmp_path: Path) -> None:
+async def test_close_is_not_taken_for_an_abandoned_call(tmp_path: Path) -> None:
     log = tmp_path / 'cancellations.jsonl'
     connection = McpConnection('fake', config(tmp_path, MCP_FAKE_CANCEL_LOG=str(log)), request_timeout_millis=None)
     stalled = asyncio.create_task(connection.call_tool('stall', {}))

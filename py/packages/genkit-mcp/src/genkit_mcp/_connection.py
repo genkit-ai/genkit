@@ -284,7 +284,7 @@ class _Session(ClientSession):
             metadata=metadata,
             progress_callback=progress_callback,
         )
-        # Outside an operation is the handshake, and initialize must never be cancelled.
+        # Outside an operation (the handshake, the liveness probe), a request is never cancelled.
         if abandon is None:
             return await sent
         # The SDK takes the request's id from this counter before it first suspends.
@@ -624,6 +624,7 @@ class McpConnection:
                     if not request.result.done():
                         request.result.set_result(value)
             except Exception as error:
+                _abandon.set(None)
                 if await _transport_is_dead(session, error):
                     # Settle now rather than leaving callers waiting the seconds the SDK spends terminating the child.
                     self._settle(error)
