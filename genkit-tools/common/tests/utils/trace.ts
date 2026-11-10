@@ -20,6 +20,23 @@ export const TRACE_ID = '7c273c22b219d077c6731a10d46b7d40';
 export const BASE_FLOW_SPAN_ID = '22b219d077c67';
 export const WRAPPER_ACTION_SPAN_ID = 'eec307f9311c5617';
 
+/** Builds a minimal valid SpanData for unit tests with optional field overrides. */
+export function makeSpan(overrides: Partial<SpanData> = {}): SpanData {
+  const spanId = overrides.spanId ?? 'span-1';
+  return {
+    traceId: 'trace-1',
+    spanId,
+    startTime: 100,
+    endTime: 200,
+    attributes: {},
+    instrumentationLibrary: { name: 'genkit-tracer', version: 'v1' },
+    spanKind: 'INTERNAL',
+    status: { code: 0 },
+    ...overrides,
+    displayName: overrides.displayName ?? spanId,
+  };
+}
+
 /** Helper class to manage traces in tests */
 export class MockTrace {
   private BASE_FLOW_SPAN: SpanData = {
