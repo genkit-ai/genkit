@@ -615,6 +615,24 @@ async def test_reconnect_replaces_one_server_process(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_hosted_call_cut_off_by_reconnect_names_its_server_and_host(tmp_path: Path) -> None:
+    """A hosted server's interrupted call is distinguishable from the same server on another host."""
+    host = McpHost('hosted', mcp_servers=servers(tmp_path, 'repo'))
+    try:
+        tools = {tool.name: tool for tool in await host.get_active_tools()}
+        waiting = asyncio.create_task(tools['repo_stall']({}))
+        await tools['repo_await_stall']({})
+
+        await host.reconnect('repo')
+
+        with pytest.raises(GenkitError, match="MCP server 'repo' on host 'hosted' restarted") as raised:
+            await asyncio.wait_for(waiting, timeout=LIMIT)
+        assert raised.value.status == 'UNAVAILABLE'
+    finally:
+        await host.close()
+
+
+@pytest.mark.asyncio
 async def test_reconnect_reports_a_server_which_cannot_be_started(tmp_path: Path) -> None:
     """The caller of reconnect hears about a broken server, and keeps holding it."""
     host = McpHost('hosted', mcp_servers={'broken': missing_server(tmp_path)})
@@ -777,7 +795,7 @@ async def test_a_disconnected_server_cannot_drop_the_listing(tmp_path: Path) -> 
         await expand_wildcard_tools(ai._registry, ['hosted:tool/*'])
         assert (await counter.run({})).response.output == '2'
 
-        with pytest.raises(GenkitError) as raised:
+        with pytest.raises(GenkitError, match="MCP server 'beta' on host 'hosted' is closed") as raised:
             await beta_echo.run({'message': 'late'})
         assert raised.value.status == 'FAILED_PRECONDITION'
 

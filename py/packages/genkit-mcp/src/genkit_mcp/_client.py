@@ -288,9 +288,10 @@ class McpClient:
             if not loop.is_running():
                 return
             if time.monotonic() >= deadline:
+                named = {'client': self._name} if self._host is None else {'server': self._name, 'host': self._host}
                 logger.warning(
                     'MCP connection did not close on its event loop in time',
-                    client=self._name,
+                    **named,
                     timeout_seconds=_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS,
                 )
                 return
@@ -310,10 +311,17 @@ class McpClient:
                 del self._closing[connection]
         self._close_tasks -= {task for task in self._close_tasks if task.get_loop().is_closed()}
 
+    @property
+    def _target(self) -> str:
+        """Name this standalone client or this hosted server in a message."""
+        if self._host is None:
+            return f'MCP client {self._name!r}'
+        return f'MCP server {self._name!r} on host {self._host!r}'
+
     def _refuse_when_closed(self) -> None:
         """Raise if this client has been closed. Call under the connections lock."""
         if self._closed:
-            raise _ConnectionClosedError(f'MCP client {self._name!r} is closed')
+            raise _ConnectionClosedError(f'{self._target} is closed')
 
     def _connection(self) -> McpConnection:
         """Return the calling loop's connection, replacing one which has ended."""
@@ -337,7 +345,7 @@ class McpClient:
         except _ConnectionClosedError:
             if self._closed:
                 raise
-            raise _ConnectionFailedError(f'MCP client {self._name!r} restarted during the request; retry it') from None
+            raise _ConnectionFailedError(f'{self._target} restarted during the request; retry it') from None
 
     async def _call_tool(
         self,
