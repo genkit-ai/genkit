@@ -6,7 +6,7 @@
   },
   "scripts": {
     "preinstall": "npx only-allow pnpm",
-    "build": "pnpm install && pnpm build:common && pnpm build:telemetry-server && pnpm build:cli",
+    "build": "pnpm build:common && pnpm build:telemetry-server && pnpm build:cli",
     "build:cli": "pnpm build:md-context && cd cli && pnpm build",
     "build:telemetry-server": "cd telemetry-server && pnpm build",
     "build:common": "cd common && pnpm build && cd .. && pnpm export:schemas",

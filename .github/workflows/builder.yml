@@ -55,7 +55,7 @@ jobs:
     - name: Install dependencies
       run: pnpm install
     - name: Run build script
-      run: pnpm build:js
+      run: pnpm build:js:all
     - name: Run js tests
       run: pnpm test:js
     - name: Validate working directory is clean
