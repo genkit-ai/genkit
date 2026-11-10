@@ -30,7 +30,7 @@ import { logDataFromOtlp, traceDataFromOtlp } from './utils/otlp.js';
 
 export { LocalFileLogStore } from './file-log-store.js';
 export { LocalFileTraceStore } from './file-trace-store.js';
-export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types';
+export { TraceQuerySchema, type TraceQuery, type TraceStore } from './types.js';
 
 let server: http.Server;
 const broadcastManager = new BroadcastManager();
@@ -287,7 +287,7 @@ export async function startTelemetryServer(params: {
     }
   );
 
-  api.post(
+  api.post<{ parentTraceId?: string; parentSpanId?: string }>(
     [
       '/api/otlp',
       '/api/otlp/v1/traces',
@@ -300,8 +300,8 @@ export async function startTelemetryServer(params: {
         const { parentTraceId, parentSpanId } = request.params;
 
         if (
-          !request.body.resourceSpans?.length &&
-          !request.body.resourceLogs?.length
+          !request.body?.resourceSpans?.length &&
+          !request.body?.resourceLogs?.length
         ) {
           // Acknowledge and ignore empty payloads.
           response.status(200).json({});

@@ -24,12 +24,12 @@ import {
   SUPPORTED_DOC_LANGUAGES,
   detectProjectLanguage,
   type SupportedDocLanguage,
-} from '../utils/docs';
+} from '../utils/docs.js';
 import {
   resolveTelemetryServer,
   startDevProcessManager,
   startManager,
-} from '../utils/manager-utils';
+} from '../utils/manager-utils.js';
 
 export {
   SUPPORTED_DOC_LANGUAGES,

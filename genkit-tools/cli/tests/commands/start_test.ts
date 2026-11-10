@@ -29,8 +29,8 @@ import {
   vi,
   type Mock,
 } from 'vitest';
-import { start } from '../../src/commands/start';
-import * as managerUtils from '../../src/utils/manager-utils';
+import { start } from '../../src/commands/start.js';
+import * as managerUtils from '../../src/utils/manager-utils.js';
 
 vi.mock('@genkit-ai/tools-common/server');
 vi.mock('@genkit-ai/tools-common/utils', () => ({
@@ -44,7 +44,7 @@ vi.mock('@genkit-ai/tools-common/utils', () => ({
 vi.mock('get-port', () => ({
   __esModule: true,
   default: vi.fn(() => Promise.resolve(4000)),
-  makeRange: vi.fn(),
+  portNumbers: vi.fn(),
 }));
 vi.mock('open');
 

@@ -19,14 +19,14 @@ import http from 'http';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RuntimeManager } from '../src/manager/manager';
+import { RuntimeManager } from '../src/manager/manager.js';
 import {
   REFLECTION_SECRET_HEADER,
   isLoopbackUrl,
   secretForRuntime,
-} from '../src/manager/reflection-auth';
-import { RuntimeEvent, type RuntimeInfo } from '../src/manager/types';
-import { logger } from '../src/utils/logger';
+} from '../src/manager/reflection-auth.js';
+import { RuntimeEvent, type RuntimeInfo } from '../src/manager/types.js';
+import { logger } from '../src/utils/logger.js';
 
 vi.mock('chokidar', () => {
   const watch = vi.fn().mockReturnValue({

@@ -17,12 +17,12 @@
 import { logger } from '@genkit-ai/tools-common/utils';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { defineDocsTool } from '../mcp/docs';
-import { defineFlowTools } from './flows';
-import { defineInitPrompt } from './prompts/init';
-import { defineRuntimeTools } from './runtime';
-import { defineTraceTools } from './trace';
-import { McpRuntimeManager, McpToolOptions } from './utils';
+import { defineDocsTool } from '../mcp/docs.js';
+import { defineFlowTools } from './flows.js';
+import { defineInitPrompt } from './prompts/init.js';
+import { defineRuntimeTools } from './runtime.js';
+import { defineTraceTools } from './trace.js';
+import { McpRuntimeManager, McpToolOptions } from './utils.js';
 
 export async function startMcpServer(params: {
   projectRoot: string;

@@ -19,8 +19,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it, vi } from 'vitest';
-import { ProcessManager } from '../src/manager/process-manager';
-import { logger } from '../src/utils';
+import { ProcessManager } from '../src/manager/process-manager.js';
+import { logger } from '../src/utils/index.js';
 
 type TerminationHook = {
   terminateProcess(pid: number, callback: (error: Error | null) => void): void;

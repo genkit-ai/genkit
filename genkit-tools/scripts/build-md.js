@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-const fs = require('fs');
-const path = require('path');
+import * as fs from 'fs';
+import * as path from 'path';
 
-const CONTEXT_DIR = path.resolve(__dirname, '..', 'cli', 'context');
+const CONTEXT_DIR = path.resolve(import.meta.dirname, '..', 'cli', 'context');
 const TARGET_DIR = path.resolve(
-  __dirname,
+  import.meta.dirname,
   '..',
   'cli',
   'src',

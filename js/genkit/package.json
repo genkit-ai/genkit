@@ -11,7 +11,7 @@
   "type": "commonjs",
   "main": "./lib/cjs/index.js",
   "scripts": {
-    "check": "tsc && tsc -p tsconfig.types-test.json",
+    "check": "tsc -p tsconfig.test.json",
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",

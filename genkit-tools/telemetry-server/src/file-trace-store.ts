@@ -25,8 +25,8 @@ import { Mutex } from 'async-mutex';
 import fs from 'fs';
 import lockfile from 'lockfile';
 import path from 'path';
-import type { TraceQuery, TraceQueryResponse, TraceStore } from './types';
-import { version as currentVersion } from './utils/version';
+import type { TraceQuery, TraceQueryResponse, TraceStore } from './types.js';
+import { version as currentVersion } from './utils/version.js';
 
 const MAX_TRACES = 1000;
 const MAX_INDEX_FILES = 10;

@@ -21,17 +21,21 @@ import express, { type ErrorRequestHandler } from 'express';
 import type { Server } from 'http';
 import os from 'os';
 import path from 'path';
-import type { GenkitToolsError } from '../manager';
-import type { BaseRuntimeManager } from '../manager/manager';
-import { detectRuntimeSync, logger, writeToolsInfoFile } from '../utils';
+import type { GenkitToolsError } from '../manager/index.js';
+import type { BaseRuntimeManager } from '../manager/manager.js';
 import {
   createToolsRequestEvent,
   extractActionType,
   recordRequestEvent,
-} from '../utils/analytics';
-import { toolsPackage } from '../utils/package';
-import { downloadAndExtractUiAssets } from '../utils/ui-assets';
-import { TOOLS_SERVER_ROUTER } from './router';
+} from '../utils/analytics.js';
+import {
+  detectRuntimeSync,
+  logger,
+  writeToolsInfoFile,
+} from '../utils/index.js';
+import { toolsPackage } from '../utils/package.js';
+import { downloadAndExtractUiAssets } from '../utils/ui-assets.js';
+import { TOOLS_SERVER_ROUTER } from './router.js';
 
 const MAX_PAYLOAD_SIZE = 30000000;
 /**
@@ -276,7 +280,7 @@ export function startServer(
     express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('sendBidiInput', projectRuntime),
     (req, res) => {
-      const { traceId, chunk } = req.body;
+      const { traceId, chunk } = req.body ?? {};
       const stream = activeInputStreams.get(traceId);
       if (stream) {
         stream.push(chunk);
@@ -292,7 +296,7 @@ export function startServer(
     express.json(),
     loggedExpressRoute('endBidiInput', projectRuntime),
     (req, res) => {
-      const { traceId } = req.body;
+      const { traceId } = req.body ?? {};
       const stream = activeInputStreams.get(traceId);
       if (stream) {
         stream.close();
@@ -312,7 +316,7 @@ export function startServer(
     express.json({ limit: MAX_PAYLOAD_SIZE }),
     loggedExpressRoute('streamTrace', projectRuntime),
     async (req, res) => {
-      const { traceId } = req.body;
+      const { traceId } = req.body ?? {};
 
       if (!traceId) {
         res.status(400).json({ error: 'traceId is required' });
@@ -382,7 +386,7 @@ export function startServer(
     })
   );
 
-  app.all('*', (_, res) => {
+  app.all('/{*splat}', (_, res) => {
     res.status(200).sendFile('/', { root: UI_ASSETS_SERVE_PATH });
   });
 

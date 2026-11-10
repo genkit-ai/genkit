@@ -16,8 +16,7 @@
 
 import type { MessageData } from '@genkit-ai/ai';
 import type { BaseEvalDataPoint } from '@genkit-ai/ai/evaluator';
-import type { ModelAction, ModelInfo } from '@genkit-ai/ai/model';
-import type { SessionData, SessionStore } from '@genkit-ai/ai/session';
+import type { DefineModelOptions, ModelAction } from '@genkit-ai/ai/model';
 import type { StreamingCallback } from '@genkit-ai/core';
 import type { Genkit } from '../src/genkit';
 import type {
@@ -28,12 +27,12 @@ import type {
 
 export function defineEchoModel(
   ai: Genkit,
-  modelInfo?: ModelInfo
+  options?: Omit<DefineModelOptions, 'name'>
 ): ModelAction {
   const model = ai.defineModel(
     {
       name: 'echoModel',
-      ...modelInfo,
+      ...options,
     },
     async (request, sendChunk) => {
       (model as any).__test__lastRequest = request;
@@ -122,17 +121,6 @@ export async function runAsync<O>(fn: () => O): Promise<O> {
   });
 }
 
-export class TestMemorySessionStore<S> implements SessionStore<S> {
-  private data: Record<string, SessionData<S>> = {};
-
-  async get(sessionId: string): Promise<SessionData<S> | undefined> {
-    return this.data[sessionId];
-  }
-
-  async save(sessionId: string, sessionData: SessionData<S>): Promise<void> {
-    this.data[sessionId] = sessionData;
-  }
-}
 export function defineStaticResponseModel(
   ai: Genkit,
   message: MessageData

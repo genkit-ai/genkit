@@ -22,9 +22,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'yaml';
 import * as z from 'zod';
-import * as action from '../types/action';
-import * as apis from '../types/apis';
-import { SpanDataSchema, TraceDataSchema } from '../types/trace';
+import * as action from '../types/action.js';
+import * as apis from '../types/apis.js';
+import { SpanDataSchema, TraceDataSchema } from '../types/trace.js';
 
 const registry = new OpenAPIRegistry();
 registry.register('CustomAny', action.CustomAnySchema.openapi('CustomAny'));

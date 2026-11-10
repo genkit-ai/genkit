@@ -1,6 +1,10 @@
 {
   "name": "genkit-cli",
   "version": "1.45.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "description": "CLI for interacting with the Google Genkit AI framework",
   "license": "Apache-2.0",
   "keywords": [
@@ -32,13 +36,13 @@
   "dependencies": {
     "@genkit-ai/telemetry-server": "workspace:*",
     "@genkit-ai/tools-common": "workspace:*",
-    "@inquirer/prompts": "^7.10.1",
+    "@inquirer/prompts": "^8.7.3",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "axios": "^1.20.0",
     "colorette": "^2.0.20",
     "commander": "^14.0.3",
-    "get-port": "5.1.1",
-    "open": "^6.4.0",
+    "get-port": "^7.2.0",
+    "open": "^11.0.4",
     "semver": "^7.8.5",
     "yaml": "^2.9.1",
     "zod": "3.25.67"

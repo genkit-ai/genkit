@@ -20,15 +20,15 @@ import EventEmitter from 'events';
 import * as fsSync from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
-import { GenkitError } from '../types';
 import {
   RunActionResponseSchema,
   type Action,
   type RunActionResponse,
-} from '../types/action';
-import * as apis from '../types/apis';
-import type { TraceData } from '../types/trace';
-import { logger } from '../utils/logger';
+} from '../types/action.js';
+import * as apis from '../types/apis.js';
+import { GenkitError } from '../types/index.js';
+import type { TraceData } from '../types/trace.js';
+import { logger } from '../utils/logger.js';
 import {
   checkServerHealth,
   findRuntimesDir,
@@ -38,15 +38,18 @@ import {
   removeToolsInfoFile,
   retriable,
   type DevToolsInfo,
-} from '../utils/utils';
-import { ProcessManager } from './process-manager';
-import { REFLECTION_SECRET_HEADER, secretForRuntime } from './reflection-auth';
+} from '../utils/utils.js';
+import { ProcessManager } from './process-manager.js';
+import {
+  REFLECTION_SECRET_HEADER,
+  secretForRuntime,
+} from './reflection-auth.js';
 import {
   GenkitToolsError,
   RuntimeEvent,
   type RuntimeInfo,
   type StreamingCallback,
-} from './types';
+} from './types.js';
 
 const STREAM_DELIMITER = '\n';
 const HEALTH_CHECK_INTERVAL = 5000;
@@ -389,7 +392,7 @@ export class RuntimeManager extends BaseRuntimeManager {
     options: RuntimeManagerOptions
   ): Promise<BaseRuntimeManager> {
     if (options.experimentalReflectionV2) {
-      const { RuntimeManagerV2 } = await import('./manager-v2');
+      const { RuntimeManagerV2 } = await import('./manager-v2.js');
       return RuntimeManagerV2.create(options);
     }
 

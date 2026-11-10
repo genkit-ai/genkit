@@ -24,7 +24,7 @@ import {
   vi,
   type Mocked,
 } from 'vitest';
-import { detectCLIRuntime } from '../../src/utils/runtime-detector';
+import { detectCLIRuntime } from '../../src/utils/runtime-detector.js';
 
 vi.mock('fs');
 const mockedFs = fs as Mocked<typeof fs>;

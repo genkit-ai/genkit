@@ -23,12 +23,12 @@ import {
   detectRuntimeSync,
   findProjectRoot,
   projectNameFromGenkitFilePath,
-} from '../../src/utils';
+} from '../../src/utils/index.js';
 import {
   formatDuration,
   parseAndSanitizeJson,
   sanitizeBase64DataUrls,
-} from '../../src/utils/utils';
+} from '../../src/utils/utils.js';
 
 describe('utils', () => {
   describe('findProjectRoot', () => {

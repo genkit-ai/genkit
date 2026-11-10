@@ -22,7 +22,7 @@ import {
   parsePort,
   parsePositiveInt,
   parseTraceStatus,
-} from '../../src/utils/option-parsers';
+} from '../../src/utils/option-parsers.js';
 
 describe('option-parsers', () => {
   describe('parsePositiveInt', () => {

@@ -14,6 +14,6 @@
  * limitations under the License.
  */
 
-import { name, version } from './version';
+import { name, version } from './version.js';
 
 export const toolsPackage = { name, version };

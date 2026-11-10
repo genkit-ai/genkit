@@ -16,7 +16,7 @@
 
 import type { BaseRuntimeManager } from '@genkit-ai/tools-common/manager';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { waitForRuntimeShutdown } from '../../src/utils/runtime-shutdown';
+import { waitForRuntimeShutdown } from '../../src/utils/runtime-shutdown.js';
 
 describe('waitForRuntimeShutdown', () => {
   afterEach(() => {

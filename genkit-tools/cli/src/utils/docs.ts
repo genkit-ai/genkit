@@ -26,7 +26,7 @@ import { writeFile } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import os from 'os';
 import path from 'path';
-import { version } from './version';
+import { version } from './version.js';
 
 export const SUPPORTED_DOC_LANGUAGES = ['js', 'go', 'python', 'dart'] as const;
 export type SupportedDocLanguage = (typeof SUPPORTED_DOC_LANGUAGES)[number];
