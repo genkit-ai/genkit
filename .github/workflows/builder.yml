@@ -53,9 +53,9 @@ jobs:
         node-version: 20.x
         cache: pnpm
     - name: Install dependencies
-      run: pnpm install
+      run: pnpm install && pnpm pnpm-install-js
     - name: Run build script
-      run: pnpm build:js
+      run: pnpm build:js:all
     - name: Run js tests
       run: pnpm test:js
     - name: Validate working directory is clean

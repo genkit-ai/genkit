@@ -97,7 +97,7 @@ This will install all dependencies and build all packages.
 pnpm build
 ```
 
-This will build all packages in this repository. This is recommended the first time you check out a fresh repo or pull new revisions.
+This will build the core JS packages, plugins, and CLI tooling in this repository (after dependencies have been installed via `pnpm run setup`). To also compile `doc-snippets` and all `testapps`, run `pnpm build:all`.
 
 ### Pack it
 
