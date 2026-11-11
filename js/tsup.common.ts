@@ -139,15 +139,28 @@ export const defaultOptions = {
  *
  */
 export function fromPackageJson(packageJson: {
-  exports?: {
-    [key: string]: { import: string | { default: string } };
-  };
+  exports?:
+    | string
+    | unknown[]
+    | {
+        [key: string]:
+          | string
+          | null
+          | { import?: string | { default?: string } };
+      };
 }): string[] {
-  if (!packageJson.exports) return ['./src/index.ts'];
+  if (
+    !packageJson.exports ||
+    typeof packageJson.exports !== 'object' ||
+    Array.isArray(packageJson.exports)
+  ) {
+    return ['./src/index.ts'];
+  }
   const out: string[] = [];
   for (const key in packageJson.exports) {
     if (Object.prototype.hasOwnProperty.call(packageJson.exports, key)) {
-      const imp = packageJson.exports[key].import;
+      const val = packageJson.exports[key];
+      const imp = val && typeof val === 'object' ? val.import : undefined;
       const importFile =
         typeof imp === 'object' && imp !== null ? imp.default : imp;
       if (typeof importFile === 'string') {
