@@ -10,7 +10,7 @@
     "build:noncore": "pnpm -r --workspace-concurrency -1 -F \"./plugins/**\" build",
     "build:testapps": "pnpm -r --workspace-concurrency -1 -F \"./testapps/**\" build",
     "build:docsnippets": "pnpm -F doc-snippets build",
-    "pack:all": "(mkdir ../dist || true) && npm-run-all pack:core pack:ai pack:genkit pack:plugins",
+    "pack:all": "(mkdir ../dist || true) && pnpm pack:core && pnpm pack:ai && pnpm pack:genkit && pnpm pack:plugins",
     "pack:core": "cd core && pnpm pack --pack-destination ../../dist",
     "pack:ai": "cd ai && pnpm pack --pack-destination ../../dist",
     "pack:genkit": "cd genkit && pnpm pack --pack-destination ../../dist",
@@ -22,7 +22,6 @@
     "typedoc-html": "typedoc --sortEntryPoints false --options typedoc.json"
   },
   "devDependencies": {
-    "npm-run-all": "^4.1.5",
     "only-allow": "^1.2.1",
     "tsx": "^4.20.3",
     "typedoc": "^0.28.17",
