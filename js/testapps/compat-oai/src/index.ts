@@ -21,6 +21,7 @@ import {
   openAICompatible,
 } from '@genkit-ai/compat-oai';
 import { deepSeek } from '@genkit-ai/compat-oai/deepseek';
+import { mistral } from '@genkit-ai/compat-oai/mistral';
 import { openAI } from '@genkit-ai/compat-oai/openai';
 import { xAI } from '@genkit-ai/compat-oai/xai';
 import { startFlowServer } from '@genkit-ai/express';
@@ -38,6 +39,7 @@ const ai = genkit({
     openAI(),
     deepSeek(),
     xAI(),
+    mistral(),
     openAICompatible({
       name: 'openrouter',
       baseURL: 'https://openrouter.ai/api/v1',
@@ -84,6 +86,29 @@ export const modelWrapFlow = ai.defineFlow(
   async (subject, { sendChunk }) => {
     const { stream, response } = ai.generateStream({
       model: deepSeek.model('deepseek-chat'),
+      prompt: `tell me a fun fact about ${subject}`,
+    });
+
+    for await (const chunk of stream) {
+      sendChunk(chunk.text);
+    }
+
+    const { text } = await response;
+
+    return text;
+  }
+);
+
+export const mistralFlow = ai.defineFlow(
+  {
+    name: 'mistralFlow',
+    inputSchema: z.string(),
+    outputSchema: z.string(),
+    streamSchema: z.string(),
+  },
+  async (subject, { sendChunk }) => {
+    const { stream, response } = ai.generateStream({
+      model: mistral.model('mistral-small-latest'),
       prompt: `tell me a fun fact about ${subject}`,
     });
 
