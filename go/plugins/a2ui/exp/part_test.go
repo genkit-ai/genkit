@@ -48,7 +48,7 @@ func TestNewPartWireShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"data":{"envelopes":[{"createSurface":{"surfaceId":"s1"}}]},"metadata":{"mimeType":"application/a2ui+json"}}`
+	want := `{"data":{"messages":[{"createSurface":{"surfaceId":"s1"}}]},"metadata":{"mimeType":"application/a2ui+json"}}`
 	if string(b) != want {
 		t.Errorf("wire shape = %s\nwant       = %s", string(b), want)
 	}
@@ -95,5 +95,19 @@ func TestEnvelopesFromPartsRoundTrip(t *testing.T) {
 	action, _ := envs[0]["action"].(map[string]any)
 	if action["name"] != "submit" {
 		t.Errorf("action name = %v, want submit", action["name"])
+	}
+}
+
+func TestEnvelopesFromPartsLegacyKey(t *testing.T) {
+	// Parts written before the rename to "messages" must keep replaying.
+	p := ai.NewDataPart(map[string]any{
+		"envelopes": []any{map[string]any{"deleteSurface": map[string]any{"surfaceId": "s1"}}},
+	})
+	p.Metadata = map[string]any{"mimeType": A2UIMimeType}
+	if !IsPart(p) {
+		t.Fatal("legacy part not recognized by IsPart")
+	}
+	if envs := EnvelopesFromParts([]*ai.Part{p}); len(envs) != 1 {
+		t.Fatalf("got %d envelopes, want 1", len(envs))
 	}
 }
