@@ -26,7 +26,6 @@ export const MistralEmbeddingConfigSchema = z.object({
     .describe(
       'Dimension of the output embeddings, for models that support it. Sent as `output_dimension`.'
     ),
-  encodingFormat: z.union([z.literal('float'), z.literal('base64')]).optional(),
   apiKey: z
     .string()
     .optional()
@@ -42,9 +41,9 @@ export const mistralEmbedderRequestBuilder: EmbedderRequestBuilder = (
   params
 ) => {
   const { outputDimension } = req.options ?? {};
-  // Request floats unless asked otherwise. Without an explicit format the
-  // OpenAI SDK asks for base64 and decodes it.
-  params.encoding_format ??= 'float';
+  // Always request floats. Without an explicit format the OpenAI SDK asks for
+  // base64, and a base64 response would be returned as the embedding.
+  params.encoding_format = 'float';
   if (outputDimension !== undefined) {
     (params as unknown as Record<string, unknown>).output_dimension =
       outputDimension;

@@ -21,6 +21,15 @@ import { FakeOpenAIServer } from './fake_openai_server';
 
 const API_KEY = 'mistral-test-key';
 
+/** Capabilities given to models outside the known list. */
+const UNKNOWN_MODEL_SUPPORTS = {
+  multiturn: true,
+  tools: false,
+  media: false,
+  systemRole: true,
+  output: ['text'],
+};
+
 /** Fields the OpenAI plugin sends that Mistral's request schema rejects. */
 const NON_MISTRAL_FIELDS = [
   'stream_options',
@@ -103,9 +112,6 @@ describe('mistral plugin', () => {
         maxOutputTokens: 128,
         stopSequences: ['END'],
         randomSeed: 42,
-        safePrompt: true,
-        reasoningEffort: 'high',
-        promptMode: 'reasoning',
         presencePenalty: 0.5,
         frequencyPenalty: 0.25,
       },
@@ -123,13 +129,9 @@ describe('mistral plugin', () => {
       messages: [{ role: 'user', content: 'hi' }],
       temperature: 0.3,
       top_p: 0.9,
-      top_k: 40,
       max_tokens: 128,
       stop: ['END'],
       random_seed: 42,
-      safe_prompt: true,
-      reasoning_effort: 'high',
-      prompt_mode: 'reasoning',
       presence_penalty: 0.5,
       frequency_penalty: 0.25,
     });
@@ -554,6 +556,12 @@ describe('mistral plugin', () => {
     const body = server.requests[0].body;
     expect(body.model).toBe('open-mistral-nemo');
     expect(body.max_tokens).toBe(10);
+    const action = await ai.registry.lookupAction(
+      '/model/mistral/open-mistral-nemo'
+    );
+    expect(action?.__action.metadata?.model.supports).toEqual(
+      UNKNOWN_MODEL_SUPPORTS
+    );
   });
 
   it('lists models and embedders from /v1/models', async () => {
@@ -576,6 +584,10 @@ describe('mistral plugin', () => {
       { name: 'mistral/open-mistral-nemo', type: 'model' },
       { name: 'mistral/mistral-embed', type: 'embedder' },
     ]);
+    expect(actions[0].metadata?.model?.supports?.tools).toBe(true);
+    expect(actions[1].metadata?.model?.supports).toEqual(
+      UNKNOWN_MODEL_SUPPORTS
+    );
   });
 
   describe('request-scoped API keys', () => {
