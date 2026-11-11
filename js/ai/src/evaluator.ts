@@ -188,7 +188,7 @@ export function evaluator<
   options: EvaluatorOptions<DataPoint, EvaluatorOpts>,
   runner: EvaluatorFn<EvalDataPoint, EvaluatorOpts>
 ): EvaluatorAction {
-  const evalMetadata = {};
+  const evalMetadata: Record<string, any> = {};
   evalMetadata[EVALUATOR_METADATA_KEY_IS_BILLED] =
     options.isBilled == undefined ? true : options.isBilled;
   evalMetadata[EVALUATOR_METADATA_KEY_DISPLAY_NAME] = options.displayName;

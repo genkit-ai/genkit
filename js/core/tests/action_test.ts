@@ -45,7 +45,7 @@ describe('action', () => {
         inputSchema: z.string(),
         outputSchema: z.number(),
         use: [
-          async (input, next) => (await next(input + 'middle1')) + 1,
+          async (input: any, next: any) => (await next(input + 'middle1')) + 1,
           async (input, opts, next) =>
             (await next(input + 'middle2', opts)) + 2,
         ],
@@ -69,7 +69,7 @@ describe('action', () => {
         inputSchema: z.string(),
         outputSchema: z.number(),
         use: [
-          async (input, next) => (await next(input + 'middle1')) + 1,
+          async (input: any, next: any) => (await next(input + 'middle1')) + 1,
           async (input, opts, next) =>
             (await next(input + 'middle2', opts)) + 2,
         ],
@@ -117,7 +117,7 @@ describe('action', () => {
     const chunks: any[] = [];
     await act.run('1234', {
       context: { foo: 'bar' },
-      onChunk: (c) => chunks.push(c),
+      onChunk: (c: any) => chunks.push(c),
     });
 
     assert.deepStrictEqual(passedContext, {
@@ -326,7 +326,9 @@ describe('action', () => {
       {
         name: 'child',
         actionType: 'custom',
-        use: [async (input, next) => (await next(input + 'middle1')) + 1],
+        use: [
+          async (input: any, next: any) => (await next(input + 'middle1')) + 1,
+        ],
       },
       async (_, ctx) => {
         gotAbortSignal = ctx.abortSignal;

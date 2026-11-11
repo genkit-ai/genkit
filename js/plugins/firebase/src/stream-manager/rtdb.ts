@@ -15,7 +15,11 @@
  */
 
 import { App } from 'firebase-admin/app';
-import { Database, getDatabase } from 'firebase-admin/database';
+import {
+  Database,
+  getDatabase,
+  type DataSnapshot,
+} from 'firebase-admin/database';
 import {
   GenkitError,
   StreamNotFoundError,
@@ -118,7 +122,7 @@ export class RtdbStreamManager implements StreamManager {
         unsubscribe();
       }, this.timeout);
     };
-    const handleEvent = (snapshot) => {
+    const handleEvent = (snapshot: DataSnapshot) => {
       resetTimeout();
       if (!snapshot.exists()) {
         return;

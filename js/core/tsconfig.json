@@ -1,6 +1,6 @@
 {
   "extends": "../tsconfig.json",
-  "include": ["src"],
+  "include": ["src", "typings.d.ts"],
   "compilerOptions": {
     // DOM is needed for streaming APIs.
     "lib": ["es2022", "dom"]

@@ -371,7 +371,7 @@ function getModelMiddleware(options: {
   const middleware: ModelMiddlewareArgument[] = options.use || [];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
   const constratedSimulator = simulateConstrainedGeneration();
-  middleware.push((req, next) => {
+  const constrained: ModelMiddleware = (req, next) => {
     if (
       !options?.supports?.constrained ||
       options?.supports?.constrained === 'none' ||
@@ -381,7 +381,8 @@ function getModelMiddleware(options: {
       return constratedSimulator(req, next);
     }
     return next(req);
-  });
+  };
+  middleware.push(constrained);
 
   return middleware;
 }

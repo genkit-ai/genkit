@@ -50,7 +50,6 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionRole,
   ChatCompletionTool,
-  CompletionChoice,
 } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
@@ -339,10 +338,11 @@ export function toOpenAIMessages(
   return apiMessages;
 }
 
-const finishReasonMap: Record<
-  // OpenAI Node SDK doesn't support tool_call in the enum, but it is returned from the API
-  CompletionChoice['finish_reason'] | 'tool_calls',
-  GenerateResponseData['finishReason']
+const finishReasonMap: Partial<
+  Record<
+    ChatCompletion.Choice['finish_reason'],
+    GenerateResponseData['finishReason']
+  >
 > = {
   length: 'length',
   stop: 'stop',
@@ -653,9 +653,13 @@ export function toOpenAIRequestBody(
       type: 'text',
     };
   }
-  for (const key in body) {
-    if (!body[key] || (Array.isArray(body[key]) && !body[key].length))
-      delete body[key];
+  const bodyRecord = body as unknown as Record<string, unknown>;
+  for (const key in bodyRecord) {
+    if (
+      !bodyRecord[key] ||
+      (Array.isArray(bodyRecord[key]) && !(bodyRecord[key] as unknown[]).length)
+    )
+      delete bodyRecord[key];
   }
   return body;
 }
