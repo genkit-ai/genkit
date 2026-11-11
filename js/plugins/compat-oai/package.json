@@ -61,6 +61,12 @@
       "import": "./lib/xai/index.mjs",
       "types": "./lib/xai/index.d.ts",
       "default": "./lib/xai/index.js"
+    },
+    "./mistral": {
+      "require": "./lib/mistral/index.js",
+      "import": "./lib/mistral/index.mjs",
+      "types": "./lib/mistral/index.d.ts",
+      "default": "./lib/mistral/index.js"
     }
   },
   "typesVersions": {
@@ -73,6 +79,9 @@
       ],
       "xai": [
         "lib/xai"
+      ],
+      "mistral": [
+        "lib/mistral"
       ]
     }
   },

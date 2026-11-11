@@ -179,6 +179,48 @@ const result = await ai.generate({
 console.log(result.text);
 ```
 
+### Mistral
+
+The `mistral` plugin uses Mistral's OpenAI-compatible API at
+`https://api.mistral.ai/v1`. Pass `apiKey` or set the `MISTRAL_API_KEY`
+environment variable.
+
+```typescript
+import { genkit } from 'genkit';
+import { mistral } from '@genkit-ai/compat-oai/mistral';
+
+const ai = genkit({
+  plugins: [mistral()],
+});
+
+const response = await ai.generate({
+  model: mistral.model('mistral-small-latest'),
+  prompt: 'Tell me a joke.',
+  config: {
+    maxOutputTokens: 256,
+    randomSeed: 42,
+  },
+});
+
+const embeddings = await ai.embed({
+  embedder: mistral.embedder('codestral-embed', { outputDimension: 256 }),
+  content: 'Hello world',
+});
+```
+
+The plugin maps Genkit config to Mistral's request fields: `maxOutputTokens` is
+sent as `max_tokens`, `randomSeed` as `random_seed`, and the embedder's
+`outputDimension` as `output_dimension`. Mistral-only options are `safePrompt`,
+`reasoningEffort` and `promptMode`. Streaming requests don't send
+`stream_options`, which Mistral rejects.
+
+Reasoning models return their thinking as reasoning parts
+(`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
+`thinking` content.
+
+Any model returned by `/v1/models` can be used by name, for example
+`mistral.model('open-mistral-nemo')` or `'mistral/open-mistral-nemo'`.
+
 ### Custom models & other Cloud providers
 
 ```typescript
