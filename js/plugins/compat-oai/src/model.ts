@@ -300,7 +300,9 @@ export function toOpenAIMessages(
         // Providers with thinking modes (e.g. DeepSeek) expect reasoning from
         // all previous assistant turns to be echoed back when the request
         // carries tools, so it is sent on every assistant message, not only
-        // tool-calling ones. Providers that don't use it ignore the field.
+        // tool-calling ones. Most other providers ignore the field; providers
+        // that reject unknown fields (e.g. Mistral) must remove it in their
+        // request builder.
         const reasoning = msg.reasoning;
         // `reasoning_content` is a provider extension, not part of the
         // OpenAI SDK types.
@@ -340,9 +342,9 @@ export function toOpenAIMessages(
 }
 
 /**
- * A content chunk in an assistant message or stream delta. OpenAI always sends
- * `content` as a string, but some compatible providers (e.g. Mistral) send an
- * array of typed chunks and put reasoning in `thinking` chunks.
+ * A content chunk in an assistant message or stream delta, in Mistral's
+ * `ContentChunk` shape. OpenAI always sends `content` as a string; Mistral can
+ * send an array of typed chunks, with reasoning in `thinking` chunks.
  */
 interface ContentChunk {
   type?: string;
@@ -351,9 +353,10 @@ interface ContentChunk {
 }
 
 /**
- * Converts an array of content chunks to Genkit parts. `text` chunks become
- * text parts and `thinking` chunks become reasoning parts; consecutive chunks
- * of the same kind are merged. Other chunk types are dropped.
+ * Converts an array of Mistral `ContentChunk`s to Genkit parts. `text` chunks
+ * become text parts and `thinking` chunks become reasoning parts; consecutive
+ * chunks of the same kind are merged. Other chunk types (`image_url`,
+ * `reference`, `document_url` and so on) are dropped.
  */
 function fromContentChunks(chunks: ContentChunk[]): Part[] {
   const parts: Part[] = [];
@@ -433,6 +436,9 @@ export function fromOpenAIToolCall(
 
 /**
  * Converts an OpenAI message event to a Genkit GenerateResponseData object.
+ * `message.content` is normally a string. An array is read as Mistral's
+ * `ContentChunk` shape: text and thinking chunks are kept, other chunk types
+ * (`image_url`, `reference` and so on) are dropped.
  * @param choice The OpenAI message event to convert.
  * @param jsonMode Whether the event is a JSON response.
  * @returns The converted Genkit GenerateResponseData object.
@@ -458,7 +464,8 @@ export function fromOpenAIChoice(
   }
 
   // Handle regular content if present. Text that accompanies tool calls is a
-  // preamble, not JSON output, so it is never parsed.
+  // preamble, not JSON output, so it is never parsed. An array is Mistral's
+  // `ContentChunk` shape; in JSON mode its text chunks are joined and parsed.
   const messageContent: unknown = choice.message.content;
   if (Array.isArray(messageContent)) {
     const chunkParts = fromContentChunks(messageContent);
@@ -562,7 +569,9 @@ function fromOpenAIToolCallChunk(
 
 /**
  * Converts an OpenAI message stream event to a Genkit GenerateResponseData
- * object.
+ * object. `delta.content` is normally a string. An array is read as Mistral's
+ * `ContentChunk` shape: text and thinking chunks are kept, other chunk types
+ * (`image_url`, `reference` and so on) are dropped.
  * @param choice The OpenAI message stream event to convert.
  * @param _jsonMode Unused; kept for signature compatibility. Streamed content
  *   is always emitted as text, see the comment in the body.
@@ -601,7 +610,8 @@ export function fromOpenAIChunkChoice(
   // `{}` and `[]` as standalone tokens) is still part of a larger document.
   // Emitting it as `data` would drop it from `accumulatedText`, which the
   // JSON format parser uses to build partial output. The final message is
-  // parsed from the complete response.
+  // parsed from the complete response. An array is Mistral's `ContentChunk`
+  // shape, see fromContentChunks.
   const deltaContent: unknown = choice.delta.content;
   if (Array.isArray(deltaContent)) {
     content.push(...fromContentChunks(deltaContent));
@@ -730,6 +740,13 @@ export interface ModelRunnerOptions {
    * field.
    */
   streamOptions?: ChatCompletionStreamOptions | false;
+  /**
+   * Set for providers that stream `content` as an array of chunks (Mistral's
+   * `ContentChunk` shape). The runner then keeps the streamed chunks and puts
+   * them on the final completion, because the OpenAI SDK builds the final
+   * message by concatenating `content` as strings. Off by default.
+   */
+  contentChunks?: boolean;
 }
 
 /**
@@ -783,24 +800,29 @@ export function openAIModelRunner(
         // tool calls incrementally: the first delta carries `name`/`id` and
         // subsequent deltas carry only fragments of the `arguments` JSON string.
         const toolCallAccumulators = new Map<number, ToolCallAccumulator[]>();
-        // Some providers (e.g. Mistral) stream `content` as an array of
-        // chunks. The SDK builds the final completion by concatenating content
-        // as strings, so keep the chunks per choice and restore them below.
-        const contentChunks = new Map<number, ContentChunk[]>();
+        // Only for providers that opt in with `contentChunks` (Mistral): they
+        // can stream `content` as an array of chunks, which the SDK's final
+        // completion mangles by concatenating content as strings. Keep the
+        // chunks per choice and restore them below.
+        const contentChunks = runnerOptions?.contentChunks
+          ? new Map<number, ContentChunk[]>()
+          : undefined;
         let streamedContentChunks = false;
         for await (const chunk of stream) {
           chunk.choices?.forEach((chunk) => {
-            const deltaContent: unknown = chunk.delta?.content;
-            let chunks = contentChunks.get(chunk.index);
-            if (!chunks) {
-              chunks = [];
-              contentChunks.set(chunk.index, chunks);
-            }
-            if (Array.isArray(deltaContent)) {
-              streamedContentChunks = true;
-              chunks.push(...deltaContent);
-            } else if (typeof deltaContent === 'string' && deltaContent) {
-              chunks.push({ type: 'text', text: deltaContent });
+            if (contentChunks) {
+              const deltaContent: unknown = chunk.delta?.content;
+              let chunks = contentChunks.get(chunk.index);
+              if (!chunks) {
+                chunks = [];
+                contentChunks.set(chunk.index, chunks);
+              }
+              if (Array.isArray(deltaContent)) {
+                streamedContentChunks = true;
+                chunks.push(...deltaContent);
+              } else if (typeof deltaContent === 'string' && deltaContent) {
+                chunks.push({ type: 'text', text: deltaContent });
+              }
             }
             let accumulators = toolCallAccumulators.get(chunk.index);
             if (!accumulators) {
@@ -815,7 +837,7 @@ export function openAIModelRunner(
           });
         }
         response = await stream.finalChatCompletion();
-        if (streamedContentChunks) {
+        if (contentChunks && streamedContentChunks) {
           for (const choice of response.choices) {
             const chunks = contentChunks.get(choice.index);
             if (chunks) {
