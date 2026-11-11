@@ -44,6 +44,8 @@ import {
   SUPPORTED_MISTRAL_MODELS,
 } from './mistral.js';
 
+const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
+
 export type MistralPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
 function defineMistralModel(
@@ -133,12 +135,16 @@ export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
         'Please pass in the API key or set the MISTRAL_API_KEY environment variable.',
     });
   }
-  const pluginOptions = { name: 'mistral', ...options };
-  return openAICompatible({
+  // Request-scoped clients (a per-request `apiKey`) are built from
+  // `pluginOptions`, so it must carry the Mistral base URL too.
+  const pluginOptions: PluginOptions = {
     name: 'mistral',
-    baseURL: 'https://api.mistral.ai/v1',
-    apiKey,
+    baseURL: MISTRAL_BASE_URL,
     ...options,
+  };
+  return openAICompatible({
+    ...pluginOptions,
+    apiKey,
     initializer: async (client) => {
       return [
         ...Object.values(SUPPORTED_MISTRAL_MODELS).map((modelRef) =>
