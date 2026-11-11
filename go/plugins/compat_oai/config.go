@@ -93,6 +93,20 @@ func AddExtraFields(params *openai.ChatCompletionNewParams, fields map[string]an
 	params.SetExtraFields(merged)
 }
 
+// AddEmbeddingExtraFields is [AddExtraFields] for the embeddings request: it
+// merges fields into the extra request fields params carries, keeping any set
+// earlier, where [openai.EmbeddingNewParams.SetExtraFields] alone would
+// replace them wholesale.
+func AddEmbeddingExtraFields(params *openai.EmbeddingNewParams, fields map[string]any) {
+	if len(fields) == 0 {
+		return
+	}
+	merged := make(map[string]any, len(params.ExtraFields())+len(fields))
+	maps.Copy(merged, params.ExtraFields())
+	maps.Copy(merged, fields)
+	params.SetExtraFields(merged)
+}
+
 // RequestConfig holds the per-request settings Genkit owns rather than the
 // provider: the credential the request is served with, the model version it
 // is served by, and the passthrough for request fields the config does not
@@ -155,10 +169,10 @@ func (c RequestConfig) ApplyVersion(params *openai.ChatCompletionNewParams) {
 // that can merge itself into the outgoing OpenAI embeddings request. It is
 // [ChatConfig] for embedders, for a provider whose embeddings request differs
 // from OpenAI's (see [NewEmbedderWithConfig]): the config declares the fields
-// the provider accepts, writes SDK-modeled ones directly and the rest with
-// [openai.EmbeddingNewParams.SetExtraFields], and carries the credential
-// override and the passthrough [EmbeddingConfig] carries. [EmbeddingConfig]
-// is the OpenAI implementation.
+// the provider accepts, writes SDK-modeled ones directly and the rest through
+// [AddEmbeddingExtraFields], and carries the credential override and the
+// passthrough [EmbeddingConfig] carries. [EmbeddingConfig] is the OpenAI
+// implementation.
 type EmbedderConfig interface {
 	// ApplyToEmbedding merges the config into params. Only fields the config
 	// carries are written, so the zero config leaves params untouched.

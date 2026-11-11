@@ -231,15 +231,17 @@ streaming request asks for usage through `stream_options`; set
 `OpenAICompatible.OmitStreamOptions` to leave it out, which only works where
 the provider reports usage on its streams unasked. A model turn's reasoning
 goes back in a `reasoning_content` field; set
-`OpenAICompatible.ThinkingChunks` to send it as a leading `thinking` chunk of
-the message content array instead. Responses whose content is such an array
-are unpacked into text and reasoning parts whatever the plugin sets.
+`OpenAICompatible.SendReasoningAsThinkingChunks` to send it as a leading
+`thinking` chunk of the message content array instead. Responses whose
+content is such an array are unpacked into text and reasoning parts whatever
+the plugin sets.
 
 A provider whose embeddings request differs from OpenAI's declares an
 embedder config of its own, implementing `compat_oai.EmbedderConfig`, and
 builds its embedders with `compat_oai.NewEmbedderWithConfig`, the embedder
-counterpart of `NewChatModel`. The `mistral` plugin does this to send the
-output size as `output_dimension`.
+counterpart of `NewChatModel`; fields the provider names differently go out
+through `compat_oai.AddEmbeddingExtraFields`. The `mistral` plugin does this
+to send the output size as `output_dimension`.
 
 Model IDs are string literals rather than exported constants. An exported
 `ModelMyModel` outlives the model it names: the ID churns every few months,

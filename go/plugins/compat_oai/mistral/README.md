@@ -58,10 +58,19 @@ snapshot:
 | `ministral-3b-latest` | text, images |
 | `codestral-latest` | text |
 
-All of them call tools and constrain JSON output to a schema. The catalog is
-not a ceiling: any chat model Mistral serves resolves on demand, a config
-`version` pins a dated snapshot such as `mistral-small-2603`, and the `Models`
-field describes or corrects any model, curated or not. The model list is at
+All of them call tools and constrain JSON output to a schema. Whether Mistral
+honors the two together is not confirmed, so a structured-output request that
+carries tools sends its schema as prompt instructions rather than as a
+`json_schema` response format. Magistral, Pixtral and Devstral are left out because
+Mistral has deprecated or retired them.
+
+The catalog is not a ceiling: any chat model Mistral serves resolves on
+demand, a config `version` pins a dated snapshot such as
+`mistral-small-2603`, and the `Models` field describes or corrects any model,
+curated or not. A model the plugin does not curate is described
+conservatively, as text only and with no constrained output (a schema goes
+out as prompt instructions with JSON mode on), since it may predate either
+feature; a `Models` entry turns on what it supports. The model list is at
 https://docs.mistral.ai/getting-started/models and the API reference at
 https://docs.mistral.ai/api.
 
@@ -98,7 +107,9 @@ example `min_tokens`).
 `reasoningEffort` turns reasoning on for the models that take it. Each model
 takes a subset of the levels: Mistral Small and Medium take `none` and `high`
 and reason only when asked; Mistral Large 4 takes `low`, `medium` and `high`
-and always reasons. Mistral returns the reasoning as a `thinking` chunk in the
+and always reasons. Mistral's API reference also lists `minimal`, `xhigh` and
+`max`, which no current model takes; the config leaves them out, and `extra`
+can still send one. Mistral returns the reasoning as a `thinking` chunk in the
 message content, which the plugin turns into Genkit reasoning parts, available
 through `response.Reasoning()`. When the conversation goes back to Mistral, as
 in a tool loop, the reasoning is sent back as the same `thinking` chunk.
@@ -111,7 +122,8 @@ requests leave it out.
 
 ## Embedders
 
-`mistral-embed` and `codestral-embed` are registered. They take a
+`mistral-embed` (1024 dimensions) and `codestral-embed` (1536 by default, up
+to 3072) are registered; other embedders do not resolve on demand. They take a
 `mistral.EmbedConfig`, carried by `mistral.EmbedderRef`. `dimensions` is sent
 as Mistral's `output_dimension`, for models that let you choose it:
 
@@ -133,8 +145,9 @@ FIM, OCR, moderation, and audio endpoints are not exposed by this plugin, and
 
 ## Live tests
 
-Live tests are skipped unless `MISTRAL_API_KEY` is set:
+Live tests are skipped unless `GENKIT_LIVE` and `MISTRAL_API_KEY` are both
+set (`GENKIT_LIVE=all` adds the expensive cases):
 
 ```bash
-go test -race ./plugins/compat_oai/mistral -run '^TestPluginLive$' -v -count=1
+GENKIT_LIVE=1 go test -race ./plugins/compat_oai/mistral -run '^TestPluginLive$' -v -count=1
 ```

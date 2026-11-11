@@ -19,7 +19,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"maps"
 	"math"
 	"slices"
 	"sync"
@@ -234,15 +233,15 @@ type OpenAICompatible struct {
 	// responses report zero tokens.
 	OmitStreamOptions bool
 
-	// ThinkingChunks records that the provider carries a model turn's
-	// reasoning as a thinking chunk in the message's content array, as
-	// Mistral does, rather than in a reasoning_content field beside it.
-	// Responses are read either way: a content array is always unpacked into
-	// its text and its reasoning. This decides how the reasoning of a model
-	// turn in the history is sent back: as a leading thinking chunk, rather
-	// than as a reasoning_content field a provider with a closed schema
-	// rejects.
-	ThinkingChunks bool
+	// SendReasoningAsThinkingChunks records that the provider reads a model
+	// turn's reasoning as a thinking chunk in the message's content array, as
+	// Mistral does, rather than from a reasoning_content field beside it. It
+	// governs the request only: the reasoning of a model turn in the history
+	// is sent back as a leading thinking chunk, rather than as a
+	// reasoning_content field a provider with a closed schema rejects.
+	// Responses are read either way, since a content array is always unpacked
+	// into its text and its reasoning.
+	SendReasoningAsThinkingChunks bool
 
 	// descs caches the action descriptors of listed models by name; they are
 	// deterministic per name, and rebuilding a full model action per listed
@@ -302,6 +301,18 @@ func clearInheritedOpenAIIdentity() []option.RequestOption {
 		option.WithOrganization(""), option.WithHeaderDel("OpenAI-Organization"),
 		option.WithProject(""), option.WithHeaderDel("OpenAI-Project"),
 	}
+}
+
+// newGenerator returns a generator for model id served by client, carrying
+// every plugin-level setting that shapes the request or reads the response.
+// Each model constructor starts from it, so none can leave a setting out or
+// apply one after the messages are built.
+func (o *OpenAICompatible) newGenerator(client *openai.Client, id string) *ModelGenerator {
+	return NewModelGenerator(client, id).
+		withSeparateReasoning(o.SeparateReasoningTokens).
+		withMediaTypes(o.MediaTypes).
+		withOmitStreamOptions(o.OmitStreamOptions).
+		withReasoningAsThinkingChunks(o.SendReasoningAsThinkingChunks)
 }
 
 // Name implements genkit.Plugin.
@@ -366,11 +377,7 @@ func (o *OpenAICompatible) DefineModel(provider, id string, opts ai.ModelOptions
 		input *ai.ModelRequest,
 		cb ai.ModelStreamCallback,
 	) (*ai.ModelResponse, error) {
-		return NewModelGenerator(o.client, id).
-			withSeparateReasoning(o.SeparateReasoningTokens).
-			withMediaTypes(o.MediaTypes).
-			withOmitStreamOptions(o.OmitStreamOptions).
-			withThinkingChunks(o.ThinkingChunks).
+		return o.newGenerator(o.client, id).
 			WithMessages(input.Messages).
 			WithConfig(input.Config).
 			WithTools(input.Tools).
@@ -400,11 +407,7 @@ func newSDKModel(o *OpenAICompatible, id string, opts ai.ModelOptions) *ai.Model
 		if err := rejectManagedConfig(&config); err != nil {
 			return nil, err
 		}
-		return NewModelGenerator(o.client, id).
-			withSeparateReasoning(o.SeparateReasoningTokens).
-			withMediaTypes(o.MediaTypes).
-			withOmitStreamOptions(o.OmitStreamOptions).
-			withThinkingChunks(o.ThinkingChunks).
+		return o.newGenerator(o.client, id).
 			WithParams(config).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -484,11 +487,7 @@ func NewChatModel[Config ChatConfig](o *OpenAICompatible, id string, opts ai.Mod
 		if opts.Supports != nil {
 			supports = *opts.Supports
 		}
-		g := NewModelGenerator(o.clientForKey(config.RequestAPIKey()), id).
-			withSeparateReasoning(o.SeparateReasoningTokens).
-			withMediaTypes(o.MediaTypes).
-			withOmitStreamOptions(o.OmitStreamOptions).
-			withThinkingChunks(o.ThinkingChunks).
+		g := o.newGenerator(o.clientForKey(config.RequestAPIKey()), id).
 			WithParams(params).
 			WithMessages(input.Messages).
 			WithTools(input.Tools).
@@ -523,8 +522,8 @@ func forwardRequestExtra(params *openai.ChatCompletionNewParams, extra map[strin
 // forwardEmbeddingExtra is [forwardRequestExtra] for the embeddings request,
 // whose only Genkit-built field is the input. The model stays settable: it is
 // this request's version pin. The extra fields are merged over any the
-// config's own merge set, as [AddExtraFields] merges them for chat, so a
-// declared field a provider names differently survives the passthrough.
+// config's own merge set (see [AddEmbeddingExtraFields]), so a declared
+// field a provider names differently survives the passthrough.
 func forwardEmbeddingExtra(params *openai.EmbeddingNewParams, extra map[string]any) error {
 	if len(extra) == 0 {
 		return nil
@@ -532,10 +531,7 @@ func forwardEmbeddingExtra(params *openai.EmbeddingNewParams, extra map[string]a
 	if _, ok := extra["input"]; ok {
 		return status.Errorf(status.ErrInvalidArgument, "compat_oai: extra field %q is built by Genkit from the request and cannot be set from config", "input")
 	}
-	merged := make(map[string]any, len(params.ExtraFields())+len(extra))
-	maps.Copy(merged, params.ExtraFields())
-	maps.Copy(merged, extra)
-	params.SetExtraFields(merged)
+	AddEmbeddingExtraFields(params, extra)
 	return nil
 }
 
@@ -562,20 +558,24 @@ func (o *OpenAICompatible) newEmbedder(provider, id string, embedOpts *ai.Embedd
 	return newConfigEmbedder[EmbeddingConfig](o, provider, id, embedOpts)
 }
 
-// NewEmbedderWithConfig creates an unregistered embedder whose config is the
-// provider's own Config type, for providers whose embeddings request differs
-// from OpenAI's; providers that take OpenAI's use
-// [OpenAICompatible.NewEmbedder]. The framework validates the request's config
-// against the schema inferred from Config and deserializes it before the
-// embedder function runs, and the config merges itself into the outgoing
-// request through [EmbedderConfig], with its extra fields forwarded after that
-// merge so a collision resolves in their favor. A config carrying a request
-// API key is served by a request-scoped client.
+// NewEmbedderWithConfig is [NewChatModel] for embedders: it creates an
+// unregistered embedder whose config is the provider's own Config type, for
+// providers whose embeddings request differs from OpenAI's; providers that
+// take OpenAI's use [OpenAICompatible.NewEmbedder]. The framework validates
+// the request's config against the schema inferred from Config and
+// deserializes it before the embedder function runs, and the config merges
+// itself into the outgoing request through [EmbedderConfig], with its extra
+// fields forwarded after that merge so a collision resolves in their favor. A
+// config carrying a request API key is served by a request-scoped client. An
+// empty label is derived from the plugin's provider and the name.
 //
 // Return the embedder from the plugin's Init for the framework to register,
 // or register it with [genkit.RegisterAction].
-func NewEmbedderWithConfig[Config EmbedderConfig](o *OpenAICompatible, id string, embedOpts *ai.EmbedderOptions) *ai.EmbedderAction {
-	return newConfigEmbedder[Config](o, o.Provider, id, embedOpts)
+func NewEmbedderWithConfig[Config EmbedderConfig](o *OpenAICompatible, id string, opts ai.EmbedderOptions) *ai.EmbedderAction {
+	if opts.Label == "" {
+		opts.Label = internal.ProviderLabel(o.Provider, id)
+	}
+	return newConfigEmbedder[Config](o, o.Provider, id, &opts)
 }
 
 // newConfigEmbedder builds an embedder of provider whose config is Config.

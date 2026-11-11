@@ -110,6 +110,27 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 			wantText:  "[1, 2, 3]",
 			wantParts: 1,
 		},
+		"thinking as a string": {
+			content:       `[{"type":"thinking","thinking":"Let me think..."},{"type":"text","text":"Final answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+		},
+		// One chunk of an unexpected shape is skipped, not allowed to fail
+		// the decode of the others.
+		"unexpected chunks beside good ones": {
+			content:       `[42,{"type":"text","text":7},{"type":"thinking","thinking":{"odd":true}},{"type":"thinking","thinking":[{"type":"text","text":"Let me think..."}]},{"type":"text","text":"Final answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+		},
+		// Nothing readable: the content is kept as the SDK read it rather
+		// than silently dropped.
+		"no text or thinking chunk": {
+			content:   `[{"type":"reference","reference_ids":[1]}]`,
+			wantText:  `[{"type":"reference","reference_ids":[1]}]`,
+			wantParts: 1,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var completion openai.ChatCompletion
@@ -165,7 +186,7 @@ func TestWithMessagesSendsThinkingChunks(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			g := newGen().withThinkingChunks(true).WithMessages([]*ai.Message{{Role: ai.RoleModel, Content: tc.parts}})
+			g := newGen().withReasoningAsThinkingChunks(true).WithMessages([]*ai.Message{{Role: ai.RoleModel, Content: tc.parts}})
 			if g.err != nil {
 				t.Fatalf("WithMessages() error = %v", g.err)
 			}
@@ -184,6 +205,49 @@ func TestWithMessagesSendsThinkingChunks(t *testing.T) {
 				t.Errorf("content = %#v, want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestGenerateStreamContentChunks pins the streamed side of content arrays:
+// each delta that arrives as an array is split into its reasoning and text
+// before the accumulator sees it, so the chunks handed to the callback and the
+// final message carry neither the raw JSON nor each other's content, and
+// string deltas interleave with array ones in order.
+func TestGenerateStreamContentChunks(t *testing.T) {
+	events := []string{
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Think "}]}]},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":"carefully."},{"type":"text","text":"Hello"}]},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"!"}]},"finish_reason":"stop"}]}`,
+	}
+	var body strings.Builder
+	for _, e := range events {
+		body.WriteString("data: " + e + "\n\n")
+	}
+	body.WriteString("data: [DONE]\n\n")
+
+	var reasoning, text strings.Builder
+	resp, err := newStubGen(t, "text/event-stream", body.String()).
+		WithMessages([]*ai.Message{ai.NewUserTextMessage("hi")}).
+		Generate(context.Background(), &ai.ModelRequest{}, func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+			reasoning.WriteString(chunk.Reasoning())
+			text.WriteString(chunk.Text())
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if got := reasoning.String(); got != "Think carefully." {
+		t.Errorf("streamed reasoning = %q, want %q", got, "Think carefully.")
+	}
+	if got := text.String(); got != "Hello there!" {
+		t.Errorf("streamed text = %q, want %q", got, "Hello there!")
+	}
+	if got := resp.Reasoning(); got != "Think carefully." {
+		t.Errorf("Reasoning() = %q, want %q", got, "Think carefully.")
+	}
+	if got := resp.Text(); got != "Hello there!" {
+		t.Errorf("Text() = %q, want %q", got, "Hello there!")
 	}
 }
 

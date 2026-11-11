@@ -49,9 +49,14 @@ var chatRequestFields = []string{
 	"guardrails", "prompt_cache_key", "service_tier", "safe_prompt",
 }
 
-// assistantMessageFields are the fields of Mistral's AssistantMessage schema,
-// which has no reasoning_content.
-var assistantMessageFields = []string{"role", "content", "tool_calls", "prefix"}
+// messageFields are the fields of each of Mistral's message schemas, by role.
+// The assistant message has no reasoning_content.
+var messageFields = map[string][]string{
+	"system":    {"role", "content"},
+	"user":      {"role", "content"},
+	"assistant": {"role", "content", "tool_calls", "prefix"},
+	"tool":      {"role", "content", "tool_call_id", "name"},
+}
 
 // embeddingRequestFields are the fields of Mistral's EmbeddingRequest schema.
 var embeddingRequestFields = []string{"model", "input", "metadata", "output_dimension", "output_dtype", "encoding_format"}
@@ -79,9 +84,13 @@ func decodeChatRequest(t *testing.T, r *http.Request) map[string]any {
 	messages, _ := body["messages"].([]any)
 	for _, m := range messages {
 		msg, _ := m.(map[string]any)
-		if msg["role"] == "assistant" {
-			checkClosed(t, "assistant message", msg, assistantMessageFields)
+		role, _ := msg["role"].(string)
+		allowed, known := messageFields[role]
+		if !known {
+			t.Errorf("message has role %q, which Mistral does not take", role)
+			continue
 		}
+		checkClosed(t, role+" message", msg, allowed)
 	}
 	return body
 }
@@ -188,8 +197,8 @@ func TestPluginRegistersModelsAndEmbedders(t *testing.T) {
 				t.Errorf("%s %s support = %v, want %v", modelID, field, got, want)
 			}
 		}
-		if got := supports["constrained"]; got != ai.ConstrainedSupportAll {
-			t.Errorf("%s constrained = %v, want %q", modelID, got, ai.ConstrainedSupportAll)
+		if got := supports["constrained"]; got != ai.ConstrainedSupportNoTools {
+			t.Errorf("%s constrained = %v, want %q", modelID, got, ai.ConstrainedSupportNoTools)
 		}
 		output, _ := supports["output"].([]string)
 		if !slices.Equal(output, []string{"text", "json"}) {
@@ -200,9 +209,15 @@ func TestPluginRegistersModelsAndEmbedders(t *testing.T) {
 		}
 	}
 
-	for _, id := range []string{"mistral-embed", "codestral-embed"} {
-		if genkit.LookupEmbedder(g, "mistral/"+id) == nil {
+	for id, dims := range map[string]int{"mistral-embed": 1024, "codestral-embed": 1536} {
+		e := genkit.LookupEmbedder(g, "mistral/"+id)
+		if e == nil {
 			t.Errorf("LookupEmbedder(%q) = nil", id)
+			continue
+		}
+		info, _ := e.(api.Action).Desc().Metadata["info"].(map[string]any)
+		if got := info["dimensions"]; got != dims {
+			t.Errorf("%s dimensions = %v, want %d", id, got, dims)
 		}
 	}
 }
@@ -477,19 +492,19 @@ func TestReasoningGoesBackAsThinkingChunk(t *testing.T) {
 	}
 }
 
-// TestStructuredOutputRequest pins that a constrained JSON request with tools
-// stays inside Mistral's schema: the output schema rides as a json_schema
-// response_format, which Mistral accepts as OpenAI sends it.
+// TestStructuredOutputRequest pins how a constrained JSON request reaches
+// Mistral. Without tools the output schema rides as a json_schema
+// response_format. With tools no response_format is sent at all, since
+// Mistral is not confirmed to honor structured output and tools together:
+// the schema reaches the model as prompt instructions instead.
 func TestStructuredOutputRequest(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body := decodeChatRequest(t, r)
-		format, _ := body["response_format"].(map[string]any)
-		if format["type"] != "json_schema" {
-			t.Errorf("response_format = %#v, want a json_schema format", body["response_format"])
-		}
-		if tools, _ := body["tools"].([]any); len(tools) != 1 {
-			t.Errorf("tools = %#v, want the one tool", body["tools"])
-		}
+		mu.Lock()
+		bodies = append(bodies, body)
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
 			"id":"c1","object":"chat.completion","created":1,"model":"mistral-small-latest",
@@ -511,12 +526,40 @@ func TestStructuredOutputRequest(t *testing.T) {
 	type answer struct {
 		City string `json:"city"`
 	}
-	got, _, err := genkit.GenerateData[answer](ctx, g, ai.WithPrompt("Where?"), ai.WithTools(lookup), ai.WithToolChoice(ai.ToolChoiceAuto))
-	if err != nil {
-		t.Fatalf("GenerateData() error = %v", err)
-	}
-	if got.City != "Paris" {
-		t.Errorf("City = %q, want %q", got.City, "Paris")
+	for name, opts := range map[string][]ai.GenerateOption{
+		"without tools": {ai.WithPrompt("Where?")},
+		"with tools":    {ai.WithPrompt("Where?"), ai.WithTools(lookup), ai.WithToolChoice(ai.ToolChoiceAuto)},
+	} {
+		mu.Lock()
+		bodies = nil
+		mu.Unlock()
+		got, _, err := genkit.GenerateData[answer](ctx, g, opts...)
+		if err != nil {
+			t.Fatalf("%s: GenerateData() error = %v", name, err)
+		}
+		if got.City != "Paris" {
+			t.Errorf("%s: City = %q, want %q", name, got.City, "Paris")
+		}
+		mu.Lock()
+		if len(bodies) != 1 {
+			t.Fatalf("%s: requests = %d, want 1", name, len(bodies))
+		}
+		body := bodies[0]
+		mu.Unlock()
+		format, sent := body["response_format"].(map[string]any)
+		switch name {
+		case "without tools":
+			if format["type"] != "json_schema" {
+				t.Errorf("%s: response_format = %#v, want a json_schema format", name, body["response_format"])
+			}
+		case "with tools":
+			if sent {
+				t.Errorf("%s: response_format = %#v, want none beside tools", name, format)
+			}
+			if tools, _ := body["tools"].([]any); len(tools) != 1 {
+				t.Errorf("%s: tools = %#v, want the one tool", name, body["tools"])
+			}
+		}
 	}
 }
 
@@ -636,7 +679,7 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 		}
 	}
 	effort, _ := props["reasoningEffort"].(map[string]any)
-	if got, want := effort["enum"], []any{"none", "minimal", "low", "medium", "high", "xhigh", "max"}; !reflect.DeepEqual(got, want) {
+	if got, want := effort["enum"], []any{"none", "low", "medium", "high"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reasoningEffort enum = %#v, want %#v", got, want)
 	}
 	tier, _ := props["serviceTier"].(map[string]any)

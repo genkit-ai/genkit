@@ -54,8 +54,8 @@ type ModelGenerator struct {
 	mediaTypes []string
 	// omitStreamOptions is [OpenAICompatible.OmitStreamOptions].
 	omitStreamOptions bool
-	// thinkingChunks is [OpenAICompatible.ThinkingChunks].
-	thinkingChunks bool
+	// reasoningAsThinkingChunks is [OpenAICompatible.SendReasoningAsThinkingChunks].
+	reasoningAsThinkingChunks bool
 	// classify is the provider's [OpenAICompatible.ClassifyError].
 	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
@@ -100,11 +100,11 @@ func (g *ModelGenerator) withOmitStreamOptions(omit bool) *ModelGenerator {
 	return g
 }
 
-// withThinkingChunks sets whether a model turn's reasoning is sent back as a
-// thinking chunk; see [OpenAICompatible.ThinkingChunks]. It must come before
-// [ModelGenerator.WithMessages].
-func (g *ModelGenerator) withThinkingChunks(thinkingChunks bool) *ModelGenerator {
-	g.thinkingChunks = thinkingChunks
+// withReasoningAsThinkingChunks sets whether a model turn's reasoning is sent
+// back as a thinking chunk; see [OpenAICompatible.SendReasoningAsThinkingChunks].
+// It must come before [ModelGenerator.WithMessages].
+func (g *ModelGenerator) withReasoningAsThinkingChunks(send bool) *ModelGenerator {
+	g.reasoningAsThinkingChunks = send
 	return g
 }
 
@@ -133,7 +133,7 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 			am.Content.OfString = param.NewOpt(content)
 			switch {
 			case !slices.ContainsFunc(msg.Content, (*ai.Part).IsReasoning):
-			case g.thinkingChunks:
+			case g.reasoningAsThinkingChunks:
 				// The content array replaces the string content: the SDK
 				// marshals an extra field over the struct field it collides
 				// with. An empty chain of thought has nothing to send back.
@@ -963,47 +963,79 @@ func firstReasoning(raws ...string) (reasoning string, ok bool) {
 	return "", ok
 }
 
-// contentChunk is one entry of a message content array, the shape Mistral
-// answers with when a response carries reasoning: text chunks hold the
-// answer, and thinking chunks hold the reasoning as text chunks of their own.
-type contentChunk struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	Thinking []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"thinking"`
-}
-
 // contentChunks unpacks the raw JSON of a message's content when it is an
-// array of chunks rather than a string, joining the text chunks into text
-// and the text inside thinking chunks into reasoning. ok is false when the
-// content is not such an array, so a plain string keeps its meaning however
-// it reads. Chunks of any other type, such as references, carry no text and
-// are skipped.
+// array of chunks rather than a string, the shape Mistral answers with when a
+// response carries reasoning. Text chunks are joined into text, and thinking
+// chunks into reasoning; a thinking chunk holds its reasoning as an array of
+// text chunks, or as a bare string.
+//
+// Each chunk is read on its own, so one of an unexpected shape is skipped
+// rather than failing the rest, as are chunks of other types, such as
+// references, which carry no text. ok is false when the content is not such
+// an array or holds no text or thinking chunk at all; the caller then keeps
+// the content as the SDK read it, so nothing the provider sent is dropped
+// unseen. A plain string keeps its meaning however it reads.
 func contentChunks(raw string) (text, reasoning string, ok bool) {
 	raw = strings.TrimSpace(raw)
 	if !strings.HasPrefix(raw, "[") {
 		return "", "", false
 	}
-	var chunks []contentChunk
+	var chunks []json.RawMessage
 	if err := json.Unmarshal([]byte(raw), &chunks); err != nil {
 		return "", "", false
 	}
 	var textOut, reasoningOut strings.Builder
-	for _, c := range chunks {
-		switch c.Type {
+	for _, rawChunk := range chunks {
+		var chunk struct {
+			Type     string          `json:"type"`
+			Text     json.RawMessage `json:"text"`
+			Thinking json.RawMessage `json:"thinking"`
+		}
+		if json.Unmarshal(rawChunk, &chunk) != nil {
+			continue
+		}
+		switch chunk.Type {
 		case "text":
-			textOut.WriteString(c.Text)
+			var t string
+			if json.Unmarshal(chunk.Text, &t) == nil {
+				textOut.WriteString(t)
+				ok = true
+			}
 		case "thinking":
-			for _, t := range c.Thinking {
-				if t.Type == "text" {
-					reasoningOut.WriteString(t.Text)
-				}
+			if r, read := thinkingText(chunk.Thinking); read {
+				reasoningOut.WriteString(r)
+				ok = true
 			}
 		}
 	}
+	if !ok {
+		return "", "", false
+	}
 	return textOut.String(), reasoningOut.String(), true
+}
+
+// thinkingText reads the reasoning a thinking chunk carries: a bare string,
+// or an array of chunks whose text chunks it joins. read is false when the
+// field is neither.
+func thinkingText(raw json.RawMessage) (text string, read bool) {
+	if json.Unmarshal(raw, &text) == nil {
+		return text, true
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(raw, &parts) != nil {
+		return "", false
+	}
+	var out strings.Builder
+	for _, rawPart := range parts {
+		var part struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(rawPart, &part) == nil && part.Type == "text" {
+			out.WriteString(part.Text)
+		}
+	}
+	return out.String(), true
 }
 
 // thinkingContent is the content array a model turn is sent back with when

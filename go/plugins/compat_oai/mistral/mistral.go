@@ -37,28 +37,25 @@ const (
 // ReasoningEffort is how hard a reasoning-capable Mistral model thinks before
 // it answers.
 //
-// The API reference enumerates every level below, but each model takes a
-// subset of them: Mistral Small and Medium take none and high, Mistral Large 4
-// low, medium and high. The schema enumerates the full set; which subset a
-// model takes is the model's to decide, so a level a model does not take is an
-// error from Mistral rather than one from here.
+// Each model takes a subset of the levels: Mistral Small and Medium take none
+// and high, Mistral Large 4 low, medium and high. The schema enumerates the
+// union of the levels the current models take, so the Dev UI offers no level
+// that every model rejects; which subset a model takes is the model's to
+// decide, so a level a model does not take is an error from Mistral rather
+// than one from here. The API reference also lists minimal, xhigh and max,
+// which no current model takes; a model that does can be sent one through
+// the config's extra map.
 type ReasoningEffort string
 
 const (
 	// ReasoningEffortNone turns reasoning off.
 	ReasoningEffortNone ReasoningEffort = "none"
-	// ReasoningEffortMinimal is the least reasoning short of none.
-	ReasoningEffortMinimal ReasoningEffort = "minimal"
 	// ReasoningEffortLow is light reasoning.
 	ReasoningEffortLow ReasoningEffort = "low"
 	// ReasoningEffortMedium is moderate reasoning.
 	ReasoningEffortMedium ReasoningEffort = "medium"
 	// ReasoningEffortHigh is deep reasoning.
 	ReasoningEffortHigh ReasoningEffort = "high"
-	// ReasoningEffortXHigh is deeper reasoning than high.
-	ReasoningEffortXHigh ReasoningEffort = "xhigh"
-	// ReasoningEffortMax is the deepest reasoning.
-	ReasoningEffortMax ReasoningEffort = "max"
 )
 
 // ServiceTier selects the capacity a request is served from.
@@ -111,7 +108,7 @@ type ChatConfig struct {
 	// API's random_seed.
 	Seed *int `json:"seed,omitempty" jsonschema_description:"Makes sampling deterministic across calls when set, sent as the API's random_seed."`
 	// ReasoningEffort adjusts how hard a reasoning-capable model thinks.
-	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=minimal,enum=low,enum=medium,enum=high,enum=xhigh,enum=max" jsonschema_description:"How hard a reasoning-capable model thinks, from none to max. Which levels a model takes is the model's to decide."`
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=low,enum=medium,enum=high" jsonschema_description:"How hard a reasoning-capable model thinks: none, low, medium, or high. Mistral Small and Medium take none and high; Mistral Large 4 takes low, medium, and high."`
 	// ParallelToolCalls lets the model request several tool calls in one
 	// response. It applies to a request that carries tools.
 	ParallelToolCalls *bool `json:"parallelToolCalls,omitempty" jsonschema_description:"Lets the model request several tool calls in one response; false caps it at one call per response."`
@@ -119,8 +116,7 @@ type ChatConfig struct {
 	// sent as the API's safe_prompt.
 	SafePrompt *bool `json:"safePrompt,omitempty" jsonschema_description:"Injects Mistral's safety prompt before the conversation, sent as the API's safe_prompt."`
 	// PromptCacheKey groups requests that share a prompt prefix for prompt
-	// caching, sent as the API's prompt_cache_key. Hits come back as the
-	// response usage's CachedContentTokens.
+	// caching, sent as the API's prompt_cache_key.
 	PromptCacheKey string `json:"promptCacheKey,omitempty" jsonschema_description:"Groups requests that share a prompt prefix for prompt caching, sent as the API's prompt_cache_key."`
 	// ServiceTier selects the capacity the request is served from, sent as
 	// the API's service_tier.
@@ -201,7 +197,7 @@ type EmbedConfig struct {
 // ApplyToEmbedding implements [compat_oai.EmbedderConfig].
 func (c EmbedConfig) ApplyToEmbedding(params *openai.EmbeddingNewParams) {
 	if c.Dimensions > 0 {
-		params.SetExtraFields(map[string]any{"output_dimension": c.Dimensions})
+		compat_oai.AddEmbeddingExtraFields(params, map[string]any{"output_dimension": c.Dimensions})
 	}
 	if c.EncodingFormat != "" {
 		params.EncodingFormat = c.EncodingFormat
@@ -221,9 +217,12 @@ func (c EmbedConfig) RequestExtra() map[string]any {
 // Capability sets shared by the entries below. Mistral's current chat models
 // call tools, take a tool choice, and constrain output to a JSON schema
 // through response_format json_schema; they differ on whether they read
-// images. Only object roots are advertised as constrained: whether Mistral
-// takes an array or enum schema root is not documented, so those formats
-// reach the model as prompt instructions.
+// images. Constrained output is claimed without tools only: whether Mistral
+// honors a json_schema response format beside tools is not confirmed, so a
+// request with tools carries its schema as prompt instructions. Only object roots are
+// advertised as constrained: whether Mistral takes an array or enum schema
+// root is not documented, so those formats reach the model as prompt
+// instructions too.
 var (
 	multimodal = ai.ModelSupports{
 		Multiturn:   true,
@@ -232,7 +231,7 @@ var (
 		Media:       true,
 		ToolChoice:  true,
 		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportAll,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 	textOnly = ai.ModelSupports{
 		Multiturn:   true,
@@ -241,7 +240,7 @@ var (
 		Media:       false,
 		ToolChoice:  true,
 		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportAll,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 	// dynamicSupports is for a model the plugin knows nothing about, which
 	// may predate json_schema support: a schema reaches it as prompt
@@ -274,7 +273,9 @@ var mediaTypes = []string{"image/*"}
 var supportedModels = map[string]ai.ModelOptions{
 	// Mistral Large 3.
 	"mistral-large-latest": {Label: "Mistral Large", Supports: &multimodal},
-	// Mistral Large 4, in public preview; it always reasons.
+	// Mistral Large 4, in public preview. Mistral serves it under this ID
+	// alone; mistral-large-latest still names Mistral Large 3. It always
+	// reasons.
 	"mistral-large-4": {Label: "Mistral Large 4", Supports: &multimodal, Stage: ai.ModelStageUnstable},
 	// Mistral Medium 3.5.
 	"mistral-medium-latest": {Label: "Mistral Medium", Supports: &multimodal},
@@ -283,6 +284,10 @@ var supportedModels = map[string]ai.ModelOptions{
 	"ministral-8b-latest":  {Label: "Ministral 8B", Supports: &multimodal},
 	"ministral-3b-latest":  {Label: "Ministral 3B", Supports: &multimodal},
 	"codestral-latest":     {Label: "Codestral", Supports: &textOnly},
+
+	// Magistral, Pixtral and Devstral are deliberately absent: Mistral has
+	// deprecated or retired them, and their aliases are served by the models
+	// above. They still resolve on demand.
 }
 
 // dynamicModelOptions is advertised for Mistral models that resolve
@@ -296,8 +301,9 @@ var dynamicModelOptions = ai.ModelOptions{
 // supportedEmbedders curates Mistral's embedders.
 var supportedEmbedders = map[string]ai.EmbedderOptions{
 	"mistral-embed": {
-		Label:    "Mistral Embed",
-		Supports: &ai.EmbedderSupports{Input: []string{"text"}},
+		Label:      "Mistral Embed",
+		Dimensions: 1024,
+		Supports:   &ai.EmbedderSupports{Input: []string{"text"}},
 	},
 	// Codestral Embed defaults to 1536 dimensions and takes up to 3072
 	// through EmbedConfig.Dimensions.
@@ -336,7 +342,11 @@ type Mistral struct {
 	// builds, which is the way to describe a curated model differently: Init
 	// has already registered those and nothing can re-register them.
 	Models map[string]ai.ModelOptions
-	// Embedders is [Mistral.Models] for embedders, keyed by embedder ID.
+	// Embedders overrides what the plugin knows about a curated Mistral
+	// embedder, keyed by embedder ID, bare or provider-prefixed, with the
+	// same overlay rules as [Mistral.Models]. Unlike models, embedders do not
+	// resolve on demand: Init registers the curated ones only, so an entry
+	// for any other ID has no effect.
 	Embedders map[string]ai.EmbedderOptions
 
 	openAICompatible compat_oai.OpenAICompatible
@@ -376,7 +386,7 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 	m.openAICompatible.OmitStreamOptions = true
 	// It also has no reasoning_content field: reasoning goes back as the
 	// thinking chunk it arrived in.
-	m.openAICompatible.ThinkingChunks = true
+	m.openAICompatible.SendReasoningAsThinkingChunks = true
 	m.openAICompatible.Opts = opts
 	actions := m.openAICompatible.Init(ctx)
 
@@ -396,7 +406,7 @@ func (m *Mistral) newModel(id string, opts ai.ModelOptions) *ai.ModelAction {
 
 // newEmbedder creates a Mistral embedder without registering it.
 func (m *Mistral) newEmbedder(id string, opts ai.EmbedderOptions) *ai.EmbedderAction {
-	return compat_oai.NewEmbedderWithConfig[EmbedConfig](&m.openAICompatible, id, &opts)
+	return compat_oai.NewEmbedderWithConfig[EmbedConfig](&m.openAICompatible, id, opts)
 }
 
 // modelOptions returns the ModelOptions for a Mistral model ID: curated
