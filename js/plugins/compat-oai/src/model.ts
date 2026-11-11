@@ -350,35 +350,44 @@ interface ContentChunk {
   type?: string;
   text?: string;
   thinking?: { type?: string; text?: string }[];
+  /** Signature of a `thinking` chunk, for replaying it on later turns. */
+  signature?: string | null;
 }
 
 /**
  * Converts an array of Mistral `ContentChunk`s to Genkit parts. `text` chunks
- * become text parts and `thinking` chunks become reasoning parts; consecutive
- * chunks of the same kind are merged. Other chunk types (`image_url`,
- * `reference`, `document_url` and so on) are dropped.
+ * become text parts and `thinking` chunks become reasoning parts, with the
+ * chunk's `signature` (if any) in `metadata.signature`. Consecutive chunks of
+ * the same kind are merged. Other chunk types (`image_url`, `reference`,
+ * `document_url` and so on) are dropped.
  */
 function fromContentChunks(chunks: ContentChunk[]): Part[] {
   const parts: Part[] = [];
-  const append = (kind: 'text' | 'reasoning', value: string) => {
-    if (!value) return;
-    const last = parts[parts.length - 1];
-    if (last?.[kind] !== undefined) {
-      last[kind] += value;
-    } else {
-      parts.push(kind === 'text' ? { text: value } : { reasoning: value });
-    }
-  };
   for (const chunk of chunks) {
+    const last = parts[parts.length - 1];
     if (chunk.type === 'text') {
-      append('text', chunk.text ?? '');
+      if (!chunk.text) continue;
+      if (last?.text !== undefined) {
+        last.text += chunk.text;
+      } else {
+        parts.push({ text: chunk.text });
+      }
     } else if (chunk.type === 'thinking') {
-      append(
-        'reasoning',
-        (chunk.thinking ?? [])
-          .map((t) => (t.type === 'text' ? (t.text ?? '') : ''))
-          .join('')
-      );
+      const text = (chunk.thinking ?? [])
+        .map((t) => (t.type === 'text' ? (t.text ?? '') : ''))
+        .join('');
+      if (!text && !chunk.signature) continue;
+      let part: Part;
+      if (last?.reasoning !== undefined) {
+        part = last;
+        part.reasoning += text;
+      } else {
+        part = { reasoning: text };
+        parts.push(part);
+      }
+      if (chunk.signature) {
+        part.metadata = { ...part.metadata, signature: chunk.signature };
+      }
     }
   }
   return parts;

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from 'genkit';
+import { z, type MessageData } from 'genkit';
 import { ModelInfo, ModelReference } from 'genkit/model';
 import type { ChatCompletionMessageParam } from 'openai/resources/index.mjs';
 import {
@@ -96,34 +96,53 @@ export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
   body.safe_prompt = safePrompt;
   body.reasoning_effort = reasoningEffort;
   body.prompt_mode = promptMode;
-  params.messages = params.messages.map(toMistralMessage);
+  params.messages = toMistralMessages(req.messages, params.messages);
 };
 
 /**
  * Mistral has no `reasoning_content` field. Reasoning from earlier assistant
- * turns is sent back as a `thinking` chunk in the `content` array instead,
- * which is the shape Mistral returns it in.
+ * turns is sent back as `thinking` chunks in the `content` array instead,
+ * which is the shape Mistral returns it in, with the chunk's `signature` when
+ * the reasoning part kept one in `metadata.signature`.
+ *
+ * Each Genkit `model` message becomes exactly one `assistant` message, so the
+ * two are matched up in order.
  */
-function toMistralMessage(
-  message: ChatCompletionMessageParam
-): ChatCompletionMessageParam {
-  if (message.role !== 'assistant' || !('reasoning_content' in message)) {
-    return message;
-  }
-  const { reasoning_content: reasoning, ...rest } =
-    message as typeof message & {
+function toMistralMessages(
+  source: MessageData[],
+  messages: ChatCompletionMessageParam[]
+): ChatCompletionMessageParam[] {
+  const modelMessages = source.filter((m) => m.role === 'model');
+  let next = 0;
+  return messages.map((message) => {
+    if (message.role !== 'assistant') {
+      return message;
+    }
+    const { reasoning_content: _, ...rest } = message as typeof message & {
       reasoning_content?: string;
     };
-  if (!reasoning) {
-    return rest;
-  }
-  const content: unknown[] = [
-    { type: 'thinking', thinking: [{ type: 'text', text: reasoning }] },
-  ];
-  if (typeof rest.content === 'string' && rest.content) {
-    content.push({ type: 'text', text: rest.content });
-  }
-  return { ...rest, content } as ChatCompletionMessageParam;
+    const thinking = (modelMessages[next++]?.content ?? [])
+      .filter(
+        (part) =>
+          part.reasoning !== undefined &&
+          (part.reasoning || part.metadata?.signature)
+      )
+      .map((part) => ({
+        type: 'thinking',
+        thinking: [{ type: 'text', text: part.reasoning }],
+        ...(typeof part.metadata?.signature === 'string'
+          ? { signature: part.metadata.signature }
+          : {}),
+      }));
+    if (thinking.length === 0) {
+      return rest;
+    }
+    const content: unknown[] = [...thinking];
+    if (typeof rest.content === 'string' && rest.content) {
+      content.push({ type: 'text', text: rest.content });
+    }
+    return { ...rest, content } as ChatCompletionMessageParam;
+  });
 }
 
 /**

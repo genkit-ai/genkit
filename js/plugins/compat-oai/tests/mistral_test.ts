@@ -394,6 +394,87 @@ describe('mistral plugin', () => {
     }
   });
 
+  it('keeps the thinking signature in reasoning metadata', async () => {
+    server.setNextResponse({
+      body: {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'thinking',
+                  thinking: [{ type: 'text', text: 'Two plus two.' }],
+                  signature: 'sig-123',
+                },
+                { type: 'text', text: '4' },
+              ],
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      },
+    });
+
+    const response = await ai.generate({
+      model: mistral.model('magistral-small-latest'),
+      prompt: 'What is 2 + 2?',
+    });
+
+    expect(response.message?.content).toEqual([
+      { reasoning: 'Two plus two.', metadata: { signature: 'sig-123' } },
+      { text: '4' },
+    ]);
+  });
+
+  it('sends the thinking signature back on later turns', async () => {
+    server.setNextResponse({
+      body: {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'thinking',
+                  thinking: [{ type: 'text', text: 'Two plus two.' }],
+                  signature: 'sig-123',
+                },
+                { type: 'text', text: '4' },
+              ],
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      },
+    });
+    const first = await ai.generate({
+      model: mistral.model('magistral-small-latest'),
+      prompt: 'What is 2 + 2?',
+    });
+
+    await ai.generate({
+      model: mistral.model('magistral-small-latest'),
+      messages: first.messages,
+      prompt: 'And 3 + 3?',
+    });
+
+    const body = server.requests[1].body;
+    expect(body.messages[1]).toEqual({
+      role: 'assistant',
+      content: [
+        {
+          type: 'thinking',
+          thinking: [{ type: 'text', text: 'Two plus two.' }],
+          signature: 'sig-123',
+        },
+        { type: 'text', text: '4' },
+      ],
+    });
+  });
+
   it('sends output_dimension for embeddings', async () => {
     server.setNextResponse({
       body: {
