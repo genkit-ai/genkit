@@ -1300,15 +1300,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "dnspython"
-version = "2.8.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
-]
-
-[[package]]
 name = "docstring-parser"
 version = "0.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1328,44 +1319,29 @@ wheels = [
 
 [[package]]
 name = "dotpromptz"
-version = "0.2.0"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
     { name = "anyio" },
     { name = "dotpromptz-handlebars" },
     { name = "jsonschema" },
-    { name = "pydantic", extra = ["email"] },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "structlog" },
-    { name = "types-aiofiles" },
-    { name = "types-pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/81/36da4a47d5be1b935fdec140a1675bf3825d0116f63b6d784b548bc6b4eb/dotpromptz-0.2.0.tar.gz", hash = "sha256:4414bd8a0e4636a48318c665b18418e60b6fd61a4d96d6e440f09fd6882eea59", size = 90844, upload-time = "2026-10-05T22:04:43.371Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/40/a045e41e4e84f804e7cabf4a1b6f867ab9415483b97b5d7ec96c16889b9d/dotpromptz-1.0.0.tar.gz", hash = "sha256:ced2d9a27cff2a4567e5979e49886b1f7aea5c8ac671b5a25dccff8c155172ce", size = 91032, upload-time = "2026-11-11T21:27:33.232Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/af/1c/41c11b559053e385f49bbcd7375b16937b887d6e6edbaf14630da1342c97/dotpromptz-0.2.0-py3-none-any.whl", hash = "sha256:0ea7f81161bafc72babae3ff50e3bdcc4eb26a16691a1be091f7a1cf0e88ce83", size = 70440, upload-time = "2026-10-05T22:04:41.764Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/ef/fe44d13a67352d3d712d5ab268e045d4099547bdb58c8888044cd45d323f/dotpromptz-1.0.0-py3-none-any.whl", hash = "sha256:23abd376b9415f4f8bd1fba94f65094b59afb5c0eda340b13bbbdbdc0af9d150", size = 70446, upload-time = "2026-11-11T21:27:32.047Z" },
 ]
 
 [[package]]
 name = "dotpromptz-handlebars"
-version = "0.2.0"
+version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/22/40/c50f14ab97363667944c59f7bddc0c878068fc51ce5fa9fcdb4b5dffa45f/dotpromptz_handlebars-0.2.0.tar.gz", hash = "sha256:62528d768c9461f64fdf119a39121ebd0e6fec04f1a3578c7e3b832512d78423", size = 41135, upload-time = "2026-10-05T21:50:15.338Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/3d/05c6bd1571a1192ab67510e4c769391e8aae1bfc0e77c41304b5a2879b60/dotpromptz_handlebars-1.0.0.tar.gz", hash = "sha256:a360fc4f854bac9eb7842e99219cefc27608a6335d2d67aea8118d96809bf108", size = 41985, upload-time = "2026-11-11T21:25:27.093Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/69/bd20ac7246569d4634c052d5af3c1f06c82a2234e1f619c2cc36d33561e7/dotpromptz_handlebars-0.2.0-py3-none-any.whl", hash = "sha256:7da43a27a9fe095379d887ee6cf3ab4f2aefa43458064bee0dcf08282ed73c8c", size = 19956, upload-time = "2026-10-05T21:50:14.22Z" },
-]
-
-[[package]]
-name = "email-validator"
-version = "2.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "dnspython" },
-    { name = "idna" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/52/542be4bf133c261ae141bc8f425e7216d014e246383df47dc416084b57e9/dotpromptz_handlebars-1.0.0-py3-none-any.whl", hash = "sha256:ef7a6935fa56fd4a03ad1022ed5a54c664f63e48751fe846843e440617a5b6b3", size = 19707, upload-time = "2026-11-11T21:25:25.764Z" },
 ]
 
 [[package]]
@@ -1633,7 +1609,7 @@ vertexai = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.9.0" },
-    { name = "dotpromptz", specifier = ">=0.2.0,<0.3.0" },
+    { name = "dotpromptz", specifier = ">=1.0.0,<2" },
     { name = "genkit-a2ui", marker = "extra == 'a2ui'", editable = "packages/genkit-a2ui" },
     { name = "genkit-amazon-bedrock", marker = "extra == 'amazon-bedrock'", editable = "packages/genkit-amazon-bedrock" },
     { name = "genkit-anthropic", marker = "extra == 'anthropic'", editable = "packages/genkit-anthropic" },
@@ -5272,11 +5248,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5a/87/b70ad306ebb6f9b585f114d0ac2137d792b48be34d732d60e597c2f8465a/pydantic-2.12.5-py3-none-any.whl", hash = "sha256:e561593fccf61e8a20fc46dfc2dfe075b8be7d0188df33f221ad1f0139180f9d", size = 463580, upload-time = "2025-11-26T15:11:44.605Z" },
 ]
 
-[package.optional-dependencies]
-email = [
-    { name = "email-validator" },
-]
-
 [[package]]
 name = "pydantic-core"
 version = "2.41.5"
@@ -6675,24 +6646,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7e/ec/adfe3dd6b5f7c5fc0b3cecdf6f893f1756dbd23cf749cd1ae49db069414f/typeguard-4.5.0.tar.gz", hash = "sha256:749bea21cdb2553e12831bc29f1eae980b22c7de8331ab67ae7db9e85470b5a7", size = 79993, upload-time = "2026-02-15T00:24:25.244Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/35/7541d1f046491fac8ce05d543d3f0de0af02086ad864dd3a23535ec703b9/typeguard-4.5.0-py3-none-any.whl", hash = "sha256:cfda388fc88a9ce42a41890900d6f31ee124bea9b73bb84701a32438e92165c3", size = 36724, upload-time = "2026-02-15T00:24:23.581Z" },
-]
-
-[[package]]
-name = "types-aiofiles"
-version = "25.1.0.20251011"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/84/6c/6d23908a8217e36704aa9c79d99a620f2fdd388b66a4b7f72fbc6b6ff6c6/types_aiofiles-25.1.0.20251011.tar.gz", hash = "sha256:1c2b8ab260cb3cd40c15f9d10efdc05a6e1e6b02899304d80dfa0410e028d3ff", size = 14535, upload-time = "2025-10-11T02:44:51.237Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/0f/76917bab27e270bb6c32addd5968d69e558e5b6f7fb4ac4cbfa282996a96/types_aiofiles-25.1.0.20251011-py3-none-any.whl", hash = "sha256:8ff8de7f9d42739d8f0dadcceeb781ce27cd8d8c4152d4a7c52f6b20edb8149c", size = 14338, upload-time = "2025-10-11T02:44:50.054Z" },
-]
-
-[[package]]
-name = "types-pyyaml"
-version = "6.0.12.20250915"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/7e/69/3c51b36d04da19b92f9e815be12753125bd8bc247ba0470a982e6979e71c/types_pyyaml-6.0.12.20250915.tar.gz", hash = "sha256:0f8b54a528c303f0e6f7165687dd33fafa81c807fcac23f632b63aa624ced1d3", size = 17522, upload-time = "2025-09-15T03:01:00.728Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/e0/1eed384f02555dde685fff1a1ac805c1c7dcb6dd019c916fe659b1c1f9ec/types_pyyaml-6.0.12.20250915-py3-none-any.whl", hash = "sha256:e7d4d9e064e89a3b3cae120b4990cd370874d2bf12fa5f46c97018dd5d3c9ab6", size = 20338, upload-time = "2025-09-15T03:00:59.218Z" },
 ]
 
 [[package]]
