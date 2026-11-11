@@ -126,9 +126,13 @@ function toMistralMessage(
   return { ...rest, content } as ChatCompletionMessageParam;
 }
 
-/** Mistral does not accept `stream_options` on streaming requests. */
+/**
+ * Mistral does not accept `stream_options` on streaming requests, and streams
+ * reasoning as `thinking` chunks in a `content` array.
+ */
 export const MISTRAL_RUNNER_OPTIONS: ModelRunnerOptions = {
   streamOptions: false,
+  contentChunks: true,
 };
 
 /** Mistral ModelRef helper, with Mistral specific config. */
