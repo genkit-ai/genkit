@@ -30,18 +30,95 @@ const UNKNOWN_MODEL_SUPPORTS = {
   output: ['text'],
 };
 
-/** Fields the OpenAI plugin sends that Mistral's request schema rejects. */
-const NON_MISTRAL_FIELDS = [
-  'stream_options',
-  'max_completion_tokens',
-  'seed',
-  'user',
-  'reasoning_content',
+/**
+ * Wire keys of Mistral's `ChatCompletionRequest`, and of the message types it
+ * takes, copied from the `$Outbound` types in `@mistralai/mistralai` 3.5.0
+ * (`models/components/chatcompletionrequest.ts` and friends). Mistral's
+ * request schema rejects keys that are not listed.
+ */
+const MISTRAL_CHAT_REQUEST_KEYS = [
+  'model',
+  'temperature',
+  'top_p',
+  'max_tokens',
+  'stream',
+  'stop',
+  'random_seed',
+  'metadata',
+  'messages',
+  'response_format',
+  'tools',
+  'tool_choice',
+  'presence_penalty',
+  'frequency_penalty',
+  'min_tokens',
+  'repetition_penalty',
+  'top_k',
+  'logprobs',
+  'top_logprobs',
+  'prompt_logprobs',
+  'top_prompt_logprobs',
+  'n',
+  'prediction',
+  'parallel_tool_calls',
+  'reasoning_effort',
+  'prompt_mode',
+  'guardrails',
+  'prompt_cache_key',
+  'service_tier',
+  'safe_prompt',
+];
+const MISTRAL_MESSAGE_KEYS: Record<string, string[]> = {
+  system: ['role', 'content'],
+  user: ['role', 'content'],
+  assistant: ['role', 'content', 'tool_calls', 'prefix'],
+  tool: ['role', 'content', 'tool_call_id', 'name'],
+};
+const MISTRAL_THINK_CHUNK_KEYS = ['type', 'thinking', 'signature', 'closed'];
+
+/** Wire keys of Mistral's `EmbeddingRequest`, from the same SDK. */
+const MISTRAL_EMBEDDING_REQUEST_KEYS = [
+  'model',
+  'metadata',
+  'input',
+  'output_dimension',
+  'output_dtype',
+  'encoding_format',
 ];
 
-function expectNoNonMistralFields(body: Record<string, unknown>) {
-  for (const field of NON_MISTRAL_FIELDS) {
-    expect(body).not.toHaveProperty(field);
+function expectKeysIn(value: object, allowed: string[]) {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  expect(unknown).toEqual([]);
+}
+
+/** Asserts a chat request body only uses keys Mistral accepts. */
+function expectMistralChatRequest(body: Record<string, any>) {
+  expectKeysIn(body, MISTRAL_CHAT_REQUEST_KEYS);
+  for (const message of body.messages) {
+    expectKeysIn(message, MISTRAL_MESSAGE_KEYS[message.role] ?? []);
+    if (Array.isArray(message.content)) {
+      for (const chunk of message.content) {
+        if (chunk.type === 'thinking') {
+          expectKeysIn(chunk, MISTRAL_THINK_CHUNK_KEYS);
+        }
+      }
+    }
+  }
+}
+
+/** Asserts an embeddings request body only uses keys Mistral accepts. */
+function expectMistralEmbeddingRequest(body: Record<string, any>) {
+  expectKeysIn(body, MISTRAL_EMBEDDING_REQUEST_KEYS);
+}
+
+/** Checks every captured request body against Mistral's request keys. */
+function expectMistralRequests(server: FakeOpenAIServer) {
+  for (const { body } of server.requests) {
+    if (body.messages) {
+      expectMistralChatRequest(body);
+    } else if (body.input) {
+      expectMistralEmbeddingRequest(body);
+    }
   }
 }
 
@@ -64,7 +141,13 @@ describe('mistral plugin', () => {
   });
 
   afterEach(() => {
-    server.stop();
+    try {
+      // Every chat and embeddings request a test made must fit Mistral's
+      // schema.
+      expectMistralRequests(server);
+    } finally {
+      server.stop();
+    }
   });
 
   it('requires an API key', () => {
@@ -135,7 +218,7 @@ describe('mistral plugin', () => {
       presence_penalty: 0.5,
       frequency_penalty: 0.25,
     });
-    expectNoNonMistralFields(body);
+    expectMistralChatRequest(body);
   });
 
   it('does not pass unknown config through to the request', async () => {
@@ -146,7 +229,7 @@ describe('mistral plugin', () => {
     });
 
     const body = server.requests[0].body;
-    expectNoNonMistralFields(body);
+    expectMistralChatRequest(body);
   });
 
   it('does not send stream_options when streaming', async () => {
@@ -170,7 +253,8 @@ describe('mistral plugin', () => {
           choices: [
             { index: 0, delta: { content: 'lo' }, finish_reason: 'stop' },
           ],
-          // Mistral sends usage on the last chunk without being asked.
+          // Assumes Mistral sends usage on the last chunk without
+          // stream_options. Not confirmed against the live API.
           usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
         },
       ],
@@ -188,7 +272,7 @@ describe('mistral plugin', () => {
 
     const body = server.requests[0].body;
     expect(body.stream).toBe(true);
-    expectNoNonMistralFields(body);
+    expectMistralChatRequest(body);
     expect(chunks.join('')).toBe('Hello');
     expect(final.text).toBe('Hello');
     expect(final.usage.outputTokens).toBe(2);
@@ -364,7 +448,7 @@ describe('mistral plugin', () => {
     });
 
     const body = server.requests[0].body;
-    expectNoNonMistralFields(body);
+    expectMistralChatRequest(body);
     expect(body.messages[1]).toEqual({
       role: 'assistant',
       content: [
@@ -394,6 +478,148 @@ describe('mistral plugin', () => {
     for (const message of body.messages) {
       expect(message).not.toHaveProperty('reasoning_content');
     }
+  });
+
+  it('streams JSON output alongside thinking chunks', async () => {
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          id: '1',
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'thinking',
+                    thinking: [{ type: 'text', text: 'Answer is 4.' }],
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: '1',
+          choices: [
+            {
+              index: 0,
+              delta: { content: [{ type: 'text', text: '{"answer":' }] },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: '1',
+          choices: [
+            { index: 0, delta: { content: '4}' }, finish_reason: 'stop' },
+          ],
+        },
+      ],
+    });
+
+    const { stream, response } = ai.generateStream({
+      model: mistral.model('magistral-small-latest'),
+      prompt: 'What is 2 + 2?',
+      output: { format: 'json', schema: z.object({ answer: z.number() }) },
+    });
+    const reasoning: string[] = [];
+    const text: string[] = [];
+    for await (const chunk of stream) {
+      reasoning.push(chunk.reasoning);
+      text.push(chunk.text);
+    }
+    const final = await response;
+
+    expect(reasoning.join('')).toBe('Answer is 4.');
+    expect(text.join('')).toBe('{"answer":4}');
+    expect(final.output).toEqual({ answer: 4 });
+    expect(final.reasoning).toBe('Answer is 4.');
+    const body = server.requests[0].body;
+    expect(body.stream).toBe(true);
+    expect(body.response_format.type).toBe('json_schema');
+    expectMistralChatRequest(body);
+  });
+
+  it('round-trips a tool call', async () => {
+    const add = ai.defineTool(
+      {
+        name: 'add',
+        description: 'Adds two numbers',
+        inputSchema: z.object({ a: z.number(), b: z.number() }),
+        outputSchema: z.number(),
+      },
+      async ({ a, b }) => a + b
+    );
+    server.setNextResponse({
+      body: {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: { name: 'add', arguments: '{"a":2,"b":2}' },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      },
+    });
+    server.setNextResponse({
+      body: {
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: '2 + 2 is 4.' },
+            finish_reason: 'stop',
+          },
+        ],
+      },
+    });
+
+    const response = await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      prompt: 'What is 2 + 2?',
+      tools: [add],
+    });
+
+    expect(response.text).toBe('2 + 2 is 4.');
+    expect(server.requests).toHaveLength(2);
+    const [first, second] = server.requests.map((r) => r.body);
+    expect(first.tools).toEqual([
+      {
+        type: 'function',
+        function: {
+          name: 'add',
+          parameters: expect.objectContaining({ type: 'object' }),
+        },
+      },
+    ]);
+    expect(second.messages.slice(1)).toEqual([
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'add', arguments: '{"a":2,"b":2}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', content: '4' },
+    ]);
+    expectMistralChatRequest(first);
+    expectMistralChatRequest(second);
   });
 
   it('keeps the thinking signature in reasoning metadata', async () => {
@@ -501,6 +727,7 @@ describe('mistral plugin', () => {
       output_dimension: 256,
     });
     expect(body).not.toHaveProperty('dimensions');
+    expectMistralEmbeddingRequest(body);
   });
 
   it('does not pass unknown embedder options through to the request', async () => {
@@ -637,6 +864,7 @@ describe('mistral plugin', () => {
         for (const request of scopedServer.requests) {
           expect(request.headers['authorization']).toBe('Bearer scoped-key');
         }
+        expectMistralRequests(scopedServer);
       } finally {
         scopedServer.stop();
       }
@@ -644,7 +872,9 @@ describe('mistral plugin', () => {
 
     it('sends a request-scoped key to api.mistral.ai by default', async () => {
       const calls: { url: string; authorization: string | null }[] = [];
+      const bodies: Record<string, any>[] = [];
       const recordingFetch = async (url: any, init?: any) => {
+        bodies.push(JSON.parse(init.body));
         calls.push({
           url: String(url),
           authorization: new Headers(init?.headers).get('authorization'),
@@ -684,6 +914,8 @@ describe('mistral plugin', () => {
           authorization: 'Bearer scoped-key',
         },
       ]);
+      expectMistralChatRequest(bodies[0]);
+      expectMistralEmbeddingRequest(bodies[1]);
     });
   });
 });
