@@ -62,39 +62,69 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
-      "types": "./lib/index.d.ts",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./user_engagement": {
-      "require": "./lib/user-engagement.js",
-      "import": "./lib/user-engagement.mjs",
-      "types": "./lib/user-engagement.d.ts",
+      "import": {
+        "types": "./lib/user-engagement.d.mts",
+        "default": "./lib/user-engagement.mjs"
+      },
+      "require": {
+        "types": "./lib/user-engagement.d.ts",
+        "default": "./lib/user-engagement.js"
+      },
       "default": "./lib/user-engagement.js"
     },
     "./user-engagement": {
-      "require": "./lib/user-engagement.js",
-      "import": "./lib/user-engagement.mjs",
-      "types": "./lib/user-engagement.d.ts",
+      "import": {
+        "types": "./lib/user-engagement.d.mts",
+        "default": "./lib/user-engagement.mjs"
+      },
+      "require": {
+        "types": "./lib/user-engagement.d.ts",
+        "default": "./lib/user-engagement.js"
+      },
       "default": "./lib/user-engagement.js"
     },
     "./beta/data-connect": {
-      "require": "./lib/beta/data-connect.js",
-      "import": "./lib/beta/data-connect.mjs",
-      "types": "./lib/beta/data-connect.d.ts",
+      "import": {
+        "types": "./lib/beta/data-connect.d.mts",
+        "default": "./lib/beta/data-connect.mjs"
+      },
+      "require": {
+        "types": "./lib/beta/data-connect.d.ts",
+        "default": "./lib/beta/data-connect.js"
+      },
       "default": "./lib/beta/data-connect.js"
     },
     "./beta": {
-      "require": "./lib/beta.js",
-      "import": "./lib/beta.mjs",
-      "types": "./lib/beta.d.ts",
+      "import": {
+        "types": "./lib/beta.d.mts",
+        "default": "./lib/beta.mjs"
+      },
+      "require": {
+        "types": "./lib/beta.d.ts",
+        "default": "./lib/beta.js"
+      },
       "default": "./lib/beta.js"
     },
     "./context": {
-      "require": "./lib/context.js",
-      "import": "./lib/context.mjs",
-      "types": "./lib/context.d.ts",
+      "import": {
+        "types": "./lib/context.d.mts",
+        "default": "./lib/context.mjs"
+      },
+      "require": {
+        "types": "./lib/context.d.ts",
+        "default": "./lib/context.js"
+      },
       "default": "./lib/context.js"
     }
   },
@@ -107,7 +137,7 @@
         "lib/user-engagement"
       ],
       "beta/data-connect": [
-        "lib/data-connect"
+        "lib/beta/data-connect"
       ],
       "beta": [
         "lib/beta"
@@ -116,5 +146,8 @@
         "lib/context"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

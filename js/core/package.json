@@ -65,45 +65,80 @@
   "types": "lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./async": {
-      "types": "./lib/async.ts",
-      "require": "./lib/async.js",
-      "import": "./lib/async.mjs",
+      "import": {
+        "types": "./lib/async.d.mts",
+        "default": "./lib/async.mjs"
+      },
+      "require": {
+        "types": "./lib/async.d.ts",
+        "default": "./lib/async.js"
+      },
       "default": "./lib/async.js"
     },
     "./registry": {
-      "types": "./lib/registry.d.ts",
-      "require": "./lib/registry.js",
-      "import": "./lib/registry.mjs",
+      "import": {
+        "types": "./lib/registry.d.mts",
+        "default": "./lib/registry.mjs"
+      },
+      "require": {
+        "types": "./lib/registry.d.ts",
+        "default": "./lib/registry.js"
+      },
       "default": "./lib/registry.js"
     },
     "./tracing": {
-      "types": "./lib/tracing.d.ts",
-      "require": "./lib/tracing.js",
-      "import": "./lib/tracing.mjs",
+      "import": {
+        "types": "./lib/tracing.d.mts",
+        "default": "./lib/tracing.mjs"
+      },
+      "require": {
+        "types": "./lib/tracing.d.ts",
+        "default": "./lib/tracing.js"
+      },
       "default": "./lib/tracing.js"
     },
     "./logging": {
-      "types": "./lib/logging.d.ts",
-      "require": "./lib/logging.js",
-      "import": "./lib/logging.mjs",
+      "import": {
+        "types": "./lib/logging.d.mts",
+        "default": "./lib/logging.mjs"
+      },
+      "require": {
+        "types": "./lib/logging.d.ts",
+        "default": "./lib/logging.js"
+      },
       "default": "./lib/logging.js"
     },
     "./schema": {
-      "types": "./lib/schema.d.ts",
-      "require": "./lib/schema.js",
-      "import": "./lib/schema.mjs",
+      "import": {
+        "types": "./lib/schema.d.mts",
+        "default": "./lib/schema.mjs"
+      },
+      "require": {
+        "types": "./lib/schema.d.ts",
+        "default": "./lib/schema.js"
+      },
       "default": "./lib/schema.js"
     },
     "./node": {
-      "types": "./lib/node.d.ts",
-      "require": "./lib/node.js",
-      "import": "./lib/node.mjs",
+      "import": {
+        "types": "./lib/node.d.mts",
+        "default": "./lib/node.mjs"
+      },
+      "require": {
+        "types": "./lib/node.d.ts",
+        "default": "./lib/node.js"
+      },
       "default": "./lib/node.js"
     }
   },
@@ -132,7 +167,13 @@
       ],
       "node": [
         "lib/node"
+      ],
+      "async": [
+        "lib/async"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

@@ -139,14 +139,20 @@ export const defaultOptions = {
  *
  */
 export function fromPackageJson(packageJson: {
-  exports?: { [key: string]: { import: string } };
+  exports?: {
+    [key: string]: { import: string | { default: string } };
+  };
 }): string[] {
   if (!packageJson.exports) return ['./src/index.ts'];
   const out: string[] = [];
   for (const key in packageJson.exports) {
     if (Object.prototype.hasOwnProperty.call(packageJson.exports, key)) {
-      const importFile = packageJson.exports[key].import;
-      out.push(importFile.replace('./lib', './src').replace('.mjs', '.ts'));
+      const imp = packageJson.exports[key].import;
+      const importFile =
+        typeof imp === 'object' && imp !== null ? imp.default : imp;
+      if (typeof importFile === 'string') {
+        out.push(importFile.replace('./lib', './src').replace('.mjs', '.ts'));
+      }
     }
   }
   return out;

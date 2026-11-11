@@ -74,21 +74,36 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
-      "types": "./lib/index.d.ts",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./model-armor": {
-      "require": "./lib/model-armor.js",
-      "import": "./lib/model-armor.mjs",
-      "types": "./lib/model-armor.d.ts",
+      "import": {
+        "types": "./lib/model-armor.d.mts",
+        "default": "./lib/model-armor.mjs"
+      },
+      "require": {
+        "types": "./lib/model-armor.d.ts",
+        "default": "./lib/model-armor.js"
+      },
       "default": "./lib/model-armor.js"
     },
     "./beta": {
-      "require": "./lib/beta.js",
-      "import": "./lib/beta.mjs",
-      "types": "./lib/beta.d.ts",
+      "import": {
+        "types": "./lib/beta.d.mts",
+        "default": "./lib/beta.mjs"
+      },
+      "require": {
+        "types": "./lib/beta.d.ts",
+        "default": "./lib/beta.js"
+      },
       "default": "./lib/beta.js"
     }
   },
@@ -101,5 +116,8 @@
         "lib/beta"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

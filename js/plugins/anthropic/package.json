@@ -44,9 +44,14 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     }
   },
