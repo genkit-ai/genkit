@@ -17,7 +17,14 @@
 import { Firestore } from '@google-cloud/firestore';
 import { afterEach, beforeEach, describe, it } from '@jest/globals';
 import * as assert from 'assert';
-import { AgentAPI, genkit, type SessionSnapshotInput } from 'genkit/beta';
+import {
+  AgentAPI,
+  GENKIT_VERSION,
+  genkit,
+  type SessionSnapshotInput,
+} from 'genkit/beta';
+import * as http2 from 'node:http2';
+import type { AddressInfo } from 'node:net';
 import {
   FirestoreSessionStore,
   type FirestoreSessionStoreOptions,
@@ -914,5 +921,100 @@ describe('FirestoreSessionStore', () => {
         'system messages should not be persisted'
       );
     });
+  });
+});
+
+// Doesn't need the emulator: the default client is pointed at a local endpoint
+// that records the headers Firestore actually sends.
+describe('FirestoreSessionStore client attribution', () => {
+  /**
+   * Starts a local gRPC endpoint that records each request's headers and fails
+   * it with PERMISSION_DENIED.
+   */
+  async function startHeaderRecorder() {
+    const requests: http2.IncomingHttpHeaders[] = [];
+    const server = http2.createServer();
+    server.on('stream', (stream, headers) => {
+      requests.push(headers);
+      stream.respond(
+        {
+          ':status': 200,
+          'content-type': 'application/grpc',
+          'grpc-status': '7',
+          'grpc-message': 'recorded by test',
+        },
+        { endStream: true }
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, '127.0.0.1', resolve)
+    );
+    const { port } = server.address() as AddressInfo;
+    return {
+      host: `127.0.0.1:${port}`,
+      requests,
+      close: () =>
+        new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  /** Sets environment variables, returning a function that restores them. */
+  function setEnv(vars: Record<string, string>): () => void {
+    const saved = Object.keys(vars).map(
+      (key) => [key, process.env[key]] as const
+    );
+    Object.assign(process.env, vars);
+    return () => {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
+  }
+
+  it('appends genkit-node to the default client x-goog-api-client header', async () => {
+    const recorder = await startHeaderRecorder();
+    // The default client takes its endpoint and project from the environment.
+    const restoreEnv = setEnv({
+      FIRESTORE_EMULATOR_HOST: recorder.host,
+      GCLOUD_PROJECT: 'genkit-test',
+    });
+    const store = new FirestoreSessionStore<Custom>();
+    const db = (store as any).db as Firestore;
+    try {
+      // Every RPC from the client carries the header. A unary call fails fast
+      // here; streaming reads would be retried with backoff.
+      await assert.rejects(db.listCollections());
+      assert.ok(recorder.requests.length > 0, 'expected a Firestore request');
+      for (const headers of recorder.requests) {
+        const header = String(headers['x-goog-api-client']);
+        const tokens = header.split(' ');
+        const i = tokens.indexOf(`genkit-node/${GENKIT_VERSION}`);
+        assert.ok(i > 0, `genkit-node token missing from "${header}"`);
+        // Appended to Firestore's own client library token, not replacing it.
+        assert.ok(
+          /^gccl\/\S+$/.test(tokens[i - 1]),
+          `genkit-node token should follow gccl/<version> in "${header}"`
+        );
+      }
+    } finally {
+      await db.terminate();
+      await recorder.close();
+      restoreEnv();
+    }
+  });
+
+  it('does not configure a caller-provided Firestore instance', async () => {
+    const db = new Firestore({ projectId: 'genkit-test' });
+    try {
+      new FirestoreSessionStore<Custom>({ db });
+      // settings() freezes an instance's settings; the caller must still be
+      // able to configure theirs.
+      assert.doesNotThrow(() =>
+        db.settings({ ignoreUndefinedProperties: true })
+      );
+    } finally {
+      await db.terminate();
+    }
   });
 });

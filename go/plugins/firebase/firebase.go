@@ -29,10 +29,21 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
+	"github.com/firebase/genkit/go/internal"
+	"google.golang.org/api/option"
 )
 
 const provider = "firebase"
 const projectIdEnv = "FIREBASE_PROJECT_ID"
+
+var genkitUserAgent = fmt.Sprintf("genkit-go/%s", internal.Version)
+
+// defaultAppOptions returns the client options for the Firebase app that Init
+// creates when no App is provided. The user agent is sent on the app's Google
+// API requests, including Firestore's gRPC calls.
+func defaultAppOptions() []option.ClientOption {
+	return []option.ClientOption{option.WithUserAgent(genkitUserAgent)}
+}
 
 const pluginInstruction = "Pass the Firebase plugin to genkit.Init():\n" +
 	"  g := genkit.Init(ctx, genkit.WithPlugins(&firebase.Firebase{ProjectId: \"your-project\"}))"
@@ -92,7 +103,11 @@ func (f *Firebase) Init(ctx context.Context) []api.Action {
 	}
 
 	if f.App == nil {
-		firebaseApp, err := firebasev4.NewApp(ctx, &firebasev4.Config{ProjectID: projectId})
+		firebaseApp, err := firebasev4.NewApp(
+			ctx,
+			&firebasev4.Config{ProjectID: projectId},
+			defaultAppOptions()...,
+		)
 		if err != nil {
 			panic(fmt.Errorf("firebase.Init: failed to initialize Firebase App: %v", err))
 		}

@@ -22,6 +22,7 @@ import {
   type Transaction,
 } from '@google-cloud/firestore';
 import {
+  GENKIT_VERSION,
   GenkitError,
   applyPatch,
   diff,
@@ -227,6 +228,31 @@ function sanitize<T>(value: T): T {
 }
 
 /**
+ * Creates the Firestore instance used when no `db` is supplied, tagged with
+ * Genkit client attribution: `genkit-node/<version>` is appended after
+ * Firestore's own token in the `x-goog-api-client` header (e.g.
+ * `... gccl/7.11.6 genkit-node/1.43.0`), on both gRPC and REST requests.
+ *
+ * The token can't be passed to `new Firestore()`: the constructor always
+ * overwrites `libName`/`libVersion` with its own `gccl/<version>` value.
+ * `settings()` doesn't, so the token is appended there. `settings()` must be
+ * called before the instance is used and freezes its settings, so this is only
+ * done for instances created here, never for a caller-provided `db`.
+ */
+function createDefaultFirestore(): Firestore {
+  const db = new Firestore();
+  // Firestore keeps its computed header version (e.g. `7.11.6`) in internal
+  // settings; it's read so the `gccl/<version>` token is kept as-is. If that
+  // internal shape ever changes, skip attribution rather than fail.
+  const libVersion = (db as unknown as { _settings?: { libVersion?: unknown } })
+    ._settings?.libVersion;
+  if (typeof libVersion === 'string' && libVersion) {
+    db.settings({ libVersion: `${libVersion} genkit-node/${GENKIT_VERSION}` });
+  }
+  return db;
+}
+
+/**
  * A Firestore-backed {@link SessionStore} that persists session snapshots as
  * incremental JSON Patch diffs anchored to periodic, sharded full-state
  * checkpoints.
@@ -263,7 +289,7 @@ export class FirestoreSessionStore<S = unknown> implements SessionStore<S> {
   protected snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
 
   constructor(opts?: FirestoreSessionStoreOptions) {
-    this.db = opts?.db ?? new Firestore();
+    this.db = opts?.db ?? createDefaultFirestore();
     this.collection = opts?.collection ?? 'genkit-sessions';
     this.checkpointInterval =
       opts?.checkpointInterval ?? DEFAULT_CHECKPOINT_INTERVAL;
