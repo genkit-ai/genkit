@@ -52,6 +52,10 @@ type ModelGenerator struct {
 	constrained ai.ConstrainedSupport
 	// mediaTypes is [OpenAICompatible.MediaTypes].
 	mediaTypes []string
+	// omitStreamOptions is [OpenAICompatible.OmitStreamOptions].
+	omitStreamOptions bool
+	// thinkingChunks is [OpenAICompatible.ThinkingChunks].
+	thinkingChunks bool
 	// classify is the provider's [OpenAICompatible.ClassifyError].
 	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
@@ -89,6 +93,21 @@ func (g *ModelGenerator) withMediaTypes(types []string) *ModelGenerator {
 	return g
 }
 
+// withOmitStreamOptions sets whether a streaming request leaves out
+// stream_options; see [OpenAICompatible.OmitStreamOptions].
+func (g *ModelGenerator) withOmitStreamOptions(omit bool) *ModelGenerator {
+	g.omitStreamOptions = omit
+	return g
+}
+
+// withThinkingChunks sets whether a model turn's reasoning is sent back as a
+// thinking chunk; see [OpenAICompatible.ThinkingChunks]. It must come before
+// [ModelGenerator.WithMessages].
+func (g *ModelGenerator) withThinkingChunks(thinkingChunks bool) *ModelGenerator {
+	g.thinkingChunks = thinkingChunks
+	return g
+}
+
 // WithMessages adds messages to the request
 func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 	// Return early if we already have an error
@@ -112,12 +131,23 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 		case ai.RoleModel:
 			am := openai.ChatCompletionAssistantMessageParam{}
 			am.Content.OfString = param.NewOpt(content)
-			// A reasoning part goes back even when its text is empty. DeepSeek
-			// rejects a thinking-mode tool call it cannot match to one of its
-			// own replies, as when the caller rewrote the call IDs, unless the
-			// turn carries reasoning_content, and a turn with no chain of
-			// thought carries it empty.
-			if slices.ContainsFunc(msg.Content, (*ai.Part).IsReasoning) {
+			switch {
+			case !slices.ContainsFunc(msg.Content, (*ai.Part).IsReasoning):
+			case g.thinkingChunks:
+				// The content array replaces the string content: the SDK
+				// marshals an extra field over the struct field it collides
+				// with. An empty chain of thought has nothing to send back.
+				if reasoning := concatenateReasoningContent(msg.Content); reasoning != "" {
+					am.SetExtraFields(map[string]any{
+						"content": thinkingContent(reasoning, content),
+					})
+				}
+			default:
+				// A reasoning part goes back even when its text is empty.
+				// DeepSeek rejects a thinking-mode tool call it cannot match
+				// to one of its own replies, as when the caller rewrote the
+				// call IDs, unless the turn carries reasoning_content, and a
+				// turn with no chain of thought carries it empty.
 				am.SetExtraFields(map[string]any{
 					"reasoning_content": concatenateReasoningContent(msg.Content),
 				})
@@ -661,7 +691,10 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 	// A streamed request carries no token usage at all unless it asks for it,
 	// so it is requested here rather than left to each plugin: a response
 	// without usage would otherwise report zero tokens for every stream.
-	g.request.StreamOptions.IncludeUsage = openai.Bool(true)
+	// A provider that rejects the field reports usage unasked instead.
+	if !g.omitStreamOptions {
+		g.request.StreamOptions.IncludeUsage = openai.Bool(true)
+	}
 
 	stream := g.client.Chat.Completions.NewStreaming(ctx, *g.request)
 	defer func() {
@@ -692,6 +725,18 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 
 	for stream.Next() {
 		chunk := stream.Current()
+		// A content array carries text and reasoning together, and the SDK
+		// reads it into the content string as raw JSON. The delta's content is
+		// rewritten to the text alone before the accumulator sees it, so
+		// neither the streamed chunks nor the final message carry the JSON.
+		var chunkReasoning string
+		var chunkReasoningSeen bool
+		if len(chunk.Choices) > 0 {
+			if text, reasoning, ok := contentChunks(chunk.Choices[0].Delta.JSON.Content.Raw()); ok {
+				chunk.Choices[0].Delta.Content = text
+				chunkReasoning, chunkReasoningSeen = reasoning, reasoning != ""
+			}
+		}
 		acc.AddChunk(chunk)
 
 		// Usage rides on a final chunk of its own and is null on the rest.
@@ -721,6 +766,9 @@ func (g *ModelGenerator) generateStream(ctx context.Context, req *ai.ModelReques
 			chunk.Choices[0].Delta.JSON.ExtraFields["reasoning_content"].Raw(),
 			chunk.Choices[0].Delta.JSON.ExtraFields["reasoning"].Raw(),
 		)
+		if chunkReasoningSeen {
+			reasoningDelta, ok = chunkReasoning, true
+		}
 		reasoningSeen = reasoningSeen || ok
 		if reasoningDelta != "" {
 			reasoning.WriteString(reasoningDelta)
@@ -915,6 +963,63 @@ func firstReasoning(raws ...string) (reasoning string, ok bool) {
 	return "", ok
 }
 
+// contentChunk is one entry of a message content array, the shape Mistral
+// answers with when a response carries reasoning: text chunks hold the
+// answer, and thinking chunks hold the reasoning as text chunks of their own.
+type contentChunk struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Thinking []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"thinking"`
+}
+
+// contentChunks unpacks the raw JSON of a message's content when it is an
+// array of chunks rather than a string, joining the text chunks into text
+// and the text inside thinking chunks into reasoning. ok is false when the
+// content is not such an array, so a plain string keeps its meaning however
+// it reads. Chunks of any other type, such as references, carry no text and
+// are skipped.
+func contentChunks(raw string) (text, reasoning string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "[") {
+		return "", "", false
+	}
+	var chunks []contentChunk
+	if err := json.Unmarshal([]byte(raw), &chunks); err != nil {
+		return "", "", false
+	}
+	var textOut, reasoningOut strings.Builder
+	for _, c := range chunks {
+		switch c.Type {
+		case "text":
+			textOut.WriteString(c.Text)
+		case "thinking":
+			for _, t := range c.Thinking {
+				if t.Type == "text" {
+					reasoningOut.WriteString(t.Text)
+				}
+			}
+		}
+	}
+	return textOut.String(), reasoningOut.String(), true
+}
+
+// thinkingContent is the content array a model turn is sent back with when
+// its provider reads reasoning as thinking chunks: the reasoning first, as
+// the provider answered it, then the text, if any.
+func thinkingContent(reasoning, text string) []map[string]any {
+	content := []map[string]any{{
+		"type":     "thinking",
+		"thinking": []map[string]any{{"type": "text", "text": reasoning}},
+	}}
+	if text != "" {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
+	return content
+}
+
 // extractErrorObject decodes the error object a provider returns beside a
 // choice when an upstream fails mid-generation, or nil when the field is
 // absent or is not an object. The object is kept whole: its message becomes
@@ -945,11 +1050,12 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, sep
 
 	// Map finish reason. end_turn is xAI's name for an answer the model chose
 	// to end, one of the three reasons it documents, so leaving it out reports
-	// an ordinary completion as unknown.
+	// an ordinary completion as unknown. model_length is Mistral's for a
+	// generation cut off by the model's context length.
 	switch choice.FinishReason {
 	case "stop", "tool_calls", "end_turn":
 		resp.FinishReason = ai.FinishReasonStop
-	case "length", "model_context_window_exceeded":
+	case "length", "model_context_window_exceeded", "model_length":
 		resp.FinishReason = ai.FinishReasonLength
 	case "content_filter", "sensitive":
 		resp.FinishReason = ai.FinishReasonBlocked
@@ -981,16 +1087,26 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, sep
 	// reasoning field as a Genkit reasoning part. DeepSeek and Kimi name it
 	// reasoning_content; OpenRouter normalizes every vendor it fronts onto
 	// reasoning.
-	if reasoning, ok := firstReasoning(
+	reasoning, reasoningSeen := firstReasoning(
 		choice.Message.JSON.ExtraFields["reasoning_content"].Raw(),
 		choice.Message.JSON.ExtraFields["reasoning"].Raw(),
-	); ok {
+	)
+	// Mistral carries reasoning as a thinking chunk in a content array
+	// instead, which the SDK reads into the content string as raw JSON.
+	text := choice.Message.Content
+	if chunkText, chunkReasoning, ok := contentChunks(choice.Message.JSON.Content.Raw()); ok {
+		text = chunkText
+		if chunkReasoning != "" {
+			reasoning, reasoningSeen = chunkReasoning, true
+		}
+	}
+	if reasoningSeen {
 		resp.Message.Content = append(resp.Message.Content, ai.NewReasoningPart(reasoning, nil))
 	}
 
 	// Add text content
-	if choice.Message.Content != "" {
-		resp.Message.Content = append(resp.Message.Content, ai.NewTextPart(choice.Message.Content))
+	if text != "" {
+		resp.Message.Content = append(resp.Message.Content, ai.NewTextPart(text))
 	}
 
 	// Add tool calls

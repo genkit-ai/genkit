@@ -94,7 +94,7 @@ func TestEmbeddingConfigApply(t *testing.T) {
 		Model:          "text-embedding-3-small",
 		EncodingFormat: openai.EmbeddingNewParamsEncodingFormatFloat,
 	}
-	EmbeddingConfig{}.applyToEmbedding(&params)
+	EmbeddingConfig{}.ApplyToEmbedding(&params)
 	if params.EncodingFormat != openai.EmbeddingNewParamsEncodingFormatFloat {
 		t.Errorf("EncodingFormat = %q, want the float default preserved", params.EncodingFormat)
 	}
@@ -106,7 +106,7 @@ func TestEmbeddingConfigApply(t *testing.T) {
 		Dimensions:     256,
 		EncodingFormat: openai.EmbeddingNewParamsEncodingFormatBase64,
 		User:           "user-1",
-	}.applyToEmbedding(&params)
+	}.ApplyToEmbedding(&params)
 	if got := params.Dimensions.Or(0); got != 256 {
 		t.Errorf("Dimensions = %d, want 256", got)
 	}

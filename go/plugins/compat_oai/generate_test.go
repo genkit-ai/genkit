@@ -82,6 +82,141 @@ func TestConvertChatCompletionToModelResponseReasoning(t *testing.T) {
 	}
 }
 
+// TestConvertChatCompletionToModelResponseContentChunks pins a content array,
+// the shape Mistral answers with when a response carries reasoning: its
+// thinking chunks become a reasoning part and its text chunks the text,
+// rather than the raw JSON the SDK reads into the content string. A string
+// that merely looks like an array is text and stays as it is.
+func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		content       string
+		wantReasoning string
+		wantText      string
+		wantParts     int
+	}{
+		"thinking and text": {
+			content:       `[{"type":"thinking","thinking":[{"type":"text","text":"Let me "},{"type":"text","text":"think..."}]},{"type":"text","text":"Final "},{"type":"text","text":"answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+		},
+		"text chunks only": {
+			content:   `[{"type":"text","text":"Final answer"},{"type":"reference","reference_ids":[1]}]`,
+			wantText:  "Final answer",
+			wantParts: 1,
+		},
+		"string that looks like an array": {
+			content:   `"[1, 2, 3]"`,
+			wantText:  "[1, 2, 3]",
+			wantParts: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var completion openai.ChatCompletion
+			if err := json.Unmarshal([]byte(`{
+				"id": "chatcmpl-1", "object": "chat.completion", "created": 1, "model": "m",
+				"choices": [{"index": 0, "message": {"role": "assistant", "content": `+tc.content+`}, "finish_reason": "stop"}]
+			}`), &completion); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			resp, err := convertChatCompletionToModelResponse(&completion, false)
+			if err != nil {
+				t.Fatalf("convertChatCompletionToModelResponse() error = %v", err)
+			}
+			if got := resp.Reasoning(); got != tc.wantReasoning {
+				t.Errorf("Reasoning() = %q, want %q", got, tc.wantReasoning)
+			}
+			if got := resp.Text(); got != tc.wantText {
+				t.Errorf("Text() = %q, want %q", got, tc.wantText)
+			}
+			if len(resp.Message.Content) != tc.wantParts {
+				t.Errorf("content = %#v, want %d parts", resp.Message.Content, tc.wantParts)
+			}
+		})
+	}
+}
+
+// TestWithMessagesSendsThinkingChunks pins the model turn a provider that
+// reads reasoning as thinking chunks is sent: the reasoning as a leading
+// thinking chunk of the content array, the text after it, and no
+// reasoning_content field. A turn whose reasoning is empty goes back as plain
+// text, since an empty thinking chunk says nothing.
+func TestWithMessagesSendsThinkingChunks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		parts []*ai.Part
+		want  any
+	}{
+		"reasoning and text": {
+			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", nil), ai.NewTextPart("Final answer")},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		"reasoning alone": {
+			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", nil)},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}},
+			},
+		},
+		"empty reasoning": {
+			parts: []*ai.Part{ai.NewReasoningPart("", nil), ai.NewTextPart("Final answer")},
+			want:  "Final answer",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGen().withThinkingChunks(true).WithMessages([]*ai.Message{{Role: ai.RoleModel, Content: tc.parts}})
+			if g.err != nil {
+				t.Fatalf("WithMessages() error = %v", g.err)
+			}
+			data, err := json.Marshal(g.messages[0])
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			var message map[string]any
+			if err := json.Unmarshal(data, &message); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if got, ok := message["reasoning_content"]; ok {
+				t.Errorf("reasoning_content = %v, want none", got)
+			}
+			if got := message["content"]; !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("content = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGenerateStreamOmitStreamOptions pins both sides of
+// [OpenAICompatible.OmitStreamOptions]: a stream asks for usage through
+// stream_options unless the provider rejects the field, in which case the
+// field is left out entirely.
+func TestGenerateStreamOmitStreamOptions(t *testing.T) {
+	for _, omit := range []bool{false, true} {
+		var body map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: "+`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+		}))
+		client := openai.NewClient(option.WithBaseURL(srv.URL), option.WithAPIKey("stub"))
+		_, err := NewModelGenerator(&client, "m").
+			withOmitStreamOptions(omit).
+			WithMessages([]*ai.Message{ai.NewUserTextMessage("hi")}).
+			Generate(context.Background(), &ai.ModelRequest{}, func(context.Context, *ai.ModelResponseChunk) error { return nil })
+		srv.Close()
+		if err != nil {
+			t.Fatalf("omit=%v: Generate() error = %v", omit, err)
+		}
+		_, sent := body["stream_options"]
+		if sent == omit {
+			t.Errorf("omit=%v: stream_options sent = %v, want %v", omit, sent, !omit)
+		}
+	}
+}
+
 // newGen returns a ModelGenerator with a nil client; only local tool-shaping
 // logic is exercised, so no network call is made.
 func newGen() *ModelGenerator {
@@ -158,6 +293,8 @@ func TestConvertChatCompletionToModelResponseProviderFinishReasons(t *testing.T)
 		// xAI documents three finish reasons and this is one of them, so an
 		// unmapped end_turn would report ordinary answers as unknown.
 		"end_turn": ai.FinishReasonStop,
+		// Mistral's name for a generation cut off by the context length.
+		"model_length": ai.FinishReasonLength,
 	} {
 		t.Run(finishReason, func(t *testing.T) {
 			completion := &openai.ChatCompletion{
