@@ -27,6 +27,10 @@ export const MistralEmbeddingConfigSchema = z.object({
       'Dimension of the output embeddings, for models that support it. Sent as `output_dimension`.'
     ),
   encodingFormat: z.union([z.literal('float'), z.literal('base64')]).optional(),
+  apiKey: z
+    .string()
+    .optional()
+    .describe('Overrides the plugin API key for this request.'),
 });
 
 /**

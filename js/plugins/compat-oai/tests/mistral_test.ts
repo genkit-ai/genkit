@@ -496,4 +496,101 @@ describe('mistral plugin', () => {
       { name: 'mistral/mistral-embed', type: 'embedder' },
     ]);
   });
+
+  describe('request-scoped API keys', () => {
+    const CHAT_RESPONSE = {
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'scoped' },
+          finish_reason: 'stop',
+        },
+      ],
+    };
+    const EMBED_RESPONSE = {
+      object: 'list',
+      data: [{ object: 'embedding', index: 0, embedding: [0.5] }],
+    };
+
+    it('sends a request-scoped key to the configured base URL', async () => {
+      const scopedServer = new FakeOpenAIServer('scoped-key');
+      await scopedServer.start();
+      try {
+        const scopedAi = genkit({
+          plugins: [
+            mistral({
+              ...fakeServerOptions(scopedServer),
+              apiKey: 'default-key',
+            }),
+          ],
+        });
+        scopedServer.setNextResponse({ body: CHAT_RESPONSE });
+        scopedServer.setNextResponse({ body: EMBED_RESPONSE });
+
+        const response = await scopedAi.generate({
+          model: mistral.model('mistral-small-latest'),
+          prompt: 'hi',
+          config: { apiKey: 'scoped-key' },
+        });
+        const embeddings = await scopedAi.embed({
+          embedder: mistral.embedder('mistral-embed'),
+          content: 'hi',
+          options: { apiKey: 'scoped-key' },
+        });
+
+        expect(response.text).toBe('scoped');
+        expect(embeddings).toEqual([{ embedding: [0.5] }]);
+        expect(scopedServer.requests).toHaveLength(2);
+        for (const request of scopedServer.requests) {
+          expect(request.headers['authorization']).toBe('Bearer scoped-key');
+        }
+      } finally {
+        scopedServer.stop();
+      }
+    });
+
+    it('sends a request-scoped key to api.mistral.ai by default', async () => {
+      const calls: { url: string; authorization: string | null }[] = [];
+      const recordingFetch = async (url: any, init?: any) => {
+        calls.push({
+          url: String(url),
+          authorization: new Headers(init?.headers).get('authorization'),
+        });
+        const body = String(url).endsWith('/embeddings')
+          ? EMBED_RESPONSE
+          : CHAT_RESPONSE;
+        return new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+      const defaultAi = genkit({
+        plugins: [
+          mistral({ apiKey: 'default-key', fetch: recordingFetch as any }),
+        ],
+      });
+
+      await defaultAi.generate({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'hi',
+        config: { apiKey: 'scoped-key' },
+      });
+      await defaultAi.embed({
+        embedder: mistral.embedder('mistral-embed'),
+        content: 'hi',
+        options: { apiKey: 'scoped-key' },
+      });
+
+      expect(calls).toEqual([
+        {
+          url: 'https://api.mistral.ai/v1/chat/completions',
+          authorization: 'Bearer scoped-key',
+        },
+        {
+          url: 'https://api.mistral.ai/v1/embeddings',
+          authorization: 'Bearer scoped-key',
+        },
+      ]);
+    });
+  });
 });
