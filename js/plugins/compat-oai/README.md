@@ -208,18 +208,24 @@ const embeddings = await ai.embed({
 });
 ```
 
-The plugin maps Genkit config to Mistral's request fields: `maxOutputTokens` is
-sent as `max_tokens`, `randomSeed` as `random_seed`, and the embedder's
-`outputDimension` as `output_dimension`. Mistral-only options are `safePrompt`,
-`reasoningEffort` and `promptMode`. Streaming requests don't send
-`stream_options`, which Mistral rejects.
+Mistral rejects request fields it doesn't know, so the plugin sends only
+Mistral's own field names:
+
+- `maxOutputTokens` is sent as `max_tokens`.
+- `randomSeed` is sent as `random_seed`. OpenAI's `seed` and `user`, and any
+  other config the plugin doesn't map, are ignored.
+- The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are
+  always requested as floats.
+- Streaming requests don't send `stream_options`.
 
 Reasoning models return their thinking as reasoning parts
 (`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
 `thinking` content.
 
 Any model returned by `/v1/models` can be used by name, for example
-`mistral.model('open-mistral-nemo')` or `'mistral/open-mistral-nemo'`.
+`mistral.model('open-mistral-nemo')` or `'mistral/open-mistral-nemo'`. Models
+outside the known list are treated as text only, without tools or constrained
+output.
 
 ### Custom models & other Cloud providers
 
@@ -277,8 +283,8 @@ Want to contribute to the project? That's awesome! Head over to our [Contributio
 
 ## Need help?
 
- - [Genkit Discord](https://genkit.dev/discord)
- - [Github Issues](https://github.com/genkit-ai/genkit/issues)
+- [Genkit Discord](https://genkit.dev/discord)
+- [Github Issues](https://github.com/genkit-ai/genkit/issues)
 
 ## License
 

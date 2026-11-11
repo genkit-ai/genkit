@@ -40,6 +40,21 @@ const MISTRAL_MODEL_INFO: ModelInfo = {
   },
 };
 
+/**
+ * Default for models that are not in the known list, such as ones found
+ * through `/v1/models`: text only, with no tools or constrained output, since
+ * their capabilities are unknown.
+ */
+const MISTRAL_UNKNOWN_MODEL_INFO: ModelInfo = {
+  supports: {
+    multiturn: true,
+    tools: false,
+    media: false,
+    systemRole: true,
+    output: ['text'],
+  },
+};
+
 /** Models with text input only, tool calling and structured output. */
 const MISTRAL_TEXT_MODEL_INFO: ModelInfo = {
   supports: {
@@ -60,18 +75,6 @@ export const MistralChatCompletionConfigSchema =
       .int()
       .optional()
       .describe('Seed for random sampling. Sent as `random_seed`.'),
-    safePrompt: z
-      .boolean()
-      .optional()
-      .describe('Inject a safety prompt before the conversation.'),
-    reasoningEffort: z
-      .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
-      .optional()
-      .describe('Reasoning effort, for models that support it.'),
-    promptMode: z
-      .enum(['reasoning'])
-      .optional()
-      .describe('Use the reasoning system prompt, for reasoning models.'),
   });
 
 /**
@@ -79,23 +82,11 @@ export const MistralChatCompletionConfigSchema =
  * schema rejects unknown fields, so only fields it accepts are set.
  */
 export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
-  const {
-    maxOutputTokens,
-    topK,
-    randomSeed,
-    safePrompt,
-    reasoningEffort,
-    promptMode,
-  } = req.config ?? {};
-  // Fields that are not part of the OpenAI request type.
-  const body = params as unknown as Record<string, unknown>;
+  const { maxOutputTokens, randomSeed } = req.config ?? {};
 
   params.max_tokens = maxOutputTokens;
-  body.top_k = topK;
-  body.random_seed = randomSeed;
-  body.safe_prompt = safePrompt;
-  body.reasoning_effort = reasoningEffort;
-  body.prompt_mode = promptMode;
+  // `random_seed` is not part of the OpenAI request type.
+  (params as unknown as Record<string, unknown>).random_seed = randomSeed;
   params.messages = toMistralMessages(req.messages, params.messages);
 };
 
@@ -162,25 +153,45 @@ export function mistralModelRef(params: {
 }): ModelReference<typeof MistralChatCompletionConfigSchema> {
   return compatOaiModelRef({
     ...params,
-    info: params.info ?? MISTRAL_MODEL_INFO,
+    info: params.info ?? MISTRAL_UNKNOWN_MODEL_INFO,
     configSchema: MistralChatCompletionConfigSchema,
     namespace: 'mistral',
   });
 }
 
 export const SUPPORTED_MISTRAL_MODELS = {
-  'mistral-large-latest': mistralModelRef({ name: 'mistral-large-latest' }),
-  'mistral-medium-latest': mistralModelRef({ name: 'mistral-medium-latest' }),
-  'mistral-small-latest': mistralModelRef({ name: 'mistral-small-latest' }),
+  'mistral-large-latest': mistralModelRef({
+    name: 'mistral-large-latest',
+    info: MISTRAL_MODEL_INFO,
+  }),
+  'mistral-medium-latest': mistralModelRef({
+    name: 'mistral-medium-latest',
+    info: MISTRAL_MODEL_INFO,
+  }),
+  'mistral-small-latest': mistralModelRef({
+    name: 'mistral-small-latest',
+    info: MISTRAL_MODEL_INFO,
+  }),
   'magistral-medium-latest': mistralModelRef({
     name: 'magistral-medium-latest',
+    info: MISTRAL_MODEL_INFO,
   }),
   'magistral-small-latest': mistralModelRef({
     name: 'magistral-small-latest',
+    info: MISTRAL_MODEL_INFO,
   }),
-  'ministral-14b-latest': mistralModelRef({ name: 'ministral-14b-latest' }),
-  'ministral-8b-latest': mistralModelRef({ name: 'ministral-8b-latest' }),
-  'ministral-3b-latest': mistralModelRef({ name: 'ministral-3b-latest' }),
+  'ministral-14b-latest': mistralModelRef({
+    name: 'ministral-14b-latest',
+    info: MISTRAL_MODEL_INFO,
+  }),
+  'ministral-8b-latest': mistralModelRef({
+    name: 'ministral-8b-latest',
+    info: MISTRAL_MODEL_INFO,
+  }),
+  'ministral-3b-latest': mistralModelRef({
+    name: 'ministral-3b-latest',
+    info: MISTRAL_MODEL_INFO,
+  }),
   'codestral-latest': mistralModelRef({
     name: 'codestral-latest',
     info: MISTRAL_TEXT_MODEL_INFO,
