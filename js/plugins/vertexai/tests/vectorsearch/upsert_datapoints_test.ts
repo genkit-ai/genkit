@@ -24,7 +24,7 @@ describe('upsertDatapoints', () => {
   // FIXME -- t.mock.method is not supported node above 20
   it.skip('upsertDatapoints sends the correct request and handles response', async (t) => {
     // Mocking the fetch method within the test scope
-    t.mock.method(global, 'fetch', async (url, options) => {
+    t.mock.method(global, 'fetch', async (url: any, options: any) => {
       return {
         ok: true,
         json: async () => ({}),

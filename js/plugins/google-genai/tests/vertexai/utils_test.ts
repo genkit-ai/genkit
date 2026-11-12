@@ -692,8 +692,7 @@ describe('Vertex AI Utils', () => {
     it('turns a defaulted regional location into global', () => {
       const result = toInteractionsClientOptions(defaulted);
       assert.strictEqual(result.kind, 'global');
-      assert.ok(result.kind !== 'express');
-      if (result.kind !== 'express') {
+      if (result.kind === 'global') {
         assert.strictEqual(result.location, 'global');
         assert.strictEqual(result.projectId, 'p');
       }

@@ -96,7 +96,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
       'isRetired',
       'isUnemployed',
       'isDisabled',
-    ]) {
+    ] as const) {
       assert.strictEqual(
         typeof parsed[key],
         'boolean',

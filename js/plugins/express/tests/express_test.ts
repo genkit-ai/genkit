@@ -60,8 +60,8 @@ const contextProvider: ContextProvider<Context> = (req: RequestData) => {
 
 describe('expressHandler', async () => {
   let server: http.Server;
-  let port;
-  let abortableFlowResult;
+  let port: number;
+  let abortableFlowResult: [string, boolean] | undefined;
   // Settle when abortableFlow starts and when it returns, so the hang-up test
   // aborts a flow that is running and reads its result without guessing at
   // timings (a fixed delay aborted before the request reached the flow on a
@@ -552,7 +552,7 @@ describe('expressHandler', async () => {
 
 describe('startFlowServer', async () => {
   let server: FlowServer;
-  let port;
+  let port: number;
 
   beforeEach(async () => {
     const ai = genkit({});

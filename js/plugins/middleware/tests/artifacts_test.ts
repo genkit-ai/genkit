@@ -51,38 +51,6 @@ describe('artifacts middleware', () => {
     );
   }
 
-  // Helper: create a model that calls multiple tools sequentially.
-  function createMultiToolModel(
-    ai: any,
-    calls: { toolName: string; input: any }[],
-    namePrefix = 'multi'
-  ) {
-    let turn = 0;
-    return ai.defineModel(
-      { name: `${namePrefix}-model-${Math.random()}` },
-      async () => {
-        turn++;
-        if (turn <= calls.length) {
-          const call = calls[turn - 1];
-          return {
-            message: {
-              role: 'model' as const,
-              content: [
-                { toolRequest: { name: call.toolName, input: call.input } },
-              ],
-            },
-          };
-        }
-        return {
-          message: {
-            role: 'model' as const,
-            content: [{ text: 'done' }],
-          },
-        };
-      }
-    );
-  }
-
   it('write_artifact creates an artifact in the session', async () => {
     const ai = genkit({});
     const session = new Session({ sessionId: 'test-write' });
@@ -402,17 +370,6 @@ describe('artifacts middleware', () => {
     const session = new Session({ sessionId: 'test-write-read' });
 
     let capturedToolOutput: any;
-
-    const model = createMultiToolModel(ai, [
-      {
-        toolName: 'write_artifact',
-        input: { name: 'code.ts', content: 'console.log("hello")' },
-      },
-      {
-        toolName: 'read_artifact',
-        input: { name: 'code.ts' },
-      },
-    ]);
 
     // Override model to capture tool output on third turn.
     let turnCount = 0;

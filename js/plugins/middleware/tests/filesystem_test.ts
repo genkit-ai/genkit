@@ -44,7 +44,7 @@ describe('filesystem middleware', () => {
     let turn = 0;
     return ai.defineModel(
       { name: `pm-${toolName}-${Math.random()}` },
-      async (_, sendChunk) => {
+      async (_: any, sendChunk: any) => {
         turn++;
         if (turn === 1) {
           const content = [{ toolRequest: { name: toolName, input } }];

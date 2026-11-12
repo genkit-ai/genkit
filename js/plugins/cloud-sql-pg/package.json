@@ -17,7 +17,7 @@
   "version": "1.44.0",
   "type": "commonjs",
   "scripts": {
-    "check": "tsc",
+    "check": "tsc -p tsconfig.test.json",
     "compile": "tsup-node",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",

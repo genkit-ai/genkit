@@ -136,6 +136,7 @@ describe('Anthropic Integration', () => {
           cache_creation: null,
           server_tool_use: null,
           service_tier: null,
+          inference_geo: null,
         },
       },
     });
@@ -413,6 +414,7 @@ describe('Anthropic Integration', () => {
           cache_creation: null,
           server_tool_use: null,
           service_tier: null,
+          inference_geo: null,
         },
       },
     });

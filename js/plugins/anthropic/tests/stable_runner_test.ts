@@ -88,6 +88,7 @@ const createUsage = (
   output_tokens: 0,
   server_tool_use: null,
   service_tier: null,
+  inference_geo: null,
   ...overrides,
 });
 
@@ -849,6 +850,7 @@ describe('fromAnthropicContentBlockChunk', () => {
           id: 'abc123',
           name: 'tellAJoke',
           input: { topic: 'dogs' },
+          caller: { type: 'direct' },
         },
       },
       expectedOutput: {
@@ -934,6 +936,8 @@ describe('fromAnthropicResponse', () => {
         role: 'assistant',
         stop_reason: 'max_tokens',
         stop_sequence: null,
+        container: null,
+        stop_details: null,
         content: [
           {
             type: 'text',
@@ -980,12 +984,15 @@ describe('fromAnthropicResponse', () => {
         role: 'assistant',
         stop_reason: 'tool_use',
         stop_sequence: null,
+        container: null,
+        stop_details: null,
         content: [
           {
             type: 'tool_use',
             id: 'abc123',
             name: 'tellAJoke',
             input: { topic: 'dogs' },
+            caller: { type: 'direct' },
           },
         ],
         usage: createUsage({
@@ -1859,6 +1866,7 @@ describe('claudeModel', () => {
             id: 'toolu_123',
             name: 'get_weather',
             input: { city: 'NYC' },
+            caller: { type: 'direct' },
           },
         ],
         stop_reason: 'tool_use',

@@ -105,8 +105,8 @@ describe('createMcpServer', async () => {
     });
 
     port = await getPort();
-    let serverResolver;
-    const serverPromise = new Promise((r) => {
+    let serverResolver!: () => void;
+    const serverPromise = new Promise<void>((r) => {
       serverResolver = r;
     });
     mcpHttpServer = app.listen(port, () => {

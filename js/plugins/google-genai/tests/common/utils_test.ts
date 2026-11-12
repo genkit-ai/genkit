@@ -981,7 +981,7 @@ describe('Common Utils', () => {
       response.catch(() => {});
 
       try {
-        for await (const val of asyncStream) {
+        for await (const _ of asyncStream) {
           // should throw
         }
         assert.fail('Should have thrown on malformed JSON');
@@ -1013,7 +1013,7 @@ describe('Common Utils', () => {
       response.catch(() => {});
 
       try {
-        for await (const val of asyncStream) {
+        for await (const _ of asyncStream) {
           // First one is yielded, but then trailing fails parsing
         }
         assert.fail('Should have thrown on trailing data');
@@ -1049,7 +1049,7 @@ describe('Common Utils', () => {
       response.catch(() => {});
 
       try {
-        for await (const val of asyncStream) {
+        for await (const _ of asyncStream) {
           // should throw
         }
         assert.fail('Should have thrown on error body');
@@ -1086,7 +1086,7 @@ describe('Common Utils', () => {
         const { stream: asyncStream } = processStream(mockResponse);
 
         await assert.rejects(async () => {
-          for await (const val of asyncStream) {
+          for await (const _ of asyncStream) {
             // should throw
           }
         });

@@ -161,7 +161,7 @@ describe('fromMistralResponse', () => {
   const testCases: {
     should: string;
     input: GenerateRequest<typeof MistralConfigSchema>;
-    response: ChatCompletionResponse;
+    response: Omit<ChatCompletionResponse, 'created'> & { created?: number };
     expectedOutput: GenerateResponseData;
   }[] = [
     {
@@ -336,7 +336,10 @@ describe('fromMistralResponse', () => {
   for (const test of testCases) {
     it(test.should, () => {
       assert.deepEqual(
-        fromMistralResponse(test.input, test.response),
+        fromMistralResponse(
+          test.input,
+          test.response as ChatCompletionResponse
+        ),
         test.expectedOutput
       );
     });
@@ -527,7 +530,10 @@ describe('fromMistralResponse error handling', () => {
       },
     };
 
-    const result = fromMistralResponse(input, response);
+    const result = fromMistralResponse(
+      input,
+      response as unknown as ChatCompletionResponse
+    );
     assert.deepEqual(result.message!.content, []);
   });
 });

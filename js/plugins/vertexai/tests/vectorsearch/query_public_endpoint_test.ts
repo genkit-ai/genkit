@@ -21,7 +21,7 @@ import { queryPublicEndpoint } from '../../src/vectorsearch/vector_search/query_
 describe('queryPublicEndpoint', () => {
   // FIXME -- t.mock.method is not supported node above 20
   it.skip('sends the correct request and retrieves neighbors', async (t) => {
-    t.mock.method(global, 'fetch', async (url, options) => {
+    t.mock.method(global, 'fetch', async (url: any, options: any) => {
       return {
         ok: true,
         json: async () => ({ neighbors: ['neighbor1', 'neighbor2'] }),
