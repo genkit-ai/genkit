@@ -18,7 +18,10 @@ name: Build Samples
 
 on:
   pull_request:
-    paths: samples/**
+    paths:
+      - samples/**
+      - .pnpmfile.cjs
+      - .github/workflows/samples.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
