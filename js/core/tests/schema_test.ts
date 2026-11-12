@@ -228,11 +228,30 @@ describe('toJsonSchema() zod v3 output compat', () => {
     assert.strictEqual(json.description, 'outer');
   });
 
-  it('keeps the pattern for formats the validators do not know', () => {
-    for (const schema of [z.cuid(), z.ulid(), z.base64(), z.nanoid()]) {
+  it('keeps only the pattern for formats the validators do not know', () => {
+    for (const schema of [
+      z.cuid(),
+      z.ulid(),
+      z.base64(),
+      z.nanoid(),
+      z.string().startsWith('ab'),
+    ]) {
       const json = toJsonSchema({ schema });
-      assert.strictEqual(typeof json.pattern, 'string', json.format);
+      assert.strictEqual(typeof json.pattern, 'string', json.pattern);
+      assert.strictEqual(json.format, undefined, json.pattern);
+      assert.strictEqual(
+        validateSchema('!!not valid!!', { schema }).valid,
+        false,
+        json.pattern
+      );
     }
+  });
+
+  it('keeps anyOf for nullable strings with several patterns', () => {
+    const schema = z.string().regex(/^a/).regex(/b$/).nullable();
+    assert.strictEqual(validateSchema(null, { schema }).valid, true);
+    assert.strictEqual(validateSchema('ab', { schema }).valid, true);
+    assert.strictEqual(validateSchema('xb', { schema }).valid, false);
   });
 
   it('drops the pattern for formats the validators check', () => {

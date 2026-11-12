@@ -150,19 +150,20 @@ function compatOverride(ctx: {
       delete jsonSchema.minimum;
     if (jsonSchema.maximum === Number.MAX_SAFE_INTEGER)
       delete jsonSchema.maximum;
-  } else if (
-    def.type === 'string' &&
-    typeof jsonSchema.format === 'string' &&
-    VALIDATED_FORMATS.has(jsonSchema.format) &&
-    typeof jsonSchema.pattern === 'string'
-  ) {
-    // String formats (datetime, email, uuid, ...) also emit zod's internal
-    // regex as `pattern`. `format` alone is what v3 emitted, is validated by
-    // ajv-formats/cfworker, and keeps validation errors readable. Formats the
-    // validators don't know (cuid, ulid, base64, ...) keep the pattern, since
-    // it's their only check. A user-supplied `.regex()` on top of a format is
-    // emitted under `allOf` and is not affected.
-    delete jsonSchema.pattern;
+  } else if (def.type === 'string' && typeof jsonSchema.format === 'string') {
+    if (VALIDATED_FORMATS.has(jsonSchema.format)) {
+      // String formats (datetime, email, uuid, ...) also emit zod's internal
+      // regex as `pattern`. `format` alone is what v3 emitted, is validated by
+      // ajv-formats/cfworker, and keeps validation errors readable. A
+      // user-supplied `.regex()` on top of a format is emitted under `allOf`
+      // and is not affected.
+      delete jsonSchema.pattern;
+    } else {
+      // zod-specific formats (cuid, base64, starts_with, ...): `pattern` is
+      // their only check, and the non-standard `format` makes strict ajv throw
+      // and some providers reject the schema. v3 emitted just the pattern.
+      delete jsonSchema.format;
+    }
   } else if (def.type === 'nullable') {
     collapseNullablePrimitive(jsonSchema);
   }
@@ -210,7 +211,13 @@ function collapseNullablePrimitive(jsonSchema: z.core.JSONSchema.BaseSchema) {
     typeof inner.type !== 'string' ||
     !PRIMITIVE_TYPES.has(inner.type) ||
     inner.enum !== undefined ||
-    inner.const !== undefined
+    inner.const !== undefined ||
+    // e.g. several `.regex()` checks emit `allOf: [{ type: 'string', ... }]`,
+    // which would reject null once hoisted next to `type: [X, 'null']`.
+    inner.allOf !== undefined ||
+    inner.anyOf !== undefined ||
+    inner.oneOf !== undefined ||
+    inner.not !== undefined
   ) {
     return;
   }
