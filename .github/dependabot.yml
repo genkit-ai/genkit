@@ -14,12 +14,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 version: 2
+
+# Policy notes:
+# 1. Cooldowns satisfy zizmor (`dependabot-cooldown` >= 7d) and align npm workspaces
+#    with our 21-day Airlock `minimumReleaseAge: 30240` policy.
+# 2. Library ecosystems scope weekly grouped PRs to `minor` + `patch` and suppress
+#    routine `version-update:semver-major` PRs via `ignore` (so breaking major jumps
+#    that require code migrations are handled intentionally rather than turning the
+#    weekly PR red). Security/CVE updates bypass both `cooldown` and `ignore`, opening
+#    standalone PRs (including major bumps when required) outside the weekly group.
 updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:
@@ -30,47 +41,92 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 21
     groups:
       root-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # Maintain dependencies for the core JS workspace
   - package-ecosystem: "npm"
     directory: "/js"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 21
     groups:
       js-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # Maintain dependencies for genkit-tools
   - package-ecosystem: "npm"
     directory: "/genkit-tools"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 21
     groups:
       tools-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # Maintain dependencies for Go
   - package-ecosystem: "gomod"
     directory: "/go"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       go-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # Maintain dependencies for Python (uv workspace)
   - package-ecosystem: "uv"
     directory: "/py"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       py-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
