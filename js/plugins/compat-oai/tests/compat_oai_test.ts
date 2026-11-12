@@ -2635,6 +2635,35 @@ describe('openAIModelRunner', () => {
   });
 });
 
+describe('finish reasons', () => {
+  it('maps model_length to length', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: 'cut off' },
+      finish_reason: 'model_length',
+    } as unknown as ChatCompletion.Choice;
+    expect(fromOpenAIChoice(choice).finishReason).toBe('length');
+  });
+
+  it('maps model_length to length when streaming', () => {
+    const choice = {
+      index: 0,
+      delta: { content: 'cut off' },
+      finish_reason: 'model_length',
+    } as unknown as ChatCompletionChunk.Choice;
+    expect(fromOpenAIChunkChoice(choice).finishReason).toBe('length');
+  });
+
+  it('maps error to other', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: '' },
+      finish_reason: 'error',
+    } as unknown as ChatCompletion.Choice;
+    expect(fromOpenAIChoice(choice).finishReason).toBe('other');
+  });
+});
+
 describe('content chunk arrays', () => {
   // Mistral sends `content` as an array of `ContentChunk`s.
   const chunks = [
