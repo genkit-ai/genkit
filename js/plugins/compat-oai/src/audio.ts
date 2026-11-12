@@ -18,6 +18,7 @@
 import type {
   GenerateRequest,
   GenerateResponseData,
+  GenkitSchema,
   ModelReference,
 } from 'genkit';
 import { GenerationCommonConfigSchema, Message, modelRef, z } from 'genkit';
@@ -182,7 +183,7 @@ export async function speechToGenerateResponse(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAISpeechModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   client: OpenAI;
@@ -224,7 +225,7 @@ export function defineCompatOpenAISpeechModel<
 /** Speech generation ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiSpeechModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;
@@ -369,7 +370,7 @@ export function transcriptionToGenerateResponse(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAITranscriptionModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   client: OpenAI;
@@ -417,7 +418,7 @@ export function defineCompatOpenAITranscriptionModel<
 /** Transcription ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiTranscriptionModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

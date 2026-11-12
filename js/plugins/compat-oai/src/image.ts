@@ -17,6 +17,7 @@
 import type {
   GenerateRequest,
   GenerateResponseData,
+  GenkitSchema,
   ModelReference,
 } from 'genkit';
 import { Message, modelRef, z } from 'genkit';
@@ -120,7 +121,7 @@ function toGenerateResponse(result: ImagesResponse): GenerateResponseData {
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAIImageModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   client: OpenAI;
@@ -164,7 +165,7 @@ export function defineCompatOpenAIImageModel<
 /** Image generation ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiImageModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

@@ -14,22 +14,23 @@
  * limitations under the License.
  */
 
-import type { Genkit, ModelArgument, z } from 'genkit';
+import type { Genkit, GenkitSchema, ModelArgument } from 'genkit';
 import {
   EvalStatusEnum,
   type BaseEvalDataPoint,
   type Score,
 } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import path from 'path';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
 
 export async function answerAccuracyScore<
-  CustomModelOptions extends z.ZodType<any, any>,
+  CustomModelOptions extends GenkitSchema,
 >(
   ai: Genkit,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: z.infer<CustomModelOptions>
+  judgeConfig?: InferOutput<CustomModelOptions>
 ): Promise<Score> {
   if (!dataPoint.output) {
     throw new Error('Output was not provided');

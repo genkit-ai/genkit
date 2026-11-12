@@ -22,6 +22,7 @@ import {
 } from 'genkit';
 import { reranker as pluginReranker } from 'genkit/plugin';
 import { RankedDocument, rerankerRef } from 'genkit/reranker';
+import type { InferOutput } from 'genkit/schema';
 import { checkModelName } from '../../common/utils.js';
 import { rerankerRank } from './client.js';
 import {
@@ -47,7 +48,7 @@ export const VertexRerankerConfigSchema = z
   })
   .passthrough();
 export type VertexRerankerConfigSchemaType = typeof VertexRerankerConfigSchema;
-export type VertexRerankerConfig = z.infer<VertexRerankerConfigSchemaType>;
+export type VertexRerankerConfig = InferOutput<VertexRerankerConfigSchemaType>;
 
 type ConfigSchemaType = VertexRerankerConfigSchemaType;
 

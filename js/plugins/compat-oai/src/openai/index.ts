@@ -23,6 +23,7 @@ import {
   modelActionMetadata,
   ModelReference,
   z,
+  type GenkitSchema,
 } from 'genkit';
 import { type GenkitPluginV2, type ResolvableAction } from 'genkit/plugin';
 import { type ActionType } from 'genkit/registry';
@@ -297,20 +298,17 @@ export type OpenAIPlugin = {
       | (`o${number}` & {}),
     config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
   ): ModelReference<typeof OpenAIChatCompletionConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
+  model(name: string, config?: any): ModelReference<GenkitSchema>;
   embedder(
     name:
       | keyof typeof SUPPORTED_EMBEDDING_MODELS
       | (`${string}-embedding-${string}` & {}),
     config?: z.infer<typeof TextEmbeddingConfigSchema>
   ): EmbedderReference<typeof TextEmbeddingConfigSchema>;
-  embedder(name: string, config?: any): EmbedderReference<z.ZodType<any, any>>;
+  embedder(name: string, config?: any): EmbedderReference<GenkitSchema>;
 };
 
-const model = ((
-  name: string,
-  config?: any
-): ModelReference<z.ZodType<any, any>> => {
+const model = ((name: string, config?: any): ModelReference<GenkitSchema> => {
   if (name.includes('gpt-image-1') || name.includes('dall-e')) {
     return openAIImageModelRef({
       name,
@@ -344,7 +342,7 @@ const model = ((
 const embedder = ((
   name: string,
   config?: any
-): EmbedderReference<z.ZodType<any, any>> => {
+): EmbedderReference<GenkitSchema> => {
   return embedderRef({
     name,
     config,

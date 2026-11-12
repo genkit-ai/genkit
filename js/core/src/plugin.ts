@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import type { z } from 'zod';
 import type { Action, ActionMetadata } from './action.js';
 import type { BackgroundAction } from './background-action.js';
 import type { ActionType } from './registry.js';
+import type { GenkitSchema } from './schema.js';
 
 export interface Provider<T> {
   id: string;
@@ -35,11 +35,11 @@ export interface PluginProvider {
 }
 
 export interface InitializedPlugin {
-  models?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
-  retrievers?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
-  embedders?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
-  indexers?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
-  evaluators?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
+  models?: Action<GenkitSchema, GenkitSchema>[];
+  retrievers?: Action<GenkitSchema, GenkitSchema>[];
+  embedders?: Action<GenkitSchema, GenkitSchema>[];
+  indexers?: Action<GenkitSchema, GenkitSchema>[];
+  evaluators?: Action<GenkitSchema, GenkitSchema>[];
   /** @deprecated */
   flowStateStore?: Provider<any> | Provider<any>[];
   /** @deprecated */

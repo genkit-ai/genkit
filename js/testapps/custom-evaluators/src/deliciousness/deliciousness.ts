@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { z, type ModelArgument } from 'genkit';
+import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import { ai } from '../index.js';
 
 const DELICIOUSNESS_VALUES = ['yes', 'no', 'maybe'] as const;
@@ -29,11 +30,11 @@ const DeliciousnessDetectionResponseSchema = z.object({
 const deliciousnessPrompt = ai.prompt('deliciousness');
 
 export async function deliciousnessScore<
-  CustomModelOptions extends z.ZodType<any, any>,
+  CustomModelOptions extends GenkitSchema,
 >(
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: z.infer<CustomModelOptions>
+  judgeConfig?: InferOutput<CustomModelOptions>
 ): Promise<Score> {
   const d = dataPoint;
   try {

@@ -136,7 +136,7 @@ const prompts: Record<string, GenerateOptions> = {
   },
 };
 
-const flows: Flow<z.ZodString, z.ZodTypeAny>[] = [];
+const flows: Flow<z.ZodString>[] = [];
 for (const format in prompts) {
   flows.push(formatFlow(format, prompts[format]));
 }

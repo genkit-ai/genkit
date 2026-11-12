@@ -14,25 +14,28 @@
  * limitations under the License.
  */
 
-import type { EvaluatorAction, Genkit, ModelArgument, z } from 'genkit';
+import type {
+  EvaluatorAction,
+  Genkit,
+  GenkitSchema,
+  ModelArgument,
+} from 'genkit';
 import type { GenerationCommonConfigSchema } from 'genkit/model';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import type { Criteria } from 'langchain/evaluation';
 import { langchainEvaluator } from './evaluators.js';
 
 export { GenkitTracer } from './tracing.js';
 
 interface LangchainPluginParams<
-  ModelCustomOptions extends z.ZodType<
-    any,
-    any
-  > = typeof GenerationCommonConfigSchema,
+  ModelCustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
 > {
   evaluators?: {
     criteria?: Criteria[];
     labeledCriteria?: Criteria[];
     judge: ModelArgument<ModelCustomOptions>;
-    judgeConfig?: z.infer<ModelCustomOptions>;
+    judgeConfig?: InferOutput<ModelCustomOptions>;
   };
 }
 

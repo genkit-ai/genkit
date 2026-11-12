@@ -17,6 +17,7 @@
 import type { protos } from '@google-cloud/aiplatform';
 import { type Action, type Genkit, type z } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import { runInNewSpan } from 'genkit/tracing';
 import type { GoogleAuth } from 'google-auth-library';
 import { getGenkitClientHeader } from '../common/index.js';
@@ -40,7 +41,7 @@ export class EvaluatorFactory {
     toRequest: (
       datapoint: BaseEvalDataPoint
     ) => protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
-    responseHandler: (response: z.infer<ResponseType>) => Score
+    responseHandler: (response: InferOutput<ResponseType>) => Score
   ): Action {
     return ai.defineEvaluator(
       {
@@ -68,7 +69,7 @@ export class EvaluatorFactory {
     ai: Genkit,
     partialRequest: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseSchema: ResponseType
-  ): Promise<z.infer<ResponseType>> {
+  ): Promise<InferOutput<ResponseType>> {
     const locationName = `projects/${this.projectId}/locations/${this.location}`;
     const request: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest =
       {

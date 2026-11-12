@@ -20,7 +20,7 @@ import {
   type PineconeConfiguration,
   type RecordMetadata,
 } from '@pinecone-database/pinecone';
-import { z, type Genkit } from 'genkit';
+import { z, type Genkit, type GenkitSchema } from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 
 import type { EmbedderArgument, Embedding } from 'genkit/embedder';
@@ -30,6 +30,7 @@ import {
   indexerRef,
   retrieverRef,
 } from 'genkit/retriever';
+import type { InferOutput } from 'genkit/schema';
 import { Md5 } from 'ts-md5';
 
 const SparseVectorSchema = z
@@ -115,13 +116,13 @@ be used instead.
  * @param params.embedderOptions  Options to customize the embedder
  * @returns The Pinecone Genkit plugin
  */
-export function pinecone<EmbedderCustomOptions extends z.ZodType<any, any>>(
+export function pinecone<EmbedderCustomOptions extends GenkitSchema>(
   params: {
     clientParams?: PineconeConfiguration;
     indexId: string;
     contentKey?: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }[]
 ): GenkitPlugin {
   return genkitPlugin('pinecone', async (ai: Genkit) => {
@@ -148,7 +149,7 @@ content. If not specified, the value '_content' is used by default.
  * @returns A Pinecone retriever
  */
 export function configurePineconeRetriever<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: {
@@ -160,7 +161,7 @@ export function configurePineconeRetriever<
     textKey?: string;
     contentKey?: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { indexId, embedder, embedderOptions } = {
@@ -229,7 +230,7 @@ content. If not specified, the value '_content' is used by default.
  * @returns A Genkit indexer
  */
 export function configurePineconeIndexer<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: {
@@ -241,7 +242,7 @@ export function configurePineconeIndexer<
     textKey?: string;
     contentKey?: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { indexId, embedder, embedderOptions } = {

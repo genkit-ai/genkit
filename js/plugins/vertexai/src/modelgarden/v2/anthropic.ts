@@ -49,6 +49,7 @@ import {
   type ModelAction,
 } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import { getGenkitClientHeader } from '../../common/index.js';
 import { PluginOptions } from './types.js';
 import { checkModelName } from './utils.js';
@@ -104,7 +105,7 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type AnthropicConfigSchemaType = typeof AnthropicConfigSchema;
-export type AnthropicConfig = z.infer<AnthropicConfigSchemaType>;
+export type AnthropicConfig = InferOutput<AnthropicConfigSchemaType>;
 
 // All the config schema types
 type ConfigSchemaType = AnthropicConfigSchemaType;

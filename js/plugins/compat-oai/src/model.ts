@@ -19,6 +19,7 @@ import type {
   GenerateRequest,
   GenerateResponseChunkData,
   GenerateResponseData,
+  GenkitSchema,
   MessageData,
   ModelReference,
   Part,
@@ -802,7 +803,7 @@ export function openAIModelRunner(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAIModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   client: OpenAI;
@@ -837,7 +838,7 @@ const GENERIC_MODEL_INFO: ModelInfo = {
 
 /** ModelRef helper, with reasonable defaults for OpenAI-compatible providers */
 export function compatOaiModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

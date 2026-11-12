@@ -18,6 +18,7 @@
 import type {
   GenerateRequest,
   GenerateResponseData,
+  GenkitSchema,
   ModelReference,
 } from 'genkit';
 import { GenerationCommonConfigSchema, Message, modelRef, z } from 'genkit';
@@ -156,7 +157,7 @@ export function translationToGenerateResponse(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAITranslationModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   client: OpenAI;
@@ -198,7 +199,7 @@ export function defineCompatOpenAITranslationModel<
 /** Translation ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiTranslationModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { z } from 'genkit';
+import { z, type GenkitSchema } from 'genkit';
 import { ModelInfo } from 'genkit/model';
 import {
   ImageGenerationCommonConfigSchema,
@@ -25,7 +25,7 @@ import {
 /** OpenAI image generation ModelRef helper, same as the OpenAI-compatible spec.
  * */
 export function openAIImageModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;
