@@ -5,7 +5,7 @@
     "build": "pnpm build:libs",
     "build:all": "pnpm build:libs && pnpm build:docsnippets && pnpm build:testapps",
     "build:libs": "pnpm -r --workspace-concurrency -1 -F core -F ai -F genkit -F \"./plugins/**\" build",
-    "build:core": "pnpm -r --workspace-concurrency 1 -F core -F ai build",
+    "build:core": "pnpm -r -F core -F ai build",
     "build:genkit": "pnpm -F genkit build",
     "build:noncore": "pnpm -r --workspace-concurrency -1 -F \"./plugins/**\" build",
     "build:testapps": "pnpm -r --workspace-concurrency -1 -F \"./testapps/**\" build",

@@ -89,7 +89,7 @@ pnpm i
 pnpm run setup
 ```
 
-This will install all dependencies and build all packages.
+This will install workspace dependencies, build the core JS packages, plugins, and CLI tooling, and link the Genkit CLI.
 
 ### Build it
 
