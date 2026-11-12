@@ -297,6 +297,7 @@ describe('extractResolvedToolResults', () => {
           {
             type: 'tool-userApproval',
             toolCallId: 'tc-2',
+            input: {},
             // No toolName property — SDK v6 ToolUIPart doesn't have one
             state: 'output-available',
             output: { approved: false, feedback: 'User rejected' },

@@ -1,4 +1,5 @@
 node_modules
 jest.config.ts
 tsconfig.json
+tsconfig.test.json
 tsup.config.ts

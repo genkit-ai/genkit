@@ -63,12 +63,12 @@ describe('defineReranker', () => {
       options: {},
     })) as any;
 
-    assert.deepStrictEqual(result.documents.map((d) => d.text).sort(), [
+    assert.deepStrictEqual(result.documents.map((d: any) => d.text).sort(), [
       'doc1',
       'doc2',
     ]);
     assert.deepStrictEqual(
-      result.documents.map((d) => d.metadata.score).sort(),
+      result.documents.map((d: any) => d.metadata.score).sort(),
       [0.8, 0.9]
     );
     assert.strictEqual(fetchSpy.callCount, 1);

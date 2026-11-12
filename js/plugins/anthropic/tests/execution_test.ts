@@ -42,7 +42,7 @@ describe('Model Execution Integration Tests', () => {
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
     // Resolve the model action via plugin
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;
@@ -98,7 +98,7 @@ describe('Model Execution Integration Tests', () => {
     // Verify plugin has resolve method
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;
@@ -152,7 +152,7 @@ describe('Model Execution Integration Tests', () => {
       [__testClient]: mockClient,
     } as PluginOptions);
 
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;
@@ -204,7 +204,7 @@ describe('Model Execution Integration Tests', () => {
     // Verify plugin has resolve method
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;
@@ -269,7 +269,7 @@ describe('Model Execution Integration Tests', () => {
     // Verify plugin has resolve method
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;
@@ -306,7 +306,7 @@ describe('Model Execution Integration Tests', () => {
     // Verify plugin has resolve method
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;
@@ -343,7 +343,7 @@ describe('Model Execution Integration Tests', () => {
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
     // Resolve without prefix
-    const modelAction = plugin.resolve(
+    const modelAction = plugin.resolve!(
       'model',
       'claude-3-5-haiku-20241022'
     ) as ModelAction;

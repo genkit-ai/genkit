@@ -234,6 +234,7 @@ export function createMockAnthropicMessage(
       id: options.toolUse.id || 'toolu_test123',
       name: options.toolUse.name,
       input: options.toolUse.input,
+      caller: { type: 'direct' },
     });
   } else {
     content.push({
@@ -251,6 +252,7 @@ export function createMockAnthropicMessage(
     output_tokens: 20,
     server_tool_use: null,
     service_tier: null,
+    inference_geo: null,
     ...(options.usage ?? {}),
   };
 
@@ -263,6 +265,8 @@ export function createMockAnthropicMessage(
     stop_reason:
       options.stopReason || (options.toolUse ? 'tool_use' : 'end_turn'),
     stop_sequence: null,
+    container: null,
+    stop_details: null,
     usage,
   };
 }
@@ -347,6 +351,7 @@ export function mockMessageWithToolUse(
         id: 'toolu_test123',
         name: toolName,
         input: toolInput,
+        caller: { type: 'direct' },
       },
     ],
     stop_reason: 'tool_use',

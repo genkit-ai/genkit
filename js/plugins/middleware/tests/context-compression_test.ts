@@ -21,6 +21,7 @@ import {
   z,
   type GenerateRequest,
   type MessageData,
+  type Part,
 } from 'genkit';
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
@@ -114,10 +115,8 @@ describe('contextCompression middleware', () => {
 
   it('counts reasoning and data parts in estimated tokens on initial turn', async () => {
     const ai = genkit({});
-    let capturedRequest: GenerateRequest | undefined;
 
-    const pm = ai.defineModel({ name: 'echoModel' }, async (req) => {
-      capturedRequest = req;
+    const pm = ai.defineModel({ name: 'echoModel' }, async () => {
       return {
         message: { role: 'model', content: [{ text: 'response' }] },
         usage: { inputTokens: 50 },
@@ -2141,7 +2140,7 @@ describe('contextCompression middleware', () => {
         contextCompression({
           maxInputTokens: 100,
           summarize: {
-            model: { name: 'summaryModel' },
+            model: summaryModel,
             preserveRecent: 2,
           },
         }),
@@ -2561,7 +2560,7 @@ describe('contextCompression middleware', () => {
     // resolveCompressedHistory should resolve to the latest summary, not the stale SUMMARY_1
     const resolved = resolveCompressedHistory(r2.messages);
     assert.strictEqual(resolved.length, 3);
-    assert.ok(resolved[0].content[0].text.includes('SUMMARY_2'));
+    assert.ok(resolved[0].content[0].text?.includes('SUMMARY_2'));
   });
 
   it('preserves the latest [model, tool] turn when maxMessages is 3 (keepCount: 2) in a tool loop', async () => {

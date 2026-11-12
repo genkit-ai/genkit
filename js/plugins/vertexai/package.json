@@ -20,7 +20,7 @@
   "version": "1.44.0",
   "type": "commonjs",
   "scripts": {
-    "check": "tsc",
+    "check": "tsc -p tsconfig.test.json",
     "compile": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" npx tsup-node",
     "build:clean": "rimraf ./lib",
     "build": "npm-run-all build:clean check compile",

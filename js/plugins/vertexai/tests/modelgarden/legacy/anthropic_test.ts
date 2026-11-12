@@ -158,17 +158,27 @@ describe('fromAnthropicResponse', () => {
         usage: {
           input_tokens: 123,
           output_tokens: 234,
+          cache_creation: null,
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+          inference_geo: null,
+          server_tool_use: null,
+          service_tier: null,
         },
         stop_sequence: null,
+        container: null,
+        stop_details: null,
         type: 'message',
         content: [
           {
             type: 'text',
             text: 'part 1',
+            citations: null,
           },
           {
             type: 'text',
             text: 'part 2',
+            citations: null,
           },
         ],
       },
@@ -237,15 +247,24 @@ describe('fromAnthropicResponse', () => {
         type: 'message',
         stop_reason: 'tool_use',
         stop_sequence: null,
+        container: null,
+        stop_details: null,
         usage: {
           input_tokens: 123,
           output_tokens: 234,
+          cache_creation: null,
+          cache_creation_input_tokens: null,
+          cache_read_input_tokens: null,
+          inference_geo: null,
+          server_tool_use: null,
+          service_tier: null,
         },
         content: [
           {
             id: 'toolu_get_weather',
             name: 'get_weather',
             type: 'tool_use',
+            caller: { type: 'direct' },
             input: {
               type: 'object',
               properties: {

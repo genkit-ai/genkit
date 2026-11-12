@@ -2,6 +2,7 @@
   "private": true,
   "scripts": {
     "preinstall": "npx only-allow pnpm",
+    "check": "pnpm -r --workspace-concurrency -1 run check",
     "build": "pnpm install && pnpm build:libs && pnpm build:docsnippets && pnpm build:testapps",
     "build:libs": "pnpm build:core && pnpm build:genkit && pnpm build:noncore ",
     "build:core": "pnpm -r --workspace-concurrency 1 -F core -F ai -F flow build",

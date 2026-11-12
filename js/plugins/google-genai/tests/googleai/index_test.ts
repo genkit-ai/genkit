@@ -365,13 +365,21 @@ describe('GoogleAI Plugin', () => {
 
     it('should handle names with googleai/ prefix', () => {
       const embedderName = 'googleai/text-embedding-custom';
-      const embedderRef = googleAI.embedder(embedderName);
+      const embedderRef = (
+        googleAI.embedder as (
+          name: string
+        ) => ReturnType<typeof googleAI.embedder>
+      )(embedderName);
       assert.strictEqual(embedderRef.name, embedderName);
     });
 
     it('should handle names with embedders/ prefix', () => {
       const embedderName = 'embedders/text-embedding-custom';
-      const embedderRef = googleAI.embedder(embedderName);
+      const embedderRef = (
+        googleAI.embedder as (
+          name: string
+        ) => ReturnType<typeof googleAI.embedder>
+      )(embedderName);
       assert.strictEqual(embedderRef.name, 'googleai/text-embedding-custom');
     });
   });

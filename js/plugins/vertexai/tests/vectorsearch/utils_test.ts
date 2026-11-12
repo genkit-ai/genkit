@@ -33,7 +33,7 @@ google.auth.getClient = async () => {
 google.cloudresourcemanager = () => {
   return {
     projects: {
-      get: async ({ projectId }) => {
+      get: async ({ projectId }: { projectId: string }) => {
         return {
           data: {
             projectNumber: '123456789',

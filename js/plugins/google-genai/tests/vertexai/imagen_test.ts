@@ -41,11 +41,6 @@ import {
   ImagenPrediction,
 } from '../../src/vertexai/types.js';
 
-// Helper function to escape special characters for use in a RegExp
-function escapeRegExp(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
-}
-
 describe('Vertex AI Imagen', () => {
   describe('KNOWN_IMAGEN_MODELS', () => {
     it('should contain non-zero number of models', () => {

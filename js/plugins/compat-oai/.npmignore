@@ -2,6 +2,7 @@
 src/
 tests/
 tsconfig.json
+tsconfig.test.json
 tsup.common.ts
 tsup.config.ts
 
