@@ -16,6 +16,7 @@ package compat_oai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -93,6 +94,7 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 		wantReasoning string
 		wantText      string
 		wantParts     int
+		wantSignature string
 	}{
 		"thinking and text": {
 			content:       `[{"type":"thinking","thinking":[{"type":"text","text":"Let me "},{"type":"text","text":"think..."}]},{"type":"text","text":"Final "},{"type":"text","text":"answer"}]`,
@@ -131,6 +133,15 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 			wantText:  `[{"type":"reference","reference_ids":[1]}]`,
 			wantParts: 1,
 		},
+		// The signature Mistral replays reasoning with rides on the
+		// reasoning part's metadata.
+		"thinking with a signature": {
+			content:       `[{"type":"thinking","thinking":[{"type":"text","text":"Let me think..."}],"signature":"sig-1"},{"type":"text","text":"Final answer"}]`,
+			wantReasoning: "Let me think...",
+			wantText:      "Final answer",
+			wantParts:     2,
+			wantSignature: "sig-1",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var completion openai.ChatCompletion
@@ -152,6 +163,9 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 			}
 			if len(resp.Message.Content) != tc.wantParts {
 				t.Errorf("content = %#v, want %d parts", resp.Message.Content, tc.wantParts)
+			}
+			if got := string(metadataSignature(resp.Message.Content[0].Metadata)); got != tc.wantSignature {
+				t.Errorf("signature = %q, want %q", got, tc.wantSignature)
 			}
 		})
 	}
@@ -178,6 +192,24 @@ func TestWithMessagesSendsThinkingChunks(t *testing.T) {
 			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", nil)},
 			want: []any{
 				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}},
+			},
+		},
+		"reasoning with a signature": {
+			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", []byte("sig-1")), ai.NewTextPart("Final answer")},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}, "signature": "sig-1"},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		// History persisted as JSON carries the signature as base64.
+		"signature after a JSON round trip": {
+			parts: []*ai.Part{{
+				Kind:     ai.PartReasoning,
+				Text:     "Think carefully.",
+				Metadata: map[string]any{"signature": base64.StdEncoding.EncodeToString([]byte("sig-1"))},
+			}},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}, "signature": "sig-1"},
 			},
 		},
 		"empty reasoning": {
@@ -216,7 +248,7 @@ func TestWithMessagesSendsThinkingChunks(t *testing.T) {
 func TestGenerateStreamContentChunks(t *testing.T) {
 	events := []string{
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Think "}]}]},"finish_reason":null}]}`,
-		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":"carefully."},{"type":"text","text":"Hello"}]},"finish_reason":null}]}`,
+		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":"carefully.","signature":"sig-1"},{"type":"text","text":"Hello"}]},"finish_reason":null}]}`,
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}`,
 		`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"!"}]},"finish_reason":"stop"}]}`,
 	}
@@ -245,6 +277,9 @@ func TestGenerateStreamContentChunks(t *testing.T) {
 	}
 	if got := resp.Reasoning(); got != "Think carefully." {
 		t.Errorf("Reasoning() = %q, want %q", got, "Think carefully.")
+	}
+	if got := string(metadataSignature(resp.Message.Content[0].Metadata)); got != "sig-1" {
+		t.Errorf("final signature = %q, want the streamed %q", got, "sig-1")
 	}
 	if got := resp.Text(); got != "Hello there!" {
 		t.Errorf("Text() = %q, want %q", got, "Hello there!")
