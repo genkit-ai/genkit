@@ -2533,6 +2533,16 @@ describe('openAIModelRunner', () => {
         expectedStatus: 'INVALID_ARGUMENT',
       },
       {
+        name: '422',
+        error: new APIError(
+          422,
+          { error: { message: 'Validation Error' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'INVALID_ARGUMENT',
+      },
+      {
         name: '500',
         error: new APIError(
           500,
@@ -2596,6 +2606,35 @@ describe('openAIModelRunner', () => {
         'Some other error'
       );
     });
+  });
+});
+
+describe('finish reasons', () => {
+  it('maps model_length to length', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: 'cut off' },
+      finish_reason: 'model_length',
+    } as unknown as ChatCompletion.Choice;
+    expect(fromOpenAIChoice(choice).finishReason).toBe('length');
+  });
+
+  it('maps model_length to length when streaming', () => {
+    const choice = {
+      index: 0,
+      delta: { content: 'cut off' },
+      finish_reason: 'model_length',
+    } as unknown as ChatCompletionChunk.Choice;
+    expect(fromOpenAIChunkChoice(choice).finishReason).toBe('length');
+  });
+
+  it('maps error to other', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: '' },
+      finish_reason: 'error',
+    } as unknown as ChatCompletion.Choice;
+    expect(fromOpenAIChoice(choice).finishReason).toBe('other');
   });
 });
 

@@ -395,11 +395,13 @@ function fromContentChunks(chunks: ContentChunk[]): Part[] {
 
 const finishReasonMap: Partial<
   Record<
-    ChatCompletion.Choice['finish_reason'],
+    ChatCompletion.Choice['finish_reason'] | 'model_length',
     GenerateResponseData['finishReason']
   >
 > = {
   length: 'length',
+  // Mistral: generation hit the model's context length.
+  model_length: 'length',
   stop: 'stop',
   tool_calls: 'stop',
   content_filter: 'blocked',
@@ -890,6 +892,8 @@ export function openAIModelRunner(
             status = 'PERMISSION_DENIED';
             break;
           case 400:
+          // Request validation errors, e.g. from Mistral's closed schema.
+          case 422:
             status = 'INVALID_ARGUMENT';
             break;
           case 500:
