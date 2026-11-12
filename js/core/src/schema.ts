@@ -60,7 +60,9 @@ export type InferOutput<S extends GenkitSchema> =
 
 /** Whether the schema is a zod (v4) schema. */
 export function isZodSchema(schema: GenkitSchema): schema is z.ZodType {
-  return schema['~standard'].vendor === 'zod' && '_zod' in schema;
+  // Optional chaining: callers may pass values that aren't valid GenkitSchemas
+  // at runtime (e.g. zod < 3.24 schemas from prebuilt plugins).
+  return schema?.['~standard']?.vendor === 'zod' && '_zod' in schema;
 }
 
 const zodAdapters = new WeakMap<GenkitSchema, z.ZodType>();
@@ -71,10 +73,15 @@ const foreignSchemas = new WeakMap<z.core.$ZodType, GenkitSchema>();
  * (composition, JSON schema conversion) can stay zod-only. Non-zod schemas are
  * wrapped; their JSON schema comes from `~standard.jsonSchema` and validation
  * from `~standard.validate`.
+ *
+ * @param label Describes where the schema came from, used in the error if the
+ *   schema isn't supported.
  */
 export function toZodSchema<S extends GenkitSchema>(
-  schema: S
+  schema: S,
+  label = 'schema'
 ): z.ZodType<InferOutput<S>, InferInput<S>> {
+  assertGenkitSchema(schema, label);
   if (isZodSchema(schema)) {
     return schema as z.ZodType<InferOutput<S>, InferInput<S>>;
   }

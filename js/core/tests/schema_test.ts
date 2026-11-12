@@ -655,4 +655,20 @@ describe('unsupported schemas', () => {
   it('accepts zod v4 schemas', () => {
     assertGenkitSchema(z.string(), 'X');
   });
+
+  it('rejects unsupported schemas in toZodSchema', () => {
+    assert.throws(
+      () =>
+        toZodSchema(
+          z3.object({ a: z3.string() }) as unknown as GenkitSchema,
+          'X'
+        ),
+      /X is not supported: found a zod v3 schema/
+    );
+    // e.g. zod < 3.24, which has no `~standard` at all.
+    assert.throws(
+      () => toZodSchema({ _def: {} } as unknown as GenkitSchema, 'X'),
+      /X is not supported: found a zod v3 schema/
+    );
+  });
 });

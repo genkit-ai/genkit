@@ -156,7 +156,10 @@ export function retriever<OptionsType extends GenkitSchema = GenkitSchema>(
       name: options.name,
       inputSchema: options.configSchema
         ? RetrieverRequestSchema.extend({
-            options: toZodSchema(options.configSchema).optional(),
+            options: toZodSchema(
+              options.configSchema,
+              `configSchema of retriever "${options.name}"`
+            ).optional(),
           })
         : RetrieverRequestSchema,
       outputSchema: RetrieverResponseSchema,
@@ -216,7 +219,10 @@ export function indexer<IndexerOptions extends GenkitSchema>(
       name: options.name,
       inputSchema: options.configSchema
         ? IndexerRequestSchema.extend({
-            options: toZodSchema(options.configSchema).optional(),
+            options: toZodSchema(
+              options.configSchema,
+              `configSchema of indexer "${options.name}"`
+            ).optional(),
           })
         : IndexerRequestSchema,
       outputSchema: z.void(),

@@ -149,7 +149,10 @@ export function reranker<OptionsType extends GenkitSchema = GenkitSchema>(
       name: options.name,
       inputSchema: options.configSchema
         ? RerankerRequestSchema.extend({
-            options: toZodSchema(options.configSchema).optional(),
+            options: toZodSchema(
+              options.configSchema,
+              `configSchema of reranker "${options.name}"`
+            ).optional(),
           })
         : RerankerRequestSchema,
       outputSchema: RerankerResponseSchema,

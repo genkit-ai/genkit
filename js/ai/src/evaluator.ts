@@ -216,7 +216,10 @@ export function evaluator<
         // Widened: a generic `EvaluatorOpts | ZodUnknown` value here makes the
         // inferred object type opaque under zod v4.
         options: (options.configSchema
-          ? toZodSchema(options.configSchema)
+          ? toZodSchema(
+              options.configSchema,
+              `configSchema of evaluator "${options.name}"`
+            )
           : z.unknown().optional()) as z.ZodType<
           InferOutput<EvaluatorOpts> | undefined
         >,
