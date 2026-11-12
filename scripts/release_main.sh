@@ -18,7 +18,7 @@
 
 # git clone git@github.com:firebase/genkit.git
 # cd genkit
-# pnpm i
+# pnpm i && pnpm pnpm-install-workspaces
 # pnpm build
 # pnpm test:all
 # Run from root: scripts/release_main.sh
