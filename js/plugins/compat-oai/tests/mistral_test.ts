@@ -33,8 +33,9 @@ const UNKNOWN_MODEL_SUPPORTS = {
 /**
  * Wire keys of Mistral's `ChatCompletionRequest`, and of the message types it
  * takes, copied from the `$Outbound` types in `@mistralai/mistralai` 3.5.0
- * (`models/components/chatcompletionrequest.ts` and friends). Mistral's
- * request schema rejects keys that are not listed.
+ * (`models/components/chatcompletionrequest.ts` and friends). They match the
+ * schema's properties in https://docs.mistral.ai/openapi.yaml, which sets
+ * `additionalProperties: false`, so keys that are not listed are rejected.
  */
 const MISTRAL_CHAT_REQUEST_KEYS = [
   'model',
@@ -194,7 +195,8 @@ describe('mistral plugin', () => {
         topK: 40,
         maxOutputTokens: 128,
         stopSequences: ['END'],
-        randomSeed: 42,
+        seed: 42,
+        reasoningEffort: 'high',
         presencePenalty: 0.5,
         frequencyPenalty: 0.25,
       },
@@ -212,9 +214,11 @@ describe('mistral plugin', () => {
       messages: [{ role: 'user', content: 'hi' }],
       temperature: 0.3,
       top_p: 0.9,
+      top_k: 40,
       max_tokens: 128,
       stop: ['END'],
       random_seed: 42,
+      reasoning_effort: 'high',
       presence_penalty: 0.5,
       frequency_penalty: 0.25,
     });
@@ -225,10 +229,12 @@ describe('mistral plugin', () => {
     await ai.generate({
       model: mistral.model('mistral-small-latest'),
       prompt: 'hi',
-      config: { seed: 1, user: 'someone' } as any,
+      config: { user: 'someone', max_completion_tokens: 5 } as any,
     });
 
     const body = server.requests[0].body;
+    expect(body).not.toHaveProperty('user');
+    expect(body).not.toHaveProperty('max_completion_tokens');
     expectMistralChatRequest(body);
   });
 

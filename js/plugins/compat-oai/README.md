@@ -199,7 +199,7 @@ const response = await ai.generate({
   prompt: 'Tell me a joke.',
   config: {
     maxOutputTokens: 256,
-    randomSeed: 42,
+    seed: 42,
   },
 });
 
@@ -212,14 +212,18 @@ const embeddings = await ai.embed({
 Mistral rejects request fields it doesn't know, so the plugin sends only
 Mistral's own field names:
 
-- `maxOutputTokens` is sent as `max_tokens`.
-- `randomSeed` is sent as `random_seed`. OpenAI's `seed` and `user`, and any
-  other config the plugin doesn't map, are ignored.
+- `maxOutputTokens` is sent as `max_tokens`, `topK` as `top_k`, and `seed` as
+  `random_seed`.
+- `reasoningEffort` is sent as `reasoning_effort`. Allowed values vary by
+  model: Mistral Small and Medium take `none` and `high`, Mistral Large 4 takes
+  `low`, `medium` and `high`.
+- OpenAI's `user` and `max_completion_tokens`, and any other config the plugin
+  doesn't map, are ignored.
 - The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are
   always requested as floats.
 - Streaming requests don't send `stream_options`.
 
-Models that reason return their thinking as reasoning parts
+With `reasoningEffort` set, the model's thinking comes back as reasoning parts
 (`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
 `thinking` content.
 
