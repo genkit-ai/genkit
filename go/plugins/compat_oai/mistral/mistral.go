@@ -38,13 +38,14 @@ const (
 // it answers.
 //
 // Each model takes a subset of the levels: Mistral Small and Medium take none
-// and high, Mistral Large 4 low, medium and high. The schema enumerates the
-// union of the levels the current models take, so the Dev UI offers no level
-// that every model rejects; which subset a model takes is the model's to
-// decide, so a level a model does not take is an error from Mistral rather
-// than one from here. The API reference also lists minimal, xhigh and max,
-// which no current model takes; a model that does can be sent one through
-// the config's extra map.
+// and high, Mistral Large 4 low, medium and high, and the Z.ai GLM 5.3 models
+// Mistral serves low, high and max. The schema enumerates the union of the
+// levels the models Mistral serves take, so the Dev UI offers no level that
+// every model rejects; which subset a model takes is the model's to decide,
+// so a level a model does not take is an error from Mistral rather than one
+// from here. The API reference also lists minimal and xhigh, which no model
+// Mistral serves takes; a model that does can be sent one through the
+// config's extra map. See https://docs.mistral.ai/inference/conversations/reasoning.
 type ReasoningEffort string
 
 const (
@@ -56,6 +57,9 @@ const (
 	ReasoningEffortMedium ReasoningEffort = "medium"
 	// ReasoningEffortHigh is deep reasoning.
 	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortMax is the deepest reasoning, which the Z.ai GLM 5.3
+	// models take.
+	ReasoningEffortMax ReasoningEffort = "max"
 )
 
 // ServiceTier selects the capacity a request is served from.
@@ -86,29 +90,29 @@ const (
 type ChatConfig struct {
 	compat_oai.RequestConfig
 
-	// Temperature controls the degree of randomness in token selection.
-	// Mistral recommends values between 0.0 and 0.7 and documents no hard
-	// range, so the schema declares none; the default varies by model.
-	Temperature *float64 `json:"temperature,omitempty" jsonschema_description:"Controls the degree of randomness in token selection. Mistral recommends 0.0 to 0.7; the default varies by model."`
-	// TopP is the nucleus sampling threshold: only the tokens comprising the
-	// top P probability mass are considered.
-	TopP *float64 `json:"topP,omitempty" jsonschema_description:"Nucleus sampling threshold: only the tokens comprising the top P probability mass are considered."`
+	// Temperature controls the degree of randomness in token selection, from
+	// 0 to 1.5. Mistral recommends values between 0.0 and 0.7; the default
+	// varies by model.
+	Temperature *float64 `json:"temperature,omitempty" jsonschema:"minimum=0,maximum=1.5" jsonschema_description:"Controls the degree of randomness in token selection, from 0 to 1.5. Mistral recommends 0.0 to 0.7; the default varies by model."`
+	// TopP is the nucleus sampling threshold, above 0 and up to 1: only the
+	// tokens comprising the top P probability mass are considered.
+	TopP *float64 `json:"topP,omitempty" jsonschema:"exclusiveMinimum=0,maximum=1" jsonschema_description:"Nucleus sampling threshold, above 0 and up to 1: only the tokens comprising the top P probability mass are considered."`
 	// MaxOutputTokens is the maximum number of tokens to generate, sent as the
 	// API's max_tokens.
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty" jsonschema:"minimum=1" jsonschema_description:"Maximum number of tokens to generate, sent as the API's max_tokens."`
 	// StopSequences stop generation when produced by the model.
 	StopSequences []string `json:"stopSequences,omitempty" jsonschema_description:"Stop generation when produced by the model."`
 	// FrequencyPenalty penalizes tokens by how often they have appeared so
-	// far, discouraging verbatim repetition.
-	FrequencyPenalty *float64 `json:"frequencyPenalty,omitempty" jsonschema_description:"Penalizes tokens by how often they have appeared so far, discouraging verbatim repetition."`
+	// far, discouraging verbatim repetition, from -2 to 2.
+	FrequencyPenalty *float64 `json:"frequencyPenalty,omitempty" jsonschema:"minimum=-2,maximum=2" jsonschema_description:"Penalizes tokens by how often they have appeared so far, discouraging verbatim repetition, from -2 to 2."`
 	// PresencePenalty penalizes tokens that have appeared at all, encouraging
-	// a wider variety of words and phrases.
-	PresencePenalty *float64 `json:"presencePenalty,omitempty" jsonschema_description:"Penalizes tokens that have appeared at all, encouraging a wider variety of words and phrases."`
+	// a wider variety of words and phrases, from -2 to 2.
+	PresencePenalty *float64 `json:"presencePenalty,omitempty" jsonschema:"minimum=-2,maximum=2" jsonschema_description:"Penalizes tokens that have appeared at all, encouraging a wider variety of words and phrases, from -2 to 2."`
 	// Seed makes sampling deterministic across calls when set, sent as the
-	// API's random_seed.
-	Seed *int `json:"seed,omitempty" jsonschema_description:"Makes sampling deterministic across calls when set, sent as the API's random_seed."`
+	// API's random_seed. It cannot be negative.
+	Seed *int `json:"seed,omitempty" jsonschema:"minimum=0" jsonschema_description:"Makes sampling deterministic across calls when set, sent as the API's random_seed. It cannot be negative."`
 	// ReasoningEffort adjusts how hard a reasoning-capable model thinks.
-	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=low,enum=medium,enum=high" jsonschema_description:"How hard a reasoning-capable model thinks: none, low, medium, or high. Mistral Small and Medium take none and high; Mistral Large 4 takes low, medium, and high."`
+	ReasoningEffort ReasoningEffort `json:"reasoningEffort,omitempty" jsonschema:"enum=none,enum=low,enum=medium,enum=high,enum=max" jsonschema_description:"How hard a reasoning-capable model thinks: none, low, medium, high, or max. Mistral Small and Medium take none and high; Mistral Large 4 takes low, medium, and high; the Z.ai GLM 5.3 models take low, high, and max."`
 	// ParallelToolCalls lets the model request several tool calls in one
 	// response. It applies to a request that carries tools.
 	ParallelToolCalls *bool `json:"parallelToolCalls,omitempty" jsonschema_description:"Lets the model request several tool calls in one response; false caps it at one call per response."`
@@ -242,9 +246,11 @@ var (
 		Output:      []string{"text", "json"},
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
-	// dynamicSupports is for a model the plugin knows nothing about, which
-	// may predate json_schema support: a schema reaches it as prompt
-	// instructions, with JSON mode on the wire.
+	// dynamicSupports is for a model the plugin knows nothing about. Mistral
+	// documents custom structured outputs on every model it currently serves
+	// except the retired codestral-mamba, so it takes the curated constrained
+	// support; it reads no images unless a Models entry says it does.
+	// See https://docs.mistral.ai/inference/conversations/structured-output/custom.
 	dynamicSupports = ai.ModelSupports{
 		Multiturn:   true,
 		Tools:       true,
@@ -252,7 +258,7 @@ var (
 		Media:       false,
 		ToolChoice:  true,
 		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportNone,
+		Constrained: ai.ConstrainedSupportNoTools,
 	}
 )
 
@@ -271,19 +277,22 @@ var mediaTypes = []string{"image/*"}
 //
 // Catalog: https://docs.mistral.ai/getting-started/models
 var supportedModels = map[string]ai.ModelOptions{
-	// Mistral Large 3.
-	"mistral-large-latest": {Label: "Mistral Large", Supports: &multimodal},
-	// Mistral Large 4, in public preview. Mistral serves it under this ID
-	// alone; mistral-large-latest still names Mistral Large 3. It always
-	// reasons.
-	"mistral-large-4": {Label: "Mistral Large 4", Supports: &multimodal, Stage: ai.ModelStageUnstable},
-	// Mistral Medium 3.5.
-	"mistral-medium-latest": {Label: "Mistral Medium", Supports: &multimodal},
+	// Mistral Large 4, also served as mistral-large-4-0. It always reasons.
+	// mistral-large-latest does not name it.
+	"mistral-large-4": {Label: "Mistral Large 4", Supports: &multimodal},
 	// Mistral Small 4.
 	"mistral-small-latest": {Label: "Mistral Small", Supports: &multimodal},
+	// Ministral 3.
+	"ministral-14b-latest": {Label: "Ministral 14B", Supports: &multimodal},
 	"ministral-8b-latest":  {Label: "Ministral 8B", Supports: &multimodal},
 	"ministral-3b-latest":  {Label: "Ministral 3B", Supports: &multimodal},
 	"codestral-latest":     {Label: "Codestral", Supports: &textOnly},
+
+	// Mistral Large 3 and Mistral Medium 3.5, which these aliases still name,
+	// were deprecated on 2026-10-31 with Mistral Large 4 as the replacement.
+	// See https://docs.mistral.ai/models/mistral-large-3-25-12.
+	"mistral-large-latest":  {Label: "Mistral Large 3", Supports: &multimodal, Stage: ai.ModelStageDeprecated},
+	"mistral-medium-latest": {Label: "Mistral Medium 3.5", Supports: &multimodal, Stage: ai.ModelStageDeprecated},
 
 	// Magistral, Pixtral and Devstral are deliberately absent: Mistral has
 	// deprecated or retired them, and their aliases are served by the models

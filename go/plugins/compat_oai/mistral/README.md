@@ -45,18 +45,24 @@ response, err := genkit.Generate(ctx, g, ai.WithPrompt("Explain mixture-of-exper
 
 ## Models
 
-These chat models are registered, by the aliases Mistral moves to each new
-snapshot:
+These chat models are registered, most by the aliases Mistral moves to each
+new snapshot:
 
 | Model | Input |
 | --- | --- |
-| `mistral-large-latest` | text, images |
-| `mistral-large-4` (public preview) | text, images |
-| `mistral-medium-latest` | text, images |
+| `mistral-large-4` | text, images |
 | `mistral-small-latest` | text, images |
+| `ministral-14b-latest` | text, images |
 | `ministral-8b-latest` | text, images |
 | `ministral-3b-latest` | text, images |
 | `codestral-latest` | text |
+| `mistral-large-latest` (deprecated) | text, images |
+| `mistral-medium-latest` (deprecated) | text, images |
+
+`mistral-large-latest` and `mistral-medium-latest` still name Mistral Large 3
+and Mistral Medium 3.5. Mistral deprecated both on 2026-10-31, with Mistral
+Large 4 (`mistral-large-4`, also served as `mistral-large-4-0`) as the
+replacement, so they are registered with the deprecated stage.
 
 All of them call tools and constrain JSON output to a schema. Whether Mistral
 honors the two together is not confirmed, so a structured-output request that
@@ -67,10 +73,10 @@ Mistral has deprecated or retired them.
 The catalog is not a ceiling: any chat model Mistral serves resolves on
 demand, a config `version` pins a dated snapshot such as
 `mistral-small-2603`, and the `Models` field describes or corrects any model,
-curated or not. A model the plugin does not curate is described
-conservatively, as text only and with no constrained output (a schema goes
-out as prompt instructions with JSON mode on), since it may predate either
-feature; a `Models` entry turns on what it supports. The model list is at
+curated or not. A model the plugin does not curate is described as text
+only, with the same constrained output as the curated models, since Mistral
+documents structured output on every model it currently serves; a `Models`
+entry turns on image input where the model has it. The model list is at
 https://docs.mistral.ai/getting-started/models and the API reference at
 https://docs.mistral.ai/api.
 
@@ -81,7 +87,7 @@ Models take a typed `mistral.ChatConfig`, carried with the model ID by
 
 ```go
 response, err := genkit.Generate(ctx, g,
-    ai.WithModel(mistral.ModelRef("mistral-medium-latest", &mistral.ChatConfig{
+    ai.WithModel(mistral.ModelRef("mistral-large-4", &mistral.ChatConfig{
         ReasoningEffort: mistral.ReasoningEffortHigh,
         MaxOutputTokens: 1024,
     })),
@@ -107,18 +113,24 @@ example `min_tokens`).
 `reasoningEffort` turns reasoning on for the models that take it. Each model
 takes a subset of the levels: Mistral Small and Medium take `none` and `high`
 and reason only when asked; Mistral Large 4 takes `low`, `medium` and `high`
-and always reasons. Mistral's API reference also lists `minimal`, `xhigh` and
-`max`, which no current model takes; the config leaves them out, and `extra`
-can still send one. Mistral returns the reasoning as a `thinking` chunk in the
-message content, which the plugin turns into Genkit reasoning parts, available
-through `response.Reasoning()`. When the conversation goes back to Mistral, as
-in a tool loop, the reasoning is sent back as the same `thinking` chunk.
+and always reasons; the Z.ai GLM 5.3 models Mistral serves take `low`, `high`
+and `max`. Mistral's API reference also lists `minimal` and `xhigh`, which no
+model Mistral serves takes; the config leaves them out, and `extra` can still
+send one. Mistral returns the reasoning as a `thinking` chunk in the message
+content, which the plugin turns into Genkit reasoning parts, available
+through `response.Reasoning()`, with the chunk's `signature`, when it has one,
+in the part's `signature` metadata. When the conversation goes back to
+Mistral, as in a tool loop, the reasoning is sent back as the same `thinking`
+chunk, signature included, as Mistral asks for multi-turn reasoning.
 
 ## Streaming
 
-Mistral rejects the `stream_options` field the plugin sends other providers,
-and reports usage on the final chunk of every stream without it, so streaming
-requests leave it out.
+Mistral's request schema has no `stream_options` field, which the plugin
+sends other providers, and rejects fields it does not declare, so streaming
+requests leave it out. Mistral's changelog says streamed usage arrives on the
+final chunk, but its known-limitations page says `stream_options.include_usage`
+must be set to get it; until a live run settles which holds, streamed
+responses may report zero tokens.
 
 ## Embedders
 

@@ -181,6 +181,7 @@ func TestPluginRegistersModelsAndEmbedders(t *testing.T) {
 		"mistral-large-4":       true,
 		"mistral-medium-latest": true,
 		"mistral-small-latest":  true,
+		"ministral-14b-latest":  true,
 		"ministral-8b-latest":   true,
 		"ministral-3b-latest":   true,
 		"codestral-latest":      false,
@@ -206,6 +207,15 @@ func TestPluginRegistersModelsAndEmbedders(t *testing.T) {
 		}
 		if label, _ := meta["label"].(string); label == "" {
 			t.Errorf("%s has no label", modelID)
+		}
+		// Mistral deprecated the models these two aliases name on
+		// 2026-10-31; the rest are generally available.
+		var wantStage ai.ModelStage
+		if modelID == "mistral-large-latest" || modelID == "mistral-medium-latest" {
+			wantStage = ai.ModelStageDeprecated
+		}
+		if got := meta["stage"]; got != wantStage {
+			t.Errorf("%s stage = %v, want %q", modelID, got, wantStage)
 		}
 	}
 
@@ -347,16 +357,16 @@ func TestThinkingChunks(t *testing.T) {
 		body := decodeChatRequest(t, r)
 		if body["stream"] == true {
 			writeSSE(w,
-				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-medium-latest","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Think "}]}]},"finish_reason":null}]}`,
-				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-medium-latest","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"carefully."}]}]},"finish_reason":null}]}`,
-				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-medium-latest","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"Streamed "}]},"finish_reason":null}]}`,
-				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-medium-latest","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Think "}]}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"carefully."}]}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"content":[{"type":"text","text":"Streamed "}]},"finish_reason":null}]}`,
+				`{"id":"c1","object":"chat.completion.chunk","created":1,"model":"mistral-large-4","choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":4,"total_tokens":7}}`,
 			)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{
-			"id":"c1","object":"chat.completion","created":1,"model":"mistral-medium-latest",
+			"id":"c1","object":"chat.completion","created":1,"model":"mistral-large-4",
 			"choices":[{"index":0,"message":{"role":"assistant","content":[
 				{"type":"thinking","thinking":[{"type":"text","text":"Think carefully."}]},
 				{"type":"text","text":"Complete answer"}
@@ -368,7 +378,7 @@ func TestThinkingChunks(t *testing.T) {
 
 	ctx := context.Background()
 	g := genkit.Init(ctx, genkit.WithPlugins(newPlugin(server)))
-	model := ai.WithModel(mistral.ModelRef("mistral-medium-latest", &mistral.ChatConfig{ReasoningEffort: mistral.ReasoningEffortHigh}))
+	model := ai.WithModel(mistral.ModelRef("mistral-large-4", &mistral.ChatConfig{ReasoningEffort: mistral.ReasoningEffortHigh}))
 
 	t.Run("complete", func(t *testing.T) {
 		resp, err := genkit.Generate(ctx, g, model, ai.WithPrompt("Say hi."))
@@ -428,10 +438,10 @@ func TestReasoningGoesBackAsThinkingChunk(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if reqNum == 1 {
 			_, _ = io.WriteString(w, `{
-				"id":"c-tool-1","object":"chat.completion","created":1,"model":"mistral-medium-latest",
+				"id":"c-tool-1","object":"chat.completion","created":1,"model":"mistral-large-4",
 				"choices":[{"index":0,"message":{
 					"role":"assistant",
-					"content":[{"type":"thinking","thinking":[{"type":"text","text":"I should call the lookup tool."}]}],
+					"content":[{"type":"thinking","thinking":[{"type":"text","text":"I should call the lookup tool."}],"signature":"sig-1"}],
 					"tool_calls":[{"id":"call1","type":"function","function":{"name":"lookup","arguments":"{\"value\":\"question\"}"}}]
 				},"finish_reason":"tool_calls"}]
 			}`)
@@ -446,8 +456,9 @@ func TestReasoningGoesBackAsThinkingChunk(t *testing.T) {
 			}
 		}
 		want := []any{map[string]any{
-			"type":     "thinking",
-			"thinking": []any{map[string]any{"type": "text", "text": "I should call the lookup tool."}},
+			"type":      "thinking",
+			"thinking":  []any{map[string]any{"type": "text", "text": "I should call the lookup tool."}},
+			"signature": "sig-1",
 		}}
 		if assistant == nil {
 			t.Error("second request has no assistant message")
@@ -461,14 +472,14 @@ func TestReasoningGoesBackAsThinkingChunk(t *testing.T) {
 		}
 
 		_, _ = io.WriteString(w, `{
-			"id":"c-tool-2","object":"chat.completion","created":1,"model":"mistral-medium-latest",
+			"id":"c-tool-2","object":"chat.completion","created":1,"model":"mistral-large-4",
 			"choices":[{"index":0,"message":{"role":"assistant","content":"Tool loop complete"},"finish_reason":"stop"}]
 		}`)
 	}))
 	defer server.Close()
 
 	ctx := context.Background()
-	g := genkit.Init(ctx, genkit.WithPlugins(newPlugin(server)), genkit.WithDefaultModel("mistral/mistral-medium-latest"))
+	g := genkit.Init(ctx, genkit.WithPlugins(newPlugin(server)), genkit.WithDefaultModel("mistral/mistral-large-4"))
 
 	lookup := genkit.DefineTool(g, "lookup", "Looks up a value.",
 		func(_ *ai.ToolContext, input struct {
@@ -679,8 +690,25 @@ func TestModelRefAndConfigSchema(t *testing.T) {
 		}
 	}
 	effort, _ := props["reasoningEffort"].(map[string]any)
-	if got, want := effort["enum"], []any{"none", "low", "medium", "high"}; !reflect.DeepEqual(got, want) {
+	if got, want := effort["enum"], []any{"none", "low", "medium", "high", "max"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("reasoningEffort enum = %#v, want %#v", got, want)
+	}
+	// The ranges Mistral's OpenAPI spec declares ride on the schema, where
+	// the framework enforces them.
+	for field, want := range map[string]map[string]any{
+		"temperature":      {"minimum": 0.0, "maximum": 1.5},
+		"topP":             {"exclusiveMinimum": 0.0, "maximum": 1.0},
+		"frequencyPenalty": {"minimum": -2.0, "maximum": 2.0},
+		"presencePenalty":  {"minimum": -2.0, "maximum": 2.0},
+		"seed":             {"minimum": 0.0},
+		"maxOutputTokens":  {"minimum": 1.0},
+	} {
+		prop, _ := props[field].(map[string]any)
+		for key, value := range want {
+			if got := prop[key]; !reflect.DeepEqual(got, value) {
+				t.Errorf("%s %s = %#v, want %#v", field, key, got, value)
+			}
+		}
 	}
 	tier, _ := props["serviceTier"].(map[string]any)
 	if got, want := tier["enum"], []any{"auto", "standard_only"}; !reflect.DeepEqual(got, want) {
@@ -749,6 +777,12 @@ func TestDynamicListingAndResolution(t *testing.T) {
 	props, _ := schema["properties"].(map[string]any)
 	if props["safePrompt"] == nil {
 		t.Error("listed model schema is missing the plugin's safePrompt property")
+	}
+	// Mistral documents structured output on every model it serves, so an
+	// uncurated model takes the curated constrained support.
+	supports, _ := model["supports"].(map[string]any)
+	if got := supports["constrained"]; got != ai.ConstrainedSupportNoTools {
+		t.Errorf("listed model constrained = %v, want %q", got, ai.ConstrainedSupportNoTools)
 	}
 
 	resp, err := genkit.Generate(ctx, g, ai.WithModelName("mistral/mistral-brand-new"), ai.WithPrompt("hi"))
