@@ -18,10 +18,11 @@ version: 2
 # Policy notes:
 # 1. Cooldowns satisfy zizmor (`dependabot-cooldown` >= 7d) and align npm workspaces
 #    with our 21-day Airlock `minimumReleaseAge: 30240` policy.
-# 2. Library ecosystems scope weekly grouped PRs to `minor` + `patch` and ignore
-#    routine `version-update:semver-major` bumps so breaking major upgrades (which
-#    require code migrations) don't turn the weekly PR red and block safe updates.
-#    Dependabot security/CVE updates bypass both `cooldown` and `version-update` ignores.
+# 2. Library ecosystems scope weekly grouped PRs to `minor` + `patch` and suppress
+#    routine `version-update:semver-major` PRs via `ignore` (so breaking major jumps
+#    that require code migrations are handled intentionally rather than turning the
+#    weekly PR red). Security/CVE updates bypass both `cooldown` and `ignore`, opening
+#    standalone PRs (including major bumps when required) outside the weekly group.
 updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
