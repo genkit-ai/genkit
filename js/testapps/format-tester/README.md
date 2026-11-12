@@ -16,10 +16,10 @@ and reports pass/fail results.
 
 ## Models Tested (default)
 
-- `vertexai/gemini-2.5-pro`
-- `vertexai/gemini-2.5-flash`
-- `googleai/gemini-2.5-pro`
-- `googleai/gemini-2.5-flash`
+- `vertexai/gemini-3.1-pro-preview`
+- `vertexai/gemini-3.8-flash`
+- `googleai/gemini-pro-latest`
+- `googleai/gemini-flash-latest`
 - Vertex AI Model Garden: Claude 3.5 Sonnet (v1 and v2)
 
 ## Setup
@@ -61,7 +61,7 @@ pnpm build && pnpm start
 Pass model names as command-line arguments:
 
 ```bash
-pnpm build && node lib/index.js googleai/gemini-2.5-flash vertexai/gemini-2.5-pro
+pnpm build && node lib/index.js googleai/gemini-flash-latest vertexai/gemini-3.1-pro-preview
 ```
 
 ## Expected Behavior

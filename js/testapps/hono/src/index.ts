@@ -44,7 +44,7 @@ const authContextProvider: ContextProvider<{ userId: string }> = (req) => {
 // Actions (flows) served over HTTP via @genkit-ai/fetch
 const helloFlow = ai.defineFlow('hello', async (input: string) => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.0-flash'),
+    model: googleAI.model('gemini-flash-latest'),
     prompt: `Say hello to: ${input}`,
   });
   return text;
@@ -57,7 +57,7 @@ const greetingFlow = ai.defineFlow(
   },
   async (input) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Write a short greeting for someone named ${input.name}.`,
     });
     return text;
@@ -71,7 +71,7 @@ const streamingFlow = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: input.prompt,
     });
     let full = '';
@@ -91,7 +91,7 @@ const secureGreetingFlow = ai.defineFlow(
   },
   async (input, { context }) => {
     const { text } = await ai.generate({
-      model: googleAI.model('gemini-2.0-flash'),
+      model: googleAI.model('gemini-flash-latest'),
       prompt: `Say a short greeting to ${input.name} (user ${context?.userId}).`,
     });
     return text?.trim() ?? '';
@@ -119,7 +119,7 @@ app.get('/', (c) =>
 );
 
 app.post('/models/gemini-flash', async (c) => {
-  const model = await googleAI().model('gemini-2.0-flash');
+  const model = await googleAI().model('gemini-flash-latest');
   return fetchHandler(model)(c.req.raw);
 });
 
