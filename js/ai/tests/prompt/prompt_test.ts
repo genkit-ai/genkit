@@ -812,6 +812,33 @@ describe('prompt', () => {
     });
   }
 
+  it('parses input with the schema on direct calls and via the action', async () => {
+    const greet = definePrompt(registry, {
+      name: 'greetParsed',
+      model: 'echoModel',
+      input: {
+        schema: z.object({
+          name: z.string().trim(),
+          style: z.string().default('casual'),
+        }),
+      },
+      prompt: 'Greet {{name}} in a {{style}} way',
+    });
+    const want = [{ text: 'Greet Pavel in a casual way' }];
+
+    const rendered = await greet.render({ name: ' Pavel ' });
+    assert.deepStrictEqual(rendered.messages?.[0].content, want);
+
+    const action = await registry.lookupAction('/prompt/greetParsed');
+    const request = await action({ name: ' Pavel ' });
+    assert.deepStrictEqual(request.messages[0].content, want);
+
+    await assert.rejects(
+      greet.render({ name: 1 } as never),
+      /Schema validation failed/
+    );
+  });
+
   it('metadata is correctly populated', async () => {
     definePrompt(registry, {
       name: 'metadataTest',

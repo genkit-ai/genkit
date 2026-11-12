@@ -34,6 +34,24 @@ describe('background action', () => {
   beforeEach(() => {
     spanExporter.exportedSpans = [];
   });
+  it('does not validate operations against the start input JSON schema', async () => {
+    const action = backgroundAction({
+      name: 'jsonInput',
+      actionType: 'custom' as ActionType,
+      inputJsonSchema: {
+        type: 'object',
+        properties: { prompt: { type: 'string' } },
+        required: ['prompt'],
+      },
+      start: async () => ({ id: 'op' }),
+      check: async (op) => ({ ...op, done: true }),
+      cancel: async (op) => op,
+    });
+    const op = await action.start({ prompt: 'hi' });
+    assert.strictEqual((await action.check(op)).done, true);
+    assert.strictEqual((await action.cancel(op)).id, 'op');
+  });
+
   it('should pass options to check and cancel', async () => {
     let checkOptionsReceived: any = null;
     let cancelOptionsReceived: any = null;

@@ -6564,7 +6564,9 @@ describe('detach finalize', () => {
       new Registry(),
       { name: 'finalizeIdempotent', store },
       async (sess) => {
-        await sess.run(async () => {});
+        // Keep the turn in flight until both detach inputs have arrived, so
+        // they target the same run (input items are parsed asynchronously).
+        await sess.run(() => new Promise((r) => setTimeout(r, 20)));
         return { message: { role: 'model', content: [{ text: 'done' }] } };
       }
     );
@@ -6793,5 +6795,38 @@ describe('detach finalize', () => {
       snap.state?.messages.map((m) => m.content[0].text),
       ['go', 'ack']
     );
+  });
+});
+
+describe('agent wire schemas', () => {
+  it('keeps extra snapshot fields from a custom store', async () => {
+    // A store that adds its own bookkeeping to every snapshot it returns.
+    class TaggingStore extends InMemorySessionStore<unknown> {
+      async getSnapshot(
+        opts: Parameters<InMemorySessionStore<unknown>['getSnapshot']>[0]
+      ) {
+        const snap = await super.getSnapshot(opts);
+        return snap && { ...snap, storeTag: 'kept' };
+      }
+    }
+    const registry = new Registry();
+    const flow = defineCustomAgent(
+      registry,
+      { name: 'taggedAgent', store: new TaggingStore() },
+      async (sess) => {
+        await sess.run(async () => ({ finishReason: 'stop' as const }));
+        return { message: { role: 'model', content: [{ text: 'done' }] } };
+      }
+    );
+    const session = flow.streamBidi({});
+    session.send({ message: { role: 'user', content: [{ text: 'hi' }] } });
+    session.close();
+    for await (const _ of session.stream) {
+    }
+    const { snapshotId } = await session.output;
+
+    const action = await registry.lookupAction('/agent-snapshot/taggedAgent');
+    const snap = await action!({ snapshotId });
+    assert.strictEqual(snap.storeTag, 'kept');
   });
 });

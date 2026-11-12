@@ -17,6 +17,7 @@
 import {
   action,
   defineAction,
+  wireObject,
   z,
   type Action,
   type ActionFnArg,
@@ -38,7 +39,7 @@ export type EmbeddingBatch = { embedding: number[] }[];
  * EmbeddingSchema includes the embedding and also metadata so you know
  * which of multiple embeddings corresponds to which part of a document.
  */
-export const EmbeddingSchema = z.object({
+export const EmbeddingSchema = wireObject({
   embedding: z.array(z.number()),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
@@ -56,7 +57,7 @@ export type EmbedderFn<EmbedderOptions extends GenkitSchema> = (
 /**
  * Zod schema of an embed request.
  */
-const EmbedRequestSchema = z.object({
+const EmbedRequestSchema = wireObject({
   input: z.array(DocumentDataSchema),
   options: z.any().optional(),
 });
@@ -70,7 +71,7 @@ export interface EmbedRequest<O = any> {
 /**
  * Zod schema of an embed response.
  */
-const EmbedResponseSchema = z.object({
+const EmbedResponseSchema = wireObject({
   embeddings: z.array(EmbeddingSchema),
   // TODO: stats, etc.
 });

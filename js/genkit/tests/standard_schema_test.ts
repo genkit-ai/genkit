@@ -30,6 +30,10 @@ const libraries = {
   arktype: {
     input: type({ city: 'string', 'days?': 'number.integer > 0' }),
     state: type({ count: 'number' }),
+    withDefaults: type({
+      id: 'string.trim',
+      tags: type('string[]').default(() => []),
+    }),
   },
   valibot: {
     input: toStandardJsonSchema(
@@ -39,6 +43,12 @@ const libraries = {
       })
     ),
     state: toStandardJsonSchema(v.object({ count: v.number() })),
+    withDefaults: toStandardJsonSchema(
+      v.object({
+        id: v.pipe(v.string(), v.trim()),
+        tags: v.optional(v.array(v.string()), []),
+      })
+    ),
   },
 };
 
@@ -66,6 +76,14 @@ for (const [name, schemas] of Object.entries(libraries)) {
       const json = toJsonSchema({ schema: schemas.input });
       assert.deepStrictEqual(json.required, ['city']);
       assert.deepStrictEqual(json.properties.city, { type: 'string' });
+    });
+
+    it('applies defaults and transforms to flow input', async () => {
+      const f = ai.defineFlow(
+        { name: 'withDefaults', inputSchema: schemas.withDefaults },
+        async (input) => input
+      );
+      assert.deepStrictEqual(await f({ id: '  a  ' }), { id: 'a', tags: [] });
     });
 
     it('sends tool input JSON schema to the model', async () => {

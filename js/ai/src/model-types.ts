@@ -16,6 +16,7 @@
 
 import {
   OperationSchema,
+  wireObject,
   z,
   type GenkitSchema,
   type InferOutput,
@@ -30,7 +31,9 @@ import {
 export { Part, PartSchema };
 
 /** Zod schema for a serializable reference to a registered generate middleware. */
-export const MiddlewareRefSchema: z.ZodType<any, any> = z.object({
+// Loose: in-process callers attach the middleware definition (`__def`) so it
+// can run without being registered; parsing must not strip it.
+export const MiddlewareRefSchema: z.ZodType<any, any> = z.looseObject({
   name: z.string(),
   config: z.any().optional(),
 });
@@ -55,7 +58,7 @@ export type Role = z.infer<typeof RoleSchema>;
 /**
  * Zod schema of a message.
  */
-export const MessageSchema = z.object({
+export const MessageSchema = wireObject({
   role: RoleSchema,
   content: z.array(PartSchema),
   metadata: z.record(z.string(), z.unknown()).optional(),
@@ -119,7 +122,7 @@ export type ModelInfo = z.infer<typeof ModelInfoSchema>;
 /**
  * Zod schema of a tool definition.
  */
-export const ToolDefinitionSchema = z.object({
+export const ToolDefinitionSchema = wireObject({
   name: z.string(),
   key: z.string().optional(),
   description: z.string(),
@@ -210,7 +213,7 @@ export type GenerationCommonConfig = typeof GenerationCommonConfigSchema;
 /**
  * Zod schema of output config.
  */
-export const OutputConfigSchema = z.object({
+export const OutputConfigSchema = wireObject({
   format: z.string().optional(),
   schema: z.record(z.string(), z.any()).optional(),
   constrained: z.boolean().optional(),
@@ -223,7 +226,7 @@ export const OutputConfigSchema = z.object({
 export type OutputConfig = z.infer<typeof OutputConfigSchema>;
 
 /** ModelRequestSchema represents the parameters that are passed to a model when generating content. */
-export const ModelRequestSchema = z.object({
+export const ModelRequestSchema = wireObject({
   messages: z.array(MessageSchema),
   config: z.any().optional(),
   tools: z.array(ToolDefinitionSchema).optional(),
@@ -262,7 +265,7 @@ export interface GenerateRequest<
 /**
  * Zod schema of usage info from a generate request.
  */
-export const GenerationUsageSchema = z.object({
+export const GenerationUsageSchema = wireObject({
   inputTokens: z.number().optional(),
   outputTokens: z.number().optional(),
   totalTokens: z.number().optional(),
@@ -298,7 +301,7 @@ export const FinishReasonSchema = z.enum([
 ]);
 
 /** @deprecated All responses now return a single candidate. Only the first candidate will be used if supplied. */
-export const CandidateSchema = z.object({
+export const CandidateSchema = wireObject({
   index: z.number(),
   message: MessageSchema,
   usage: GenerationUsageSchema.optional(),
@@ -310,7 +313,7 @@ export const CandidateSchema = z.object({
 export type CandidateData = z.infer<typeof CandidateSchema>;
 
 /** @deprecated All responses now return a single candidate. Only the first candidate will be used if supplied. */
-export const CandidateErrorSchema = z.object({
+export const CandidateErrorSchema = wireObject({
   index: z.number(),
   code: z.enum(['blocked', 'other', 'unknown']),
   message: z.string().optional(),
@@ -324,7 +327,7 @@ export type CandidateError = z.infer<typeof CandidateErrorSchema>;
  * inside another value (e.g. a model response that accompanies an error,
  * agent outputs, and session snapshots).
  */
-export const RuntimeErrorSchema = z.object({
+export const RuntimeErrorSchema = wireObject({
   /** Canonical status name (e.g. `INTERNAL`, `FAILED_PRECONDITION`). */
   status: z.string().optional(),
   /** Human-readable error message. */
@@ -338,7 +341,7 @@ export type RuntimeError = z.infer<typeof RuntimeErrorSchema>;
 /**
  * Zod schema of a model response.
  */
-export const ModelResponseSchema = z.object({
+export const ModelResponseSchema = wireObject({
   message: MessageSchema.optional(),
   finishReason: FinishReasonSchema,
   finishMessage: z.string().optional(),
@@ -389,7 +392,7 @@ export const GenerateResponseSchema = ModelResponseSchema.extend({
 export type GenerateResponseData = z.infer<typeof GenerateResponseSchema>;
 
 /** ModelResponseChunkSchema represents a chunk of content to stream to the client. */
-export const ModelResponseChunkSchema = z.object({
+export const ModelResponseChunkSchema = wireObject({
   role: RoleSchema.optional(),
   /** index of the message this chunk belongs to. */
   index: z.number().optional(),
@@ -410,7 +413,7 @@ export type GenerateResponseChunkData = z.infer<
 >;
 
 /** Zod schema for output configuration within a generate action request. */
-export const GenerateActionOutputConfig = z.object({
+export const GenerateActionOutputConfig = wireObject({
   format: z.string().optional(),
   contentType: z.string().optional(),
   instructions: z.union([z.boolean(), z.string()]).optional(),
@@ -419,7 +422,7 @@ export const GenerateActionOutputConfig = z.object({
 });
 
 /** Zod schema for the options passed to the internal generate action. */
-export const GenerateActionOptionsSchema = z.object({
+export const GenerateActionOptionsSchema = wireObject({
   /** A model name (e.g. `vertexai/gemini-1.0-pro`). */
   model: z.string().optional(),
   /** Retrieved documents to be used as context for this generation. */
@@ -437,13 +440,11 @@ export const GenerateActionOptionsSchema = z.object({
   /** Configuration for the desired output of the request. Defaults to the model's default output if unspecified. */
   output: GenerateActionOutputConfig.optional(),
   /** Options for resuming an interrupted generation. */
-  resume: z
-    .object({
-      respond: z.array(ToolResponsePartSchema).optional(),
-      restart: z.array(ToolRequestPartSchema).optional(),
-      metadata: z.record(z.string(), z.any()).optional(),
-    })
-    .optional(),
+  resume: wireObject({
+    respond: z.array(ToolResponsePartSchema).optional(),
+    restart: z.array(ToolRequestPartSchema).optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
+  }).optional(),
   /** When true, return tool calls for manual processing instead of automatically resolving them. */
   returnToolRequests: z.boolean().optional(),
   /** Maximum number of tool call iterations that can be performed in a single generate call (default 5). */

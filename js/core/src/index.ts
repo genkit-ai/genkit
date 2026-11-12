@@ -101,6 +101,7 @@ export {
   isZodSchema,
   toJsonSchema,
   toZodSchema,
+  wireObject,
   type GenkitSchema,
   type InferInput,
   type InferOutput,

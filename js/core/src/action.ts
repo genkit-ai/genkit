@@ -22,11 +22,12 @@ import { getContext, runWithContext, type ActionContext } from './context.js';
 import type { ActionType, Registry } from './registry.js';
 import {
   assertGenkitSchema,
-  isZodSchema,
-  parseSchema,
+  parseSchemaAsync,
+  wireObject,
   type GenkitSchema,
   type InferInput,
   type InferOutput,
+  type ProvidedSchema,
 } from './schema.js';
 import {
   type ActionStreamInput,
@@ -90,7 +91,7 @@ export interface ActionMetadata<
 }
 
 /** Zod schema for {@link ActionMetadata}. */
-export const ActionMetadataSchema = z.object({
+export const ActionMetadataSchema = wireObject({
   key: z.string().optional(),
   actionType: z.string().optional(),
   name: z.string(),
@@ -253,7 +254,7 @@ export type Action<
   S extends GenkitSchema = GenkitSchema,
   RunOptions extends ActionRunOptions<
     InferOutput<S>,
-    InferOutput<Init>
+    InferInput<Init>
     // unfortunately we can't use Init generic param to type ActionRunOptions here (using any)
     // this is somewhat mitigated in BidiAction interface, so anyone interacting with
     // bidi actions will still get properly typed init option.
@@ -282,9 +283,9 @@ export interface BidiAction<
   Init extends GenkitSchema = GenkitSchema,
   RunOptions extends BidiActionRunOptions<
     InferOutput<OS>,
-    InferOutput<IS>,
-    InferOutput<Init>
-  > = BidiActionRunOptions<InferOutput<OS>, InferOutput<IS>, InferOutput<Init>>,
+    InferInput<IS>,
+    InferInput<Init>
+  > = BidiActionRunOptions<InferOutput<OS>, InferInput<IS>, InferInput<Init>>,
 > extends Action<IS, O, OS, RunOptions, Init> {
   streamBidi(
     init?: InferInput<Init>,
@@ -337,7 +338,7 @@ export type ActionParams<
   /**
    * Middleware to apply to the action.
    */
-  use?: Middleware<InferOutput<I>, InferOutput<O>, InferOutput<S>>[];
+  use?: Middleware<InferInput<I>, InferOutput<O>, InferOutput<S>>[];
   /**
    * Stream Zod schema.
    */
@@ -367,7 +368,7 @@ export type ActionAsyncParams<
   fn: (
     input: InferOutput<I>,
     options: ActionFnArg<InferOutput<S>, InferOutput<I>>
-  ) => Promise<InferOutput<O>>;
+  ) => Promise<InferInput<O>>;
 };
 
 /**
@@ -404,24 +405,24 @@ export function actionWithMiddleware<
   Init extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S, any, Init>,
-  middleware: Middleware<InferOutput<I>, InferOutput<O>, InferOutput<S>>[]
+  middleware: Middleware<InferInput<I>, InferOutput<O>, InferOutput<S>>[]
 ): Action<I, O, S, any, Init> {
   const wrapped = (async (
-    req: InferOutput<I>,
-    options?: ActionRunOptions<InferOutput<S>, InferOutput<Init>>
+    req: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>, InferInput<Init>>
   ) => {
     return (await wrapped.run(req, options)).result;
   }) as Action<I, O, S, any, Init>;
   wrapped.__action = action.__action;
   wrapped.run = async (
-    req: InferOutput<I>,
-    options?: ActionRunOptions<InferOutput<S>, InferOutput<Init>>
+    req: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>, InferInput<Init>>
   ): Promise<ActionResult<InferOutput<O>>> => {
     let telemetry;
     const dispatch = async (
       index: number,
-      req: InferOutput<I>,
-      opts?: ActionRunOptions<InferOutput<S>, InferOutput<Init>>
+      req: InferInput<I>,
+      opts?: ActionRunOptions<InferOutput<S>, InferInput<Init>>
     ) => {
       if (index === middleware.length) {
         // end of the chain, call the original model action
@@ -434,7 +435,7 @@ export function actionWithMiddleware<
       if (currentMiddleware.length === 3) {
         return (
           currentMiddleware as MiddlewareWithOptions<
-            InferOutput<I>,
+            InferInput<I>,
             InferOutput<O>,
             InferOutput<S>
           >
@@ -443,7 +444,7 @@ export function actionWithMiddleware<
         );
       } else if (currentMiddleware.length === 2) {
         return (
-          currentMiddleware as SimpleMiddleware<InferOutput<I>, InferOutput<O>>
+          currentMiddleware as SimpleMiddleware<InferInput<I>, InferOutput<O>>
         )(req, async (modifiedReq) =>
           dispatch(index + 1, modifiedReq || req, opts)
         );
@@ -476,7 +477,7 @@ export function action<
   fn: (
     input: InferOutput<I>,
     options: ActionFnArg<InferOutput<S>, InferOutput<I>, InferOutput<Init>>
-  ) => Promise<InferOutput<O>>
+  ) => Promise<InferInput<O>>
 ): Action<I, O, S, any, Init> {
   const actionName =
     typeof config.name === 'string'
@@ -513,62 +514,65 @@ export function action<
   } as ActionMetadata<I, O, S>;
 
   const actionFn = (async (
-    input?: InferOutput<I>,
-    options?: ActionRunOptions<InferOutput<S>, InferOutput<Init>>
+    input?: InferInput<I>,
+    options?: ActionRunOptions<InferOutput<S>, InferInput<Init>>
   ) => {
     return (await actionFn.run(input, options)).result;
   }) as Action<I, O, S, any, Init>;
   actionFn.__action = { ...actionMetadata };
 
   actionFn.run = async (
-    input: InferOutput<I>,
-    options?: ActionRunOptions<InferOutput<S>, InferOutput<Init>> & {
-      inputStream?: AsyncIterable<InferOutput<I>>;
+    rawInput: InferInput<I>,
+    rawOptions?: ActionRunOptions<InferOutput<S>, InferInput<Init>> & {
+      inputStream?: AsyncIterable<InferInput<I>>;
     }
   ): Promise<ActionResult<InferOutput<O>>> => {
-    if (config.inputSchema || config.inputJsonSchema) {
-      if (!options?.inputStream) {
-        input = parseSchema(input, {
-          schema: config.inputSchema,
-          jsonSchema: config.inputJsonSchema,
-        });
-      } else {
-        const inputStream = options.inputStream;
-        options = {
-          ...options,
-          inputStream: (async function* () {
-            for await (const item of inputStream) {
-              yield parseSchema(item, {
-                schema: config.inputSchema,
-                jsonSchema: config.inputJsonSchema,
-              });
+    // Parse with the schemas: defaults, transforms and refinements apply, and
+    // fn receives the schema's output type. Without a schema this is a no-op.
+    const inputSchema: ProvidedSchema = {
+      schema: config.inputSchema,
+      jsonSchema: config.inputJsonSchema,
+    };
+    const rawInputStream = rawOptions?.inputStream;
+    // With an input stream the items are parsed instead; the unary input is
+    // passed through as is (bidi callers send undefined).
+    const input = rawInputStream
+      ? (rawInput as unknown as InferOutput<I>)
+      : await parseSchemaAsync<InferOutput<I>>(rawInput, inputSchema);
+    const options: ActionRunOptions<InferOutput<S>, InferOutput<Init>> & {
+      inputStream?: AsyncIterable<InferOutput<I>>;
+    } = {
+      ...rawOptions,
+      inputStream: rawInputStream
+        ? (async function* () {
+            for await (const item of rawInputStream) {
+              yield await parseSchemaAsync<InferOutput<I>>(item, inputSchema);
             }
-          })(),
-        };
-      }
-    }
-
-    if (config.initSchema || config.initJsonSchema) {
-      const validatedInit = parseSchema<InferOutput<Init>>(options?.init, {
-        schema: config.initSchema,
-        jsonSchema: config.initJsonSchema,
-      });
-      options = { ...options, init: validatedInit };
-    }
+          })()
+        : undefined,
+      init:
+        config.initSchema || config.initJsonSchema
+          ? await parseSchemaAsync<InferOutput<Init>>(rawOptions?.init, {
+              schema: config.initSchema,
+              jsonSchema: config.initJsonSchema,
+            })
+          : (rawOptions?.init as InferOutput<Init> | undefined),
+    };
 
     let traceId;
     let spanId;
     const genkitKey = actionFn.__action.key;
-    let output = await runInNewSpan(
+    const output = await runInNewSpan(
       {
         metadata: {
           name: actionName,
           // Seed input (and init) up front so the realtime "pending" span
           // export carries them; both are already resolved by this point.
-          // `init` is stored raw (like `input`) so the tracing layer serializes
-          // them consistently.
-          input,
-          ...(options?.init !== undefined ? { init: options.init } : {}),
+          // Both are recorded as the caller sent them (pre-parse): transforms
+          // aren't idempotent, so replaying a parsed input (Dev UI rerun,
+          // trace replay) could fail or apply them twice.
+          input: rawInput,
+          ...(rawOptions?.init !== undefined ? { init: rawOptions.init } : {}),
         },
         labels: {
           [SPAN_TYPE_ATTR]: 'action',
@@ -632,8 +636,11 @@ export function action<
             >);
           // if context is explicitly passed in, we run action with the provided context,
           // otherwise we let upstream context carry through.
-          const output = await runWithContext(options?.context, actFn);
-
+          const rawOutput = await runWithContext(options?.context, actFn);
+          const output = await parseSchemaAsync<InferOutput<O>>(rawOutput, {
+            schema: config.outputSchema,
+            jsonSchema: config.outputJsonSchema,
+          });
           metadata.output = JSON.stringify(output);
           return output;
         } catch (err) {
@@ -644,10 +651,6 @@ export function action<
         }
       }
     );
-    output = parseSchema(output, {
-      schema: config.outputSchema,
-      jsonSchema: config.outputJsonSchema,
-    });
     return {
       result: output,
       telemetry: {
@@ -658,9 +661,9 @@ export function action<
   };
 
   actionFn.stream = (
-    input?: InferOutput<I>,
-    opts?: ActionRunOptions<InferOutput<S>, InferOutput<Init>> & {
-      inputStream?: AsyncIterable<InferOutput<I>>;
+    input?: InferInput<I>,
+    opts?: ActionRunOptions<InferOutput<S>, InferInput<Init>> & {
+      inputStream?: AsyncIterable<InferInput<I>>;
     }
   ): StreamingResponse<O, S> => {
     let chunkStreamController: ReadableStreamDefaultController<InferOutput<S>>;
@@ -674,13 +677,8 @@ export function action<
 
     const invocationPromise = actionFn
       .run(
-        // Only zod schemas can be parsed synchronously here; other Standard
-        // Schemas are validated in run().
-        !opts?.inputStream &&
-          config.inputSchema &&
-          isZodSchema(config.inputSchema)
-          ? (config.inputSchema.parse(input) as InferOutput<I>)
-          : input,
+        // run() parses the input (parsing twice would re-apply transforms).
+        input as InferInput<I>,
         {
           onChunk: ((chunk: InferOutput<S>) => {
             chunkStreamController.enqueue(chunk);
@@ -705,6 +703,11 @@ export function action<
           // Ignore if already closed or cancelled
         }
       });
+    // Errors (including input validation, which happens in run()) surface by
+    // awaiting `output` or draining `stream`. Callers that do neither, e.g.
+    // break out of the stream early, shouldn't crash with an unhandled
+    // rejection.
+    invocationPromise.catch(() => {});
 
     return {
       output: invocationPromise,
@@ -753,8 +756,8 @@ export function defineAction<
   fn: (
     input: InferOutput<I>,
     options: ActionFnArg<InferOutput<S>, InferOutput<I>, InferOutput<Init>>
-  ) => Promise<InferOutput<O>>
-): Action<I, O, S, ActionRunOptions<InferOutput<S>, InferOutput<Init>>, Init> {
+  ) => Promise<InferInput<O>>
+): Action<I, O, S, ActionRunOptions<InferOutput<S>, InferInput<Init>>, Init> {
   if (isInRuntimeContext()) {
     throw new Error(
       'Cannot define new actions at runtime.\n' +
@@ -763,7 +766,7 @@ export function defineAction<
   }
   const act = action(
     config,
-    async (i: InferOutput<I>, options): Promise<InferOutput<O>> => {
+    async (i: InferOutput<I>, options): Promise<InferInput<O>> => {
       await registry.initializeAllPlugins();
       return await runInActionRuntimeContext(() => fn(i, options));
     }
@@ -786,7 +789,7 @@ export function defineBidiAction<
   config: ActionParams<IS, O, OS, Init>,
   fn: (
     input: ActionFnArg<InferOutput<OS>, InferOutput<IS>, InferOutput<Init>>
-  ) => AsyncGenerator<InferOutput<OS>, InferOutput<O>, void>
+  ) => AsyncGenerator<InferOutput<OS>, InferInput<O>, void>
 ): BidiAction<IS, O, OS, Init> {
   const act = bidiAction(config, (input) => {
     return (async function* () {
@@ -810,7 +813,7 @@ export function bidiAction<
   config: ActionParams<IS, O, OS, Init>,
   fn: (
     input: ActionFnArg<InferOutput<OS>, InferOutput<IS>, InferOutput<Init>>
-  ) => AsyncGenerator<InferOutput<OS>, InferOutput<O>, void>
+  ) => AsyncGenerator<InferOutput<OS>, InferInput<O>, void>
 ): BidiAction<IS, O, OS, Init> {
   const meta = { ...config.metadata, bidi: true };
   const act = action({ ...config, metadata: meta }, async (input, options) => {
@@ -822,7 +825,7 @@ export function bidiAction<
     } as ActionFnArg<InferOutput<OS>, InferOutput<IS>, InferOutput<Init>>);
 
     const iter = outputGen[Symbol.asyncIterator]();
-    let result: InferOutput<O>;
+    let result: InferInput<O>;
     try {
       while (true) {
         const { value, done } = await iter.next();
@@ -841,10 +844,10 @@ export function bidiAction<
   }) as unknown as BidiAction<IS, O, OS, Init>;
 
   act.streamBidi = (init, opts) => {
-    let channel: Channel<InferOutput<IS>> | undefined;
+    let channel: Channel<InferInput<IS>> | undefined;
     let stream = opts?.inputStream;
     if (!stream) {
-      channel = new Channel<InferOutput<IS>>();
+      channel = new Channel<InferInput<IS>>();
       stream = channel;
     }
 
@@ -910,7 +913,7 @@ export function defineActionAsync<
     config.then((resolvedConfig) => {
       const act = action(
         resolvedConfig,
-        async (i: InferOutput<I>, options): Promise<InferOutput<O>> => {
+        async (i: InferOutput<I>, options): Promise<InferInput<O>> => {
           await registry.initializeAllPlugins();
           return await runInActionRuntimeContext(() =>
             resolvedConfig.fn(i, options)

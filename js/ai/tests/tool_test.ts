@@ -137,6 +137,80 @@ describe('defineInterrupt', () => {
     });
   });
 
+  describe('schema parsing', () => {
+    it('restart() validates replaceInput but keeps it raw (parsed when the tool runs)', () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'test',
+          description: 'test',
+          inputSchema: z.string().transform((s) => s.toUpperCase()),
+        },
+        async (input, { interrupt }) => interrupt()
+      );
+      assert.deepStrictEqual(
+        t.restart({ toolRequest: { name: 'test', input: 'a' } }, undefined, {
+          replaceInput: 'b',
+        }).toolRequest.input,
+        'b'
+      );
+    });
+
+    it('respond() returns the parsed output', () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'test',
+          description: 'test',
+          outputSchema: z.object({ ok: z.boolean().default(true) }),
+        },
+        async (input, { interrupt }) => interrupt()
+      );
+      assert.deepStrictEqual(
+        t.respond({ toolRequest: { name: 'test', input: {} } }, {}).toolResponse
+          .output,
+        { ok: true }
+      );
+    });
+
+    it('parses tool input and output, including the v2 tool action', async () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'parsed',
+          description: 'test',
+          inputSchema: z.object({ n: z.number().default(2) }),
+          outputSchema: z.object({
+            doubled: z.number(),
+            note: z.string().default('ok'),
+          }),
+        },
+        async ({ n }) => ({ doubled: n * 2 })
+      );
+      assert.deepStrictEqual(await t({}), { doubled: 4, note: 'ok' });
+      const v2 = await registry.lookupAction('/tool.v2/parsed');
+      assert.deepStrictEqual(await v2({}), {
+        output: { doubled: 4, note: 'ok' },
+      });
+    });
+
+    it('parses an undefined regular tool output in the v2 action too', async () => {
+      defineTool(
+        registry,
+        {
+          name: 'defaulted',
+          description: 'test',
+          outputSchema: z.string().default('fallback'),
+        },
+        async () => undefined
+      );
+      const v1 = await registry.lookupAction('/tool/defaulted');
+      const v2 = await registry.lookupAction('/tool.v2/defaulted');
+      assert.strictEqual(await v1({}), 'fallback');
+      assert.deepStrictEqual(await v2({}), { output: 'fallback' });
+    });
+  });
+
   describe('multipart tools', () => {
     it('should define a multipart tool', async () => {
       const t = defineTool(
@@ -153,6 +227,23 @@ describe('defineInterrupt', () => {
       assert.equal(t.__action.actionType, 'tool.v2');
       const result = await t({});
       assert.deepStrictEqual(result, {
+        output: 'main output',
+        content: [{ text: 'part 1' }],
+      });
+    });
+
+    it('validates multipart output against the tool outputJsonSchema only for `output`', async () => {
+      const t = defineTool(
+        registry,
+        {
+          name: 'jsonOut',
+          description: 'test',
+          multipart: true,
+          outputJsonSchema: { type: 'string' },
+        },
+        async () => ({ output: 'main output', content: [{ text: 'part 1' }] })
+      );
+      assert.deepStrictEqual(await t({}), {
         output: 'main output',
         content: [{ text: 'part 1' }],
       });

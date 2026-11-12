@@ -19,11 +19,11 @@ import {
   runFlow as baseRunFlow,
   streamFlow as baseStreamFlow,
 } from 'genkit/beta/client';
-import type { InferOutput } from 'genkit/schema';
+import type { InferInput, InferOutput } from 'genkit/schema';
 
 type Input<A extends Action> =
   A extends Action<infer I extends GenkitSchema, any, any>
-    ? InferOutput<I>
+    ? InferInput<I>
     : never;
 type Output<A extends Action> =
   A extends Action<any, infer O extends GenkitSchema, any>
@@ -35,7 +35,7 @@ type Stream<A extends Action> =
     : never;
 type InitData<A extends Action> =
   A extends Action<any, any, any, any, infer Init extends GenkitSchema>
-    ? InferOutput<Init>
+    ? InferInput<Init>
     : never;
 
 export interface RequestData<T, Init = any> {
