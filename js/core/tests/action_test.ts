@@ -548,6 +548,25 @@ describe('action schema parsing', () => {
     assert.strictEqual(await act.stream('a').output, '<a>');
   });
 
+  it('stream() input errors reject output, never unhandled', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { act } = searchAction();
+      // Never awaited: must not surface as an unhandled rejection.
+      // @ts-expect-error q must be a string
+      act.stream({ q: 1 });
+      // @ts-expect-error q must be a string
+      const { output } = act.stream({ q: 1 });
+      await assert.rejects(output, /Schema validation failed/);
+      await new Promise((r) => setTimeout(r, 10));
+      assert.deepStrictEqual(unhandled, []);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
   it('stream() returns the same parsed output as run()', async () => {
     const { act, seen } = searchAction();
     const { stream, output } = act.stream({ q: ' y ' });

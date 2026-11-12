@@ -632,7 +632,7 @@ function basicToolV2<I extends GenkitSchema, O extends GenkitSchema>(
 }
 
 function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
-  config: ToolConfig<I, O>,
+  config: { multipart?: true } & ToolConfig<I, O>,
   fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O> {
   const a = action(
@@ -662,8 +662,10 @@ function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
         interrupt,
       });
       // The action's output schema is the multipart envelope; parse `output`
-      // with the tool's own schema, like the v1 tool action does.
-      if (response.output === undefined) return response;
+      // with the tool's own schema, like the v1 tool action does. Multipart
+      // tools may return only `content`; the v2 action of a regular tool
+      // parses `undefined` like its v1 action (defaults, required checks).
+      if (response.output === undefined && config.multipart) return response;
       return {
         ...response,
         output: await parseSchemaAsync(response.output, {

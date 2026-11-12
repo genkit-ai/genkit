@@ -193,6 +193,22 @@ describe('defineInterrupt', () => {
         output: { doubled: 4, note: 'ok' },
       });
     });
+
+    it('parses an undefined regular tool output in the v2 action too', async () => {
+      defineTool(
+        registry,
+        {
+          name: 'defaulted',
+          description: 'test',
+          outputSchema: z.string().default('fallback'),
+        },
+        async () => undefined
+      );
+      const v1 = await registry.lookupAction('/tool/defaulted');
+      const v2 = await registry.lookupAction('/tool.v2/defaulted');
+      assert.strictEqual(await v1({}), 'fallback');
+      assert.deepStrictEqual(await v2({}), { output: 'fallback' });
+    });
   });
 
   describe('multipart tools', () => {

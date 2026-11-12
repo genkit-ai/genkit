@@ -253,7 +253,7 @@ export type Action<
   S extends GenkitSchema = GenkitSchema,
   RunOptions extends ActionRunOptions<
     InferOutput<S>,
-    InferOutput<Init>
+    InferInput<Init>
     // unfortunately we can't use Init generic param to type ActionRunOptions here (using any)
     // this is somewhat mitigated in BidiAction interface, so anyone interacting with
     // bidi actions will still get properly typed init option.
@@ -702,6 +702,11 @@ export function action<
           // Ignore if already closed or cancelled
         }
       });
+    // Errors (including input validation, which happens in run()) surface by
+    // awaiting `output` or draining `stream`. Callers that do neither, e.g.
+    // break out of the stream early, shouldn't crash with an unhandled
+    // rejection.
+    invocationPromise.catch(() => {});
 
     return {
       output: invocationPromise,
