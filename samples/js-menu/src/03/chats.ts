@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-import { MessageSchema, type MessageData } from '@genkit-ai/ai/model';
 import { z } from 'genkit';
+import { MessageSchema, type MessageData } from 'genkit/model';
 
 // Our flow will take a sessionId along with each question to track the chat history.
 // The host application should keep track of these ids somewhere.

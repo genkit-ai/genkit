@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import { Document } from '@genkit-ai/ai/retriever';
 import {
   devLocalIndexerRef,
   devLocalRetrieverRef,
 } from '@genkit-ai/dev-local-vectorstore';
 import { z } from 'genkit';
+import { Document } from 'genkit/retriever';
 import { ai } from '../genkit.js';
 import {
   AnswerOutputSchema,

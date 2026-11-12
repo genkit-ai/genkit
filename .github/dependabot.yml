@@ -93,6 +93,26 @@ updates:
         update-types:
           - "version-update:semver-major"
 
+  # Maintain dependencies for JS samples workspace
+  - package-ecosystem: "npm"
+    directory: "/samples"
+    versioning-strategy: "lockfile-only"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 21
+    groups:
+      samples-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
   # Maintain dependencies for Go
   - package-ecosystem: "gomod"
     directory: "/go"
