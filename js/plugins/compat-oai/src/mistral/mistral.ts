@@ -159,7 +159,18 @@ export function mistralModelRef(params: {
   });
 }
 
+/**
+ * Known models, by the aliases Mistral moves to each new snapshot. Magistral is
+ * left out: Mistral retired it, and reasoning now comes from
+ * `reasoningEffort` on the models below.
+ */
 export const SUPPORTED_MISTRAL_MODELS = {
+  // Mistral Large 4. It has no `-latest` alias; `mistral-large-latest` still
+  // names Mistral Large 3.
+  'mistral-large-4': mistralModelRef({
+    name: 'mistral-large-4',
+    info: MISTRAL_MODEL_INFO,
+  }),
   'mistral-large-latest': mistralModelRef({
     name: 'mistral-large-latest',
     info: MISTRAL_MODEL_INFO,
@@ -170,14 +181,6 @@ export const SUPPORTED_MISTRAL_MODELS = {
   }),
   'mistral-small-latest': mistralModelRef({
     name: 'mistral-small-latest',
-    info: MISTRAL_MODEL_INFO,
-  }),
-  'magistral-medium-latest': mistralModelRef({
-    name: 'magistral-medium-latest',
-    info: MISTRAL_MODEL_INFO,
-  }),
-  'magistral-small-latest': mistralModelRef({
-    name: 'magistral-small-latest',
     info: MISTRAL_MODEL_INFO,
   }),
   'ministral-14b-latest': mistralModelRef({

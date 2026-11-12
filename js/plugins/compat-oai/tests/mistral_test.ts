@@ -301,7 +301,7 @@ describe('mistral plugin', () => {
     });
 
     const response = await ai.generate({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       prompt: 'What is 2 + 2?',
     });
 
@@ -362,7 +362,7 @@ describe('mistral plugin', () => {
     });
 
     const { stream, response } = ai.generateStream({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       prompt: 'What is 2 + 2?',
     });
     const reasoning: string[] = [];
@@ -405,7 +405,7 @@ describe('mistral plugin', () => {
     });
 
     const response = await ai.generate({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       prompt: 'What is 2 + 2?',
       output: {
         format: 'json',
@@ -429,7 +429,7 @@ describe('mistral plugin', () => {
 
   it('sends earlier reasoning back as a thinking chunk', async () => {
     await ai.generate({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       messages: [
         { role: 'user', content: [{ text: 'What is 2 + 2?' }] },
         {
@@ -522,7 +522,7 @@ describe('mistral plugin', () => {
     });
 
     const { stream, response } = ai.generateStream({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       prompt: 'What is 2 + 2?',
       output: { format: 'json', schema: z.object({ answer: z.number() }) },
     });
@@ -646,7 +646,7 @@ describe('mistral plugin', () => {
     });
 
     const response = await ai.generate({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       prompt: 'What is 2 + 2?',
     });
 
@@ -679,12 +679,12 @@ describe('mistral plugin', () => {
       },
     });
     const first = await ai.generate({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       prompt: 'What is 2 + 2?',
     });
 
     await ai.generate({
-      model: mistral.model('magistral-small-latest'),
+      model: mistral.model('mistral-small-latest'),
       messages: first.messages,
       prompt: 'And 3 + 3?',
     });
@@ -767,6 +767,14 @@ describe('mistral plugin', () => {
       '/model/mistral/mistral-large-latest'
     );
     expect(large?.__action.metadata?.model.supports.media).toBe(true);
+    const large4 = await ai.registry.lookupAction(
+      '/model/mistral/mistral-large-4'
+    );
+    expect(large4?.__action.metadata?.model.supports).toMatchObject({
+      tools: true,
+      media: true,
+      constrained: 'all',
+    });
     const embed = await ai.registry.lookupAction(
       '/embedder/mistral/mistral-embed'
     );
@@ -775,16 +783,16 @@ describe('mistral plugin', () => {
 
   it('resolves models that are not in the known list', async () => {
     await ai.generate({
-      model: 'mistral/open-mistral-nemo',
+      model: 'mistral/ministral-14b-2512',
       prompt: 'hi',
       config: { maxOutputTokens: 10 },
     });
 
     const body = server.requests[0].body;
-    expect(body.model).toBe('open-mistral-nemo');
+    expect(body.model).toBe('ministral-14b-2512');
     expect(body.max_tokens).toBe(10);
     const action = await ai.registry.lookupAction(
-      '/model/mistral/open-mistral-nemo'
+      '/model/mistral/ministral-14b-2512'
     );
     expect(action?.__action.metadata?.model.supports).toEqual(
       UNKNOWN_MODEL_SUPPORTS
@@ -798,7 +806,7 @@ describe('mistral plugin', () => {
         object: 'list',
         data: [
           { id: 'mistral-large-latest', object: 'model' },
-          { id: 'open-mistral-nemo', object: 'model' },
+          { id: 'ministral-14b-2512', object: 'model' },
           { id: 'mistral-embed', object: 'model' },
         ],
       },
@@ -808,7 +816,7 @@ describe('mistral plugin', () => {
 
     expect(actions.map((a) => ({ name: a.name, type: a.actionType }))).toEqual([
       { name: 'mistral/mistral-large-latest', type: 'model' },
-      { name: 'mistral/open-mistral-nemo', type: 'model' },
+      { name: 'mistral/ministral-14b-2512', type: 'model' },
       { name: 'mistral/mistral-embed', type: 'embedder' },
     ]);
     expect(actions[0].metadata?.model?.supports?.tools).toBe(true);

@@ -219,12 +219,12 @@ Mistral's own field names:
   always requested as floats.
 - Streaming requests don't send `stream_options`.
 
-Reasoning models return their thinking as reasoning parts
+Models that reason return their thinking as reasoning parts
 (`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
 `thinking` content.
 
 Any model returned by `/v1/models` can be used by name, for example
-`mistral.model('open-mistral-nemo')` or `'mistral/open-mistral-nemo'`. Models
+`mistral.model('ministral-14b-2512')` or `'mistral/ministral-14b-2512'`. Models
 outside the known list are treated as text only, without tools or constrained
 output.
 
