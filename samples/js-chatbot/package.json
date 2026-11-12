@@ -3,7 +3,6 @@
     "start": "concurrently npm:start:server npm:start:ng",
     "build": "cd server && npm run build && cd ../ && cd genkit-app && npm run build",
     "setup": "npm i && cd server && npm i && cd ../genkit-app && npm i",
-    "start:server:idx": "echo -e '\\033[1mChoose a Cloud Project with the Vertex APIs enabled\\033[0m in the popup\nSee https://console.cloud.google.com/apis/api/aiplatform.googleapis.com/metrics' && npm run start:server",
     "start:server": "cd server && npm run genkit:dev",
     "start:ng": "cd genkit-app && npm start"
   },
