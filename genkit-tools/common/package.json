@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@asteasolutions/zod-to-openapi": "^7.3.4",
-    "@inquirer/prompts": "^8.7.3",
+    "@inquirer/prompts": "^8.7.4",
     "@trpc/server": "^11.19.0",
     "adm-zip": "^0.6.1",
     "ajv": "^8.20.0",
@@ -33,8 +33,8 @@
     "winston": "^3.19.0",
     "ws": "^8.22.0",
     "yaml": "^2.9.1",
-    "zod": "3.25.67",
-    "zod-to-json-schema": "~3.24.6"
+    "zod": "3.25.76",
+    "zod-to-json-schema": "~3.25.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -45,7 +45,7 @@
     "genversion": "^3.2.0",
     "rimraf": "^6.1.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "repository": {
     "type": "git",
