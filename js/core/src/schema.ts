@@ -769,8 +769,17 @@ export function defineJsonSchema(
   return jsonSchema;
 }
 
+/**
+ * Maps data to what it would be as JSON, which is all the validator accepts
+ * (it throws on `undefined`): undefined object properties are dropped, and
+ * undefined array items or a top-level `undefined` become `null`. So an
+ * unconstrained schema (`{}`) accepts a missing value, and a typed one rejects
+ * it with a ValidationError (reported as `null`).
+ */
 function sanitizeForJsonSchema(data: any): any {
-  if (Array.isArray(data)) {
+  if (data === undefined) {
+    return null;
+  } else if (Array.isArray(data)) {
     return data.map(sanitizeForJsonSchema);
   } else if (data !== null && typeof data === 'object') {
     const out: any = {};

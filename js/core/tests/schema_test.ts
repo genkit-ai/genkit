@@ -989,3 +989,29 @@ describe('validation error details', () => {
     );
   });
 });
+
+describe('validateSchema() with undefined', () => {
+  it('accepts undefined for unconstrained schemas', () => {
+    assert.strictEqual(
+      validateSchema(undefined, { jsonSchema: {} }).valid,
+      true
+    );
+    assert.strictEqual(
+      validateSchema([1, undefined], {
+        jsonSchema: { type: 'array', items: { type: ['number', 'null'] } },
+      }).valid,
+      true
+    );
+  });
+
+  it('rejects undefined for typed schemas with a ValidationError', () => {
+    assert.strictEqual(
+      validateSchema(undefined, { jsonSchema: { type: 'object' } }).valid,
+      false
+    );
+    assert.throws(
+      () => parseSchema(undefined, { jsonSchema: { type: 'object' } }),
+      ValidationError
+    );
+  });
+});
