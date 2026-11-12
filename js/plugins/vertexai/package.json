@@ -23,7 +23,7 @@
     "check": "tsc",
     "compile": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" npx tsup-node",
     "build:clean": "rimraf ./lib",
-    "build": "npm-run-all build:clean check compile",
+    "build": "pnpm build:clean && pnpm check && pnpm compile",
     "build:watch": "cross-env NODE_OPTIONS=\"--max-old-space-size=16384\" tsup-node --watch",
     "test": "tsx --test ./tests/*_test.ts ./tests/**/*_test.ts ./tests/**/**/*_test.ts"
   },
@@ -57,7 +57,6 @@
     "@types/sinon": "^17.0.4",
     "cross-env": "10.1.0",
     "google-gax": "^4.4.1",
-    "npm-run-all": "^4.1.5",
     "rimraf": "^6.0.1",
     "sinon": "^21.0.0",
     "tsup": "^8.3.5",
