@@ -805,7 +805,7 @@ describe('mistral plugin', () => {
     );
   });
 
-  it('lists models and embedders from /v1/models', async () => {
+  it('lists models without capabilities as text only', async () => {
     const plugin = mistral(fakeServerOptions(server));
     server.setNextResponse({
       body: {
@@ -829,6 +829,99 @@ describe('mistral plugin', () => {
     expect(actions[1].metadata?.model?.supports).toEqual(
       UNKNOWN_MODEL_SUPPORTS
     );
+  });
+
+  describe('listing with /v1/models capabilities', () => {
+    // Entries shaped like Mistral's `BaseModelCard`, trimmed to the fields
+    // the plugin reads.
+    const MODELS_RESPONSE = {
+      object: 'list',
+      data: [
+        {
+          id: 'mistral-large-latest',
+          object: 'model',
+          capabilities: {
+            completion_chat: true,
+            function_calling: true,
+            vision: true,
+          },
+        },
+        {
+          id: 'ministral-14b-2512',
+          object: 'model',
+          capabilities: {
+            completion_chat: true,
+            function_calling: true,
+            vision: true,
+          },
+        },
+        {
+          id: 'some-text-model',
+          object: 'model',
+          capabilities: {
+            completion_chat: true,
+            function_calling: false,
+            vision: false,
+          },
+        },
+        {
+          id: 'mistral-ocr-latest',
+          object: 'model',
+          capabilities: { completion_chat: false, ocr: true },
+        },
+        {
+          id: 'mistral-moderation-latest',
+          object: 'model',
+          capabilities: { completion_chat: false, moderation: true },
+        },
+        {
+          id: 'mistral-embed',
+          object: 'model',
+          capabilities: { completion_chat: false },
+        },
+      ],
+    };
+
+    it('lists only chat models, with tools and media from capabilities', async () => {
+      const plugin = mistral(fakeServerOptions(server));
+      server.setNextResponse({ body: MODELS_RESPONSE });
+
+      const actions = await plugin.list!();
+
+      expect(
+        actions.map((a) => ({ name: a.name, type: a.actionType }))
+      ).toEqual([
+        { name: 'mistral/mistral-large-latest', type: 'model' },
+        { name: 'mistral/ministral-14b-2512', type: 'model' },
+        { name: 'mistral/some-text-model', type: 'model' },
+        { name: 'mistral/mistral-embed', type: 'embedder' },
+      ]);
+      // Known models keep their curated info.
+      expect(actions[0].metadata?.model?.supports?.constrained).toBe('all');
+      expect(actions[1].metadata?.model?.supports).toEqual({
+        ...UNKNOWN_MODEL_SUPPORTS,
+        tools: true,
+        media: true,
+      });
+      expect(actions[2].metadata?.model?.supports).toEqual(
+        UNKNOWN_MODEL_SUPPORTS
+      );
+    });
+
+    it('resolves a listed model with its listed capabilities', async () => {
+      server.setNextResponse({ body: MODELS_RESPONSE });
+      await ai.registry.listResolvableActions();
+
+      const action = await ai.registry.lookupAction(
+        '/model/mistral/ministral-14b-2512'
+      );
+
+      expect(action?.__action.metadata?.model.supports).toEqual({
+        ...UNKNOWN_MODEL_SUPPORTS,
+        tools: true,
+        media: true,
+      });
+    });
   });
 
   describe('request-scoped API keys', () => {

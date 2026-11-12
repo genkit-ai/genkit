@@ -228,9 +228,12 @@ With `reasoningEffort` set, the model's thinking comes back as reasoning parts
 `thinking` content.
 
 Any model returned by `/v1/models` can be used by name, for example
-`mistral.model('ministral-14b-2512')` or `'mistral/ministral-14b-2512'`. Models
-outside the known list are treated as text only, without tools or constrained
-output.
+`mistral.model('ministral-14b-2512')` or `'mistral/ministral-14b-2512'`. When
+the plugin lists models (for example in the Developer UI), it reads each
+entry's `capabilities`: only chat models are listed, and tool and image
+support follow `function_calling` and `vision`. Models outside the known list
+never get constrained output, and a model that hasn't been listed is treated as
+text only.
 
 ### Custom models & other Cloud providers
 
