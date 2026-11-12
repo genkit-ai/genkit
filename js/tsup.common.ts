@@ -134,39 +134,3 @@ export const defaultOptions = {
   treeshake: false,
   esbuildPlugins: [rewriteRelativeImportsForEsm],
 };
-
-/**
- *
- */
-export function fromPackageJson(packageJson: {
-  exports?:
-    | string
-    | unknown[]
-    | {
-        [key: string]:
-          | string
-          | null
-          | { import?: string | { default?: string } };
-      };
-}): string[] {
-  if (
-    !packageJson.exports ||
-    typeof packageJson.exports !== 'object' ||
-    Array.isArray(packageJson.exports)
-  ) {
-    return ['./src/index.ts'];
-  }
-  const out: string[] = [];
-  for (const key in packageJson.exports) {
-    if (Object.prototype.hasOwnProperty.call(packageJson.exports, key)) {
-      const val = packageJson.exports[key];
-      const imp = val && typeof val === 'object' ? val.import : undefined;
-      const importFile =
-        typeof imp === 'object' && imp !== null ? imp.default : imp;
-      if (typeof importFile === 'string') {
-        out.push(importFile.replace('./lib', './src').replace('.mjs', '.ts'));
-      }
-    }
-  }
-  return out;
-}
