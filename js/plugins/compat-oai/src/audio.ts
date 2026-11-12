@@ -182,7 +182,7 @@ export async function speechToGenerateResponse(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAISpeechModel<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   client: OpenAI;
@@ -224,7 +224,7 @@ export function defineCompatOpenAISpeechModel<
 /** Speech generation ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiSpeechModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;
@@ -241,7 +241,10 @@ export function compatOaiSpeechModelRef<
   } = params;
   return modelRef({
     name,
-    configSchema: configSchema || (SpeechConfigSchema as any),
+    // When configSchema is omitted, CustomOptions is its default (untyped), so the
+    // common schema is a valid stand-in.
+    configSchema:
+      configSchema ?? (SpeechConfigSchema as unknown as CustomOptions),
     info,
     config,
     namespace,
@@ -366,7 +369,7 @@ export function transcriptionToGenerateResponse(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAITranscriptionModel<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   client: OpenAI;
@@ -414,7 +417,7 @@ export function defineCompatOpenAITranscriptionModel<
 /** Transcription ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiTranscriptionModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;
@@ -431,7 +434,10 @@ export function compatOaiTranscriptionModelRef<
   } = params;
   return modelRef({
     name,
-    configSchema: configSchema || (TranscriptionConfigSchema as any),
+    // When configSchema is omitted, CustomOptions is its default (untyped), so the
+    // common schema is a valid stand-in.
+    configSchema:
+      configSchema ?? (TranscriptionConfigSchema as unknown as CustomOptions),
     info,
     config,
     namespace,

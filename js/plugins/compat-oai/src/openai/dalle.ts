@@ -25,7 +25,7 @@ import {
 /** OpenAI image generation ModelRef helper, same as the OpenAI-compatible spec.
  * */
 export function openAIImageModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;

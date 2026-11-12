@@ -20,7 +20,7 @@ import { compatOaiImageModelRef } from '../image.js';
 
 /** XAI image generation ModelRef helper, same as the OpenAI-compatible model specification. */
 export function xaiImageModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;

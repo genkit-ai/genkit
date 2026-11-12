@@ -102,7 +102,7 @@ export {
 
 /** An action that represents a generative AI model, accepting a {@link GenerateRequest} and returning a {@link GenerateResponseData}. */
 export type ModelAction<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = Action<
   typeof GenerateRequestSchema,
   typeof GenerateResponseSchema,
@@ -113,7 +113,7 @@ export type ModelAction<
 
 /** An action that represents a generative AI model that runs in the background (asynchronously). */
 export type BackgroundModelAction<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = BackgroundAction<
   typeof GenerateRequestSchema,
   typeof GenerateResponseSchema
@@ -141,7 +141,7 @@ export type ModelMiddlewareArgument =
 
 /** Options for defining a new model via {@link defineModel} or {@link model}. */
 export type DefineModelOptions<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   name: string;
   /** Known version names for this model, e.g. `gemini-1.0-pro-001`. */
@@ -160,7 +160,9 @@ export type DefineModelOptions<
  * Creates a {@link ModelAction} without registering it. Useful for plugin authors
  * who need to return a model action from a resolver.
  */
-export function model<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+export function model<
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+>(
   options: DefineModelOptions<CustomOptionsSchema>,
   runner: (
     request: GenerateRequest<CustomOptionsSchema>,
@@ -184,7 +186,7 @@ export function model<CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny>(
 }
 
 function modelActionOptions<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: DefineModelOptions<CustomOptionsSchema>
 ): ActionParams<typeof GenerateRequestSchema, typeof GenerateResponseSchema> {
@@ -214,7 +216,7 @@ function modelActionOptions<
  * Defines a new model and adds it to the registry.
  */
 export function defineModel<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: {
@@ -230,7 +232,7 @@ export function defineModel<
  * Defines a new model and adds it to the registry.
  */
 export function defineModel<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: DefineModelOptions<CustomOptionsSchema>,
@@ -241,7 +243,7 @@ export function defineModel<
 ): ModelAction<CustomOptionsSchema>;
 
 export function defineModel<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: any,
@@ -278,7 +280,7 @@ export function defineModel<
 
 /** Options for defining a background model that processes requests asynchronously. */
 export type DefineBackgroundModelOptions<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = DefineModelOptions<CustomOptionsSchema> & {
   start: (
     request: GenerateRequest<CustomOptionsSchema>,
@@ -298,7 +300,7 @@ export type DefineBackgroundModelOptions<
  * Defines a new model that runs in the background.
  */
 export function defineBackgroundModel<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: DefineBackgroundModelOptions<CustomOptionsSchema>
@@ -311,7 +313,7 @@ export function defineBackgroundModel<
  * Defines a new model that runs in the background.
  */
 export function backgroundModel<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: DefineBackgroundModelOptions<CustomOptionsSchema>
 ): BackgroundModelAction<CustomOptionsSchema> {
@@ -396,7 +398,7 @@ export const ModelReferenceSchema = z.object({
  * A reference to a model that includes optional configuration and version info.
  * Can be passed anywhere a {@link ModelArgument} is accepted.
  */
-export interface ModelReference<CustomOptions extends z.ZodTypeAny>
+export interface ModelReference<CustomOptions extends z.ZodType<any, any>>
   extends z.infer<typeof ModelReferenceSchema> {
   name: string;
   configSchema?: CustomOptions;
@@ -419,7 +421,7 @@ export function modelActionMetadata({
 }: {
   name: string;
   info?: ModelInfo;
-  configSchema?: z.ZodTypeAny;
+  configSchema?: z.ZodType<any, any>;
   background?: boolean;
 }): ActionMetadata {
   return {
@@ -442,7 +444,7 @@ export function modelActionMetadata({
 
 /** Cretes a model reference. */
 export function modelRef<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: Omit<
     ModelReference<CustomOptionsSchema>,
@@ -538,21 +540,22 @@ function getPartCounts(parts: Part[]): PartCounts {
  * Union type for all the ways a model can be specified: by name string,
  * {@link ModelAction}, or {@link ModelReference}.
  */
-export type ModelArgument<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
-  | ModelAction<CustomOptions>
-  | ModelReference<CustomOptions>
-  | string;
+export type ModelArgument<
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = ModelAction<CustomOptions> | ModelReference<CustomOptions> | string;
 
 /** The result of resolving a {@link ModelArgument} to a concrete action, config, and version. */
 export interface ResolvedModel<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   modelAction: ModelAction;
   config?: z.infer<CustomOptions>;
   version?: string;
 }
 
-export async function resolveModel<C extends z.ZodTypeAny = z.ZodTypeAny>(
+export async function resolveModel<
+  C extends z.ZodType<any, any> = z.ZodType<any, any>,
+>(
   registry: Registry,
   model: ModelArgument<C> | undefined,
   options?: { warnDeprecated?: boolean }

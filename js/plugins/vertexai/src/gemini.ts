@@ -993,11 +993,39 @@ function fromGeminiThought(part: {
   };
 }
 
+/**
+ * Nullable schemas can be expressed as `anyOf: [X, {type: 'null'}]` (zod v4
+ * emits this for objects, enums, and described nullables). Gemini function
+ * declarations have no such construct, so fold it into `X` with
+ * `nullable: true`. Outer keywords (e.g. `description`) win over inner ones.
+ */
+function unwrapNullableUnion<S extends Record<string, any>>(
+  property: S
+): S | undefined {
+  const variants: unknown = property.anyOf ?? property.oneOf;
+  if (!Array.isArray(variants) || variants.length !== 2) {
+    return undefined;
+  }
+  const nonNull = variants.filter((v) => v?.type !== 'null');
+  if (nonNull.length !== 1) {
+    return undefined;
+  }
+  const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = property;
+  return { ...nonNull[0], ...rest, nullable: true };
+}
+
 // Translate JSON schema to Vertex AI's format. Specifically, the type field needs be mapped.
 // Since JSON schemas can include nested arrays/objects, we have to recursively map the type field
 // in all nested fields.
 function convertSchemaProperty(property) {
-  if (!property || !property.type) {
+  if (!property) {
+    return undefined;
+  }
+  const unwrapped = unwrapNullableUnion(property);
+  if (unwrapped) {
+    return convertSchemaProperty(unwrapped);
+  }
+  if (!property.type) {
     return undefined;
   }
   const baseSchema = {} as Schema;
@@ -1092,7 +1120,8 @@ export function defineGeminiKnownModel(
 ): ModelAction {
   const modelName = `vertexai/${name}`;
 
-  const model: ModelReference<z.ZodTypeAny> = SUPPORTED_GEMINI_MODELS[name];
+  const model: ModelReference<z.ZodType<any, any>> =
+    SUPPORTED_GEMINI_MODELS[name];
   if (!model) throw new Error(`Unsupported model: ${name}`);
 
   return defineGeminiModel({

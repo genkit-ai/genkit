@@ -24,12 +24,12 @@ import path from 'path';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
 
 export async function answerAccuracyScore<
-  CustomModelOptions extends z.ZodTypeAny,
+  CustomModelOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: CustomModelOptions
+  judgeConfig?: z.infer<CustomModelOptions>
 ): Promise<Score> {
   if (!dataPoint.output) {
     throw new Error('Output was not provided');

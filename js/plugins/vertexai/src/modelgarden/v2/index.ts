@@ -101,7 +101,7 @@ export type VertexModelGardenPlugin = {
     name: llama.KnownModels | (llama.LlamaModelName & {}),
     config: llama.LlamaConfig
   ): ModelReference<llama.LlamaConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
 };
 
 export const vertexModelGarden =
@@ -109,7 +109,7 @@ export const vertexModelGarden =
 (vertexModelGarden as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodTypeAny> => {
+): ModelReference<z.ZodType<any, any>> => {
   if (anthropic.isAnthropicModelName(name)) {
     return anthropic.model(name, config);
   }

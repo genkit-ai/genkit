@@ -21,13 +21,19 @@ import {
 } from 'genkit/beta/client';
 
 type Input<A extends Action> =
-  A extends Action<infer I extends z.ZodTypeAny, any, any> ? z.infer<I> : never;
+  A extends Action<infer I extends z.ZodType<any, any>, any, any>
+    ? z.infer<I>
+    : never;
 type Output<A extends Action> =
-  A extends Action<any, infer O extends z.ZodTypeAny, any> ? z.infer<O> : never;
+  A extends Action<any, infer O extends z.ZodType<any, any>, any>
+    ? z.infer<O>
+    : never;
 type Stream<A extends Action> =
-  A extends Action<any, any, infer S extends z.ZodTypeAny> ? z.infer<S> : never;
+  A extends Action<any, any, infer S extends z.ZodType<any, any>>
+    ? z.infer<S>
+    : never;
 type InitData<A extends Action> =
-  A extends Action<any, any, any, any, infer Init extends z.ZodTypeAny>
+  A extends Action<any, any, any, any, infer Init extends z.ZodType<any, any>>
     ? z.infer<Init>
     : never;
 

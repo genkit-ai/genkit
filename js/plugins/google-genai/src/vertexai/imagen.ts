@@ -126,12 +126,12 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
             .length(5)
             .optional(),
         })
+        .passthrough()
         .describe(
           'Prompts the model to generate a mask instead of you ' +
             'needing to provide one. Consequently, when you provide ' +
             'this parameter you can omit a mask object.'
         )
-        .passthrough()
         .optional(),
       maskDilation: z
         .number()
@@ -164,8 +164,8 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
         .enum(['x2', 'x4'])
         .describe('The factor to upscale the image.'),
     })
-    .describe('Configuration for upscaling.')
     .passthrough()
+    .describe('Configuration for upscaling.')
     .optional(),
 }).passthrough();
 export type ImagenConfigSchemaType = typeof ImagenConfigSchema;

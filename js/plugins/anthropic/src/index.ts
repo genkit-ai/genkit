@@ -163,7 +163,7 @@ export type AnthropicPlugin = {
     name: KnownClaudeModels | (ClaudeModelName & {}),
     config?: ClaudeConfig
   ): ModelReference<AnthropicConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
 };
 
 /**
@@ -174,7 +174,7 @@ export const anthropic = anthropicPlugin as AnthropicPlugin;
 (anthropic as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodTypeAny> => {
+): ModelReference<z.ZodType<any, any>> => {
   return claudeModelReference(name, config);
 };
 

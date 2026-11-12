@@ -1558,6 +1558,37 @@ describe('toGeminiTool', () => {
     assert.deepStrictEqual(got, want);
   });
 
+  it('should convert anyOf-with-null to nullable', async () => {
+    const got = toGeminiTool({
+      name: 'foo',
+      description: 'tool foo',
+      inputSchema: toJsonSchema({
+        schema: z.object({
+          nullableEnum: z.enum(['a', 'b']).nullable(),
+          nullableObject: z
+            .object({ x: z.number() })
+            .nullable()
+            .describe('an object'),
+        }),
+      }),
+    });
+
+    assert.deepStrictEqual(got.parameters?.properties, {
+      nullableEnum: {
+        enum: ['a', 'b'],
+        nullable: true,
+        type: SchemaType.STRING,
+      },
+      nullableObject: {
+        description: 'an object',
+        nullable: true,
+        type: SchemaType.OBJECT,
+        properties: { x: { type: SchemaType.NUMBER } },
+        required: ['x'],
+      },
+    });
+  });
+
   it('should replace slashes in tool names', async () => {
     const got = toGeminiTool({
       name: 'my/tool/name',

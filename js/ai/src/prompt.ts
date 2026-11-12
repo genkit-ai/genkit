@@ -69,18 +69,15 @@ import type { ToolAction, ToolArgument } from './tool.js';
 /**
  * Prompt action.
  */
-export type PromptAction<I extends z.ZodTypeAny = z.ZodTypeAny> = Action<
-  I,
-  typeof GenerateRequestSchema,
-  z.ZodNever
-> & {
-  __action: {
-    metadata: {
-      type: 'prompt';
+export type PromptAction<I extends z.ZodType<any, any> = z.ZodType<any, any>> =
+  Action<I, typeof GenerateRequestSchema, z.ZodNever> & {
+    __action: {
+      metadata: {
+        type: 'prompt';
+      };
     };
+    __executablePrompt: ExecutablePrompt<z.infer<I>>;
   };
-  __executablePrompt: ExecutablePrompt<I>;
-};
 
 export function isPromptAction(action: Action): action is PromptAction {
   return action.__action.metadata?.type === 'prompt';
@@ -89,27 +86,28 @@ export function isPromptAction(action: Action): action is PromptAction {
 /**
  * Prompt action.
  */
-export type ExecutablePromptAction<I extends z.ZodTypeAny = z.ZodTypeAny> =
-  Action<
-    I,
-    typeof GenerateResponseSchema,
-    typeof GenerateResponseChunkSchema
-  > & {
-    __action: {
-      metadata: {
-        type: 'executablePrompt';
-      };
+export type ExecutablePromptAction<
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = Action<
+  I,
+  typeof GenerateResponseSchema,
+  typeof GenerateResponseChunkSchema
+> & {
+  __action: {
+    metadata: {
+      type: 'executablePrompt';
     };
-    __executablePrompt: ExecutablePrompt<I>;
   };
+  __executablePrompt: ExecutablePrompt<z.infer<I>>;
+};
 
 /**
  * Configuration for a prompt action.
  */
 export interface PromptConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   name: string;
   variant?: string;
@@ -138,8 +136,8 @@ export interface PromptConfig<
  * Generate options of a prompt.
  */
 export type PromptGenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = Omit<GenerateOptions<O, CustomOptions>, 'prompt' | 'system'>;
 
 /**
@@ -147,8 +145,8 @@ export type PromptGenerateOptions<
  */
 export interface ExecutablePrompt<
   I = undefined,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   /** Prompt reference. */
   ref: { name: string; metadata?: Record<string, any> };
@@ -230,9 +228,9 @@ interface PromptCache {
  * @returns The new `ExecutablePrompt`.
  */
 export function definePrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: PromptConfig<I, O, CustomOptions>
@@ -246,9 +244,9 @@ export function definePrompt<
 }
 
 function definePromptAsync<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   name: string,
@@ -369,7 +367,7 @@ function definePromptAsync<
         metadata,
         fn: async (
           input: z.infer<I>
-        ): Promise<GenerateRequest<z.ZodTypeAny>> => {
+        ): Promise<GenerateRequest<z.ZodType<any, any>>> => {
           return toGenerateRequest(
             registry,
             await renderOptionsFn(input, undefined)
@@ -471,9 +469,9 @@ function promptMetadata(options: PromptConfig<any, any, any>) {
 }
 
 function wrapInExecutablePrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(wrapOpts: {
   registry: Registry;
   name: string;
@@ -485,7 +483,7 @@ function wrapInExecutablePrompt<
   metadata?: Record<string, any>;
 }) {
   const executablePrompt = (async (
-    input?: I,
+    input?: z.infer<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateResponse<z.infer<O>>> => {
     return await runInNewSpan(
@@ -501,7 +499,7 @@ function wrapInExecutablePrompt<
       },
       async (metadata) => {
         const output = await generate(wrapOpts.registry, {
-          ...(await wrapOpts.renderOptionsFn(input, opts)),
+          ...(await wrapOpts.renderOptionsFn(input as z.infer<I>, opts)),
         });
         metadata.output = output;
         return output;
@@ -512,21 +510,21 @@ function wrapInExecutablePrompt<
   executablePrompt.ref = { name: wrapOpts.name, metadata: wrapOpts.metadata };
 
   executablePrompt.render = async (
-    input?: I,
+    input?: z.infer<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateOptions<O, CustomOptions>> => {
     return {
-      ...(await wrapOpts.renderOptionsFn(input, opts)),
+      ...(await wrapOpts.renderOptionsFn(input as z.infer<I>, opts)),
     } as GenerateOptions<O, CustomOptions>;
   };
 
   executablePrompt.stream = (
-    input?: I,
+    input?: z.infer<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): GenerateStreamResponse<z.infer<O>> => {
     return generateStream(
       wrapOpts.registry,
-      wrapOpts.renderOptionsFn(input, opts)
+      wrapOpts.renderOptionsFn(input as z.infer<I>, opts)
     );
   };
 
@@ -537,9 +535,9 @@ function wrapInExecutablePrompt<
 }
 
 async function renderSystemPrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   session: Session | undefined,
@@ -584,9 +582,9 @@ async function renderSystemPrompt<
 }
 
 async function renderMessages<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   session: Session | undefined,
@@ -638,9 +636,9 @@ async function renderMessages<
 }
 
 async function renderUserPrompt<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   session: Session | undefined,
@@ -741,9 +739,9 @@ function normalizeParts(parts: string | Part | Part[]): Part[] {
 }
 
 async function renderDotpromptToParts<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   promptFn: PromptFunction,
@@ -959,8 +957,8 @@ function loadPrompt(
 
 export async function prompt<
   I = undefined,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   name: string,
@@ -979,8 +977,8 @@ function registryLookupKey(name: string, variant?: string, ns?: string) {
 
 async function lookupPrompt<
   I = undefined,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   name: string,

@@ -76,6 +76,6 @@ export const vertexRerankers = vertexRerankersPlugin as VertexAIRerankers;
 (vertexRerankers as any).reranker = (
   name: string,
   config?: any
-): RerankerReference<z.ZodTypeAny> => {
+): RerankerReference<z.ZodType<any, any>> => {
   return reranker.reranker(name, config);
 };

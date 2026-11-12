@@ -59,7 +59,7 @@ export class GenkitAI {
   /**
    * Embeds the given `content` using the specified `embedder`.
    */
-  embed<CustomOptions extends z.ZodTypeAny>(
+  embed<CustomOptions extends z.ZodType<any, any>>(
     params: EmbedderParams<CustomOptions>
   ): Promise<Embedding[]> {
     return embed(this.registry, params);
@@ -68,7 +68,9 @@ export class GenkitAI {
   /**
    * A veneer for interacting with embedder models in bulk.
    */
-  embedMany<ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny>(params: {
+  embedMany<
+    ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  >(params: {
     embedder: EmbedderArgument<ConfigSchema>;
     content: string[] | DocumentData[];
     metadata?: Record<string, unknown>;
@@ -89,7 +91,7 @@ export class GenkitAI {
    * const { text } = await ai.generate('hi');
    * ```
    */
-  generate<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generate<O extends z.ZodType<any, any> = z.ZodType<any, any>>(
     strPrompt: string
   ): Promise<GenerateResponse<z.infer<O>>>;
 
@@ -108,7 +110,7 @@ export class GenkitAI {
    * ]);
    * ```
    */
-  generate<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generate<O extends z.ZodType<any, any> = z.ZodType<any, any>>(
     parts: Part[]
   ): Promise<GenerateResponse<z.infer<O>>>;
 
@@ -138,8 +140,11 @@ export class GenkitAI {
    * ```
    */
   generate<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends z.ZodType<any, any> = z.ZodType<any, any>,
+    CustomOptions extends z.ZodType<
+      any,
+      any
+    > = typeof GenerationCommonConfigSchema,
   >(
     opts:
       | GenerateOptions<O, CustomOptions>
@@ -147,8 +152,11 @@ export class GenkitAI {
   ): Promise<GenerateResponse<z.infer<O>>>;
 
   async generate<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends z.ZodType<any, any> = z.ZodType<any, any>,
+    CustomOptions extends z.ZodType<
+      any,
+      any
+    > = typeof GenerationCommonConfigSchema,
   >(
     options:
       | string
@@ -185,7 +193,7 @@ export class GenkitAI {
    * console.log((await response).text);
    * ```
    */
-  generateStream<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generateStream<O extends z.ZodType<any, any> = z.ZodType<any, any>>(
     strPrompt: string
   ): GenerateStreamResponse<z.infer<O>>;
 
@@ -208,7 +216,7 @@ export class GenkitAI {
    * console.log((await response).text);
    * ```
    */
-  generateStream<O extends z.ZodTypeAny = z.ZodTypeAny>(
+  generateStream<O extends z.ZodType<any, any> = z.ZodType<any, any>>(
     parts: Part[]
   ): GenerateStreamResponse<z.infer<O>>;
 
@@ -242,8 +250,11 @@ export class GenkitAI {
    * ```
    */
   generateStream<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends z.ZodType<any, any> = z.ZodType<any, any>,
+    CustomOptions extends z.ZodType<
+      any,
+      any
+    > = typeof GenerationCommonConfigSchema,
   >(
     opts:
       | GenerateStreamOptions<O, CustomOptions>
@@ -251,8 +262,11 @@ export class GenkitAI {
   ): GenerateStreamResponse<z.infer<O>>;
 
   generateStream<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends z.ZodType<any, any> = z.ZodType<any, any>,
+    CustomOptions extends z.ZodType<
+      any,
+      any
+    > = typeof GenerationCommonConfigSchema,
   >(
     options:
       | string

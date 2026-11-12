@@ -44,8 +44,8 @@ import { isExecutablePrompt, type ExecutablePrompt } from './prompt.js';
  * @beta
  */
 export interface Resumable<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   /**
    * respond constructs a tool response corresponding to the provided interrupt tool request
@@ -95,9 +95,9 @@ export interface Resumable<
  * An action with a `tool` type.
  */
 export type ToolAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-> = Action<I, O, z.ZodTypeAny, ToolRunOptions> &
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = Action<I, O, z.ZodType<any, any>, ToolRunOptions> &
   Resumable<I, O> & {
     __action: {
       metadata: {
@@ -110,12 +110,12 @@ export type ToolAction<
  * An action with a `tool.v2` type.
  */
 export type MultipartToolAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = Action<
   I,
   typeof MultipartToolResponseSchema,
-  z.ZodTypeAny,
+  z.ZodType<any, any>,
   ToolRunOptions
 > &
   Resumable<I, O> & {
@@ -130,9 +130,9 @@ export type MultipartToolAction<
  * A dynamic action with a `tool` type. Dynamic tools are detached actions -- not associated with any registry.
  */
 export type DynamicToolAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-> = Action<I, O, z.ZodTypeAny, ToolRunOptions> & {
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = Action<I, O, z.ZodType<any, any>, ToolRunOptions> & {
   /** @deprecated no-op, for backwards compatibility only. */
   attach(registry: Registry): ToolAction<I, O>;
 } & Resumable<I, O> & {
@@ -144,7 +144,7 @@ export type DynamicToolAction<
   };
 
 /** Runtime options passed to a tool when it is executed by the framework. */
-export interface ToolRunOptions extends ActionRunOptions<z.ZodTypeAny> {
+export interface ToolRunOptions extends ActionRunOptions<z.ZodType<any, any>> {
   /**
    * If resumed is supplied to a tool at runtime, that means that it was previously interrupted and this is a second
    * @beta
@@ -157,7 +157,10 @@ export interface ToolRunOptions extends ActionRunOptions<z.ZodTypeAny> {
 /**
  * Configuration for a tool.
  */
-export interface ToolConfig<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
+export interface ToolConfig<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+> {
   /** Unique name of the tool to use as a key in the registry. */
   name: string;
   /** Description of the tool. This is passed to the model to help understand what the tool is used for. */
@@ -178,17 +181,17 @@ export interface ToolConfig<I extends z.ZodTypeAny, O extends z.ZodTypeAny> {
  * A reference to a tool in the form of a name, definition, or the action itself.
  */
 export type ToolArgument<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = string | ToolAction<I, O> | Action<I, O> | ExecutablePrompt<any, any, any>;
 
 /**
  * Converts an action to a tool action by setting the appropriate metadata.
  */
-export function asTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  registry: Registry,
-  action: Action<I, O>
-): ToolAction<I, O> {
+export function asTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(registry: Registry, action: Action<I, O>): ToolAction<I, O> {
   if (action.__action?.metadata?.type === 'tool') {
     return action as ToolAction<I, O>;
   }
@@ -208,8 +211,8 @@ export function asTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  * Resolves a mix of various formats of tool references to a list of tool actions by looking them up in the registry.
  */
 export async function resolveTools<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   tools?: (ToolArgument | ToolDefinition)[]
@@ -258,7 +261,7 @@ export async function lookupToolByName(
  * Converts a tool action to a definition of the tool to be passed to a model.
  */
 export function toToolDefinition(
-  tool: Action<z.ZodTypeAny, z.ZodTypeAny>
+  tool: Action<z.ZodType<any, any>, z.ZodType<any, any>>
 ): ToolDefinition {
   const originalName = tool.__action.name;
   let name = originalName;
@@ -302,13 +305,19 @@ export interface ToolFnOptions extends ActionFnArg<never> {
 }
 
 /** The implementation function for a standard tool. Receives typed input and {@link ToolFnOptions}. */
-export type ToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
+export type ToolFn<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+> = (
   input: z.infer<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<z.infer<O>>;
 
 /** The implementation function for a multipart tool that can return structured output, content parts, and metadata. */
-export type MultipartToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
+export type MultipartToolFn<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+> = (
   input: z.infer<I>,
   ctx: ToolFnOptions & ToolRunOptions
 ) => Promise<{
@@ -317,12 +326,18 @@ export type MultipartToolFn<I extends z.ZodTypeAny, O extends z.ZodTypeAny> = (
   metadata?: Record<string, any>;
 }>;
 
-export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(
   registry: Registry,
   config: { multipart: true } & ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
+  fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O>;
-export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(
   registry: Registry,
   config: ToolConfig<I, O>,
   fn?: ToolFn<I, O>
@@ -333,26 +348,32 @@ export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  *
  * A tool is an action that can be passed to a model to be called automatically if it so chooses.
  */
-export function defineTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function defineTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(
   registry: Registry,
   config: { multipart?: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O> | MultipartToolFn<I, O>
 ): ToolAction<I, O> | MultipartToolAction<I, O> {
-  const a = tool(config, fn);
-  delete a.__action.metadata.dynamic;
-  registry.registerAction(config.multipart ? 'tool.v2' : 'tool', a);
-  if (!config.multipart) {
-    // For non-multipart tools, we register a v2 tool action as well
-    registry.registerAction('tool.v2', basicToolV2(config, fn as ToolFn<I, O>));
+  if (config.multipart) {
+    const a = multipartTool(config, fn as MultipartToolFn<I, O> | undefined);
+    delete a.__action.metadata.dynamic;
+    registry.registerAction('tool.v2', a);
+    return a;
   }
-  return a as ToolAction<I, O>;
+  const a = basicTool(config, fn as ToolFn<I, O> | undefined);
+  delete a.__action.metadata.dynamic;
+  registry.registerAction('tool', a);
+  // For non-multipart tools, we register a v2 tool action as well
+  registry.registerAction('tool.v2', basicToolV2(config, fn as ToolFn<I, O>));
+  return a;
 }
 
-function implementTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  a: ToolAction<I, O>,
-  config: ToolConfig<I, O>,
-  registry?: Registry
-) {
+function implementTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(a: ToolAction<I, O>, config: ToolConfig<I, O>, registry?: Registry) {
   (a as ToolAction<I, O>).respond = (interrupt, responseData, options) => {
     if (registry) {
       assertUnstable(
@@ -389,8 +410,8 @@ function implementTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
 
 /** InterruptConfig defines the options for configuring an interrupt. */
 export type InterruptConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  R extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  R extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = ToolConfig<I, R> & {
   /** requestMetadata adds additional `interrupt` metadata to the `toolRequest` generated by the interrupt */
   requestMetadata?:
@@ -483,9 +504,10 @@ export function isMultipartTool(t: unknown): t is MultipartToolAction {
   return isAction(t) && t.__action?.metadata?.type === 'tool.v2';
 }
 
-export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  config: InterruptConfig<I, O>
-): ToolAction<I, O> {
+export function interrupt<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(config: InterruptConfig<I, O>): ToolAction<I, O> {
   const { requestMetadata, ...toolConfig } = config;
 
   return tool<I, O>(
@@ -496,19 +518,21 @@ export function interrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
         tool: { ...toolConfig.metadata?.tool, restartable: false },
       },
     },
-    async (input, { interrupt }) => {
+    // interrupt() always throws, so this never resolves with a value.
+    async (input, { interrupt }): Promise<never> => {
       if (!config.requestMetadata) interrupt();
       else if (typeof config.requestMetadata === 'object')
         interrupt(config.requestMetadata);
       else interrupt(await Promise.resolve(config.requestMetadata(input)));
+      throw new Error('unreachable: interrupt() throws');
     }
   );
 }
 
-export function defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  registry: Registry,
-  config: InterruptConfig<I, O>
-): ToolAction<I, O> {
+export function defineInterrupt<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(registry: Registry, config: InterruptConfig<I, O>): ToolAction<I, O> {
   const i = interrupt(config);
   delete i.__action.metadata.dynamic;
   registry.registerAction('tool', i);
@@ -543,24 +567,32 @@ function interruptTool(registry?: Registry) {
   };
 }
 
-export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function tool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(
   config: { multipart: true } & ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
+  fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O>;
-export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): ToolAction<I, O>;
+export function tool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(config: ToolConfig<I, O>, fn?: ToolFn<I, O>): ToolAction<I, O>;
 
 /**
  * Defines a dynamic tool. Dynamic tools are just like regular tools but will not be registered in the
  * Genkit registry and can be defined dynamically at runtime.
  */
-export function tool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+export function tool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(
   config: { multipart?: true } & ToolConfig<I, O>,
   fn?: ToolFn<I, O> | MultipartToolFn<I, O>
 ): ToolAction<I, O> | MultipartToolAction<I, O> {
-  return config.multipart ? multipartTool(config, fn) : basicTool(config, fn);
+  return config.multipart
+    ? multipartTool(config, fn as MultipartToolFn<I, O> | undefined)
+    : basicTool(config, fn as ToolFn<I, O> | undefined);
 }
 
 function recordResumedMetadata(runOptions: any) {
@@ -572,10 +604,10 @@ function recordResumedMetadata(runOptions: any) {
   }
 }
 
-function basicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): ToolAction<I, O> {
+function basicTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(config: ToolConfig<I, O>, fn?: ToolFn<I, O>): ToolAction<I, O> {
   const a = action(
     {
       ...config,
@@ -599,10 +631,10 @@ function basicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   return a;
 }
 
-function basicToolV2<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): MultipartToolAction<I, O> {
+function basicToolV2<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(config: ToolConfig<I, O>, fn?: ToolFn<I, O>): MultipartToolAction<I, O> {
   return multipartTool(config, async (input, ctx) => {
     if (!fn) {
       const interrupt = interruptTool(ctx.registry);
@@ -614,7 +646,10 @@ function basicToolV2<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
   });
 }
 
-function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+function multipartTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(
   config: ToolConfig<I, O>,
   fn?: MultipartToolFn<I, O>
 ): MultipartToolAction<I, O> {
@@ -653,10 +688,10 @@ function multipartTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
  *
  * @deprecated renamed to {@link tool}.
  */
-export function dynamicTool<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): DynamicToolAction<I, O> {
+export function dynamicTool<
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+>(config: ToolConfig<I, O>, fn?: ToolFn<I, O>): DynamicToolAction<I, O> {
   const t = basicTool(config, fn) as DynamicToolAction<I, O>;
   t.attach = (_: Registry) => t;
   return t;

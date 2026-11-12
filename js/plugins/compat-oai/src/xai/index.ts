@@ -142,10 +142,13 @@ export type XAIPlugin = {
     name: keyof typeof SUPPORTED_IMAGE_MODELS,
     config?: z.infer<typeof ImageGenerationCommonConfigSchema>
   ): ModelReference<typeof ImageGenerationCommonConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
 };
 
-const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
+const model = ((
+  name: string,
+  config?: any
+): ModelReference<z.ZodType<any, any>> => {
   if (name.includes('image')) {
     return xaiImageModelRef({
       name,
