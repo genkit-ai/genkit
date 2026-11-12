@@ -19,7 +19,12 @@ import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { z } from 'zod';
 import { z as z3 } from 'zod/v3';
-import { action, defineAction, defineActionAsync } from '../src/action.js';
+import {
+  ActionMetadataSchema,
+  action,
+  defineAction,
+  defineActionAsync,
+} from '../src/action.js';
 import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
 import { enableTelemetry } from '../src/tracing.js';
@@ -665,5 +670,12 @@ describe('action schema parsing', () => {
       (await act.run(recordedInput, { init: { n: '' } })).result,
       3
     );
+  });
+});
+
+describe('ActionMetadataSchema', () => {
+  it('keeps unknown keys (dynamic action providers return it as output)', () => {
+    const parsed = ActionMetadataSchema.parse({ name: 'x', futureField: 1 });
+    assert.strictEqual((parsed as Record<string, unknown>).futureField, 1);
   });
 });

@@ -20,6 +20,7 @@ import {
   ActionContext,
   GenkitError,
   isAction,
+  wireObject,
   z,
 } from '@genkit-ai/core';
 import { Registry } from '@genkit-ai/core/registry';
@@ -56,13 +57,13 @@ export interface ResourceOptions {
   metadata?: Record<string, any>;
 }
 
-export const ResourceInputSchema = z.object({
+export const ResourceInputSchema = wireObject({
   uri: z.string(),
 });
 
 export type ResourceInput = z.infer<typeof ResourceInputSchema>;
 
-export const ResourceOutputSchema = z.object({
+export const ResourceOutputSchema = wireObject({
   content: z.array(PartSchema),
 });
 

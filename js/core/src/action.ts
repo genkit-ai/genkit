@@ -23,6 +23,7 @@ import type { ActionType, Registry } from './registry.js';
 import {
   assertGenkitSchema,
   parseSchemaAsync,
+  wireObject,
   type GenkitSchema,
   type InferInput,
   type InferOutput,
@@ -90,7 +91,7 @@ export interface ActionMetadata<
 }
 
 /** Zod schema for {@link ActionMetadata}. */
-export const ActionMetadataSchema = z.object({
+export const ActionMetadataSchema = wireObject({
   key: z.string().optional(),
   actionType: z.string().optional(),
   name: z.string(),
