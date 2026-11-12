@@ -70,11 +70,20 @@ const MISTRAL_TEXT_MODEL_INFO: ModelInfo = {
 /** Mistral custom configuration schema. */
 export const MistralChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.extend({
-    randomSeed: z
+    seed: z
       .number()
       .int()
       .optional()
       .describe('Seed for random sampling. Sent as `random_seed`.'),
+    reasoningEffort: z
+      .string()
+      .optional()
+      .describe(
+        'How much the model reasons before answering, such as `none`, `low`, ' +
+          '`medium` or `high`. Allowed values vary by model: Mistral Small and ' +
+          'Medium take `none` and `high`, Mistral Large 4 takes `low`, ' +
+          '`medium` and `high`. Sent as `reasoning_effort`.'
+      ),
   });
 
 /**
@@ -82,11 +91,15 @@ export const MistralChatCompletionConfigSchema =
  * schema rejects unknown fields, so only fields it accepts are set.
  */
 export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
-  const { maxOutputTokens, randomSeed } = req.config ?? {};
+  const { maxOutputTokens, topK, seed, reasoningEffort } = req.config ?? {};
+  // `top_k`, `random_seed` and Mistral's `reasoning_effort` values are not
+  // part of the OpenAI request type.
+  const body = params as unknown as Record<string, unknown>;
 
   params.max_tokens = maxOutputTokens;
-  // `random_seed` is not part of the OpenAI request type.
-  (params as unknown as Record<string, unknown>).random_seed = randomSeed;
+  body.top_k = topK;
+  body.random_seed = seed;
+  body.reasoning_effort = reasoningEffort;
   params.messages = toMistralMessages(req.messages, params.messages);
 };
 
