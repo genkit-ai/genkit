@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-import type { MessageData } from '@genkit-ai/ai/model';
 import { googleAI } from '@genkit-ai/google-genai';
-import { z } from 'genkit';
+import { z, type MessageData } from 'genkit';
 import { defineAgent, type HistoryStore } from './agent.js';
 import { ai } from './genkit.js';
 

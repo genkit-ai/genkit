@@ -1,5 +1,4 @@
 # General build + OS files
-!samples/**/package-lock.json
 *.eld
 *.tgz
 .DS_Store
@@ -21,7 +20,7 @@ genkit-tools/cli/src/commands/init-ai-tools/context/*.ts
 
 # Sample-specific files
 **/*.env
-samples/**/pnpm-lock.yaml
+samples/*/**/pnpm-lock.yaml
 genkit-packages
 typings
 js/testapps/firebase-functions-sample1/functions/.env
