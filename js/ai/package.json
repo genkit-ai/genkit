@@ -52,93 +52,168 @@
   "types": "lib/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./retriever": {
-      "types": "./lib/retriever.d.ts",
-      "require": "./lib/retriever.js",
-      "import": "./lib/retriever.mjs",
+      "import": {
+        "types": "./lib/retriever.d.mts",
+        "default": "./lib/retriever.mjs"
+      },
+      "require": {
+        "types": "./lib/retriever.d.ts",
+        "default": "./lib/retriever.js"
+      },
       "default": "./lib/retriever.js"
     },
     "./embedder": {
-      "types": "./lib/embedder.d.ts",
-      "require": "./lib/embedder.js",
-      "import": "./lib/embedder.mjs",
+      "import": {
+        "types": "./lib/embedder.d.mts",
+        "default": "./lib/embedder.mjs"
+      },
+      "require": {
+        "types": "./lib/embedder.d.ts",
+        "default": "./lib/embedder.js"
+      },
       "default": "./lib/embedder.js"
     },
     "./evaluator": {
-      "types": "./lib/evaluator.d.ts",
-      "require": "./lib/evaluator.js",
-      "import": "./lib/evaluator.mjs",
+      "import": {
+        "types": "./lib/evaluator.d.mts",
+        "default": "./lib/evaluator.mjs"
+      },
+      "require": {
+        "types": "./lib/evaluator.d.ts",
+        "default": "./lib/evaluator.js"
+      },
       "default": "./lib/evaluator.js"
     },
     "./model": {
-      "types": "./lib/model.d.ts",
-      "require": "./lib/model.js",
-      "import": "./lib/model.mjs",
+      "import": {
+        "types": "./lib/model.d.mts",
+        "default": "./lib/model.mjs"
+      },
+      "require": {
+        "types": "./lib/model.d.ts",
+        "default": "./lib/model.js"
+      },
       "default": "./lib/model.js"
     },
     "./model/middleware": {
-      "types": "./lib/model/middleware.d.ts",
-      "require": "./lib/model/middleware.js",
-      "import": "./lib/model/middleware.mjs",
+      "import": {
+        "types": "./lib/model/middleware.d.mts",
+        "default": "./lib/model/middleware.mjs"
+      },
+      "require": {
+        "types": "./lib/model/middleware.d.ts",
+        "default": "./lib/model/middleware.js"
+      },
       "default": "./lib/model/middleware.js"
     },
     "./extract": {
-      "types": "./lib/extract.d.ts",
-      "require": "./lib/extract.js",
-      "import": "./lib/extract.mjs",
+      "import": {
+        "types": "./lib/extract.d.mts",
+        "default": "./lib/extract.mjs"
+      },
+      "require": {
+        "types": "./lib/extract.d.ts",
+        "default": "./lib/extract.js"
+      },
       "default": "./lib/extract.js"
     },
     "./tool": {
-      "types": "./lib/tool.d.ts",
-      "require": "./lib/tool.js",
-      "import": "./lib/tool.mjs",
+      "import": {
+        "types": "./lib/tool.d.mts",
+        "default": "./lib/tool.mjs"
+      },
+      "require": {
+        "types": "./lib/tool.d.ts",
+        "default": "./lib/tool.js"
+      },
       "default": "./lib/tool.js"
     },
     "./testing": {
-      "types": "./lib/testing/index.d.ts",
-      "require": "./lib/testing/index.js",
-      "import": "./lib/testing/index.mjs",
+      "import": {
+        "types": "./lib/testing/index.d.mts",
+        "default": "./lib/testing/index.mjs"
+      },
+      "require": {
+        "types": "./lib/testing/index.d.ts",
+        "default": "./lib/testing/index.js"
+      },
       "default": "./lib/testing/index.js"
     },
     "./reranker": {
-      "types": "./lib/reranker.d.ts",
-      "require": "./lib/reranker.js",
-      "import": "./lib/reranker.mjs",
+      "import": {
+        "types": "./lib/reranker.d.mts",
+        "default": "./lib/reranker.mjs"
+      },
+      "require": {
+        "types": "./lib/reranker.d.ts",
+        "default": "./lib/reranker.js"
+      },
       "default": "./lib/reranker.js"
     },
     "./session": {
-      "types": "./lib/session.d.ts",
-      "require": "./lib/session.js",
-      "import": "./lib/session.mjs",
+      "import": {
+        "types": "./lib/session.d.mts",
+        "default": "./lib/session.mjs"
+      },
+      "require": {
+        "types": "./lib/session.d.ts",
+        "default": "./lib/session.js"
+      },
       "default": "./lib/session.js"
     },
     "./session-stores": {
-      "types": "./lib/session-stores.d.ts",
-      "require": "./lib/session-stores.js",
-      "import": "./lib/session-stores.mjs",
+      "import": {
+        "types": "./lib/session-stores.d.mts",
+        "default": "./lib/session-stores.mjs"
+      },
+      "require": {
+        "types": "./lib/session-stores.d.ts",
+        "default": "./lib/session-stores.js"
+      },
       "default": "./lib/session-stores.js"
     },
     "./agent-core": {
-      "types": "./lib/agent-core.d.ts",
-      "require": "./lib/agent-core.js",
-      "import": "./lib/agent-core.mjs",
+      "import": {
+        "types": "./lib/agent-core.d.mts",
+        "default": "./lib/agent-core.mjs"
+      },
+      "require": {
+        "types": "./lib/agent-core.d.ts",
+        "default": "./lib/agent-core.js"
+      },
       "default": "./lib/agent-core.js"
     },
     "./json-patch": {
-      "types": "./lib/json-patch.d.ts",
-      "require": "./lib/json-patch.js",
-      "import": "./lib/json-patch.mjs",
+      "import": {
+        "types": "./lib/json-patch.d.mts",
+        "default": "./lib/json-patch.mjs"
+      },
+      "require": {
+        "types": "./lib/json-patch.d.ts",
+        "default": "./lib/json-patch.js"
+      },
       "default": "./lib/json-patch.js"
     },
     "./formats": {
-      "types": "./lib/formats/index.d.ts",
-      "require": "./lib/formats/index.js",
-      "import": "./lib/formats/index.mjs",
+      "import": {
+        "types": "./lib/formats/index.d.mts",
+        "default": "./lib/formats/index.mjs"
+      },
+      "require": {
+        "types": "./lib/formats/index.d.ts",
+        "default": "./lib/formats/index.js"
+      },
       "default": "./lib/formats/index.js"
     }
   },
@@ -185,7 +260,13 @@
       ],
       "formats": [
         "lib/formats"
+      ],
+      "testing": [
+        "lib/testing/index"
       ]
     }
-  }
+  },
+  "files": [
+    "lib"
+  ]
 }

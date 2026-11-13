@@ -38,27 +38,47 @@
   "types": "./lib/index.d.ts",
   "exports": {
     ".": {
-      "require": "./lib/index.js",
-      "import": "./lib/index.mjs",
-      "types": "./lib/index.d.ts",
+      "import": {
+        "types": "./lib/index.d.mts",
+        "default": "./lib/index.mjs"
+      },
+      "require": {
+        "types": "./lib/index.d.ts",
+        "default": "./lib/index.js"
+      },
       "default": "./lib/index.js"
     },
     "./openai": {
-      "require": "./lib/openai/index.js",
-      "import": "./lib/openai/index.mjs",
-      "types": "./lib/openai/index.d.ts",
+      "import": {
+        "types": "./lib/openai/index.d.mts",
+        "default": "./lib/openai/index.mjs"
+      },
+      "require": {
+        "types": "./lib/openai/index.d.ts",
+        "default": "./lib/openai/index.js"
+      },
       "default": "./lib/openai/index.js"
     },
     "./deepseek": {
-      "require": "./lib/deepseek/index.js",
-      "import": "./lib/deepseek/index.mjs",
-      "types": "./lib/deepseek/index.d.ts",
+      "import": {
+        "types": "./lib/deepseek/index.d.mts",
+        "default": "./lib/deepseek/index.mjs"
+      },
+      "require": {
+        "types": "./lib/deepseek/index.d.ts",
+        "default": "./lib/deepseek/index.js"
+      },
       "default": "./lib/deepseek/index.js"
     },
     "./xai": {
-      "require": "./lib/xai/index.js",
-      "import": "./lib/xai/index.mjs",
-      "types": "./lib/xai/index.d.ts",
+      "import": {
+        "types": "./lib/xai/index.d.mts",
+        "default": "./lib/xai/index.mjs"
+      },
+      "require": {
+        "types": "./lib/xai/index.d.ts",
+        "default": "./lib/xai/index.js"
+      },
       "default": "./lib/xai/index.js"
     }
   },
