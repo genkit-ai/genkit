@@ -16,7 +16,7 @@
   "dependencies": {
     "genkit": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
-    "@google-cloud/bigquery": "^7.8.0",
+    "@google-cloud/bigquery": "^8.3.1",
     "dotenv": "^18.0.8"
   },
   "devDependencies": {
