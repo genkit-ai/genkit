@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z, type MessageData } from 'genkit';
+import { GenkitError, z, type MessageData } from 'genkit';
 import { ModelInfo, ModelReference } from 'genkit/model';
 import type { ChatCompletionMessageParam } from 'openai/resources/index.mjs';
 import {
@@ -92,12 +92,20 @@ export const MistralChatCompletionConfigSchema =
  */
 export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
   const { maxOutputTokens, topK, seed, reasoningEffort } = req.config ?? {};
-  // `top_k`, `random_seed` and Mistral's `reasoning_effort` values are not
-  // part of the OpenAI request type.
+  // Mistral's schema declares `top_k`, but its models reject it ("top_k
+  // sampling is not enabled for this model"), so say so before sending.
+  if (topK !== undefined) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        "Mistral doesn't support topK: its models reject top_k sampling. Remove topK from the config.",
+    });
+  }
+  // `random_seed` and Mistral's `reasoning_effort` values are not part of the
+  // OpenAI request type.
   const body = params as unknown as Record<string, unknown>;
 
   params.max_tokens = maxOutputTokens;
-  body.top_k = topK;
   body.random_seed = seed;
   body.reasoning_effort = reasoningEffort;
   params.messages = toMistralMessages(req.messages, params.messages);
@@ -150,8 +158,9 @@ function toMistralMessages(
 }
 
 /**
- * Mistral does not accept `stream_options` on streaming requests, and streams
- * reasoning as `thinking` chunks in a `content` array.
+ * Mistral reports usage on the last streamed chunk without being asked, so
+ * `stream_options` isn't sent, and it streams reasoning as `thinking` chunks
+ * in a `content` array.
  */
 export const MISTRAL_RUNNER_OPTIONS: ModelRunnerOptions = {
   streamOptions: false,

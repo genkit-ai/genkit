@@ -202,7 +202,6 @@ describe('mistral plugin', () => {
       config: {
         temperature: 0.3,
         topP: 0.9,
-        topK: 40,
         maxOutputTokens: 128,
         stopSequences: ['END'],
         seed: 42,
@@ -224,7 +223,6 @@ describe('mistral plugin', () => {
       messages: [{ role: 'user', content: 'hi' }],
       temperature: 0.3,
       top_p: 0.9,
-      top_k: 40,
       max_tokens: 128,
       stop: ['END'],
       random_seed: 42,
@@ -233,6 +231,19 @@ describe('mistral plugin', () => {
       frequency_penalty: 0.25,
     });
     expectMistralChatRequest(body);
+  });
+
+  it('refuses topK before the request goes out', async () => {
+    // Mistral's models answer top_k with "top_k sampling is not enabled for
+    // this model".
+    await expect(
+      ai.generate({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'hi',
+        config: { topK: 40 },
+      })
+    ).rejects.toThrow(/topK/);
+    expect(server.requests).toHaveLength(0);
   });
 
   it('does not pass unknown config through to the request', async () => {

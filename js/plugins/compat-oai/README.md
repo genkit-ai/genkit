@@ -212,8 +212,9 @@ const embeddings = await ai.embed({
 Mistral rejects request fields it doesn't know, so the plugin sends only
 Mistral's own field names:
 
-- `maxOutputTokens` is sent as `max_tokens`, `topK` as `top_k`, and `seed` as
-  `random_seed`.
+- `maxOutputTokens` is sent as `max_tokens`, and `seed` as `random_seed`.
+- `topK` is refused before the request goes out: Mistral's models reject
+  `top_k` sampling.
 - `reasoningEffort` is sent as `reasoning_effort`. Allowed values vary by
   model: Mistral Small and Medium take `none` and `high`, Mistral Large 4 takes
   `low`, `medium` and `high`.
