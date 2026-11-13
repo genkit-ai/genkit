@@ -19,6 +19,9 @@ name: Build CLI Binaries
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -44,20 +47,22 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
       
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
       
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@a3252b78c470c02df07e9d59298aecedc3ccdd6d # v3
         with:
           version: 10.11.0
       
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: '20'
           cache: 'pnpm'
@@ -97,7 +102,7 @@ jobs:
           fi
       
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: genkit-${{ matrix.target }}
           path: genkit-tools/cli/dist/bin/genkit-${{ matrix.target }}${{ steps.binary.outputs.ext }}
@@ -133,7 +138,7 @@ jobs:
           fi
       
       - name: Download binary artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: genkit-${{ matrix.target }}
           path: ./
@@ -173,8 +178,8 @@ jobs:
         run: |
           echo "Testing genkit ui:start"
           
-          # Start UI in background, piping any prompts to accept them
-          (echo "" | ./genkit-${{ matrix.target }} ui:start 2>&1 | tee ui_output.log) &
+          # Start UI in background in non-interactive mode so CI doesn't opt into analytics
+          ./genkit-${{ matrix.target }} --non-interactive ui:start > ui_output.log 2>&1 &
           UI_PID=$!
           
           # Give it time to start
@@ -187,7 +192,7 @@ jobs:
             
             # Try to stop it gracefully
             echo "Testing genkit ui:stop"
-            ./genkit-${{ matrix.target }} ui:stop || true
+            ./genkit-${{ matrix.target }} --non-interactive ui:stop || true
             
             # Give it time to stop
             sleep 2
@@ -213,13 +218,9 @@ jobs:
         run: |
           Write-Host "Testing genkit ui:start"
           
-          # Create empty input file first for redirecting stdin
-          "" | Out-File -FilePath ".\empty.txt"
-          
-          # Start UI in background, redirecting input to handle prompts
+          # Start UI in background in non-interactive mode so CI doesn't opt into analytics
           $process = Start-Process -FilePath ".\genkit-${{ matrix.target }}.exe" `
-            -ArgumentList "ui:start" `
-            -RedirectStandardInput ".\empty.txt" `
+            -ArgumentList "--non-interactive", "ui:start" `
             -RedirectStandardOutput ".\ui_output.log" `
             -RedirectStandardError ".\ui_error.log" `
             -PassThru `
@@ -239,7 +240,7 @@ jobs:
             
             # Try to stop it gracefully
             Write-Host "Testing genkit ui:stop"
-            & ".\genkit-${{ matrix.target }}.exe" ui:stop
+            & ".\genkit-${{ matrix.target }}.exe" --non-interactive ui:stop
             
             Start-Sleep -Seconds 2
           } else {

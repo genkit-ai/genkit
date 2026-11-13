@@ -106,16 +106,18 @@ export async function startCLI(): Promise<void> {
         commandName = 'unknown';
       }
 
-      if (
-        !process.argv.includes('--non-interactive') &&
-        commandName !== 'config'
-      ) {
-        await notifyAnalyticsIfFirstRun();
-      }
-
       const { isCompiledBinary } = detectCLIRuntime();
       const projectRoot = await findProjectRoot();
       const projectRuntime = await detectRuntime(projectRoot);
+
+      if (
+        !process.argv.includes('--non-interactive') &&
+        commandName !== 'config' &&
+        actionCommand.name() !== SERVER_HARNESS_COMMAND
+      ) {
+        await notifyAnalyticsIfFirstRun(projectRuntime);
+      }
+
       await record(
         new RunCommandEvent(
           commandName,
