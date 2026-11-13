@@ -36,16 +36,17 @@ from genkit_google_genai import GoogleAI
 # 1. Initialize Genkit with the Google AI (Gemini) plugin
 ai = Genkit(plugins=[GoogleAI()])
 
-# 2. Define a type-safe tool
-@ai.tool(description="Get current weather for a city")
-def get_weather(city: str) -> str:
+# 2. Define a type-safe tool (the docstring becomes the tool description)
+@ai.tool
+async def get_weather(city: str) -> str:
+    """Get current weather for a city."""
     return f"Sunny, 72°F in {city}"
 
 # 3. Define a flow
-@ai.flow()
+@ai.flow
 async def plan_trip(destination: str) -> str:
     response = await ai.generate(
-        model="googleai/gemini-flash-latest",
+        model=GoogleAI.gemini("gemini-flash-latest"),
         prompt=f"Suggest activities in {destination} given the weather.",
         tools=[get_weather],
     )

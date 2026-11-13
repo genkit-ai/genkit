@@ -404,7 +404,7 @@ async def run(n: int, ctx: ActionRunContext) -> str:
 ```python
 from genkit import FlowContext
 
-@ai.flow()
+@ai.flow
 async def run(n: int, ctx: FlowContext[Status]) -> str:
     ctx.send_chunk(Status(step='search'))
 ```
@@ -427,7 +427,7 @@ async def prepare(dish: str, ctx: ToolRunContext) -> str: ...
 ```python
 from genkit import ToolContext
 
-@ai.tool()
+@ai.tool
 async def prepare(dish: str, ctx: ToolContext[Progress]) -> str:
     ctx.send_chunk(Progress(stage='searing', percent=40))
 ```
@@ -472,7 +472,7 @@ async def slow(x: dict, ctx: ToolRunContext) -> dict:
 **New:**
 
 ```python
-@ai.tool()
+@ai.tool
 async def slow(x: dict) -> dict:
     while not done:
         await step()   # cancellation raises asyncio.CancelledError here
@@ -498,7 +498,7 @@ async with stream:
 Cancellation can now land at any `await` in your tool, so put cleanup for partial work in `finally`. If you catch `asyncio.CancelledError` yourself, re-raise it.
 
 ```python
-@ai.tool()
+@ai.tool
 async def book_trip(trip: Trip) -> Booking:
     hold = await reserve_seats(trip)
     try:
@@ -655,7 +655,7 @@ async def get_order(order_id: str) -> Order:
 ```python
 from genkit import PublicError
 
-@ai.flow()
+@ai.flow
 async def get_order(order_id: str) -> Order:
     order = await db.find(order_id)
     if order is None:
@@ -907,7 +907,7 @@ from genkit.middleware import Middleware, MiddlewareContext
 @ai.middleware
 class PiiRedact(Middleware[Cfg]):
     name = 'pii_redact'
-    async def model(self, params, ctx: MiddlewareContext, next_fn): ...
+    async def wrap_model(self, params, ctx: MiddlewareContext, next_fn): ...
 ```
 
 `tools()` returns `Tool` handles. `GenerateMiddleware`, `MiddlewareRef`, `MiddlewarePlugin` and `new_middleware` are removed.
