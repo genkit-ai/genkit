@@ -68,6 +68,37 @@ describe('extract', () => {
         ],
       },
       {
+        name: 'handles strings',
+        steps: [
+          { chunk: '["a", "b', want: ['a'] },
+          { chunk: ', c\\"d",', want: ['b, c"d'] },
+          { chunk: " 'e,]'", want: ['e,]'] },
+          { chunk: ']', want: [] },
+        ],
+      },
+      {
+        name: 'handles numbers, booleans and null',
+        steps: [
+          { chunk: '[1, 2', want: [1] },
+          { chunk: '3, true,', want: [23, true] },
+          { chunk: ' null, -4.5e1]', want: [null, -45] },
+        ],
+      },
+      {
+        name: 'handles nested arrays',
+        steps: [
+          { chunk: '[[1, [2]], ["]"', want: [[1, [2]]] },
+          { chunk: '], {"a": [3]}]', want: [[']'], { a: [3] }] },
+        ],
+      },
+      {
+        name: 'finds the array once it arrives',
+        steps: [
+          { chunk: '```json\n', want: [] },
+          { chunk: '["a", "b"]', want: ['a', 'b'] },
+        ],
+      },
+      {
         name: 'handles whitespace',
         steps: [
           { chunk: '[\n  ', want: [] },
