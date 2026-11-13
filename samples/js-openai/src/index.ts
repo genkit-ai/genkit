@@ -28,7 +28,7 @@ const ai = genkit({
 
 ai.defineFlow('basic-hi', async () => {
   const { text } = await ai.generate({
-    model: openAI.model('o4-mini'),
+    model: openAI.model('gpt-5.6-terra'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
   });
 
@@ -40,7 +40,7 @@ ai.defineFlow('multimodal-input', async () => {
   const photoBase64 = fs.readFileSync('photo.jpg', { encoding: 'base64' });
 
   const { text } = await ai.generate({
-    model: openAI.model('gpt-4o'),
+    model: openAI.model('gpt-5.5'),
     prompt: [
       { text: 'describe this photo' },
       {
@@ -58,7 +58,7 @@ ai.defineFlow('multimodal-input', async () => {
 // Streaming
 ai.defineFlow('streaming', async (_, { sendChunk }) => {
   const { stream } = ai.generateStream({
-    model: openAI.model('gpt-4o'),
+    model: openAI.model('gpt-5.5'),
     prompt: 'Write a poem about AI.',
   });
 
@@ -69,22 +69,6 @@ ai.defineFlow('streaming', async (_, { sendChunk }) => {
   }
 
   return poem;
-});
-
-// Web search
-ai.defineFlow('web-search', async () => {
-  const response = await ai.generate({
-    model: openAI.model('gpt-4o-search-preview'),
-    prompt: 'Who is Albert Einstein?',
-    config: {
-      web_search_options: {},
-    },
-  });
-
-  return {
-    text: response.text,
-    annotations: (response.raw as any)?.choices?.[0].message.annotations,
-  };
 });
 
 const getWeather = ai.defineTool(
@@ -119,7 +103,7 @@ ai.defineFlow(
   },
   async (location, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: openAI.model('gpt-4o'),
+      model: openAI.model('gpt-5.4'),
       config: {
         temperature: 1,
       },
@@ -151,7 +135,7 @@ ai.defineFlow(
   },
   async (name, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: openAI.model('gpt-4o'),
+      model: openAI.model('gpt-5.4'),
       config: {
         temperature: 1, // we want creativity
       },

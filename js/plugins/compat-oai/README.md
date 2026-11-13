@@ -25,6 +25,13 @@ Official OpenAI-compatible provider documentation:
 
 This plugin also supports OpenAI models, and custom models from other model providers.
 
+Notes on the OpenAI models:
+
+- Models with an announced shutdown date have `stage: 'deprecated'`. A dated snapshot id (for example `gpt-5-2025-08-07`) gets the stage and capabilities of its alias. Move to a current model before the shutdown date.
+- `gpt-5.4` and later, except the no-tools models below, take function tools on Chat Completions only at `reasoning_effort: 'none'`. `gpt-5.4*` and `gpt-5.5` default to `none`. The others do not, so set `reasoning_effort: 'none'` in the config when you pass tools.
+- `gpt-6-astra`, `gpt-6.1-sol` and `gpt-6.1-terra` do not support function tools on Chat Completions.
+- `gpt-5-search-api` does not support function tools.
+
 ## Installation
 
 Install the plugin in your project with your favorite package manager:
@@ -40,14 +47,14 @@ Install the plugin in your project with your favorite package manager:
 ```typescript
 import dotenv from 'dotenv';
 import { genkit } from 'genkit';
-import openAI, { gpt35Turbo } from '@genkit-ai/compat-oai';
+import { openAI } from '@genkit-ai/compat-oai/openai';
 
 dotenv.config();
 
 const ai = genkit({
   plugins: [openAI({ apiKey: process.env.OPENAI_API_KEY })],
   // specify a default model if not provided in generate params:
-  model: gpt35Turbo,
+  model: openAI.model('gpt-5.5'),
 });
 ```
 
@@ -57,7 +64,7 @@ The simplest way to generate text is by using the `generate` method:
 
 ```typescript
 const response = await ai.generate({
-  model: gpt4o
+  model: openAI.model('gpt-5.5'),
   prompt: 'Tell me a joke.',
 });
 
@@ -73,7 +80,7 @@ import { z } from 'genkit';
 import { openAI } from '@genkit-ai/compat-oai/openai';
 
 const response = await ai.generate({
-  model: openAI.model('gpt-5'),
+  model: openAI.model('gpt-5.5'),
   prompt: 'Extract the answer from the text.',
   output: {
     schema: z
@@ -97,7 +104,7 @@ See the [Structured Outputs guide](https://developers.openai.com/api/docs/guides
 
 ```typescript
 const response = await ai.generate({
-  model: gpt4o,
+  model: openAI.model('gpt-5.5'),
   prompt: [
     { text: 'What animal is in the photo?' },
     { media: { url: imageUrl } },
