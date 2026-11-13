@@ -38,6 +38,7 @@ import type {
   ChatCompletionMessageToolCall,
   ChatCompletionRole,
 } from 'openai/resources/index.mjs';
+import { defineCompatOpenAIEmbedder } from '../src/embedder';
 import {
   ModelRequestBuilder,
   fromOpenAIChoice,
@@ -2532,6 +2533,16 @@ describe('openAIModelRunner', () => {
         expectedStatus: 'INVALID_ARGUMENT',
       },
       {
+        name: '422',
+        error: new APIError(
+          422,
+          { error: { message: 'Validation Error' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'INVALID_ARGUMENT',
+      },
+      {
         name: '500',
         error: new APIError(
           500,
@@ -2595,5 +2606,267 @@ describe('openAIModelRunner', () => {
         'Some other error'
       );
     });
+  });
+});
+
+describe('finish reasons', () => {
+  it('maps model_length to length', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: 'cut off' },
+      finish_reason: 'model_length',
+    } as unknown as ChatCompletion.Choice;
+    expect(fromOpenAIChoice(choice).finishReason).toBe('length');
+  });
+
+  it('maps model_length to length when streaming', () => {
+    const choice = {
+      index: 0,
+      delta: { content: 'cut off' },
+      finish_reason: 'model_length',
+    } as unknown as ChatCompletionChunk.Choice;
+    expect(fromOpenAIChunkChoice(choice).finishReason).toBe('length');
+  });
+
+  it('maps error to other', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: '' },
+      finish_reason: 'error',
+    } as unknown as ChatCompletion.Choice;
+    expect(fromOpenAIChoice(choice).finishReason).toBe('other');
+  });
+});
+
+describe('content chunk arrays', () => {
+  // Mistral sends `content` as an array of `ContentChunk`s.
+  const chunks = [
+    {
+      type: 'thinking',
+      thinking: [
+        { type: 'text', text: 'Two plus ' },
+        { type: 'text', text: 'two.' },
+      ],
+    },
+    { type: 'image_url', image_url: 'https://example.com/cat.png' },
+    { type: 'text', text: '{"answer":' },
+    { type: 'reference', reference_ids: [1] },
+    { type: 'text', text: '4}' },
+  ];
+
+  it('fromOpenAIChoice keeps text and thinking chunks and drops others', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: chunks },
+      finish_reason: 'stop',
+    } as unknown as ChatCompletion.Choice;
+
+    expect(fromOpenAIChoice(choice).message?.content).toEqual([
+      { reasoning: 'Two plus two.' },
+      { text: '{"answer":4}' },
+    ]);
+  });
+
+  it('fromOpenAIChoice parses joined text chunks in JSON mode', () => {
+    const choice = {
+      index: 0,
+      message: { role: 'assistant', content: chunks },
+      finish_reason: 'stop',
+    } as unknown as ChatCompletion.Choice;
+
+    expect(fromOpenAIChoice(choice, true).message?.content).toEqual([
+      { reasoning: 'Two plus two.' },
+      { data: { answer: 4 } },
+    ]);
+  });
+
+  it('fromOpenAIChunkChoice keeps text and thinking chunks and drops others', () => {
+    const choice = {
+      index: 0,
+      delta: { content: chunks },
+      finish_reason: null,
+    } as unknown as ChatCompletionChunk.Choice;
+
+    expect(fromOpenAIChunkChoice(choice, true).message?.content).toEqual([
+      { reasoning: 'Two plus two.' },
+      { text: '{"answer":4}' },
+    ]);
+  });
+});
+
+describe('openAIModelRunner runner options', () => {
+  let server: FakeOpenAIServer;
+  let client: OpenAI;
+
+  beforeEach(async () => {
+    server = new FakeOpenAIServer();
+    await server.start();
+    client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+  });
+
+  afterEach(() => {
+    server.stop();
+  });
+
+  const request: GenerateRequest = {
+    messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+  };
+  const stream = (runner: ReturnType<typeof openAIModelRunner>) =>
+    runner(request, { streamingRequested: true, sendChunk: () => {} });
+
+  function queueTextStream() {
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          id: '1',
+          choices: [
+            {
+              index: 0,
+              delta: { role: 'assistant', content: 'ok' },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      ],
+    });
+  }
+
+  function queueChunkArrayStream() {
+    server.setNextResponse({
+      stream: true,
+      chunks: [
+        {
+          id: '1',
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: 'assistant',
+                content: [
+                  {
+                    type: 'thinking',
+                    thinking: [{ type: 'text', text: 'hm' }],
+                  },
+                ],
+              },
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: '1',
+          choices: [
+            { index: 0, delta: { content: 'ok' }, finish_reason: 'stop' },
+          ],
+        },
+      ],
+    });
+  }
+
+  it('sends stream_options with include_usage by default', async () => {
+    queueTextStream();
+    await stream(openAIModelRunner('gpt-4o', client));
+    expect(server.requests[0].body.stream_options).toEqual({
+      include_usage: true,
+    });
+  });
+
+  it('sends a custom streamOptions value', async () => {
+    queueTextStream();
+    await stream(
+      openAIModelRunner('gpt-4o', client, undefined, undefined, {
+        streamOptions: { include_usage: false },
+      })
+    );
+    expect(server.requests[0].body.stream_options).toEqual({
+      include_usage: false,
+    });
+  });
+
+  it('omits stream_options when streamOptions is false', async () => {
+    queueTextStream();
+    await stream(
+      openAIModelRunner('gpt-4o', client, undefined, undefined, {
+        streamOptions: false,
+      })
+    );
+    expect(server.requests[0].body).not.toHaveProperty('stream_options');
+  });
+
+  it('leaves the final completion to the SDK by default', async () => {
+    queueChunkArrayStream();
+    const result = await stream(openAIModelRunner('gpt-4o', client));
+    // Without `contentChunks` the final message is whatever the SDK built,
+    // so the thinking chunk is not restored as reasoning.
+    expect(result.message?.content).not.toContainEqual({ reasoning: 'hm' });
+  });
+
+  it('restores streamed content chunks when contentChunks is set', async () => {
+    queueChunkArrayStream();
+    const result = await stream(
+      openAIModelRunner('gpt-4o', client, undefined, undefined, {
+        contentChunks: true,
+      })
+    );
+    expect(result.message?.content).toEqual([
+      { reasoning: 'hm' },
+      { text: 'ok' },
+    ]);
+  });
+});
+
+describe('defineCompatOpenAIEmbedder', () => {
+  function fakeEmbeddingsClient() {
+    const create = jest.fn(async (_body: unknown) => ({
+      data: [{ embedding: [0.1, 0.2] }],
+    }));
+    return {
+      create,
+      client: { embeddings: { create } } as unknown as OpenAI,
+    };
+  }
+  const input = [{ content: [{ text: 'hello' }] }];
+
+  it('passes options through without a requestBuilder', async () => {
+    const { create, client } = fakeEmbeddingsClient();
+    const embedder = defineCompatOpenAIEmbedder({ name: 'test/e', client });
+
+    await embedder({
+      input,
+      options: { encodingFormat: 'float', dimensions: 8 },
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      model: 'test/e',
+      input: ['hello'],
+      encoding_format: 'float',
+      dimensions: 8,
+    });
+  });
+
+  it('lets the requestBuilder replace the passthrough', async () => {
+    const { create, client } = fakeEmbeddingsClient();
+    const embedder = defineCompatOpenAIEmbedder({
+      name: 'test/e',
+      client,
+      requestBuilder: (req, params) => {
+        (params as unknown as Record<string, unknown>).output_dimension =
+          req.options.dimensions;
+      },
+    });
+
+    const result = await embedder({
+      input,
+      options: { encodingFormat: 'float', dimensions: 8 },
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      model: 'test/e',
+      input: ['hello'],
+      encoding_format: 'float',
+      output_dimension: 8,
+    });
+    expect(result.embeddings).toEqual([{ embedding: [0.1, 0.2] }]);
   });
 });

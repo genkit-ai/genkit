@@ -19,6 +19,7 @@ Official OpenAI-compatible provider documentation:
 - [OpenAI](https://genkit.dev/docs/integrations/openai/)
 - [xAI (Grok)](https://genkit.dev/docs/integrations/xai/)
 - [DeepSeek](https://genkit.dev/docs/integrations/deepseek/)
+- [Mistral](#mistral) (in this README)
 - [Other compatible APIs](https://genkit.dev/docs/integrations/openai-compatible/)
 
 ## Supported models
@@ -179,6 +180,62 @@ const result = await ai.generate({
 console.log(result.text);
 ```
 
+### Mistral
+
+The `mistral` plugin uses Mistral's OpenAI-compatible API at
+`https://api.mistral.ai/v1`. Pass `apiKey` or set the `MISTRAL_API_KEY`
+environment variable.
+
+```typescript
+import { genkit } from 'genkit';
+import { mistral } from '@genkit-ai/compat-oai/mistral';
+
+const ai = genkit({
+  plugins: [mistral()],
+});
+
+const response = await ai.generate({
+  model: mistral.model('mistral-small-latest'),
+  prompt: 'Tell me a joke.',
+  config: {
+    maxOutputTokens: 256,
+    seed: 42,
+  },
+});
+
+const embeddings = await ai.embed({
+  embedder: mistral.embedder('codestral-embed', { outputDimension: 256 }),
+  content: 'Hello world',
+});
+```
+
+Mistral rejects request fields it doesn't know, so the plugin sends only
+Mistral's own field names:
+
+- `maxOutputTokens` is sent as `max_tokens`, and `seed` as `random_seed`.
+- `topK` is refused before the request goes out: Mistral's models reject
+  `top_k` sampling.
+- `reasoningEffort` is sent as `reasoning_effort`. Allowed values vary by
+  model: Mistral Small and Medium take `none` and `high`, Mistral Large 4 takes
+  `low`, `medium` and `high`.
+- OpenAI's `user` and `max_completion_tokens`, and any other config the plugin
+  doesn't map, are ignored.
+- The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are
+  always requested as floats.
+- Streaming requests don't send `stream_options`.
+
+With `reasoningEffort` set, the model's thinking comes back as reasoning parts
+(`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
+`thinking` content.
+
+Any model returned by `/v1/models` can be used by name, for example
+`mistral.model('ministral-14b-2512')` or `'mistral/ministral-14b-2512'`. When
+the plugin lists models (for example in the Developer UI), it reads each
+entry's `capabilities`: only chat models are listed, and tool and image
+support follow `function_calling` and `vision`. Models outside the known list
+never get constrained output, and a model that hasn't been listed is treated as
+text only.
+
 ### Custom models & other Cloud providers
 
 ```typescript
@@ -235,8 +292,8 @@ Want to contribute to the project? That's awesome! Head over to our [Contributio
 
 ## Need help?
 
- - [Genkit Discord](https://genkit.dev/discord)
- - [Github Issues](https://github.com/genkit-ai/genkit/issues)
+- [Genkit Discord](https://genkit.dev/discord)
+- [Github Issues](https://github.com/genkit-ai/genkit/issues)
 
 ## License
 

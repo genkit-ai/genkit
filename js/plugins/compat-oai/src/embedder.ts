@@ -18,10 +18,22 @@
 // import { defineEmbedder, embedderRef } from '@genkit-ai/ai/embedder';
 
 import type { EmbedderAction, EmbedderReference } from 'genkit';
+import type { EmbedRequest } from 'genkit/embedder';
 import { embedder } from 'genkit/plugin';
 import OpenAI from 'openai';
+import type { EmbeddingCreateParams } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
+
+/**
+ * Hook to modify the embeddings request body. When set, it replaces the
+ * default passthrough of embedder options, so it must copy any options the
+ * provider needs.
+ */
+export type EmbedderRequestBuilder = (
+  req: EmbedRequest,
+  params: EmbeddingCreateParams
+) => void;
 
 /**
  * Method to define a new Genkit Embedder that is compatibale with the Open AI
@@ -33,6 +45,8 @@ import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
  * @param params.client The OpenAI client instance.
  * @param params.embedderRef Optional reference to the embedder's configuration and
  * custom options.
+ * @param params.requestBuilder Optional hook to modify the request body, see
+ * {@link EmbedderRequestBuilder}.
 
  * @returns the created {@link EmbedderAction}
  */
@@ -41,8 +55,15 @@ export function defineCompatOpenAIEmbedder(params: {
   client: OpenAI;
   pluginOptions?: PluginOptions;
   embedderRef?: EmbedderReference;
+  requestBuilder?: EmbedderRequestBuilder;
 }): EmbedderAction {
-  const { name, client: defaultClient, pluginOptions, embedderRef } = params;
+  const {
+    name,
+    client: defaultClient,
+    pluginOptions,
+    embedderRef,
+    requestBuilder,
+  } = params;
 
   const modelName = toModelName(name, pluginOptions?.name);
   const actionName =
@@ -61,12 +82,17 @@ export function defineCompatOpenAIEmbedder(params: {
         req,
         defaultClient
       );
-      const embeddings = await client.embeddings.create({
+      let body: EmbeddingCreateParams = {
         model: modelName,
         input: req.input.map((d) => d.text),
         encoding_format,
-        ...restOfConfig,
-      });
+      };
+      if (requestBuilder) {
+        requestBuilder(req, body);
+      } else {
+        body = { ...body, ...restOfConfig };
+      }
+      const embeddings = await client.embeddings.create(body);
       return {
         embeddings: embeddings.data.map((d) => ({ embedding: d.embedding })),
       };
