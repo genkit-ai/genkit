@@ -220,6 +220,20 @@ def test_extract_system() -> None:
     assert system == 'You are helpful.'
 
 
+def test_extract_system_keeps_all_system_messages() -> None:
+    """Every system message is sent, not only the first."""
+    mock_client = MagicMock()
+    model = AnthropicModel(model_name='claude-sonnet-4', client=mock_client)
+
+    messages = [
+        Message(role=Role.SYSTEM, content=[Part.from_text('You are helpful.')]),
+        Message(role=Role.USER, content=[Part.from_text('Hello')]),
+        Message(role=Role.SYSTEM, content=[Part.from_text('Answer in French.')]),
+    ]
+
+    assert model._extract_system(messages) == 'You are helpful.\n\nAnswer in French.'
+
+
 def test_to_anthropic_messages() -> None:
     """Test message conversion."""
     mock_client = MagicMock()
