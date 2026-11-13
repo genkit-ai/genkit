@@ -12,6 +12,7 @@ runs, without exporting internal generate plumbing on the public surface.
 """
 
 import asyncio
+import concurrent.futures
 import gc
 import os
 import sys
@@ -28,6 +29,7 @@ import pytest
 from genkit_mcp import McpClient, define_mcp_client
 from genkit_mcp._config import McpStdioServerConfig
 from genkit_mcp._connection import McpConnection, _serving
+from structlog.testing import capture_logs
 
 from genkit import FinishReason, Genkit, GenkitError, Message, ModelResponse, Part, Role
 
@@ -526,6 +528,29 @@ async def test_close_stops_waiting_on_a_loop_too_busy_to_close_its_connection(
     finally:
         await client.close()
         background.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('host', 'named'),
+    [(None, {'client': 'catalog'}), ('hosted', {'server': 'catalog', 'host': 'hosted'})],
+)
+async def test_a_close_timeout_is_logged_under_its_client_or_its_host_and_server(
+    monkeypatch: pytest.MonkeyPatch,
+    host: str | None,
+    named: dict[str, str],
+) -> None:
+    """The keys match the client's and the host's other connection logs."""
+    monkeypatch.setattr(genkit_mcp._client, '_CROSS_LOOP_CLOSE_TIMEOUT_SECONDS', 0)
+    client = McpClient('catalog', command='unused')
+    client._host = host
+    closed: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+    with capture_logs() as logs:
+        await client._wait_for_close(asyncio.get_running_loop(), closed)
+
+    [timed_out] = [log for log in logs if log['event'] == 'MCP connection did not close on its event loop in time']
+    assert {key: timed_out[key] for key in ('client', 'server', 'host') if key in timed_out} == named
 
 
 @pytest.mark.asyncio
