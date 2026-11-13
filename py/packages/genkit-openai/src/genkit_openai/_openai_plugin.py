@@ -79,6 +79,9 @@ from genkit_openai._typing import OpenAIConfig
 # tenant key runs under the tenant's own account, so these are not copied.
 _PLUGIN_ACCOUNT_HEADERS = frozenset({'openai-organization', 'openai-project'})
 
+# The embeddings endpoint accepts at most 2048 inputs per request.
+_MAX_EMBED_INPUTS = 2048
+
 _CLIENT_OPTION_KEYS = frozenset(inspect.signature(AsyncOpenAI.__init__).parameters) - {'self'}
 
 
@@ -601,37 +604,29 @@ class OpenAI(Plugin):
                 encoding_format = 'float'
 
             # Call with only non-None optional params to satisfy strict typings
+            extra: dict[str, Any] = {}
+            if dimensions is not None:
+                extra['dimensions'] = dimensions
+            if encoding_format is not None:
+                extra['encoding_format'] = encoding_format
+
+            # The embeddings endpoint rejects requests with more than
+            # _MAX_EMBED_INPUTS inputs, so large batches go out in chunks.
             client = self._embed_client()
+            data: list[Any] = []
             try:
-                if dimensions is not None and encoding_format is not None:
+                for start in range(0, len(texts), _MAX_EMBED_INPUTS):
                     response = await client.embeddings.create(
                         model=name,
-                        input=texts,
-                        dimensions=dimensions,
-                        encoding_format=encoding_format,
+                        input=texts[start : start + _MAX_EMBED_INPUTS],
+                        **extra,
                     )
-                elif dimensions is not None:
-                    response = await client.embeddings.create(
-                        model=name,
-                        input=texts,
-                        dimensions=dimensions,
-                    )
-                elif encoding_format is not None:
-                    response = await client.embeddings.create(
-                        model=name,
-                        input=texts,
-                        encoding_format=encoding_format,
-                    )
-                else:
-                    response = await client.embeddings.create(
-                        model=name,
-                        input=texts,
-                    )
+                    data.extend(response.data)
             except APIError as e:
                 reraise_openai_error(e)
 
             # Convert OpenAI response to Genkit format
-            embeddings = [Embedding(embedding=item.embedding) for item in response.data]
+            embeddings = [Embedding(embedding=item.embedding) for item in data]
             return EmbedResponse(embeddings=embeddings)
 
         return Embedder(
