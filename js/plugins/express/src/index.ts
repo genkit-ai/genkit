@@ -108,8 +108,22 @@ export function expressHandler<
     }
 
     const abortController = new AbortController();
-    request.on('close', () => {
+    // The client may have disconnected while the context provider was running,
+    // before the 'close' listener below existed; 'close' fires only once.
+    // 'destroyed' is also true once a response finished normally, so apply the
+    // same writableFinished check as the listener.
+    if (response.destroyed && !response.writableFinished) {
       abortController.abort();
+    }
+    // Listen on the response, not the request: since Node 16 the request
+    // (IncomingMessage) emits 'close' as soon as its body has been consumed,
+    // which is long before the client disconnects. The response emits 'close'
+    // either after it finished or when the underlying connection was terminated
+    // early, so only abort in the latter case.
+    response.on('close', () => {
+      if (!response.writableFinished) {
+        abortController.abort();
+      }
     });
     // when/if using timeout middleware, it will emit 'timeout' event.
     request.on('timeout', () => {
@@ -145,15 +159,6 @@ export function expressHandler<
         abortController.signal
       );
     } else {
-      // `request` emits `close` once its body has been read, which happened
-      // before this handler ran, so it cannot report the client going away.
-      // `response` closes with the connection, so a premature close is what
-      // ends a long-running action (an agent wait, say) when the client hangs
-      // up. Streaming responses stay out of this: a durable stream must
-      // survive a disconnect so the client can resubscribe.
-      response.on('close', () => {
-        if (!response.writableFinished) abortController.abort();
-      });
       try {
         const result = await action.run(input, {
           context,
