@@ -99,7 +99,7 @@ export async function genkitStart(
   });
   const distDir = path.resolve(process.cwd(), '../dist');
   execSync(
-    `npm i --save ${distDir}/genkit-cli-?.?*.?*.tgz ${distDir}/genkit-ai-tools-common-*.tgz`,
+    `npm i --save ${distDir}/genkit-cli-?.?*.?*.tgz ${distDir}/genkit-ai-tools-common-*.tgz ${distDir}/genkit-ai-telemetry-server-*.tgz`,
     {
       stdio: 'inherit',
       cwd: cliInstallRoot,
