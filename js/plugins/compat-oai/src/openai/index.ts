@@ -51,6 +51,7 @@ import {
   TextEmbeddingConfigSchema,
 } from './embedder.js';
 import {
+  gptModelRef,
   OpenAIChatCompletionConfigSchema,
   openAIModelRef,
   SUPPORTED_GPT_MODELS,
@@ -66,7 +67,35 @@ import {
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-const UNSUPPORTED_MODEL_MATCHERS = ['babbage', 'davinci', 'codex'];
+// Ids from /v1/models that this plugin can't list as chat models:
+// - Models for endpoints it doesn't call: moderation, Realtime, Live, audio.
+// - Responses-only models: the -pro models, Codex models, gpt-5.6-cyber,
+//   gpt-6-rosalind, gpt-rosalind-research and gpt-daybreak-*. gpt-6-cyber
+//   supports Chat Completions, so cyber is matched exactly.
+// - Legacy completions base models and their fine-tunes.
+// - Defensive entries for families OpenAI has already shut down (computer
+//   use, deep research, Sora), in case an account still lists them.
+const UNSUPPORTED_MODEL_MATCHERS: RegExp[] = [
+  /moderation/,
+  /realtime/,
+  /^gpt-live/,
+  /(^|-)audio(-|$)/,
+  /-pro(-|$)/,
+  /codex/,
+  /^gpt-5\.6-cyber/,
+  /rosalind/,
+  /^gpt-daybreak-/,
+  /^(ada|babbage|curie|davinci)(-002$|:)/,
+  // Defensive: already shut down.
+  /^computer-use/,
+  /deep-research/,
+  /^sora/,
+];
+
+/** Image ids this plugin serves through its image model. */
+function isImageModelId(id: string): boolean {
+  return id.includes('gpt-image-1') || id.includes('dall-e');
+}
 
 function createResolver(pluginOptions: PluginOptions) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
@@ -76,10 +105,7 @@ function createResolver(pluginOptions: PluginOptions) {
         client,
         pluginOptions,
       });
-    } else if (
-      actionName.includes('gpt-image-1') ||
-      actionName.includes('dall-e')
-    ) {
+    } else if (isImageModelId(actionName)) {
       const modelRef = openAIImageModelRef({ name: actionName });
       return defineCompatOpenAIImageModel({
         name: modelRef.name,
@@ -114,7 +140,7 @@ function createResolver(pluginOptions: PluginOptions) {
         modelRef,
       });
     } else {
-      const modelRef = openAIModelRef({ name: actionName });
+      const modelRef = gptModelRef(actionName);
       return defineCompatOpenAIModel({
         name: modelRef.name,
         client,
@@ -126,7 +152,12 @@ function createResolver(pluginOptions: PluginOptions) {
 }
 
 function filterOpenAiModels(model: OpenAI.Model): boolean {
-  return !UNSUPPORTED_MODEL_MATCHERS.some((m) => model.id.includes(m));
+  if (UNSUPPORTED_MODEL_MATCHERS.some((m) => m.test(model.id))) {
+    return false;
+  }
+  // Other image ids (gpt-image-2*, chatgpt-image-latest) aren't served yet and
+  // would otherwise be listed as chat models.
+  return isImageModelId(model.id) || !model.id.includes('image');
 }
 
 const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
@@ -138,10 +169,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           configSchema: TextEmbeddingConfigSchema,
           info: lookup(SUPPORTED_EMBEDDING_MODELS, model.id)?.info,
         });
-      } else if (
-        model.id.includes('gpt-image-1') ||
-        model.id.includes('dall-e')
-      ) {
+      } else if (isImageModelId(model.id)) {
         const modelRef =
           lookup(SUPPORTED_IMAGE_MODELS, model.id) ??
           openAIImageModelRef({ name: model.id });
@@ -178,9 +206,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           configSchema: modelRef.configSchema,
         });
       } else {
-        const modelRef =
-          lookup(SUPPORTED_GPT_MODELS, model.id) ??
-          openAIModelRef({ name: model.id });
+        const modelRef = gptModelRef(model.id);
         return modelActionMetadata({
           name: modelRef.name,
           info: modelRef.info,
@@ -310,7 +336,7 @@ export type OpenAIPlugin = {
 };
 
 const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
-  if (name.includes('gpt-image-1') || name.includes('dall-e')) {
+  if (isImageModelId(name)) {
     return openAIImageModelRef({
       name,
       config,

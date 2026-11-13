@@ -21,17 +21,7 @@ import {
   ChatCompletionCommonConfigSchema,
   compatOaiModelRef,
 } from '../model.js';
-
-const MULTIMODAL_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: true,
-    systemRole: true,
-    output: ['text', 'json'],
-    constrained: 'all',
-  },
-};
+import { lookup, toModelName } from '../utils.js';
 
 /** OpenAI Custom configuration schema. */
 export const OpenAIChatCompletionConfigSchema =
@@ -54,291 +44,158 @@ export function openAIModelRef(params: {
   });
 }
 
-const gpt45 = openAIModelRef({
-  name: 'gpt-4.5',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt45Preview = openAIModelRef({
-  name: 'gpt-4.5-preview',
-  info: MULTIMODAL_MODEL_INFO,
-});
+/**
+ * When a Chat Completions request may include function tools:
+ * - `always`: no restriction.
+ * - `effortNone`: only when the effective reasoning effort is `none`.
+ * - `never`: not at all.
+ */
+type ToolsSupport = 'always' | 'effortNone' | 'never';
 
-const gpt4o = openAIModelRef({
-  name: 'gpt-4o',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt4o20240513 = openAIModelRef({
-  name: 'gpt-4o-2024-05-13',
-  info: MULTIMODAL_MODEL_INFO,
-});
+interface GptModelSpec {
+  /** Capabilities other than tools and toolChoice, which follow from `tools`. */
+  supports: Omit<NonNullable<ModelInfo['supports']>, 'tools' | 'toolChoice'>;
+  tools: ToolsSupport;
+  /** Announced shutdown date (YYYY-MM-DD); sets stage 'deprecated'. */
+  shutdownDate?: string;
+}
 
-const o1 = openAIModelRef({
-  name: 'o1',
-  info: {
-    supports: {
-      multiturn: true,
-      tools: true,
-      media: true,
-      systemRole: false,
-      output: ['text', 'json'],
-    },
+const CHAT_SUPPORTS = {
+  multiturn: true,
+  media: true,
+  systemRole: true,
+  output: ['text', 'json'],
+  constrained: 'all',
+} as const satisfies GptModelSpec['supports'];
+const O_SERIES_SUPPORTS = {
+  multiturn: true,
+  media: true,
+  systemRole: false,
+  output: ['text', 'json'],
+  constrained: 'all',
+} as const satisfies GptModelSpec['supports'];
+const SEARCH_SUPPORTS = {
+  multiturn: true,
+  media: true,
+  systemRole: true,
+} as const satisfies GptModelSpec['supports'];
+
+/**
+ * The OpenAI chat catalog: one entry per registered model id. Model info
+ * (stage, supports.tools, supports.toolChoice) is derived from these entries.
+ */
+const GPT_MODEL_SPECS = {
+  'gpt-4o': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2027-01-14',
   },
-});
-
-const o3 = openAIModelRef({
-  name: 'o3',
-  info: {
-    supports: {
-      multiturn: true,
-      tools: true,
-      media: true,
-      systemRole: false,
-      output: ['text', 'json'],
-    },
+  'gpt-4o-mini': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2027-01-14',
   },
-});
-
-const o3Mini = openAIModelRef({
-  name: 'o3-mini',
-  info: {
-    supports: {
-      multiturn: true,
-      tools: true,
-      media: false,
-      systemRole: false,
-      output: ['text', 'json'],
-    },
+  'gpt-4o-mini-2024-07-18': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2027-01-14',
   },
-});
-
-const o4Mini = openAIModelRef({
-  name: 'o4-mini',
-  info: {
-    supports: {
-      multiturn: true,
-      tools: true,
-      media: true,
-      systemRole: false,
-      output: ['text', 'json'],
-    },
+  'gpt-4.1': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2027-01-14',
   },
-});
-
-const gpt4oMini = openAIModelRef({
-  name: 'gpt-4o-mini',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt4oMini20240718 = openAIModelRef({
-  name: 'gpt-4o-mini-2024-07-18',
-  info: MULTIMODAL_MODEL_INFO,
-});
-
-const gpt4Turbo = openAIModelRef({
-  name: 'gpt-4-turbo',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt4Turbo20240409 = openAIModelRef({
-  name: 'gpt-4-turbo-2024-04-09',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt4TurboPreview = openAIModelRef({
-  name: 'gpt-4-turbo-preview',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt40125Preview = openAIModelRef({
-  name: 'gpt-4-0125-preview',
-  info: MULTIMODAL_MODEL_INFO,
-});
-const gpt41106Preview = openAIModelRef({
-  name: 'gpt-4-1106-preview',
-  info: MULTIMODAL_MODEL_INFO,
-});
-
-const GPT_4_VISION_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: false,
-    media: true,
-    systemRole: true,
-    output: ['text'],
+  'gpt-4.1-mini': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2027-01-14',
   },
+  o3: {
+    supports: O_SERIES_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2026-12-11',
+  },
+  'gpt-5': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2026-12-11',
+  },
+  'gpt-5-mini': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2026-12-11',
+  },
+  'gpt-5-nano': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2026-12-11',
+  },
+  'gpt-5-search-api': { supports: SEARCH_SUPPORTS, tools: 'never' },
+  'gpt-5.1': {
+    supports: CHAT_SUPPORTS,
+    tools: 'always',
+    shutdownDate: '2027-04-01',
+  },
+  'gpt-5.2': { supports: CHAT_SUPPORTS, tools: 'always' },
+  'gpt-5.4': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-5.4-mini': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-5.4-nano': {
+    supports: CHAT_SUPPORTS,
+    tools: 'effortNone',
+    shutdownDate: '2027-04-01',
+  },
+  'gpt-5.5': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-5.6-luna': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-5.6-terra': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-5.6-sol': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-6-astra': { supports: CHAT_SUPPORTS, tools: 'never' },
+  'gpt-6-sol': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-6-luna': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
+  'gpt-6.1-sol': { supports: CHAT_SUPPORTS, tools: 'never' },
+  'gpt-6.1-terra': { supports: CHAT_SUPPORTS, tools: 'never' },
+} as const satisfies Record<string, GptModelSpec>;
+
+type GptModelId = keyof typeof GPT_MODEL_SPECS;
+
+function gptModelInfo(spec: GptModelSpec): ModelInfo {
+  const tools = spec.tools !== 'never';
+  return {
+    supports: { ...spec.supports, tools, toolChoice: tools },
+    ...(spec.shutdownDate ? { stage: 'deprecated' as const } : {}),
+  };
+}
+
+export const SUPPORTED_GPT_MODELS = Object.fromEntries(
+  Object.entries(GPT_MODEL_SPECS).map(([id, spec]) => [
+    id,
+    openAIModelRef({ name: id, info: gptModelInfo(spec) }),
+  ])
+) as {
+  [K in GptModelId]: ModelReference<typeof OpenAIChatCompletionConfigSchema>;
 };
-const gpt4Vision = openAIModelRef({
-  name: 'gpt-4-vision',
-  info: GPT_4_VISION_MODEL_INFO,
-});
-const gpt4VisionPreview = openAIModelRef({
-  name: 'gpt-4-vision-preview',
-  info: GPT_4_VISION_MODEL_INFO,
-});
-const gpt41106VisionPreview = openAIModelRef({
-  name: 'gpt-4-1106-vision-preview',
-  info: GPT_4_VISION_MODEL_INFO,
-});
 
-const GPT_4_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: false,
-    systemRole: true,
-    output: ['text'],
-  },
-};
-const gpt4 = openAIModelRef({ name: 'gpt-4', info: GPT_4_MODEL_INFO });
-const gpt40613 = openAIModelRef({
-  name: 'gpt-4-0613',
-  info: GPT_4_MODEL_INFO,
-});
-const gpt432k = openAIModelRef({
-  name: 'gpt-4-32k',
-  info: GPT_4_MODEL_INFO,
-});
-const gpt432k0613 = openAIModelRef({
-  name: 'gpt-4-32k-0613',
-  info: GPT_4_MODEL_INFO,
-});
+const SNAPSHOT_DATE_SUFFIX = /-\d{4}-\d{2}-\d{2}$/;
 
-const GPT_35_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: false,
-    systemRole: true,
-    output: ['text', 'json'],
-  },
-};
-const gpt35Turbo = openAIModelRef({
-  name: 'gpt-3.5-turbo',
-  info: GPT_35_MODEL_INFO,
-});
-const gpt35Turbo0125 = openAIModelRef({
-  name: 'gpt-3.5-turbo-0125',
-  info: GPT_35_MODEL_INFO,
-});
-const gpt35Turbo1106 = openAIModelRef({
-  name: 'gpt-3.5-turbo-1106',
-  info: GPT_35_MODEL_INFO,
-});
+/** Shut-down snapshots of catalogued aliases, which must not get live info. */
+const SHUT_DOWN_SNAPSHOTS: ReadonlySet<string> = new Set(['gpt-4o-2024-05-13']);
 
-const GPT_5_MODEL_INFO: ModelInfo = {
-  supports: {
-    multiturn: true,
-    tools: true,
-    media: true,
-    systemRole: true,
-    output: ['text', 'json'],
-    constrained: 'all',
-  },
-};
-const gpt5 = openAIModelRef({
-  name: 'gpt-5',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5Mini = openAIModelRef({
-  name: 'gpt-5-mini',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5Nano = openAIModelRef({
-  name: 'gpt-5-nano',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5ChatLatest = openAIModelRef({
-  name: 'gpt-5-chat-latest',
-  info: {
-    supports: {
-      ...GPT_5_MODEL_INFO.supports,
-      tools: false,
-      output: ['text'],
-      constrained: undefined,
-    },
-  },
-});
-const gpt5_1 = openAIModelRef({
-  name: 'gpt-5.1',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_2 = openAIModelRef({
-  name: 'gpt-5.2',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_4 = openAIModelRef({
-  name: 'gpt-5.4',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_4Mini = openAIModelRef({
-  name: 'gpt-5.4-mini',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_4Nano = openAIModelRef({
-  name: 'gpt-5.4-nano',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_5 = openAIModelRef({
-  name: 'gpt-5.5',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_6Luna = openAIModelRef({
-  name: 'gpt-5.6-luna',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_6Terra = openAIModelRef({
-  name: 'gpt-5.6-terra',
-  info: GPT_5_MODEL_INFO,
-});
-const gpt5_6Sol = openAIModelRef({
-  name: 'gpt-5.6-sol',
-  info: GPT_5_MODEL_INFO,
-});
-// Chat Completions rejects function tools for this model.
-const gpt6Astra = openAIModelRef({
-  name: 'gpt-6-astra',
-  info: {
-    supports: {
-      ...GPT_5_MODEL_INFO.supports,
-      tools: false,
-    },
-  },
-});
+function gptModelSpec(name: string): GptModelSpec | undefined {
+  const id = toModelName(name, 'openai');
+  const spec = lookup(GPT_MODEL_SPECS, id);
+  if (spec || SHUT_DOWN_SNAPSHOTS.has(id)) {
+    return spec;
+  }
+  return lookup(GPT_MODEL_SPECS, id.replace(SNAPSHOT_DATE_SUFFIX, ''));
+}
 
-export const SUPPORTED_GPT_MODELS = {
-  'gpt-4.5': gpt45,
-  'gpt-4.5-preview': gpt45Preview,
-  'gpt-4o': gpt4o,
-  'gpt-4o-2024-05-13': gpt4o20240513,
-  o1: o1,
-  o3: o3,
-  'o3-mini': o3Mini,
-  'o4-mini': o4Mini,
-  'gpt-4o-mini': gpt4oMini,
-  'gpt-4o-mini-2024-07-18': gpt4oMini20240718,
-  'gpt-4-turbo': gpt4Turbo,
-  'gpt-4-turbo-2024-04-09': gpt4Turbo20240409,
-  'gpt-4-turbo-preview': gpt4TurboPreview,
-  'gpt-4-0125-preview': gpt40125Preview,
-  'gpt-4-1106-preview': gpt41106Preview,
-  'gpt-4-vision': gpt4Vision,
-  'gpt-4-vision-preview': gpt4VisionPreview,
-  'gpt-4-1106-vision-preview': gpt41106VisionPreview,
-  'gpt-4': gpt4,
-  'gpt-4-0613': gpt40613,
-  'gpt-4-32k': gpt432k,
-  'gpt-4-32k-0613': gpt432k0613,
-  'gpt-3.5-turbo': gpt35Turbo,
-  'gpt-3.5-turbo-0125': gpt35Turbo0125,
-  'gpt-3.5-turbo-1106': gpt35Turbo1106,
-  'gpt-5': gpt5,
-  'gpt-5-mini': gpt5Mini,
-  'gpt-5-nano': gpt5Nano,
-  'gpt-5-chat-latest': gpt5ChatLatest,
-  'gpt-5.1': gpt5_1,
-  'gpt-5.2': gpt5_2,
-  'gpt-5.4': gpt5_4,
-  'gpt-5.4-mini': gpt5_4Mini,
-  'gpt-5.4-nano': gpt5_4Nano,
-  'gpt-5.5': gpt5_5,
-  'gpt-5.6-luna': gpt5_6Luna,
-  'gpt-5.6-terra': gpt5_6Terra,
-  'gpt-5.6-sol': gpt5_6Sol,
-  'gpt-6-astra': gpt6Astra,
-} as const;
+/**
+ * Returns a chat model reference for an OpenAI model id. Catalogued ids and
+ * their live dated snapshots carry catalog info (including stage); other ids
+ * get generic info.
+ */
+export function gptModelRef(
+  name: string
+): ModelReference<typeof OpenAIChatCompletionConfigSchema> {
+  const spec = gptModelSpec(name);
+  return openAIModelRef({ name, info: spec && gptModelInfo(spec) });
+}
