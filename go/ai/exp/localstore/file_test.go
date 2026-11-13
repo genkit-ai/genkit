@@ -771,3 +771,88 @@ func TestFileSessionStore_PathUnsafeSessionIDRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestFileSessionStore_Delete(t *testing.T) {
+	runDeleteStoreTests(t, func(t *testing.T) exp.SessionStore[testState] {
+		store, err := NewFileSessionStore[testState](t.TempDir(), WithPollInterval(10*time.Millisecond))
+		if err != nil {
+			t.Fatalf("NewFileSessionStore: %v", err)
+		}
+		return store
+	})
+}
+
+type deleteTenantKey struct{}
+
+func TestFileSessionStore_Delete_TenantPrefix(t *testing.T) {
+	// The same session ID under two tenants: deleting it for one must not touch
+	// the other.
+	store, err := NewFileSessionStore[testState](t.TempDir(), WithSnapshotPathPrefix(func(ctx context.Context) string {
+		tenant, _ := ctx.Value(deleteTenantKey{}).(string)
+		return tenant
+	}))
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	alice := context.WithValue(context.Background(), deleteTenantKey{}, "alice")
+	bob := context.WithValue(context.Background(), deleteTenantKey{}, "bob")
+	for _, ctx := range []context.Context{alice, bob} {
+		now := time.Now()
+		if _, err := store.SaveSnapshot(ctx, "snap",
+			func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+				return &exp.SessionSnapshot[testState]{SessionID: "shared", CreatedAt: now, UpdatedAt: now}, nil
+			}); err != nil {
+			t.Fatalf("SaveSnapshot: %v", err)
+		}
+	}
+
+	if removed, err := store.DeleteSession(alice, "shared"); err != nil || !removed {
+		t.Fatalf("DeleteSession(alice) = %v, %v; want true, nil", removed, err)
+	}
+	if got, err := store.GetLatestSnapshot(alice, "shared"); err != nil || got != nil {
+		t.Errorf("alice still sees the session: %v, %v", got, err)
+	}
+	if got, err := store.GetLatestSnapshot(bob, "shared"); err != nil || got == nil {
+		t.Errorf("bob lost his session: %v, %v", got, err)
+	}
+}
+
+func TestFileSessionStore_Delete_SeenByAnotherStoreInstance(t *testing.T) {
+	// A delete made through one store instance (standing in for another
+	// process) ends a subscription held on a different instance: the poller
+	// sees the file vanish and reports the run as aborted.
+	dir := t.TempDir()
+	watcher, err := NewFileSessionStore[testState](dir, WithPollInterval(10*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	deleter, err := NewFileSessionStore[testState](dir)
+	if err != nil {
+		t.Fatalf("NewFileSessionStore: %v", err)
+	}
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := watcher.SaveSnapshot(ctx, "p1",
+		func(_ *exp.SessionSnapshot[testState]) (*exp.SessionSnapshot[testState], error) {
+			return &exp.SessionSnapshot[testState]{SessionID: "sess", Status: exp.SnapshotStatusPending, CreatedAt: now, UpdatedAt: now}, nil
+		}); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	subCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ch := watcher.OnSnapshotStatusChange(subCtx, "p1")
+	<-ch // pending
+
+	if removed, err := deleter.DeleteSession(ctx, "sess"); err != nil || !removed {
+		t.Fatalf("DeleteSession = %v, %v; want true, nil", removed, err)
+	}
+	select {
+	case got := <-ch:
+		if got != exp.SnapshotStatusAborted {
+			t.Errorf("status = %q, want aborted", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the other instance's subscription was not ended by the delete")
+	}
+}

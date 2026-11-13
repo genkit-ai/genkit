@@ -42,12 +42,15 @@ type testInMemStore[State any] struct {
 	mu        sync.RWMutex
 	snapshots map[string]*SessionSnapshot[State]
 	subs      map[string][]chan SnapshotStatus
+	// deleted mirrors localstore: sessions removed by DeleteSession.
+	deleted map[string]struct{}
 }
 
 func newTestInMemStore[State any]() *testInMemStore[State] {
 	return &testInMemStore[State]{
 		snapshots: make(map[string]*SessionSnapshot[State]),
 		subs:      make(map[string][]chan SnapshotStatus),
+		deleted:   make(map[string]struct{}),
 	}
 }
 
@@ -139,6 +142,12 @@ func (s *testInMemStore[State]) SaveSnapshot(
 	if next.Status == "" {
 		next.Status = SnapshotStatusCompleted
 	}
+	if _, gone := s.deleted[next.SessionID]; gone && next.SessionID != "" {
+		if existing != nil || next.ParentID != "" {
+			return nil, fmt.Errorf("session %q was deleted: %w", next.SessionID, ErrSessionDeleted)
+		}
+		delete(s.deleted, next.SessionID)
+	}
 
 	copied, err := testCopySnapshot(next)
 	if err != nil {
@@ -167,6 +176,29 @@ func (s *testInMemStore[State]) OnSnapshotStatusChange(ctx context.Context, snap
 
 	context.AfterFunc(ctx, func() { s.removeSub(snapshotID, ch) })
 	return ch
+}
+
+// DeleteSession mirrors localstore.InMemorySessionStore.DeleteSession.
+func (s *testInMemStore[State]) DeleteSession(_ context.Context, sessionID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := false
+	for id, snap := range s.snapshots {
+		if snap.SessionID != sessionID {
+			continue
+		}
+		delete(s.snapshots, id)
+		removed = true
+		s.notifyLocked(id, SnapshotStatusAborted)
+		for _, ch := range s.subs[id] {
+			close(ch)
+		}
+		delete(s.subs, id)
+	}
+	if removed {
+		s.deleted[sessionID] = struct{}{}
+	}
+	return removed, nil
 }
 
 func (s *testInMemStore[State]) removeSub(snapshotID string, ch chan SnapshotStatus) {
