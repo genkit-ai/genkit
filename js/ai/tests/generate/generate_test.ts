@@ -42,6 +42,7 @@ import { defineGenerateAction } from '../../src/generate/action.js';
 import { generateMiddleware } from '../../src/generate/middleware.js';
 import {
   defineModel,
+  type GenerateRequest,
   type GenerateResponseData,
   type ModelAction,
   type ModelMiddleware,
@@ -581,6 +582,153 @@ describe('generate', () => {
     await assert.rejects(response, {
       message:
         'NOT_FOUND: failed to find matching resource for test://resource',
+    });
+  });
+
+  describe('resources in tool responses', () => {
+    let modelRequests: GenerateRequest[];
+
+    beforeEach(() => {
+      modelRequests = [];
+      defineResource(
+        registry,
+        { name: 'toolResource', template: 'test://r/{x}' },
+        (input) => ({
+          content: [{ text: `body of ${input.uri}` }, { text: 'second' }],
+        })
+      );
+      defineTool(
+        registry,
+        { name: 'linkTool', description: 'returns links', multipart: true },
+        async () => ({
+          output: 'out',
+          content: [
+            { text: 'before' },
+            { resource: { uri: 'test://r/1' } },
+            { resource: { uri: 'test://missing/2' } },
+            { resource: { uri: 'test://r/3' } },
+          ],
+        })
+      );
+      defineModel(
+        registry,
+        { name: 'linkModel', supports: { tools: true } },
+        async (request) => {
+          modelRequests.push(request);
+          return {
+            message: {
+              role: 'model',
+              content: [
+                modelRequests.length === 1
+                  ? { toolRequest: { name: 'linkTool', input: {} } }
+                  : { text: 'done' },
+              ],
+            },
+            finishReason: 'stop',
+          };
+        }
+      );
+    });
+
+    function resolvedPart(uri: string, text: string) {
+      return {
+        text,
+        metadata: { resource: { template: 'test://r/{x}', uri } },
+      };
+    }
+
+    it('resolves resource parts returned by a tool', async () => {
+      const response = await generate(registry, {
+        model: 'linkModel',
+        prompt: 'go',
+        tools: ['linkTool'],
+      });
+
+      assert.strictEqual(response.text, 'done');
+      const toolMessage = modelRequests[1].messages[2];
+      assert.deepStrictEqual(toolMessage.content[0].toolResponse?.content, [
+        { text: 'before' },
+        resolvedPart('test://r/1', 'body of test://r/1'),
+        resolvedPart('test://r/1', 'second'),
+        { text: 'Resource link (test://missing/2)' },
+        resolvedPart('test://r/3', 'body of test://r/3'),
+        resolvedPart('test://r/3', 'second'),
+      ]);
+    });
+
+    it('resolves every tool response alongside top level resources', async () => {
+      await generate(registry, {
+        model: 'linkModel',
+        tools: ['linkTool'],
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'hi' }, { resource: { uri: 'test://r/0' } }],
+          },
+          {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'linkTool', input: {}, ref: 'a' } },
+              { toolRequest: { name: 'linkTool', input: {}, ref: 'b' } },
+              { toolRequest: { name: 'linkTool', input: {}, ref: 'c' } },
+            ],
+          },
+          {
+            role: 'tool',
+            content: [
+              {
+                toolResponse: {
+                  name: 'linkTool',
+                  ref: 'a',
+                  output: 'a',
+                  content: [{ resource: { uri: 'test://r/a' } }],
+                },
+              },
+              { toolResponse: { name: 'linkTool', ref: 'b', output: 'b' } },
+              {
+                toolResponse: {
+                  name: 'linkTool',
+                  ref: 'c',
+                  output: 'c',
+                  content: [{ resource: { uri: 'test://none' } }],
+                },
+              },
+            ],
+          },
+          { role: 'user', content: [{ text: 'next' }] },
+        ],
+      });
+
+      const [user, , tool] = modelRequests[0].messages;
+      assert.deepStrictEqual(user.content, [
+        { text: 'hi' },
+        resolvedPart('test://r/0', 'body of test://r/0'),
+        resolvedPart('test://r/0', 'second'),
+      ]);
+      assert.deepStrictEqual(
+        tool.content.map((p) => p.toolResponse?.content),
+        [
+          [
+            resolvedPart('test://r/a', 'body of test://r/a'),
+            resolvedPart('test://r/a', 'second'),
+          ],
+          undefined,
+          [{ text: 'Resource link (test://none)' }],
+        ]
+      );
+    });
+
+    it('still throws for an unmatched resource supplied by the user', async () => {
+      await assert.rejects(
+        generate(registry, {
+          model: 'linkModel',
+          prompt: [{ resource: { uri: 'test://none' } }],
+        }),
+        {
+          message:
+            'NOT_FOUND: failed to find matching resource for test://none',
+        }
+      );
     });
   });
 
