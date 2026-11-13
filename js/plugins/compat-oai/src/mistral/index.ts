@@ -194,7 +194,8 @@ function createListActions(listedModelInfo: Map<string, ModelInfo>) {
 
 export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
   const apiKey = options?.apiKey ?? process.env.MISTRAL_API_KEY;
-  if (!apiKey) {
+  // `apiKey: false` means no default key: every request brings its own.
+  if (apiKey == null || apiKey === '') {
     throw new GenkitError({
       status: 'FAILED_PRECONDITION',
       message:
