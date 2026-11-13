@@ -38,19 +38,22 @@ on:
         default: rc
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Version bump
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           token: ${{ secrets.GENKIT_RELEASER_GITHUB_TOKEN }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
