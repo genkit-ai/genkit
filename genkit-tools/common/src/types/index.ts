@@ -33,3 +33,4 @@ export * from './reflection.js';
 export * from './retriever.js';
 export * from './status.js';
 export * from './trace.js';
+export * from './trajectory.js';
