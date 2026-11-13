@@ -161,6 +161,16 @@ describe('mistral plugin', () => {
     }
   });
 
+  it('accepts apiKey: false without MISTRAL_API_KEY', () => {
+    const saved = process.env.MISTRAL_API_KEY;
+    delete process.env.MISTRAL_API_KEY;
+    try {
+      expect(mistral({ apiKey: false }).name).toBe('mistral');
+    } finally {
+      if (saved !== undefined) process.env.MISTRAL_API_KEY = saved;
+    }
+  });
+
   it('reads the API key from MISTRAL_API_KEY', () => {
     const saved = process.env.MISTRAL_API_KEY;
     process.env.MISTRAL_API_KEY = 'from-env';
@@ -974,6 +984,37 @@ describe('mistral plugin', () => {
         expectMistralRequests(scopedServer);
       } finally {
         scopedServer.stop();
+      }
+    });
+
+    it('sends a request-scoped key when the plugin has apiKey: false', async () => {
+      const saved = process.env.MISTRAL_API_KEY;
+      delete process.env.MISTRAL_API_KEY;
+      const scopedServer = new FakeOpenAIServer('scoped-key');
+      await scopedServer.start();
+      try {
+        const scopedAi = genkit({
+          plugins: [
+            mistral({ ...fakeServerOptions(scopedServer), apiKey: false }),
+          ],
+        });
+        scopedServer.setNextResponse({ body: CHAT_RESPONSE });
+
+        const response = await scopedAi.generate({
+          model: mistral.model('mistral-small-latest'),
+          prompt: 'hi',
+          config: { apiKey: 'scoped-key' },
+        });
+
+        expect(response.text).toBe('scoped');
+        expect(scopedServer.requests).toHaveLength(1);
+        expect(scopedServer.requests[0].headers['authorization']).toBe(
+          'Bearer scoped-key'
+        );
+        expectMistralRequests(scopedServer);
+      } finally {
+        scopedServer.stop();
+        if (saved !== undefined) process.env.MISTRAL_API_KEY = saved;
       }
     });
 
