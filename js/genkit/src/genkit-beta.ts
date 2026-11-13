@@ -44,6 +44,7 @@ import {
 import { defineFormat } from '@genkit-ai/ai/formats';
 
 import {
+  SessionDeletedError,
   type SessionSnapshot,
   type SessionSnapshotInput,
   type SessionState,
@@ -66,6 +67,7 @@ export {
   CommittedTurnError,
   FileSessionStore,
   InMemorySessionStore,
+  SessionDeletedError,
   SessionRunner,
   applyPatch,
   diff,

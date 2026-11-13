@@ -19,6 +19,7 @@ import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import * as path from 'path';
 import {
+  SessionDeletedError,
   assertValidSessionId,
   type GetSnapshotOptions,
   type SessionSnapshot,
@@ -139,6 +140,8 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     Array<(snapshot: SessionSnapshot<S>) => void>
   >();
   private rejectBranchingSessions: boolean;
+  /** Sessions removed by `deleteSession`; see `saveSnapshot`. */
+  private deletedSessions = new Set<string>();
 
   /**
    * @param options.rejectBranchingSessions When `true`, a `sessionId` lookup
@@ -187,6 +190,14 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
     const result = mutator(current ? structuredClone(current) : undefined);
     if (result === null) return null;
 
+    // A deleted session only accepts a fresh root snapshot; a late writer
+    // continuing the old chain must not resurrect it.
+    const ownerSessionId = result.sessionId ?? result.state?.sessionId;
+    if (ownerSessionId && this.deletedSessions.has(ownerSessionId)) {
+      if (result.parentId) throw new SessionDeletedError(ownerSessionId);
+      this.deletedSessions.delete(ownerSessionId);
+    }
+
     // Determine the final ID. The runtime normally supplies a snapshotId, but
     // fall back to a fresh UUID for direct store users who omit it.
     const id =
@@ -223,6 +234,45 @@ export class InMemorySessionStore<S = unknown> implements SessionStore<S> {
         if (index >= 0) list.splice(index, 1);
       }
     };
+  }
+
+  async deleteSession(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<boolean> {
+    assertSessionIdForDelete(sessionId);
+    const removed: SessionSnapshot<S>[] = [];
+    for (const [id, snap] of this.snapshots) {
+      if ((snap.sessionId ?? snap.state?.sessionId) === sessionId) {
+        removed.push(snap);
+        this.snapshots.delete(id);
+      }
+    }
+    if (removed.length === 0) return false;
+    this.deletedSessions.add(sessionId);
+    // Tell any subscriber (e.g. a detached run watching for an abort) that
+    // its snapshot is gone, then drop the listeners.
+    for (const snap of removed) {
+      const subscribers = this.listeners.get(snap.snapshotId);
+      this.listeners.delete(snap.snapshotId);
+      for (const listener of subscribers ?? []) {
+        listener(structuredClone({ ...snap, status: 'aborted' }));
+      }
+    }
+    return true;
+  }
+}
+
+/**
+ * Validates a sessionId passed to `deleteSession`. Unlike the id checks used
+ * on the read path, an empty id is a caller error here, not "no match".
+ */
+function assertSessionIdForDelete(sessionId: string): void {
+  if (!sessionId || !sessionId.trim()) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: 'deleteSession requires a non-empty sessionId.',
+    });
   }
 }
 
@@ -307,6 +357,8 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
   private snapshotPathPrefix?: (options?: SessionStoreOptions) => string;
   private rejectBranchingSessions: boolean;
   private snapshotWatchPollIntervalMs: number;
+  /** Sessions removed by `deleteSession`; see `saveSnapshotUnlocked`. */
+  private deletedSessions = new Set<string>();
 
   /**
    * Per-file write locks. The {@link SessionStore} contract (and the
@@ -654,6 +706,18 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     const snapshot = mutator(current);
     if (snapshot === null) return null;
 
+    // A deleted session only accepts a fresh root snapshot; a late writer
+    // continuing the old chain must not resurrect it. In-process only: another
+    // process writing to the same directory is not stopped.
+    const ownerSessionId = snapshot.sessionId ?? snapshot.state?.sessionId;
+    if (ownerSessionId) {
+      const tombstone = this.tombstoneKey(ownerSessionId, options);
+      if (this.deletedSessions.has(tombstone)) {
+        if (snapshot.parentId) throw new SessionDeletedError(ownerSessionId);
+        this.deletedSessions.delete(tombstone);
+      }
+    }
+
     // Determine the final ID. The runtime normally supplies a snapshotId, but
     // fall back to a fresh UUID for direct store users who omit it.
     const id =
@@ -701,6 +765,78 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
     }
 
     return id;
+  }
+
+  /** Key under which a deleted session is remembered, scoped per tenant. */
+  private tombstoneKey(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): string {
+    return `${this.prefixDir(options)}\0${sessionId}`;
+  }
+
+  /**
+   * Removes every snapshot file of the session (matched by scanning the
+   * tenant's prefix directory) and its pointer file.
+   *
+   * Each file is unlinked under its write lock so an in-flight save of that
+   * snapshot finishes first. Cross-process deletion is best effort: files
+   * written by another process after the scan are not removed.
+   */
+  async deleteSession(
+    sessionId: string,
+    options?: SessionStoreOptions
+  ): Promise<boolean> {
+    assertSessionIdForDelete(sessionId);
+    const pointerPath = this.getPointerPath(sessionId, options);
+    const dir = this.prefixDir(options);
+
+    let files: string[];
+    try {
+      files = await fsp.readdir(dir);
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      files = [];
+    }
+
+    let removed = false;
+    for (const file of files) {
+      if (!file.endsWith('.json')) continue;
+      const filePath = path.join(dir, file);
+      let snap: SessionSnapshot<S>;
+      try {
+        snap = JSON.parse(
+          await fsp.readFile(filePath, 'utf-8')
+        ) as SessionSnapshot<S>;
+      } catch {
+        // Vanished or unreadable mid-scan; nothing to attribute to this session.
+        continue;
+      }
+      if ((snap.sessionId ?? snap.state?.sessionId) !== sessionId) continue;
+      await this.withFileLock(filePath, () =>
+        fsp.unlink(filePath).then(
+          () => {
+            removed = true;
+          },
+          (e: unknown) => {
+            if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+          }
+        )
+      );
+    }
+
+    await fsp.unlink(pointerPath).then(
+      () => {
+        removed = true;
+      },
+      (e: unknown) => {
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+      }
+    );
+
+    if (removed)
+      this.deletedSessions.add(this.tombstoneKey(sessionId, options));
+    return removed;
   }
 
   /**
@@ -757,6 +893,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
 
     let closed = false;
     let lastSerialized: string | undefined;
+    let lastSnapshot: SessionSnapshot<S> | undefined;
 
     // Re-read the file and fire the callback only when the content actually
     // changed. `fs.watch` fires multiple events per write, so dedupe by
@@ -767,8 +904,19 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
       try {
         contents = await fsp.readFile(filePath, 'utf-8');
       } catch (e: unknown) {
-        // Missing file (not yet created) or a transient read error during a
-        // concurrent rewrite: ignore and wait for the next event/poll.
+        // A file we already saw that is now gone was deleted (writes replace
+        // atomically, so they never make it vanish): report it as aborted so a
+        // watching worker stops. Otherwise it is not yet created or a transient
+        // read error during a concurrent rewrite: wait for the next event/poll.
+        if (
+          (e as NodeJS.ErrnoException).code === 'ENOENT' &&
+          lastSnapshot &&
+          lastSnapshot.status !== 'aborted'
+        ) {
+          lastSnapshot = { ...lastSnapshot, status: 'aborted' };
+          lastSerialized = undefined;
+          callback(lastSnapshot);
+        }
         return;
       }
       if (closed || contents === lastSerialized) return;
@@ -781,6 +929,7 @@ export class FileSessionStore<S = unknown> implements SessionStore<S> {
         return;
       }
       lastSerialized = contents;
+      lastSnapshot = snapshot;
       callback(snapshot);
     };
 
