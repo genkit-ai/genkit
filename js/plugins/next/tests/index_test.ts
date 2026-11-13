@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { UserFacingError, genkit, z } from 'genkit';
-import { InMemoryStreamManager } from 'genkit/beta';
+import {
+  InMemorySessionStore,
+  InMemoryStreamManager,
+  genkit as genkitBeta,
+} from 'genkit/beta';
+import { remoteAgent } from 'genkit/beta/client';
 import { apiKey, type ApiKeyContext } from 'genkit/context';
 import { NextRequest } from 'next/server.js';
 import { appRoute } from '../src/index.js';
@@ -489,5 +494,53 @@ describe('appRoute', () => {
       const response = await route(request);
       expect(response.status).toEqual(204);
     });
+  });
+});
+
+describe('appRoute with remoteAgent', () => {
+  let originalFetch: typeof globalThis.fetch;
+  let requests: string[];
+
+  beforeEach(() => {
+    const ai = genkitBeta({});
+    const agent = ai.defineCustomAgent(
+      { name: 'bgAgent', store: new InMemorySessionStore() },
+      async (sess) => {
+        await sess.run(async () => {});
+        return {
+          artifacts: [],
+          message: { role: 'model', content: [{ text: 'done' }] },
+        };
+      }
+    );
+    const routes: Record<string, (req: NextRequest) => Promise<Response>> = {
+      '/api/bgAgent': appRoute(agent),
+      '/api/bgAgent/getSnapshot': appRoute(agent.getSnapshotDataAction),
+      '/api/bgAgent/waitForSnapshot': appRoute(agent.waitForSnapshotAction),
+    };
+    requests = [];
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const req = new NextRequest(new Request(input, init));
+      requests.push(req.nextUrl.pathname);
+      const route = routes[req.nextUrl.pathname];
+      return route ? route(req) : new Response(null, { status: 404 });
+    };
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('keeps using waitForSnapshot after the agent answers NOT_FOUND', async () => {
+    const agent = remoteAgent({ url: 'http://localhost/api/bgAgent' });
+    await expect(agent.waitForSnapshot('no-such-snapshot')).rejects.toThrow(
+      /not found/
+    );
+    requests = [];
+    const task = await agent.chat().detach('go');
+    const snap = await task.wait({ intervalMs: 10 });
+    expect(snap.status).toEqual('completed');
+    expect(requests).toEqual(['/api/bgAgent', '/api/bgAgent/waitForSnapshot']);
   });
 });
