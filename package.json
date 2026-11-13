@@ -1,6 +1,9 @@
 {
   "name": "genkit",
   "private": true,
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "setup": "pnpm pnpm-install-workspaces && pnpm build && pnpm link-genkit-cli",
