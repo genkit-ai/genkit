@@ -15,15 +15,20 @@
 package compat_oai
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -219,5 +224,44 @@ func TestSDKModelsCountReasoningApart(t *testing.T) {
 				t.Errorf("OutputTokens = %d, want 7, the reasoning counted apart", got)
 			}
 		})
+	}
+}
+
+// TestListActionsWarnsOncePerFailingStreak pins that a listing failure warns
+// once, repeats stay below warn level, and a success re-arms the warning.
+func TestListActionsWarnsOncePerFailingStreak(t *testing.T) {
+	fail := true
+	o := &OpenAICompatible{
+		Provider: "test",
+		ListModels: func(context.Context, *openai.Client) ([]string, error) {
+			if fail {
+				return nil, errors.New("listing broke")
+			}
+			return []string{"m1"}, nil
+		},
+	}
+	var logged bytes.Buffer
+	ctx := logger.WithContext(context.Background(), slog.New(slog.NewTextHandler(&logged, nil)))
+	list := func() []api.ActionDesc {
+		logged.Reset()
+		return listActions(ctx, o, func(id string) api.ActionDesc { return api.ActionDesc{Name: id} })
+	}
+	warned := func() bool {
+		return strings.Contains(logged.String(), "level=WARN") && strings.Contains(logged.String(), "listing broke")
+	}
+
+	if got := list(); len(got) != 0 || !warned() {
+		t.Fatalf("first failure: listed %v, log %q; want nothing listed and a warning", got, logged.String())
+	}
+	if list(); logged.Len() != 0 {
+		t.Fatalf("repeat failure logged %q, want nothing at warn level", logged.String())
+	}
+	fail = false
+	if got := list(); len(got) != 1 || logged.Len() != 0 {
+		t.Fatalf("success: listed %v, log %q; want m1 and no log", got, logged.String())
+	}
+	fail = true
+	if list(); !warned() {
+		t.Fatalf("failure after a success logged %q, want a warning", logged.String())
 	}
 }

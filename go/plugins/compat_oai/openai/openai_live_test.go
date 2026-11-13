@@ -31,18 +31,23 @@ func TestPluginLive(t *testing.T) {
 	oai := &openai.OpenAI{APIKey: apiKey}
 	g := livetest.Init(t, oai)
 
+	// gpt-5.6-luna calls tools in Chat Completions only at effort none.
+	luna := openai.ModelRef("gpt-5.6-luna", &openaiGo.ChatCompletionNewParams{
+		ReasoningEffort: shared.ReasoningEffort("none"),
+	})
+
 	oailive.Run(t, g, oailive.Suite{
 		Suite: livetest.Suite{
-			Model: openai.ModelRef("gpt-4o-mini", nil),
+			Model: luna,
 			// The chat completions API takes the effort knob but keeps the
-			// reasoning content server-side.
-			ReasoningModel: openai.ModelRef("gpt-5-nano", &openaiGo.ChatCompletionNewParams{
+			// reasoning content server-side. gpt-5.2 takes tools at any effort.
+			ReasoningModel: openai.ModelRef("gpt-5.2", &openaiGo.ChatCompletionNewParams{
 				ReasoningEffort: shared.ReasoningEffortLow,
 			}),
-			VisionModel: openai.ModelRef("gpt-4.1-nano", nil),
+			VisionModel: luna,
 			// Chat completions read input_audio on the audio models only.
 			AudioModel:    openai.ModelRef("gpt-audio-1.5", nil),
-			DocumentModel: openai.ModelRef("gpt-4o-mini", nil),
+			DocumentModel: luna,
 			LimitConfig: &openaiGo.ChatCompletionNewParams{
 				MaxCompletionTokens: openaiGo.Int(16),
 			},
@@ -58,16 +63,15 @@ func TestPluginLive(t *testing.T) {
 		Normalized: true,
 	})
 
-	// The SDK's own request type carries the sampling fields.
+	// The SDK's own request type carries the sampling fields, which reasoning
+	// models accept only at effort none. gpt-5.6-luna rejects stop sequences.
 	t.Run("sdk config", func(t *testing.T) {
 		resp, err := genkit.Generate(t.Context(), g,
-			ai.WithModel(openai.ModelRef("gpt-4o-mini", &openaiGo.ChatCompletionNewParams{
+			ai.WithModel(openai.ModelRef("gpt-5.6-luna", &openaiGo.ChatCompletionNewParams{
+				ReasoningEffort:     shared.ReasoningEffort("none"),
 				Temperature:         openaiGo.Float(0.2),
 				MaxCompletionTokens: openaiGo.Int(50),
 				TopP:                openaiGo.Float(0.5),
-				Stop: openaiGo.ChatCompletionNewParamsStopUnion{
-					OfStringArray: []string{".", "!", "?"},
-				},
 			})),
 			ai.WithPrompt("Write a short sentence about artificial intelligence."),
 		)
