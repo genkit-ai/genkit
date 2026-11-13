@@ -46,16 +46,41 @@ of the SDK's request options).
 
 ## Models
 
-The plugin registers a curated catalog spanning the GPT-5 line (`gpt-5.6-sol`,
-`gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and earlier), the GPT-4
-line, and the o-series reasoning models. The catalog is not a ceiling: any
-model ID the API serves resolves on demand, and the models the endpoint
-reports are listed dynamically. Use the `Models` field to describe or correct
-any model, most often one released after this plugin:
+The plugin registers a curated catalog spanning the GPT-6 line (`gpt-6-astra`,
+`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`), the GPT-5 line
+(`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
+earlier, plus `gpt-5-search-api`), `gpt-4.1`, `gpt-4o`, and `o3`. Models OpenAI has shut down are not
+registered. Every catalog model with an announced shutdown date is marked
+deprecated, its dated snapshots and fine-tunes included, so generating with
+one logs a warning: `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, and `o3`
+(2026-12-11); `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o`, and `gpt-4o-mini`
+(2027-01-14); `gpt-5.1` and `gpt-5.4-nano` (2027-04-01). Models outside the
+catalog, such as `gpt-audio-mini` (shutdown 2027-01-20), resolve with the
+generic defaults and are not marked deprecated, as do models OpenAI has
+already shut down, such as `o4-mini`.
+
+`gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6.1-terra` call tools only through the
+Responses API, so they advertise no tool support here. `gpt-5-search-api`
+takes no tools either. The other `gpt-5.4` and later chat models (`gpt-5.4`,
+`gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-5.6-luna`, `gpt-6-sol`, and `gpt-6-luna`) advertise tool support, but they
+call tools in Chat Completions only with `ReasoningEffort` set to `none`. The
+`gpt-5.4` models and `gpt-5.5` default to `none`; the others default to a higher
+effort, so a request with tools must set `none` or the API rejects it. Earlier
+models (`gpt-5`, `gpt-5.1`, `gpt-5.2`, `o3`) take tools at any effort.
+
+The catalog is not a ceiling: any model ID the API serves resolves on demand,
+and the chat models the endpoint reports are listed dynamically. The listing
+leaves out the image, speech (TTS), transcription, realtime, audio, embedding,
+moderation, legacy completions, and Responses-only models OpenAI's endpoint
+also reports. IDs that don't follow OpenAI's naming, as a proxy or self-hosted
+server behind a custom base URL may report, are always listed. If the endpoint
+cannot be listed, the plugin logs a warning. Use the `Models` field to describe or correct any
+model, most often one released after this plugin:
 
 ```go
 plugin := &oai.OpenAI{Models: map[string]ai.ModelOptions{
-    "gpt-6": {Label: "GPT-6", Supports: &compat_oai.Multimodal},
+    "gpt-7": {Label: "GPT-7", Supports: &compat_oai.Multimodal},
 }}
 ```
 
