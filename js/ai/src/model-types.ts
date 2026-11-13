@@ -25,9 +25,9 @@ import {
 export { Part, PartSchema };
 
 /** Zod schema for a serializable reference to a registered generate middleware. */
-export const MiddlewareRefSchema: z.ZodTypeAny = z.object({
+export const MiddlewareRefSchema = z.object({
   name: z.string(),
-  config: z.any().optional(),
+  config: z.unknown().optional(),
 });
 /** A serializable reference to a registered generate middleware, identified by name and optional config. */
 export type MiddlewareRef = z.infer<typeof MiddlewareRefSchema>;
