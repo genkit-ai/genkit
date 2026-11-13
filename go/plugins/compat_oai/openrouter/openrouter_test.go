@@ -84,7 +84,7 @@ func TestPluginConfigPrecedenceAndAttribution(t *testing.T) {
 		rightHit = true
 		gotAuth = r.Header.Get("Authorization")
 		gotReferer = r.Header.Get("HTTP-Referer")
-		gotTitle = r.Header.Get("X-Title")
+		gotTitle = r.Header.Get("X-OpenRouter-Title")
 	})
 	defer right.Close()
 
@@ -128,7 +128,7 @@ func TestPluginConfigPrecedenceAndAttribution(t *testing.T) {
 		t.Errorf("HTTP-Referer = %q, want the plugin's SiteURL", gotReferer)
 	}
 	if gotTitle != "Genkit Test" {
-		t.Errorf("X-Title = %q, want the plugin's AppName", gotTitle)
+		t.Errorf("X-OpenRouter-Title = %q, want the plugin's AppName", gotTitle)
 	}
 }
 
