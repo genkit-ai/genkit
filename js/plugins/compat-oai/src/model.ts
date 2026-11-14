@@ -25,6 +25,7 @@ import type {
   Role,
   StreamingCallback,
   ToolRequestPart,
+  ToolResponsePart,
 } from 'genkit';
 import {
   GenerationCommonConfigSchema,
@@ -165,6 +166,22 @@ function generateFilenameFromContentType(contentType: string): string {
   return ext ? `file.${ext}` : 'file';
 }
 
+function mediaContentType(
+  media: NonNullable<Part['media']>
+): string | undefined {
+  return media.contentType || extractDataFromBase64Url(media.url)?.contentType;
+}
+
+function isToolMediaAccepted(media: NonNullable<Part['media']>): boolean {
+  const contentType = mediaContentType(media);
+  if (!contentType || isImageContentType(contentType)) {
+    return true;
+  }
+  return (
+    contentType === 'application/pdf' && !!extractDataFromBase64Url(media.url)
+  );
+}
+
 /**
  * Converts a Genkit Part to the corresponding OpenAI ChatCompletionContentPart.
  * @param part The Genkit Part to convert.
@@ -182,14 +199,7 @@ export function toOpenAITextAndMedia(
       text: part.text,
     };
   } else if (part.media) {
-    // Determine the content type from the media part or data URL
-    let contentType = part.media.contentType;
-    if (!contentType && part.media.url.startsWith('data:')) {
-      const extracted = extractDataFromBase64Url(part.media.url);
-      if (extracted) {
-        contentType = extracted.contentType;
-      }
-    }
+    const contentType = mediaContentType(part.media);
 
     // Check if this is an image type
     // If no contentType is provided, preserve legacy behavior by treating the media
@@ -241,12 +251,22 @@ export function toOpenAITextAndMedia(
  */
 export function toOpenAIMessages(
   messages: MessageData[],
-  visualDetailLevel: VisualDetailLevel = 'auto'
+  visualDetailLevel: VisualDetailLevel = 'auto',
+  supportsMedia = false
 ): ChatCompletionMessageParam[] {
   const apiMessages: ChatCompletionMessageParam[] = [];
+  const toolMedia: ChatCompletionContentPart[] = [];
+  const flushToolMedia = () => {
+    if (toolMedia.length) {
+      apiMessages.push({ role: 'user', content: toolMedia.splice(0) });
+    }
+  };
   for (const message of messages) {
     const msg = new Message(message);
     const role = toOpenAIRole(message.role);
+    if (role !== 'tool') {
+      flushToolMedia();
+    }
     switch (role) {
       case 'user':
         const content = msg.content.map((part) =>
@@ -320,22 +340,73 @@ export function toOpenAIMessages(
         break;
       }
       case 'tool': {
-        const toolResponseParts = msg.toolResponseParts();
-        toolResponseParts.map((part) => {
+        for (const { toolResponse } of msg.toolResponseParts()) {
+          const { content, media } = toOpenAIToolResult(
+            toolResponse,
+            visualDetailLevel,
+            supportsMedia
+          );
           apiMessages.push({
             role: role,
-            tool_call_id: part.toolResponse.ref ?? '',
-            content:
-              typeof part.toolResponse.output === 'string'
-                ? part.toolResponse.output
-                : JSON.stringify(part.toolResponse.output),
+            tool_call_id: toolResponse.ref ?? '',
+            content,
           });
-        });
+          toolMedia.push(...media);
+        }
         break;
       }
     }
   }
+  flushToolMedia();
   return apiMessages;
+}
+
+function toOpenAIToolResult(
+  { name, ref, output, content = [] }: ToolResponsePart['toolResponse'],
+  visualDetailLevel: VisualDetailLevel,
+  supportsMedia: boolean
+): { content: string; media: ChatCompletionContentPart[] } {
+  const lines: string[] = [];
+  const media: ChatCompletionContentPart[] = [];
+  let previousWasText = false;
+  for (const part of content) {
+    const isText = typeof part.text === 'string';
+    if (isText && previousWasText) {
+      lines[lines.length - 1] += part.text;
+    } else if (isText) {
+      lines.push(part.text);
+    } else if (part.resource) {
+      lines.push(`Resource (${part.resource.uri})`);
+    } else if (part.data !== undefined) {
+      lines.push(JSON.stringify(part.data));
+    } else if (part.media && supportsMedia && isToolMediaAccepted(part.media)) {
+      media.push(toOpenAITextAndMedia(part, visualDetailLevel));
+    } else if (part.media) {
+      lines.push(
+        `Media (${mediaContentType(part.media) ?? 'unknown type'}) omitted`
+      );
+    }
+    previousWasText = isText;
+  }
+
+  const sections: string[] = [];
+  if (output !== undefined) {
+    sections.push(typeof output === 'string' ? output : JSON.stringify(output));
+  }
+  const text = lines.filter(Boolean).join('\n');
+  if (text) {
+    sections.push(text);
+  }
+  const source = ref ? `tool ${name} (${ref})` : `tool ${name}`;
+  const placeholder = media.length
+    ? `Media from ${source} follows in the next user message.`
+    : 'null';
+  return {
+    content: sections.length ? sections.join('\n\n') : placeholder,
+    media: media.length
+      ? [{ type: 'text', text: `Media from ${source}:` }, ...media]
+      : [],
+  };
 }
 
 const finishReasonMap: Partial<
@@ -576,11 +647,13 @@ export function fromOpenAIChunkChoice(
 export function toOpenAIRequestBody(
   modelName: string,
   request: GenerateRequest,
-  requestBuilder?: ModelRequestBuilder
+  requestBuilder?: ModelRequestBuilder,
+  supportsMedia = false
 ) {
   const messages = toOpenAIMessages(
     request.messages,
-    request.config?.visualDetailLevel
+    request.config?.visualDetailLevel,
+    supportsMedia
   );
   const {
     temperature,
@@ -675,7 +748,8 @@ export function openAIModelRunner(
   name: string,
   defaultClient: OpenAI,
   requestBuilder?: ModelRequestBuilder,
-  pluginOptions?: Omit<PluginOptions, 'apiKey'>
+  pluginOptions?: Omit<PluginOptions, 'apiKey'>,
+  supportsMedia = false
 ) {
   return async (
     request: GenerateRequest,
@@ -692,7 +766,12 @@ export function openAIModelRunner(
     );
     try {
       let response: ChatCompletion;
-      const body = toOpenAIRequestBody(name, request, requestBuilder);
+      const body = toOpenAIRequestBody(
+        name,
+        request,
+        requestBuilder,
+        supportsMedia
+      );
       if (options?.streamingRequested) {
         const stream = client.beta.chat.completions.stream(
           {
@@ -825,7 +904,13 @@ export function defineCompatOpenAIModel<
       ...modelRef?.info,
       configSchema: modelRef?.configSchema,
     },
-    openAIModelRunner(modelName, client, requestBuilder, pluginOptions)
+    openAIModelRunner(
+      modelName,
+      client,
+      requestBuilder,
+      pluginOptions,
+      modelRef?.info?.supports?.media === true
+    )
   );
 }
 
