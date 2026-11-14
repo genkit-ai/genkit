@@ -92,6 +92,17 @@ describe('voyageai plugin', () => {
       assert.equal(requests[1].body.model, 'voyage-4');
     });
 
+    it('accepts null options', async () => {
+      const { ai, requests } = setup((r) => ({
+        body: embeddingsBody(r.body.input.length),
+      }));
+      const action = await ai.registry.lookupAction(
+        '/embedder/voyageai/voyage-4'
+      );
+      await action({ input: [{ content: [{ text: 'a' }] }], options: null });
+      assert.equal(requests.length, 1);
+    });
+
     it('rejects unsupported output dimensions before any request', async () => {
       const { ai, requests } = setup(() => ({ body: embeddingsBody(1) }));
       await assert.rejects(

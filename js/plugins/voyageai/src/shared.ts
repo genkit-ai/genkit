@@ -111,7 +111,7 @@ export function parseConfig<S extends z.ZodTypeAny>(
 ): z.infer<S> {
   // Genkit adds keys such as `version: undefined` to the options it passes on.
   const defined = Object.fromEntries(
-    Object.entries((options as Record<string, unknown>) ?? {}).filter(
+    Object.entries((options as Record<string, unknown>) || {}).filter(
       ([, v]) => v !== undefined
     )
   );

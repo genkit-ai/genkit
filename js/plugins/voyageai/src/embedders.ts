@@ -451,6 +451,11 @@ function toMultimodalInput(
       content.push({ type: 'text', text: part.text });
     } else if (part.media) {
       const url = part.media.url;
+      if (!url) {
+        throw invalidArgument(
+          `${actionName}: document ${index} has a media part without a URL.`
+        );
+      }
       const mediaType = mediaTypeOf(url, part.media.contentType);
       const isImage = IMAGE_MEDIA_TYPES.includes(mediaType);
       const isVideo = VIDEO_MEDIA_TYPES.includes(mediaType);

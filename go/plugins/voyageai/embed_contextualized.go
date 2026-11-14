@@ -81,7 +81,7 @@ func embedContextualized(ctx context.Context, c *client, m *model, req *ai.Embed
 	}
 	inputs := make([]string, len(req.Input))
 	for i, doc := range req.Input {
-		if doc == nil || len(doc.Content) != 1 || !doc.Content[0].IsText() {
+		if doc == nil || len(doc.Content) != 1 || doc.Content[0] == nil || !doc.Content[0].IsText() {
 			return nil, invalidArgument("input %d: a contextualized embedder takes exactly one text part per document, each document being embedded whole (pre-chunked documents are not supported, Voyage chunks them), and no media", i)
 		}
 		inputs[i] = doc.Content[0].Text

@@ -101,6 +101,9 @@ func embedMultimodal(ctx context.Context, c *client, m *model, req *ai.EmbedRequ
 			return nil, invalidArgument("input %d: document is nil", i)
 		}
 		for j, p := range doc.Content {
+			if p == nil {
+				return nil, invalidArgument("input %d, part %d: part is nil", i, j)
+			}
 			var item multimodalContent
 			var err error
 			switch {

@@ -104,7 +104,7 @@ func documentText(doc *ai.Document) (string, error) {
 	}
 	var b strings.Builder
 	for _, p := range doc.Content {
-		if !p.IsText() {
+		if p == nil || !p.IsText() {
 			return "", errors.New("only text parts are supported")
 		}
 		b.WriteString(p.Text)
