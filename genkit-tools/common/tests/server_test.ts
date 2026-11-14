@@ -33,8 +33,10 @@ describe('Tools Server', () => {
   let port: number;
   let serverPromise: Promise<void>;
   let mockManager: any;
+  let shutdownInTest = false;
 
   beforeEach(async () => {
+    shutdownInTest = false;
     port = await getPort();
     mockManager = {
       projectRoot: './',
@@ -48,6 +50,7 @@ describe('Tools Server', () => {
       listRuntimes: vi.fn(),
       onRuntimeEvent: vi.fn(),
       cancelAction: vi.fn(),
+      stopOnce: vi.fn(async () => {}),
     };
     serverPromise = startServer(mockManager as BaseRuntimeManager, port);
   });
@@ -58,13 +61,47 @@ describe('Tools Server', () => {
       .mockImplementation((code?: any) => {
         return undefined as never;
       });
-    try {
-      await axios.post(`http://localhost:${port}/api/__quitquitquit`);
-    } catch (e) {
-      // Ignore
+    if (!shutdownInTest) {
+      try {
+        await axios.post(`http://localhost:${port}/api/__quitquitquit`);
+      } catch (e) {
+        // Ignore
+      }
     }
     await serverPromise;
+    await new Promise((resolve) => setImmediate(resolve));
+    if (!shutdownInTest) expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(mockManager.stopOnce).toHaveBeenCalledTimes(1);
     exitSpy.mockRestore();
+  });
+
+  it('stops the runtime while an active streaming connection remains open', async () => {
+    let finishStream: (() => void) | undefined;
+    mockManager.streamTrace.mockImplementation(
+      () => new Promise<void>((resolve) => (finishStream = resolve))
+    );
+    const streamingResponse = await axios.post(
+      `http://localhost:${port}/api/streamTrace`,
+      { traceId: 'long-lived' },
+      { responseType: 'stream' }
+    );
+    streamingResponse.data.on('data', () => {});
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation(() => undefined as never);
+    shutdownInTest = true;
+    try {
+      await axios.post(`http://localhost:${port}/api/__quitquitquit`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(mockManager.stopOnce).toHaveBeenCalledTimes(1);
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      finishStream?.();
+      streamingResponse.data.destroy();
+      await serverPromise;
+      await new Promise((resolve) => setImmediate(resolve));
+      exitSpy.mockRestore();
+    }
   });
 
   it('should handle runAction', async () => {

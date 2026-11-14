@@ -89,6 +89,8 @@ export interface RuntimeManagerOptions {
 }
 
 export abstract class BaseRuntimeManager {
+  private stopPromise?: Promise<void>;
+
   constructor(
     readonly telemetryServerUrl: string | undefined,
     readonly projectRoot: string,
@@ -133,6 +135,11 @@ export abstract class BaseRuntimeManager {
   ): Promise<Record<string, unknown>>;
 
   abstract stop(): Promise<void>;
+
+  /** Coalesces concurrent shutdown requests from signals and the Tools API. */
+  stopOnce(): Promise<void> {
+    return (this.stopPromise ??= this.stop());
+  }
 
   /**
    * Retrieves all traces
