@@ -293,9 +293,10 @@ emitted a2ui parts.
 ### One representation
 
 A2UI rides on its own part channel: a Genkit `data` part carrying the mime type
-`application/a2ui+json` whose `data` is an object `{ envelopes }` wrapping an
-array of A2UI envelope messages. This maps 1:1 onto the A2A binding of the A2UI
-spec, so an A2A or MCP binding can drop in later for free.
+`application/a2ui+json` whose `data` is the spec's `{ messages }` payload
+wrapper around an array of A2UI envelope messages. This maps 1:1 onto the A2A
+binding of the A2UI spec, so an A2A or MCP binding can drop in later for free.
+Parts written by earlier versions use `{ envelopes }`; they are still read.
 
 - A **mixed** turn is a message whose content is `[textPart, a2uiPart, …]`.
 - A **pure-surface** turn is the special case with no text parts.

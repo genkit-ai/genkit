@@ -300,7 +300,7 @@ describe('a2ui() middleware', () => {
               { text: 'clicked:' },
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       action: {
                         name: 'refresh',
@@ -344,7 +344,7 @@ describe('a2ui() middleware', () => {
               { text: 'Here you go:' },
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       createSurface: {
                         surfaceId: 's1',
@@ -420,7 +420,7 @@ describe('a2ui() middleware', () => {
             role: 'model',
             content: [
               {
-                data: { envelopes: [] },
+                data: { messages: [] },
                 metadata: { mimeType: 'application/a2ui+json' },
               },
             ],
@@ -462,7 +462,7 @@ describe('a2ui() middleware', () => {
             content: [
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       createSurface: {
                         surfaceId: 's1',
@@ -488,7 +488,7 @@ describe('a2ui() middleware', () => {
             content: [
               {
                 data: {
-                  envelopes: [{ action: { name: 'refresh', surfaceId: 's1' } }],
+                  messages: [{ action: { name: 'refresh', surfaceId: 's1' } }],
                 },
                 metadata: { mimeType: 'application/a2ui+json' },
               },
@@ -553,7 +553,7 @@ describe('a2ui() middleware', () => {
             content: [
               {
                 data: {
-                  envelopes: [
+                  messages: [
                     {
                       createSurface: {
                         surfaceId: 's1',
