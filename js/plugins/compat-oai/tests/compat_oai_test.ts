@@ -370,6 +370,222 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
+      should: 'send tool response text content when there is no output',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'lookup',
+                content: [{ text: 'found ' }, { text: 'it' }],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        { role: 'tool', tool_call_id: 'call_1', content: 'found it' },
+      ],
+    },
+    {
+      should: 'append tool response text content after the output',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'lookup',
+                output: { id: 7 },
+                content: [
+                  { text: 'see also' },
+                  { resource: { uri: 'file:///notes.md' } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: '{"id":7}\n\nsee alsoResource (file:///notes.md)',
+        },
+      ],
+    },
+    {
+      should:
+        'send tool response media in a user message after the tool message',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'screenshot',
+                content: [
+                  {
+                    media: {
+                      url: 'data:image/png;base64,iVBOR',
+                      contentType: 'image/png',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content:
+            'Media from tool screenshot (call_1) follows in the next user message.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Media from tool screenshot (call_1):' },
+            {
+              type: 'image_url',
+              image_url: { url: 'data:image/png;base64,iVBOR', detail: 'auto' },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      should: 'keep output and text in the tool message when media is present',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                name: 'render',
+                output: 'rendered',
+                content: [
+                  { text: 'one page' },
+                  {
+                    media: {
+                      url: 'data:application/pdf;base64,JVBER',
+                      contentType: 'application/pdf',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: '',
+          content: 'rendered\n\none page',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Media from tool render:' },
+            {
+              type: 'file',
+              file: {
+                filename: 'file.pdf',
+                file_data: 'data:application/pdf;base64,JVBER',
+              },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      should: 'send null for a tool response with neither output nor content',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [{ toolResponse: { ref: 'call_1', name: 'noop' } }],
+        },
+      ],
+      expectedOutput: [
+        { role: 'tool', tool_call_id: 'call_1', content: 'null' },
+      ],
+    },
+    {
+      should: 'keep all tool messages of a turn before the tool media message',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'screenshot',
+                content: [{ media: { url: 'https://example.com/a.png' } }],
+              },
+            },
+            {
+              toolResponse: {
+                ref: 'call_2',
+                name: 'lookup',
+                output: { id: 7 },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_3',
+                name: 'screenshot',
+                content: [{ media: { url: 'https://example.com/b.png' } }],
+              },
+            },
+          ],
+        },
+        { role: 'user', content: [{ text: 'thanks' }] },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content:
+            'Media from tool screenshot (call_1) follows in the next user message.',
+        },
+        { role: 'tool', tool_call_id: 'call_2', content: '{"id":7}' },
+        {
+          role: 'tool',
+          tool_call_id: 'call_3',
+          content:
+            'Media from tool screenshot (call_3) follows in the next user message.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Media from tool screenshot (call_1):' },
+            {
+              type: 'image_url',
+              image_url: { url: 'https://example.com/a.png', detail: 'auto' },
+            },
+            { type: 'text', text: 'Media from tool screenshot (call_3):' },
+            {
+              type: 'image_url',
+              image_url: { url: 'https://example.com/b.png', detail: 'auto' },
+            },
+          ],
+        },
+        { role: 'user', content: 'thanks' },
+      ],
+    },
+    {
       should: 'transform text content correctly',
       inputMessages: [
         { role: 'user', content: [{ text: 'hi' }] },

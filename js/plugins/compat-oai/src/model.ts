@@ -25,6 +25,7 @@ import type {
   Role,
   StreamingCallback,
   ToolRequestPart,
+  ToolResponsePart,
 } from 'genkit';
 import {
   GenerationCommonConfigSchema,
@@ -244,9 +245,18 @@ export function toOpenAIMessages(
   visualDetailLevel: VisualDetailLevel = 'auto'
 ): ChatCompletionMessageParam[] {
   const apiMessages: ChatCompletionMessageParam[] = [];
+  const toolMedia: ChatCompletionContentPart[] = [];
+  const flushToolMedia = () => {
+    if (toolMedia.length) {
+      apiMessages.push({ role: 'user', content: toolMedia.splice(0) });
+    }
+  };
   for (const message of messages) {
     const msg = new Message(message);
     const role = toOpenAIRole(message.role);
+    if (role !== 'tool') {
+      flushToolMedia();
+    }
     switch (role) {
       case 'user':
         const content = msg.content.map((part) =>
@@ -320,22 +330,59 @@ export function toOpenAIMessages(
         break;
       }
       case 'tool': {
-        const toolResponseParts = msg.toolResponseParts();
-        toolResponseParts.map((part) => {
+        for (const { toolResponse } of msg.toolResponseParts()) {
+          const { content, media } = toOpenAIToolResult(
+            toolResponse,
+            visualDetailLevel
+          );
           apiMessages.push({
             role: role,
-            tool_call_id: part.toolResponse.ref ?? '',
-            content:
-              typeof part.toolResponse.output === 'string'
-                ? part.toolResponse.output
-                : JSON.stringify(part.toolResponse.output),
+            tool_call_id: toolResponse.ref ?? '',
+            content,
           });
-        });
+          toolMedia.push(...media);
+        }
         break;
       }
     }
   }
+  flushToolMedia();
   return apiMessages;
+}
+
+function toOpenAIToolResult(
+  { name, ref, output, content = [] }: ToolResponsePart['toolResponse'],
+  visualDetailLevel: VisualDetailLevel
+): { content: string; media: ChatCompletionContentPart[] } {
+  const texts: string[] = [];
+  const media: ChatCompletionContentPart[] = [];
+  for (const part of content) {
+    if (typeof part.text === 'string') {
+      texts.push(part.text);
+    } else if (part.resource) {
+      texts.push(`Resource (${part.resource.uri})`);
+    } else {
+      media.push(toOpenAITextAndMedia(part, visualDetailLevel));
+    }
+  }
+
+  const sections: string[] = [];
+  if (output !== undefined) {
+    sections.push(typeof output === 'string' ? output : JSON.stringify(output));
+  }
+  if (texts.length) {
+    sections.push(texts.join(''));
+  }
+  const source = ref ? `tool ${name} (${ref})` : `tool ${name}`;
+  const placeholder = media.length
+    ? `Media from ${source} follows in the next user message.`
+    : 'null';
+  return {
+    content: sections.length ? sections.join('\n\n') : placeholder,
+    media: media.length
+      ? [{ type: 'text', text: `Media from ${source}:` }, ...media]
+      : [],
+  };
 }
 
 const finishReasonMap: Partial<
