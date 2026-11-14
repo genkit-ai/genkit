@@ -43,6 +43,8 @@ import { defineCompatOpenAIModel } from '../model.js';
 import { lookup } from '../utils.js';
 import {
   gptImage1RequestBuilder,
+  GPTImageConfigSchema,
+  isGptImageModel,
   openAIImageModelRef,
   SUPPORTED_IMAGE_MODELS,
 } from './dalle.js';
@@ -76,16 +78,16 @@ function createResolver(pluginOptions: PluginOptions) {
         client,
         pluginOptions,
       });
-    } else if (
-      actionName.includes('gpt-image-1') ||
-      actionName.includes('dall-e')
-    ) {
+    } else if (isGptImageModel(actionName) || actionName.includes('dall-e')) {
       const modelRef = openAIImageModelRef({ name: actionName });
       return defineCompatOpenAIImageModel({
         name: modelRef.name,
         client,
         pluginOptions,
         modelRef,
+        requestBuilder: isGptImageModel(actionName)
+          ? gptImage1RequestBuilder
+          : undefined,
       });
     } else if (actionName.includes('tts')) {
       const modelRef = openAISpeechModelRef({ name: actionName });
@@ -138,10 +140,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           configSchema: TextEmbeddingConfigSchema,
           info: lookup(SUPPORTED_EMBEDDING_MODELS, model.id)?.info,
         });
-      } else if (
-        model.id.includes('gpt-image-1') ||
-        model.id.includes('dall-e')
-      ) {
+      } else if (isGptImageModel(model.id) || model.id.includes('dall-e')) {
         const modelRef =
           lookup(SUPPORTED_IMAGE_MODELS, model.id) ??
           openAIImageModelRef({ name: model.id });
@@ -255,7 +254,7 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
             client,
             pluginOptions,
             modelRef,
-            requestBuilder: modelRef.name.includes('gpt-image-1')
+            requestBuilder: isGptImageModel(modelRef.name)
               ? gptImage1RequestBuilder
               : undefined,
           })
@@ -270,11 +269,18 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
 
 export type OpenAIPlugin = {
   (params?: OpenAIPluginOptions): GenkitPluginV2;
+  /** References a GPT image model with its image-generation configuration. */
   model(
     name:
-      | keyof typeof SUPPORTED_IMAGE_MODELS
-      | (`dall-e${string}` & {})
-      | (`gpt-image-${string}` & {}),
+      | Extract<keyof typeof SUPPORTED_IMAGE_MODELS, `gpt-image-${string}`>
+      | (`gpt-image-${string}` & {})
+      | (`chatgpt-image-${string}` & {}),
+    config?: z.infer<typeof GPTImageConfigSchema>
+  ): ModelReference<typeof GPTImageConfigSchema>;
+  model(
+    name:
+      | Extract<keyof typeof SUPPORTED_IMAGE_MODELS, `dall-e${string}`>
+      | (`dall-e${string}` & {}),
     config?: z.infer<typeof ImageGenerationCommonConfigSchema>
   ): ModelReference<typeof ImageGenerationCommonConfigSchema>;
   model(
@@ -310,7 +316,7 @@ export type OpenAIPlugin = {
 };
 
 const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
-  if (name.includes('gpt-image-1') || name.includes('dall-e')) {
+  if (isGptImageModel(name) || name.includes('dall-e')) {
     return openAIImageModelRef({
       name,
       config,

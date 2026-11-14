@@ -22,6 +22,28 @@ import {
   compatOaiImageModelRef,
 } from '../image.js';
 
+/** Returns whether an OpenAI model name belongs to the GPT image family. */
+export function isGptImageModel(name: string): boolean {
+  return /^(?:openai\/)?(?:gpt|chatgpt)-image-/.test(name);
+}
+
+/** GPT image config; supported sizes and quality levels depend on the model. */
+export const GPTImageConfigSchema = ImageGenerationCommonConfigSchema.omit({
+  response_format: true,
+  style: true,
+}).extend({
+  size: z
+    .string()
+    .regex(/^(auto|[1-9]\d*x[1-9]\d*)$/)
+    .optional(),
+  background: z.enum(['transparent', 'opaque', 'auto']).optional(),
+  moderation: z.enum(['low', 'auto']).optional(),
+  output_compression: z.number().int().min(0).max(100).optional(),
+  output_format: z.enum(['png', 'jpeg', 'webp']).optional(),
+  quality: z.enum(['low', 'medium', 'high', 'auto', 'xhigh', 'max']).optional(),
+  n: z.number().int().min(1).max(10).optional(),
+});
+
 /** OpenAI image generation ModelRef helper, same as the OpenAI-compatible spec.
  * */
 export function openAIImageModelRef<
@@ -32,24 +54,25 @@ export function openAIImageModelRef<
   configSchema?: CustomOptions;
   config?: any;
 }) {
-  return compatOaiImageModelRef({ ...params, namespace: 'openai' });
+  return compatOaiImageModelRef({
+    ...params,
+    configSchema:
+      params.configSchema ??
+      (isGptImageModel(params.name)
+        ? GPTImageConfigSchema
+        : ImageGenerationCommonConfigSchema),
+    namespace: 'openai',
+  });
 }
 
 export const SUPPORTED_IMAGE_MODELS = {
   'dall-e-3': openAIImageModelRef({ name: 'dall-e-3' }),
-  'gpt-image-1': openAIImageModelRef({
-    name: 'gpt-image-1',
-    configSchema: ImageGenerationCommonConfigSchema.omit({
-      response_format: true,
-    }).extend({
-      size: z.enum(['1024x1024', '1536x1024', '1024x1536', 'auto']).optional(),
-      background: z.enum(['transparent', 'opaque', 'auto']).optional(),
-      moderation: z.enum(['low', 'auto']).optional(),
-      output_compression: z.number().int().min(1).max(100).optional(),
-      output_format: z.enum(['png', 'jpeg', 'web']).optional(),
-      quality: z.enum(['low', 'medium', 'high']).optional(),
-    }),
+  'gpt-image-1': openAIImageModelRef({ name: 'gpt-image-1' }),
+  'gpt-image-2': openAIImageModelRef({ name: 'gpt-image-2' }),
+  'gpt-image-2.5-sunburst': openAIImageModelRef({
+    name: 'gpt-image-2.5-sunburst',
   }),
+  'gpt-image-2.5-flare': openAIImageModelRef({ name: 'gpt-image-2.5-flare' }),
 };
 
 export const gptImage1RequestBuilder: ImageRequestBuilder = (req, params) => {
@@ -60,10 +83,10 @@ export const gptImage1RequestBuilder: ImageRequestBuilder = (req, params) => {
     output_compression,
     output_format,
     quality,
-    style,
+    size,
     user,
   } = req.config ?? {};
-  // GPT Image 1 does not support response format
+  // GPT image models always return base64 and do not support response_format.
   params.response_format = undefined;
   params.background = background;
   params.moderation = moderation;
@@ -71,6 +94,6 @@ export const gptImage1RequestBuilder: ImageRequestBuilder = (req, params) => {
   params.output_compression = output_compression;
   params.output_format = output_format;
   params.quality = quality;
-  params.style = style;
+  params.size = size;
   params.user = user;
 };
