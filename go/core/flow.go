@@ -120,11 +120,7 @@ func runStep[Out any](ctx context.Context, caller, name string, fn func(context.
 		Subtype: "flowStep",
 	}
 	return tracing.RunInNewSpan(ctx, spanMetadata, nil, func(ctx context.Context, _ any) (Out, error) {
-		o, err := fn(ctx)
-		if err != nil {
-			return base.Zero[Out](), err
-		}
-		return o, nil
+		return fn(ctx)
 	})
 }
 
