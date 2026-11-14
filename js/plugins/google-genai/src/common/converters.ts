@@ -673,6 +673,11 @@ function handleFunctionCallPartials(
   }
 }
 
+function isGeminiToolTextResult(response: Record<string, unknown>): boolean {
+  const keys = Object.keys(response);
+  return keys.length === 2 && 'text' in response;
+}
+
 function fromGeminiFunctionResponse(part: GeminiPart): Part {
   if (!part.functionResponse) {
     throw new Error(
@@ -686,7 +691,7 @@ function fromGeminiFunctionResponse(part: GeminiPart): Part {
   if (
     isObject(response) &&
     'name' in response &&
-    ('content' in response || 'text' in response)
+    ('content' in response || isGeminiToolTextResult(response))
   ) {
     output = response.content;
     text = response.text;

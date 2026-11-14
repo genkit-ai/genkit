@@ -1677,6 +1677,16 @@ describe('Part conversions back and forth', () => {
     }
   });
 
+  it('should keep a native function response with name and text keys as output', () => {
+    const response = { name: 'myTool', text: 'hi', other: 1 };
+    assert.deepStrictEqual(
+      TEST_ONLY.fromGeminiPart({
+        functionResponse: { name: 'myTool', response },
+      }),
+      { toolResponse: { name: 'myTool', output: response } }
+    );
+  });
+
   it('should be symmetric for Gemini Part -> Genkit Part -> Gemini Part', () => {
     const geminiParts: GeminiPart[] = [
       { text: 'hello' },
