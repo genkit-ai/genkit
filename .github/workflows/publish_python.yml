@@ -73,7 +73,6 @@ jobs:
             py/packages/genkit-ollama
             py/packages/genkit-openai
             py/packages/genkit-vertexai
-            py/packages/genkit-voyageai
           )
 
           FAILED=()
