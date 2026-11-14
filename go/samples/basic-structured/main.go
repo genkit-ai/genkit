@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // This sample demonstrates typed output: the Go type you ask for is the schema
-// the model is held to, so the answer comes back as a struct, not a string.
+// the model is held to, so the answer is decoded into that type.
 //
 //   - simpleJokesFlow streams plain text with WithStreaming.
 //   - structuredJokesFlow streams a typed Joke with GenerateDataStream.
@@ -21,6 +21,9 @@
 //
 // jsonschema tags describe each field to the model, which is what makes the
 // generated values sensible.
+//
+// Scalars work too: GenerateData[int] returns a decoded *int, including zero,
+// and GenerateDataStream[string] decodes JSON string chunks and its final Output.
 //
 // Run it:
 //

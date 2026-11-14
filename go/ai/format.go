@@ -377,6 +377,13 @@ func (j *jsonHandler) parseJSON(text string) (any, error) {
 		return nil, nil
 	}
 
+	// Complete JSON can be a scalar, which the lenient object/array extractor
+	// does not recognize.
+	var result any
+	if json.Unmarshal([]byte(extracted), &result) == nil {
+		return result, nil
+	}
+
 	result, err := base.ExtractJSON(extracted)
 	if err != nil {
 		return nil, nil

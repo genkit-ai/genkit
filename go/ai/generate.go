@@ -1681,9 +1681,10 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return
 		}
 
-		output, err := extractTypedOutput[Out](resp)
-		if err != nil {
-			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, err)
+		// Unlike text prompts, this helper requests JSON even for a string Out.
+		var output Out
+		if err := resp.Output(&output); err != nil {
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, fmt.Errorf("failed to parse output: %w", err))
 			return
 		}
 
