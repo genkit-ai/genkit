@@ -173,25 +173,46 @@ function toGeminiToolResponse(part: Part): GeminiPart {
       'Invalid ToolResponsePart: output or content must be provided.'
     );
   }
+  const { name, ref, output, content } = part.toolResponse!;
+  const { text, media } = splitToolResponseContent(name, content);
   const functionResponse: FunctionResponse = {
-    name: part.toolResponse!.name,
-    ...(part.toolResponse?.ref !== undefined
-      ? { id: part.toolResponse.ref }
-      : {}),
-    response: {
-      name: part.toolResponse!.name,
-      ...(part.toolResponse?.output !== undefined
-        ? { content: part.toolResponse.output }
-        : {}),
-    },
-    ...(part.toolResponse?.content !== undefined
-      ? { parts: part.toolResponse.content.map(toGeminiPart) }
-      : {}),
+    name,
+    ...(ref !== undefined ? { id: ref } : {}),
+    response: { name, ...toGeminiToolResult(output, text) },
+    ...(media.length ? { parts: media } : {}),
   };
 
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     functionResponse,
   });
+}
+
+function toGeminiToolResult(output: unknown, text?: string): object {
+  if (text === undefined) {
+    return output === undefined ? {} : { content: output };
+  }
+  return output === undefined ? { content: text } : { output, content: text };
+}
+
+function splitToolResponseContent(
+  toolName: string,
+  content: Part[] | undefined
+): { text?: string; media: GeminiPart[] } {
+  const texts: string[] = [];
+  const media: GeminiPart[] = [];
+  for (const mapped of (content ?? []).map(toGeminiPart)) {
+    if (mapped.inlineData || mapped.fileData) {
+      media.push(mapped);
+    } else if (typeof mapped.text === 'string' && !mapped.thought) {
+      texts.push(mapped.text);
+    } else {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Tool response content for ${toolName} may only contain text, media or resource parts.`,
+      });
+    }
+  }
+  return { text: texts.length ? texts.join('') : undefined, media };
 }
 
 function toGeminiResource(part: Part): GeminiPart {
