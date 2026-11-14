@@ -35,6 +35,7 @@ import {
   LyriaPredictResponse,
   RegionalClientOptions,
 } from '../../src/vertexai/types.js';
+import { getDerivedOptions } from '../../src/vertexai/utils.js';
 
 const {
   GENERIC_MODEL,
@@ -140,6 +141,95 @@ describe('Vertex AI Lyria', () => {
         },
       ],
     };
+
+    describe('location selection', () => {
+      beforeEach(() => {
+        sinon.stub(process, 'env').value({
+          ...process.env,
+          GCLOUD_LOCATION: undefined,
+          VERTEX_API_KEY: undefined,
+          GOOGLE_API_KEY: undefined,
+          GOOGLE_GENAI_API_KEY: undefined,
+        });
+      });
+
+      for (const {
+        name,
+        pluginLocation,
+        environmentLocation,
+        requestLocation,
+        expectedLocation,
+      } of [
+        {
+          name: 'uses global when no location is chosen',
+          expectedLocation: 'global',
+        },
+        {
+          name: 'preserves a plugin location',
+          pluginLocation: 'us-central1',
+          expectedLocation: 'us-central1',
+        },
+        {
+          name: 'preserves an environment location',
+          environmentLocation: 'us-central1',
+          expectedLocation: 'us-central1',
+        },
+        {
+          name: 'preserves a request location equal to the built-in default',
+          requestLocation: 'us-central1',
+          expectedLocation: 'us-central1',
+        },
+        {
+          name: 'allows a request to override a plugin location',
+          pluginLocation: 'us-central1',
+          requestLocation: 'global',
+          expectedLocation: 'global',
+        },
+      ]) {
+        it(name, async () => {
+          if (environmentLocation)
+            process.env.GCLOUD_LOCATION = environmentLocation;
+          const clientOptions = await getDerivedOptions(
+            { projectId: 'test-project', location: pluginLocation },
+            sinon.stub().returns(authMock) as any
+          );
+          mockFetchResponse(mockPrediction);
+
+          await defineModel('lyria-002', clientOptions).run({
+            ...minimalRequest,
+            config: { ...minimalRequest.config, location: requestLocation },
+          });
+
+          sinon.assert.calledOnce(fetchStub);
+          const host =
+            expectedLocation === 'global'
+              ? 'aiplatform.googleapis.com'
+              : `${expectedLocation}-aiplatform.googleapis.com`;
+          assert.strictEqual(
+            fetchStub.firstCall.args[0],
+            `https://${host}/v1beta1/projects/test-project/locations/${expectedLocation}/publishers/google/models/lyria-002:predict`
+          );
+        });
+      }
+
+      it('keeps Lyria 3 on global when no location is chosen', async () => {
+        const clientOptions = await getDerivedOptions(
+          { projectId: 'test-project' },
+          sinon.stub().returns(authMock) as any
+        );
+        mockFetchResponse({ status: 'completed', steps: [] });
+
+        await defineModel('lyria-3-clip-preview', clientOptions).run({
+          messages: minimalRequest.messages,
+        });
+
+        sinon.assert.calledOnce(fetchStub);
+        assert.strictEqual(
+          fetchStub.firstCall.args[0],
+          'https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/interactions'
+        );
+      });
+    });
 
     it('should call fetch with correct params and return lyria response for legacy models', async () => {
       mockFetchResponse(mockPrediction);
@@ -305,13 +395,15 @@ describe('Vertex AI Lyria', () => {
       );
     });
 
-    it('should pass AbortSignal to fetch', async () => {
+    it('preserves request options when defaulting the location to global', async () => {
       mockFetchResponse(mockPrediction);
       const controller = new AbortController();
       const abortSignal = controller.signal;
 
-      const clientOptionsWithSignal = {
+      const clientOptionsWithSignal: RegionalClientOptions = {
         ...defaultRegionalClientOptions,
+        locationDefaulted: true,
+        apiVersion: 'v1',
         signal: abortSignal,
       };
       const model = defineModel(legacyModelName, clientOptionsWithSignal);
@@ -320,6 +412,11 @@ describe('Vertex AI Lyria', () => {
 
       sinon.assert.calledOnce(fetchStub);
       const fetchOptions = fetchStub.lastCall.args[1];
+      assert.strictEqual(
+        fetchStub.lastCall.args[0],
+        `https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/${legacyModelName}:predict`
+      );
+      assert.deepStrictEqual(fetchOptions.headers, getExpectedHeaders());
       assert.ok(fetchOptions.signal, 'Fetch options should have a signal');
 
       const fetchSignal = fetchOptions.signal;
