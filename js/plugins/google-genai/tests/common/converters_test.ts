@@ -226,7 +226,7 @@ describe('toGeminiMessage', () => {
               name: 'screenshot',
               response: {
                 name: 'screenshot',
-                content: 'this is a test',
+                text: 'this is a test',
               },
               parts: [
                 {
@@ -266,8 +266,8 @@ describe('toGeminiMessage', () => {
               name: 'screenshot',
               response: {
                 name: 'screenshot',
-                output: { status: 'ok' },
-                content: 'this is a test',
+                content: { status: 'ok' },
+                text: 'this is a test',
               },
             },
           },
@@ -298,7 +298,7 @@ describe('toGeminiMessage', () => {
               name: 'readFile',
               response: {
                 name: 'readFile',
-                content: 'line one\nline two',
+                text: 'line one\nline two',
               },
             },
           },
@@ -388,7 +388,7 @@ describe('toGeminiMessage', () => {
               name: 'fetchDoc',
               response: {
                 name: 'fetchDoc',
-                content: 'attached',
+                text: 'attached',
               },
               parts: [
                 {
@@ -684,6 +684,106 @@ describe('toGeminiMessage', () => {
             fileData: {
               fileUri: 'file:///some/file.txt',
               mimeType: 'application/octet-stream',
+            },
+          },
+        ],
+      },
+    },
+    {
+      should: 'should strip media metadata from tool response parts',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'clip',
+              ref: '6',
+              output: 'ok',
+              content: [
+                {
+                  media: {
+                    contentType: 'video/mp4',
+                    url: 'data:video/mp4;base64,VIDEO_DATA',
+                  },
+                  metadata: {
+                    thoughtSignature: 'sig',
+                    metadata: { foo: 'bar' },
+                    videoMetadata: { startOffset: '1s' },
+                    mediaResolution: { level: 'MEDIA_RESOLUTION_LOW' },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '6',
+              name: 'clip',
+              response: { name: 'clip', content: 'ok' },
+              parts: [
+                {
+                  inlineData: { mimeType: 'video/mp4', data: 'VIDEO_DATA' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    {
+      should: 'should ignore empty text in tool response content',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'echo',
+              ref: '7',
+              output: { status: 'ok' },
+              content: [{ text: '' }],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              id: '7',
+              name: 'echo',
+              response: { name: 'echo', content: { status: 'ok' } },
+            },
+          },
+        ],
+      },
+    },
+    {
+      should: 'should omit parts for empty tool response content without a ref',
+      inputMessage: {
+        role: 'tool',
+        content: [
+          {
+            toolResponse: {
+              name: 'noop',
+              output: 'done',
+              content: [],
+            },
+          },
+        ],
+      },
+      expectedOutput: {
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: 'noop',
+              response: { name: 'noop', content: 'done' },
             },
           },
         ],
@@ -1588,6 +1688,20 @@ describe('Part conversions back and forth', () => {
           name: 'myTool',
           response: { name: 'myTool', content: { res: 2 } },
           id: 'ref1',
+        },
+      },
+      {
+        functionResponse: {
+          name: 'myTool',
+          response: { name: 'myTool', content: { res: 2 }, text: 'done' },
+          id: 'ref2',
+        },
+      },
+      {
+        functionResponse: {
+          name: 'myTool',
+          response: { name: 'myTool', text: 'only text' },
+          id: 'ref3',
         },
       },
       {

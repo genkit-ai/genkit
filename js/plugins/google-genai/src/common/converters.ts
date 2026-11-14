@@ -188,10 +188,10 @@ function toGeminiToolResponse(part: Part): GeminiPart {
 }
 
 function toGeminiToolResult(output: unknown, text?: string): object {
-  if (text === undefined) {
-    return output === undefined ? {} : { content: output };
-  }
-  return output === undefined ? { content: text } : { output, content: text };
+  return {
+    ...(output !== undefined ? { content: output } : {}),
+    ...(text !== undefined ? { text } : {}),
+  };
 }
 
 function splitToolResponseContent(
@@ -201,10 +201,12 @@ function splitToolResponseContent(
   const texts: string[] = [];
   const media: GeminiPart[] = [];
   for (const mapped of (content ?? []).map(toGeminiPart)) {
-    if (mapped.inlineData || mapped.fileData) {
-      media.push(mapped);
+    if (mapped.inlineData) {
+      media.push({ inlineData: mapped.inlineData });
+    } else if (mapped.fileData) {
+      media.push({ fileData: mapped.fileData });
     } else if (typeof mapped.text === 'string' && !mapped.thought) {
-      texts.push(mapped.text);
+      if (mapped.text) texts.push(mapped.text);
     } else {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -678,15 +680,23 @@ function fromGeminiFunctionResponse(part: GeminiPart): Part {
     );
   }
 
-  let output: unknown = part.functionResponse.response;
-  if (isObject(output) && 'name' in output && 'content' in output) {
-    output = output.content;
+  const response = part.functionResponse.response;
+  let output: unknown = response;
+  let text: unknown;
+  if (
+    isObject(response) &&
+    'name' in response &&
+    ('content' in response || 'text' in response)
+  ) {
+    output = response.content;
+    text = response.text;
   }
 
   const toolResponse: Part = {
     toolResponse: {
       name: part.functionResponse.name.replace(/__/g, '/'), // restore slashes
       output,
+      ...(typeof text === 'string' ? { content: [{ text }] } : {}),
     },
   };
   if (part.functionResponse.id) {
