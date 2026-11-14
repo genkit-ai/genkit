@@ -366,12 +366,15 @@ function toOpenAIToolResult(
   visualDetailLevel: VisualDetailLevel,
   supportsMedia: boolean
 ): { content: string; media: ChatCompletionContentPart[] } {
-  const texts: string[] = [];
   const lines: string[] = [];
   const media: ChatCompletionContentPart[] = [];
+  let previousWasText = false;
   for (const part of content) {
-    if (typeof part.text === 'string') {
-      texts.push(part.text);
+    const isText = typeof part.text === 'string';
+    if (isText && previousWasText) {
+      lines[lines.length - 1] += part.text;
+    } else if (isText) {
+      lines.push(part.text);
     } else if (part.resource) {
       lines.push(`Resource (${part.resource.uri})`);
     } else if (part.data !== undefined) {
@@ -383,13 +386,14 @@ function toOpenAIToolResult(
         `Media (${mediaContentType(part.media) ?? 'unknown type'}) omitted`
       );
     }
+    previousWasText = isText;
   }
 
   const sections: string[] = [];
   if (output !== undefined) {
     sections.push(typeof output === 'string' ? output : JSON.stringify(output));
   }
-  const text = [texts.join(''), ...lines].filter(Boolean).join('\n');
+  const text = lines.filter(Boolean).join('\n');
   if (text) {
     sections.push(text);
   }

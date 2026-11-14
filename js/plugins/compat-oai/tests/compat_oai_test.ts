@@ -40,6 +40,8 @@ import type {
 } from 'openai/resources/index.mjs';
 import {
   ModelRequestBuilder,
+  compatOaiModelRef,
+  defineCompatOpenAIModel,
   fromOpenAIChoice,
   fromOpenAIChunkChoice,
   fromOpenAIToolCall,
@@ -701,6 +703,36 @@ describe('toOpenAiMessages', () => {
       ],
       expectedOutput: [
         { role: 'tool', tool_call_id: 'call_1', content: 'null' },
+      ],
+    },
+    {
+      should: 'keep the order of tool response parts',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'lookup',
+                content: [
+                  { text: 'a' },
+                  { text: 'b' },
+                  { resource: { uri: 'file:///u.md' } },
+                  { text: 'c' },
+                  { data: { d: 1 } },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: 'ab\nResource (file:///u.md)\nc\n{"d":1}',
+        },
       ],
     },
     {
@@ -2279,6 +2311,50 @@ describe('toOpenAiRequestBody', () => {
 });
 
 describe('openAIModelRunner', () => {
+  it('omits tool response media for a model without media support', async () => {
+    const create = jest.fn(async (_body: any) => ({
+      choices: [{ message: { content: 'response' } }],
+    }));
+    const model = defineCompatOpenAIModel({
+      name: 'deepseek-chat',
+      client: { chat: { completions: { create } } } as unknown as OpenAI,
+      modelRef: compatOaiModelRef({
+        name: 'deepseek/deepseek-chat',
+        info: { supports: { media: false, tools: true } },
+      }),
+    });
+    await model({
+      messages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'screenshot',
+                content: [
+                  {
+                    media: {
+                      url: 'data:image/png;base64,iVBOR',
+                      contentType: 'image/png',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(create.mock.calls[0][0].messages).toStrictEqual([
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: 'Media (image/png) omitted',
+      },
+    ]);
+  });
+
   it('should correctly run non-streaming requests', async () => {
     const openaiClient = {
       chat: {
