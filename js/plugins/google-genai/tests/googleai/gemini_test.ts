@@ -1586,75 +1586,130 @@ describe('Google AI Gemini', () => {
         assert.deepStrictEqual(apiRequest.response_format, { type: 'audio' });
       });
 
-      it('drops permissive safetySettings on an Interactions model (default behavior)', async () => {
-        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
-        mockFetchResponse(defaultApiResponse);
-        const request: GenerateRequest<typeof GeminiConfigSchema> = {
-          ...minimalRequest,
-          config: {
-            safetySettings: [
-              {
-                category: 'HARM_CATEGORY_HATE_SPEECH',
-                threshold: 'BLOCK_NONE',
-              },
-              {
-                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                threshold: 'BLOCK_NONE',
-              },
-              {
-                category: 'HARM_CATEGORY_UNSPECIFIED',
-                threshold: 'BLOCK_LOW_AND_ABOVE',
-              },
-            ],
-          },
-        };
-        await model.run(request);
+      describe('safetySettings', () => {
+        const categories = [
+          'HARM_CATEGORY_HATE_SPEECH',
+          'HARM_CATEGORY_DANGEROUS_CONTENT',
+          'HARM_CATEGORY_HARASSMENT',
+          'HARM_CATEGORY_SEXUALLY_EXPLICIT',
+        ] as const;
+        const thresholds = [
+          ['BLOCK_LOW_AND_ABOVE', 'block_low_and_above'],
+          ['BLOCK_MEDIUM_AND_ABOVE', 'block_medium_and_above'],
+          ['BLOCK_ONLY_HIGH', 'block_only_high'],
+          ['BLOCK_NONE', 'off'],
+        ] as const;
 
-        const body = JSON.parse(fetchStub.lastCall.args[1].body);
-        assert.strictEqual(body.safety_settings, undefined);
-        assert.strictEqual(body.generation_config?.safety_settings, undefined);
-      });
-
-      it('throws for blocking safetySettings on an Interactions model', async () => {
-        const model = defineModel('gemini-flash-latest', defaultPluginOptions);
-        mockFetchResponse(defaultApiResponse);
-        const request: GenerateRequest<typeof GeminiConfigSchema> = {
-          ...minimalRequest,
-          config: {
-            safetySettings: [
-              {
-                category: 'HARM_CATEGORY_HATE_SPEECH',
-                threshold: 'BLOCK_NONE',
-              },
-              {
-                category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                threshold: 'BLOCK_ONLY_HIGH',
-              },
-            ],
-          },
-        };
-        await assert.rejects(
-          () => model.run(request),
-          (err: any) => {
-            assert.strictEqual(err.status, 'INVALID_ARGUMENT');
-            assert.ok(
-              err.message.includes(
-                "safetySettings with blocking thresholds are not supported for model 'gemini-flash-latest'"
-              )
-            );
-            // Only the offending setting is reported.
-            assert.deepStrictEqual(err.detail, {
-              safetySettings: [
+        for (const stream of [false, true]) {
+          for (const [threshold, expectedThreshold] of thresholds) {
+            it(`sends ${threshold} on the Interactions path (stream=${stream})`, async () => {
+              const model = defineModel(
+                'gemini-flash-latest',
+                defaultPluginOptions
+              );
+              if (stream) {
+                const event = {
+                  event_type: 'interaction.completed',
+                  interaction: { status: 'completed' },
+                };
+                fetchStub.resolves(
+                  new Response(
+                    `event: ${event.event_type}\ndata: ${JSON.stringify(event)}\n\n`,
+                    { headers: { 'Content-Type': 'text/event-stream' } }
+                  )
+                );
+              } else {
+                mockFetchResponse({ status: 'completed', steps: [] });
+              }
+              await model.run(
                 {
-                  category: 'HARM_CATEGORY_DANGEROUS_CONTENT',
-                  threshold: 'BLOCK_ONLY_HIGH',
+                  ...minimalRequest,
+                  config: {
+                    safetySettings: [
+                      ...categories.map((category) => ({
+                        category,
+                        threshold,
+                      })),
+                      { category: 'HARM_CATEGORY_UNSPECIFIED', threshold },
+                    ],
+                  },
                 },
-              ],
+                stream ? { onChunk: () => {} } : undefined
+              );
+
+              sinon.assert.calledOnce(fetchStub);
+              assert.ok(fetchStub.lastCall.args[0].endsWith('/interactions'));
+              const body = JSON.parse(fetchStub.lastCall.args[1].body);
+              assert.deepStrictEqual(
+                body.safety_settings,
+                [
+                  'hate_speech',
+                  'dangerous_content',
+                  'harassment',
+                  'sexually_explicit',
+                ].map((type) => ({ type, threshold: expectedThreshold }))
+              );
+              assert.strictEqual(body.stream, stream);
+              assert.strictEqual(
+                body.generation_config?.safety_settings,
+                undefined
+              );
+              assert.strictEqual(
+                body.generation_config?.safetySettings,
+                undefined
+              );
             });
-            return true;
           }
-        );
-        sinon.assert.notCalled(fetchStub);
+        }
+
+        for (const safetySettings of [
+          undefined,
+          [],
+          [
+            {
+              category: 'HARM_CATEGORY_UNSPECIFIED',
+              threshold: 'BLOCK_ONLY_HIGH',
+            },
+          ],
+        ] as const) {
+          it(`omits empty or unspecified Interactions safetySettings: ${JSON.stringify(safetySettings)}`, async () => {
+            const model = defineModel(
+              'gemini-flash-latest',
+              defaultPluginOptions
+            );
+            mockFetchResponse({ status: 'completed', steps: [] });
+            await model.run({
+              ...minimalRequest,
+              config: {
+                safetySettings: safetySettings
+                  ? [...safetySettings]
+                  : undefined,
+              },
+            });
+            const body = JSON.parse(fetchStub.lastCall.args[1].body);
+            assert.strictEqual(body.safety_settings, undefined);
+          });
+        }
+
+        it('preserves generateContent safetySettings', async () => {
+          const model = defineModel('gemini-2.5-flash', defaultPluginOptions);
+          mockFetchResponse(defaultApiResponse);
+          const safetySettings = [
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+            {
+              category: 'HARM_CATEGORY_HATE_SPEECH',
+              threshold: 'BLOCK_ONLY_HIGH',
+            },
+          ] as const;
+          await model.run({
+            ...minimalRequest,
+            config: { safetySettings: [...safetySettings] },
+          });
+          assert.ok(fetchStub.lastCall.args[0].includes(':generateContent'));
+          const body = JSON.parse(fetchStub.lastCall.args[1].body);
+          assert.deepStrictEqual(body.safetySettings, safetySettings);
+          assert.strictEqual(body.safety_settings, undefined);
+        });
       });
 
       describe('TTS on an unlisted model (routed to Interactions)', () => {
