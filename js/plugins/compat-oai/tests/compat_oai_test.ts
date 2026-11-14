@@ -413,13 +413,14 @@ describe('toOpenAiMessages', () => {
         {
           role: 'tool',
           tool_call_id: 'call_1',
-          content: '{"id":7}\n\nsee alsoResource (file:///notes.md)',
+          content: '{"id":7}\n\nsee also\nResource (file:///notes.md)',
         },
       ],
     },
     {
       should:
         'send tool response media in a user message after the tool message',
+      supportsMedia: true,
       inputMessages: [
         {
           role: 'tool',
@@ -462,6 +463,7 @@ describe('toOpenAiMessages', () => {
     },
     {
       should: 'keep output and text in the tool message when media is present',
+      supportsMedia: true,
       inputMessages: [
         {
           role: 'tool',
@@ -506,6 +508,202 @@ describe('toOpenAiMessages', () => {
       ],
     },
     {
+      should: 'omit tool response media when the model does not support media',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                output: 'ok',
+                content: [
+                  {
+                    media: {
+                      url: 'data:image/png;base64,iVBOR',
+                      contentType: 'image/png',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: 'ok\n\nMedia (image/png) omitted',
+        },
+      ],
+    },
+    {
+      should: 'omit tool response audio',
+      supportsMedia: true,
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                output: 'ok',
+                content: [
+                  {
+                    media: {
+                      url: 'data:audio/wav;base64,AAAA',
+                      contentType: 'audio/wav',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: 'ok\n\nMedia (audio/wav) omitted',
+        },
+      ],
+    },
+    {
+      should: 'omit a tool response blob that is not a pdf',
+      supportsMedia: true,
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                output: 'ok',
+                content: [
+                  {
+                    media: {
+                      url: 'data:application/json;base64,e30=',
+                      contentType: 'application/json',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: 'ok\n\nMedia (application/json) omitted',
+        },
+      ],
+    },
+    {
+      should: 'omit a remote tool response url that is not an image',
+      supportsMedia: true,
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                output: 'ok',
+                content: [
+                  {
+                    media: {
+                      url: 'https://example.com/a.pdf',
+                      contentType: 'application/pdf',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: 'ok\n\nMedia (application/pdf) omitted',
+        },
+      ],
+    },
+    {
+      should: 'send tool response data parts as json text',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                output: 'ok',
+                content: [{ data: { a: 1 } }, { custom: { x: 1 } }],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        { role: 'tool', tool_call_id: 'call_1', content: 'ok\n\n{"a":1}' },
+      ],
+    },
+    {
+      should: 'send a standalone tool response resource as text',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                content: [{ resource: { uri: 'file:///notes.md' } }],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        {
+          role: 'tool',
+          tool_call_id: 'call_1',
+          content: 'Resource (file:///notes.md)',
+        },
+      ],
+    },
+    {
+      should: 'send null when tool response text is empty',
+      inputMessages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'probe',
+                content: [{ text: '' }],
+              },
+            },
+          ],
+        },
+      ],
+      expectedOutput: [
+        { role: 'tool', tool_call_id: 'call_1', content: 'null' },
+      ],
+    },
+    {
       should: 'send null for a tool response with neither output nor content',
       inputMessages: [
         {
@@ -519,6 +717,7 @@ describe('toOpenAiMessages', () => {
     },
     {
       should: 'keep all tool messages of a turn before the tool media message',
+      supportsMedia: true,
       inputMessages: [
         {
           role: 'tool',
@@ -642,7 +841,9 @@ describe('toOpenAiMessages', () => {
   for (const test of testCases) {
     it(test.should, () => {
       const actualOutput = toOpenAIMessages(
-        test.inputMessages as MessageData[]
+        test.inputMessages as MessageData[],
+        'auto',
+        test.supportsMedia
       );
       expect(actualOutput).toStrictEqual(test.expectedOutput);
     });
@@ -1800,6 +2001,35 @@ describe('toOpenAiRequestBody', () => {
       },
     });
   });
+  it('forwards tool response media only when the model supports media', () => {
+    const request = {
+      messages: [
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_1',
+                name: 'screenshot',
+                content: [{ media: { url: 'https://example.com/a.png' } }],
+              },
+            },
+          ],
+        },
+      ],
+    } as GenerateRequest;
+    const withMedia = toOpenAIRequestBody('gpt-4o', request, undefined, true);
+    const withoutMedia = toOpenAIRequestBody('deepseek-chat', request);
+    expect(withMedia.messages.map((m) => m.role)).toEqual(['tool', 'user']);
+    expect(withoutMedia.messages).toStrictEqual([
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: 'Media (unknown type) omitted',
+      },
+    ]);
+  });
+
   it('(gpt4-vision) sets response_format in openai request body', () => {
     // In either case - output.format='json' or output.format='text' - do NOT set response_format in the OpenAI request body explicitly.
     const modelName = 'gpt-4-vision';
