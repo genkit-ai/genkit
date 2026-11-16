@@ -97,6 +97,23 @@ export const modelWrapFlow = ai.defineFlow(
   }
 );
 
+export const webSearchFlow = ai.defineFlow(
+  {
+    name: 'webSearchFlow',
+    outputSchema: z.string(),
+  },
+  async () => {
+    const llmResponse = await ai.generate({
+      prompt: `What was a positive news story from today?`,
+      model: openAI.model('gpt-5-search-api'),
+      config: {
+        web_search_options: {},
+      },
+    });
+    return llmResponse.text;
+  }
+);
+
 export const embedFlow = ai.defineFlow(
   {
     name: 'embedFlow',
@@ -156,6 +173,37 @@ ai.defineFlow('streaming', async (_, { sendChunk }) => {
   }
 
   return poem;
+});
+
+// Web search
+type UrlCitation = {
+  type: 'url_citation';
+  url_citation: {
+    url: string;
+    title: string;
+    start_index: number;
+    end_index: number;
+  };
+};
+
+type SearchCompletion = {
+  choices?: { message: { annotations?: UrlCitation[] } }[];
+};
+
+ai.defineFlow('web-search', async () => {
+  const response = await ai.generate({
+    model: openAI.model('gpt-5-search-api'),
+    prompt: 'Who is Albert Einstein?',
+    config: {
+      web_search_options: {},
+    },
+  });
+
+  return {
+    text: response.text,
+    annotations: (response.raw as SearchCompletion | undefined)?.choices?.[0]
+      ?.message.annotations,
+  };
 });
 
 const getWeather = ai.defineTool(

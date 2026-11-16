@@ -71,6 +71,37 @@ ai.defineFlow('streaming', async (_, { sendChunk }) => {
   return poem;
 });
 
+// Web search
+type UrlCitation = {
+  type: 'url_citation';
+  url_citation: {
+    url: string;
+    title: string;
+    start_index: number;
+    end_index: number;
+  };
+};
+
+type SearchCompletion = {
+  choices?: { message: { annotations?: UrlCitation[] } }[];
+};
+
+ai.defineFlow('web-search', async () => {
+  const response = await ai.generate({
+    model: openAI.model('gpt-5-search-api'),
+    prompt: 'Who is Albert Einstein?',
+    config: {
+      web_search_options: {},
+    },
+  });
+
+  return {
+    text: response.text,
+    annotations: (response.raw as SearchCompletion | undefined)?.choices?.[0]
+      ?.message.annotations,
+  };
+});
+
 const getWeather = ai.defineTool(
   {
     name: 'getWeather',
