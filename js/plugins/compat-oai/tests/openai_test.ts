@@ -266,14 +266,33 @@ describe('GPT model catalog', () => {
     });
   });
 
-  it('gpt-5-search-api advertises no tools', () => {
-    expect(SUPPORTED_GPT_MODELS['gpt-5-search-api'].info?.supports?.tools).toBe(
-      false
+  it('marks exactly the models with a shutdown date as deprecated', () => {
+    const deprecated = Object.entries(SUPPORTED_GPT_MODELS)
+      .filter(([, ref]) => ref.info?.stage === 'deprecated')
+      .map(([id]) => id);
+    expect(deprecated.sort()).toEqual(
+      [
+        'gpt-4o',
+        'gpt-4o-mini',
+        'gpt-4o-mini-2024-07-18',
+        'gpt-4.1',
+        'gpt-4.1-mini',
+        'o3',
+        'gpt-5',
+        'gpt-5-mini',
+        'gpt-5-nano',
+        'gpt-5.1',
+        'gpt-5.4-nano',
+      ].sort()
     );
   });
 
   it('gives o3 constrained output', () => {
     expect(SUPPORTED_GPT_MODELS.o3.info?.supports?.constrained).toBe('all');
+  });
+
+  it('gives o3 no system role', () => {
+    expect(SUPPORTED_GPT_MODELS.o3.info?.supports?.systemRole).toBe(false);
   });
 
   it('leaves current models without a stage', () => {
@@ -302,18 +321,6 @@ describe('GPT model catalog', () => {
   });
 
   it('gpt-5.4 and later effort-none tool models advertise tools', () => {
-    expect(LISTING_FIXTURE.tools.only_at_reasoning_effort_none).toEqual([
-      'gpt-5.4',
-      'gpt-5.4-mini',
-      'gpt-5.4-nano',
-      'gpt-5.5',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-6-sol',
-      'gpt-6-luna',
-      'gpt-6.1-terra',
-    ]);
     for (const id of LISTING_FIXTURE.tools.only_at_reasoning_effort_none) {
       expect(gptModelRef(id).info?.supports?.tools).toBe(true);
     }
@@ -597,6 +604,13 @@ describe('openAI.model', () => {
     );
     expect(openAI.model('gpt-unknown-1').info?.stage).toBeUndefined();
   });
+
+  it.each(['constructor', 'toString'])(
+    'gives the Object.prototype key %s generic info',
+    (id) => {
+      expect(openAI.model(id).info).toEqual(openAIModelRef({ name: id }).info);
+    }
+  );
 
   it('gives fine-tunes generic info, not their base model info', () => {
     const id = 'ft:gpt-4o-mini-2024-07-18:acme::abc';

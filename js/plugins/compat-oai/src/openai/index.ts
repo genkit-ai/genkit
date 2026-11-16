@@ -66,15 +66,7 @@ import {
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-// Base ids (see baseId) from /v1/models that this plugin can't list as chat
-// models:
-// - Models for endpoints it doesn't call: moderation, Realtime, Live, audio.
-// - Responses-only models: the -pro models, Codex models, gpt-5.6-cyber,
-//   gpt-6-rosalind, gpt-rosalind-research and gpt-daybreak-*. gpt-6-cyber
-//   supports Chat Completions, so cyber is matched exactly.
-// - Legacy completions base models and their fine-tunes.
-// - Defensive entries for families OpenAI has already shut down (computer
-//   use, deep research, Sora), in case an account still lists them.
+// gpt-6-cyber supports Chat Completions, so only gpt-5.6-cyber is matched.
 const UNSUPPORTED_MODEL_MATCHERS: RegExp[] = [
   /moderation/,
   /realtime/,

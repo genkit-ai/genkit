@@ -1,5 +1,5 @@
 {
-  "description": "Shared OpenAI discovery fixture. 'chat': listed as a chat model. 'hidden': not listed at all. 'other': listed under its own non-chat kind (embedder, tts, stt, image), not as a chat model.",
+  "description": "OpenAI model ids as /v1/models returns them. 'chat': listed as a chat model. 'hidden': not listed at all. 'other': listed under its own non-chat kind (embedder, tts, stt, image), not as a chat model. 'tools': chat ids by when Chat Completions accepts function tools.",
   "chat": [
     "chat-latest",
     "gpt-4.1",
@@ -138,26 +138,11 @@
       "gpt-6-luna",
       "gpt-6.1-terra"
     ],
-    "default_effort_none": [
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.4-nano",
-      "gpt-5.5"
-    ],
-    "any_effort_verified": [
-      "gpt-5",
-      "gpt-5-mini",
-      "gpt-5-nano",
-      "gpt-5.1",
-      "gpt-5.2",
-      "o3"
-    ],
     "never_on_chat_completions": [
       "gpt-6-astra",
       "gpt-6.1-sol",
       "gpt-5-search-api",
       "gpt-5-search-api-2025-10-14"
-    ],
-    "note": "supports.tools is true for every chat id except never_on_chat_completions. Ids in only_at_reasoning_effort_none reject function tools at any other effort; default_effort_none ids work without an effort set. gpt-5-search-api rejects tools with 404 'tools is not supported in this model'."
+    ]
   }
 }
