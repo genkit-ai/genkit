@@ -73,11 +73,13 @@ var (
 var mediaTypes = []string{"image/*", "audio/*", "application/pdf"}
 
 // supportedModels curates capabilities for well-known OpenAI models. It is not
-// the set of usable models: any OpenAI model resolves on demand and takes
-// [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
-// folded into Versions rather than registered as separate models. Model IDs are
-// spelled out rather than taken from the SDK's ChatModel constants, which trail
-// the catalog by whichever SDK version go.mod pins.
+// the set of usable models: any OpenAI model resolves on demand, so an ID
+// absent here still works. Dated snapshots are folded into Versions rather
+// than registered as separate models. A snapshot of a model here takes that
+// model's entry (see [curatedModels]); any other ID, a fine-tune included,
+// takes [dynamicModelOptions]. Model IDs are spelled out rather than taken
+// from the SDK's ChatModel constants, which trail the catalog by whichever SDK
+// version go.mod pins.
 //
 // Models are dropped from here once OpenAI shuts them down, and marked
 // deprecated once a shutdown date is announced for them.
@@ -249,7 +251,7 @@ var supportedModels = map[string]ai.ModelOptions{
 }
 
 // dynamicModelOptions is advertised for OpenAI models that resolve dynamically
-// rather than appearing in supportedModels.
+// and are neither in supportedModels nor a snapshot of a model there.
 var dynamicModelOptions = ai.ModelOptions{
 	Supports: &multimodal,
 	Versions: []string{},
