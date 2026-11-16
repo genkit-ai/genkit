@@ -71,7 +71,7 @@ models (`gpt-5`, `gpt-5.1`, `gpt-5.2`, `o3`) take tools at any effort.
 
 The catalog is not a ceiling: any model ID the API serves resolves on demand,
 and the chat models the endpoint reports are listed dynamically. The listing
-leaves out the image, speech (TTS), transcription, realtime, audio, embedding,
+leaves out the image, speech (TTS), transcription, realtime, embedding,
 moderation, legacy completions, and Responses-only models OpenAI's endpoint
 also reports. IDs that don't follow OpenAI's naming, as a proxy or self-hosted
 server behind a custom base URL may report, are always listed. If the endpoint

@@ -85,8 +85,8 @@ var mediaTypes = []string{"image/*", "audio/*", "application/pdf"}
 // The "pro" tiers (gpt-5-pro, gpt-5.2-pro, gpt-5.4-pro, gpt-5.5-pro) are
 // absent because only the Responses API serves them. Image, speech,
 // realtime, transcription, and moderation models are absent because they are
-// not chat models. Audio chat models (gpt-audio-*) are not curated but
-// resolve dynamically.
+// not chat models. Audio chat models (gpt-audio-*) are not curated but are
+// listed and resolve dynamically.
 //
 // gpt-5.4 and later chat models, except those that advertise no tools, call
 // tools in Chat Completions only with reasoning_effort "none": gpt-5.4,
@@ -537,11 +537,10 @@ func (o *OpenAI) Embedder(g *genkit.Genkit, id string) ai.Embedder {
 // for each ID, a caller's [OpenAI.Models] entry included. OpenAI's endpoint
 // also reports image, speech (TTS), transcription, realtime, embedding,
 // moderation, legacy completions and Responses-only models, which Chat
-// Completions cannot serve, and audio models; those are left out (see
-// [isChatModel]). Audio models still resolve by name. IDs outside OpenAI's naming, as a
-// proxy or self-hosted server behind a custom base URL may report, are all
-// listed. If the endpoint cannot be listed, the error is logged and nothing
-// is listed.
+// Completions cannot serve; those are left out (see [isChatModel]). IDs
+// outside OpenAI's naming, as a proxy or self-hosted server behind a custom
+// base URL may report, are all listed. If the endpoint cannot be listed, the
+// error is logged and nothing is listed.
 func (o *OpenAI) ListActions(ctx context.Context) []api.ActionDesc {
 	actions := compat_oai.ListModelActions(ctx, &o.openAICompatible, o.modelOptions)
 	return slices.DeleteFunc(actions, func(a api.ActionDesc) bool {
@@ -563,10 +562,9 @@ var nonChatPrefixes = []string{
 	"codex-mini-", "ada:", "babbage:", "curie:", "davinci:",
 }
 
-// nonChatMarkers are ID words that mark models the listing leaves out: the
-// ones Chat Completions does not serve, plus the audio models.
+// nonChatMarkers are ID words that mark models Chat Completions does not
+// serve.
 var nonChatMarkers = map[string]bool{
-	"audio":      true,
 	"image":      true,
 	"tts":        true,
 	"transcribe": true,

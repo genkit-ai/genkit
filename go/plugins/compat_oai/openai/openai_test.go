@@ -565,6 +565,7 @@ func TestIsChatModel(t *testing.T) {
 		"gpt-5-nano", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini-2024-07-18",
 		"o3", "o3-2025-04-16", "gpt-6-cyber", "gpt-5-search-api", "chat-latest",
 		"ft:gpt-4o-mini-2024-07-18:acme::abc123",
+		"gpt-audio-1.5", "gpt-audio-mini", "gpt-4o-audio-preview",
 		// IDs outside OpenAI's naming, from a proxy or self-hosted server,
 		// pass even when they carry a word that marks an OpenAI non-chat model.
 		"claude-sonnet-4-5", "meta-llama/Llama-3.1-8B-Instruct", "qwen2.5-7b-instruct", "acme-pro",
@@ -574,7 +575,7 @@ func TestIsChatModel(t *testing.T) {
 		"dall-e-3", "gpt-image-2", "gpt-image-2.5-flare", "chatgpt-image-latest",
 		"tts-1", "gpt-4o-mini-tts", "whisper-1", "gpt-transcribe", "gpt-4o-transcribe-diarize",
 		"gpt-realtime-2.1", "gpt-4o-realtime-preview", "gpt-live-1", "gpt-live-transcribe",
-		"gpt-realtime-whisper", "gpt-audio-1.5", "gpt-audio-mini", "gpt-4o-audio-preview",
+		"gpt-realtime-whisper",
 		// Embeddings, moderation, video, legacy completions.
 		"text-embedding-3-small", "omni-moderation-latest", "sora-2",
 		"babbage-002", "davinci-002", "gpt-3.5-turbo-instruct", "gpt-3.5-turbo-instruct-0914",
@@ -618,6 +619,8 @@ func TestListActionsListsChatModelsOnly(t *testing.T) {
 			{"id":"text-embedding-3-small","object":"model","created":1,"owned_by":"system"},
 			{"id":"gpt-5.5-pro","object":"model","created":1,"owned_by":"system"},
 			{"id":"gpt-realtime-2.1","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-audio-1.5","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-4o-transcribe","object":"model","created":1,"owned_by":"system"},
 			{"id":"meta-llama/Llama-3.1-8B-Instruct","object":"model","created":1,"owned_by":"vllm"}
 		]}`)
 	}))
@@ -635,6 +638,7 @@ func TestListActionsListsChatModelsOnly(t *testing.T) {
 	want := []string{
 		"openai/ft:gpt-4o-mini-2024-07-18:acme::abc123",
 		"openai/gpt-6-sol",
+		"openai/gpt-audio-1.5",
 		"openai/meta-llama/Llama-3.1-8B-Instruct",
 		"openai/o3",
 	}
