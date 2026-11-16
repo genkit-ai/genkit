@@ -16,7 +16,12 @@
  */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { genkit, modelActionMetadata, type ActionMetadata } from 'genkit';
+import {
+  embedderActionMetadata,
+  genkit,
+  modelActionMetadata,
+  type ActionMetadata,
+} from 'genkit';
 import { modelRef, type GenerateRequest } from 'genkit/model';
 import type OpenAI from 'openai';
 import type { Fetch } from 'openai/core';
@@ -28,10 +33,28 @@ import {
 } from '../src/model';
 import { openAI } from '../src/openai';
 import {
+  SUPPORTED_IMAGE_MODELS,
+  openAIImageModelRef,
+} from '../src/openai/dalle';
+import {
+  SUPPORTED_EMBEDDING_MODELS,
+  TextEmbeddingConfigSchema,
+} from '../src/openai/embedder';
+import {
   OpenAIChatCompletionConfigSchema,
   SUPPORTED_GPT_MODELS,
   gptModelRef,
 } from '../src/openai/gpt';
+import {
+  SUPPORTED_STT_MODELS,
+  openAITranscriptionModelRef,
+} from '../src/openai/stt';
+import { SUPPORTED_TTS_MODELS, openAISpeechModelRef } from '../src/openai/tts';
+import {
+  SUPPORTED_WHISPER_MODELS,
+  openAIWhisperModelRef,
+} from '../src/openai/whisper';
+import { lookup } from '../src/utils';
 import * as LISTING_FIXTURE from './openai_listing_fixture.json';
 
 describe('gptModel', () => {
@@ -407,13 +430,67 @@ describe('openAI listActions', () => {
     }
   );
 
+  type OtherKind = 'embedder' | 'image' | 'speech' | 'whisper' | 'stt';
+  const OTHER_KINDS: Record<string, OtherKind> = {
+    'text-embedding-3-large': 'embedder',
+    'text-embedding-3-small': 'embedder',
+    'text-embedding-ada-002': 'embedder',
+    'tts-1': 'speech',
+    'tts-1-1106': 'speech',
+    'tts-1-hd': 'speech',
+    'tts-1-hd-1106': 'speech',
+    'gpt-4o-mini-tts': 'speech',
+    'gpt-4o-mini-tts-2025-03-20': 'speech',
+    'gpt-4o-mini-tts-2025-12-15': 'speech',
+    'whisper-1': 'whisper',
+    'gpt-transcribe': 'stt',
+    'gpt-4o-transcribe': 'stt',
+    'gpt-4o-transcribe-diarize': 'stt',
+    'gpt-4o-mini-transcribe': 'stt',
+    'gpt-4o-mini-transcribe-2025-03-20': 'stt',
+    'gpt-4o-mini-transcribe-2025-12-15': 'stt',
+    'gpt-image-1-mini': 'image',
+    'gpt-image-1.5': 'image',
+  };
+
+  function otherMetadata(id: string): ActionMetadata {
+    const kind = OTHER_KINDS[id];
+    if (kind === 'embedder') {
+      return embedderActionMetadata({
+        name: id,
+        configSchema: TextEmbeddingConfigSchema,
+        info: lookup(SUPPORTED_EMBEDDING_MODELS, id)?.info,
+      });
+    }
+    const ref = {
+      image: () =>
+        lookup(SUPPORTED_IMAGE_MODELS, id) ?? openAIImageModelRef({ name: id }),
+      speech: () =>
+        lookup(SUPPORTED_TTS_MODELS, id) ?? openAISpeechModelRef({ name: id }),
+      whisper: () =>
+        lookup(SUPPORTED_WHISPER_MODELS, id) ??
+        openAIWhisperModelRef({ name: id }),
+      stt: () =>
+        lookup(SUPPORTED_STT_MODELS, id) ??
+        openAITranscriptionModelRef({ name: id }),
+    }[kind]();
+    return modelActionMetadata({
+      name: ref.name,
+      info: ref.info,
+      configSchema: ref.configSchema,
+    });
+  }
+
+  it('pins a kind for every other id', () => {
+    expect(Object.keys(OTHER_KINDS).sort()).toEqual(
+      [...LISTING_FIXTURE.other].sort()
+    );
+  });
+
   it.each(LISTING_FIXTURE.other)(
-    'does not list %s as a chat model',
+    'lists %s under its own non-chat kind',
     async (id) => {
-      const action = findAction(await listActions(), id);
-      if (action) {
-        expect(action.metadata).not.toEqual(chatMetadata(id).metadata);
-      }
+      expect(findAction(await listActions(), id)).toEqual(otherMetadata(id));
     }
   );
 

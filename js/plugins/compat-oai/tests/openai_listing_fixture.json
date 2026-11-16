@@ -1,5 +1,5 @@
 {
-  "description": "Shared OpenAI discovery fixture. 'chat': listed as a chat model. 'hidden': not listed at all. 'other': not listed as a chat model; an SDK may list it under its own non-chat kind (embedder, tts, stt, image) or hide it.",
+  "description": "Shared OpenAI discovery fixture. 'chat': listed as a chat model. 'hidden': not listed at all. 'other': listed under its own non-chat kind (embedder, tts, stt, image), not as a chat model.",
   "chat": [
     "chat-latest",
     "gpt-4.1",
@@ -90,7 +90,16 @@
     "curie:ft-acme-2023-06-07-10-19-42",
     "davinci:ft-acme-2023-01-01-00-00-00",
     "ft:babbage-002:org:sfx:id",
-    "ft:davinci-002:org::abc"
+    "ft:davinci-002:org::abc",
+    "gpt-image-2",
+    "gpt-image-2-2026-04-21",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-flare-2026-09-08",
+    "gpt-image-2.5-sunburst",
+    "gpt-image-2.5-sunburst-2026-09-08",
+    "gpt-image-2.6-flare",
+    "gpt-image-2.6-sunburst",
+    "chatgpt-image-latest"
   ],
   "other": [
     "text-embedding-3-large",
@@ -111,16 +120,7 @@
     "gpt-4o-mini-transcribe-2025-03-20",
     "gpt-4o-mini-transcribe-2025-12-15",
     "gpt-image-1-mini",
-    "gpt-image-1.5",
-    "gpt-image-2",
-    "gpt-image-2-2026-04-21",
-    "gpt-image-2.5-flare",
-    "gpt-image-2.5-flare-2026-09-08",
-    "gpt-image-2.5-sunburst",
-    "gpt-image-2.5-sunburst-2026-09-08",
-    "gpt-image-2.6-flare",
-    "gpt-image-2.6-sunburst",
-    "chatgpt-image-latest"
+    "gpt-image-1.5"
   ],
   "tools": {
     "only_at_reasoning_effort_none": [
