@@ -524,36 +524,30 @@ func TestSnapshotsTakeTheirModelsOptions(t *testing.T) {
 	}
 }
 
-// TestFineTunesTakeTheirBaseModelsOptions pins that a fine-tuned model is
-// described like its base model, deprecation included, and that a fine-tune
-// of an unknown base takes the dynamic defaults.
-func TestFineTunesTakeTheirBaseModelsOptions(t *testing.T) {
+// TestFineTunesTakeDynamicDefaults pins that a fine-tuned model takes the
+// dynamic defaults whatever its base, rather than its base model's curated
+// entry.
+func TestFineTunesTakeDynamicDefaults(t *testing.T) {
 	o, g := initPlugin(t)
 
-	for ft, base := range map[string]string{
-		"ft:gpt-4o-mini-2024-07-18:acme::abc123": "gpt-4o-mini",
-		"ft:gpt-4.1:acme:custom:def456":          "gpt-4.1",
-		"ft:gpt-5.4-mini-2026-03-17:acme::ghi":   "gpt-5.4-mini",
+	for _, ft := range []string{
+		"ft:gpt-4o-mini-2024-07-18:acme::abc123",
+		"ft:gpt-4.1:acme:custom:def456",
+		"ft:gpt-5-search-api:acme::x1",
+		"ft:my-base:acme::xyz",
 	} {
 		got := o.modelOptions(ft)
-		want := supportedModels[base]
-		if got.Stage != want.Stage || got.Supports != want.Supports {
-			t.Errorf("%s: stage %q supports %p, want %s's stage %q supports %p", ft, got.Stage, got.Supports, base, want.Stage, want.Supports)
+		if got.Stage != dynamicModelOptions.Stage || got.Supports != dynamicModelOptions.Supports {
+			t.Errorf("%s: stage %q supports %p, want the dynamic defaults' stage %q supports %p", ft, got.Stage, got.Supports, dynamicModelOptions.Stage, dynamicModelOptions.Supports)
 		}
-		if got.Label != "" || len(got.Versions) != 0 {
-			t.Errorf("%s: label %q versions %v, want neither", ft, got.Label, got.Versions)
-		}
-	}
-	if got := o.modelOptions("ft:my-base:acme::xyz"); got.Stage != dynamicModelOptions.Stage || got.Supports != dynamicModelOptions.Supports {
-		t.Errorf("unknown-base fine-tune = stage %q supports %p, want the dynamic defaults", got.Stage, got.Supports)
 	}
 
 	m := genkit.LookupModel(g, "openai/ft:gpt-4o-mini-2024-07-18:acme::abc123")
 	if m == nil {
 		t.Fatal("fine-tune did not resolve")
 	}
-	if got := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)["stage"]; got != ai.ModelStageDeprecated {
-		t.Errorf("resolved fine-tune stage = %v, want %q", got, ai.ModelStageDeprecated)
+	if got := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)["stage"]; got != ai.ModelStageStable {
+		t.Errorf("resolved fine-tune stage = %v, want %q", got, ai.ModelStageStable)
 	}
 }
 

@@ -382,25 +382,14 @@ func (o *OpenAI) newEmbedder(id string, opts ai.EmbedderOptions) *ai.EmbedderAct
 }
 
 // modelOptions returns the ModelOptions for an OpenAI model ID: curated
-// capabilities for a known model, its base model's for a fine-tune of a known
-// model, and the generic multimodal defaults for the rest, with an entry from
-// [OpenAI.Models] overlaid on whichever applies.
+// capabilities for a known model and the generic multimodal defaults for the
+// rest, with an entry from [OpenAI.Models] overlaid on whichever applies.
 //
 // Every path that describes a model goes through this one, which is what makes
 // a caller's entry authoritative whether Init, ListActions or ResolveAction
 // gets there first.
 func (o *OpenAI) modelOptions(id string) ai.ModelOptions {
-	dynamic := dynamicModelOptions
-	base := id
-	if b, ok := fineTuneBase(id); ok {
-		base = b
-		if opts, ok := curatedModels[base]; ok {
-			dynamic = opts
-			dynamic.Label = ""
-			dynamic.Versions = []string{}
-		}
-	}
-	return compat_oai.ModelOptionsFor(provider, id, curatedModels, dynamic, o.Models)
+	return compat_oai.ModelOptionsFor(provider, id, curatedModels, dynamicModelOptions, o.Models)
 }
 
 // fineTuneBase returns the base model of a fine-tuned model ID

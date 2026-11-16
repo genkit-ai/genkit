@@ -51,7 +51,7 @@ The plugin registers a curated catalog spanning the GPT-6 line (`gpt-6-astra`,
 (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, and
 earlier, plus `gpt-5-search-api`), `gpt-4.1`, `gpt-4o`, and `o3`. Models OpenAI has shut down are not
 registered. Every catalog model with an announced shutdown date is marked
-deprecated, its dated snapshots and fine-tunes included, so generating with
+deprecated, its dated snapshots included, so generating with
 one logs a warning: `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, and `o3`
 (2026-12-11); `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o`, and `gpt-4o-mini`
 (2027-01-14); `gpt-5.1` and `gpt-5.4-nano` (2027-04-01). Models outside the
