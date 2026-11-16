@@ -61,7 +61,6 @@ interface OutputSchema {
 
 @Component({
   selector: 'app-chatbot',
-  standalone: true,
   providers: [provideNativeDateAdapter()],
   imports: [
     FormsModule,
