@@ -135,7 +135,8 @@
       "gpt-5.6-terra",
       "gpt-5.6-luna",
       "gpt-6-sol",
-      "gpt-6-luna"
+      "gpt-6-luna",
+      "gpt-6.1-terra"
     ],
     "default_effort_none": [
       "gpt-5.4",
@@ -154,7 +155,6 @@
     "never_on_chat_completions": [
       "gpt-6-astra",
       "gpt-6.1-sol",
-      "gpt-6.1-terra",
       "gpt-5-search-api",
       "gpt-5-search-api-2025-10-14"
     ],

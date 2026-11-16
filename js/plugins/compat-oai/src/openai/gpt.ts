@@ -155,7 +155,7 @@ const GPT_MODEL_SPECS = {
   'gpt-6-sol': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
   'gpt-6-luna': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
   'gpt-6.1-sol': { supports: CHAT_SUPPORTS, tools: 'never' },
-  'gpt-6.1-terra': { supports: CHAT_SUPPORTS, tools: 'never' },
+  'gpt-6.1-terra': { supports: CHAT_SUPPORTS, tools: 'effortNone' },
 } as const satisfies Record<string, GptModelSpec>;
 
 type GptModelId = keyof typeof GPT_MODEL_SPECS;

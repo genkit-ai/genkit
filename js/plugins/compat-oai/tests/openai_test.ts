@@ -282,12 +282,8 @@ describe('GPT model catalog', () => {
       }
     });
 
-    it('gpt-6-astra, gpt-6.1-sol and gpt-6.1-terra advertise no tools', () => {
-      for (const id of [
-        'gpt-6-astra',
-        'gpt-6.1-sol',
-        'gpt-6.1-terra',
-      ] as const) {
+    it('gpt-6-astra and gpt-6.1-sol advertise no tools', () => {
+      for (const id of ['gpt-6-astra', 'gpt-6.1-sol'] as const) {
         expect(SUPPORTED_GPT_MODELS[id].info?.supports?.tools).toBe(false);
       }
     });
@@ -304,6 +300,7 @@ describe('GPT model catalog', () => {
       'gpt-5.6-luna',
       'gpt-6-sol',
       'gpt-6-luna',
+      'gpt-6.1-terra',
     ]);
     for (const id of LISTING_FIXTURE.tools.only_at_reasoning_effort_none) {
       expect(gptModelRef(id).info?.supports?.tools).toBe(true);
