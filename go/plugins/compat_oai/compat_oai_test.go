@@ -280,3 +280,35 @@ func TestListActionsWarnsOncePerFailingStreak(t *testing.T) {
 	list()
 	check("failure after a success", 1, 0)
 }
+
+// TestListActionsCancelledRequestDoesNotWarn pins that a listing that fails
+// because its context ended logs at debug level and leaves the warning armed
+// for a real failure.
+func TestListActionsCancelledRequestDoesNotWarn(t *testing.T) {
+	o := &OpenAICompatible{
+		Provider: "test",
+		ListModels: func(ctx context.Context, _ *openai.Client) ([]string, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return nil, errors.New("listing broke")
+		},
+	}
+	var logged bytes.Buffer
+	handler := slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})
+	base := logger.WithContext(context.Background(), slog.New(handler))
+	desc := func(id string) api.ActionDesc { return api.ActionDesc{Name: id} }
+
+	cancelled, cancel := context.WithCancel(base)
+	cancel()
+	listActions(cancelled, o, desc)
+	if log := logged.String(); strings.Contains(log, "level=WARN") || !strings.Contains(log, "level=DEBUG") {
+		t.Errorf("cancelled listing logged %q, want one debug record and no warning", log)
+	}
+
+	logged.Reset()
+	listActions(base, o, desc)
+	if log := logged.String(); !strings.Contains(log, "level=WARN") {
+		t.Errorf("failure after a cancelled listing logged %q, want a warning", log)
+	}
+}

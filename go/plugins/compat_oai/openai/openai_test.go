@@ -580,7 +580,7 @@ func TestIsChatModel(t *testing.T) {
 		"gpt-realtime-2.1", "gpt-4o-realtime-preview", "gpt-live-1", "gpt-live-transcribe",
 		"gpt-realtime-whisper",
 		// Embeddings, moderation, video, legacy completions.
-		"text-embedding-3-small", "omni-moderation-latest", "sora-2",
+		"text-embedding-3-small", "omni-moderation-latest", "text-moderation-latest", "sora-2",
 		"babbage-002", "davinci-002", "gpt-3.5-turbo-instruct", "gpt-3.5-turbo-instruct-0914",
 		"curie:ft-acme-2023-06-07-10-19-42", "davinci:ft-acme-2023-01-01-00-00-00",
 		"babbage:ft-acme-2023-01-01-00-00-00", "ada:ft-acme-2023-01-01-00-00-00",
@@ -650,8 +650,8 @@ func TestListActionsListsChatModelsOnly(t *testing.T) {
 	}
 }
 
-// listingFixture is the OpenAI discovery fixture every Genkit SDK tests its
-// listing against.
+// listingFixture holds OpenAI model IDs by how the listing treats them, and
+// the listed ones that advertise no tools.
 type listingFixture struct {
 	Chat   []string `json:"chat"`
 	Hidden []string `json:"hidden"`
@@ -662,7 +662,7 @@ type listingFixture struct {
 }
 
 // TestListActionsMatchesFixture pins, against a models list holding every ID
-// in the shared fixture, that each chat ID is listed and nothing else is, and
+// in the fixture, that each chat ID is listed and nothing else is, and
 // which listed models advertise tools.
 func TestListActionsMatchesFixture(t *testing.T) {
 	raw, err := os.ReadFile("testdata/openai-listing-fixture.json")
@@ -872,5 +872,45 @@ func TestModelsOverride(t *testing.T) {
 	info := embedder.(*ai.EmbedderAction).Desc().Metadata["info"].(map[string]any)
 	if got := info["dimensions"]; got != 64 {
 		t.Errorf("dimensions = %v (%T), want the override's 64", got, got)
+	}
+}
+
+// TestModelsEntrySilencesDeprecationWarning pins that a Models entry with a
+// stable stage stops the deprecation warning for exactly the ID it names: a
+// snapshot of that model still warns.
+func TestModelsEntrySilencesDeprecationWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"gpt-4o",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	o := &OpenAI{
+		Opts:   []option.RequestOption{option.WithBaseURL(server.URL)},
+		Models: map[string]ai.ModelOptions{"gpt-4o": {Stage: ai.ModelStageStable}},
+	}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(o))
+
+	for _, tc := range []struct {
+		model string
+		warns bool
+	}{
+		{"openai/gpt-4o", false},
+		{"openai/gpt-4o-2024-11-20", true},
+		{"openai/gpt-4o-mini", true},
+	} {
+		var logged bytes.Buffer
+		ctx := logger.WithContext(context.Background(), slog.New(slog.NewTextHandler(&logged, nil)))
+		if _, err := genkit.Generate(ctx, g, ai.WithModelName(tc.model), ai.WithPrompt("hi")); err != nil {
+			t.Fatalf("Generate(%s) error = %v", tc.model, err)
+		}
+		if got := strings.Contains(logged.String(), "model is deprecated"); got != tc.warns {
+			t.Errorf("%s: deprecation warning logged = %v, want %v; log %q", tc.model, got, tc.warns, logged.String())
+		}
 	}
 }

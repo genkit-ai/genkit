@@ -233,9 +233,7 @@ type OpenAICompatible struct {
 	// through one config type, so the cache never mixes schemas.
 	descs sync.Map
 
-	// listFailing records that the last model listing failed, so a failure
-	// that persists across reflection polls is warned about once rather
-	// than on every poll.
+	// listFailing records that the last model listing failed.
 	listFailing atomic.Bool
 }
 
@@ -769,11 +767,6 @@ func ResolveChatAction[Config ChatConfig](o *OpenAICompatible, atype api.ActionT
 }
 
 // listActions lists the models the provider's API reports, described by desc.
-// Descriptors are cached per ID: they are deterministic, and reflection
-// polls the list often. A listing error lists nothing and is logged, since
-// the caller's signature has no error to return; the models stay usable by
-// name. Reflection polls the list repeatedly, so the first failure is a
-// warning and repeats are logged at debug level until a listing succeeds.
 func listActions(ctx context.Context, o *OpenAICompatible, desc func(id string) api.ActionDesc) []api.ActionDesc {
 	listModels := o.ListModels
 	if listModels == nil {
@@ -781,6 +774,10 @@ func listActions(ctx context.Context, o *OpenAICompatible, desc func(id string) 
 	}
 	models, err := listModels(ctx, o.client)
 	if err != nil {
+		if ctx.Err() != nil {
+			logger.Debug(ctx, "model listing cancelled", "provider", o.Provider, "error", err)
+			return nil
+		}
 		if o.listFailing.CompareAndSwap(false, true) {
 			logger.Warn(ctx, "unable to list models", "provider", o.Provider, "error", err)
 		} else {

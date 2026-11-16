@@ -1,5 +1,5 @@
 {
-  "description": "Shared OpenAI discovery fixture. 'chat': listed as a chat model. 'hidden': not listed at all. 'other': not listed as a chat model; an SDK may list it under its own non-chat kind (embedder, tts, stt, image) or hide it.",
+  "description": "OpenAI model IDs by how a listing treats them. 'chat': listed as a chat model. 'hidden': not listed at all. 'other': a non-chat kind (embedder, tts, stt, image), not listed as a chat model.",
   "chat": [
     "chat-latest",
     "gpt-4.1", "gpt-4.1-2025-04-14", "gpt-4.1-mini", "gpt-4.1-mini-2025-04-14",
@@ -30,10 +30,7 @@
     "gpt-image-1-mini", "gpt-image-1.5", "gpt-image-2", "gpt-image-2-2026-04-21", "gpt-image-2.5-flare", "gpt-image-2.5-flare-2026-09-08", "gpt-image-2.5-sunburst", "gpt-image-2.5-sunburst-2026-09-08", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst", "chatgpt-image-latest"
   ],
   "tools": {
-    "only_at_reasoning_effort_none": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-terra"],
-    "default_effort_none": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.5"],
-    "any_effort_verified": ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5.1", "gpt-5.2", "o3"],
     "never_on_chat_completions": ["gpt-6-astra", "gpt-6.1-sol", "gpt-5-search-api", "gpt-5-search-api-2025-10-14"],
-    "note": "supports.tools is true for every chat id except never_on_chat_completions. Ids in only_at_reasoning_effort_none reject function tools at any other effort; default_effort_none ids work without an effort set. gpt-5-search-api rejects tools with 404 'tools is not supported in this model'."
+    "note": "supports.tools is true for every chat id except never_on_chat_completions. gpt-5-search-api rejects tools with 404 'tools is not supported in this model'."
   }
 }

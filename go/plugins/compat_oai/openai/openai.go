@@ -203,8 +203,7 @@ var supportedModels = map[string]ai.ModelOptions{
 		Stage:    ai.ModelStageDeprecated,
 	},
 
-	// GPT-5 and o3 shut down 2026-12-11: gpt-5 and o3 are replaced by
-	// gpt-6.1-sol, gpt-5-mini by gpt-6.1-terra, gpt-5-nano by gpt-6-luna.
+	// GPT-5 and o3 shut down 2026-12-11.
 	"gpt-5": {
 		Label:    "OpenAI GPT-5",
 		Supports: &multimodal,
@@ -314,7 +313,7 @@ type OpenAI struct {
 	// OpenAI does.
 	//
 	//	&openai.OpenAI{Models: map[string]ai.ModelOptions{
-	//		"gpt-4o": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+	//		"gpt-5.4": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 	//	}}
 	//
 	// Fields left at their zero value keep what the plugin resolves, so an
@@ -402,17 +401,6 @@ func (o *OpenAI) modelOptions(id string) ai.ModelOptions {
 	return compat_oai.ModelOptionsFor(provider, id, curatedModels, dynamicModelOptions, o.Models)
 }
 
-// fineTuneBase returns the base model of a fine-tuned model ID
-// (ft:<base>:<org>:...).
-func fineTuneBase(id string) (string, bool) {
-	rest, ok := strings.CutPrefix(id, "ft:")
-	if !ok {
-		return "", false
-	}
-	base, _, _ := strings.Cut(rest, ":")
-	return base, true
-}
-
 // curatedModels is supportedModels plus an entry for each dated snapshot in
 // its Versions, so a snapshot that is listed or resolved by name takes its
 // model's capabilities and stage (a deprecation included) rather than the
@@ -448,12 +436,12 @@ func (o *OpenAI) embedderOptions(id string) ai.EmbedderOptions {
 // runtime. The config is the OpenAI SDK's request params, the raw request the
 // plugin sends; a nil config leaves the request's config unset.
 //
-//	ai.WithModel(openai.ModelRef("gpt-4o", &openaiGo.ChatCompletionNewParams{
+//	ai.WithModel(openai.ModelRef("gpt-5.4", &openaiGo.ChatCompletionNewParams{
 //		Temperature: openaiGo.Float(0.7),
 //	}))
 //
-// name is the model ID, with or without the provider prefix: "gpt-4o" and
-// "openai/gpt-4o" name the same model, as they do everywhere else in this
+// name is the model ID, with or without the provider prefix: "gpt-5.4" and
+// "openai/gpt-5.4" name the same model, as they do everywhere else in this
 // package.
 func ModelRef(id string, config *openaiGo.ChatCompletionNewParams) ai.ModelRef {
 	return ai.NewModelRef(compat_oai.ActionName(provider, id), config)
@@ -473,7 +461,7 @@ func (o *OpenAI) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 // Model returns a previously registered model.
 //
 // Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("openai/gpt-4o") or, to
+// first is rarely necessary: pass ai.WithModelName("openai/gpt-5.4") or, to
 // carry config with it, [ModelRef]. Use [genkit.LookupModel] when the action
 // itself is what you need.
 func (o *OpenAI) Model(g *genkit.Genkit, id string) ai.Model {
@@ -610,6 +598,17 @@ func isChatModel(id string) bool {
 		}
 	}
 	return true
+}
+
+// fineTuneBase returns the base model of a fine-tuned model ID
+// (ft:<base>:<org>:...).
+func fineTuneBase(id string) (string, bool) {
+	rest, ok := strings.CutPrefix(id, "ft:")
+	if !ok {
+		return "", false
+	}
+	base, _, _ := strings.Cut(rest, ":")
+	return base, true
 }
 
 // isOSeries reports whether id names an o-series reasoning model (o1, o3,
