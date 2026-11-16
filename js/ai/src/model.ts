@@ -152,6 +152,7 @@ export type DefineModelOptions<
   configSchema?: CustomOptionsSchema;
   /** Descriptive name for this model e.g. 'Google AI - Gemini Pro'. */
   label?: string;
+  stage?: ModelInfo['stage'];
   /** Middleware to be used with this model. */
   use?: ModelMiddlewareArgument[];
 };
@@ -204,6 +205,7 @@ function modelActionOptions<
           : undefined,
         versions: options.versions,
         supports: options.supports,
+        stage: options.stage,
       },
     },
     use: middleware,
@@ -331,6 +333,7 @@ export function backgroundModel<
           : undefined,
         versions: options.versions,
         supports: options.supports,
+        stage: options.stage,
       },
     },
     use: middleware,

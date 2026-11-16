@@ -19,15 +19,17 @@ import {
   sentinelNoopStreamingCallback,
   StreamingCallback,
 } from '@genkit-ai/core';
+import { logger } from '@genkit-ai/core/logging';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import assert from 'assert';
-import { describe, it } from 'node:test';
+import { describe, it, mock } from 'node:test';
 import {
   defineModel,
   GenerateResponseChunkData,
   GenerateResponseData,
   model,
+  resolveModel,
 } from '../../src/model.js';
 
 initNodeFeatures();
@@ -167,5 +169,58 @@ describe('model', () => {
       assert.deepStrictEqual(response, GENERATE_RESPONSE);
       assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
     });
+  });
+
+  describe('stage', () => {
+    it('keeps stage in model metadata', () => {
+      const registry = new Registry();
+      const defined = defineModel(
+        registry,
+        { name: 'defined', stage: 'legacy' },
+        async () => GENERATE_RESPONSE
+      );
+      const dynamic = model(
+        { name: 'dynamic', stage: 'unstable' },
+        async () => GENERATE_RESPONSE
+      );
+      const unset = model({ name: 'unset' }, async () => GENERATE_RESPONSE);
+
+      assert.strictEqual(defined.__action.metadata?.model?.stage, 'legacy');
+      assert.strictEqual(dynamic.__action.metadata?.model?.stage, 'unstable');
+      assert.strictEqual(unset.__action.metadata?.model?.stage, undefined);
+    });
+
+    for (const [stage, warns] of [
+      ['deprecated', true],
+      ['legacy', false],
+      ['stable', false],
+      ['unstable', false],
+      [undefined, false],
+    ] as const) {
+      it(`${warns ? 'warns' : 'does not warn'} when resolving a ${stage ?? 'stageless'} model`, async () => {
+        const registry = new Registry();
+        defineModel(
+          registry,
+          { name: 'a/m', stage },
+          async () => GENERATE_RESPONSE
+        );
+        const warn = mock.method(logger, 'warn', () => {});
+        try {
+          await resolveModel(registry, 'a/m', { warnDeprecated: true });
+        } finally {
+          warn.mock.restore();
+        }
+        assert.deepStrictEqual(
+          warn.mock.calls.map((c) => c.arguments),
+          warns
+            ? [
+                [
+                  "Model 'a/m' is deprecated and may be removed in a future release.",
+                ],
+              ]
+            : []
+        );
+      });
+    }
   });
 });
