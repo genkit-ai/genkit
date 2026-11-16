@@ -147,6 +147,33 @@ describe('toAnthropicRequest', () => {
       },
     },
     {
+      should:
+        'should concatenate multiple system message text parts without commas',
+      input: {
+        messages: [
+          {
+            role: 'system',
+            content: [{ text: 'Talk like a pirate.' }, { text: ' Arrr!' }],
+          },
+          {
+            role: 'user',
+            content: [{ text: 'Tell a joke about dogs.' }],
+          },
+        ],
+      },
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        system: 'Talk like a pirate. Arrr!',
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Tell a joke about dogs.' }],
+          },
+        ],
+      },
+    },
+    {
       should: 'should transform thinking and output_config parameters',
       input: {
         messages: [

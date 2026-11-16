@@ -265,7 +265,7 @@ export function toAnthropicRequest(
           }
           return c.text;
         })
-        .join();
+        .join('');
     }
     // If the last message is a tool response, we need to add a user message.
     // https://docs.anthropic.com/en/docs/build-with-claude/tool-use#handling-tool-use-and-tool-result-content-blocks
