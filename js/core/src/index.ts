@@ -64,6 +64,7 @@ export {
   type DynamicActionProviderAction,
 } from './dynamic-action-provider.js';
 export {
+  GENKIT_ERROR_SYMBOL,
   GenkitError,
   StatusNameSchema,
   UnstableApiError,
@@ -73,6 +74,7 @@ export {
   getErrorMessage,
   getHttpStatus,
   inheritSpanMarks,
+  isGenkitError,
   type ErrorResponseMetadata,
   type HttpErrorWireFormat,
   type SpanFailureMarks,

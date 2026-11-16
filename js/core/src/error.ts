@@ -74,10 +74,13 @@ export function inheritSpanMarks(target: object, source: unknown): void {
   }
 }
 
+export const GENKIT_ERROR_SYMBOL = Symbol.for('genkit.error');
+
 /**
  * Base error class for Genkit errors.
  */
 export class GenkitError extends Error {
+  readonly [GENKIT_ERROR_SYMBOL] = true;
   source?: string;
   status: StatusName;
   detail?: any;
@@ -140,6 +143,23 @@ export class GenkitError extends Error {
   }
 
   /**
+   * Supports `instanceof GenkitError` checks across multiple copies of `@genkit-ai/core`
+   * (e.g., dual ESM/CJS or duplicated dependencies) by validating the shared symbol brand.
+   */
+  static [Symbol.hasInstance](this: Function, instance: unknown): boolean {
+    if (!isGenkitError(instance)) {
+      return false;
+    }
+    if (this === GenkitError) {
+      return true;
+    }
+    return (
+      Function.prototype[Symbol.hasInstance].call(this, instance) ||
+      (instance as any).name === this.name
+    );
+  }
+
+  /**
    * Returns a JSON-serializable representation of this object.
    */
   public toJSON(): HttpErrorWireFormat {
@@ -195,16 +215,35 @@ export class UserFacingError extends GenkitError {
   }
 }
 
+/**
+ * Type guard to check whether an unknown error is a GenkitError,
+ * including errors created by another copy of `@genkit-ai/core`.
+ */
+export function isGenkitError(e: unknown): e is GenkitError {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    (e as any)[GENKIT_ERROR_SYMBOL] === true
+  );
+}
+
 export function getHttpStatus(e: any): number {
-  if (e instanceof GenkitError) {
+  if (isGenkitError(e)) {
     return e.code;
   }
   return 500;
 }
 
 export function getCallableJSON(e: any): HttpErrorWireFormat {
-  if (e instanceof GenkitError) {
-    return e.toJSON();
+  if (isGenkitError(e)) {
+    if (typeof e.toJSON === 'function') {
+      return e.toJSON();
+    }
+    return {
+      ...(e.detail === undefined ? {} : { details: e.detail }),
+      status: e.status,
+      message: e.publicMessage ?? e.originalMessage ?? e.message,
+    };
   }
   return {
     message: 'Internal Error',
