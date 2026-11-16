@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -228,7 +229,8 @@ func TestSDKModelsCountReasoningApart(t *testing.T) {
 }
 
 // TestListActionsWarnsOncePerFailingStreak pins that a listing failure warns
-// once, repeats stay below warn level, and a success re-arms the warning.
+// once, each repeat logs at debug level instead, and a success re-arms the
+// warning.
 func TestListActionsWarnsOncePerFailingStreak(t *testing.T) {
 	fail := true
 	o := &OpenAICompatible{
@@ -241,27 +243,40 @@ func TestListActionsWarnsOncePerFailingStreak(t *testing.T) {
 		},
 	}
 	var logged bytes.Buffer
-	ctx := logger.WithContext(context.Background(), slog.New(slog.NewTextHandler(&logged, nil)))
+	handler := slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})
+	ctx := logger.WithContext(context.Background(), slog.New(handler))
 	list := func() []api.ActionDesc {
 		logged.Reset()
 		return listActions(ctx, o, func(id string) api.ActionDesc { return api.ActionDesc{Name: id} })
 	}
-	warned := func() bool {
-		return strings.Contains(logged.String(), "level=WARN") && strings.Contains(logged.String(), "listing broke")
+	check := func(step string, warns, debugs int) {
+		t.Helper()
+		log := logged.String()
+		if got := strings.Count(log, "level=WARN"); got != warns {
+			t.Errorf("%s: %d warn records, want %d; log %q", step, got, warns, log)
+		}
+		if got := strings.Count(log, "level=DEBUG"); got != debugs {
+			t.Errorf("%s: %d debug records, want %d; log %q", step, got, debugs, log)
+		}
+		if warns+debugs > 0 && strings.Count(log, "listing broke") != warns+debugs {
+			t.Errorf("%s: log %q does not carry the listing error on every record", step, log)
+		}
 	}
 
-	if got := list(); len(got) != 0 || !warned() {
-		t.Fatalf("first failure: listed %v, log %q; want nothing listed and a warning", got, logged.String())
+	if got := list(); len(got) != 0 {
+		t.Fatalf("first failure listed %v, want nothing", got)
 	}
-	if list(); logged.Len() != 0 {
-		t.Fatalf("repeat failure logged %q, want nothing at warn level", logged.String())
+	check("first failure", 1, 0)
+	for i := range 2 {
+		list()
+		check(fmt.Sprintf("repeat failure %d", i+1), 0, 1)
 	}
 	fail = false
-	if got := list(); len(got) != 1 || logged.Len() != 0 {
-		t.Fatalf("success: listed %v, log %q; want m1 and no log", got, logged.String())
+	if got := list(); len(got) != 1 {
+		t.Fatalf("success listed %v, want m1", got)
 	}
+	check("success", 0, 0)
 	fail = true
-	if list(); !warned() {
-		t.Fatalf("failure after a success logged %q, want a warning", logged.String())
-	}
+	list()
+	check("failure after a success", 1, 0)
 }
