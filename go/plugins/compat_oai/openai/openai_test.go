@@ -460,10 +460,10 @@ func TestModelStagesAndTools(t *testing.T) {
 		"gpt-4.1": true, "gpt-4.1-mini": true, "gpt-4o": true, "gpt-4o-mini": true, // 2027-01-14
 		"gpt-5.1": true, "gpt-5.4-nano": true, // 2027-04-01
 	}
-	// The first three call tools only through the Responses API; the search
+	// The first two call tools only through the Responses API; the search
 	// model rejects tools outright.
 	noTools := map[string]bool{
-		"gpt-6-astra": true, "gpt-6.1-sol": true, "gpt-6.1-terra": true,
+		"gpt-6-astra": true, "gpt-6.1-sol": true,
 		"gpt-5-search-api": true,
 	}
 

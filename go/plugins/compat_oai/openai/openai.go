@@ -92,11 +92,11 @@ var mediaTypes = []string{"image/*", "audio/*", "application/pdf"}
 //
 // gpt-5.4 and later chat models, except those that advertise no tools, call
 // tools in Chat Completions only with reasoning_effort "none": gpt-5.4,
-// gpt-5.4-mini, gpt-5.4-nano, gpt-5.5, the gpt-5.6 models, gpt-6-sol and
-// gpt-6-luna.
+// gpt-5.4-mini, gpt-5.4-nano, gpt-5.5, the gpt-5.6 models, gpt-6-sol,
+// gpt-6-luna and gpt-6.1-terra.
 var supportedModels = map[string]ai.ModelOptions{
 	// GPT-6, the current frontier family. No dated snapshots yet. Astra and
-	// the 6.1 models call tools only through the Responses API.
+	// gpt-6.1-sol call tools only through the Responses API.
 	"gpt-6-astra": {
 		Label:    "OpenAI GPT-6 Astra",
 		Supports: &multimodalNoTools,
@@ -111,7 +111,7 @@ var supportedModels = map[string]ai.ModelOptions{
 	},
 	"gpt-6.1-terra": {
 		Label:    "OpenAI GPT-6.1 Terra",
-		Supports: &multimodalNoTools,
+		Supports: &multimodal,
 		Versions: []string{"gpt-6.1-terra"},
 		Stage:    ai.ModelStageStable,
 	},

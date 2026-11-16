@@ -59,11 +59,11 @@ catalog, such as `gpt-audio-mini` (shutdown 2027-01-20), resolve with the
 generic defaults and are not marked deprecated, as do models OpenAI has
 already shut down, such as `o4-mini`.
 
-`gpt-6-astra`, `gpt-6.1-sol`, and `gpt-6.1-terra` call tools only through the
-Responses API, so they advertise no tool support here. `gpt-5-search-api`
-takes no tools either. The other `gpt-5.4` and later chat models (`gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`,
-`gpt-5.6-luna`, `gpt-6-sol`, and `gpt-6-luna`) advertise tool support, but they
+`gpt-6-astra` and `gpt-6.1-sol` call tools only through the Responses API, so
+they advertise no tool support here. `gpt-5-search-api` takes no tools either.
+The other `gpt-5.4` and later chat models (`gpt-5.4`, `gpt-5.4-mini`,
+`gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
+`gpt-6-sol`, `gpt-6-luna`, and `gpt-6.1-terra`) advertise tool support, but they
 call tools in Chat Completions only with `ReasoningEffort` set to `none`. The
 `gpt-5.4` models and `gpt-5.5` default to `none`; the others default to a higher
 effort, so a request with tools must set `none` or the API rejects it. Earlier
