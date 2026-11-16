@@ -750,7 +750,7 @@ class AnthropicModel:
         """
         reasoning = part.reasoning
         # Claude can sign a thinking block with empty text, and a tool-use turn
-        # must start with it, so empty reasoning is not skipped.
+        # must start with it, so signed empty reasoning is kept.
         if reasoning is not None:
             # Claude only accepts thinking it signed. Unsigned reasoning, such as
             # history from a model that signs nothing, is dropped, the same as on

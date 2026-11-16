@@ -1868,8 +1868,9 @@ async def test_generate_claude_sends_back_empty_signed_thinking_before_tool_use(
 
     await ai.generate(model='anthropic/claude-sonnet-4', messages=history)
 
-    create = mock_client.messages.create if mock_client.messages.create.called else mock_client.beta.messages.create
-    sent = create.call_args.kwargs['messages']
+    # No beta config here, so this must go through the standard endpoint.
+    mock_client.messages.create.assert_awaited_once()
+    sent = mock_client.messages.create.call_args.kwargs['messages']
     assert sent[1]['content'][0] == {'type': 'thinking', 'thinking': '', 'signature': 'sig-abc'}
     assert sent[1]['content'][1]['type'] == 'tool_use'
 
