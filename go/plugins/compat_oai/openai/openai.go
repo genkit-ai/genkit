@@ -220,8 +220,8 @@ var supportedModels = map[string]ai.ModelOptions{
 		Stage:    ai.ModelStageDeprecated,
 	},
 
-	// The GPT-4.1 and GPT-4o snapshots shut down 2027-01-14; the aliases are
-	// assumed to go with them.
+	// The GPT-4.1 and GPT-4o snapshots shut down 2027-01-14, and each alias
+	// resolves to one of them.
 	"gpt-4.1": {
 		Label:    "OpenAI GPT-4.1",
 		Supports: &multimodal,
