@@ -44,6 +44,7 @@ import {
   OpenAIChatCompletionConfigSchema,
   SUPPORTED_GPT_MODELS,
   gptModelRef,
+  openAIModelRef,
 } from '../src/openai/gpt';
 import {
   SUPPORTED_STT_MODELS,
@@ -565,6 +566,33 @@ describe('openAI.model', () => {
     expect(openAI.model(id).configSchema).toBe(
       OpenAIChatCompletionConfigSchema
     );
+  });
+
+  it('gives catalogued chat ids their catalog info', () => {
+    expect(openAI.model('gpt-4o').info).toEqual(
+      SUPPORTED_GPT_MODELS['gpt-4o'].info
+    );
+    expect(openAI.model('gpt-4o').info?.stage).toBe('deprecated');
+    expect(openAI.model('gpt-5-search-api').info?.supports?.tools).toBe(false);
+  });
+
+  it('keeps the config it is given', () => {
+    expect(openAI.model('gpt-5.5', { temperature: 0.2 }).config).toEqual({
+      temperature: 0.2,
+    });
+  });
+
+  it('gives uncatalogued chat ids generic info', () => {
+    expect(openAI.model('gpt-unknown-1').info).toEqual(
+      openAIModelRef({ name: 'gpt-unknown-1' }).info
+    );
+    expect(openAI.model('gpt-unknown-1').info?.stage).toBeUndefined();
+  });
+
+  it('gives fine-tunes generic info, not their base model info', () => {
+    const id = 'ft:gpt-4o-mini-2024-07-18:acme::abc';
+    expect(openAI.model(id).info).toEqual(openAIModelRef({ name: id }).info);
+    expect(openAI.model(id).info?.stage).toBeUndefined();
   });
 });
 

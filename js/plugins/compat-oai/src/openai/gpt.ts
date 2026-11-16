@@ -197,8 +197,9 @@ function gptModelSpec(name: string): GptModelSpec | undefined {
  * get generic info.
  */
 export function gptModelRef(
-  name: string
+  name: string,
+  config?: z.infer<typeof OpenAIChatCompletionConfigSchema>
 ): ModelReference<typeof OpenAIChatCompletionConfigSchema> {
   const spec = gptModelSpec(name);
-  return openAIModelRef({ name, info: spec && gptModelInfo(spec) });
+  return openAIModelRef({ name, info: spec && gptModelInfo(spec), config });
 }

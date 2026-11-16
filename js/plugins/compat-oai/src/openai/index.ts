@@ -53,7 +53,6 @@ import {
 import {
   gptModelRef,
   OpenAIChatCompletionConfigSchema,
-  openAIModelRef,
   SUPPORTED_GPT_MODELS,
 } from './gpt.js';
 import { openAITranscriptionModelRef, SUPPORTED_STT_MODELS } from './stt.js';
@@ -369,10 +368,7 @@ const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
       config,
     });
   }
-  return openAIModelRef({
-    name,
-    config,
-  });
+  return gptModelRef(name, config);
 }) as OpenAIPlugin['model'];
 
 const embedder = ((
