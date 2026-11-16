@@ -626,6 +626,27 @@ def test_redacted_only_reasoning_part_still_replays() -> None:
     assert kwargs['messages'][0]['content'] == [{'reasoningContent': {'redactedContent': b'blob'}}]
 
 
+def test_empty_signed_reasoning_part_still_replays() -> None:
+    # Claude can sign a thinking block with empty text; it must be sent back, not dropped.
+    part = Part.from_reasoning('', metadata={REASONING_SIGNATURE_METADATA_KEY: 'sig-abc'})
+    request = ModelRequest(messages=[Message(role=Role.MODEL, content=[part])])
+    kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
+    assert kwargs['messages'][0]['content'] == [
+        {'reasoningContent': {'reasoningText': {'text': '', 'signature': 'sig-abc'}}}
+    ]
+
+
+def test_empty_unsigned_reasoning_part_is_not_replayed() -> None:
+    request = ModelRequest(
+        messages=[
+            Message(role=Role.USER, content=[Part.from_text('q')]),
+            Message(role=Role.MODEL, content=[Part.from_reasoning('')]),
+        ]
+    )
+    kwargs = build_converse_request('amazon.nova-lite-v1:0', request)
+    assert [m['role'] for m in kwargs['messages']] == ['user']
+
+
 def test_generic_reasoning_part_is_not_replayed() -> None:
     request = ModelRequest(
         messages=[

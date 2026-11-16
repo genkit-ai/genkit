@@ -325,7 +325,9 @@ def _reasoning_part_to_blocks(part: Part) -> list[dict[str, Any]]:
         blocks.append({'reasoningContent': {'redactedContent': redacted}})
     signature = _metadata_str(metadata, REASONING_SIGNATURE_METADATA_KEY)
     text = part.reasoning or ''
-    if text and signature:
+    # Claude can sign a thinking block with empty text, and a tool-use turn has to
+    # start with it, so any signed reasoning is kept.
+    if signature:
         blocks.append({'reasoningContent': {'reasoningText': {'text': text, 'signature': signature}}})
     return blocks
 

@@ -309,6 +309,42 @@ async def test_reasoning_text_streams_and_signature_accumulates() -> None:
     assert text_part.text == 'answer'
 
 
+async def test_signed_reasoning_with_empty_text_is_kept() -> None:
+    ctx, chunks = streaming_ctx()
+
+    response = await consume_converse_stream(
+        events(
+            reasoning_delta(0, {'signature': 'sig-abc'}),
+            tool_start(1, 'call_1', 'noop'),
+            tool_delta(1, '{}'),
+            tool_stop(1),
+            message_stop('tool_use'),
+        ),
+        text_request(),
+        ctx,
+    )
+
+    assert response.message is not None
+    reasoning_part, tool_part = response.message.content
+    assert reasoning_part.reasoning == ''
+    assert reasoning_part.metadata is not None
+    assert reasoning_part.metadata[REASONING_SIGNATURE_METADATA_KEY] == 'sig-abc'
+    assert tool_part.tool_request is not None
+
+
+async def test_reasoning_without_text_or_signature_is_dropped() -> None:
+    ctx, _ = streaming_ctx()
+
+    response = await consume_converse_stream(
+        events(text_delta(0, 'answer'), message_stop('end_turn')),
+        text_request(),
+        ctx,
+    )
+
+    assert response.message is not None
+    assert [part.text for part in response.message.content] == ['answer']
+
+
 async def test_redacted_reasoning_accumulates_as_base64_without_chunks() -> None:
     ctx, chunks = streaming_ctx()
 
