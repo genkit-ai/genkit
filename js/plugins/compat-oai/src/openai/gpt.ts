@@ -79,8 +79,10 @@ const O_SERIES_SUPPORTS = {
 } as const satisfies GptModelSpec['supports'];
 const SEARCH_SUPPORTS = {
   multiturn: true,
-  media: true,
+  media: false,
   systemRole: true,
+  output: ['text', 'json'],
+  constrained: 'all',
 } as const satisfies GptModelSpec['supports'];
 
 /**

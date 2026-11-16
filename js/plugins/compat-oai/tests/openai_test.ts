@@ -254,6 +254,18 @@ describe('GPT model catalog', () => {
     }
   });
 
+  it('gpt-5-search-api takes no media and gives constrained text or json', () => {
+    expect(SUPPORTED_GPT_MODELS['gpt-5-search-api'].info?.supports).toEqual({
+      multiturn: true,
+      media: false,
+      systemRole: true,
+      output: ['text', 'json'],
+      constrained: 'all',
+      tools: false,
+      toolChoice: false,
+    });
+  });
+
   it('gpt-5-search-api advertises no tools', () => {
     expect(SUPPORTED_GPT_MODELS['gpt-5-search-api'].info?.supports?.tools).toBe(
       false
