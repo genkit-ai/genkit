@@ -27,7 +27,11 @@ import {
   toOpenAIRequestBody,
 } from '../src/model';
 import { openAI } from '../src/openai';
-import { SUPPORTED_GPT_MODELS, gptModelRef } from '../src/openai/gpt';
+import {
+  OpenAIChatCompletionConfigSchema,
+  SUPPORTED_GPT_MODELS,
+  gptModelRef,
+} from '../src/openai/gpt';
 import * as LISTING_FIXTURE from './openai_listing_fixture.json';
 
 describe('gptModel', () => {
@@ -457,6 +461,32 @@ describe('openAI resolve', () => {
     );
     expect(action?.__action.metadata?.model?.supports).toEqual(
       SUPPORTED_GPT_MODELS['gpt-4o'].info?.supports
+    );
+  });
+
+  it.each([
+    'ft:gpt-4.1:acme:tts-helper:abc',
+    'ft:gpt-4.1:acme:transcribe-fix:abc',
+    'ft:gpt-4.1:acme:whisper-notes:abc',
+    'ft:gpt-4.1:acme:gpt-image-1-captions:abc',
+  ])('resolves fine-tune %s as a chat model', async (id) => {
+    const ai = genkit({ plugins: [openAI({ apiKey: 'test-key' })] });
+    const action = await ai.registry.lookupAction(`/model/openai/${id}`);
+    expect(action?.__action.metadata?.model?.supports).toEqual(
+      gptModelRef(id).info?.supports
+    );
+  });
+});
+
+describe('openAI.model', () => {
+  it.each([
+    'ft:gpt-4.1:acme:tts-helper:abc',
+    'ft:gpt-4.1:acme:transcribe-fix:abc',
+    'ft:gpt-4.1:acme:whisper-notes:abc',
+    'ft:gpt-4.1:acme:gpt-image-1-captions:abc',
+  ])('returns a chat model reference for fine-tune %s', (id) => {
+    expect(openAI.model(id).configSchema).toBe(
+      OpenAIChatCompletionConfigSchema
     );
   });
 });

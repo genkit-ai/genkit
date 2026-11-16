@@ -42,7 +42,13 @@
     "gpt-6-cyber",
     "o3",
     "o3-2025-04-16",
-    "ft:gpt-4o-mini-2024-07-18:acme::abc123"
+    "ft:gpt-4o-mini-2024-07-18:acme::abc123",
+    "ft:gpt-4o-mini-2024-07-18:acme:support-pro-v2:abc",
+    "ft:gpt-4.1:acme:image-captioner:abc",
+    "ft:gpt-4.1:acme:realtime-x:abc",
+    "ft:gpt-4.1:acme:tts-helper:abc",
+    "ft:gpt-4.1:acme:transcribe-fix:abc",
+    "ft:gpt-4.1:acme:embedding-ranker:abc"
   ],
   "hidden": [
     "gpt-5-pro",
@@ -82,7 +88,9 @@
     "davinci-002",
     "babbage-002",
     "curie:ft-acme-2023-06-07-10-19-42",
-    "davinci:ft-acme-2023-01-01-00-00-00"
+    "davinci:ft-acme-2023-01-01-00-00-00",
+    "ft:babbage-002:org:sfx:id",
+    "ft:davinci-002:org::abc"
   ],
   "other": [
     "text-embedding-3-large",

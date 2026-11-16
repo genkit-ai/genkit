@@ -67,7 +67,8 @@ import {
 
 export type OpenAIPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
 
-// Ids from /v1/models that this plugin can't list as chat models:
+// Base ids (see baseId) from /v1/models that this plugin can't list as chat
+// models:
 // - Models for endpoints it doesn't call: moderation, Realtime, Live, audio.
 // - Responses-only models: the -pro models, Codex models, gpt-5.6-cyber,
 //   gpt-6-rosalind, gpt-rosalind-research and gpt-daybreak-*. gpt-6-cyber
@@ -92,6 +93,11 @@ const UNSUPPORTED_MODEL_MATCHERS: RegExp[] = [
   /^sora/,
 ];
 
+/** Model an `ft:` id was tuned from, so its suffix can't change its kind. */
+function baseId(id: string): string {
+  return id.startsWith('ft:') ? id.split(':')[1] : id;
+}
+
 /** Image ids this plugin serves through its image model. */
 function isImageModelId(id: string): boolean {
   return id.includes('gpt-image-1') || id.includes('dall-e');
@@ -99,13 +105,14 @@ function isImageModelId(id: string): boolean {
 
 function createResolver(pluginOptions: PluginOptions) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
+    const base = baseId(actionName);
     if (actionType === 'embedder') {
       return defineCompatOpenAIEmbedder({
         name: actionName,
         client,
         pluginOptions,
       });
-    } else if (isImageModelId(actionName)) {
+    } else if (isImageModelId(base)) {
       const modelRef = openAIImageModelRef({ name: actionName });
       return defineCompatOpenAIImageModel({
         name: modelRef.name,
@@ -113,7 +120,7 @@ function createResolver(pluginOptions: PluginOptions) {
         pluginOptions,
         modelRef,
       });
-    } else if (actionName.includes('tts')) {
+    } else if (base.includes('tts')) {
       const modelRef = openAISpeechModelRef({ name: actionName });
       return defineCompatOpenAISpeechModel({
         name: modelRef.name,
@@ -121,7 +128,7 @@ function createResolver(pluginOptions: PluginOptions) {
         pluginOptions,
         modelRef,
       });
-    } else if (actionName.includes('whisper')) {
+    } else if (base.includes('whisper')) {
       const modelRef = openAIWhisperModelRef({ name: actionName });
       return defineOpenAIWhisperModel({
         name: modelRef.name,
@@ -129,7 +136,7 @@ function createResolver(pluginOptions: PluginOptions) {
         pluginOptions,
         modelRef,
       });
-    } else if (actionName.includes('transcribe')) {
+    } else if (base.includes('transcribe')) {
       const modelRef = openAITranscriptionModelRef({
         name: actionName,
       });
@@ -152,24 +159,26 @@ function createResolver(pluginOptions: PluginOptions) {
 }
 
 function filterOpenAiModels(model: OpenAI.Model): boolean {
-  if (UNSUPPORTED_MODEL_MATCHERS.some((m) => m.test(model.id))) {
+  const base = baseId(model.id);
+  if (UNSUPPORTED_MODEL_MATCHERS.some((m) => m.test(base))) {
     return false;
   }
   // Other image ids (gpt-image-2*, chatgpt-image-latest) aren't served yet and
   // would otherwise be listed as chat models.
-  return isImageModelId(model.id) || !model.id.includes('image');
+  return isImageModelId(base) || !base.includes('image');
 }
 
 const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
   return await client.models.list().then((response) =>
     response.data.filter(filterOpenAiModels).map((model: OpenAI.Model) => {
-      if (model.id.includes('embedding')) {
+      const base = baseId(model.id);
+      if (base.includes('embedding')) {
         return embedderActionMetadata({
           name: model.id,
           configSchema: TextEmbeddingConfigSchema,
           info: lookup(SUPPORTED_EMBEDDING_MODELS, model.id)?.info,
         });
-      } else if (isImageModelId(model.id)) {
+      } else if (isImageModelId(base)) {
         const modelRef =
           lookup(SUPPORTED_IMAGE_MODELS, model.id) ??
           openAIImageModelRef({ name: model.id });
@@ -178,7 +187,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           info: modelRef.info,
           configSchema: modelRef.configSchema,
         });
-      } else if (model.id.includes('tts')) {
+      } else if (base.includes('tts')) {
         const modelRef =
           lookup(SUPPORTED_TTS_MODELS, model.id) ??
           openAISpeechModelRef({ name: model.id });
@@ -187,7 +196,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           info: modelRef.info,
           configSchema: modelRef.configSchema,
         });
-      } else if (model.id.includes('whisper')) {
+      } else if (base.includes('whisper')) {
         const modelRef =
           lookup(SUPPORTED_WHISPER_MODELS, model.id) ??
           openAIWhisperModelRef({ name: model.id });
@@ -196,7 +205,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
           info: modelRef.info,
           configSchema: modelRef.configSchema,
         });
-      } else if (model.id.includes('transcribe')) {
+      } else if (base.includes('transcribe')) {
         const modelRef =
           lookup(SUPPORTED_STT_MODELS, model.id) ??
           openAITranscriptionModelRef({ name: model.id });
@@ -336,25 +345,26 @@ export type OpenAIPlugin = {
 };
 
 const model = ((name: string, config?: any): ModelReference<z.ZodTypeAny> => {
-  if (isImageModelId(name)) {
+  const base = baseId(name);
+  if (isImageModelId(base)) {
     return openAIImageModelRef({
       name,
       config,
     });
   }
-  if (name.includes('tts')) {
+  if (base.includes('tts')) {
     return openAISpeechModelRef({
       name,
       config,
     });
   }
-  if (name.includes('whisper')) {
+  if (base.includes('whisper')) {
     return openAIWhisperModelRef({
       name,
       config,
     });
   }
-  if (name.includes('transcribe')) {
+  if (base.includes('transcribe')) {
     return openAITranscriptionModelRef({
       name,
       config,
