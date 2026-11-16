@@ -28,6 +28,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/mistral"
@@ -791,5 +792,33 @@ func TestDynamicListingAndResolution(t *testing.T) {
 	}
 	if got := resp.Text(); got != "resolved" {
 		t.Fatalf("Text() = %q, want %q", got, "resolved")
+	}
+}
+
+// Mistral answers an unknown or retired model with 400 and an invalid_model
+// error at the top level of the body. The plugin reports NOT_FOUND for it,
+// streamed or not, and leaves any other 400 as INVALID_ARGUMENT.
+func TestUnknownModelIsNotFound(t *testing.T) {
+	for body, want := range map[string]status.Name{
+		`{"object":"error","message":"Invalid model: no-such-model","type":"invalid_model","param":null,"code":"1500","raw_status_code":400}`: status.NotFound,
+		`{"object":"error","message":"Invalid max_tokens value","type":"invalid_request_error","param":null,"code":"3000"}`:                   status.InvalidArgument,
+	} {
+		for _, stream := range []bool{false, true} {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, body)
+			}))
+			g := genkit.Init(context.Background(), genkit.WithPlugins(newPlugin(server)))
+			opts := []ai.GenerateOption{ai.WithModelName("mistral/no-such-model"), ai.WithPrompt("hi")}
+			if stream {
+				opts = append(opts, ai.WithStreaming(func(context.Context, *ai.ModelResponseChunk) error { return nil }))
+			}
+			_, err := genkit.Generate(context.Background(), g, opts...)
+			server.Close()
+			if got := status.Of(err); got != want {
+				t.Errorf("stream %v, body %s: status = %q, want %q: %v", stream, body, got, want, err)
+			}
+		}
 	}
 }

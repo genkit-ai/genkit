@@ -16,12 +16,16 @@
 package mistral
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/plugins/compat_oai"
 	"github.com/firebase/genkit/go/plugins/internal"
 	"github.com/openai/openai-go"
@@ -388,6 +392,7 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 	// It also has no reasoning_content field: reasoning goes back as the
 	// thinking chunk it arrived in.
 	m.openAICompatible.SendReasoningAsThinkingChunks = true
+	m.openAICompatible.ClassifyError = classifyError
 	m.openAICompatible.Opts = opts
 	actions := m.openAICompatible.Init(ctx)
 
@@ -398,6 +403,36 @@ func (m *Mistral) Init(ctx context.Context) []api.Action {
 		actions = append(actions, m.newEmbedder(id, m.embedderOptions(id)))
 	}
 	return actions
+}
+
+// classifyError reads a Mistral error. Mistral answers an unknown or retired
+// model with 400 and an error object of type invalid_model at the top level
+// of the body, not under the "error" key the SDK reads, so the SDK decodes
+// none of its fields; the body is read here instead.
+func classifyError(err *openai.Error) status.Name {
+	if err.StatusCode != http.StatusBadRequest {
+		return ""
+	}
+	if err.Type == "invalid_model" {
+		return status.NotFound
+	}
+	if err.Response == nil || err.Response.Body == nil {
+		return ""
+	}
+	body, readErr := io.ReadAll(err.Response.Body)
+	// The SDK leaves the body in place for debugging dumps, so it is put
+	// back for whoever reads it next.
+	err.Response.Body = io.NopCloser(bytes.NewReader(body))
+	if readErr != nil {
+		return ""
+	}
+	var e struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(body, &e) == nil && e.Type == "invalid_model" {
+		return status.NotFound
+	}
+	return ""
 }
 
 // newModel creates a Mistral model without registering it.
