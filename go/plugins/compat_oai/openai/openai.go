@@ -65,6 +65,14 @@ var (
 		Output:      []string{"text", "json"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
+	// searchSupports is for gpt-5-search-api, which takes no tools and ignores
+	// image input.
+	searchSupports = ai.ModelSupports{
+		Multiturn:   true,
+		SystemRole:  true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
+	}
 )
 
 // mediaTypes are the media OpenAI's chat completions read: images, audio
@@ -151,7 +159,7 @@ var supportedModels = map[string]ai.ModelOptions{
 
 	"gpt-5-search-api": {
 		Label:    "OpenAI GPT-5 Search API",
-		Supports: &multimodalNoTools,
+		Supports: &searchSupports,
 		Versions: []string{"gpt-5-search-api", "gpt-5-search-api-2025-10-14"},
 		Stage:    ai.ModelStageStable,
 	},

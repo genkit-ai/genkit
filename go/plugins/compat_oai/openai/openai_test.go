@@ -452,7 +452,7 @@ func TestCatalogOmitsShutDownModels(t *testing.T) {
 
 // TestModelStagesAndTools pins the two per-model facts the catalog states
 // beyond the shared capability sets: which models are deprecated, and which
-// cannot call tools through Chat Completions.
+// cannot call tools or read media through Chat Completions.
 func TestModelStagesAndTools(t *testing.T) {
 	// Every model with an announced shutdown date.
 	deprecated := map[string]bool{
@@ -466,6 +466,8 @@ func TestModelStagesAndTools(t *testing.T) {
 		"gpt-6-astra": true, "gpt-6.1-sol": true,
 		"gpt-5-search-api": true,
 	}
+	// The search model ignores image input.
+	noMedia := map[string]bool{"gpt-5-search-api": true}
 
 	for _, id := range []string{
 		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra",
@@ -486,6 +488,9 @@ func TestModelStagesAndTools(t *testing.T) {
 		if got := opts.Supports.Tools; got == noTools[id] {
 			t.Errorf("%s tools = %v, want %v", id, got, !noTools[id])
 		}
+		if got := opts.Supports.Media; got == noMedia[id] {
+			t.Errorf("%s media = %v, want %v", id, got, !noMedia[id])
+		}
 		if opts.Supports.ToolChoice && !opts.Supports.Tools {
 			t.Errorf("%s advertises tool choice without tools", id)
 		}
@@ -499,9 +504,10 @@ func TestSnapshotsTakeTheirModelsOptions(t *testing.T) {
 	o, g := initPlugin(t)
 
 	for snapshot, parent := range map[string]string{
-		"gpt-5-2025-08-07":   "gpt-5",
-		"o3-2025-04-16":      "o3",
-		"gpt-5.5-2026-04-23": "gpt-5.5",
+		"gpt-5-2025-08-07":            "gpt-5",
+		"o3-2025-04-16":               "o3",
+		"gpt-5.5-2026-04-23":          "gpt-5.5",
+		"gpt-5-search-api-2025-10-14": "gpt-5-search-api",
 	} {
 		got := o.modelOptions(snapshot)
 		want := supportedModels[parent]
@@ -511,6 +517,9 @@ func TestSnapshotsTakeTheirModelsOptions(t *testing.T) {
 		if !slices.Equal(got.Versions, []string{snapshot}) {
 			t.Errorf("%s: versions = %v, want just the snapshot", snapshot, got.Versions)
 		}
+	}
+	if got := o.modelOptions("gpt-5-search-api-2025-10-14").Supports; got.Tools || got.Media {
+		t.Errorf("search snapshot tools %v media %v, want neither", got.Tools, got.Media)
 	}
 	if got := o.modelOptions("gpt-5-2025-08-07").Label; got != "OpenAI GPT-5 2025-08-07" {
 		t.Errorf("snapshot label = %q, want %q", got, "OpenAI GPT-5 2025-08-07")

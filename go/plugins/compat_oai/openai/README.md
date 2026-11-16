@@ -60,7 +60,8 @@ generic defaults and are not marked deprecated, as do models OpenAI has
 already shut down, such as `o4-mini`.
 
 `gpt-6-astra` and `gpt-6.1-sol` call tools only through the Responses API, so
-they advertise no tool support here. `gpt-5-search-api` takes no tools either.
+they advertise no tool support here. `gpt-5-search-api` takes no tools either,
+and it advertises no media support because it ignores image input.
 The other `gpt-5.4` and later chat models (`gpt-5.4`, `gpt-5.4-mini`,
 `gpt-5.4-nano`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
 `gpt-6-sol`, `gpt-6-luna`, and `gpt-6.1-terra`) advertise tool support, but they
