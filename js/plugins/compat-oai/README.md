@@ -27,7 +27,7 @@ This plugin also supports OpenAI models, and custom models from other model prov
 
 Notes on the OpenAI models:
 
-- Models with an announced shutdown date have `stage: 'deprecated'`. A dated snapshot id (for example `gpt-5-2025-08-07`) gets the stage and capabilities of its alias. Move to a current model before the shutdown date.
+- Models with an announced shutdown date have `stage: 'deprecated'` in their model reference info. A dated snapshot id (for example `gpt-5-2025-08-07`) gets the stage and capabilities of its alias. The Dev UI and `generate` do not surface the stage for registered models yet ([#7221](https://github.com/genkit-ai/genkit/issues/7221)). Move to a current model before the shutdown date.
 - `gpt-5.4` and later, except the no-tools models below, take function tools on Chat Completions only at `reasoning_effort: 'none'`. `gpt-5.4*` and `gpt-5.5` default to `none`. The others do not, so set `reasoning_effort: 'none'` in the config when you pass tools.
 - `gpt-6-astra`, `gpt-6.1-sol` and `gpt-6.1-terra` do not support function tools on Chat Completions.
 - `gpt-5-search-api` does not support function tools.
