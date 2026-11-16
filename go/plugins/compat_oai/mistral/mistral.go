@@ -251,15 +251,7 @@ var (
 	// except the retired codestral-mamba, so it takes the curated constrained
 	// support; it reads no images unless a Models entry says it does.
 	// See https://docs.mistral.ai/inference/conversations/structured-output/custom.
-	dynamicSupports = ai.ModelSupports{
-		Multiturn:   true,
-		Tools:       true,
-		SystemRole:  true,
-		Media:       false,
-		ToolChoice:  true,
-		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportNoTools,
-	}
+	dynamicSupports = textOnly
 )
 
 // mediaTypes are the media Mistral's chat completions read through the

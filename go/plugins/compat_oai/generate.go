@@ -136,13 +136,13 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 			case g.reasoningAsThinkingChunks:
 				// The content array replaces the string content: the SDK
 				// marshals an extra field over the struct field it collides
-				// with. An empty chain of thought with no signature has
-				// nothing to send back.
-				reasoning := concatenateReasoningContent(msg.Content)
-				signature := reasoningSignature(msg.Content)
-				if reasoning != "" || signature != "" {
+				// with. Each reasoning part goes back as its own thinking
+				// chunk, so a signature stays with the block it signs. An
+				// empty chain of thought with no signature has nothing to
+				// send back.
+				if blocks := thinkingBlocks(msg.Content); len(blocks) > 0 {
 					am.SetExtraFields(map[string]any{
-						"content": thinkingContent(reasoning, signature, content),
+						"content": thinkingContent(blocks, content),
 					})
 				}
 			default:
@@ -676,18 +676,21 @@ func concatenateTextContent(parts []*ai.Part) string {
 	return content.String()
 }
 
-// reasoningSignature returns the signature of the last reasoning part among
-// parts that carries one, or "" for none.
-func reasoningSignature(parts []*ai.Part) string {
-	for i := len(parts) - 1; i >= 0; i-- {
-		if parts[i] == nil || !parts[i].IsReasoning() {
+// thinkingBlocks returns one block per reasoning part among parts, in order,
+// each with the signature its own part carries. A part with neither text nor
+// a signature is left out.
+func thinkingBlocks(parts []*ai.Part) []thinkingBlock {
+	var blocks []thinkingBlock
+	for _, part := range parts {
+		if part == nil || !part.IsReasoning() {
 			continue
 		}
-		if sig := metadataSignature(parts[i].Metadata); len(sig) > 0 {
-			return string(sig)
+		b := thinkingBlock{text: part.Text, signature: string(metadataSignature(part.Metadata))}
+		if b.text != "" || b.signature != "" {
+			blocks = append(blocks, b)
 		}
 	}
-	return ""
+	return blocks
 }
 
 // metadataSignature extracts a reasoning signature from part metadata: the
@@ -1007,11 +1010,21 @@ func firstReasoning(raws ...string) (reasoning string, ok bool) {
 	return "", ok
 }
 
+// thinkingBlock is one thinking chunk: its reasoning and the signature it
+// carried, if any.
+type thinkingBlock struct {
+	text, signature string
+}
+
 // chunkedContent is what a message content array holds: the joined text
-// chunks, the joined reasoning of its thinking chunks, and the signature the
-// last thinking chunk that had one carried.
+// chunks, each thinking chunk as a block of its own, the joined reasoning of
+// those blocks, and the signature the last thinking chunk that had one
+// carried. A complete response keeps the blocks apart, so each signature
+// stays with its own reasoning; a stream delta, which carries a fragment of
+// one block, uses the joined fields.
 type chunkedContent struct {
 	text, reasoning, signature string
+	thinking                   []thinkingBlock
 }
 
 // contentChunks unpacks the raw JSON of a message's content when it is an
@@ -1022,11 +1035,12 @@ type chunkedContent struct {
 // replays it with across turns.
 //
 // Each chunk is read on its own, so one of an unexpected shape is skipped
-// rather than failing the rest, as are chunks of other types, such as
-// references, which carry no text. ok is false when the content is not such
-// an array or holds no text or thinking chunk at all; the caller then keeps
-// the content as the SDK read it, so nothing the provider sent is dropped
-// unseen. A plain string keeps its meaning however it reads.
+// rather than failing the rest, as are reference chunks, which carry no text.
+// ok is false when the content is not such an array, holds no text or
+// thinking chunk at all, or holds a chunk of any other type, such as an
+// image; the caller then keeps the content as the SDK read it, so nothing the
+// provider sent is dropped unseen. A plain string keeps its meaning however
+// it reads.
 func contentChunks(raw string) (c chunkedContent, ok bool) {
 	raw = strings.TrimSpace(raw)
 	if !strings.HasPrefix(raw, "[") {
@@ -1055,15 +1069,25 @@ func contentChunks(raw string) (c chunkedContent, ok bool) {
 				ok = true
 			}
 		case "thinking":
-			if r, read := thinkingText(chunk.Thinking); read {
+			var block thinkingBlock
+			r, read := thinkingText(chunk.Thinking)
+			if read {
+				block.text = r
 				reasoningOut.WriteString(r)
 				ok = true
 			}
 			var sig string
 			if json.Unmarshal(chunk.Signature, &sig) == nil && sig != "" {
+				block.signature = sig
 				c.signature = sig
 				ok = true
 			}
+			if block.text != "" || block.signature != "" {
+				c.thinking = append(c.thinking, block)
+			}
+		case "reference":
+		default:
+			return chunkedContent{}, false
 		}
 	}
 	if !ok {
@@ -1098,18 +1122,21 @@ func thinkingText(raw json.RawMessage) (text string, read bool) {
 }
 
 // thinkingContent is the content array a model turn is sent back with when
-// its provider reads reasoning as thinking chunks: the reasoning first, as
-// the provider answered it and with the signature it carried, if any, then
-// the text, if any.
-func thinkingContent(reasoning, signature, text string) []map[string]any {
-	thinking := map[string]any{
-		"type":     "thinking",
-		"thinking": []map[string]any{{"type": "text", "text": reasoning}},
+// its provider reads reasoning as thinking chunks: a thinking chunk per
+// block first, as the provider answered it and with the signature it
+// carried, if any, then the text, if any.
+func thinkingContent(blocks []thinkingBlock, text string) []map[string]any {
+	content := make([]map[string]any, 0, len(blocks)+1)
+	for _, b := range blocks {
+		thinking := map[string]any{
+			"type":     "thinking",
+			"thinking": []map[string]any{{"type": "text", "text": b.text}},
+		}
+		if b.signature != "" {
+			thinking["signature"] = b.signature
+		}
+		content = append(content, thinking)
 	}
-	if signature != "" {
-		thinking["signature"] = signature
-	}
-	content := []map[string]any{thinking}
 	if text != "" {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
@@ -1187,23 +1214,27 @@ func convertChatCompletionToModelResponse(completion *openai.ChatCompletion, sep
 		choice.Message.JSON.ExtraFields["reasoning_content"].Raw(),
 		choice.Message.JSON.ExtraFields["reasoning"].Raw(),
 	)
-	// Mistral carries reasoning as a thinking chunk in a content array
+	// Mistral carries reasoning as thinking chunks in a content array
 	// instead, which the SDK reads into the content string as raw JSON.
-	// Its signature, when the chunk has one, rides on the reasoning part's
-	// metadata, so it goes back with the reasoning on the next turn.
+	// Each chunk becomes a reasoning part of its own, and its signature, when
+	// it has one, rides on that part's metadata, so it goes back with the
+	// reasoning it signs on the next turn.
 	text := choice.Message.Content
-	var signature []byte
+	var thinking []thinkingBlock
 	if c, ok := contentChunks(choice.Message.JSON.Content.Raw()); ok {
 		text = c.text
-		if c.reasoning != "" || c.signature != "" {
-			reasoning, reasoningSeen = c.reasoning, true
-		}
-		if c.signature != "" {
-			signature = []byte(c.signature)
-		}
+		thinking = c.thinking
 	}
-	if reasoningSeen {
-		resp.Message.Content = append(resp.Message.Content, ai.NewReasoningPart(reasoning, signature))
+	if len(thinking) > 0 {
+		for _, b := range thinking {
+			var signature []byte
+			if b.signature != "" {
+				signature = []byte(b.signature)
+			}
+			resp.Message.Content = append(resp.Message.Content, ai.NewReasoningPart(b.text, signature))
+		}
+	} else if reasoningSeen {
+		resp.Message.Content = append(resp.Message.Content, ai.NewReasoningPart(reasoning, nil))
 	}
 
 	// Add text content

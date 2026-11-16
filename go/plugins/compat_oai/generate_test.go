@@ -133,6 +133,21 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 			wantText:  `[{"type":"reference","reference_ids":[1]}]`,
 			wantParts: 1,
 		},
+		// A chunk the plugin has no part for is not dropped: the content is
+		// kept as the SDK read it.
+		"chunk of another type": {
+			content:   `[{"type":"text","text":"Final answer"},{"type":"image_url","image_url":"https://example.com/a.png"}]`,
+			wantText:  `[{"type":"text","text":"Final answer"},{"type":"image_url","image_url":"https://example.com/a.png"}]`,
+			wantParts: 1,
+		},
+		// Each thinking chunk becomes a reasoning part of its own.
+		"two thinking chunks": {
+			content:       `[{"type":"thinking","thinking":"First.","signature":"sig-1"},{"type":"text","text":"Final answer"},{"type":"thinking","thinking":"Second.","signature":"sig-2"}]`,
+			wantReasoning: "First.Second.",
+			wantText:      "Final answer",
+			wantParts:     3,
+			wantSignature: "sig-1",
+		},
 		// The signature Mistral replays reasoning with rides on the
 		// reasoning part's metadata.
 		"thinking with a signature": {
@@ -166,6 +181,12 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 			}
 			if got := string(metadataSignature(resp.Message.Content[0].Metadata)); got != tc.wantSignature {
 				t.Errorf("signature = %q, want %q", got, tc.wantSignature)
+			}
+			if name == "two thinking chunks" {
+				second := resp.Message.Content[1]
+				if !second.IsReasoning() || second.Text != "Second." || string(metadataSignature(second.Metadata)) != "sig-2" {
+					t.Errorf("second part = %#v, want reasoning %q signed %q", second, "Second.", "sig-2")
+				}
 			}
 		})
 	}
@@ -210,6 +231,16 @@ func TestWithMessagesSendsThinkingChunks(t *testing.T) {
 			}},
 			want: []any{
 				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Think carefully."}}, "signature": "sig-1"},
+			},
+		},
+		// Each reasoning part goes back as its own thinking chunk, so each
+		// signature stays with the reasoning it signs.
+		"two reasoning parts": {
+			parts: []*ai.Part{ai.NewReasoningPart("First.", []byte("sig-1")), ai.NewReasoningPart("Second.", []byte("sig-2")), ai.NewTextPart("Final answer")},
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "First."}}, "signature": "sig-1"},
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Second."}}, "signature": "sig-2"},
+				map[string]any{"type": "text", "text": "Final answer"},
 			},
 		},
 		"empty reasoning": {
