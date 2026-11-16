@@ -203,8 +203,8 @@ func TestPluginRegistersModelsAndEmbedders(t *testing.T) {
 			t.Errorf("%s constrained = %v, want %q", modelID, got, ai.ConstrainedSupportNoTools)
 		}
 		output, _ := supports["output"].([]string)
-		if !slices.Equal(output, []string{"text", "json"}) {
-			t.Errorf("%s output = %v, want [text json]", modelID, output)
+		if !slices.Equal(output, []string{"text", "json", "array", "enum"}) {
+			t.Errorf("%s output = %v, want [text json array enum]", modelID, output)
 		}
 		if label, _ := meta["label"].(string); label == "" {
 			t.Errorf("%s has no label", modelID)

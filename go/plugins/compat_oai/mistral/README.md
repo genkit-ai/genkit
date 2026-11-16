@@ -64,7 +64,8 @@ and Mistral Medium 3.5. Mistral deprecated both on 2026-10-31, with Mistral
 Large 4 (`mistral-large-4`, also served as `mistral-large-4-0`) as the
 replacement, so they are registered with the deprecated stage.
 
-All of them call tools and constrain JSON output to a schema. Whether Mistral
+All of them call tools and constrain JSON output to a schema, including one
+with an array or enum root. Whether Mistral
 honors the two together is not confirmed, so a structured-output request that
 carries tools sends its schema as prompt instructions rather than as a
 `json_schema` response format. Magistral, Pixtral and Devstral are left out because

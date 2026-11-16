@@ -227,10 +227,9 @@ func (c EmbedConfig) RequestExtra() map[string]any {
 // through response_format json_schema; they differ on whether they read
 // images. Constrained output is claimed without tools only: whether Mistral
 // honors a json_schema response format beside tools is not confirmed, so a
-// request with tools carries its schema as prompt instructions. Only object roots are
-// advertised as constrained: whether Mistral takes an array or enum schema
-// root is not documented, so those formats reach the model as prompt
-// instructions too.
+// request with tools carries its schema as prompt instructions. Array and
+// enum schema roots are constrained as well: Mistral holds a reply to either
+// on the wire, which xAI and Kimi do too and OpenAI does not.
 var (
 	multimodal = ai.ModelSupports{
 		Multiturn:   true,
@@ -238,7 +237,7 @@ var (
 		SystemRole:  true,
 		Media:       true,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
 	textOnly = ai.ModelSupports{
@@ -247,7 +246,7 @@ var (
 		SystemRole:  true,
 		Media:       false,
 		ToolChoice:  true,
-		Output:      []string{"text", "json"},
+		Output:      []string{"text", "json", "array", "enum"},
 		Constrained: ai.ConstrainedSupportNoTools,
 	}
 	// dynamicSupports is for a model the plugin knows nothing about. Mistral
