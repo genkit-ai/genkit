@@ -86,7 +86,7 @@ const UNSUPPORTED_MODEL_MATCHERS: RegExp[] = [
   /^gpt-5\.6-cyber/,
   /rosalind/,
   /^gpt-daybreak-/,
-  /^(ada|babbage|curie|davinci)(-002$|:)/,
+  /^((text|code)-)?(ada|babbage|curie|davinci)(-\d{3}$|:)/,
   // Defensive: already shut down.
   /^computer-use/,
   /deep-research/,
