@@ -371,9 +371,10 @@ export function mockModel(
       apiVersion: 'v2',
       name: options.name ?? 'mockModel',
       // Forward only the metadata fields defineModel accepts; ModelInfo's
-      // `configSchema`/`stage` aren't part of DefineModelOptions.
+      // `configSchema` isn't part of DefineModelOptions.
       versions: options.info?.versions,
       label: options.info?.label,
+      stage: options.info?.stage,
       // Default to native constrained generation (like modern provider models),
       // so a structured-output request reaches `respond` with `output.schema`
       // intact instead of the framework injecting a schema blob into the prompt
