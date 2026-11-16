@@ -19,7 +19,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { defineDocsTool } from '../mcp/docs.js';
 import { defineFlowTools } from './flows.js';
-import { defineInitPrompt } from './prompts/init.js';
 import { defineRuntimeTools } from './runtime.js';
 import { defineTraceTools } from './trace.js';
 import { McpRuntimeManager, McpToolOptions } from './utils.js';
@@ -49,7 +48,6 @@ export async function startMcpServer(params: {
   );
 
   await defineDocsTool(server, projectRoot);
-  defineInitPrompt(server);
 
   const manager = new McpRuntimeManager(auth);
   const options: McpToolOptions = {

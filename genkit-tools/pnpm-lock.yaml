@@ -37,9 +37,6 @@ importers:
       '@genkit-ai/tools-common':
         specifier: workspace:*
         version: link:../common
-      '@inquirer/prompts':
-        specifier: ^8.7.3
-        version: 8.7.3(@types/node@20.19.43)
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.1
         version: 1.32.1(zod@3.25.67)

@@ -32,7 +32,7 @@ import { evalFlow } from './commands/eval-flow.js';
 import { evalRun } from './commands/eval-run.js';
 import { flowBatchRun } from './commands/flow-batch-run.js';
 import { flowRun } from './commands/flow-run.js';
-import { initAiTools } from './commands/init-ai-tools/index.js';
+import { initAiTools } from './commands/init-ai-tools.js';
 import { logList } from './commands/log-list.js';
 import { mcp } from './commands/mcp.js';
 import { getPluginCommands, getPluginSubCommand } from './commands/plugins.js';
@@ -146,7 +146,7 @@ export async function startCLI(): Promise<void> {
     program.addCommand(serverHarness);
   }
 
-  const deprecatedCommands = new Set([uiStart, uiStop]);
+  const deprecatedCommands = new Set([uiStart, uiStop, initAiTools]);
   for (const command of commands) {
     program.addCommand(command, {
       hidden: deprecatedCommands.has(command),
