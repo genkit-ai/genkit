@@ -56,7 +56,10 @@ interface GptModelSpec {
   /** Capabilities other than tools and toolChoice, which follow from `tools`. */
   supports: Omit<NonNullable<ModelInfo['supports']>, 'tools' | 'toolChoice'>;
   tools: ToolsSupport;
-  /** Announced shutdown date (YYYY-MM-DD); sets stage 'deprecated'. */
+  /**
+   * Shutdown date (YYYY-MM-DD) of the model, or for an alias, of the snapshot
+   * it resolves to. Sets stage 'deprecated'.
+   */
   shutdownDate?: string;
 }
 
