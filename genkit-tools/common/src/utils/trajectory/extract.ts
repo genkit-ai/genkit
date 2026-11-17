@@ -24,6 +24,7 @@ import type {
   ToolRequestPart,
   TraceData,
   Trajectory,
+  TrajectoryAction,
   TrajectoryBundle,
   TrajectoryStatus,
   TrajectoryStep,
@@ -38,6 +39,10 @@ import {
   sortSpansChronologically,
   stackTraceSpans,
 } from '../trace.js';
+import {
+  collectScopeResumeDecisions,
+  isEnclosingTurnInterrupted,
+} from './interrupts.js';
 import {
   aggregateUsage,
   extractSpanRuntimeError,
@@ -319,16 +324,29 @@ function appendFallbackInputSteps(state: TrajectoryExtractionState): void {
 }
 
 function resolveStepFinishReason(
+  actions: TrajectoryAction[],
+  hasToolRequests: boolean,
+  modelSpan: NestedSpanData,
+  state: TrajectoryExtractionState,
   finishReason?: string,
   modelError?: RuntimeError
 ): FinishReason {
+  if (
+    actions.some(
+      (a) => a.status === 'interrupted' || a.interrupt !== undefined
+    ) ||
+    finishReason === 'interrupted' ||
+    (hasToolRequests &&
+      isEnclosingTurnInterrupted(modelSpan, state.trajectorySpans.parentMap))
+  ) {
+    return 'interrupted';
+  }
   if (modelError || finishReason === 'failed') return 'failed';
   if (finishReason === 'aborted' || finishReason === 'cancelled') {
     return 'aborted';
   }
   if (finishReason === 'length') return 'length';
   if (finishReason === 'blocked') return 'blocked';
-  if (finishReason === 'interrupted') return 'interrupted';
   if (finishReason === 'other' || finishReason === 'unknown') {
     return finishReason;
   }
@@ -485,7 +503,14 @@ function appendModelStep(
     ...(model ? { model } : {}),
     content: contentParts,
     actions,
-    finishReason: resolveStepFinishReason(finishReason, error),
+    finishReason: resolveStepFinishReason(
+      actions,
+      toolRequestParts.length > 0,
+      modelSpan,
+      state,
+      finishReason,
+      error
+    ),
     ...(error ? { error } : {}),
     ...(usage ? { usage } : {}),
   });
@@ -510,6 +535,7 @@ function buildTrajectory(
     trajectorySpans,
     claimedToolSpanIds: new Set<string>(),
     toolResponses: collectToolResponses(parsedInputs),
+    resumeDecisions: collectScopeResumeDecisions(parsedInputs),
     emittedMessageSigs: new Set<string>(),
     spanStepCounts: new Map<string, number>(),
     steps: [],

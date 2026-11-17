@@ -487,3 +487,57 @@ export const MOCK_SUBAGENT_TRACE: TraceData = makeTrace(
   ],
   { traceId: 'trace-sub', startTime: 100, endTime: 900 }
 );
+
+/** Canonical HITL tool interrupt baseline trace (`trace-hitl`). */
+export const MOCK_HITL_INTERRUPT_TRACE: TraceData = makeTrace(
+  [
+    makeAgentSpan({
+      spanId: 'root-agent',
+      name: 'bankAgent',
+      sessionId: 'sess-hitl',
+      startTime: 100,
+      endTime: 300,
+    }),
+    makeTurnSpan({
+      spanId: 'turn-1',
+      turn: 1,
+      parentSpanId: 'root-agent',
+      startTime: 105,
+      endTime: 295,
+    }),
+    makeModelSpan({
+      spanId: 'model-1',
+      parentSpanId: 'turn-1',
+      model: 'gemini',
+      startTime: 110,
+      endTime: 200,
+      messages: [
+        { role: 'user', content: [{ text: 'Transfer $500 to Alice' }] },
+      ],
+      outputMessage: {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              ref: 'tx-1',
+              name: 'transferFunds',
+              input: { to: 'Alice', amount: 500 },
+            },
+          },
+        ],
+      },
+    }),
+    makeToolSpan({
+      spanId: 'tool-1',
+      parentSpanId: 'turn-1',
+      name: 'transferFunds',
+      callId: 'tx-1',
+      startTime: 205,
+      endTime: 250,
+      input: { to: 'Alice', amount: 500 },
+      interrupt: { confirmRequired: true },
+      status: { code: 2, message: 'ToolInterruptError' },
+    }),
+  ],
+  { traceId: 'trace-hitl', startTime: 100, endTime: 300 }
+);

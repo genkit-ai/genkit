@@ -30,6 +30,11 @@ import {
   shortToolName,
 } from '../trace.js';
 import {
+  resolveInTraceInterruptResume,
+  resolveToolInterrupt,
+  type ResumeDecision,
+} from './interrupts.js';
+import {
   extractSpanRuntimeError,
   getTurnContext,
   normalizeParts,
@@ -40,10 +45,12 @@ import {
 
 /**
  * A `toolResponse` part extracted from `role: 'tool'` messages in model inputs,
- * used as a fallback output source when pairing an earlier `toolRequest`.
+ * used as a fallback output source and interrupt-resume signal when pairing an earlier `toolRequest`.
  */
 export interface ToolResponseEntry {
   part: ToolResponsePart;
+  /** True if metadata marks this response as fulfilling an interrupted tool request. */
+  resumed?: boolean;
 }
 
 /** Shared mutable pairing state while projecting a trajectory. */
@@ -51,6 +58,7 @@ export interface ToolPairingContext {
   trajectorySpans: TrajectorySpans;
   claimedToolSpanIds: Set<string>;
   toolResponses: ToolResponseEntry[];
+  resumeDecisions: ResumeDecision[];
 }
 
 /**
@@ -79,7 +87,12 @@ export function collectToolResponses(
         const key = `${part.toolResponse.ref || ''}:${part.toolResponse.name}:${JSON.stringify(part.toolResponse.output)}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
-        responses.push({ part: part as ToolResponsePart });
+        responses.push({
+          part: part as ToolResponsePart,
+          resumed: Boolean(
+            part.metadata?.['interruptResponse'] || msg.metadata?.['resumed']
+          ),
+        });
       }
     }
   }
@@ -146,6 +159,7 @@ function claimMatchingToolSpan(
   const nameMatched = toolSpans.filter(
     (ts) =>
       !ctx.claimedToolSpanIds.has(ts.spanId) &&
+      ts.attributes?.['genkit:metadata:resumed'] === undefined &&
       matchesToolSpanName(ts, reqShortName, subagentByToolSpanId)
   );
 
@@ -165,6 +179,7 @@ function claimMatchingToolSpan(
 
 function classifyToolAction(
   subtrajectoryId: string | undefined,
+  isInterrupted: boolean,
   matchedSpan: NestedSpanData | undefined,
   matchedResp: ToolResponseEntry | undefined,
   finishReason: string | undefined
@@ -175,6 +190,7 @@ function classifyToolAction(
 } {
   const type: TrajectoryAction['type'] = subtrajectoryId ? 'subagent' : 'tool';
 
+  if (isInterrupted) return { type, status: 'interrupted' };
   if (matchedSpan && getSpanStatus(matchedSpan) === '✖') {
     return {
       type,
@@ -246,26 +262,57 @@ function buildSingleToolAction(
   const spanInput = parseSpanJson(matchedSpan?.attributes?.['genkit:input']);
   const spanResult = parseToolSpanResult(matchedSpan);
   const input = req.input !== undefined ? req.input : spanInput;
-  const output =
+  let output =
     spanResult.output !== undefined
       ? spanResult.output
       : matchedResp?.part.toolResponse.output;
   const respContent = Array.isArray(matchedResp?.part.toolResponse.content)
     ? normalizeParts(matchedResp.part.toolResponse.content)
     : undefined;
-  const content =
+  let content =
     spanResult.content ??
     (respContent && respContent.length > 0 ? respContent : undefined);
+
+  const errAttr =
+    (matchedSpan?.attributes?.['genkit:error'] as string | undefined) ||
+    matchedSpan?.status?.message;
+  const { isInterrupted, interrupt } = resolveToolInterrupt({
+    reqPart,
+    modelSpan,
+    parentMap: ctx.trajectorySpans.parentMap,
+    matchedToolSpan: matchedSpan,
+    toolSpanErrAttr: errAttr,
+    finishReason,
+    actionOutput: matchedResp?.resumed ? undefined : output,
+  });
 
   const subtrajectoryId = matchedSpan
     ? ctx.trajectorySpans.subagentByToolSpanId.get(matchedSpan.spanId)
     : undefined;
   const { type, status, error } = classifyToolAction(
     subtrajectoryId,
+    isInterrupted,
     matchedSpan,
     matchedResp,
     finishReason
   );
+
+  let resume: TrajectoryAction['resume'] | undefined;
+  if (isInterrupted) {
+    const resolved = resolveInTraceInterruptResume({
+      reqRef: req.ref,
+      reqShortName,
+      resumeDecisions: ctx.resumeDecisions,
+      toolSpans: ctx.trajectorySpans.toolSpans,
+      claimedToolSpanIds: ctx.claimedToolSpanIds,
+      actionOutput: output,
+      actionContent: content,
+      parseToolResult: parseToolSpanResult,
+    });
+    resume = resolved.resumeInfo;
+    output = resolved.resolvedOutput;
+    content = resolved.resolvedContent;
+  }
 
   const startTime = matchedSpan?.startTime;
   const endTime = matchedSpan?.endTime || undefined;
@@ -283,5 +330,7 @@ function buildSingleToolAction(
     ...(startTime !== undefined ? { startTime } : {}),
     ...(endTime !== undefined ? { endTime } : {}),
     ...(subtrajectoryId ? { subtrajectoryId } : {}),
+    ...(interrupt !== undefined ? { interrupt } : {}),
+    ...(resume ? { resume } : {}),
   };
 }
