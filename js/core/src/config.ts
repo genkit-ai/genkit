@@ -14,21 +14,12 @@
  * limitations under the License.
  */
 
-import { logger } from './logging.js';
-
 const CONFIG_KEY = '__GENKIT_RUNTIME_CONFIG__';
 
 /**
  * Runtime configuration for Genkit.
  */
 export interface GenkitRuntimeConfig {
-  /**
-   * JSON schema validation mode.
-   * - 'compile': Uses `ajv` to compile schema validation functions. This is faster but requires `eval` or `new Function` support.
-   * - 'interpret': Uses `@cfworker/json-schema` to interpret schemas. This is slower but works in environments that restrict code generation (e.g. Cloudflare Workers).
-   */
-  jsonSchemaMode?: 'compile' | 'interpret';
-
   /**
    * Whether the runtime is sandboxed.
    * If true, features that require access to the file system or spawning processes (like the Reflection API) will be disabled.
@@ -47,11 +38,6 @@ function getConfig(): GenkitRuntimeConfig {
  * Sets the runtime configuration for Genkit.
  */
 export function setGenkitRuntimeConfig(config: GenkitRuntimeConfig) {
-  if (config.jsonSchemaMode === 'interpret') {
-    logger.warn(
-      "It looks like you're trying to disable schema code generation. Please ensure that the '@cfworker/json-schema' package is installed: `npm i --save @cfworker/json-schema`"
-    );
-  }
   const current = getConfig();
   global[CONFIG_KEY] = { ...current, ...config };
 }
@@ -62,7 +48,6 @@ export function setGenkitRuntimeConfig(config: GenkitRuntimeConfig) {
 export function getGenkitRuntimeConfig(): GenkitRuntimeConfig {
   const config = getConfig();
   return {
-    jsonSchemaMode: config.jsonSchemaMode ?? 'compile',
     sandboxedRuntime: config.sandboxedRuntime ?? false,
   };
 }
