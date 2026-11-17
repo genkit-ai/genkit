@@ -15,7 +15,6 @@
  */
 
 import { Dotprompt } from 'dotprompt';
-import type * as z from 'zod';
 import {
   runOutsideActionRuntimeContext,
   type Action,
@@ -30,7 +29,7 @@ import { isDynamicActionProvider } from './dynamic-action-provider.js';
 import { GenkitError } from './error.js';
 import { logger } from './logging.js';
 import type { PluginProvider } from './plugin.js';
-import { toJsonSchema, type JSONSchema } from './schema.js';
+import { toJsonSchema, type GenkitSchema, type JSONSchema } from './schema.js';
 
 export type AsyncProvider<T> = () => Promise<T>;
 
@@ -71,7 +70,7 @@ export function isActionType(value: string): value is ActionType {
  * A schema is either a Zod schema or a JSON schema.
  */
 export interface Schema {
-  schema?: z.ZodType<any, any>;
+  schema?: GenkitSchema;
   jsonSchema?: JSONSchema;
 }
 
@@ -144,10 +143,7 @@ export function parseRegistryKey(
   };
 }
 
-export type ActionsRecord = Record<
-  string,
-  Action<z.ZodType<any, any>, z.ZodType<any, any>>
->;
+export type ActionsRecord = Record<string, Action<GenkitSchema, GenkitSchema>>;
 export type ActionMetadataRecord = Record<string, ActionMetadata>;
 
 /**
@@ -156,8 +152,8 @@ export type ActionMetadataRecord = Record<string, ActionMetadata>;
 export class Registry {
   private actionsById: Record<
     string,
-    | Action<z.ZodType<any, any>, z.ZodType<any, any>>
-    | PromiseLike<Action<z.ZodType<any, any>, z.ZodType<any, any>>>
+    | Action<GenkitSchema, GenkitSchema>
+    | PromiseLike<Action<GenkitSchema, GenkitSchema>>
   > = {};
   private pluginsByName: Record<string, PluginProvider> = {};
   private schemasByName: Record<string, Schema> = {};
@@ -224,8 +220,8 @@ export class Registry {
    * @returns The action.
    */
   async lookupAction<
-    I extends z.ZodType<any, any>,
-    O extends z.ZodType<any, any>,
+    I extends GenkitSchema,
+    O extends GenkitSchema,
     R extends Action<I, O>,
   >(key: string): Promise<R> {
     const parsedKey = parseRegistryKey(key);
@@ -280,10 +276,10 @@ export class Registry {
    * @param action The action to register.
    */
   registerAction<
-    I extends z.ZodType<any, any>,
-    O extends z.ZodType<any, any>,
-    S extends z.ZodType<any, any>,
-    Init extends z.ZodType<any, any>,
+    I extends GenkitSchema,
+    O extends GenkitSchema,
+    S extends GenkitSchema,
+    Init extends GenkitSchema,
   >(
     type: ActionType,
     action: Action<I, O, S, any, Init>,
@@ -319,10 +315,7 @@ export class Registry {
   /**
    * Registers an action promise in the registry.
    */
-  registerActionAsync<
-    I extends z.ZodType<any, any>,
-    O extends z.ZodType<any, any>,
-  >(
+  registerActionAsync<I extends GenkitSchema, O extends GenkitSchema>(
     type: ActionType,
     name: string,
     action: PromiseLike<Action<I, O>>,
@@ -347,10 +340,7 @@ export class Registry {
    */
   async listActions(): Promise<ActionsRecord> {
     await this.initializeAllPlugins();
-    const actions: Record<
-      string,
-      Action<z.ZodType<any, any>, z.ZodType<any, any>>
-    > = {};
+    const actions: Record<string, Action<GenkitSchema, GenkitSchema>> = {};
     await Promise.all(
       Object.entries(this.actionsById).map(async ([key, action]) => {
         actions[key] = await action;
@@ -504,7 +494,7 @@ export class Registry {
 
   async getDynamicAction(
     key: ParsedRegistryKey
-  ): Promise<Action<z.ZodType<any, any>, z.ZodType<any, any>> | undefined> {
+  ): Promise<Action<GenkitSchema, GenkitSchema> | undefined> {
     if (key.actionName.includes('*')) {
       // * means multiple actions, this returns exactly one.
       return undefined;

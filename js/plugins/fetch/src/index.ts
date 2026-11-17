@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import type { GenkitSchema } from 'genkit';
 import {
   Action,
   ActionStreamInput,
@@ -21,7 +22,6 @@ import {
   StreamNotFoundError,
   type ActionContext,
   type StreamManager,
-  type z,
 } from 'genkit/beta';
 import {
   getCallableJSON,
@@ -30,6 +30,7 @@ import {
   type RequestData,
 } from 'genkit/context';
 import { logger } from 'genkit/logging';
+import type { InferOutput } from 'genkit/schema';
 import { getErrorMessage, getErrorStack } from './utils.js';
 
 const streamDelimiter = '\n\n';
@@ -41,9 +42,9 @@ const randomUUID = () => globalThis.crypto.randomUUID();
  * A wrapper object containing an action with its associated options.
  */
 export type ActionWithOptions<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
 > = {
   action: Action<I, O, S>;
   options: {
@@ -58,7 +59,7 @@ export type ActionWithOptions<
  */
 export interface FetchHandlerOptions<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
 > {
   contextProvider?: ContextProvider<C, I>;
   streamManager?: StreamManager;
@@ -68,9 +69,9 @@ export interface FetchHandlerOptions<
  * Wraps an action (flow, model, etc.) with options for use with {@link fetchHandlers}.
  */
 export function withActionOptions<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema,
 >(
   action: Action<I, O, S>,
   options: {
@@ -99,12 +100,9 @@ function headersToObject(headers: Headers): Record<string, string> {
 /**
  * Gets context from the request using the context provider if available.
  */
-async function getContext<
-  C extends ActionContext,
-  I extends z.ZodType<any, any>,
->(
+async function getContext<C extends ActionContext, I extends GenkitSchema>(
   request: Request,
-  input: z.infer<I>,
+  input: InferOutput<I>,
   provider?: ContextProvider<C, I>
 ): Promise<C> {
   const context = {} as C;
@@ -208,16 +206,16 @@ async function subscribeToStream(
  * Runs an action with durable streaming support.
  */
 async function runActionWithDurableStreaming<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
   streamId: string,
-  input: z.infer<I>,
-  init: z.infer<Init> | undefined,
+  input: InferOutput<I>,
+  init: InferOutput<Init> | undefined,
   context: ActionContext,
   writer: WritableStreamDefaultWriter<Uint8Array>,
   abortSignal: AbortSignal
@@ -232,7 +230,7 @@ async function runActionWithDurableStreaming<
   }
 
   try {
-    let onChunk = (chunk: z.infer<S>) => {
+    let onChunk = (chunk: InferOutput<S>) => {
       writer.write(
         encoder.encode(
           'data: ' + JSON.stringify({ message: chunk }) + streamDelimiter
@@ -242,7 +240,7 @@ async function runActionWithDurableStreaming<
 
     if (streamManager && durableStream) {
       const originalOnChunk = onChunk;
-      onChunk = (chunk: z.infer<S>) => {
+      onChunk = (chunk: InferOutput<S>) => {
         originalOnChunk(chunk);
         taskQueue!.enqueue(() => durableStream!.write(chunk));
       };
@@ -309,10 +307,10 @@ async function runActionWithDurableStreaming<
  */
 async function handleActionRequest<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   request: Request,
   action: Action<I, O, S, any, Init>,
@@ -350,8 +348,8 @@ async function handleActionRequest<
     );
   }
 
-  const input = body.data as z.infer<I>;
-  const init = body.init as z.infer<Init> | undefined;
+  const input = body.data as InferOutput<I>;
+  const init = body.init as InferOutput<Init> | undefined;
 
   let context: C;
   try {
@@ -446,10 +444,10 @@ async function handleActionRequest<
 
 export function fetchHandler<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S, any, Init>,
   options?: FetchHandlerOptions<C, I>

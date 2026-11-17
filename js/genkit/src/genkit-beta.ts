@@ -57,7 +57,11 @@ import {
 } from '@genkit-ai/ai/session-stores';
 
 import { applyPatch, diff } from '@genkit-ai/ai/json-patch';
-import { type Operation, type z } from '@genkit-ai/core';
+import {
+  type GenkitSchema,
+  type InferOutput,
+  type Operation,
+} from '@genkit-ai/core';
 import type { Formatter } from './formats.js';
 import { Genkit, type GenkitOptions } from './genkit.js';
 
@@ -121,7 +125,7 @@ export class GenkitBeta extends Genkit {
     config: {
       name: string;
       description?: string;
-      stateSchema?: z.ZodType<State>;
+      stateSchema?: GenkitSchema<State>;
       store?: SessionStore<State>;
       /**
        * How long (ms) one request to the `waitForSnapshot` companion action
@@ -142,15 +146,15 @@ export class GenkitBeta extends Genkit {
    */
   definePromptAgent<
     State = unknown,
-    I extends z.ZodType<any, any> = z.ZodType<any, any>,
+    I extends GenkitSchema = GenkitSchema,
   >(config: {
     promptName: string;
     /**
      * Input values for the referenced prompt's input variables. Lets a single
      * prompt be reused/customized across multiple agents.
      */
-    promptInput?: z.infer<I>;
-    stateSchema?: z.ZodType<State>;
+    promptInput?: InferOutput<I>;
+    stateSchema?: GenkitSchema<State>;
     store?: SessionStore<State>;
     /**
      * How long (ms) one request to the `waitForSnapshot` companion action
@@ -181,10 +185,9 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineAgent<
-    State = unknown,
-    I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  >(config: AgentConfig<State, I>) {
+  defineAgent<State = unknown, I extends GenkitSchema = GenkitSchema>(
+    config: AgentConfig<State, I>
+  ) {
     return defineAgent<State, I>(this.registry, config);
   }
 
@@ -240,7 +243,7 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineInterrupt<I extends z.ZodType<any, any>, O extends z.ZodType<any, any>>(
+  defineInterrupt<I extends GenkitSchema, O extends GenkitSchema>(
     config: InterruptConfig<I, O>
   ): ToolAction<I, O> {
     return defineInterrupt(this.registry, config);
@@ -262,11 +265,8 @@ export class GenkitBeta extends Genkit {
    * The status of the operation and final result can be obtained using {@link Genkit.checkOperation}.
    */
   generateOperation<
-    O extends z.ZodType<any, any> = z.ZodType<any, any>,
-    CustomOptions extends z.ZodType<
-      any,
-      any
-    > = typeof GenerationCommonConfigSchema,
+    O extends GenkitSchema = GenkitSchema,
+    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
   >(
     opts:
       | GenerateOptions<O, CustomOptions>

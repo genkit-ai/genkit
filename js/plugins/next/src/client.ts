@@ -14,27 +14,28 @@
  * limitations under the License.
  */
 
-import type { Action, z } from 'genkit';
+import type { Action, GenkitSchema } from 'genkit';
 import {
   runFlow as baseRunFlow,
   streamFlow as baseStreamFlow,
 } from 'genkit/beta/client';
+import type { InferOutput } from 'genkit/schema';
 
 type Input<A extends Action> =
-  A extends Action<infer I extends z.ZodType<any, any>, any, any>
-    ? z.infer<I>
+  A extends Action<infer I extends GenkitSchema, any, any>
+    ? InferOutput<I>
     : never;
 type Output<A extends Action> =
-  A extends Action<any, infer O extends z.ZodType<any, any>, any>
-    ? z.infer<O>
+  A extends Action<any, infer O extends GenkitSchema, any>
+    ? InferOutput<O>
     : never;
 type Stream<A extends Action> =
-  A extends Action<any, any, infer S extends z.ZodType<any, any>>
-    ? z.infer<S>
+  A extends Action<any, any, infer S extends GenkitSchema>
+    ? InferOutput<S>
     : never;
 type InitData<A extends Action> =
-  A extends Action<any, any, any, any, infer Init extends z.ZodType<any, any>>
-    ? z.infer<Init>
+  A extends Action<any, any, any, any, infer Init extends GenkitSchema>
+    ? InferOutput<Init>
     : never;
 
 export interface RequestData<T, Init = any> {

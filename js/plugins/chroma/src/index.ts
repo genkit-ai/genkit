@@ -34,9 +34,11 @@ import {
   type EmbedderArgument,
   type Embedding,
   type Genkit,
+  type GenkitSchema,
 } from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import { CommonRetrieverOptionsSchema } from 'genkit/retriever';
+import type { InferOutput } from 'genkit/schema';
 import { Md5 } from 'ts-md5';
 
 export { IncludeEnum };
@@ -62,19 +64,19 @@ type ChromaClientParams =
   | (() => Promise<NativeChromaClientParams>);
 
 type ChromaPluginParams<
-  EmbedderCustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema = GenkitSchema,
 > = {
   clientParams?: ChromaClientParams;
   collectionName: string;
   createCollectionIfMissing?: boolean;
   embedder: EmbedderArgument<EmbedderCustomOptions>;
-  embedderOptions?: z.infer<EmbedderCustomOptions>;
+  embedderOptions?: InferOutput<EmbedderCustomOptions>;
 }[];
 
 /**
  * Chroma plugin that provides the Chroma retriever and indexer
  */
-export function chroma<EmbedderCustomOptions extends z.ZodType<any, any>>(
+export function chroma<EmbedderCustomOptions extends GenkitSchema>(
   params: ChromaPluginParams<EmbedderCustomOptions>
 ): GenkitPlugin {
   return genkitPlugin('chroma', async (ai: Genkit) => {
@@ -112,16 +114,14 @@ export const chromaIndexerRef = (params: {
 /**
  * Configures a Chroma vector store retriever.
  */
-export function chromaRetriever<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
->(
+export function chromaRetriever<EmbedderCustomOptions extends GenkitSchema>(
   ai: Genkit,
   params: {
     clientParams?: ChromaClientParams;
     collectionName: string;
     createCollectionIfMissing?: boolean;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { embedder, collectionName, embedderOptions } = params;
@@ -233,16 +233,14 @@ function constructMetadata(
 /**
  * Configures a Chroma indexer.
  */
-export function chromaIndexer<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
->(
+export function chromaIndexer<EmbedderCustomOptions extends GenkitSchema>(
   ai: Genkit,
   params: {
     clientParams?: ChromaClientParams;
     collectionName: string;
     createCollectionIfMissing?: boolean;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const { collectionName, embedder, embedderOptions } = {
@@ -321,7 +319,7 @@ export function chromaIndexer<
  * https://docs.trychroma.com/docs/embeddings/multimodal
  */
 export async function createChromaCollection<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: {
@@ -329,7 +327,7 @@ export async function createChromaCollection<
     clientParams?: ChromaClientParams;
     metadata?: CollectionMetadata;
     embedder?: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   let chromaEmbedder: IEmbeddingFunction | undefined = undefined;

@@ -17,6 +17,7 @@
 import { ActionMetadata, modelActionMetadata, z } from 'genkit';
 import { ModelAction, ModelInfo, ModelReference, modelRef } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import {
   ensureToolIds,
   fromInteractionSync,
@@ -103,7 +104,7 @@ export const AntigravityConfigSchema = z
   .passthrough();
 
 export type AntigravityConfigSchemaType = typeof AntigravityConfigSchema;
-export type AntigravityConfig = z.infer<AntigravityConfigSchemaType>;
+export type AntigravityConfig = InferOutput<AntigravityConfigSchemaType>;
 
 type ConfigSchemaType = AntigravityConfigSchemaType;
 

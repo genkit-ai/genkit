@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z, type Genkit } from 'genkit';
+import { z, type Genkit, type GenkitSchema } from 'genkit';
 import {
   evaluatorRef,
   type BaseEvalDataPoint,
@@ -61,8 +61,8 @@ export const genkitEvalRef = (metric: GenkitMetric) =>
  * Genkit evaluation plugin that provides the RAG evaluators
  */
 export function genkitEval<
-  ModelCustomOptions extends z.ZodType<any, any>,
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   params: PluginOptions<ModelCustomOptions, EmbedderCustomOptions>
 ): GenkitPlugin {
@@ -89,8 +89,8 @@ function fillScores(
  * Configures a Genkit evaluator
  */
 export function genkitEvaluators<
-  ModelCustomOptions extends z.ZodType<any, any>,
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: PluginOptions<ModelCustomOptions, EmbedderCustomOptions>
@@ -263,10 +263,7 @@ export function genkitEvaluators<
   });
 }
 
-function resolveConfig<
-  M extends z.ZodType<any, any>,
-  E extends z.ZodType<any, any>,
->(
+function resolveConfig<M extends GenkitSchema, E extends GenkitSchema>(
   metric: GenkitMetricConfig<M, E>,
   params: PluginOptions<M, E>
 ): ResolvedConfig<M, E> {

@@ -15,15 +15,16 @@
  */
 
 import * as aiplatform from '@google-cloud/aiplatform';
-import { z } from 'genkit';
+import { z, type GenkitSchema } from 'genkit';
 import type { EmbedderReference } from 'genkit/embedder';
 import { CommonRetrieverOptionsSchema, type Document } from 'genkit/retriever';
+import type { InferOutput } from 'genkit/schema';
 import type { GoogleAuth } from 'google-auth-library';
 import type { PluginOptions } from '../types.js';
 
 // This internal interface will be passed to the vertexIndexers and vertexRetrievers functions
 export interface VertexVectorSearchOptions<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 > {
   pluginOptions: PluginOptions;
   authClient: GoogleAuth;
@@ -172,7 +173,7 @@ export type DocumentIndexer<Options extends {} = {}> = (
 ) => Promise<string[]>;
 
 export interface VectorSearchOptions<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
   IndexerOptions extends {},
   RetrieverOptions extends { k?: number },
 > {
@@ -186,5 +187,5 @@ export interface VectorSearchOptions<
   documentIndexer: DocumentIndexer<IndexerOptions>;
   // Embedder and default options to use for indexing and retrieval
   embedder?: EmbedderReference<EmbedderCustomOptions>;
-  embedderOptions?: z.infer<EmbedderCustomOptions>;
+  embedderOptions?: InferOutput<EmbedderCustomOptions>;
 }

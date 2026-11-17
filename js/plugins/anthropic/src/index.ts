@@ -18,8 +18,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
 
-import type { Part } from 'genkit';
-import { z, type ActionMetadata, type ModelReference } from 'genkit';
+import {
+  type ActionMetadata,
+  type GenkitSchema,
+  type ModelReference,
+  type Part,
+} from 'genkit';
 import { type ModelAction } from 'genkit/model';
 import { type ActionType } from 'genkit/registry';
 import { listActions } from './list.js';
@@ -163,7 +167,7 @@ export type AnthropicPlugin = {
     name: KnownClaudeModels | (ClaudeModelName & {}),
     config?: ClaudeConfig
   ): ModelReference<AnthropicConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
+  model(name: string, config?: any): ModelReference<GenkitSchema>;
 };
 
 /**
@@ -174,7 +178,7 @@ export const anthropic = anthropicPlugin as AnthropicPlugin;
 (anthropic as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodType<any, any>> => {
+): ModelReference<GenkitSchema> => {
   return claudeModelReference(name, config);
 };
 

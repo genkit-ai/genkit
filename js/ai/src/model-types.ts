@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import { OperationSchema, z } from '@genkit-ai/core';
+import {
+  OperationSchema,
+  z,
+  type GenkitSchema,
+  type InferOutput,
+} from '@genkit-ai/core';
 import { DocumentDataSchema } from './document.js';
 import {
   PartSchema,
@@ -228,9 +233,9 @@ export const ModelRequestSchema = z.object({
 });
 /** ModelRequest represents the parameters that are passed to a model when generating content. */
 export interface ModelRequest<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 > extends z.infer<typeof ModelRequestSchema> {
-  config?: z.infer<CustomOptionsSchema>;
+  config?: InferOutput<CustomOptionsSchema>;
 }
 /**
  * Zod schema of a generate request.
@@ -249,9 +254,9 @@ export type GenerateRequestData = z.infer<typeof GenerateRequestSchema>;
  * Generate request.
  */
 export interface GenerateRequest<
-  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 > extends z.infer<typeof GenerateRequestSchema> {
-  config?: z.infer<CustomOptionsSchema>;
+  config?: InferOutput<CustomOptionsSchema>;
 }
 
 /**

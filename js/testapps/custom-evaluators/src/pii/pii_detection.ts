@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { z, type ModelArgument } from 'genkit';
+import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import { ai } from '../index.js';
 
 const PiiDetectionResponseSchema = z.object({
@@ -26,11 +27,11 @@ const PiiDetectionResponseSchema = z.object({
 const piiDetectionPrompt = ai.prompt('pii_detection');
 
 export async function piiDetectionScore<
-  CustomModelOptions extends z.ZodType<any, any>,
+  CustomModelOptions extends GenkitSchema,
 >(
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: z.infer<CustomModelOptions>
+  judgeConfig?: InferOutput<CustomModelOptions>
 ): Promise<Score> {
   const d = dataPoint;
   try {

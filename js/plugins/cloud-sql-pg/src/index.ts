@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z, type Genkit } from 'genkit';
+import { z, type Genkit, type GenkitSchema } from 'genkit';
 import { type EmbedderArgument } from 'genkit/embedder';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import {
@@ -23,6 +23,7 @@ import {
   indexerRef,
   retrieverRef,
 } from 'genkit/retriever';
+import type { InferOutput } from 'genkit/schema';
 import { v4 as uuidv4 } from 'uuid';
 import { PostgresEngine } from './engine.js';
 import { DistanceStrategy, type QueryOptions } from './indexes.js';
@@ -88,11 +89,11 @@ export const postgresIndexerRef = (params: { tableName: string }) => {
  * @param params.embedderOptions Options to customize the embedder
  * @returns The Postgres Genkit plugin
  */
-export function postgres<EmbedderCustomOptions extends z.ZodType<any, any>>(
+export function postgres<EmbedderCustomOptions extends GenkitSchema>(
   params: {
     tableName: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
     engine: PostgresEngine;
     schemaName?: string;
     contentColumn?: string;
@@ -123,13 +124,13 @@ export default postgres;
  * @returns A Postgres retriever
  */
 export async function configurePostgresRetriever<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: {
     tableName: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
     engine: PostgresEngine;
     schemaName?: string;
     contentColumn?: string;
@@ -319,7 +320,7 @@ export async function configurePostgresRetriever<
  * @returns Add documents to vector store
  */
 export function configurePostgresIndexer<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   params: {
@@ -333,7 +334,7 @@ export function configurePostgresIndexer<
     idColumn?: string;
     metadataJsonColumn?: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
-    embedderOptions?: z.infer<EmbedderCustomOptions>;
+    embedderOptions?: InferOutput<EmbedderCustomOptions>;
   }
 ) {
   const schemaName = params.schemaName ?? 'public';

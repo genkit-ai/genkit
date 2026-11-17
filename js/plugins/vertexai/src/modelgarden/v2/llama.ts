@@ -21,6 +21,7 @@ import {
   type GenerateRequest,
   type ModelAction,
 } from 'genkit/model';
+import type { InferOutput } from 'genkit/schema';
 import type { GoogleAuth } from 'google-auth-library';
 import OpenAI from 'openai';
 import { getGenkitClientHeader } from '../../common/index.js';
@@ -35,7 +36,7 @@ export const LlamaConfigSchema = OpenAIConfigSchema.extend({
   location: z.string().optional(),
 }).passthrough();
 export type LlamaConfigSchemaType = typeof LlamaConfigSchema;
-export type LlamaConfig = z.infer<LlamaConfigSchemaType>;
+export type LlamaConfig = InferOutput<LlamaConfigSchemaType>;
 
 type ConfigSchemaType = LlamaConfigSchemaType;
 

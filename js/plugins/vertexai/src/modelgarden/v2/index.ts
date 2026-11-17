@@ -14,7 +14,12 @@
  * limitations under the License.
  */
 
-import { GenkitError, ModelReference, z, type ActionMetadata } from 'genkit';
+import {
+  GenkitError,
+  ModelReference,
+  type ActionMetadata,
+  type GenkitSchema,
+} from 'genkit';
 import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import { getDerivedParams } from '../../common/index.js';
@@ -101,7 +106,7 @@ export type VertexModelGardenPlugin = {
     name: llama.KnownModels | (llama.LlamaModelName & {}),
     config: llama.LlamaConfig
   ): ModelReference<llama.LlamaConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
+  model(name: string, config?: any): ModelReference<GenkitSchema>;
 };
 
 export const vertexModelGarden =
@@ -109,7 +114,7 @@ export const vertexModelGarden =
 (vertexModelGarden as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodType<any, any>> => {
+): ModelReference<GenkitSchema> => {
   if (anthropic.isAnthropicModelName(name)) {
     return anthropic.model(name, config);
   }

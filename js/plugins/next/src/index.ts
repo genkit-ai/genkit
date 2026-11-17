@@ -15,6 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import type { GenkitSchema } from 'genkit';
 import {
   Action,
   AsyncTaskQueue,
@@ -30,6 +31,7 @@ import {
   type ContextProvider,
   type RequestData,
 } from 'genkit/context';
+import type { InferOutput } from 'genkit/schema';
 import { NextRequest, NextResponse } from 'next/server.js';
 export { NextRequest, NextResponse, z, type Action, type ActionContext };
 
@@ -143,10 +145,10 @@ async function getContext<C extends ActionContext, T>(
 
 function appRoute<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S, any, Init>,
   opts?: {
@@ -157,8 +159,8 @@ function appRoute<
   return async (req: NextRequest): Promise<NextResponse> => {
     let context: C = {} as C;
     const { data: input, init } = (await req.json()) as {
-      data: z.infer<I>;
-      init?: z.infer<Init>;
+      data: InferOutput<I>;
+      init?: InferOutput<Init>;
     };
     const streamId = req.headers.get('x-genkit-stream-id');
     if (req.headers.get('accept') !== 'text/event-stream') {

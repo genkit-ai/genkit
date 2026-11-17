@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z, type Genkit } from 'genkit';
+import { z, type Genkit, type GenkitSchema } from 'genkit';
 import {
   GenerationCommonConfigSchema,
   getBasicUsageStats,
@@ -341,7 +341,7 @@ export function defineImagenModel(
   options: PluginOptions
 ): ModelAction {
   const modelName = `vertexai/${name}`;
-  const model: ModelReference<z.ZodType<any, any>> =
+  const model: ModelReference<GenkitSchema> =
     lookup(SUPPORTED_IMAGEN_MODELS, name) ||
     modelRef({
       name: modelName,

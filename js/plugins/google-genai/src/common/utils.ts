@@ -24,7 +24,7 @@ import {
   StatusName,
   StatusNameSchema,
   getClientHeader as defaultGetClientHeader,
-  z,
+  type GenkitSchema,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GenerateRequest } from 'genkit/model';
@@ -139,9 +139,7 @@ export function stringTruncator(key: string, value: unknown): unknown {
  * Gets the un-prefixed model name from a modelReference
  */
 export function extractVersion(
-  model:
-    | ModelReference<z.ZodType<any, any>>
-    | EmbedderReference<z.ZodType<any, any>>
+  model: ModelReference<GenkitSchema> | EmbedderReference<GenkitSchema>
 ): string {
   return model.version ? model.version : checkModelName(model.name);
 }

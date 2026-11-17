@@ -18,17 +18,18 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { Prompt } from '@modelcontextprotocol/sdk/types.js';
 import {
   GenkitError,
-  z,
   type ExecutablePrompt,
   type GenerateOptions,
   type GenerateResponse,
   type GenerateStreamResponse,
   type Genkit,
+  type GenkitSchema,
   type JSONSchema,
   type PromptGenerateOptions,
   type ToolAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
+import type { InferOutput } from 'genkit/schema';
 import { fromMcpPromptMessage } from './message.js';
 
 function toSchema(args: Prompt['arguments']) {
@@ -83,9 +84,9 @@ function registerPrompt(
 }
 
 function createExecutablePrompt<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   client: Client,
   prompt: Prompt,
@@ -96,14 +97,14 @@ function createExecutablePrompt<
     promptName: string;
     options?: PromptGenerateOptions<any, any>;
   }
-): ExecutablePrompt<z.infer<I>, O, CustomOptions> {
+): ExecutablePrompt<InferOutput<I>, O, CustomOptions> {
   const callPrompt = (async (
-    input?: z.infer<I>,
+    input?: InferOutput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
-  ): Promise<GenerateResponse<z.infer<O>>> => {
+  ): Promise<GenerateResponse<InferOutput<O>>> => {
     logger.debug(`[MCP] Calling MCP prompt ${params.name}/${prompt.name}`);
     return params.ai.generate(callPrompt.render(input, opts));
-  }) as ExecutablePrompt<z.infer<I>, O, CustomOptions>;
+  }) as ExecutablePrompt<InferOutput<I>, O, CustomOptions>;
 
   callPrompt.ref = {
     name: prompt.name,
@@ -115,9 +116,9 @@ function createExecutablePrompt<
   };
 
   callPrompt.stream = (
-    input?: z.infer<I>,
+    input?: InferOutput<I>,
     opts?: PromptGenerateOptions<O, CustomOptions>
-  ): GenerateStreamResponse<z.infer<O>> => {
+  ): GenerateStreamResponse<InferOutput<O>> => {
     logger.debug(`[MCP] Streaming MCP prompt ${params.name}/${prompt.name}`);
     return params.ai.generateStream(callPrompt.render(input, opts));
   };

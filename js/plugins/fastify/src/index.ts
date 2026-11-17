@@ -22,6 +22,7 @@ import type {
   FastifyRequest,
   RouteHandlerMethod,
 } from 'fastify';
+import type { GenkitSchema } from 'genkit';
 import {
   Action,
   ActionStreamInput,
@@ -30,7 +31,6 @@ import {
   StreamNotFoundError,
   type ActionContext,
   type StreamManager,
-  type z,
 } from 'genkit/beta';
 import {
   getCallableJSON,
@@ -39,6 +39,7 @@ import {
   type RequestData,
 } from 'genkit/context';
 import { logger } from 'genkit/logging';
+import type { InferOutput } from 'genkit/schema';
 import type { ServerResponse } from 'http';
 import { getErrorMessage, getErrorStack } from './utils.js';
 
@@ -49,7 +50,7 @@ const streamDelimiter = '\n\n';
  */
 export interface FastifyHandlerOptions<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
 > {
   contextProvider?: ContextProvider<C, I>;
   streamManager?: StreamManager;
@@ -76,10 +77,10 @@ export interface FastifyHandlerOptions<
  */
 export function fastifyHandler<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S, any, Init>,
   opts?: FastifyHandlerOptions<C, I>
@@ -104,9 +105,10 @@ export function fastifyHandler<
       return;
     }
 
-    const input = (request.body as { data?: z.infer<I> }).data as z.infer<I>;
-    const init = (request.body as { init?: z.infer<Init> }).init as
-      | z.infer<Init>
+    const input = (request.body as { data?: InferOutput<I> })
+      .data as InferOutput<I>;
+    const init = (request.body as { init?: InferOutput<Init> }).init as
+      | InferOutput<Init>
       | undefined;
     let context: Record<string, any>;
 
@@ -238,16 +240,16 @@ export function fastifyHandler<
 }
 
 async function runActionWithDurableStreaming<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
   streamId: string,
-  input: z.infer<I>,
-  init: z.infer<Init> | undefined,
+  input: InferOutput<I>,
+  init: InferOutput<Init> | undefined,
   context: ActionContext,
   response: ServerResponse,
   abortSignal: AbortSignal
@@ -259,7 +261,7 @@ async function runActionWithDurableStreaming<
     durableStream = await streamManager.open(streamId);
   }
   try {
-    let onChunk = (chunk: z.infer<S>) => {
+    let onChunk = (chunk: InferOutput<S>) => {
       // The client may have disconnected mid-stream; writing to a destroyed
       // response would throw.
       if (response.destroyed) return;
@@ -269,7 +271,7 @@ async function runActionWithDurableStreaming<
     };
     if (streamManager) {
       const originalOnChunk = onChunk;
-      onChunk = (chunk: z.infer<S>) => {
+      onChunk = (chunk: InferOutput<S>) => {
         originalOnChunk(chunk);
         taskQueue!.enqueue(() => durableStream!.write(chunk));
       };
@@ -386,10 +388,10 @@ async function subscribeToStream(
  */
 export type FlowWithContextProvider<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 > = {
   flow: Flow<I, O, S, Init>;
   context: ContextProvider<C, I>;
@@ -399,10 +401,10 @@ export type FlowWithContextProvider<
  * A wrapper object containing a flow with its associated options.
  */
 export type FlowWithOptions<
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 > = {
   flow: Flow<I, O, S, Init>;
   options: {
@@ -418,10 +420,10 @@ export type FlowWithOptions<
  */
 export function withContextProvider<
   C extends ActionContext = ActionContext,
-  I extends z.ZodType<any, any> = z.ZodType<any, any>,
-  O extends z.ZodType<any, any> = z.ZodType<any, any>,
-  S extends z.ZodType<any, any> = z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema = GenkitSchema,
+  O extends GenkitSchema = GenkitSchema,
+  S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   flow: Flow<I, O, S, Init>,
   context: ContextProvider<C, I>
@@ -437,10 +439,10 @@ export function withContextProvider<
  * for use with the {@link genkitFastify} plugin.
  */
 export function withFlowOptions<
-  I extends z.ZodType<any, any>,
-  O extends z.ZodType<any, any>,
-  S extends z.ZodType<any, any>,
-  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends GenkitSchema,
+  O extends GenkitSchema,
+  S extends GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 >(
   flow: Flow<I, O, S, Init>,
   options: {

@@ -22,6 +22,7 @@ import {
   modelRef,
 } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import {
   ensureToolIds,
   fromInteraction,
@@ -154,7 +155,7 @@ export const DeepResearchConfigSchema = z
   })
   .passthrough();
 export type DeepResearchConfigSchemaType = typeof DeepResearchConfigSchema;
-export type DeepResearchConfig = z.infer<DeepResearchConfigSchemaType>;
+export type DeepResearchConfig = InferOutput<DeepResearchConfigSchemaType>;
 
 // This contains all the DeepResearch config schema types
 type ConfigSchemaType = DeepResearchConfigSchemaType;

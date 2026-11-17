@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import { z } from 'genkit';
+import type { GenkitSchema } from 'genkit';
 import { ModelInfo } from 'genkit/model';
 import { compatOaiImageModelRef } from '../image.js';
 
 /** XAI image generation ModelRef helper, same as the OpenAI-compatible model specification. */
 export function xaiImageModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

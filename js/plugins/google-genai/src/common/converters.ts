@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { GenkitError, ToolRequest, z } from 'genkit';
+import { GenkitError, ToolRequest, type GenkitSchema } from 'genkit';
 import {
   CandidateData,
   MediaPart,
@@ -359,7 +359,7 @@ function toGeminiPart(part: Part): GeminiPart {
 
 function toGeminiRole(
   role: MessageData['role'],
-  model?: ModelReference<z.ZodType<any, any>>
+  model?: ModelReference<GenkitSchema>
 ): string {
   switch (role) {
     case 'user':
@@ -385,7 +385,7 @@ function toGeminiRole(
 
 export function toGeminiMessage(
   message: MessageData,
-  model?: ModelReference<z.ZodType<any, any>>
+  model?: ModelReference<GenkitSchema>
 ): GeminiContent {
   let sortedParts = message.content;
   if (message.role === 'tool') {

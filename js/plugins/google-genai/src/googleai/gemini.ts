@@ -37,6 +37,7 @@ import {
 } from 'genkit/model';
 import { downloadRequestMedia } from 'genkit/model/middleware';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import {
   fromGeminiCandidate,
   toGeminiFunctionModeEnum,
@@ -376,7 +377,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type GeminiConfigSchemaType = typeof GeminiConfigSchema;
-export type GeminiConfig = z.infer<GeminiConfigSchemaType>;
+export type GeminiConfig = InferOutput<GeminiConfigSchemaType>;
 
 export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
   speechConfig: z
@@ -434,7 +435,7 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
-export type GeminiTtsConfig = z.infer<GeminiTtsConfigSchemaType>;
+export type GeminiTtsConfig = InferOutput<GeminiTtsConfigSchemaType>;
 
 export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
   imageConfig: z
@@ -489,7 +490,7 @@ export const GeminiImageConfigSchema = GeminiConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type GeminiImageConfigSchemaType = typeof GeminiImageConfigSchema;
-export type GeminiImageConfig = z.infer<GeminiImageConfigSchemaType>;
+export type GeminiImageConfig = InferOutput<GeminiImageConfigSchemaType>;
 
 /**
  * Config for video generation models such as gemini-omni-1.1-flash.
@@ -559,7 +560,7 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type GeminiVideoConfigSchemaType = typeof GeminiVideoConfigSchema;
-export type GeminiVideoConfig = z.infer<GeminiVideoConfigSchemaType>;
+export type GeminiVideoConfig = InferOutput<GeminiVideoConfigSchemaType>;
 
 export const GemmaConfigSchema = GeminiConfigSchema.extend({
   // No range check: the accepted range depends on the model, so the value is
@@ -570,7 +571,7 @@ export const GemmaConfigSchema = GeminiConfigSchema.extend({
     .optional(),
 }).passthrough();
 export type GemmaConfigSchemaType = typeof GemmaConfigSchema;
-export type GemmaConfig = z.infer<GemmaConfigSchemaType>;
+export type GemmaConfig = InferOutput<GemmaConfigSchemaType>;
 
 // This contains all the Gemini config schema types
 type ConfigSchemaType =
@@ -579,7 +580,7 @@ type ConfigSchemaType =
   | GeminiImageConfigSchemaType
   | GeminiVideoConfigSchemaType
   | GemmaConfigSchemaType;
-type ConfigSchema = z.infer<ConfigSchemaType>;
+type ConfigSchema = InferOutput<ConfigSchemaType>;
 
 const modelInteractionsMap = new Map<string, boolean>();
 
