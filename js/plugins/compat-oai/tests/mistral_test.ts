@@ -1139,6 +1139,63 @@ describe('mistral plugin', () => {
     });
   });
 
+  describe('validation errors', () => {
+    it('reports a live 422 validation error as INVALID_ARGUMENT', async () => {
+      // As sent live for an out of range temperature.
+      server.setNextResponse({
+        statusCode: 422,
+        body: {
+          object: 'error',
+          message: {
+            detail: [
+              {
+                type: 'less_than_equal',
+                loc: ['body', 'temperature'],
+                msg: 'Input should be less than or equal to 1.5',
+                input: 1.9,
+                ctx: { le: 1.5 },
+              },
+            ],
+          },
+          type: 'invalid_request_error',
+          param: null,
+          code: null,
+          raw_status_code: 422,
+        },
+      });
+
+      await expect(
+        ai.generate({ model: 'mistral/mistral-small-latest', prompt: 'hi' })
+      ).rejects.toMatchObject({
+        status: 'INVALID_ARGUMENT',
+        message: expect.stringContaining('less than or equal to 1.5'),
+      });
+    });
+
+    it("reports a 422 in the OpenAPI spec's HTTPValidationError shape", async () => {
+      server.setNextResponse({
+        statusCode: 422,
+        body: {
+          detail: [
+            {
+              type: 'extra_forbidden',
+              loc: ['body', 'foo'],
+              msg: 'Extra inputs are not permitted',
+              input: 1,
+            },
+          ],
+        },
+      });
+
+      await expect(
+        ai.generate({ model: 'mistral/mistral-small-latest', prompt: 'hi' })
+      ).rejects.toMatchObject({
+        status: 'INVALID_ARGUMENT',
+        message: expect.stringContaining('Extra inputs are not permitted'),
+      });
+    });
+  });
+
   it('sends output_dimension for embeddings', async () => {
     server.setNextResponse({
       body: {

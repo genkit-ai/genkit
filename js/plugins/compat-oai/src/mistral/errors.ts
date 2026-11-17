@@ -20,26 +20,28 @@ import type { ErrorStatusClassifier } from '../model.js';
 type Fetch = NonNullable<ClientOptions['fetch']>;
 
 /**
- * Whether `body` is a Mistral error body: a top-level object such as
- * `{"object": "error", "message": "...", "type": "invalid_model", ...}`, not
- * wrapped in an `error` key as OpenAI's are.
+ * Whether `body` is an error body the OpenAI SDK can't read: a JSON object
+ * with no `error` key. Mistral sends top-level errors such as
+ * `{"object": "error", "message": "...", "type": "invalid_model", ...}`, and
+ * its OpenAPI spec documents HTTP 422 as `{"detail": [...]}`
+ * (`HTTPValidationError`), neither wrapped in an `error` key as OpenAI's are.
  */
-function isTopLevelError(body: unknown): body is Record<string, unknown> {
+function isUnwrappedError(body: unknown): body is Record<string, unknown> {
   return (
     typeof body === 'object' &&
     body !== null &&
     !Array.isArray(body) &&
-    (body as Record<string, unknown>).object === 'error' &&
     !('error' in body)
   );
 }
 
 /**
  * Wraps `fetch` so that Mistral's error bodies reach the OpenAI SDK. The SDK
- * only reads errors under an `error` key, so for a top-level Mistral error it
- * reports "400 status code (no body)" and drops the message and `type`. This
- * moves the body under `error`, so the API error has Mistral's message,
- * `type` and `code`.
+ * only reads errors under an `error` key, so for any other JSON object body
+ * it reports, for example, "400 status code (no body)" and drops the message
+ * and `type`. This moves the body under `error`, so the API error has
+ * Mistral's message, `type` and `code`, or the `detail` of a validation
+ * error.
  *
  * Returns `undefined`, keeping the SDK's own fetch, when `httpAgent` is set
  * without a `fetch`: Node's built-in fetch would ignore the agent.
@@ -58,7 +60,7 @@ export function mistralErrorBodyFetch(
     } catch {
       return response;
     }
-    if (!isTopLevelError(body)) return response;
+    if (!isUnwrappedError(body)) return response;
     const headers = new Headers(response.headers);
     // The body is re-encoded, so the original length and encoding no longer
     // apply.
