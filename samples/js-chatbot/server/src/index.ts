@@ -36,7 +36,7 @@ export const AgentInput = z.object({
 const ai = genkit({
   plugins: [
     vertexAI({
-      location: 'us-central1',
+      location: 'global',
     }),
     vertexModelGarden({
       location: 'us-central1',
@@ -52,7 +52,7 @@ const ai = genkit({
 });
 
 const llms: ModelReference<any>[] = [
-  vertexAI.model('gemini-2.5-flash'),
+  vertexAI.model('gemini-4-hydrogen'),
   vertexModelGarden.model('meta/llama-3.1-405b-instruct-maas'),
 ];
 
