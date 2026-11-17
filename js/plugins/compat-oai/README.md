@@ -218,6 +218,8 @@ Mistral's own field names:
 - `reasoningEffort` is sent as `reasoning_effort`. Allowed values vary by
   model: Mistral Small and Medium take `none` and `high`, Mistral Large 4
   (`mistral-large-latest`) takes `low`, `medium` and `high`.
+- `temperature` (0 to 1.5), `topP` (above 0, at most 1) and `seed` (0 or
+  more) are checked against Mistral's ranges before the request goes out.
 - OpenAI's `user` and `max_completion_tokens`, and any other config the plugin
   doesn't map, are ignored.
 - The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are

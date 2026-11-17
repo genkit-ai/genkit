@@ -1022,6 +1022,34 @@ describe('mistral plugin', () => {
     });
   });
 
+  describe('config bounds', () => {
+    const schema = MistralChatCompletionConfigSchema;
+
+    it("accepts values in Mistral's ranges", () => {
+      for (const config of [
+        { temperature: 0 },
+        { temperature: 1.5 },
+        { topP: 1 },
+        { topP: 0.01 },
+        { seed: 0 },
+      ]) {
+        expect(schema.safeParse(config).success).toBe(true);
+      }
+    });
+
+    it("rejects values outside Mistral's ranges", () => {
+      for (const config of [
+        { temperature: 1.6 },
+        { temperature: -0.1 },
+        { topP: 0 },
+        { topP: 1.1 },
+        { seed: -1 },
+      ]) {
+        expect(schema.safeParse(config).success).toBe(false);
+      }
+    });
+  });
+
   describe('signed thinking chunks', () => {
     const TWO_SIGNED_CHUNKS = [
       {

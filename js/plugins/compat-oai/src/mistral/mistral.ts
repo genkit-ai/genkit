@@ -70,13 +70,27 @@ const MISTRAL_TEXT_MODEL_INFO: ModelInfo = {
 
 /**
  * Mistral custom configuration schema. `topK` is left out: Mistral's models
- * reject `top_k` sampling.
+ * reject `top_k` sampling. Bounds follow Mistral's request schema, so out of
+ * range values are caught before the request goes out.
  */
 export const MistralChatCompletionConfigSchema =
   ChatCompletionCommonConfigSchema.omit({ topK: true }).extend({
+    temperature: z
+      .number()
+      .min(0)
+      .max(1.5)
+      .optional()
+      .describe('Sampling temperature, between 0 and 1.5.'),
+    topP: z
+      .number()
+      .gt(0)
+      .max(1)
+      .optional()
+      .describe('Nucleus sampling, above 0 and at most 1.'),
     seed: z
       .number()
       .int()
+      .min(0)
       .optional()
       .describe('Seed for random sampling. Sent as `random_seed`.'),
     reasoningEffort: z
