@@ -24,6 +24,7 @@ import {
   MOCK_AGENT_TOOL_TRACE,
   MOCK_AGENT_TOOL_TRAJECTORY,
   MOCK_SPAN_AGENT,
+  MOCK_SUBAGENT_TRACE,
   makeAgentSpan,
   makeModelSpan,
   makeSpan,
@@ -433,4 +434,163 @@ describe('extractTrajectoryFromTrace', () => {
       });
     }
   );
+
+  it('partitions nested subagent spans into linked child trajectories in TrajectoryBundle', () => {
+    const bundle = extractTrajectoryFromTrace(MOCK_SUBAGENT_TRACE);
+
+    expect(TrajectoryBundleSchema.parse(bundle)).toMatchObject({
+      sessionId: 'sess-outer',
+      trajectories: {
+        'trace-sub': {
+          steps: [
+            {},
+            {
+              actions: [
+                {
+                  actionId: 'sub-call-1',
+                  spanId: 'delegate-tool',
+                  name: 'delegate_to_researcher',
+                  type: 'subagent',
+                  status: 'success',
+                  subtrajectoryId: 'sub-agent',
+                },
+              ],
+            },
+            {},
+          ],
+        },
+        'sub-agent': {
+          parentTrajectoryId: 'trace-sub',
+          agentName: 'researcher',
+          steps: [
+            {
+              stepId: 'sub-model-1-1',
+              content: [{ text: 'Topic: OATR' }],
+            },
+            {
+              stepId: 'sub-model-1-2',
+              content: [{ text: 'OATR defines TrajectoryBundle.' }],
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it('matches plain agent name tool requests to delegate_to_ spans across intermediate wrappers', () => {
+    const trace = makeTrace(
+      [
+        makeAgentSpan({ spanId: 'root-agent', name: 'coordinator' }),
+        makeTurnSpan({ spanId: 'turn-1', turn: 1 }),
+        makeModelSpan({
+          spanId: 'm1',
+          parentSpanId: 'turn-1',
+          startTime: 120,
+          endTime: 160,
+          messages: [{ role: 'user', content: [{ text: 'Delegate to mars' }] }],
+          outputMessage: {
+            role: 'model',
+            content: [
+              { toolRequest: { name: 'researcher', input: { topic: 'mars' } } },
+            ],
+          },
+        }),
+        makeToolSpan({
+          spanId: 'tool-delegate',
+          parentSpanId: 'turn-1',
+          name: 'delegate_to_researcher',
+          startTime: 165,
+          endTime: 240,
+          output: { summary: 'Mars facts' },
+        }),
+        makeSpan({
+          spanId: 'inner-wrapper',
+          parentSpanId: 'tool-delegate',
+          displayName: 'invokeSubagent',
+          startTime: 166,
+          endTime: 235,
+        }),
+        makeAgentSpan({
+          spanId: 'sub-researcher',
+          parentSpanId: 'inner-wrapper',
+          name: 'researcher',
+          startTime: 168,
+          endTime: 230,
+        }),
+      ],
+      { traceId: 'trace-delegate-wrapper' }
+    );
+
+    const bundle = extractTrajectoryFromTrace(trace);
+    expect(
+      bundle.trajectories['trace-delegate-wrapper'].steps[1].actions[0]
+    ).toMatchObject({
+      spanId: 'tool-delegate',
+      type: 'subagent',
+      subtrajectoryId: 'sub-researcher',
+      output: { summary: 'Mars facts' },
+    });
+  });
+
+  it('links nested subagent spans invoked directly without an enclosing tool span', () => {
+    const trace = makeTrace(
+      [
+        makeAgentSpan({ spanId: 'root-agent', name: 'coordinator' }),
+        makeModelSpan({
+          spanId: 'm1',
+          parentSpanId: 'root-agent',
+          startTime: 120,
+          endTime: 160,
+          messages: [{ role: 'user', content: [{ text: 'Ask researcher' }] }],
+          outputMessage: {
+            role: 'model',
+            content: [
+              {
+                toolRequest: {
+                  ref: 'direct-sub-1',
+                  name: 'researcher',
+                  input: { topic: 'direct' },
+                },
+              },
+            ],
+          },
+        }),
+        makeAgentSpan({
+          spanId: 'direct-researcher',
+          parentSpanId: 'root-agent',
+          name: 'researcher',
+          startTime: 165,
+          endTime: 220,
+        }),
+      ],
+      { traceId: 'trace-direct-subagent' }
+    );
+
+    const bundle = extractTrajectoryFromTrace(trace);
+
+    expect(TrajectoryBundleSchema.parse(bundle)).toMatchObject({
+      trajectories: {
+        'trace-direct-subagent': {
+          steps: [
+            {},
+            {
+              actions: [
+                {
+                  actionId: 'direct-sub-1',
+                  spanId: 'direct-researcher',
+                  name: 'researcher',
+                  type: 'subagent',
+                  subtrajectoryId: 'direct-researcher',
+                },
+              ],
+            },
+          ],
+        },
+        'direct-researcher': {
+          parentTrajectoryId: 'trace-direct-subagent',
+          agentName: 'researcher',
+        },
+      },
+    });
+  });
 });
