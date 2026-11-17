@@ -260,7 +260,7 @@ export function evaluator<
                   metadata: { 'evaluator:evalRunId': i.evalRunId },
                 },
               },
-              async (metadata, otSpan) => {
+              async (metadata) => {
                 const results = await runBatch(
                   runner,
                   batch,
@@ -416,9 +416,8 @@ async function runBatch<
           metadata: { 'evaluator:evalRunId': evalRunId },
         },
       },
-      async (metadata, otSpan) => {
-        const spanId = otSpan.spanContext().spanId;
-        const traceId = otSpan.spanContext().traceId;
+      async (metadata, span) => {
+        const { spanId, traceId } = span;
         try {
           const result = await runner(
             datapoint as InferOutput<EvalDataPoint>,

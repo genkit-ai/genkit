@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { z } from 'zod';
@@ -27,21 +26,19 @@ import {
 } from '../src/action.js';
 import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
-import { enableTelemetry } from '../src/tracing.js';
-import { TestSpanExporter } from './utils.js';
+import { configureInstrumentation } from '../src/tracing.js';
+import { TestInstrumentation } from './utils.js';
 
 initNodeFeatures();
 
-const spanExporter = new TestSpanExporter();
-enableTelemetry({
-  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
-});
+const spanRecorder = new TestInstrumentation();
+configureInstrumentation(spanRecorder);
 
 describe('action', () => {
   var registry: Registry;
   beforeEach(() => {
     registry = new Registry();
-    spanExporter.exportedSpans = [];
+    spanRecorder.exportedSpans = [];
   });
 
   it('applies middleware', async () => {
@@ -362,9 +359,9 @@ describe('action', () => {
 
     await act();
 
-    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(spanRecorder.exportedSpans.length, 1);
     assert.strictEqual(
-      spanExporter.exportedSpans[0].attributes['genkit:key'],
+      spanRecorder.exportedSpans[0].attributes['genkit:key'],
       '/custom/keyedAction'
     );
   });
@@ -391,7 +388,7 @@ describe('action', () => {
       },
     });
 
-    const span = spanExporter.exportedSpans.find(
+    const span = spanRecorder.exportedSpans.find(
       (s) => s.displayName === 'scrubTest'
     );
     assert.ok(span);
@@ -439,9 +436,9 @@ describe('action', () => {
 
     await act.run('foo', { init: { setting: 'value' } });
 
-    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(spanRecorder.exportedSpans.length, 1);
     assert.strictEqual(
-      spanExporter.exportedSpans[0].attributes['genkit:init'],
+      spanRecorder.exportedSpans[0].attributes['genkit:init'],
       JSON.stringify({ setting: 'value' })
     );
   });
@@ -461,9 +458,9 @@ describe('action', () => {
 
     await act.run('foo');
 
-    assert.strictEqual(spanExporter.exportedSpans.length, 1);
+    assert.strictEqual(spanRecorder.exportedSpans.length, 1);
     assert.strictEqual(
-      spanExporter.exportedSpans[0].attributes['genkit:init'],
+      spanRecorder.exportedSpans[0].attributes['genkit:init'],
       undefined
     );
   });
@@ -505,7 +502,7 @@ describe('action schema checks', () => {
 
 describe('action schema parsing', () => {
   beforeEach(() => {
-    spanExporter.exportedSpans = [];
+    spanRecorder.exportedSpans = [];
   });
 
   const Input = z.object({
@@ -632,7 +629,7 @@ describe('action schema parsing', () => {
   it('records the parsed output on the span', async () => {
     const { act } = searchAction();
     await act({ q: 'z' });
-    const span = spanExporter.exportedSpans.find(
+    const span = spanRecorder.exportedSpans.find(
       (s) => s.attributes['genkit:name'] === 'search'
     );
     assert.strictEqual(
@@ -656,7 +653,7 @@ describe('action schema parsing', () => {
       await act.run({ n: 'abc' }, { init: { n: 'de' } }).then((r) => r.result),
       5
     );
-    const span = spanExporter.exportedSpans.find(
+    const span = spanRecorder.exportedSpans.find(
       (s) => s.attributes['genkit:name'] === 'replayable'
     );
     const recordedInput = JSON.parse(

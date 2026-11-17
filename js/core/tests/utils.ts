@@ -14,48 +14,81 @@
  * limitations under the License.
  */
 
-import { SpanKind } from '@opentelemetry/api';
-import type { ExportResult } from '@opentelemetry/core';
-import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
+// ai tests import this file, which pulls core sources into their compilation;
+// those sources rely on core's global declarations.
+/// <reference path="../typings.d.ts" />
 
-export class TestSpanExporter implements SpanExporter {
-  exportedSpans: any[] = [];
+import { randomBytes } from 'node:crypto';
+import { getAsyncContext } from '../src/async-context.js';
+import {
+  metadataToAttributes,
+  toSpanAttributes,
+  type GenkitSpanContext,
+  type Instrumentation,
+  type InstrumentationNext,
+  type InstrumentationSpanInfo,
+  type SpanAttributes,
+} from '../src/tracing/instrumentation-api.js';
 
-  export(
-    spans: ReadableSpan[],
-    resultCallback: (result: ExportResult) => void
-  ): void {
-    this.exportedSpans.push(...spans.map((s) => this._exportInfo(s)));
-    resultCallback({ code: 0 });
-  }
+export interface RecordedSpan {
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  displayName: string;
+  attributes: Record<string, unknown>;
+  status: 'ok' | 'error';
+}
 
-  shutdown(): Promise<void> {
-    return this.forceFlush();
-  }
+const parentAlsKey = 'core.tests.recordingInstrumentation.span';
 
-  private _exportInfo(span: ReadableSpan) {
-    return {
-      spanId: span.spanContext().spanId,
-      traceId: span.spanContext().traceId,
-      attributes: { ...span.attributes },
-      displayName: span.name,
-      links: span.links,
-      spanKind: SpanKind[span.kind],
-      parentSpanId: span.parentSpanId,
-      sameProcessAsParentSpan: { value: !span.spanContext().isRemote },
-      status: span.status,
-      timeEvents: {
-        timeEvent: span.events.map((e) => ({
-          annotation: {
-            attributes: e.attributes ?? {},
-            description: e.name,
-          },
-        })),
-      },
+/**
+ * In-memory instrumentation for tests. Records spans when they finish (so
+ * children come before parents), with the same attribute encoding as the
+ * built-in providers: labels, then custom writes, then `genkit:*` metadata.
+ *
+ * Usage: `configureInstrumentation(recorder)`.
+ */
+export class TestInstrumentation implements Instrumentation {
+  exportedSpans: RecordedSpan[] = [];
+
+  async runInNewSpan<T>(
+    info: InstrumentationSpanInfo,
+    next: InstrumentationNext<T>
+  ): Promise<T> {
+    const parent = info.metadata.isRoot
+      ? undefined
+      : getAsyncContext().getStore<RecordedSpan>(parentAlsKey);
+    const span: RecordedSpan = {
+      traceId: parent?.traceId ?? randomBytes(16).toString('hex'),
+      spanId: randomBytes(8).toString('hex'),
+      parentSpanId: parent?.spanId,
+      displayName: info.metadata.name,
+      attributes: {},
+      status: 'ok',
     };
-  }
-  forceFlush(): Promise<void> {
-    return Promise.resolve();
+    const custom: SpanAttributes = {};
+    const ctx: GenkitSpanContext = {
+      traceId: span.traceId,
+      spanId: span.spanId,
+      setMetadata: (values) => Object.assign(custom, toSpanAttributes(values)),
+    };
+    try {
+      return await getAsyncContext().run(parentAlsKey, span, () => next(ctx));
+    } catch (e) {
+      span.status = 'error';
+      throw e;
+    } finally {
+      // Drop undefined values (e.g. `genkit:input` for a no-input action), as
+      // OTel and the Dev UI's JSON wire format both do.
+      span.attributes = Object.fromEntries(
+        Object.entries({
+          ...info.labels,
+          ...custom,
+          ...metadataToAttributes(info.metadata),
+        }).filter(([, v]) => v !== undefined)
+      );
+      this.exportedSpans.push(span);
+    }
   }
 }
 

@@ -18,15 +18,10 @@ declare global {
   var __genkit_AsyncContext: any;
   var __genkit_ClientHeader: any;
   var __genkit_logger: any;
-  var __genkit_disableRootSpanDetection: any;
   var __GENKIT_RUNTIME_CONFIG__: any;
   var __GENKIT_PENDING_TELEMETRY_POSTS: any;
   var __GENKIT_CONFIGURED_INSTRUMENTATION: any;
   var __GENKIT_DIRECT_INSTRUMENTATION: any;
-  var __GENKIT_DEFAULT_OTEL_INSTRUMENTATION: any;
-  var __GENKIT_DISABLE_GENKIT_OTEL_INITIALIZATION: any;
-  var __GENKIT_TELEMETRY_PROVIDER: any;
-  var __GENKIT_TELEMETRY_INSTRUMENTED: any;
   var __GENKIT_TRACING_CONTEXT: any;
 }
 

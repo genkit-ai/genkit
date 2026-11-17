@@ -14,21 +14,12 @@
  * limitations under the License.
  */
 
-import {
-  SpanStatusCode,
-  trace,
-  TraceFlags,
-  type Span as ApiSpan,
-  type SpanAttributes,
-} from '@opentelemetry/api';
 import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { getAsyncContext } from '../async-context.js';
 import { logger } from '../logging.js';
-import { postToTelemetryServer } from './exporter.js';
 import {
   getErrorMessage,
-  isDisableRootSpanDetection,
   metadataToAttributes,
   toSpanAttributes,
   type GenkitLogRecord,
@@ -37,11 +28,17 @@ import {
   type InstrumentationNext,
   type InstrumentationSpanInfo,
   type LogRecordingInstrumentation,
+  type SpanAttributes,
 } from './instrumentation-api.js';
+import { postToTelemetryServer } from './telemetry-server.js';
 import type { SpanData, TraceData } from './types.js';
 
 const directAlsKey = 'core.tracing.direct.span';
 const INSTRUMENTATION_LIBRARY = { name: 'genkit-tracer', version: 'v1' };
+
+// OTLP span status codes, which the Dev UI expects.
+const STATUS_UNSET = 0;
+const STATUS_ERROR = 2;
 
 interface DirectParent {
   traceId: string;
@@ -51,8 +48,8 @@ interface DirectParent {
 /**
  * A self-contained instrumentation that feeds the Developer UI directly, with
  * no OpenTelemetry SDK. It mints its own ids, tracks parentage via Genkit's
- * async context, builds the same `SpanData`/`TraceData` shape the OTel-backed
- * `TraceServerExporter` produced, and POSTs to `${server}/api/traces`.
+ * async context, builds the `SpanData`/`TraceData` shape the telemetry server
+ * expects, and POSTs to `${server}/api/traces`.
  *
  * Auto-prepended in dev when a telemetry server is configured.
  *
@@ -65,10 +62,8 @@ export class DirectTelemetryInstrumentation
     info: InstrumentationSpanInfo,
     next: InstrumentationNext<T>
   ): Promise<T> {
-    // An explicit root starts a new trace even under an active parent, matching
-    // OTelInstrumentation (`spanOptions.root`).
-    const isRoot = info.metadata.isRoot && !isDisableRootSpanDetection();
-    const parent = isRoot
+    // An explicit root starts a new trace even under an active parent.
+    const parent = info.metadata.isRoot
       ? undefined
       : getAsyncContext().getStore<DirectParent>(directAlsKey);
     const traceId = parent?.traceId ?? genId(16);
@@ -88,17 +83,10 @@ export class DirectTelemetryInstrumentation
         Object.assign(customAttributes, toSpanAttributes(values));
       },
     };
-    // Non-recording OTel span carrying our ids, for providers/callbacks that
-    // read `.spanContext()`. Never booted through the SDK.
-    const otSpan: ApiSpan = trace.wrapSpanContext({
-      traceId,
-      spanId,
-      traceFlags: TraceFlags.SAMPLED,
-    });
 
     const exceptions: Array<Record<string, string>> = [];
     let status: { code: number; message?: string } = {
-      code: SpanStatusCode.UNSET,
+      code: STATUS_UNSET,
     };
 
     const exportSpan = (final: boolean) => {
@@ -148,12 +136,12 @@ export class DirectTelemetryInstrumentation
       const output = await getAsyncContext().run(
         directAlsKey,
         { traceId, spanId } as DirectParent,
-        () => next(otSpan, spanCtx)
+        () => next(spanCtx)
       );
       exportSpan(true);
       return output;
     } catch (e) {
-      status = { code: SpanStatusCode.ERROR, message: getErrorMessage(e) };
+      status = { code: STATUS_ERROR, message: getErrorMessage(e) };
       if (e instanceof Error) {
         const exception = toExceptionAttributes(e);
         if (exception) exceptions.push(exception);
@@ -241,13 +229,11 @@ interface BuildSpanDataArgs {
 }
 
 /**
- * Reproduces the `SpanData` shape `TraceServerExporter._exportInfo` produced,
- * so before/after Dev UI traces are structurally identical.
+ * Builds the `SpanData` shape the telemetry server and Dev UI expect.
  */
 function buildSpanData(args: BuildSpanDataArgs): SpanData {
   const { info, exceptions } = args;
-  // Genkit's own attributes win over custom writes, as they did when
-  // OTelInstrumentation applied metadataToAttributes last (at span end).
+  // Genkit's own attributes win over custom writes.
   const attributes: Record<string, any> = {
     ...info.labels,
     ...args.customAttributes,
@@ -260,7 +246,7 @@ function buildSpanData(args: BuildSpanDataArgs): SpanData {
     endTime: args.endTime,
     attributes,
     displayName: info.metadata.name,
-    links: (info.links ?? []) as any,
+    links: [],
     instrumentationLibrary: { ...INSTRUMENTATION_LIBRARY },
     spanKind: 'INTERNAL',
     sameProcessAsParentSpan: { value: true },
@@ -281,10 +267,11 @@ function buildSpanData(args: BuildSpanDataArgs): SpanData {
 }
 
 /**
- * Mirrors OTel's `Span.recordException`: type prefers `code` over `name`, empty
- * fields are omitted, and nothing is recorded without a type or message. The
- * omission matters: the Dev UI titles interrupts "Interrupted" only when
- * `exception.message` is missing (`ToolInterruptError` has an empty message).
+ * Encodes an error as OTLP exception event attributes: type prefers `code`
+ * over `name`, empty fields are omitted, and nothing is recorded without a
+ * type or message. The omission matters: the Dev UI titles interrupts
+ * "Interrupted" only when `exception.message` is missing (`ToolInterruptError`
+ * has an empty message).
  */
 function toExceptionAttributes(
   e: Error & { code?: unknown }

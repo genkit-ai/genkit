@@ -85,7 +85,7 @@ export class EvaluatorFactory {
           input: request,
         },
       },
-      async (metadata, _otSpan) => {
+      async (metadata) => {
         const client = await this.auth.getClient();
         const url = `https://${this.location}-aiplatform.googleapis.com/v1beta1/${locationName}:evaluateInstances`;
         const response = await client.request({

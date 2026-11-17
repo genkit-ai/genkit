@@ -16,8 +16,7 @@
 
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
-import { enableTelemetry } from '@genkit-ai/core/tracing';
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { configureInstrumentation } from '@genkit-ai/core/tracing';
 import * as assert from 'assert';
 import { describe, it, mock } from 'node:test';
 
@@ -28,7 +27,7 @@ import {
   z,
   type ActionContext,
 } from '@genkit-ai/core';
-import { TestSpanExporter } from '../../core/tests/utils.js';
+import { TestInstrumentation } from '../../core/tests/utils.js';
 import {
   AgentError,
   createAgentAPI,
@@ -64,10 +63,8 @@ import {
 
 initNodeFeatures();
 
-const spanExporter = new TestSpanExporter();
-enableTelemetry({
-  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
-});
+const spanRecorder = new TestInstrumentation();
+configureInstrumentation(spanRecorder);
 
 /**
  * Returns a Promise that resolves once the given snapshotId reaches targetStatus
@@ -751,7 +748,7 @@ describe('Agent', () => {
     });
 
     it('records the snapshotId and state on the turn span (server-managed)', async () => {
-      spanExporter.exportedSpans = [];
+      spanRecorder.exportedSpans = [];
       const store = new InMemorySessionStore<{ count: number }>();
 
       const flow = defineCustomAgent<{ count: number }>(
@@ -780,7 +777,7 @@ describe('Agent', () => {
       const output = await session.output;
       assert.ok(output.snapshotId);
 
-      const turnSpan = spanExporter.exportedSpans.find(
+      const turnSpan = spanRecorder.exportedSpans.find(
         (s) => s.displayName === 'runTurn-1'
       );
       assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
@@ -792,12 +789,12 @@ describe('Agent', () => {
       );
 
       // The turn span's output is the session state this turn produced.
-      const out = JSON.parse(turnSpan.attributes['genkit:output']);
+      const out = JSON.parse(turnSpan.attributes['genkit:output'] as string);
       assert.deepStrictEqual(out.state.custom, { count: 1 });
     });
 
     it("records a committed failed turn's snapshotId on the turn span", async () => {
-      spanExporter.exportedSpans = [];
+      spanRecorder.exportedSpans = [];
       const store = new InMemorySessionStore<{}>();
 
       const flow = defineCustomAgent<{}>(
@@ -821,7 +818,7 @@ describe('Agent', () => {
       const output = await session.output;
       assert.ok(output.snapshotId, 'the committed turn reports its snapshot');
 
-      const turnSpan = spanExporter.exportedSpans.find(
+      const turnSpan = spanRecorder.exportedSpans.find(
         (s) => s.displayName === 'runTurn-1'
       );
       assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
@@ -832,7 +829,7 @@ describe('Agent', () => {
     });
 
     it('records state on the turn span for a client-managed agent', async () => {
-      spanExporter.exportedSpans = [];
+      spanRecorder.exportedSpans = [];
       const registry = new Registry();
 
       const flow = defineCustomAgent<{ count: number }>(
@@ -860,14 +857,14 @@ describe('Agent', () => {
       }
       await session.output;
 
-      const turnSpan = spanExporter.exportedSpans.find(
+      const turnSpan = spanRecorder.exportedSpans.find(
         (s) => s.displayName === 'runTurn-1'
       );
       assert.ok(turnSpan, 'expected a runTurn-1 span to be exported');
 
       // The turn span's output carries the session state this turn produced,
       // for client-managed agents too.
-      const out = JSON.parse(turnSpan.attributes['genkit:output']);
+      const out = JSON.parse(turnSpan.attributes['genkit:output'] as string);
       assert.deepStrictEqual(out.state.custom, { count: 1 });
     });
   });

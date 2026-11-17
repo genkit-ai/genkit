@@ -14,137 +14,21 @@
  * limitations under the License.
  */
 
-import { GenkitError } from './error.js';
-import { logger } from './logging.js';
-import type { TelemetryConfig } from './telemetryTypes.js';
-import { flushTelemetryServerPosts } from './tracing/exporter.js';
+import { flushTelemetryServerPosts } from './tracing/telemetry-server.js';
 
-export * from './tracing/exporter.js';
 export * from './tracing/instrumentation.js';
+export * from './tracing/telemetry-server.js';
 export * from './tracing/types.js';
 
-const oTelInitializationKey = '__GENKIT_DISABLE_GENKIT_OTEL_INITIALIZATION';
-const instrumentationKey = '__GENKIT_TELEMETRY_INSTRUMENTED';
-const telemetryProviderKey = '__GENKIT_TELEMETRY_PROVIDER';
-
 /**
- * Ensures telemetry setup has settled before a span is opened: runs the
- * flag-gated Firebase auto-init and waits for any pending `enableTelemetry`
- * config.
+ * Awaits in-flight Developer UI telemetry posts. The reflection server relies
+ * on this so a trace is saved before its traceId is returned to the Dev UI.
  *
- * The wait matters because plugins like `enableFirebaseTelemetry()` resolve
- * their config asynchronously (credentials lookup) and are typically called
- * without `await`. Without it, spans opened before the SDK starts (e.g. the
- * first request after a cold start) go to the no-op tracer and are dropped.
- *
- * Historically this also booted a NodeSDK (`enableTelemetry({})`) when nothing
- * was configured. That no longer happens: the Developer UI is fed by
- * `DirectTelemetryInstrumentation`, so collection stays opt-in.
- *
- * @hidden
- */
-export async function ensureBasicTelemetryInstrumentation() {
-  await checkFirebaseMonitoringAutoInit();
-  if (global[instrumentationKey]) {
-    await global[instrumentationKey];
-  }
-}
-
-/**
- * Checks to see if the customer is using Firebase Genkit Monitoring
- * auto initialization via environment variable by attempting to resolve
- * the firebase plugin.
- *
- * Enables Firebase Genkit Monitoring if the plugin is installed and warns
- * if it hasn't been installed.
- */
-async function checkFirebaseMonitoringAutoInit() {
-  if (
-    !global[instrumentationKey] &&
-    process.env.ENABLE_FIREBASE_MONITORING === 'true'
-  ) {
-    try {
-      const importModule = new Function(
-        'moduleName',
-        'return import(moduleName)'
-      );
-      const firebaseModule = await importModule('@genkit-ai/firebase');
-
-      firebaseModule.enableFirebaseTelemetry();
-    } catch (e) {
-      logger.warn(
-        "It looks like you're trying to enable firebase monitoring, but " +
-          "haven't installed the firebase plugin. Please run " +
-          '`npm i --save @genkit-ai/firebase` and redeploy.'
-      );
-    }
-  }
-}
-
-export interface TelemetryProvider {
-  enableTelemetry(
-    telemetryConfig: TelemetryConfig | Promise<TelemetryConfig>
-  ): Promise<void>;
-  flushTracing(): Promise<void>;
-}
-
-function getTelemetryProvider(): TelemetryProvider {
-  if (global[telemetryProviderKey]) {
-    return global[telemetryProviderKey];
-  }
-  throw new GenkitError({
-    status: 'FAILED_PRECONDITION',
-    message: 'TelemetryProvider is not initialized.',
-  });
-}
-export function setTelemetryProvider(provider: TelemetryProvider) {
-  if (global[telemetryProviderKey]) return;
-  global[telemetryProviderKey] = provider;
-}
-
-/**
- * Enables tracing and metrics open telemetry configuration.
- */
-export async function enableTelemetry(
-  telemetryConfig: TelemetryConfig | Promise<TelemetryConfig>
-) {
-  if (isOTelInitializationDisabled()) {
-    return;
-  }
-  global[instrumentationKey] =
-    telemetryConfig instanceof Promise ? telemetryConfig : Promise.resolve();
-  return getTelemetryProvider().enableTelemetry(telemetryConfig);
-}
-
-/**
- * Flushes all configured span processors.
+ * Instrumentations that buffer (e.g. an OTel batch span processor) own their
+ * own flushing.
  *
  * @hidden
  */
 export async function flushTracing() {
-  // Also await DirectTelemetryInstrumentation's posts, which bypass the OTel
-  // processors. The reflection server relies on this so a trace is saved
-  // before its traceId is returned to the Dev UI.
-  await Promise.all([
-    getTelemetryProvider().flushTracing(),
-    flushTelemetryServerPosts(),
-  ]);
-}
-
-function isOTelInitializationDisabled(): boolean {
-  return global[oTelInitializationKey] === true;
-}
-
-/**
- * Disables Genkit's OTel initialization. This is useful when you want to
- * control the OTel initialization yourself.
- *
- * This function attempts to control Genkit's internal OTel instrumentation behaviour,
- * since internal implementation details are subject to change at any time consider
- * this function "unstable" and subject to breaking changes as well.
- *
- * @hidden
- */
-export function disableGenkitOTelInitialization() {
-  global[oTelInitializationKey] = true;
+  await flushTelemetryServerPosts();
 }

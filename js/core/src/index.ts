@@ -107,7 +107,6 @@ export {
   type InferOutput,
   type JSONSchema,
 } from './schema.js';
-export * from './telemetryTypes.js';
 export * from './utils.js';
 
 const clientHeaderGlobalKey = '__genkit_ClientHeader';

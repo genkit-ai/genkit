@@ -55,11 +55,25 @@ console.log(text);
 
 ## Compatibility
 
-`configureInstrumentation(...)` replaces Genkit's default OpenTelemetry
-instrumentation. `enableGoogleCloudTelemetry()` and `enableFirebaseTelemetry()`
-depend on that default (they read `genkit:*` span attributes), so don't combine
-them with `GenAiInstrumentation`. Their `genkit/*` metrics and logs would stop
-without an error.
+Genkit core has no OpenTelemetry dependency and records nothing outside the
+Developer UI unless an instrumentation is configured, so
+`configureInstrumentation(new GenAiInstrumentation())` is what turns
+OpenTelemetry export on.
+
+This replaces `enableFirebaseTelemetry()` (`@genkit-ai/firebase`) and
+`enableGoogleCloudTelemetry()` (`@genkit-ai/google-cloud`), which were removed.
+To keep exporting to Google Cloud, register a Cloud Trace exporter with the SDK:
+
+```ts
+import { TraceExporter } from '@google-cloud/opentelemetry-cloud-trace-exporter';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+
+new NodeSDK({
+  spanProcessors: [new BatchSpanProcessor(new TraceExporter())],
+}).start();
+configureInstrumentation(new GenAiInstrumentation());
+```
 
 ## Options
 

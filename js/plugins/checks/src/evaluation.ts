@@ -128,7 +128,7 @@ async function checksEvalInstance<ResponseType extends z.ZodType<any, any>>(
         input: request,
       },
     },
-    async (metadata, _otSpan) => {
+    async (metadata) => {
       const client = await auth.getClient();
       const url =
         'https://checks.googleapis.com/v1alpha/aisafety:classifyContent';

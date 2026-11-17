@@ -17,20 +17,17 @@
 import { BackgroundActionRunOptions, Operation } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
-import { enableTelemetry } from '@genkit-ai/core/tracing';
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { configureInstrumentation } from '@genkit-ai/core/tracing';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { TestSpanExporter } from '../../../core/tests/utils.js';
+import { TestInstrumentation } from '../../../core/tests/utils.js';
 import { GenkitAI } from '../../src/genkit-ai.js';
 import { GenerateResponseData } from '../../src/model-types.js';
 import { defineBackgroundModel } from '../../src/model.js';
 
 initNodeFeatures();
-const spanExporter = new TestSpanExporter();
-enableTelemetry({
-  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
-});
+const spanRecorder = new TestInstrumentation();
+configureInstrumentation(spanRecorder);
 
 describe('background model', () => {
   let registry: Registry;
