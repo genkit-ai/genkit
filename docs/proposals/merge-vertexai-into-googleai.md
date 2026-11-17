@@ -91,17 +91,27 @@ The namespace and refs stay the same, but some model IDs differ by backend:
 
 ## Interactions API
 
-The same switch covers Interactions. The request body is the same on both backends. What changes is the transport, plus a few field rules (for example, Cloud rejects `top_k`, and Cloud Interactions doesn't serve image models).
+**Background.** Gemini can be called through two Google APIs:
 
-- **Developer API:** `v1beta/interactions` with an API key.
-- **Cloud:** `v1beta1/projects/{p}/locations/{l}/interactions` with OAuth, or express mode at `locations/global/interactions`.
+- **`generateContent`:** the older API. Each request sends the full conversation and gets a response back.
+- **The Interactions API:** the newer one (`/interactions`). Google's agent-style models are built on it (Deep Research, Antigravity), and it adds things like server-side `store` and background runs. Gemini is moving to it.
 
-The Python Interactions work ([genkit-python#78](https://github.com/genkit-ai/genkit-python/pull/78), then [#105](https://github.com/genkit-ai/genkit-python/pull/105), then a Gemini-on-Interactions follow-up) uses the plugin's own HTTP client and wire types rather than the SDK's, matching JS and Dart. So two separate choices are in play:
+Users don't pick between them. `ai.generate(...)` looks the same either way, and the plugin chooses the API for each model.
 
-- **The model picks the API.** Gemini, Antigravity, Lyria and Deep Research use Interactions through our own client. Imagen, Veo, embedders, image models and tuned endpoints use `generateContent` through `genai.Client`.
-- **`enterprise=` picks the backend for both.** Either client sends to the Developer API or to Cloud based on the same setting. Gemini on Interactions works with either value.
+**Where each SDK is:**
 
-**The ask for the Interactions work:** the Cloud client should choose its URL and auth from a backend value passed in, not from the plugin class, and the request function should take credentials instead of assuming an API key. That's the same amount of work now. `GoogleAI(enterprise=...)` then just connects the setting; nothing has to be moved out of `VertexAI`.
+- **JS:** newer Gemini models on both `googleAI` and `vertexAI` already use Interactions (since #6851). Older Gemini, image models and tuned endpoints stay on `generateContent`.
+- **Python:** Gemini, Gemma, Imagen, Veo and embedders still use `generateContent`. Only Deep Research, Antigravity and Lyria use Interactions, and only on the Developer API. The migration is in progress: [genkit-python#78](https://github.com/genkit-ai/genkit-python/pull/78), then [#105](https://github.com/genkit-ai/genkit-python/pull/105), then a follow-up that moves Gemini onto Interactions. It uses the plugin's own HTTP client and wire types rather than the SDK's, matching JS and Dart.
+
+**Why it matters here.** After the migration, the plugin has two code paths: `genai.Client` for `generateContent` models and its own client for Interactions models. Both APIs exist on both backends:
+
+- **Interactions, Developer API:** `v1beta/interactions`, authenticated with an API key.
+- **Interactions, Cloud:** `v1beta1/projects/{p}/locations/{l}/interactions`, authenticated with OAuth. Express mode uses `locations/global/interactions`.
+- **What differs:** the request body is the same, apart from a few field rules (Cloud rejects `top_k`, and Cloud Interactions doesn't serve image models).
+
+So `enterprise=` has to reach both code paths. Otherwise, `GoogleAI(enterprise=True)` could send Imagen calls to Cloud while Gemini calls still go to the Developer API. Gemini on Interactions works with either value.
+
+**The ask for the Interactions work:** the Cloud Interactions client should choose its URL and auth from a backend value passed in, not from the plugin class, and the request function should take credentials instead of assuming an API key. That's the same amount of work now. `GoogleAI(enterprise=...)` then just connects the setting; nothing has to be moved out of `VertexAI`.
 
 ## At 2.0: the `vertexai/` alias
 
