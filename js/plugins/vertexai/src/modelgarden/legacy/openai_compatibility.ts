@@ -204,17 +204,16 @@ export function toOpenAiMessages(
               arguments: JSON.stringify(part.toolRequest.input),
             },
           }));
-        if (toolCalls.length > 0) {
-          openAiMsgs.push({
-            role: role,
-            tool_calls: toolCalls,
-          });
-        } else {
-          openAiMsgs.push({
-            role: role,
-            content: msg.text,
-          });
-        }
+        const text = msg.text;
+        openAiMsgs.push(
+          toolCalls.length > 0
+            ? {
+                role,
+                ...(text ? { content: text } : {}),
+                tool_calls: toolCalls,
+              }
+            : { role, content: text }
+        );
         break;
       }
       case 'tool': {
@@ -266,26 +265,38 @@ export function fromOpenAiToolCall(
   };
 }
 
+function toModelContent(
+  content: string | null | undefined,
+  toolCalls:
+    | ChatCompletionMessageToolCall[]
+    | ChatCompletionChunk.Choice.Delta.ToolCall[]
+    | undefined,
+  jsonMode: boolean
+): Part[] {
+  const toolRequests = (toolCalls ?? []).map(fromOpenAiToolCall);
+  if (!content) return toolRequests;
+  const answer =
+    jsonMode && toolRequests.length === 0
+      ? { data: JSON.parse(content) }
+      : { text: content };
+  return [answer, ...toolRequests];
+}
+
 /** @deprecated */
 export function fromOpenAiChoice(
   choice: ChatCompletion.Choice,
   jsonMode = false
 ): CandidateData {
-  const toolRequestParts = choice.message.tool_calls?.map(fromOpenAiToolCall);
   return {
     index: choice.index,
     finishReason: finishReasonMap[choice.finish_reason] || 'other',
     message: {
       role: 'model',
-      content: toolRequestParts
-        ? // Note: Not sure why I have to cast here exactly.
-          // Otherwise it thinks toolRequest must be 'undefined' if provided
-          (toolRequestParts as ToolRequestPart[])
-        : [
-            jsonMode
-              ? { data: JSON.parse(choice.message.content!) }
-              : { text: choice.message.content! },
-          ],
+      content: toModelContent(
+        choice.message.content,
+        choice.message.tool_calls,
+        jsonMode
+      ),
     },
     custom: {},
   };
@@ -296,7 +307,6 @@ export function fromOpenAiChunkChoice(
   choice: ChatCompletionChunk.Choice,
   jsonMode = false
 ): CandidateData {
-  const toolRequestParts = choice.delta.tool_calls?.map(fromOpenAiToolCall);
   return {
     index: choice.index,
     finishReason: choice.finish_reason
@@ -304,13 +314,11 @@ export function fromOpenAiChunkChoice(
       : 'unknown',
     message: {
       role: 'model',
-      content: toolRequestParts
-        ? (toolRequestParts as ToolRequestPart[])
-        : [
-            jsonMode
-              ? { data: JSON.parse(choice.delta.content!) }
-              : { text: choice.delta.content! },
-          ],
+      content: toModelContent(
+        choice.delta.content,
+        choice.delta.tool_calls,
+        jsonMode
+      ),
     },
     custom: {},
   };
