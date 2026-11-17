@@ -157,15 +157,11 @@ describe('eval utils', () => {
           extractors: {
             input: (trace: TraceData) => {
               return Object.values(trace.spans)
-                .filter(
-                  (s) =>
-                    s.attributes['genkit:type'] === 'action' &&
-                    s.attributes['genkit:metadata:subtype'] !== 'retriever'
-                )
+                .filter((s) => s.attributes['genkit:type'] === 'flow')
                 .map((s) => {
                   const inputValue = JSON.parse(
                     s.attributes['genkit:input'] as string
-                  ).start.input;
+                  );
                   if (!inputValue) {
                     return '';
                   }

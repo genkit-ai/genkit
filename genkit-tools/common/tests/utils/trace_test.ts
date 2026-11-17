@@ -44,7 +44,7 @@ describe('trace utils', () => {
 
     expect(span).toBeDefined();
     expect(span!.spanId).toEqual(BASE_FLOW_SPAN_ID);
-    expect(span?.spans?.length).toBe(1);
+    expect(span?.spans?.length).toBe(2);
   });
 
   it('returns undefined if no spans', async () => {
