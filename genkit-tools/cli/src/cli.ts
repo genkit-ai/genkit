@@ -46,6 +46,7 @@ import { traceGet } from './commands/trace-get.js';
 import { traceList } from './commands/trace-list.js';
 import { uiStart } from './commands/ui-start.js';
 import { uiStop } from './commands/ui-stop.js';
+import { warnIfLegacyGenkitContext } from './utils/legacy-context-warning.js';
 import { detectCLIRuntime } from './utils/runtime-detector.js';
 import { showUpdateNotification } from './utils/updates.js';
 import { version } from './utils/version.js';
@@ -116,6 +117,20 @@ export async function startCLI(): Promise<void> {
       const { isCompiledBinary } = detectCLIRuntime();
       const projectRoot = await findProjectRoot();
       const projectRuntime = await detectRuntime(projectRoot);
+      if (
+        process.stdout.isTTY &&
+        !process.argv.includes('--non-interactive') &&
+        process.argv[2] !== SERVER_HARNESS_COMMAND &&
+        commandName !== 'mcp' &&
+        commandName !== 'config' &&
+        commandName !== 'init:ai-tools'
+      ) {
+        try {
+          await warnIfLegacyGenkitContext(projectRoot);
+        } catch (e) {
+          logger.debug('Failed to check for legacy GENKIT.md context', e);
+        }
+      }
       await record(
         new RunCommandEvent(
           commandName,
