@@ -49,19 +49,7 @@ export function stackTraceSpans(trace: TraceData): NestedSpanData | undefined {
     span.spans?.sort((a, b) => a.startTime - b.startTime);
   });
 
-  // Re-position the root node to the first non-internal span
-  let bestRoot = rootSpan!;
-  while (
-    bestRoot.attributes['genkit:metadata:genkit-dev-internal'] ||
-    bestRoot.attributes['genkit:metadata:flow:wrapperAction']
-  ) {
-    if (!bestRoot.spans?.length) {
-      break;
-    }
-    bestRoot = bestRoot.spans[0];
-  }
-
-  return bestRoot;
+  return rootSpan;
 }
 
 /** Extracts the display type/subtype of a span. */

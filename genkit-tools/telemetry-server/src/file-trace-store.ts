@@ -274,15 +274,6 @@ export class LocalFileTraceStore implements TraceStore {
         }
       });
     });
-    // Delete the root wrapper if it's the only span left
-    if (Object.keys(trace.spans).length === 1) {
-      Object.keys(trace.spans).forEach((spanId) => {
-        const span = trace.spans[spanId];
-        if (span.attributes['genkit:name'] === 'dev-run-action-wrapper') {
-          delete trace.spans[spanId];
-        }
-      });
-    }
     return trace;
   }
 }
