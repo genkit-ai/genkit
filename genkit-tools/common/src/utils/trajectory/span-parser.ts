@@ -60,6 +60,7 @@ export interface ScopePartition {
   modelSpans: NestedSpanData[];
   toolSpans: NestedSpanData[];
   scopeSpans: NestedSpanData[];
+  subagentByToolSpanId: Map<string, string>;
 }
 
 /** Parsed structure of a span's `genkit:input` JSON attribute. */

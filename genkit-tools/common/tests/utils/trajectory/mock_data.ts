@@ -388,3 +388,105 @@ export const MOCK_AGENT_TOOL_TRACE: TraceData = makeTrace(
   ],
   { traceId: 'trace-1', startTime: 100, endTime: 500 }
 );
+
+/** Canonical parent agent delegating to a nested `/agent/researcher` subagent (`trace-sub`). */
+export const MOCK_SUBAGENT_TRACE: TraceData = makeTrace(
+  [
+    makeAgentSpan({
+      spanId: 'root-agent',
+      name: 'codingAgent',
+      sessionId: 'sess-outer',
+      startTime: 100,
+      endTime: 900,
+    }),
+    makeModelSpan({
+      spanId: 'model-1',
+      parentSpanId: 'root-agent',
+      model: 'gemini-pro',
+      startTime: 130,
+      endTime: 200,
+      messages: [{ role: 'user', content: [{ text: 'Research OATR spec' }] }],
+      outputMessage: {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              ref: 'sub-call-1',
+              name: 'delegate_to_researcher',
+              input: { topic: 'OATR' },
+            },
+          },
+        ],
+      },
+    }),
+    makeToolSpan({
+      spanId: 'delegate-tool',
+      parentSpanId: 'root-agent',
+      name: 'delegate_to_researcher',
+      callId: 'sub-call-1',
+      startTime: 210,
+      endTime: 600,
+      input: { topic: 'OATR' },
+      output: { summary: 'OATR is a flat bundle' },
+    }),
+    makeAgentSpan({
+      spanId: 'sub-agent',
+      parentSpanId: 'delegate-tool',
+      name: 'researcher',
+      sessionId: 'sess-sub',
+      startTime: 215,
+      endTime: 590,
+    }),
+    makeModelSpan({
+      spanId: 'sub-model-1',
+      parentSpanId: 'sub-agent',
+      model: 'gemini-flash',
+      startTime: 220,
+      endTime: 580,
+      messages: [{ role: 'user', content: [{ text: 'Topic: OATR' }] }],
+      outputMessage: {
+        role: 'model',
+        content: [{ text: 'OATR defines TrajectoryBundle.' }],
+      },
+    }),
+    makeModelSpan({
+      spanId: 'model-2',
+      parentSpanId: 'root-agent',
+      model: 'gemini-pro',
+      startTime: 610,
+      endTime: 850,
+      messages: [
+        { role: 'user', content: [{ text: 'Research OATR spec' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              toolRequest: {
+                ref: 'sub-call-1',
+                name: 'delegate_to_researcher',
+                input: { topic: 'OATR' },
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          content: [
+            {
+              toolResponse: {
+                ref: 'sub-call-1',
+                name: 'delegate_to_researcher',
+                output: { summary: 'OATR is a flat bundle' },
+              },
+            },
+          ],
+        },
+      ],
+      outputMessage: {
+        role: 'model',
+        content: [{ text: 'Here is the OATR summary.' }],
+      },
+    }),
+  ],
+  { traceId: 'trace-sub', startTime: 100, endTime: 900 }
+);

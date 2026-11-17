@@ -73,6 +73,14 @@ const AGENT_FINISH_REASONS: ReadonlySet<string> = new Set([
   'failed',
 ]);
 
+/**
+ * A "trajectory scope" is the contiguous region of a trace's span tree that
+ * projects into a single `Trajectory`. It starts at `scopeRoot` (either the
+ * trace root span or a nested subagent span) and includes all descendant turn,
+ * model, and tool spans down to—but excluding—any nested agent spans, each of
+ * which starts its own child trajectory scope in
+ * `TrajectoryBundle.trajectories`.
+ */
 interface ScopeExtractionState extends ToolPairingContext {
   traceId: string;
   emittedMessageSigs: Set<string>;
@@ -87,12 +95,50 @@ function nextStepId(spanId: string, state: ScopeExtractionState): string {
   return `${spanId}-${count}`;
 }
 
-function walkScopeSpan(
-  node: NestedSpanData,
+function findEnclosingToolSpan(
+  span: NestedSpanData,
   scopeRoot: NestedSpanData,
-  partition: ScopePartition
-): void {
+  parentMap: ReadonlyMap<string, NestedSpanData>
+): NestedSpanData | undefined {
+  let curr = parentMap.get(span.spanId);
+  while (curr && curr.spanId !== scopeRoot.spanId) {
+    if (isToolSpan(curr)) return curr;
+    curr = parentMap.get(curr.spanId);
+  }
+  return undefined;
+}
+
+interface ScopeWalkContext {
+  trace: TraceData;
+  scopeRoot: NestedSpanData;
+  trajectoryId: string;
+  trajectories: Map<string, Trajectory>;
+  partition: ScopePartition;
+}
+
+function walkScopeSpan(node: NestedSpanData, ctx: ScopeWalkContext): void {
+  const { trace, scopeRoot, trajectoryId, trajectories, partition } = ctx;
   const isRootNode = node.spanId === scopeRoot.spanId;
+
+  if (!isRootNode && isAgentSpan(node)) {
+    const enclosingTool = findEnclosingToolSpan(
+      node,
+      scopeRoot,
+      partition.parentMap
+    );
+    if (enclosingTool) {
+      partition.subagentByToolSpanId.set(enclosingTool.spanId, node.spanId);
+    } else {
+      partition.toolSpans.push(node);
+      partition.scopeSpans.push(node);
+      partition.subagentByToolSpanId.set(node.spanId, node.spanId);
+    }
+    trajectories.set(
+      node.spanId,
+      buildTrajectoryScope(trace, node, node.spanId, trajectories, trajectoryId)
+    );
+    return;
+  }
 
   partition.scopeSpans.push(node);
   if (isModelSpan(node)) {
@@ -103,19 +149,35 @@ function walkScopeSpan(
 
   for (const child of node.spans || []) {
     partition.parentMap.set(child.spanId, node);
-    walkScopeSpan(child, scopeRoot, partition);
+    walkScopeSpan(child, ctx);
   }
 }
 
-function partitionTrajectoryScope(scopeRoot: NestedSpanData): ScopePartition {
+/**
+ * Walks `scopeRoot` to collect model/tool spans in this scope while splitting
+ * nested subagent boundaries into child trajectories.
+ */
+function partitionTrajectoryScope(
+  trace: TraceData,
+  scopeRoot: NestedSpanData,
+  trajectoryId: string,
+  trajectories: Map<string, Trajectory>
+): ScopePartition {
   const partition: ScopePartition = {
     parentMap: new Map<string, NestedSpanData>(),
     modelSpans: [],
     toolSpans: [],
     scopeSpans: [],
+    subagentByToolSpanId: new Map<string, string>(),
   };
 
-  walkScopeSpan(scopeRoot, scopeRoot, partition);
+  walkScopeSpan(scopeRoot, {
+    trace,
+    scopeRoot,
+    trajectoryId,
+    trajectories,
+    partition,
+  });
   sortSpansChronologically(partition.modelSpans);
   sortSpansChronologically(partition.toolSpans);
   sortSpansChronologically(partition.scopeSpans);
@@ -424,9 +486,16 @@ function appendModelStep(
 function buildTrajectoryScope(
   trace: TraceData,
   scopeRoot: NestedSpanData,
-  trajectoryId: string
+  trajectoryId: string,
+  trajectories: Map<string, Trajectory>,
+  parentTrajectoryId?: string
 ): Trajectory {
-  const partition = partitionTrajectoryScope(scopeRoot);
+  const partition = partitionTrajectoryScope(
+    trace,
+    scopeRoot,
+    trajectoryId,
+    trajectories
+  );
   const parsedInputs = parseScopeInputs(partition.scopeSpans);
   const state: ScopeExtractionState = {
     traceId: trace.traceId,
@@ -466,6 +535,7 @@ function buildTrajectoryScope(
 
   return {
     trajectoryId,
+    ...(parentTrajectoryId ? { parentTrajectoryId } : {}),
     ...(agentName ? { agentName } : {}),
     status,
     ...(finishReason ? { finishReason } : {}),
@@ -506,7 +576,10 @@ export function extractTrajectoryFromTrace(trace: TraceData): TrajectoryBundle {
 
   const trajectories = new Map<string, Trajectory>();
   if (prunedRoot) {
-    trajectories.set(rootId, buildTrajectoryScope(trace, prunedRoot, rootId));
+    trajectories.set(
+      rootId,
+      buildTrajectoryScope(trace, prunedRoot, rootId, trajectories)
+    );
   } else {
     trajectories.set(rootId, {
       trajectoryId: rootId,

@@ -32,6 +32,7 @@ function makePartition(
     modelSpans: [],
     toolSpans,
     scopeSpans: toolSpans,
+    subagentByToolSpanId: new Map(),
   };
 }
 
