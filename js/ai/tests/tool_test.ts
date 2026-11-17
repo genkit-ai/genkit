@@ -401,7 +401,7 @@ describe('isMultipartTool', () => {
     const multipart = defineTool(
       registry,
       { name: 'multipart', description: 'test', multipart: true },
-      async () => {}
+      async () => ({})
     );
     assert.strictEqual(isMultipartTool(multipart), true);
   });
@@ -622,7 +622,7 @@ describe('defineTool', () => {
     defineTool(
       registry,
       { name: 'test', description: 'test', multipart: true },
-      async () => {}
+      async () => ({})
     );
     assert.ok(await registry.lookupAction('/tool.v2/test'));
     assert.equal(await registry.lookupAction('/tool/test'), undefined);

@@ -205,7 +205,7 @@ describe('model wire schemas', () => {
     const request = {
       messages: [
         {
-          role: 'user',
+          role: 'user' as const,
           content: [
             { text: 'hi', extraPartKey: 1 },
             { media: { url: 'http://x', extraMediaKey: 1 } },

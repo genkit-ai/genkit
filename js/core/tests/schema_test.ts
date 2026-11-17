@@ -384,7 +384,10 @@ describe('annotateSchema()', () => {
   });
 
   it('should merge annotations for ZodRecord (additionalProperties)', () => {
-    const schema = z.record(annotateSchema(z.string(), { 'x-hint': 'foo' }));
+    const schema = z.record(
+      z.string(),
+      annotateSchema(z.string(), { 'x-hint': 'foo' })
+    );
 
     const json = toJsonSchema({ schema });
     assert.ok(
@@ -423,7 +426,7 @@ describe('annotateSchema()', () => {
     const json = toJsonSchema({ schema: z.object({ root: NodeSchema }) });
     // The recursive definition is emitted once under definitions/$defs.
     const defs = json.definitions ?? json.$defs;
-    const def = Object.values(defs ?? {})[0];
+    const def = defs?.[Object.keys(defs)[0]];
     assert.strictEqual(def.properties.name['x-hint'], 'name');
   });
 

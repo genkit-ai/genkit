@@ -858,11 +858,11 @@ describe('prompt', () => {
 
   it('respects output schema in the definition', async () => {
     const schema1 = z.object({
-      puppyName: z.string({ description: 'A cute name for a puppy' }),
+      puppyName: z.string().describe('A cute name for a puppy'),
     });
     const prompt1 = definePrompt(registry, {
       name: 'prompt1',
-      input: { schema: z.string({ description: 'Dog breed' }) },
+      input: { schema: z.string().describe('Dog breed') },
       output: {
         format: 'json',
         schema: schema1,
