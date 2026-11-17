@@ -432,7 +432,10 @@ describe('mistral plugin', () => {
     });
 
     expect(response.message?.content).toEqual([
-      { reasoning: 'Two plus two is four.' },
+      {
+        reasoning: 'Two plus two is four.',
+        metadata: { reasoningSource: 'mistral' },
+      },
       { text: '4' },
     ]);
     expect(response.reasoning).toBe('Two plus two is four.');
@@ -502,7 +505,10 @@ describe('mistral plugin', () => {
     expect(reasoning.join('')).toBe('Two plus two is four.');
     expect(text.join('')).toBe('4');
     expect(final.message?.content).toEqual([
-      { reasoning: 'Two plus two is four.' },
+      {
+        reasoning: 'Two plus two is four.',
+        metadata: { reasoningSource: 'mistral' },
+      },
       { text: '4' },
     ]);
   });
@@ -560,12 +566,21 @@ describe('mistral plugin', () => {
         { role: 'user', content: [{ text: 'What is 2 + 2?' }] },
         {
           role: 'model',
-          content: [{ reasoning: 'Two plus two is four.' }, { text: '4' }],
+          content: [
+            {
+              reasoning: 'Two plus two is four.',
+              metadata: { reasoningSource: 'mistral' },
+            },
+            { text: '4' },
+          ],
         },
         {
           role: 'model',
           content: [
-            { reasoning: 'I should call a tool.' },
+            {
+              reasoning: 'I should call a tool.',
+              metadata: { reasoningSource: 'mistral' },
+            },
             { toolRequest: { name: 'add', ref: 'call_1', input: { a: 2 } } },
           ],
         },
@@ -604,6 +619,109 @@ describe('mistral plugin', () => {
     for (const message of body.messages) {
       expect(message).not.toHaveProperty('reasoning_content');
     }
+  });
+
+  it('sends back only reasoning marked as Mistral', async () => {
+    await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      messages: [
+        { role: 'user', content: [{ text: 'Bread for two?' }] },
+        // A Gemini or Claude turn: its reasoning carries a signature under the
+        // same key, but isn't Mistral's.
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Gemini thinks.',
+              metadata: { thoughtSignature: 'gemini-sig' },
+            },
+            { text: 'Two loaves.' },
+          ],
+        },
+        { role: 'user', content: [{ text: 'And three?' }] },
+        {
+          role: 'model',
+          content: [{ reasoning: 'Unsigned, unmarked.' }, { text: 'Three.' }],
+        },
+        { role: 'user', content: [{ text: 'And four?' }] },
+        {
+          role: 'model',
+          content: [
+            {
+              reasoning: 'Mistral thinks.',
+              metadata: { reasoningSource: 'mistral', thoughtSignature: 'sig' },
+            },
+            { text: 'Four.' },
+          ],
+        },
+      ],
+      prompt: 'And five?',
+    });
+
+    const body = server.requests[0].body;
+    const assistant = body.messages.filter(
+      (m: { role: string }) => m.role === 'assistant'
+    );
+    expect(assistant).toEqual([
+      { role: 'assistant', content: 'Two loaves.' },
+      { role: 'assistant', content: 'Three.' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'thinking',
+            thinking: [{ type: 'text', text: 'Mistral thinks.' }],
+            signature: 'sig',
+          },
+          { type: 'text', text: 'Four.' },
+        ],
+      },
+    ]);
+  });
+
+  it('sends back Mistral reasoning after a JSON round trip of the history', async () => {
+    server.setNextResponse({
+      body: {
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: [
+                {
+                  type: 'thinking',
+                  thinking: [{ type: 'text', text: 'Two plus two.' }],
+                  signature: 'sig-123',
+                },
+                { type: 'text', text: '4' },
+              ],
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      },
+    });
+    const first = await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      prompt: 'What is 2 + 2?',
+    });
+    const saved = JSON.parse(JSON.stringify(first.messages));
+    expect(saved[1].content[0].metadata).toEqual({
+      reasoningSource: 'mistral',
+      thoughtSignature: 'sig-123',
+    });
+
+    await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      messages: saved,
+      prompt: 'And 3 + 3?',
+    });
+
+    expect(server.requests[1].body.messages[1].content[0]).toEqual({
+      type: 'thinking',
+      thinking: [{ type: 'text', text: 'Two plus two.' }],
+      signature: 'sig-123',
+    });
   });
 
   it('streams JSON output alongside thinking chunks', async () => {
@@ -779,7 +897,7 @@ describe('mistral plugin', () => {
     expect(response.message?.content).toEqual([
       {
         reasoning: 'Two plus two.',
-        metadata: { thoughtSignature: 'sig-123' },
+        metadata: { reasoningSource: 'mistral', thoughtSignature: 'sig-123' },
       },
       { text: '4' },
     ]);

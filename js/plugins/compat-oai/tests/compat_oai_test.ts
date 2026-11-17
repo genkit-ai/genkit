@@ -1883,6 +1883,54 @@ describe('openAIModelRunner', () => {
     );
   });
 
+  it('marks reasoning parts only when reasoningSource is set', async () => {
+    const reply = {
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: [
+              {
+                type: 'thinking',
+                thinking: [{ type: 'text', text: 'hm' }],
+                signature: 'sig',
+              },
+              { type: 'text', text: 'ok' },
+            ],
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    };
+    const openaiClient = {
+      chat: { completions: { create: jest.fn(async () => reply) } },
+    } as unknown as OpenAI;
+
+    const unmarked = await openAIModelRunner(
+      'm',
+      openaiClient
+    )({
+      messages: [],
+    });
+    expect(unmarked.message?.content[0]).toEqual({
+      reasoning: 'hm',
+      metadata: { thoughtSignature: 'sig' },
+    });
+
+    const marked = await openAIModelRunner(
+      'm',
+      openaiClient,
+      undefined,
+      undefined,
+      { reasoningSource: 'mistral' }
+    )({ messages: [] });
+    expect(marked.message?.content[0]).toEqual({
+      reasoning: 'hm',
+      metadata: { thoughtSignature: 'sig', reasoningSource: 'mistral' },
+    });
+  });
+
   it('should correctly run streaming requests', async () => {
     const openaiClient = {
       beta: {

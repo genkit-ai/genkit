@@ -141,10 +141,20 @@ function refuseNonImageMedia(messages: ChatCompletionMessageParam[]) {
 }
 
 /**
+ * Marks reasoning parts read from Mistral replies, in
+ * `metadata.reasoningSource`. Only reasoning with this mark is sent back to
+ * Mistral: a history can hold reasoning from other models, whose text and
+ * signatures Mistral can't use. The Python plugin uses the same mark.
+ */
+export const MISTRAL_REASONING_SOURCE = 'mistral';
+
+/**
  * Mistral has no `reasoning_content` field. Reasoning from earlier assistant
  * turns is sent back as `thinking` chunks in the `content` array instead,
  * which is the shape Mistral returns it in, with the chunk's `signature` when
- * the reasoning part kept one in `metadata.thoughtSignature`.
+ * the reasoning part kept one in `metadata.thoughtSignature`. Only reasoning
+ * marked as Mistral's (see {@link MISTRAL_REASONING_SOURCE}) is sent back;
+ * reasoning from other models, or with no mark, is dropped.
  *
  * Each Genkit `model` message becomes exactly one `assistant` message, so the
  * two are matched up in order.
@@ -167,6 +177,7 @@ function toMistralMessages(
       .filter(
         (part) =>
           part.reasoning !== undefined &&
+          part.metadata?.reasoningSource === MISTRAL_REASONING_SOURCE &&
           (part.reasoning || part.metadata?.thoughtSignature)
       )
       .map((part) => ({
@@ -190,11 +201,12 @@ function toMistralMessages(
 /**
  * Mistral reports usage on the last streamed chunk without being asked, so
  * `stream_options` isn't sent, and it streams reasoning as `thinking` chunks
- * in a `content` array.
+ * in a `content` array. Its reasoning parts are marked as Mistral's.
  */
 export const MISTRAL_RUNNER_OPTIONS: ModelRunnerOptions = {
   streamOptions: false,
   contentChunks: true,
+  reasoningSource: MISTRAL_REASONING_SOURCE,
 };
 
 /** Mistral ModelRef helper, with Mistral specific config. */

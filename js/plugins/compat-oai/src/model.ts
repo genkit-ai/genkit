@@ -764,6 +764,23 @@ export interface ModelRunnerOptions {
    * message by concatenating `content` as strings. Off by default.
    */
   contentChunks?: boolean;
+  /**
+   * When set, every reasoning part the runner returns or streams is marked
+   * with `metadata.reasoningSource` set to this value, so the provider can
+   * tell its own reasoning apart from other models' in a mixed history. The
+   * mark stays with the part through a JSON round trip of the history.
+   */
+  reasoningSource?: string;
+}
+
+/** Marks the reasoning parts in `parts` with `metadata.reasoningSource`. */
+function markReasoningSource(parts: Part[] | undefined, source?: string) {
+  if (!source || !parts) return;
+  for (const part of parts) {
+    if (part.reasoning !== undefined) {
+      part.metadata = { ...part.metadata, reasoningSource: source };
+    }
+  }
 }
 
 /**
@@ -847,6 +864,10 @@ export function openAIModelRunner(
               toolCallAccumulators.set(chunk.index, accumulators);
             }
             const c = fromOpenAIChunkChoice(chunk, undefined, accumulators);
+            markReasoningSource(
+              c.message?.content,
+              runnerOptions?.reasoningSource
+            );
             options?.sendChunk!({
               index: chunk.index,
               content: c.message?.content ?? [],
@@ -879,8 +900,16 @@ export function openAIModelRunner(
         return standardResponse;
       } else {
         const choice = response.choices[0];
+        const converted = fromOpenAIChoice(
+          choice,
+          request.output?.format === 'json'
+        );
+        markReasoningSource(
+          converted.message?.content,
+          runnerOptions?.reasoningSource
+        );
         return {
-          ...fromOpenAIChoice(choice, request.output?.format === 'json'),
+          ...converted,
           ...standardResponse,
         };
       }
