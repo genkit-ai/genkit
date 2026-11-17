@@ -26,6 +26,7 @@ const API_KEY = 'mistral-test-key';
 const UNKNOWN_MODEL_SUPPORTS = {
   multiturn: true,
   tools: false,
+  toolChoice: false,
   media: false,
   systemRole: true,
   output: ['text'],
@@ -1050,6 +1051,53 @@ describe('mistral plugin', () => {
     });
   });
 
+  describe('tool choice', () => {
+    it('sends toolChoice as tool_choice', async () => {
+      const add = ai.defineTool(
+        {
+          name: 'add',
+          description: 'Adds two numbers',
+          inputSchema: z.object({ a: z.number(), b: z.number() }),
+          outputSchema: z.number(),
+        },
+        async ({ a, b }) => a + b
+      );
+      for (const toolChoice of ['auto', 'required', 'none'] as const) {
+        server.setNextResponse({
+          body: {
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: 'ok' },
+                finish_reason: 'stop',
+              },
+            ],
+          },
+        });
+        await ai.generate({
+          model: mistral.model('mistral-small-latest'),
+          prompt: 'What is 2 + 2?',
+          tools: [add],
+          toolChoice,
+        });
+      }
+
+      expect(server.requests.map((r) => r.body.tool_choice)).toEqual([
+        'auto',
+        'required',
+        'none',
+      ]);
+    });
+
+    it('does not send tool_choice when toolChoice is unset', async () => {
+      await ai.generate({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'hi',
+      });
+      expect(server.requests[0].body).not.toHaveProperty('tool_choice');
+    });
+  });
+
   describe('signed thinking chunks', () => {
     const TWO_SIGNED_CHUNKS = [
       {
@@ -1279,6 +1327,7 @@ describe('mistral plugin', () => {
     expect(codestral?.__action.metadata?.model.supports).toEqual({
       multiturn: true,
       tools: true,
+      toolChoice: true,
       media: false,
       systemRole: true,
       output: ['text', 'json'],
@@ -1416,6 +1465,7 @@ describe('mistral plugin', () => {
       expect(actions[1].metadata?.model?.supports).toEqual({
         ...UNKNOWN_MODEL_SUPPORTS,
         tools: true,
+        toolChoice: true,
         media: true,
       });
       expect(actions[2].metadata?.model?.supports).toEqual(
@@ -1434,6 +1484,7 @@ describe('mistral plugin', () => {
       expect(action?.__action.metadata?.model.supports).toEqual({
         ...UNKNOWN_MODEL_SUPPORTS,
         tools: true,
+        toolChoice: true,
         media: true,
       });
     });

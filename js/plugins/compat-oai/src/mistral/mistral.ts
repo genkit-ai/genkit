@@ -34,6 +34,7 @@ const MISTRAL_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     tools: true,
+    toolChoice: true,
     media: true,
     systemRole: true,
     output: ['text', 'json'],
@@ -50,6 +51,7 @@ const MISTRAL_UNKNOWN_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     tools: false,
+    toolChoice: false,
     media: false,
     systemRole: true,
     output: ['text'],
@@ -61,6 +63,7 @@ const MISTRAL_TEXT_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
     tools: true,
+    toolChoice: true,
     media: false,
     systemRole: true,
     output: ['text', 'json'],
@@ -128,6 +131,11 @@ export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
   params.max_tokens = maxOutputTokens;
   body.random_seed = seed;
   body.reasoning_effort = reasoningEffort;
+  // Genkit's `auto`, `required` and `none` are all Mistral `tool_choice`
+  // values.
+  if (req.toolChoice) {
+    params.tool_choice = req.toolChoice;
+  }
   params.messages = toMistralMessages(req.messages, params.messages);
 };
 

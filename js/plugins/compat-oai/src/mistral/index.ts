@@ -106,6 +106,7 @@ function modelInfoFromCapabilities(
     supports: {
       multiturn: true,
       tools: capabilities.function_calling === true,
+      toolChoice: capabilities.function_calling === true,
       media: capabilities.vision === true,
       systemRole: true,
       output: ['text'],
