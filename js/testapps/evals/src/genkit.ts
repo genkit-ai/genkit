@@ -18,7 +18,6 @@ import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
-import { langchain } from 'genkitx-langchain';
 
 // Turn off safety checks for evaluation so that the LLM as an evaluator can
 // respond appropriately to potentially harmful content without error.
@@ -66,12 +65,5 @@ export const ai = genkit({
         embedder: googleAI.embedder('gemini-embedding-001'),
       },
     ]),
-    langchain({
-      evaluators: {
-        criteria: ['coherence'],
-        labeledCriteria: ['correctness'],
-        judge: googleAI.model('gemini-pro-latest'),
-      },
-    }),
   ],
 });
