@@ -14,27 +14,28 @@
  * limitations under the License.
  */
 
-import { Validator } from '@cfworker/json-schema';
+import {
+  Validator,
+  type OutputUnit,
+  type SchemaDraft,
+} from '@cfworker/json-schema';
 import type {
   StandardJSONSchemaV1,
   StandardSchemaV1,
 } from '@standard-schema/spec';
-import Ajv, { type ErrorObject, type JSONSchemaType } from 'ajv';
-import addFormats from 'ajv-formats';
 import { z } from 'zod';
-import { getGenkitRuntimeConfig } from './config.js';
 import { GenkitError } from './error.js';
 
 import type { Registry } from './registry.js';
-const ajv = new Ajv();
-addFormats(ajv);
 
 export { z }; // provide a consistent zod to use throughout genkit
 
 /**
  * JSON schema.
  */
-export type JSONSchema = JSONSchemaType<any> | any;
+// Deliberately loose: JSON schemas come from users, plugins and remote
+// servers (e.g. MCP) in many drafts and shapes.
+export type JSONSchema = any;
 
 /**
  * Any schema genkit can both validate with and describe as JSON schema:
@@ -191,8 +192,7 @@ function unsupportedSchemaError(label: string, zod3: boolean): GenkitError {
 }
 
 const jsonSchemas = new WeakMap<GenkitSchema, JSONSchema>();
-const ajvValidators = new WeakMap<JSONSchema, ReturnType<typeof ajv.compile>>();
-const cfWorkerValidators = new WeakMap<JSONSchema, Validator>();
+const jsonSchemaValidators = new WeakMap<JSONSchema, Validator>();
 
 /**
  * Annotates a Zod schema with UI-specific metadata.
@@ -278,8 +278,8 @@ export function toJsonSchema(
   label = 'schema'
 ): JSONSchema | undefined {
   // if neither jsonSchema or schema is present return undefined
-  if (!jsonSchema && !schema) return null;
-  if (jsonSchema) return jsonSchema;
+  if (!hasJsonSchema(jsonSchema) && !schema) return null;
+  if (hasJsonSchema(jsonSchema)) return jsonSchema;
   if (jsonSchemas.has(schema!)) return jsonSchemas.get(schema!)!;
   assertGenkitSchema(schema, label);
   if (!isZodSchema(schema)) {
@@ -365,14 +365,14 @@ function compatOverride(ctx: {
     if (VALIDATED_FORMATS.has(jsonSchema.format)) {
       // String formats (datetime, email, uuid, ...) also emit zod's internal
       // regex as `pattern`. `format` alone is what v3 emitted, is validated by
-      // ajv-formats/cfworker, and keeps validation errors readable. A
+      // the JSON schema validator, and keeps validation errors readable. A
       // user-supplied `.regex()` on top of a format is emitted under `allOf`
       // and is not affected.
       delete jsonSchema.pattern;
     } else {
       // zod-specific formats (cuid, base64, starts_with, ...): `pattern` is
-      // their only check, and the non-standard `format` makes strict ajv throw
-      // and some providers reject the schema. v3 emitted just the pattern.
+      // their only check, and some providers reject non-standard formats.
+      // v3 emitted just the pattern.
       delete jsonSchema.format;
     }
   } else if (def.type === 'nullable') {
@@ -382,7 +382,7 @@ function compatOverride(ctx: {
 
 const PRIMITIVE_TYPES = new Set(['string', 'number', 'integer', 'boolean']);
 
-/** Formats validated by both ajv-formats and @cfworker/json-schema. */
+/** Formats validated by @cfworker/json-schema. */
 const VALIDATED_FORMATS = new Set([
   'date-time',
   'date',
@@ -447,26 +447,103 @@ export interface ValidationErrorDetail {
   message: string;
 }
 
-function ajvErrorToValidationErrorDetail(
-  error: ErrorObject
-): ValidationErrorDetail {
-  return {
-    path: error.instancePath.substring(1).replace(/\//g, '.') || '(root)',
-    message: error.message!,
-  };
+// Keywords whose error only says "a subschema failed"; the subschema's own
+// errors are more specific.
+const WRAPPER_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  'additionalProperties',
+  'items',
+  'prefixItems',
+  'additionalItems',
+  'allOf',
+  '$ref',
+  'dependentSchemas',
+]);
+
+// Combinators report one summary error plus one error per failed branch; the
+// summary is the readable one.
+const COMBINATOR_KEYWORDS = new Set(['anyOf', 'oneOf', 'not']);
+
+/**
+ * Reduces the validator's full error tree to one error per actual problem.
+ */
+/**
+ * The validator reports `instanceLocation` as a URI fragment: JSON pointer
+ * escapes plus percent-encoding (`my key` becomes `my%20key`).
+ */
+function decodePointerSegment(segment: string): string {
+  let decoded = segment;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    // Not percent-encoded after all; use as is.
+  }
+  return decoded.replace(/~1/g, '/').replace(/~0/g, '~');
 }
 
-function cfWorkerErrorToValidationErrorDetail(error: {
-  instanceLocation: string;
-  error: string;
-}): ValidationErrorDetail {
-  const path = error.instanceLocation.startsWith('#/')
-    ? error.instanceLocation.substring(2)
-    : '';
-  return {
-    path: path.replace(/\//g, '.') || '(root)',
-    message: error.error,
-  };
+function toValidationErrorDetails(
+  errors: OutputUnit[]
+): ValidationErrorDetail[] {
+  const under = (e: OutputUnit, parent: OutputUnit) =>
+    e !== parent && e.keywordLocation.startsWith(parent.keywordLocation + '/');
+  // `additionalProperties: false` also reports a "False boolean schema" error;
+  // the additionalProperties error names the offending property. A top-level
+  // `false` schema reports only the latter, so keep it then.
+  let kept = errors.filter((e) => e.keyword !== 'false');
+  if (kept.length === 0) kept = errors;
+  const combinators = kept.filter((e) => COMBINATOR_KEYWORDS.has(e.keyword));
+  kept = kept.filter((e) => !combinators.some((c) => under(e, c)));
+  kept = kept.filter(
+    (e) => !WRAPPER_KEYWORDS.has(e.keyword) || !kept.some((o) => under(o, e))
+  );
+  // A failed `then`/`else` is reported on the `if` keyword ("Instance does not
+  // match "then" schema"), while its specific errors sit under the sibling
+  // `then`/`else` location.
+  kept = kept.filter((e) => {
+    if (e.keyword !== 'if') return true;
+    const parent = e.keywordLocation.slice(0, -'/if'.length);
+    return !kept.some(
+      (o) =>
+        o.keywordLocation.startsWith(`${parent}/then/`) ||
+        o.keywordLocation.startsWith(`${parent}/else/`)
+    );
+  });
+  const seen = new Set<string>();
+  const details: ValidationErrorDetail[] = [];
+  for (const e of kept) {
+    const path = e.instanceLocation
+      .replace(/^#\/?/, '')
+      .split('/')
+      .filter((p) => p !== '')
+      .map((p) => decodePointerSegment(p))
+      .join('.');
+    const detail = { path: path || '(root)', message: e.error };
+    const key = `${detail.path}\0${detail.message}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      details.push(detail);
+    }
+  }
+  return details;
+}
+
+/**
+ * Whether a JSON schema was provided. `false` (rejects everything) and `true`
+ * are valid schemas, so this can't be a truthiness check.
+ */
+function hasJsonSchema(jsonSchema: JSONSchema): boolean {
+  return jsonSchema !== undefined && jsonSchema !== null;
+}
+
+function schemaDraft(jsonSchema: JSONSchema): SchemaDraft {
+  const declared =
+    typeof jsonSchema?.$schema === 'string' ? jsonSchema.$schema : '';
+  if (declared.includes('2020-12')) return '2020-12';
+  if (declared.includes('2019-09')) return '2019-09';
+  if (declared.includes('draft-04')) return '4';
+  // What genkit emits, and the most common draft for undeclared schemas.
+  return '7';
 }
 
 /**
@@ -492,49 +569,31 @@ export function validateSchema(
   options: ProvidedSchema
 ): ValidationResponse {
   const toValidate = toJsonSchema(options);
-  if (!toValidate) {
+  if (!hasJsonSchema(toValidate)) {
     return { valid: true, schema: toValidate };
   }
-  const validationMode = getGenkitRuntimeConfig().jsonSchemaMode;
-
-  if (validationMode === 'interpret') {
-    let validator = cfWorkerValidators.get(toValidate);
-    if (!validator) {
-      validator = new Validator(toValidate);
-      cfWorkerValidators.set(toValidate, validator);
-    }
-
-    const result = validator.validate(sanitizeForJsonSchema(data));
-    if (!result.valid) {
-      return {
-        valid: false,
-        errors: result.errors.map(cfWorkerErrorToValidationErrorDetail),
-        schema: toValidate,
-      };
-    }
-
-    return {
-      valid: result.valid,
-      schema: toValidate,
-    };
-  }
-
-  let validator = ajvValidators.get(toValidate);
+  // An interpreting validator (no codegen), so it also runs where `eval` is
+  // unavailable, e.g. Cloudflare Workers. Boolean schemas (`true`/`false`)
+  // can't be WeakMap keys and are cheap to build, so only objects are cached.
+  let validator =
+    typeof toValidate === 'object'
+      ? jsonSchemaValidators.get(toValidate)
+      : undefined;
   if (!validator) {
-    validator = ajv.compile(toValidate);
-    ajvValidators.set(toValidate, validator);
+    validator = new Validator(toValidate, schemaDraft(toValidate), false);
+    if (typeof toValidate === 'object') {
+      jsonSchemaValidators.set(toValidate, validator);
+    }
   }
-
-  const valid = validator(data) as boolean;
-  if (!valid) {
+  const result = validator.validate(sanitizeForJsonSchema(data));
+  if (!result.valid) {
     return {
       valid: false,
-      errors: (validator.errors ?? []).map(ajvErrorToValidationErrorDetail),
+      errors: toValidationErrorDetails(result.errors),
       schema: toValidate,
     };
   }
-
-  return { valid, schema: toValidate };
+  return { valid: true, schema: toValidate };
 }
 
 type ParseResult<T> =
@@ -620,7 +679,7 @@ export function parseSchema<T = unknown>(
   options: ProvidedSchema
 ): T {
   const { schema, jsonSchema } = options;
-  if (jsonSchema || !schema) {
+  if (hasJsonSchema(jsonSchema) || !schema) {
     return throwOnFailure(data, options, validateJsonSchema<T>(data, options));
   }
   if (isIgnoredValue(schema)) return data as T;
@@ -652,7 +711,7 @@ export async function parseSchemaAsync<T = unknown>(
   options: ProvidedSchema
 ): Promise<T> {
   const { schema, jsonSchema } = options;
-  if (jsonSchema || !schema) {
+  if (hasJsonSchema(jsonSchema) || !schema) {
     return throwOnFailure(data, options, validateJsonSchema<T>(data, options));
   }
   if (isIgnoredValue(schema)) return data as T;
@@ -710,8 +769,17 @@ export function defineJsonSchema(
   return jsonSchema;
 }
 
+/**
+ * Maps data to what it would be as JSON, which is all the validator accepts
+ * (it throws on `undefined`): undefined object properties are dropped, and
+ * undefined array items or a top-level `undefined` become `null`. So an
+ * unconstrained schema (`{}`) accepts a missing value, and a typed one rejects
+ * it with a ValidationError (reported as `null`).
+ */
 function sanitizeForJsonSchema(data: any): any {
-  if (Array.isArray(data)) {
+  if (data === undefined) {
+    return null;
+  } else if (Array.isArray(data)) {
     return data.map(sanitizeForJsonSchema);
   } else if (data !== null && typeof data === 'object') {
     const out: any = {};

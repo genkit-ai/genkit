@@ -160,7 +160,9 @@ describe('GenerateResponse', () => {
           response.assertValidSchema(request);
         },
         (err: unknown) => {
-          return err instanceof Error && err.message.includes('must be number');
+          return (
+            err instanceof Error && err.message.includes('Expected "number"')
+          );
         }
       );
     });
