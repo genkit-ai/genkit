@@ -1051,6 +1051,35 @@ describe('mistral plugin', () => {
     });
   });
 
+  it('passes Mistral-only request fields through', async () => {
+    const mistralFields = {
+      safe_prompt: true,
+      parallel_tool_calls: false,
+      min_tokens: 0,
+      prompt_mode: 'reasoning',
+      repetition_penalty: 1.1,
+      prediction: { type: 'content', content: 'Hello' },
+      guardrails: [{ block_on_error: true }],
+      prompt_cache_key: 'chat-1',
+      service_tier: 'auto',
+      metadata: { team: 'genkit' },
+    } as const;
+    expect(MistralChatCompletionConfigSchema.safeParse(mistralFields)).toEqual(
+      expect.objectContaining({ success: true })
+    );
+
+    await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      prompt: 'hi',
+      config: { ...mistralFields, user: 'someone' } as any,
+    });
+
+    const body = server.requests[0].body;
+    expect(body).toMatchObject(mistralFields);
+    expect(body).not.toHaveProperty('user');
+    expectMistralChatRequest(body);
+  });
+
   describe('tool choice', () => {
     it('sends toolChoice as tool_choice', async () => {
       const add = ai.defineTool(

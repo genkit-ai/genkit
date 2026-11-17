@@ -200,6 +200,7 @@ const response = await ai.generate({
   config: {
     maxOutputTokens: 256,
     seed: 42,
+    safe_prompt: true,
   },
 });
 
@@ -221,6 +222,11 @@ Mistral's own field names:
 - `temperature` (0 to 1.5), `topP` (above 0, at most 1) and `seed` (0 or
   more) are checked against Mistral's ranges before the request goes out.
 - `toolChoice` (`auto`, `required` or `none`) is sent as `tool_choice`.
+- These Mistral-only fields are passed through as they are, under Mistral's
+  names: `safe_prompt`, `parallel_tool_calls`, `min_tokens`, `prompt_mode`,
+  `repetition_penalty`, `prediction`, `guardrails`, `prompt_cache_key`,
+  `service_tier` and `metadata`. Some models reject some of them, for example
+  Mistral Small rejects `min_tokens` and `repetition_penalty`.
 - OpenAI's `user` and `max_completion_tokens`, and any other config the plugin
   doesn't map, are ignored.
 - The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are

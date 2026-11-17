@@ -72,48 +72,108 @@ const MISTRAL_TEXT_MODEL_INFO: ModelInfo = {
 };
 
 /**
+ * Mistral-only request fields that are passed through from the config as they
+ * are, under Mistral's own names. Mistral's request schema rejects unknown
+ * fields, so other config keys are not passed through.
+ */
+const MistralRequestFieldsSchema = z.object({
+  safe_prompt: z
+    .boolean()
+    .optional()
+    .describe('Whether to inject a safety prompt before all conversations.'),
+  parallel_tool_calls: z
+    .boolean()
+    .optional()
+    .describe('Whether the model can make more than one tool call per turn.'),
+  min_tokens: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('The minimum number of tokens to generate.'),
+  prompt_mode: z
+    .enum(['reasoning'])
+    .optional()
+    .describe('Selects the system prompt Mistral adds for reasoning models.'),
+  repetition_penalty: z
+    .number()
+    .gt(0)
+    .max(2)
+    .optional()
+    .describe('Penalizes repeated tokens, above 0 and at most 2.'),
+  prediction: z
+    .object({ type: z.literal('content').optional(), content: z.string() })
+    .optional()
+    .describe('Expected completion, used to speed up the response.'),
+  guardrails: z
+    .array(z.record(z.unknown()))
+    .optional()
+    .describe("Moderation guardrails, in Mistral's `GuardrailConfig` shape."),
+  prompt_cache_key: z
+    .string()
+    .optional()
+    .describe('Key for grouping requests that share a prompt prefix.'),
+  service_tier: z
+    .enum(['auto', 'standard_only'])
+    .optional()
+    .describe('The service tier to use for the request.'),
+  metadata: z
+    .record(z.unknown())
+    .optional()
+    .describe('Metadata to attach to the request.'),
+});
+
+/** Keys of {@link MistralRequestFieldsSchema}, passed through as they are. */
+const MISTRAL_REQUEST_FIELDS = Object.keys(
+  MistralRequestFieldsSchema.shape
+) as (keyof typeof MistralRequestFieldsSchema.shape)[];
+
+/**
  * Mistral custom configuration schema. `topK` is left out: Mistral's models
  * reject `top_k` sampling. Bounds follow Mistral's request schema, so out of
  * range values are caught before the request goes out.
  */
 export const MistralChatCompletionConfigSchema =
-  ChatCompletionCommonConfigSchema.omit({ topK: true }).extend({
-    temperature: z
-      .number()
-      .min(0)
-      .max(1.5)
-      .optional()
-      .describe('Sampling temperature, between 0 and 1.5.'),
-    topP: z
-      .number()
-      .gt(0)
-      .max(1)
-      .optional()
-      .describe('Nucleus sampling, above 0 and at most 1.'),
-    seed: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe('Seed for random sampling. Sent as `random_seed`.'),
-    reasoningEffort: z
-      .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
-      .optional()
-      .describe(
-        'How much the model reasons before answering, such as `none`, `low`, ' +
-          '`medium` or `high`. Allowed values vary by model: Mistral Small and ' +
-          'Medium take `none` and `high`, Mistral Large 4 ' +
-          '(`mistral-large-latest`) takes `low`, `medium` and `high`. ' +
-          'Sent as `reasoning_effort`.'
-      ),
-  });
+  ChatCompletionCommonConfigSchema.omit({ topK: true })
+    .extend({
+      temperature: z
+        .number()
+        .min(0)
+        .max(1.5)
+        .optional()
+        .describe('Sampling temperature, between 0 and 1.5.'),
+      topP: z
+        .number()
+        .gt(0)
+        .max(1)
+        .optional()
+        .describe('Nucleus sampling, above 0 and at most 1.'),
+      seed: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe('Seed for random sampling. Sent as `random_seed`.'),
+      reasoningEffort: z
+        .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+        .optional()
+        .describe(
+          'How much the model reasons before answering, such as `none`, `low`, ' +
+            '`medium` or `high`. Allowed values vary by model: Mistral Small and ' +
+            'Medium take `none` and `high`, Mistral Large 4 ' +
+            '(`mistral-large-latest`) takes `low`, `medium` and `high`. ' +
+            'Sent as `reasoning_effort`.'
+        ),
+    })
+    .merge(MistralRequestFieldsSchema);
 
 /**
  * Builds the parts of the request that differ from OpenAI. Mistral's request
  * schema rejects unknown fields, so only fields it accepts are set.
  */
 export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
-  const { maxOutputTokens, topK, seed, reasoningEffort } = req.config ?? {};
+  const config = req.config ?? {};
+  const { maxOutputTokens, topK, seed, reasoningEffort } = config;
   // Mistral's schema declares `top_k`, but its models reject it ("top_k
   // sampling is not enabled for this model"), so say so before sending. The
   // config schema leaves `topK` out, but untyped config can still carry it.
@@ -135,6 +195,9 @@ export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
   // values.
   if (req.toolChoice) {
     params.tool_choice = req.toolChoice;
+  }
+  for (const key of MISTRAL_REQUEST_FIELDS) {
+    if (config[key] !== undefined) body[key] = config[key];
   }
   params.messages = toMistralMessages(req.messages, params.messages);
 };
