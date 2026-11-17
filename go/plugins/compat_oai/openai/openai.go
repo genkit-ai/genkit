@@ -19,6 +19,7 @@ import (
 	"context"
 	"maps"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -545,9 +546,13 @@ func (o *OpenAI) ResolveAction(atype api.ActionType, id string) api.Action {
 // and do not follow the gpt- or o-series naming.
 var nonChatPrefixes = []string{
 	"dall-e-", "tts-", "whisper-", "text-embedding-", "omni-moderation-",
-	"text-moderation-", "sora-", "babbage-", "davinci-", "computer-use-",
-	"codex-mini-", "ada:", "babbage:", "curie:", "davinci:",
+	"text-moderation-", "sora-", "computer-use-", "codex-mini-",
 }
+
+// legacyCompletionID matches OpenAI's legacy completion, edit, similarity and
+// search model IDs and their fine-tunes, on any host.
+var legacyCompletionID = regexp.MustCompile(
+	`(^|-)(babbage|curie|davinci)(-|:|$)|^((text|code)-)?ada(-\d{3})?(:|$)|^(text|code)-(similarity|search)-`)
 
 // nonChatMarkers are ID words that mark models Chat Completions does not
 // serve.
@@ -586,7 +591,7 @@ func isChatModel(id string) bool {
 			return false
 		}
 	}
-	if responsesOnlyModels[id] {
+	if responsesOnlyModels[id] || legacyCompletionID.MatchString(id) {
 		return false
 	}
 	if !strings.HasPrefix(id, "gpt-") && !strings.HasPrefix(id, "chatgpt-") && !isOSeries(id) {

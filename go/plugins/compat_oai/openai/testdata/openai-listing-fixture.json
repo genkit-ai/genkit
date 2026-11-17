@@ -21,7 +21,11 @@
     "gpt-live-1", "gpt-live-transcribe",
     "gpt-realtime", "gpt-realtime-1.5", "gpt-realtime-2", "gpt-realtime-2.1", "gpt-realtime-2.1-mini", "gpt-realtime-2025-08-28", "gpt-realtime-mini", "gpt-realtime-mini-2025-12-15", "gpt-realtime-translate", "gpt-realtime-whisper",
     "omni-moderation-2024-09-26", "omni-moderation-latest",
-    "davinci-002", "babbage-002", "curie:ft-acme-2023-06-07-10-19-42", "davinci:ft-acme-2023-01-01-00-00-00"
+    "davinci-002", "babbage-002", "curie:ft-acme-2023-06-07-10-19-42", "davinci:ft-acme-2023-01-01-00-00-00",
+    "davinci", "curie", "ada", "babbage", "davinci-instruct-beta", "curie-instruct-beta",
+    "text-davinci-003", "text-davinci-edit-001", "text-curie-001", "text-babbage-001", "text-ada-001",
+    "code-davinci-002", "code-davinci-edit-001", "code-search-ada-code-001", "code-search-babbage-text-001",
+    "text-similarity-ada-001", "text-similarity-davinci-001", "text-search-curie-doc-001", "text-search-davinci-query-001"
   ],
   "other": [
     "text-embedding-3-large", "text-embedding-3-small", "text-embedding-ada-002",

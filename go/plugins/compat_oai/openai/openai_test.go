@@ -572,6 +572,7 @@ func TestIsChatModel(t *testing.T) {
 		// IDs outside OpenAI's naming, from a proxy or self-hosted server,
 		// pass even when they carry a word that marks an OpenAI non-chat model.
 		"claude-sonnet-4-5", "meta-llama/Llama-3.1-8B-Instruct", "qwen2.5-7b-instruct", "acme-pro",
+		"my-realtime-llama", "llama-guard-moderation", "my-image-model", "ada-lovelace-7b", "adapter-llama",
 	}
 	notChat := []string{
 		// Image, speech, transcription, realtime and Live.
@@ -584,6 +585,11 @@ func TestIsChatModel(t *testing.T) {
 		"babbage-002", "davinci-002", "gpt-3.5-turbo-instruct", "gpt-3.5-turbo-instruct-0914",
 		"curie:ft-acme-2023-06-07-10-19-42", "davinci:ft-acme-2023-01-01-00-00-00",
 		"babbage:ft-acme-2023-01-01-00-00-00", "ada:ft-acme-2023-01-01-00-00-00",
+		"davinci", "curie", "ada", "babbage", "davinci-instruct-beta", "curie-instruct-beta",
+		"text-davinci-003", "text-davinci-edit-001", "text-curie-001", "text-babbage-001", "text-ada-001",
+		"code-davinci-002", "code-davinci-edit-001", "code-search-ada-code-001", "code-search-babbage-text-001",
+		"text-similarity-ada-001", "text-similarity-davinci-001", "text-search-curie-doc-001",
+		"text-search-davinci-query-001", "ft:davinci-002:acme::abc123",
 		// Responses only.
 		"gpt-5.5-pro", "gpt-5.5-pro-2026-04-23", "gpt-5.2-pro", "o3-pro", "gpt-5-pro-2025-10-06",
 		"gpt-5.1-codex-max", "codex-mini-latest", "o3-deep-research", "computer-use-preview",
