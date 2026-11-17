@@ -24,6 +24,7 @@ import {
 } from 'genkit';
 import { embedderRef } from 'genkit/embedder';
 import { embedder as pluginEmbedder } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import { toGeminiMessage } from '../common/converters.js';
 import { isKnownKey } from '../common/utils.js';
 import { embedContent } from './client.js';
@@ -61,7 +62,7 @@ export const EmbeddingConfigSchema = z
   })
   .passthrough();
 export type EmbeddingConfigSchemaType = typeof EmbeddingConfigSchema;
-export type EmbeddingConfig = z.infer<EmbeddingConfigSchemaType>;
+export type EmbeddingConfig = InferOutput<EmbeddingConfigSchemaType>;
 
 // This contains all the embedder config schema types
 type ConfigSchemaType = EmbeddingConfigSchemaType;

@@ -15,13 +15,14 @@
  */
 
 import similarity from 'compute-cosine-similarity';
-import { z, type Genkit, type ModelArgument } from 'genkit';
+import { z, type Genkit, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { EmbedderArgument } from 'genkit/embedder';
 import {
   EvalStatusEnum,
   type BaseEvalDataPoint,
   type Score,
 } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import path from 'path';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
 
@@ -32,15 +33,15 @@ const AnswerRelevancyResponseSchema = z.object({
 });
 
 export async function answerRelevancyScore<
-  CustomModelOptions extends z.ZodType<any, any>,
-  CustomEmbedderOptions extends z.ZodType<any, any>,
+  CustomModelOptions extends GenkitSchema,
+  CustomEmbedderOptions extends GenkitSchema,
 >(
   ai: Genkit,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   embedder: EmbedderArgument<CustomEmbedderOptions>,
-  judgeConfig?: z.infer<CustomModelOptions>,
-  embedderOptions?: z.infer<CustomEmbedderOptions>
+  judgeConfig?: InferOutput<CustomModelOptions>,
+  embedderOptions?: InferOutput<CustomEmbedderOptions>
 ): Promise<Score> {
   try {
     if (!dataPoint.input) {

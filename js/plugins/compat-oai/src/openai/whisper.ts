@@ -15,8 +15,7 @@
  * limitations under the License.
  */
 
-import type { ModelReference } from 'genkit';
-import { modelRef, z } from 'genkit';
+import { modelRef, z, type GenkitSchema, type ModelReference } from 'genkit';
 import type { ModelAction, ModelInfo } from 'genkit/model';
 import { model } from 'genkit/plugin';
 import OpenAI from 'openai';
@@ -64,7 +63,7 @@ export const WhisperConfigSchema = TranscriptionConfigSchema.extend({
  * @returns the created {@link ModelAction}
  */
 export function defineOpenAIWhisperModel<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   client: OpenAI;
@@ -118,7 +117,7 @@ export function defineOpenAIWhisperModel<
 
 /** OpenAI whisper ModelRef helper. */
 export function openAIWhisperModelRef<
-  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(params: {
   name: string;
   info?: ModelInfo;

@@ -25,6 +25,7 @@ import {
 } from 'genkit';
 import { ModelAction, ModelInfo } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import {
   ensureToolIds,
   fromInteractionSync,
@@ -75,7 +76,7 @@ export const LyriaConfigSchema = z
   })
   .passthrough();
 export type LyriaConfigSchemaType = typeof LyriaConfigSchema;
-export type LyriaConfig = z.infer<LyriaConfigSchemaType>;
+export type LyriaConfig = InferOutput<LyriaConfigSchemaType>;
 
 export const Lyria3ConfigSchema = z
   .object({
@@ -94,10 +95,10 @@ export const Lyria3ConfigSchema = z
   })
   .passthrough();
 export type Lyria3ConfigSchemaType = typeof Lyria3ConfigSchema;
-export type Lyria3Config = z.infer<Lyria3ConfigSchemaType>;
+export type Lyria3Config = InferOutput<Lyria3ConfigSchemaType>;
 
 type ConfigSchemaType = LyriaConfigSchemaType | Lyria3ConfigSchemaType;
-type ConfigSchema = z.infer<ConfigSchemaType>;
+type ConfigSchema = InferOutput<ConfigSchemaType>;
 
 function commonRef(
   name: string,
@@ -234,10 +235,20 @@ export function defineModel(
       // Dispatch on the model name rather than narrowing `request`: the two
       // config types are loose objects with all-optional fields, so TS treats
       // them as mutually assignable and a type guard can't tell them apart.
+      // The model name determines which config schema applies, so narrowing
+      // the request's config type here is safe.
       if (shouldUseLegacyEndpoint(name)) {
-        return generateLegacyLyria(ref, request, clientOpt);
+        return generateLegacyLyria(
+          ref,
+          request as GenerateRequest<LyriaConfigSchemaType>,
+          clientOpt
+        );
       }
-      return generateLyria3(ref, request, clientOpt);
+      return generateLyria3(
+        ref,
+        request as GenerateRequest<Lyria3ConfigSchemaType>,
+        clientOpt
+      );
     }
   );
 }

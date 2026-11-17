@@ -17,7 +17,7 @@
 import type { CachedContent, StartChatParams } from '@google-cloud/vertexai';
 import type { CachedContents } from '@google-cloud/vertexai/build/src/resources/index.js';
 import crypto from 'crypto';
-import { GenkitError, type MessageData, type z } from 'genkit';
+import { GenkitError, type GenkitSchema, type MessageData } from 'genkit';
 import type { GenerateRequest } from 'genkit/model';
 import {
   CONTEXT_CACHE_SUPPORTED_MODELS,
@@ -46,7 +46,7 @@ export function generateCacheKey(request: CachedContent): string {
  * Retrieves the content needed for the cache based on the chat history and config details.
  */
 export function getContentForCache(
-  request: GenerateRequest<z.ZodType<any, any>>,
+  request: GenerateRequest<GenkitSchema>,
   chatRequest: StartChatParams,
   modelVersion: string,
   cacheConfigDetails: CacheConfigDetails
@@ -76,7 +76,7 @@ export function getContentForCache(
  * @throws GenkitError if lengths are mismatched
  */
 function validateHistoryLength(
-  request: GenerateRequest<z.ZodType<any, any>>,
+  request: GenerateRequest<GenkitSchema>,
   chatRequest: StartChatParams
 ) {
   if (chatRequest.history?.length !== request.messages.length - 1) {
@@ -122,7 +122,7 @@ export async function lookupContextCache(
  * Extracts the cache configuration from the request if available.
  */
 export const extractCacheConfig = (
-  request: GenerateRequest<z.ZodType<any, any>>
+  request: GenerateRequest<GenkitSchema>
 ): {
   cacheConfig: { ttlSeconds?: number } | boolean;
   endOfCachedContents: number;
@@ -146,7 +146,7 @@ export const extractCacheConfig = (
  * Validates context caching request for compatibility with model and request configurations.
  */
 export function validateContextCacheRequest(
-  request: GenerateRequest<z.ZodType<any, any>>,
+  request: GenerateRequest<GenkitSchema>,
   modelVersion: string
 ): boolean {
   if (!modelVersion || !CONTEXT_CACHE_SUPPORTED_MODELS.includes(modelVersion)) {

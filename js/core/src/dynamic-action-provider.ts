@@ -23,17 +23,13 @@ import {
 } from './action.js';
 import { GenkitError } from './error.js';
 import { ActionMetadataRecord, ActionType, Registry } from './registry.js';
+import type { GenkitSchema } from './schema.js';
 
 type DapValue = {
-  [K in ActionType]?: Action<
-    z.ZodType<any, any>,
-    z.ZodType<any, any>,
-    z.ZodType<any, any>
-  >[];
+  [K in ActionType]?: Action<GenkitSchema, GenkitSchema, GenkitSchema>[];
 } & Record<
   string,
-  | Action<z.ZodType<any, any>, z.ZodType<any, any>, z.ZodType<any, any>>[]
-  | undefined
+  Action<GenkitSchema, GenkitSchema, GenkitSchema>[] | undefined
 >;
 
 class SimpleCache {
@@ -119,10 +115,7 @@ export interface DynamicRegistry {
   getAction(
     actionType: string,
     actionName: string
-  ): Promise<
-    | Action<z.ZodType<any, any>, z.ZodType<any, any>, z.ZodType<any, any>>
-    | undefined
-  >;
+  ): Promise<Action<GenkitSchema, GenkitSchema, GenkitSchema> | undefined>;
   listActionMetadata(
     actionType: string,
     actionName: string
@@ -133,7 +126,7 @@ export interface DynamicRegistry {
 export type DynamicActionProviderAction = Action<
   z.ZodVoid,
   z.ZodArray<typeof ActionMetadataSchema>,
-  z.ZodType<any, any>
+  GenkitSchema
 > &
   DynamicRegistry & {
     __action: {
@@ -144,7 +137,7 @@ export type DynamicActionProviderAction = Action<
   };
 
 export function isDynamicActionProvider(
-  obj: Action<z.ZodType<any, any>, z.ZodType<any, any>>
+  obj: Action<GenkitSchema, GenkitSchema>
 ): obj is DynamicActionProviderAction {
   return obj.__action?.metadata?.type == 'dynamic-action-provider';
 }
@@ -214,7 +207,7 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
     const result = await dap.__cache.getOrFetch();
     if (result[actionType]) {
       return result[actionType]!.find(
-        (t: Action<z.ZodType<any, any>, z.ZodType<any, any>, z.ZodType<any, any>>) =>
+        (t: Action<GenkitSchema, GenkitSchema, GenkitSchema>) =>
           t.__action.name == actionName
       );
     }
@@ -229,7 +222,7 @@ function implementDap(dap: DynamicActionProviderAction, cache: SimpleCache) {
 
     // Match everything in the actionType
     const metadata = result[actionType]!.map(
-      (a: Action<z.ZodType<any, any>, z.ZodType<any, any>, z.ZodType<any, any>>) => a.__action
+      (a: Action<GenkitSchema, GenkitSchema, GenkitSchema>) => a.__action
     );
     if (actionName == '*') {
       return metadata;

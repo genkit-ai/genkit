@@ -19,6 +19,7 @@ import Anthropic, { APIError } from '@anthropic-ai/sdk';
 import type {
   GenerateRequest,
   GenerateResponseData,
+  GenkitSchema,
   ModelReference,
   StreamingCallback,
 } from 'genkit';
@@ -134,7 +135,7 @@ export function listKnownModels(
  * @param configSchema The config schema for this model (used for type inference).
  * @returns The runner that Genkit will call when the model is invoked.
  */
-export function claudeRunner<TConfigSchema extends z.ZodType<any, any>>(
+export function claudeRunner<TConfigSchema extends GenkitSchema>(
   params: ClaudeRunnerParams,
   configSchema: TConfigSchema
 ) {

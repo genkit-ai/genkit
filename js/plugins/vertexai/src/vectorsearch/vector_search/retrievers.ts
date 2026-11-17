@@ -17,8 +17,8 @@
 import {
   retrieverRef,
   type Genkit,
+  type GenkitSchema,
   type RetrieverAction,
-  type z,
 } from 'genkit';
 import { queryPublicEndpoint } from './query_public_endpoint.js';
 import {
@@ -36,18 +36,16 @@ const DEFAULT_K = 10;
  * vector search options and embedder configurations.
  *
  * @param {VertexVectorSearchOptions<EmbedderCustomOptions>} params - The parameters for creating the retrievers.
- * @returns {RetrieverAction<z.ZodType<any, any>>[]} - An array of retriever actions.
+ * @returns {RetrieverAction<GenkitSchema>[]} - An array of retriever actions.
  */
-export function vertexAiRetrievers<
-  EmbedderCustomOptions extends z.ZodType<any, any>,
->(
+export function vertexAiRetrievers<EmbedderCustomOptions extends GenkitSchema>(
   ai: Genkit,
   params: VertexVectorSearchOptions<EmbedderCustomOptions>
-): RetrieverAction<z.ZodType<any, any>>[] {
+): RetrieverAction<GenkitSchema>[] {
   const vectorSearchOptions = params.pluginOptions.vectorSearchOptions;
   const defaultEmbedder = params.defaultEmbedder;
 
-  const retrievers: RetrieverAction<z.ZodType<any, any>>[] = [];
+  const retrievers: RetrieverAction<GenkitSchema>[] = [];
 
   if (!vectorSearchOptions || vectorSearchOptions.length === 0) {
     return retrievers;

@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
+import { toStandardJsonSchema } from '@valibot/to-json-schema';
+import { type } from 'arktype';
 import { genkit, z } from 'genkit/beta';
+import * as v from 'valibot';
 
 const ai = genkit({});
 
@@ -294,6 +297,62 @@ export const largeSteps = ai.defineFlow({ name: 'largeSteps' }, async () => {
   });
   return 'something...';
 });
+
+// Flows, tools and agent state accept any Standard Schema library that also
+// implements Standard JSON Schema, not just zod. ArkType works as is; Valibot
+// via `toStandardJsonSchema()`.
+export const arkWeather = ai.defineFlow(
+  {
+    name: 'arkWeather',
+    inputSchema: type({ city: 'string', 'days?': 'number.integer > 0' }),
+    outputSchema: type({ city: 'string', days: 'number' }),
+  },
+  async ({ city, days = 3 }) => ({ city, days })
+);
+
+export const valibotLookup = ai.defineTool(
+  {
+    name: 'valibotLookup',
+    description: 'Looks up a record by id',
+    inputSchema: toStandardJsonSchema(v.object({ id: v.string() })),
+    outputSchema: toStandardJsonSchema(
+      v.object({ id: v.string(), found: v.boolean() })
+    ),
+  },
+  async ({ id }) => ({ id, found: id.length > 0 })
+);
+
+export const valibotFlow = ai.defineFlow(
+  {
+    name: 'valibotFlow',
+    inputSchema: toStandardJsonSchema(
+      v.object({
+        id: v.pipe(v.string(), v.minLength(1)),
+        tags: v.optional(v.array(v.string())),
+      })
+    ),
+  },
+  async ({ id, tags }) => {
+    const record = await valibotLookup({ id });
+    return { ...record, tags: tags ?? [] };
+  }
+);
+
+export const arkCounterAgent = ai.defineCustomAgent(
+  { name: 'arkCounterAgent', stateSchema: type({ count: 'number' }) },
+  async (sess) => {
+    await sess.run(async () => {
+      sess.updateCustom((s) => ({ count: (s?.count ?? 0) + 1 }));
+      return { finishReason: 'stop' as const };
+    });
+    return {
+      message: {
+        role: 'model',
+        content: [{ text: `count: ${sess.getCustom()?.count}` }],
+      },
+    };
+  }
+);
 
 const loremIpsum = [
   'lorem',

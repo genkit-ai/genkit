@@ -21,7 +21,7 @@ import {
 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 
-import { RerankerReference, z } from 'genkit';
+import { RerankerReference, type GenkitSchema } from 'genkit';
 import { getDerivedOptions } from '../../common/utils.js';
 import * as reranker from './reranker.js';
 import { type VertexRerankerPluginOptions } from './types.js';
@@ -76,6 +76,6 @@ export const vertexRerankers = vertexRerankersPlugin as VertexAIRerankers;
 (vertexRerankers as any).reranker = (
   name: string,
   config?: any
-): RerankerReference<z.ZodType<any, any>> => {
+): RerankerReference<GenkitSchema> => {
   return reranker.reranker(name, config);
 };

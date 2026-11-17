@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import type { Genkit, ModelReference, z } from 'genkit';
+import type { Genkit, GenkitSchema, ModelReference } from 'genkit';
 import type { BaseEvalDataPoint, EvaluatorAction } from 'genkit/evaluator';
+import type { InferOutput } from 'genkit/schema';
 import type { ByoMetric } from '..';
 import { deliciousnessScore } from './deliciousness';
 
@@ -27,11 +28,11 @@ export const DELICIOUSNESS: ByoMetric = {
  * Create the Deliciousness evaluator.
  */
 export function createDeliciousnessEvaluator<
-  ModelCustomOptions extends z.ZodType<any, any>,
+  ModelCustomOptions extends GenkitSchema,
 >(
   ai: Genkit,
   judge: ModelReference<ModelCustomOptions>,
-  judgeConfig?: z.infer<ModelCustomOptions>
+  judgeConfig?: InferOutput<ModelCustomOptions>
 ): EvaluatorAction {
   return ai.defineEvaluator(
     {

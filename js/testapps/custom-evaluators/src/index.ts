@@ -14,8 +14,14 @@
  * limitations under the License.
  */
 import { googleAI } from '@genkit-ai/google-genai';
-import { genkit, type Genkit, type ModelReference, type z } from 'genkit';
+import {
+  genkit,
+  type Genkit,
+  type GenkitSchema,
+  type ModelReference,
+} from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import {
   PERMISSIVE_SAFETY_SETTINGS,
   URL_REGEX,
@@ -67,16 +73,16 @@ export interface ByoMetric {
 /**
  * Plugin option definition for the PII evaluator
  */
-export interface PluginOptions<ModelCustomOptions extends z.ZodType<any, any>> {
+export interface PluginOptions<ModelCustomOptions extends GenkitSchema> {
   judge: ModelReference<ModelCustomOptions>;
-  judgeConfig?: z.infer<ModelCustomOptions>;
+  judgeConfig?: InferOutput<ModelCustomOptions>;
   metrics?: Array<ByoMetric>;
 }
 
 /**
  * Configurable Eval plugin that provides different kinds of custom evaluators.
  */
-export function byoEval<ModelCustomOptions extends z.ZodType<any, any>>(
+export function byoEval<ModelCustomOptions extends GenkitSchema>(
   params: PluginOptions<ModelCustomOptions>
 ): GenkitPlugin {
   // Define the new plugin

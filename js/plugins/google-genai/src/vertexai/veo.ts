@@ -23,6 +23,7 @@ import {
 } from 'genkit';
 import { BackgroundModelAction, ModelInfo } from 'genkit/model';
 import { backgroundModel as pluginBackgroundModel } from 'genkit/plugin';
+import type { InferOutput } from 'genkit/schema';
 import { isKnownKey } from '../common/utils.js';
 import { veoCheckOperation, veoPredict } from './client.js';
 import {
@@ -117,7 +118,7 @@ export const VeoConfigSchema = z
   })
   .passthrough();
 export type VeoConfigSchemaType = typeof VeoConfigSchema;
-export type VeoConfig = z.infer<VeoConfigSchemaType>;
+export type VeoConfig = InferOutput<VeoConfigSchemaType>;
 
 // This contains all the Veo config schema types
 type ConfigSchemaType = VeoConfigSchemaType;

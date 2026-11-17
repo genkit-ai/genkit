@@ -159,6 +159,7 @@ export {
   type FlowFn,
   type FlowSideChannel,
   type GenkitRuntimeConfig,
+  type GenkitSchema,
   type JSONSchema,
   type JSONSchema7,
   type Middleware,
