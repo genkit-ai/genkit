@@ -272,9 +272,10 @@ var mediaTypes = []string{"image/*"}
 //
 // Catalog: https://docs.mistral.ai/getting-started/models
 var supportedModels = map[string]ai.ModelOptions{
-	// Mistral Large 4, also served as mistral-large-4-0. It always reasons.
-	// mistral-large-latest does not name it.
-	"mistral-large-4": {Label: "Mistral Large 4", Supports: &multimodal},
+	// Mistral Large 4, also served as mistral-large-4-0 and as
+	// mistral-large-latest. It always reasons.
+	"mistral-large-4":      {Label: "Mistral Large 4", Supports: &multimodal},
+	"mistral-large-latest": {Label: "Mistral Large 4", Supports: &multimodal},
 	// Mistral Small 4.
 	"mistral-small-latest": {Label: "Mistral Small", Supports: &multimodal},
 	// Ministral 3.
@@ -283,10 +284,8 @@ var supportedModels = map[string]ai.ModelOptions{
 	"ministral-3b-latest":  {Label: "Ministral 3B", Supports: &multimodal},
 	"codestral-latest":     {Label: "Codestral", Supports: &textOnly},
 
-	// Mistral Large 3 and Mistral Medium 3.5, which these aliases still name,
-	// were deprecated on 2026-10-31 with Mistral Large 4 as the replacement.
-	// See https://docs.mistral.ai/models/mistral-large-3-25-12.
-	"mistral-large-latest":  {Label: "Mistral Large 3", Supports: &multimodal, Stage: ai.ModelStageDeprecated},
+	// Mistral Medium 3.5, which this alias names, is deprecated and retires
+	// on 2027-04-30.
 	"mistral-medium-latest": {Label: "Mistral Medium 3.5", Supports: &multimodal, Stage: ai.ModelStageDeprecated},
 
 	// Magistral, Pixtral and Devstral are deliberately absent: Mistral has

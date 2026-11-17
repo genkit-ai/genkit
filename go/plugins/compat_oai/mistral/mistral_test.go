@@ -209,10 +209,10 @@ func TestPluginRegistersModelsAndEmbedders(t *testing.T) {
 		if label, _ := meta["label"].(string); label == "" {
 			t.Errorf("%s has no label", modelID)
 		}
-		// Mistral deprecated the models these two aliases name on
-		// 2026-10-31; the rest are generally available.
+		// Mistral has deprecated Medium 3.5, which this alias names; the
+		// rest are generally available.
 		var wantStage ai.ModelStage
-		if modelID == "mistral-large-latest" || modelID == "mistral-medium-latest" {
+		if modelID == "mistral-medium-latest" {
 			wantStage = ai.ModelStageDeprecated
 		}
 		if got := meta["stage"]; got != wantStage {

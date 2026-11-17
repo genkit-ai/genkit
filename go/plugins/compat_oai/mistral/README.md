@@ -50,19 +50,19 @@ new snapshot:
 
 | Model | Input |
 | --- | --- |
-| `mistral-large-4` | text, images |
+| `mistral-large-4` (also `mistral-large-latest`) | text, images |
 | `mistral-small-latest` | text, images |
 | `ministral-14b-latest` | text, images |
 | `ministral-8b-latest` | text, images |
 | `ministral-3b-latest` | text, images |
 | `codestral-latest` | text |
-| `mistral-large-latest` (deprecated) | text, images |
 | `mistral-medium-latest` (deprecated) | text, images |
 
-`mistral-large-latest` and `mistral-medium-latest` still name Mistral Large 3
-and Mistral Medium 3.5. Mistral deprecated both on 2026-10-31, with Mistral
-Large 4 (`mistral-large-4`, also served as `mistral-large-4-0`) as the
-replacement, so they are registered with the deprecated stage.
+`mistral-large-latest` names Mistral Large 4, as does `mistral-large-4-0`.
+Mistral Large 3 is served only as `mistral-large-2512`, which resolves on
+demand. `mistral-medium-latest` names Mistral Medium 3.5, which Mistral has
+deprecated and retires on 2027-04-30, so it is registered with the deprecated
+stage.
 
 All of them call tools and constrain JSON output to a schema, including one
 with an array or enum root. Whether Mistral
