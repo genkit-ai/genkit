@@ -179,7 +179,7 @@ export type VertexAIPlugin = {
     name: deepResearch.KnownModels | (deepResearch.DeepResearchModelName & {}),
     config?: deepResearch.DeepResearchConfig
   ): ModelReference<deepResearch.DeepResearchConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
 
   embedder(
     name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
@@ -196,7 +196,7 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
 (vertexAI as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodTypeAny> => {
+): ModelReference<z.ZodType<any, any>> => {
   if (imagen.isImagenModelName(name)) {
     return imagen.model(name, config);
   }

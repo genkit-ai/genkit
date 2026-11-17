@@ -154,7 +154,6 @@ describe('toGenerateRequest', () => {
               type: 'object',
               properties: { topic: { type: 'string' } },
               required: ['topic'],
-              additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
             key: '/tool/tellAFunnyJoke',
@@ -180,7 +179,6 @@ describe('toGenerateRequest', () => {
             description: 'add two numbers together',
             inputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',
-              additionalProperties: true,
               properties: { a: { type: 'number' }, b: { type: 'number' } },
               required: ['a', 'b'],
               type: 'object',
@@ -227,7 +225,6 @@ describe('toGenerateRequest', () => {
               type: 'object',
               properties: { topic: { type: 'string' } },
               required: ['topic'],
-              additionalProperties: true,
               $schema: 'http://json-schema.org/draft-07/schema#',
             },
             key: '/tool/tellAFunnyJoke',
@@ -257,7 +254,6 @@ describe('toGenerateRequest', () => {
               type: 'object',
               properties: { topic: { type: 'string' } },
               required: ['topic'],
-              additionalProperties: true,
             },
             outputSchema: {
               $schema: 'http://json-schema.org/draft-07/schema#',

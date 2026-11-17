@@ -44,10 +44,10 @@ const streamDelimiter = '\n\n';
  */
 export function expressHandler<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   action: Action<I, O, S, any, Init>,
   opts?: {
@@ -181,10 +181,10 @@ export function expressHandler<
 }
 
 async function runActionWithDurableStreaming<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
@@ -318,9 +318,9 @@ async function subscribeToStream(
  */
 export type FlowWithContextProvider<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   flow: Flow<I, O, S>;
   context: ContextProvider<C, I>;
@@ -330,9 +330,9 @@ export type FlowWithContextProvider<
  * A wrapper object containing a flow with its associated options.
  */
 export type FlowWithOptions<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   flow: Flow<I, O, S>;
   options: {
@@ -348,9 +348,9 @@ export type FlowWithOptions<
  */
 export function withContextProvider<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   flow: Flow<I, O, S>,
   context: ContextProvider<C, I>
@@ -365,9 +365,9 @@ export function withContextProvider<
  * Adds an auth policy to the flow.
  */
 export function withFlowOptions<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any>,
 >(
   flow: Flow<I, O, S>,
   options: {

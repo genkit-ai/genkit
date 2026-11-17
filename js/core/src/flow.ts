@@ -29,20 +29,20 @@ import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
  * Flow is an observable, streamable, (optionally) strongly typed function.
  */
 export interface Flow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
-> extends Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {}
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
+> extends Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<Init>>, Init> {}
 
 /**
  * Configuration for a streaming flow.
  */
 export interface FlowConfig<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   /** Name of the flow. */
   name: string;
@@ -73,9 +73,9 @@ export interface FlowSideChannel<S> extends ActionFnArg<S> {
  * Function to be executed in the flow.
  */
 export type FlowFn<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = (
   /** Input to the flow. */
   input: z.infer<I>,
@@ -87,10 +87,10 @@ export type FlowFn<
  * Defines a  flow. This operates on the currently active registry.
  */
 export function flow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   config: FlowConfig<I, O, S, Init> | string,
   fn: FlowFn<I, O, S>
@@ -105,10 +105,10 @@ export function flow<
  * Defines a non-streaming flow. This operates on the currently active registry.
  */
 export function defineFlow<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   config: FlowConfig<I, O, S, Init> | string,
@@ -125,10 +125,10 @@ export function defineFlow<
  * Registers a flow as an action in the registry.
  */
 function flowAction<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(config: FlowConfig<I, O, S, Init>, fn: FlowFn<I, O, S>): Flow<I, O, S, Init> {
   return action(
     {

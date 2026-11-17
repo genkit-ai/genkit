@@ -26,11 +26,11 @@ const PiiDetectionResponseSchema = z.object({
 const piiDetectionPrompt = ai.prompt('pii_detection');
 
 export async function piiDetectionScore<
-  CustomModelOptions extends z.ZodTypeAny,
+  CustomModelOptions extends z.ZodType<any, any>,
 >(
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
-  judgeConfig?: CustomModelOptions
+  judgeConfig?: z.infer<CustomModelOptions>
 ): Promise<Score> {
   const d = dataPoint;
   try {

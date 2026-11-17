@@ -26,7 +26,7 @@ export { type MediaPart, type Part, type TextPart } from './parts.js';
 /**
  * Retriever implementation function signature.
  */
-export type RetrieverFn<RetrieverOptions extends z.ZodTypeAny> = (
+export type RetrieverFn<RetrieverOptions extends z.ZodType<any, any>> = (
   query: Document,
   queryOpts: z.infer<RetrieverOptions>
 ) => Promise<RetrieverResponse>;
@@ -34,7 +34,7 @@ export type RetrieverFn<RetrieverOptions extends z.ZodTypeAny> = (
 /**
  * Indexer implementation function signature.
  */
-export type IndexerFn<IndexerOptions extends z.ZodTypeAny> = (
+export type IndexerFn<IndexerOptions extends z.ZodType<any, any>> = (
   docs: Array<Document>,
   indexerOpts: z.infer<IndexerOptions>
 ) => Promise<void>;
@@ -74,21 +74,23 @@ export type RetrieverInfo = z.infer<typeof RetrieverInfoSchema>;
 /**
  * A retriever action type.
  */
-export type RetrieverAction<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
-  Action<typeof RetrieverRequestSchema, typeof RetrieverResponseSchema> & {
-    __configSchema?: CustomOptions;
-  };
+export type RetrieverAction<
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = Action<typeof RetrieverRequestSchema, typeof RetrieverResponseSchema> & {
+  __configSchema?: CustomOptions;
+};
 
 /**
  * An indexer action type.
  */
-export type IndexerAction<IndexerOptions extends z.ZodTypeAny = z.ZodTypeAny> =
-  Action<typeof IndexerRequestSchema, z.ZodVoid> & {
-    __configSchema?: IndexerOptions;
-  };
+export type IndexerAction<
+  IndexerOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = Action<typeof IndexerRequestSchema, z.ZodVoid> & {
+  __configSchema?: IndexerOptions;
+};
 
 function retrieverWithMetadata<
-  RetrieverOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  RetrieverOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   retriever: Action<
     typeof RetrieverRequestSchema,
@@ -102,7 +104,7 @@ function retrieverWithMetadata<
 }
 
 function indexerWithMetadata<
-  IndexerOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  IndexerOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   indexer: Action<typeof IndexerRequestSchema, z.ZodVoid>,
   configSchema?: IndexerOptions
@@ -116,7 +118,7 @@ function indexerWithMetadata<
  *  Creates a retriever action for the provided {@link RetrieverFn} implementation.
  */
 export function defineRetriever<
-  OptionsType extends z.ZodTypeAny = z.ZodTypeAny,
+  OptionsType extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: {
@@ -134,7 +136,9 @@ export function defineRetriever<
 /**
  *  Creates a retriever action for the provided {@link RetrieverFn} implementation.
  */
-export function retriever<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
+export function retriever<
+  OptionsType extends z.ZodType<any, any> = z.ZodType<any, any>,
+>(
   options: {
     name: string;
     configSchema?: OptionsType;
@@ -177,7 +181,7 @@ export function retriever<OptionsType extends z.ZodTypeAny = z.ZodTypeAny>(
 /**
  *  Creates an indexer action for the provided {@link IndexerFn} implementation.
  */
-export function defineIndexer<IndexerOptions extends z.ZodTypeAny>(
+export function defineIndexer<IndexerOptions extends z.ZodType<any, any>>(
   registry: Registry,
   options: {
     name: string;
@@ -194,7 +198,7 @@ export function defineIndexer<IndexerOptions extends z.ZodTypeAny>(
 /**
  *  Creates an indexer action for the provided {@link IndexerFn} implementation.
  */
-export function indexer<IndexerOptions extends z.ZodTypeAny>(
+export function indexer<IndexerOptions extends z.ZodType<any, any>>(
   options: {
     name: string;
     embedderInfo?: EmbedderInfo;
@@ -237,7 +241,7 @@ export function indexer<IndexerOptions extends z.ZodTypeAny>(
 
 /** Parameters for running a retrieval via the `retrieve` function. */
 export interface RetrieverParams<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   retriever: RetrieverArgument<CustomOptions>;
   query: string | DocumentData;
@@ -248,13 +252,13 @@ export interface RetrieverParams<
  * A type that can be used to pass a retriever as an argument, either using a reference or an action.
  */
 export type RetrieverArgument<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = RetrieverAction<CustomOptions> | RetrieverReference<CustomOptions> | string;
 
 /**
  * Retrieves documents from a {@link RetrieverArgument} based on the provided query.
  */
-export async function retrieve<CustomOptions extends z.ZodTypeAny>(
+export async function retrieve<CustomOptions extends z.ZodType<any, any>>(
   registry: Registry,
   params: RetrieverParams<CustomOptions>
 ): Promise<Array<Document>> {
@@ -285,14 +289,15 @@ export async function retrieve<CustomOptions extends z.ZodTypeAny>(
 /**
  * A type that can be used to pass an indexer as an argument, either using a reference or an action.
  */
-export type IndexerArgument<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
-  IndexerReference<CustomOptions> | IndexerAction<CustomOptions> | string;
+export type IndexerArgument<
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = IndexerReference<CustomOptions> | IndexerAction<CustomOptions> | string;
 
 /**
  * Options passed to the index function.
  */
 export interface IndexerParams<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   indexer: IndexerArgument<CustomOptions>;
   documents: Array<DocumentData>;
@@ -302,7 +307,7 @@ export interface IndexerParams<
 /**
  * Indexes documents using a {@link IndexerArgument}.
  */
-export async function index<CustomOptions extends z.ZodTypeAny>(
+export async function index<CustomOptions extends z.ZodType<any, any>>(
   registry: Registry,
   params: IndexerParams<CustomOptions>
 ): Promise<void> {
@@ -333,7 +338,7 @@ export const CommonRetrieverOptionsSchema = z.object({
 /**
  * A retriver reference object.
  */
-export interface RetrieverReference<CustomOptions extends z.ZodTypeAny> {
+export interface RetrieverReference<CustomOptions extends z.ZodType<any, any>> {
   name: string;
   configSchema?: CustomOptions;
   info?: RetrieverInfo;
@@ -343,7 +348,7 @@ export interface RetrieverReference<CustomOptions extends z.ZodTypeAny> {
  * Helper method to configure a {@link RetrieverReference} to a plugin.
  */
 export function retrieverRef<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: RetrieverReference<CustomOptionsSchema>
 ): RetrieverReference<CustomOptionsSchema> {
@@ -359,7 +364,7 @@ export const IndexerInfoSchema = RetrieverInfoSchema;
 export type IndexerInfo = z.infer<typeof IndexerInfoSchema>;
 
 /** A reference to an indexer, including its name, optional config schema, and info. */
-export interface IndexerReference<CustomOptions extends z.ZodTypeAny> {
+export interface IndexerReference<CustomOptions extends z.ZodType<any, any>> {
   name: string;
   configSchema?: CustomOptions;
   info?: IndexerInfo;
@@ -369,7 +374,7 @@ export interface IndexerReference<CustomOptions extends z.ZodTypeAny> {
  * Helper method to configure a {@link IndexerReference} to a plugin.
  */
 export function indexerRef<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: IndexerReference<CustomOptionsSchema>
 ): IndexerReference<CustomOptionsSchema> {
@@ -426,7 +431,7 @@ function itemToMetadata(
  * Simple retriever options.
  */
 export interface SimpleRetrieverOptions<
-  C extends z.ZodTypeAny = z.ZodTypeAny,
+  C extends z.ZodType<any, any> = z.ZodType<any, any>,
   R = any,
 > {
   /** The name of the retriever you're creating. */
@@ -458,7 +463,7 @@ export interface SimpleRetrieverOptions<
  * @returns A Genkit retriever.
  */
 export function defineSimpleRetriever<
-  C extends z.ZodTypeAny = z.ZodTypeAny,
+  C extends z.ZodType<any, any> = z.ZodType<any, any>,
   R = any,
 >(
   registry: Registry,

@@ -206,7 +206,7 @@ export type GoogleAIPlugin = {
     name: antigravity.KnownModels | (antigravity.AntigravityModelName & {}),
     config?: antigravity.AntigravityConfig
   ): ModelReference<antigravity.AntigravityConfigSchemaType>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
 
   embedder(
     name: embedder.KnownModels | (embedder.EmbedderModelName & {}),
@@ -221,7 +221,7 @@ export const googleAI = googleAIPlugin as GoogleAIPlugin;
 (googleAI as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodTypeAny> => {
+): ModelReference<z.ZodType<any, any>> => {
   if (deepResearch.isDeepResearchModelName(name)) {
     return deepResearch.model(name, config);
   }

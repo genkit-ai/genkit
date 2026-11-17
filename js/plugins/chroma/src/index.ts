@@ -61,7 +61,7 @@ type ChromaClientParams =
   NativeChromaClientParams | (() => Promise<NativeChromaClientParams>);
 
 type ChromaPluginParams<
-  EmbedderCustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   clientParams?: ChromaClientParams;
   collectionName: string;
@@ -73,7 +73,7 @@ type ChromaPluginParams<
 /**
  * Chroma plugin that provides the Chroma retriever and indexer
  */
-export function chroma<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function chroma<EmbedderCustomOptions extends z.ZodType<any, any>>(
   params: ChromaPluginParams<EmbedderCustomOptions>
 ): GenkitPlugin {
   return genkitPlugin('chroma', async (ai: Genkit) => {
@@ -111,7 +111,9 @@ export const chromaIndexerRef = (params: {
 /**
  * Configures a Chroma vector store retriever.
  */
-export function chromaRetriever<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function chromaRetriever<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(
   ai: Genkit,
   params: {
     clientParams?: ChromaClientParams;
@@ -230,7 +232,9 @@ function constructMetadata(
 /**
  * Configures a Chroma indexer.
  */
-export function chromaIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function chromaIndexer<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(
   ai: Genkit,
   params: {
     clientParams?: ChromaClientParams;
@@ -316,7 +320,7 @@ export function chromaIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
  * https://docs.trychroma.com/docs/embeddings/multimodal
  */
 export async function createChromaCollection<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: {

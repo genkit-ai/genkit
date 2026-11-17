@@ -139,7 +139,9 @@ export function stringTruncator(key: string, value: unknown): unknown {
  * Gets the un-prefixed model name from a modelReference
  */
 export function extractVersion(
-  model: ModelReference<z.ZodTypeAny> | EmbedderReference<z.ZodTypeAny>
+  model:
+    | ModelReference<z.ZodType<any, any>>
+    | EmbedderReference<z.ZodType<any, any>>
 ): string {
   return model.version ? model.version : checkModelName(model.name);
 }

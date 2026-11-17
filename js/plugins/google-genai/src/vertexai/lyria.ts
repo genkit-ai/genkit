@@ -17,6 +17,7 @@
 import {
   ActionMetadata,
   GenerateRequest,
+  GenerateResponseData,
   modelActionMetadata,
   modelRef,
   ModelReference,
@@ -42,6 +43,7 @@ import {
   extractVersion,
   shouldUseLegacyEndpoint,
   toInteractionsClientOptions,
+  type RequestClientOptions,
 } from './utils.js';
 
 export const LyriaConfigSchema = z
@@ -96,20 +98,6 @@ export type Lyria3Config = z.infer<Lyria3ConfigSchemaType>;
 
 type ConfigSchemaType = LyriaConfigSchemaType | Lyria3ConfigSchemaType;
 type ConfigSchema = z.infer<ConfigSchemaType>;
-
-function isLegacyLyriaRequest(
-  request: GenerateRequest<ConfigSchemaType>,
-  name: string
-): request is GenerateRequest<LyriaConfigSchemaType> {
-  return shouldUseLegacyEndpoint(name);
-}
-
-function isLyria3Request(
-  request: GenerateRequest<ConfigSchemaType>,
-  name: string
-): request is GenerateRequest<Lyria3ConfigSchemaType> {
-  return !shouldUseLegacyEndpoint(name);
-}
 
 function commonRef(
   name: string,
@@ -243,53 +231,66 @@ export function defineModel(
         { ...clientOptions, signal: abortSignal },
         request.config
       );
-      if (isLegacyLyriaRequest(request, name)) {
-        const lyriaPredictRequest = toLyriaPredictRequest(request);
-
-        const response = await lyriaPredict(
-          extractVersion(ref),
-          lyriaPredictRequest,
-          clientOpt
-        );
-
-        if (!response.predictions || response.predictions.length == 0) {
-          throw new Error(
-            'Model returned no predictions. Possibly due to content filters.'
-          );
-        }
-
-        return fromLyriaResponse(response, request);
-      } else if (isLyria3Request(request, name)) {
-        const messages = [...request.messages];
-        if (messages.length === 0) throw new Error('No messages provided');
-
-        const req: CreateInteractionRequest = {
-          model: extractVersion(ref),
-          input: toInteractionSteps(ensureToolIds(messages)),
-          // Nothing by default: the server returns the lyrics, caption and
-          // audio. An audio entry without a `bit_rate` is rejected here
-          // with a 400 ("bit_rate must be positive", seen live Oct 2026),
-          // although the Gemini API accepts it.
-          response_format: toInteractionResponseFormat({
-            modalities: request.config?.responseModalities,
-          }),
-        };
-
-        // Lyria 3 is only on global: a defaulted location becomes global.
-        const response = await createInteraction(
-          req,
-          toInteractionsClientOptions(clientOpt)
-        );
-
-        return withBasicUsageStats(
-          fromInteractionSync(response),
-          request.messages
-        );
-      } else {
-        throw new Error(`Unsupported model config schema for ${name}`);
+      // Dispatch on the model name rather than narrowing `request`: the two
+      // config types are loose objects with all-optional fields, so TS treats
+      // them as mutually assignable and a type guard can't tell them apart.
+      if (shouldUseLegacyEndpoint(name)) {
+        return generateLegacyLyria(ref, request, clientOpt);
       }
+      return generateLyria3(ref, request, clientOpt);
     }
   );
+}
+
+async function generateLegacyLyria(
+  ref: ModelReference<ConfigSchemaType>,
+  request: GenerateRequest<LyriaConfigSchemaType>,
+  clientOpt: RequestClientOptions
+): Promise<GenerateResponseData> {
+  const lyriaPredictRequest = toLyriaPredictRequest(request);
+
+  const response = await lyriaPredict(
+    extractVersion(ref),
+    lyriaPredictRequest,
+    clientOpt
+  );
+
+  if (!response.predictions || response.predictions.length == 0) {
+    throw new Error(
+      'Model returned no predictions. Possibly due to content filters.'
+    );
+  }
+
+  return fromLyriaResponse(response, request);
+}
+
+async function generateLyria3(
+  ref: ModelReference<ConfigSchemaType>,
+  request: GenerateRequest<Lyria3ConfigSchemaType>,
+  clientOpt: RequestClientOptions
+): Promise<GenerateResponseData> {
+  const messages = [...request.messages];
+  if (messages.length === 0) throw new Error('No messages provided');
+
+  const req: CreateInteractionRequest = {
+    model: extractVersion(ref),
+    input: toInteractionSteps(ensureToolIds(messages)),
+    // Nothing by default: the server returns the lyrics, caption and
+    // audio. An audio entry without a `bit_rate` is rejected here
+    // with a 400 ("bit_rate must be positive", seen live Oct 2026),
+    // although the Gemini API accepts it.
+    response_format: toInteractionResponseFormat({
+      modalities: request.config?.responseModalities,
+    }),
+  };
+
+  // Lyria 3 is only on global: a defaulted location becomes global.
+  const response = await createInteraction(
+    req,
+    toInteractionsClientOptions(clientOpt)
+  );
+
+  return withBasicUsageStats(fromInteractionSync(response), request.messages);
 }
 
 export const TEST_ONLY = {

@@ -74,7 +74,7 @@ export const AntigravityConfigSchema = z
       )
       .optional(),
     environment: z
-      .union([z.string(), z.record(z.unknown())])
+      .union([z.string(), z.record(z.string(), z.unknown())])
       .describe('The environment configuration for the sandbox.')
       .optional(),
     responseModalities: z

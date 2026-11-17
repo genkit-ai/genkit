@@ -21,7 +21,7 @@ import { compatOaiTranscriptionModelRef } from '../audio.js';
 
 /** OpenAI transcription ModelRef helper, same as the OpenAI-compatible spec. */
 export function openAITranscriptionModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;

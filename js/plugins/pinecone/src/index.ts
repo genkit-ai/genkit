@@ -115,7 +115,7 @@ be used instead.
  * @param params.embedderOptions  Options to customize the embedder
  * @returns The Pinecone Genkit plugin
  */
-export function pinecone<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function pinecone<EmbedderCustomOptions extends z.ZodType<any, any>>(
   params: {
     clientParams?: PineconeConfiguration;
     indexId: string;
@@ -148,7 +148,7 @@ content. If not specified, the value '_content' is used by default.
  * @returns A Pinecone retriever
  */
 export function configurePineconeRetriever<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: {
@@ -229,7 +229,7 @@ content. If not specified, the value '_content' is used by default.
  * @returns A Genkit indexer
  */
 export function configurePineconeIndexer<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: {

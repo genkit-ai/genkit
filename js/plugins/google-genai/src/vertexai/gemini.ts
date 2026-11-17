@@ -143,8 +143,8 @@ const VertexRetrievalSchema = z
               'locations/{location}/collections/default_collection/dataStores/{data_store}".'
           ),
       })
-      .describe('Vertex AI Search data store details')
-      .passthrough(),
+      .passthrough()
+      .describe('Vertex AI Search data store details'),
     disableAttribution: z
       .boolean()
       .describe(
@@ -183,7 +183,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     )
     .optional(),
   labels: z
-    .record(z.string())
+    .record(z.string(), z.string())
     .optional()
     .describe('Key-value labels to attach to the request for cost tracking.'),
   temperature: z
@@ -324,6 +324,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
        */
       streamFunctionCallArguments: z.boolean().optional(),
     })
+    .passthrough()
     .describe(
       'Controls how the model uses the provided tools (function declarations). ' +
         'With AUTO (Default) mode, the model decides whether to generate a ' +
@@ -332,7 +333,6 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
         'predict a function call and guarantee function schema adherence. ' +
         'With NONE, the model is prohibited from making function calls.'
     )
-    .passthrough()
     .optional(),
   /**
    * Retrieval config for search grounding and maps grounding
@@ -515,11 +515,11 @@ const VoiceConfigSchema = z
       .passthrough()
       .optional(),
   })
+  .passthrough()
   .describe(
     'Configuration for the voice to use: `voice`, or `prebuiltVoiceConfig` ' +
       '(the googleAI shape)'
-  )
-  .passthrough();
+  );
 
 export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
   speechConfig: z
@@ -534,22 +534,22 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
                   speaker: z.string().describe('Name of the speaker to use'),
                   voiceConfig: VoiceConfigSchema,
                 })
+                .passthrough()
                 .describe(
                   'Configuration for a single speaker in a multi speaker setup'
                 )
-                .passthrough()
             )
             .describe(
               'Configuration for the two speaker voices. Each text part must ' +
                 'name its speaker in `metadata.speechMetadata.speaker`.'
             ),
         })
-        .describe('Configuration for multi-speaker setup')
         .passthrough()
+        .describe('Configuration for multi-speaker setup')
         .optional(),
     })
-    .describe('Speech generation config')
     .passthrough()
+    .describe('Speech generation config')
     .optional(),
   audioFormat: z
     .object({
@@ -565,8 +565,8 @@ export const GeminiTtsConfigSchema = GeminiConfigSchema.extend({
         )
         .optional(),
     })
-    .describe('Format of the generated audio.')
     .passthrough()
+    .describe('Format of the generated audio.')
     .optional(),
 }).passthrough();
 export type GeminiTtsConfigSchemaType = typeof GeminiTtsConfigSchema;
@@ -613,8 +613,8 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
         )
         .optional(),
     })
-    .describe('Format of the generated video.')
     .passthrough()
+    .describe('Format of the generated video.')
     .optional(),
   videoConfig: z
     .object({
@@ -635,8 +635,8 @@ export const GeminiVideoConfigSchema = GeminiConfigSchema.extend({
         )
         .optional(),
     })
-    .describe('Video generation settings.')
     .passthrough()
+    .describe('Video generation settings.')
     .optional(),
 }).passthrough();
 export type GeminiVideoConfigSchemaType = typeof GeminiVideoConfigSchema;

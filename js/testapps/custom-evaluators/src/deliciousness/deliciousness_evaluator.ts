@@ -27,11 +27,11 @@ export const DELICIOUSNESS: ByoMetric = {
  * Create the Deliciousness evaluator.
  */
 export function createDeliciousnessEvaluator<
-  ModelCustomOptions extends z.ZodTypeAny,
+  ModelCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   judge: ModelReference<ModelCustomOptions>,
-  judgeConfig: z.infer<ModelCustomOptions>
+  judgeConfig?: z.infer<ModelCustomOptions>
 ): EvaluatorAction {
   return ai.defineEvaluator(
     {

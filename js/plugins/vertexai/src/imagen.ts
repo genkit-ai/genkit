@@ -341,7 +341,7 @@ export function defineImagenModel(
   options: PluginOptions
 ): ModelAction {
   const modelName = `vertexai/${name}`;
-  const model: ModelReference<z.ZodTypeAny> =
+  const model: ModelReference<z.ZodType<any, any>> =
     lookup(SUPPORTED_IMAGEN_MODELS, name) ||
     modelRef({
       name: modelName,

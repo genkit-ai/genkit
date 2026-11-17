@@ -29,7 +29,7 @@ export class EvaluatorFactory {
     private readonly projectId: string
   ) {}
 
-  create<ResponseType extends z.ZodTypeAny>(
+  create<ResponseType extends z.ZodType<any, any>>(
     ai: Genkit,
     config: {
       metric: VertexAIEvaluationMetricType;
@@ -64,7 +64,7 @@ export class EvaluatorFactory {
     );
   }
 
-  async evaluateInstances<ResponseType extends z.ZodTypeAny>(
+  async evaluateInstances<ResponseType extends z.ZodType<any, any>>(
     ai: Genkit,
     partialRequest: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseSchema: ResponseType

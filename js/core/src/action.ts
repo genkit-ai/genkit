@@ -52,9 +52,9 @@ const makeNoopAbortSignal = () => new AbortController().signal;
  * Action metadata.
  */
 export interface ActionMetadata<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   /** The type of action (e.g. 'prompt', 'flow'). */
   actionType?: ActionType;
@@ -75,7 +75,7 @@ export interface ActionMetadata<
   /** Stream Zod schema. */
   streamSchema?: S;
   /** Schema of the initialization data. */
-  initSchema?: z.ZodTypeAny;
+  initSchema?: z.ZodType<any, any>;
   /** JSON schema of the initialization data. */
   initJsonSchema?: JSONSchema7;
   /** Metadata for the action. */
@@ -89,12 +89,12 @@ export const ActionMetadataSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   inputSchema: z.unknown().optional(),
-  inputJsonSchema: z.object({}).optional(),
+  inputJsonSchema: z.record(z.string(), z.any()).optional(),
   outputSchema: z.unknown().optional(),
-  outputJsonSchema: z.object({}).optional(),
+  outputJsonSchema: z.record(z.string(), z.any()).optional(),
   streamSchema: z.unknown().optional(),
   initSchema: z.unknown().optional(),
-  initJsonSchema: z.object({}).optional(),
+  initJsonSchema: z.record(z.string(), z.any()).optional(),
   metadata: z.record(z.string(), z.any()).optional(),
 });
 
@@ -213,8 +213,8 @@ export interface ActionFnArg<S, I = any, Init = any> {
  * Streaming response from an action.
  */
 export interface StreamingResponse<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   /** Iterator over the streaming chunks. */
   stream: AsyncGenerator<z.infer<S>>;
@@ -226,9 +226,9 @@ export interface StreamingResponse<
  * Streaming response from a bi-directional action.
  */
 export interface BidiStreamingResponse<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
 > extends StreamingResponse<O, S> {
   /**
    * Sends a chunk of data to the action (for bi-directional streaming).
@@ -244,9 +244,9 @@ export interface BidiStreamingResponse<
  * Self-describing, validating, observable, locally and remotely callable function.
  */
 export type Action<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
   RunOptions extends ActionRunOptions<
     z.infer<S>,
     z.infer<Init>
@@ -254,7 +254,7 @@ export type Action<
     // this is somewhat mitigated in BidiAction interface, so anyone interacting with
     // bidi actions will still get properly typed init option.
   > = ActionRunOptions<z.infer<S>, any>,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = ((input?: z.infer<I>, options?: RunOptions) => Promise<z.infer<O>>) & {
   /** @hidden */
   __action: ActionMetadata<I, O, S>;
@@ -269,10 +269,10 @@ export type Action<
 };
 
 export interface BidiAction<
-  IS extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  OS extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  IS extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  OS extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
   RunOptions extends BidiActionRunOptions<
     z.infer<OS>,
     z.infer<IS>,
@@ -289,10 +289,10 @@ export interface BidiAction<
  * Action factory params.
  */
 export type ActionParams<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   /**
    * Name of the action, or an object with pluginId and actionId.
@@ -353,9 +353,9 @@ export type ActionParams<
  * Configuration for an async action (lazy loaded).
  */
 export type ActionAsyncParams<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = ActionParams<I, O, S> & {
   fn: (
     input: z.infer<I>,
@@ -376,8 +376,8 @@ export type SimpleMiddleware<I = any, O = any> = (
  */
 export type MiddlewareWithOptions<I = any, O = any, S = any> = (
   req: I,
-  options: ActionRunOptions<S, I> | undefined,
-  next: (req?: I, options?: ActionRunOptions<S, I>) => Promise<O>
+  options: ActionRunOptions<S> | undefined,
+  next: (req?: I, options?: ActionRunOptions<S>) => Promise<O>
 ) => Promise<O>;
 
 /**
@@ -390,10 +390,10 @@ export type Middleware<I = any, O = any, S = any> =
  * Creates an action with provided middleware.
  */
 export function actionWithMiddleware<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   action: Action<I, O, S, any, Init>,
   middleware: Middleware<z.infer<I>, z.infer<O>, z.infer<S>>[]
@@ -424,14 +424,17 @@ export function actionWithMiddleware<
 
       const currentMiddleware = middleware[index];
       if (currentMiddleware.length === 3) {
-        return (currentMiddleware as MiddlewareWithOptions<I, O, z.infer<S>>)(
-          req,
-          opts,
-          async (modifiedReq, modifiedOptions) =>
-            dispatch(index + 1, modifiedReq || req, modifiedOptions || opts)
+        return (
+          currentMiddleware as MiddlewareWithOptions<
+            z.infer<I>,
+            z.infer<O>,
+            z.infer<S>
+          >
+        )(req, opts, async (modifiedReq, modifiedOptions) =>
+          dispatch(index + 1, modifiedReq || req, modifiedOptions || opts)
         );
       } else if (currentMiddleware.length === 2) {
-        return (currentMiddleware as SimpleMiddleware<I, O>)(
+        return (currentMiddleware as SimpleMiddleware<z.infer<I>, z.infer<O>>)(
           req,
           async (modifiedReq) => dispatch(index + 1, modifiedReq || req, opts)
         );
@@ -458,17 +461,17 @@ export function actionWithMiddleware<
  * Creates an action with the provided config.
  */
 export function action<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   config: ActionParams<I, O, S, Init>,
   fn: (
     input: z.infer<I>,
-    options: ActionFnArg<z.infer<S>, z.infer<Init>>
+    options: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => Promise<z.infer<O>>
-): Action<I, O, z.infer<S>, any, Init> {
+): Action<I, O, S, any, Init> {
   const actionName =
     typeof config.name === 'string'
       ? config.name
@@ -489,11 +492,11 @@ export function action<
   } as ActionMetadata<I, O, S>;
 
   const actionFn = (async (
-    input?: I,
+    input?: z.infer<I>,
     options?: ActionRunOptions<z.infer<S>, z.infer<Init>>
   ) => {
     return (await actionFn.run(input, options)).result;
-  }) as Action<I, O, z.infer<S>, any, Init>;
+  }) as Action<I, O, S, any, Init>;
   actionFn.__action = { ...actionMetadata };
 
   actionFn.run = async (
@@ -525,7 +528,7 @@ export function action<
     }
 
     if (config.initSchema || config.initJsonSchema) {
-      const validatedInit = parseSchema(options?.init, {
+      const validatedInit = parseSchema<z.infer<Init>>(options?.init, {
         schema: config.initSchema,
         jsonSchema: config.initJsonSchema,
       });
@@ -635,7 +638,7 @@ export function action<
       inputStream?: AsyncIterable<z.infer<I>>;
     }
   ): StreamingResponse<O, S> => {
-    let chunkStreamController: ReadableStreamController<z.infer<S>>;
+    let chunkStreamController: ReadableStreamDefaultController<z.infer<S>>;
     const chunkStream = new ReadableStream<z.infer<S>>({
       start(controller) {
         chunkStreamController = controller;
@@ -709,10 +712,10 @@ export function isAction(a: unknown): a is Action {
  * Defines an action with the given config and registers it in the registry.
  */
 export function defineAction<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   config: ActionParams<I, O, S, Init>,
@@ -720,17 +723,20 @@ export function defineAction<
     input: z.infer<I>,
     options: ActionFnArg<z.infer<S>, z.infer<I>, z.infer<Init>>
   ) => Promise<z.infer<O>>
-): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<I>>, Init> {
+): Action<I, O, S, ActionRunOptions<z.infer<S>, z.infer<Init>>, Init> {
   if (isInRuntimeContext()) {
     throw new Error(
       'Cannot define new actions at runtime.\n' +
         'See: https://github.com/genkit-ai/genkit/blob/main/docs/errors/no_new_actions_at_runtime.md'
     );
   }
-  const act = action(config, async (i: I, options): Promise<z.infer<O>> => {
-    await registry.initializeAllPlugins();
-    return await runInActionRuntimeContext(() => fn(i, options));
-  });
+  const act = action(
+    config,
+    async (i: z.infer<I>, options): Promise<z.infer<O>> => {
+      await registry.initializeAllPlugins();
+      return await runInActionRuntimeContext(() => fn(i, options));
+    }
+  );
   act.__action.actionType = config.actionType;
   registry.registerAction(config.actionType, act);
   return act;
@@ -740,10 +746,10 @@ export function defineAction<
  * Defines a bi-directional action with the given config and registers it in the registry.
  */
 export function defineBidiAction<
-  IS extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  OS extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  IS extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  OS extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   config: ActionParams<IS, O, OS, Init>,
@@ -765,10 +771,10 @@ export function defineBidiAction<
  * Creates a bi-directional action with the given config.
  */
 export function bidiAction<
-  IS extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  OS extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  IS extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  OS extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   config: ActionParams<IS, O, OS, Init>,
   fn: (
@@ -852,9 +858,9 @@ export function bidiAction<
  * Defines an action with the given config promise and registers it in the registry.
  */
 export function defineActionAsync<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   actionType: ActionType,
@@ -873,7 +879,7 @@ export function defineActionAsync<
     config.then((resolvedConfig) => {
       const act = action(
         resolvedConfig,
-        async (i: I, options): Promise<z.infer<O>> => {
+        async (i: z.infer<I>, options): Promise<z.infer<O>> => {
           await registry.initializeAllPlugins();
           return await runInActionRuntimeContext(() =>
             resolvedConfig.fn(i, options)
