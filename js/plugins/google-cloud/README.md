@@ -14,7 +14,6 @@ The Google Cloud plugin provides integrations with Google Cloud Platform service
 
 ## Features
 
-*   **Google Cloud Observability**: Exports telemetry (traces, metrics) and logs to Google Cloud's operations suite.
 *   **Model Armor**: Middleware for sanitizing user prompts and model responses using Google Cloud Model Armor.
 *   **Firestore Session Store (Beta)**: Persists agent session snapshots in Firestore, sharded and scalable to arbitrarily long sessions.
 
@@ -24,23 +23,12 @@ The Google Cloud plugin provides integrations with Google Cloud Platform service
 npm install @genkit-ai/google-cloud
 ```
 
-## Google Cloud Observability
+## Telemetry
 
-The plugin allows you to export telemetry data to Google Cloud. This is useful for monitoring your Genkit flows and models in production.
-
-To enable it, use `enableGoogleCloudTelemetry`:
-
-```typescript
-import { enableGoogleCloudTelemetry } from '@genkit-ai/google-cloud';
-
-enableGoogleCloudTelemetry({
-  // Optional configuration
-  // projectId: 'your-project-id',
-  // forceDevMode: false, // Set to true to enable export in dev environment
-});
-```
-
-This will configure Genkit to send OpenTelemetry traces and metrics to Cloud Trace and Cloud Monitoring, and logs to Cloud Logging.
+This plugin no longer exports telemetry. To send Genkit traces and metrics to
+Google Cloud (or any OpenTelemetry backend), use
+[`@genkit-ai/otel`](https://www.npmjs.com/package/@genkit-ai/otel) with an
+OpenTelemetry exporter such as `@google-cloud/opentelemetry-cloud-trace-exporter`.
 
 ## Model Armor
 

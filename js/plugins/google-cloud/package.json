@@ -1,13 +1,10 @@
 {
   "name": "@genkit-ai/google-cloud",
-  "description": "Genkit AI framework plugin for Google Cloud Platform including Firestore trace/state store and deployment helpers for Cloud Functions for Firebase.",
+  "description": "Genkit AI framework plugin for Google Cloud Platform: Model Armor middleware and a Firestore session store.",
   "keywords": [
     "genkit",
     "genkit-plugin",
-    "genkit-telemetry",
     "genkit-statestore",
-    "genkit-deploy",
-    "genkit-flow",
     "google cloud",
     "google cloud platform",
     "firestore",
@@ -35,24 +32,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@google-cloud/firestore": "^7.11.0",
-    "@google-cloud/logging-winston": "^6.0.0",
-    "@google-cloud/modelarmor": "^0.4.1",
-    "@google-cloud/opentelemetry-cloud-monitoring-exporter": "^0.19.0",
-    "@google-cloud/opentelemetry-cloud-trace-exporter": "^2.4.1",
-    "@google-cloud/opentelemetry-resource-util": "^2.4.0",
-    "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/auto-instrumentations-node": "^0.49.1",
-    "@opentelemetry/core": "~1.25.0",
-    "@opentelemetry/instrumentation": "^0.52.0",
-    "@opentelemetry/instrumentation-pino": "^0.41.0",
-    "@opentelemetry/instrumentation-winston": "^0.39.0",
-    "@opentelemetry/resources": "~1.25.0",
-    "@opentelemetry/sdk-metrics": "~1.25.0",
-    "@opentelemetry/sdk-node": "^0.52.0",
-    "@opentelemetry/sdk-trace-base": "~1.25.0",
-    "google-auth-library": "^9.6.3",
-    "node-fetch": "^3.3.2",
-    "winston": "^3.12.0"
+    "@google-cloud/modelarmor": "^0.4.1"
   },
   "peerDependencies": {
     "genkit": "workspace:^"

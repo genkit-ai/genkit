@@ -1,8 +1,3 @@
 {
-  "entryPoints": [
-    "src/context.ts",
-    "src/index.ts",
-    "src/user_engagement.ts",
-    "src/beta/data-connect.ts"
-  ]
+  "entryPoints": ["src/context.ts", "src/index.ts", "src/beta/data-connect.ts"]
 }
