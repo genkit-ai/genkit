@@ -15,7 +15,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import * as fs from 'fs';
 import { genkit, z, type Genkit, type MessageData } from 'genkit';
+import * as path from 'path';
 import { mistral } from '../src/mistral';
 import { MistralChatCompletionConfigSchema } from '../src/mistral/mistral';
 import { FakeOpenAIServer } from './fake_openai_server';
@@ -452,8 +454,8 @@ describe('mistral plugin', () => {
           choices: [
             { index: 0, delta: { content: 'lo' }, finish_reason: 'stop' },
           ],
-          // Assumes Mistral sends usage on the last chunk without
-          // stream_options. Not confirmed against the live API.
+          // Mistral sends usage on the last chunk without stream_options
+          // (checked against the live API).
           usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
         },
       ],
@@ -1124,6 +1126,101 @@ describe('mistral plugin', () => {
         prompt: 'hi',
       });
       expect(server.requests[0].body).not.toHaveProperty('tool_choice');
+    });
+  });
+
+  describe('streamed tool calls', () => {
+    /**
+     * Chunks of live Mistral streams, captured with `tool_choice: "any"` and
+     * ids replaced. Each tool call arrives whole in one delta, with `type`
+     * and `index`.
+     */
+    function fixture(name: string) {
+      return JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, 'fixtures', 'mistral', `${name}.json`),
+          'utf8'
+        )
+      );
+    }
+
+    function defineWeatherTool() {
+      return ai.defineTool(
+        {
+          name: 'get_weather',
+          description: 'Get the weather for a city',
+          inputSchema: z.object({ city: z.string() }),
+          outputSchema: z.string(),
+        },
+        async ({ city }) => `Sunny in ${city}`
+      );
+    }
+
+    async function streamToolCalls(name: string) {
+      server.setNextResponse({ stream: true, chunks: fixture(name) });
+      const { stream, response } = ai.generateStream({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'What is the weather?',
+        tools: [defineWeatherTool()],
+        returnToolRequests: true,
+      });
+      const streamed: unknown[] = [];
+      for await (const chunk of stream) {
+        streamed.push(...chunk.toolRequests);
+      }
+      return { streamed, final: await response };
+    }
+
+    it('reads one streamed tool call', async () => {
+      const { streamed, final } = await streamToolCalls('stream_one_tool_call');
+
+      const expected = [
+        {
+          toolRequest: {
+            ref: 'call_1',
+            name: 'get_weather',
+            input: { city: 'Paris' },
+          },
+        },
+      ];
+      expect(final.message?.content).toEqual(expected);
+      // Streamed tool requests are also marked `partial`.
+      expect(streamed).toMatchObject(expected);
+      expect(final.usage.outputTokens).toBe(12);
+    });
+
+    it('reads two streamed tool calls', async () => {
+      const { final } = await streamToolCalls('stream_two_tool_calls');
+
+      expect(final.toolRequests).toEqual([
+        {
+          toolRequest: {
+            ref: 'call_1',
+            name: 'get_weather',
+            input: { city: 'Paris' },
+          },
+        },
+        {
+          toolRequest: {
+            ref: 'call_2',
+            name: 'get_weather',
+            input: { city: 'London' },
+          },
+        },
+      ]);
+    });
+
+    it('reads two streamed tool calls after streamed thinking', async () => {
+      const { final } = await streamToolCalls('stream_thinking_two_tool_calls');
+
+      expect(final.reasoning).toMatch(/^The user is asking/);
+      expect(
+        final.message?.content.filter((p) => p.reasoning !== undefined)
+      ).toHaveLength(1);
+      expect(final.toolRequests.map((p) => p.toolRequest.input)).toEqual([
+        { city: 'Paris' },
+        { city: 'London' },
+      ]);
     });
   });
 
