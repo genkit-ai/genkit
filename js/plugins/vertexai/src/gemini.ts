@@ -36,13 +36,7 @@ import {
   type VertexAI,
 } from '@google-cloud/vertexai';
 import { ApiClient } from '@google-cloud/vertexai/build/src/resources/index.js';
-import {
-  GenkitError,
-  z,
-  type Genkit,
-  type GenkitSchema,
-  type JSONSchema,
-} from 'genkit';
+import { GenkitError, z, type Genkit, type JSONSchema } from 'genkit';
 import {
   GenerationCommonConfigDescriptions,
   GenerationCommonConfigSchema,
