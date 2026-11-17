@@ -40,6 +40,10 @@ import {
   stackTraceSpans,
 } from '../trace.js';
 import {
+  collectScopeResumeDecisions,
+  isEnclosingTurnInterrupted,
+} from './interrupts.js';
+import {
   aggregateUsage,
   extractSpanRuntimeError,
   extractTextFromParts,
@@ -336,12 +340,12 @@ function resolveTrajectoryOutcome(
   if (scopeFinish === 'aborted') {
     return { status: 'error', finishReason: 'aborted' };
   }
+  const lastStep = steps.at(-1);
   if (
     scopeFinish === 'interrupted' ||
-    steps.some(
-      (s) =>
-        s.finishReason === 'interrupted' ||
-        s.actions.some((a) => a.status === 'interrupted')
+    lastStep?.finishReason === 'interrupted' ||
+    steps.some((s) =>
+      s.actions.some((a) => a.status === 'interrupted' && !a.resume)
     )
   ) {
     return { status: 'interrupted', finishReason: 'interrupted' };
@@ -353,7 +357,6 @@ function resolveTrajectoryOutcome(
     };
   }
 
-  const lastStep = steps[steps.length - 1];
   if (lastStep?.finishReason === 'failed' || lastStep?.error) {
     return {
       status: 'error',
@@ -442,6 +445,14 @@ function appendModelStep(
   const model = cleanActionName(getSpanName(modelSpan));
   const stepNumber = state.steps.length + 1;
 
+  const isStepInterrupted =
+    actions.some(
+      (a) => a.status === 'interrupted' || a.interrupt !== undefined
+    ) ||
+    finishReason === 'interrupted' ||
+    (toolRequestParts.length > 0 &&
+      isEnclosingTurnInterrupted(modelSpan, state.trajectorySpans.parentMap));
+
   state.steps.push({
     stepId: nextStepId(modelSpan.spanId, state),
     stepNumber,
@@ -454,7 +465,7 @@ function appendModelStep(
     ...(model ? { model } : {}),
     content: contentParts,
     actions,
-    finishReason,
+    finishReason: isStepInterrupted ? 'interrupted' : finishReason,
     ...(error ? { error } : {}),
     ...(usage ? { usage } : {}),
   });
@@ -479,6 +490,7 @@ function buildTrajectory(
     trajectorySpans,
     claimedToolSpanIds: new Set<string>(),
     toolResponses: collectToolResponses(parsedInputs),
+    resumeDecisions: collectScopeResumeDecisions(parsedInputs),
     emittedMessageSigs: new Set<string>(),
     spanStepCounts: new Map<string, number>(),
     steps: [],

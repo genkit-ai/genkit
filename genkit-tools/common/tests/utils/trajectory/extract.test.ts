@@ -23,6 +23,7 @@ import { extractTrajectoryFromTrace } from '../../../src/utils/index.js';
 import {
   MOCK_AGENT_TOOL_TRACE,
   MOCK_AGENT_TOOL_TRAJECTORY,
+  MOCK_HITL_INTERRUPT_TRACE,
   MOCK_SPAN_AGENT,
   MOCK_SUBAGENT_TRACE,
   makeAgentSpan,
@@ -591,6 +592,429 @@ describe('extractTrajectoryFromTrace', () => {
           agentName: 'researcher',
         },
       },
+    });
+  });
+
+  describe('Human-in-the-Loop (HITL) interrupts', () => {
+    it('projects unresumed ToolInterruptError actions as interrupted without resume', () => {
+      const bundle = extractTrajectoryFromTrace(MOCK_HITL_INTERRUPT_TRACE);
+
+      expect(TrajectoryBundleSchema.parse(bundle)).toMatchObject({
+        trajectories: {
+          'trace-hitl': {
+            status: 'interrupted',
+            finishReason: 'interrupted',
+            steps: [
+              {},
+              {
+                finishReason: 'interrupted',
+                actions: [
+                  {
+                    actionId: 'tx-1',
+                    name: 'transferFunds',
+                    type: 'tool',
+                    status: 'interrupted',
+                    interrupt: { confirmRequired: true },
+                    input: { to: 'Alice', amount: 500 },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      expect(
+        bundle.trajectories['trace-hitl'].steps[1].actions[0].resume
+      ).toBeUndefined();
+    });
+
+    it('pairs in-trace respond and restart HITL resume decisions and restarted tool outputs', () => {
+      const trace: TraceData = {
+        ...MOCK_HITL_INTERRUPT_TRACE,
+        endTime: 650,
+        spans: {
+          ...MOCK_HITL_INTERRUPT_TRACE.spans,
+          'model-1': makeModelSpan({
+            spanId: 'model-1',
+            parentSpanId: 'turn-1',
+            startTime: 110,
+            endTime: 200,
+            messages: [
+              { role: 'user', content: [{ text: 'Pay $500 and book flight' }] },
+            ],
+            outputMessage: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    ref: 'tx-1',
+                    name: 'transferFunds',
+                    input: { to: 'Alice', amount: 500 },
+                  },
+                },
+                {
+                  toolRequest: {
+                    ref: 'flt-1',
+                    name: 'bookFlight',
+                    input: { dest: 'SEA' },
+                  },
+                },
+              ],
+            },
+          }),
+          'flt-1-span': makeToolSpan({
+            spanId: 'flt-1-span',
+            parentSpanId: 'turn-1',
+            name: 'bookFlight',
+            startTime: 210,
+            endTime: 240,
+            interrupt: { seatNeeded: true },
+            status: { code: 2, message: 'ToolInterruptError' },
+          }),
+          'turn-2': makeTurnSpan({
+            spanId: 'turn-2',
+            turn: 2,
+            startTime: 350,
+            endTime: 640,
+            input: {
+              resume: {
+                respond: [
+                  {
+                    toolResponse: {
+                      ref: 'tx-1',
+                      name: 'transferFunds',
+                      output: { approved: true, receipt: 'r-1' },
+                    },
+                  },
+                ],
+                restart: [
+                  {
+                    toolRequest: {
+                      ref: 'flt-1',
+                      name: 'bookFlight',
+                      input: { dest: 'SEA' },
+                    },
+                    metadata: { resumed: { seat: '12A' } },
+                  },
+                ],
+              },
+            },
+          }),
+          'flt-restarted': makeToolSpan({
+            spanId: 'flt-restarted',
+            parentSpanId: 'turn-2',
+            name: 'bookFlight',
+            startTime: 360,
+            endTime: 410,
+            resumed: { seat: '12A' },
+            output: { pnr: 'XYZ987', seat: '12A' },
+          }),
+          'model-2': makeModelSpan({
+            spanId: 'model-2',
+            parentSpanId: 'turn-2',
+            startTime: 420,
+            endTime: 600,
+            messages: [
+              { role: 'user', content: [{ text: 'Pay $500 and book flight' }] },
+              {
+                role: 'model',
+                content: [
+                  {
+                    toolRequest: {
+                      ref: 'tx-1',
+                      name: 'transferFunds',
+                      input: { to: 'Alice', amount: 500 },
+                    },
+                    metadata: { resolvedInterrupt: { confirmRequired: true } },
+                  },
+                  {
+                    toolRequest: {
+                      ref: 'flt-1',
+                      name: 'bookFlight',
+                      input: { dest: 'SEA' },
+                    },
+                    metadata: { resumed: { seat: '12A' } },
+                  },
+                ],
+              },
+              {
+                role: 'tool',
+                content: [
+                  {
+                    toolResponse: {
+                      ref: 'tx-1',
+                      name: 'transferFunds',
+                      output: { approved: true, receipt: 'r-1' },
+                    },
+                    metadata: { interruptResponse: true },
+                  },
+                  {
+                    toolResponse: {
+                      ref: 'flt-1',
+                      name: 'bookFlight',
+                      output: { pnr: 'XYZ987', seat: '12A' },
+                    },
+                  },
+                ],
+              },
+            ],
+            outputMessage: {
+              role: 'model',
+              content: [{ text: 'Paid $500 and booked XYZ987.' }],
+            },
+          }),
+        },
+      };
+
+      const traj = extractTrajectoryFromTrace(trace).trajectories['trace-hitl'];
+      expect(traj).toMatchObject({
+        status: 'success',
+        finishReason: 'stop',
+      });
+      const steps = traj.steps;
+      expect(steps[1].finishReason).toBe('interrupted');
+      expect(steps[1].actions).toMatchObject([
+        {
+          actionId: 'tx-1',
+          type: 'tool',
+          status: 'interrupted',
+          interrupt: { confirmRequired: true },
+          output: { approved: true, receipt: 'r-1' },
+          resume: {
+            strategy: 'respond',
+            payload: { approved: true, receipt: 'r-1' },
+          },
+        },
+        {
+          actionId: 'flt-1',
+          type: 'tool',
+          status: 'interrupted',
+          interrupt: { seatNeeded: true },
+          output: { pnr: 'XYZ987', seat: '12A' },
+          resume: { strategy: 'restart', payload: { seat: '12A' } },
+        },
+      ]);
+      expect(steps[2]).toMatchObject({
+        turnIndex: 1,
+        finishReason: 'stop',
+        content: [{ text: 'Paid $500 and booked XYZ987.' }],
+      });
+    });
+
+    it('isolates parallel conflicting refs and avoids stealing restarted spans with mismatched callIds', () => {
+      const trace = makeTrace(
+        [
+          makeAgentSpan({ spanId: 'root-agent', name: 'hitlAgent' }),
+          makeTurnSpan({
+            spanId: 'turn-1',
+            turn: 1,
+            output: { finishReason: 'interrupted' },
+          }),
+          makeModelSpan({
+            spanId: 'm1',
+            parentSpanId: 'turn-1',
+            messages: [{ role: 'user', content: [{ text: 'Transfer twice' }] }],
+            outputMessage: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    ref: 'tx-1',
+                    name: 'transfer',
+                    input: { amount: 10 },
+                  },
+                },
+                {
+                  toolRequest: {
+                    ref: 'tx-2',
+                    name: 'transfer',
+                    input: { amount: 20 },
+                  },
+                },
+              ],
+            },
+          }),
+          makeTurnSpan({
+            spanId: 'turn-2',
+            turn: 2,
+            startTime: 300,
+            endTime: 490,
+            input: {
+              resume: {
+                restart: [
+                  {
+                    toolRequest: {
+                      ref: 'tx-1',
+                      name: 'transfer',
+                      input: { amount: 10 },
+                    },
+                  },
+                  {
+                    toolRequest: {
+                      ref: 'tx-2',
+                      name: 'transfer',
+                      input: { amount: 20 },
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+          makeToolSpan({
+            spanId: 'tool-tx-2',
+            parentSpanId: 'turn-2',
+            name: '/tool.v2/mcp/transfer',
+            startTime: 310,
+            endTime: 350,
+            resumed: true,
+            attributes: { 'genkit:metadata:tool:callId': 'tx-2' },
+            output: { output: { ok: 20 }, content: [] },
+          }),
+        ],
+        { traceId: 'trace-parallel-refs' }
+      );
+
+      const step =
+        extractTrajectoryFromTrace(trace).trajectories['trace-parallel-refs']
+          .steps[1];
+      expect(step.finishReason).toBe('interrupted');
+      expect(step.actions[0]).toEqual({
+        actionId: 'tx-1',
+        name: 'transfer',
+        type: 'tool',
+        status: 'interrupted',
+        interrupt: true,
+        input: { amount: 10 },
+        resume: { strategy: 'restart', payload: { amount: 10 } },
+      });
+      expect(step.actions[1]).toMatchObject({
+        actionId: 'tx-2',
+        type: 'tool',
+        status: 'interrupted',
+        interrupt: true,
+        output: { ok: 20 },
+        resume: { strategy: 'restart', payload: { amount: 20 } },
+      });
+    });
+
+    it('detects ancestor turn interrupt metadata and ignores string message content', () => {
+      const trace = makeTrace(
+        [
+          makeAgentSpan({ spanId: 'root-agent', name: 'hitlAgent' }),
+          makeSpan({
+            spanId: 'outer-string-msg',
+            parentSpanId: 'root-agent',
+            attributes: {
+              'genkit:output': JSON.stringify({
+                message: { role: 'model', content: 'plain string content' },
+              }),
+            },
+          }),
+          makeTurnSpan({
+            spanId: 'turn-1',
+            parentSpanId: 'outer-string-msg',
+            turn: 1,
+            output: {
+              finishReason: 'interrupted',
+              message: {
+                role: 'model',
+                content: [
+                  {
+                    toolRequest: {
+                      ref: 'tx-1',
+                      name: 'transfer',
+                      input: { amount: 10 },
+                    },
+                    metadata: { interrupt: { prompt: 'Approve?' } },
+                  },
+                ],
+              },
+            },
+          }),
+          makeModelSpan({
+            spanId: 'm1',
+            parentSpanId: 'turn-1',
+            messages: [{ role: 'user', content: [{ text: 'Transfer' }] }],
+            outputMessage: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    ref: 'tx-1',
+                    name: 'transfer',
+                    input: { amount: 10 },
+                  },
+                },
+              ],
+            },
+          }),
+        ],
+        { traceId: 'trace-ancestor-meta' }
+      );
+
+      const step =
+        extractTrajectoryFromTrace(trace).trajectories['trace-ancestor-meta']
+          .steps[1];
+      expect(step.finishReason).toBe('interrupted');
+      expect(step.actions[0]).toEqual({
+        actionId: 'tx-1',
+        name: 'transfer',
+        type: 'tool',
+        status: 'interrupted',
+        interrupt: { prompt: 'Approve?' },
+        input: { amount: 10 },
+      });
+    });
+
+    it('ignores malformed non-array resume.respond fields', () => {
+      const trace = makeTrace(
+        [
+          makeAgentSpan({ spanId: 'root-agent', name: 'hitlAgent' }),
+          makeTurnSpan({
+            spanId: 'turn-1',
+            turn: 1,
+            output: { finishReason: 'interrupted' },
+          }),
+          makeModelSpan({
+            spanId: 'm1',
+            parentSpanId: 'turn-1',
+            messages: [{ role: 'user', content: [{ text: 'Transfer' }] }],
+            outputMessage: {
+              role: 'model',
+              content: [
+                {
+                  toolRequest: {
+                    ref: 'tx-1',
+                    name: 'transfer',
+                    input: { amount: 10 },
+                  },
+                },
+              ],
+            },
+          }),
+          makeTurnSpan({
+            spanId: 'turn-2',
+            turn: 2,
+            startTime: 300,
+            endTime: 490,
+            input: {
+              resume: {
+                respond: 'invalid-non-array',
+              },
+            },
+          }),
+        ],
+        { traceId: 'trace-malformed-resume' }
+      );
+
+      const action =
+        extractTrajectoryFromTrace(trace).trajectories['trace-malformed-resume']
+          .steps[1].actions[0];
+      expect(action).toMatchObject({
+        actionId: 'tx-1',
+        status: 'interrupted',
+      });
+      expect(action.resume).toBeUndefined();
     });
   });
 });
