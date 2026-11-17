@@ -113,6 +113,7 @@ import {
   type FlowConfig,
   type FlowFn,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
   type JSONSchema,
   type StreamingCallback,
@@ -370,7 +371,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
   >(
     name: string,
     options?: { variant?: string }
-  ): ExecutablePrompt<InferOutput<I>, O, CustomOptions> {
+  ): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
     return this.wrapExecutablePromptPromise(
       `${name}${options?.variant ? `.${options?.variant}` : ''}`,
       prompt(this.registry, name, {
@@ -389,19 +390,19 @@ export class Genkit extends GenkitAI implements HasRegistry {
     CustomOptions extends GenkitSchema = GenkitSchema,
   >(
     name: string,
-    promise: Promise<ExecutablePrompt<InferOutput<I>, O, CustomOptions>>
+    promise: Promise<ExecutablePrompt<InferInput<I>, O, CustomOptions>>
   ) {
     const executablePrompt = (async (
-      input?: InferOutput<I>,
+      input?: InferInput<I>,
       opts?: PromptGenerateOptions<O, CustomOptions>
     ): Promise<GenerateResponse<InferOutput<O>>> => {
       return (await promise)(input, opts);
-    }) as ExecutablePrompt<InferOutput<I>, O, CustomOptions>;
+    }) as ExecutablePrompt<InferInput<I>, O, CustomOptions>;
 
     executablePrompt.ref = { name };
 
     executablePrompt.render = async (
-      input?: InferOutput<I>,
+      input?: InferInput<I>,
       opts?: PromptGenerateOptions<O, CustomOptions>
     ): Promise<GenerateOptions<O, CustomOptions>> => {
       return (await promise).render(input, opts) as Promise<
@@ -410,7 +411,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
     };
 
     executablePrompt.stream = (
-      input?: InferOutput<I>,
+      input?: InferInput<I>,
       opts?: PromptGenerateOptions<O, CustomOptions>
     ): GenerateStreamResponse<InferOutput<O>> => {
       let channel = new Channel<GenerateResponseChunk>();
@@ -497,7 +498,7 @@ export class Genkit extends GenkitAI implements HasRegistry {
     options: PromptConfig<I, O, CustomOptions>,
     /** @deprecated use `options.messages` with a template string instead. */
     templateOrFn?: string | PromptFn<I>
-  ): ExecutablePrompt<InferOutput<I>, O, CustomOptions> {
+  ): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
     // For backwards compatibility...
     if (templateOrFn) {
       if (options.messages) {

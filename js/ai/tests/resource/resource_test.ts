@@ -19,6 +19,7 @@ import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import {
+  ResourceOutputSchema,
   defineResource,
   dynamicResource,
   findMatchingResource,
@@ -297,5 +298,12 @@ describe('isDynamicResourceAction', () => {
     registry.registerAction('resource', dynamic);
 
     assert.strictEqual(isDynamicResourceAction(dynamic), true);
+  });
+});
+
+describe('resource wire schemas', () => {
+  it('keeps unknown keys in the output', () => {
+    const output = { content: [{ text: 'x' }], futureField: 1 };
+    assert.deepStrictEqual(ResourceOutputSchema.parse(output), output);
   });
 });

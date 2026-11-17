@@ -22,7 +22,7 @@ import {
   type Action,
 } from './action.js';
 import { Registry, type HasRegistry } from './registry.js';
-import type { GenkitSchema, InferOutput } from './schema.js';
+import type { GenkitSchema, InferInput, InferOutput } from './schema.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
 
 /**
@@ -37,7 +37,7 @@ export interface Flow<
     I,
     O,
     S,
-    ActionRunOptions<InferOutput<S>, InferOutput<Init>>,
+    ActionRunOptions<InferOutput<S>, InferInput<Init>>,
     Init
   > {}
 
@@ -83,11 +83,12 @@ export type FlowFn<
   O extends GenkitSchema = GenkitSchema,
   S extends GenkitSchema = GenkitSchema,
 > = (
-  /** Input to the flow. */
+  /** Input to the flow, parsed with `inputSchema` (defaults/transforms applied). */
   input: InferOutput<I>,
   /** Callback for streaming functions only. */
   streamingCallback: FlowSideChannel<InferOutput<S>>
-) => Promise<InferOutput<O>> | InferOutput<O>;
+  // The return value is parsed with `outputSchema`, so it's the schema's input type.
+) => Promise<InferInput<O>> | InferInput<O>;
 
 /**
  * Defines a  flow. This operates on the currently active registry.

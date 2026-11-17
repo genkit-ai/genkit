@@ -59,7 +59,7 @@ import {
 import { applyPatch, diff } from '@genkit-ai/ai/json-patch';
 import {
   type GenkitSchema,
-  type InferOutput,
+  type InferInput,
   type Operation,
 } from '@genkit-ai/core';
 import type { Formatter } from './formats.js';
@@ -153,7 +153,7 @@ export class GenkitBeta extends Genkit {
      * Input values for the referenced prompt's input variables. Lets a single
      * prompt be reused/customized across multiple agents.
      */
-    promptInput?: InferOutput<I>;
+    promptInput?: InferInput<I>;
     stateSchema?: GenkitSchema<State>;
     store?: SessionStore<State>;
     /**

@@ -195,3 +195,57 @@ describe('model configSchema checks', () => {
     );
   });
 });
+
+describe('model wire schemas', () => {
+  // Request and response are parsed with their schemas. Keys the schemas
+  // don't know (from a plugin, or a newer runtime) must survive, at every
+  // level.
+  it('keeps unknown keys in the request and the response', async () => {
+    const registry = new Registry();
+    const request = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { text: 'hi', extraPartKey: 1 },
+            { media: { url: 'http://x', extraMediaKey: 1 } },
+            {
+              toolResponse: { name: 't', output: {}, extraToolResponseKey: 1 },
+            },
+          ],
+          extraMessageKey: 1,
+        },
+      ],
+      tools: [{ name: 't', description: 'd', extraToolKey: 1 }],
+      output: { format: 'json', extraOutputKey: 1 },
+      docs: [{ content: [{ text: 'doc' }], extraDocKey: 1 }],
+      extraRequestKey: 1,
+    };
+    const response = {
+      finishReason: 'stop',
+      message: {
+        role: 'model',
+        content: [
+          { text: 'hi', extraPartKey: 1 },
+          { toolRequest: { name: 't', input: {}, extraToolRequestKey: 1 } },
+          { futurePartKind: { x: 1 } },
+        ],
+        extraMessageKey: 1,
+      },
+      usage: { inputTokens: 1, extraUsageKey: 1 },
+      extraResponseKey: 1,
+    };
+    let seenRequest: unknown;
+    const echo = defineModel(registry, { name: 'echo' }, async (req) => {
+      seenRequest = req;
+      // Deliberately not a GenerateResponseData: it carries keys the type
+      // doesn't declare.
+      return response as GenerateResponseData;
+    });
+
+    const { latencyMs: _, ...result } = await echo(request);
+
+    assert.deepStrictEqual(seenRequest, request);
+    assert.deepStrictEqual(result, response);
+  });
+});

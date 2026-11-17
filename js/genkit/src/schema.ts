@@ -31,6 +31,7 @@ export {
   ValidationError,
   annotateSchema,
   parseSchema,
+  parseSchemaAsync,
   toJsonSchema,
   toZodSchema,
   validateSchema,

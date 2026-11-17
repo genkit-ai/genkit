@@ -18,9 +18,11 @@ import {
   GenkitError,
   action,
   toZodSchema,
+  wireObject,
   z,
   type Action,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
 } from '@genkit-ai/core';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -47,18 +49,18 @@ export type IndexerFn<IndexerOptions extends GenkitSchema> = (
   indexerOpts: InferOutput<IndexerOptions>
 ) => Promise<void>;
 
-const RetrieverRequestSchema = z.object({
+const RetrieverRequestSchema = wireObject({
   query: DocumentDataSchema,
   options: z.any().optional(),
 });
 
-const RetrieverResponseSchema = z.object({
+const RetrieverResponseSchema = wireObject({
   documents: z.array(DocumentDataSchema),
   // TODO: stats, etc.
 });
 type RetrieverResponse = z.infer<typeof RetrieverResponseSchema>;
 
-const IndexerRequestSchema = z.object({
+const IndexerRequestSchema = wireObject({
   documents: z.array(DocumentDataSchema),
   options: z.any().optional(),
 });
@@ -255,7 +257,7 @@ export interface RetrieverParams<
 > {
   retriever: RetrieverArgument<CustomOptions>;
   query: string | DocumentData;
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /**
@@ -310,7 +312,7 @@ export interface IndexerParams<
 > {
   indexer: IndexerArgument<CustomOptions>;
   documents: Array<DocumentData>;
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /**
