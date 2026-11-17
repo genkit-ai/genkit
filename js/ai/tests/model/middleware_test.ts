@@ -910,7 +910,7 @@ describe.only('simulateConstrainedGeneration', () => {
                 'Output should be in JSON format and conform to the following schema:\n' +
                 '\n' +
                 '```\n' +
-                '{"type":"object","properties":{"foo":{"type":"string"}},"required":["foo"],"additionalProperties":true,"$schema":"http://json-schema.org/draft-07/schema#"}\n' +
+                '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"foo":{"type":"string"}},"required":["foo"]}\n' +
                 '```\n',
             },
           ],
@@ -962,7 +962,7 @@ describe.only('simulateConstrainedGeneration', () => {
               metadata: {
                 purpose: 'output',
               },
-              text: 'must be json: {"type":"object","properties":{"foo":{"type":"string"}},"required":["foo"],"additionalProperties":true,"$schema":"http://json-schema.org/draft-07/schema#"}',
+              text: 'must be json: {"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"foo":{"type":"string"}},"required":["foo"]}',
             },
           ],
         },
@@ -1011,7 +1011,6 @@ describe.only('simulateConstrainedGeneration', () => {
         format: 'json',
         schema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
-          additionalProperties: true,
           properties: {
             foo: {
               type: 'string',
@@ -1065,7 +1064,7 @@ describe.only('simulateConstrainedGeneration', () => {
                 'Output should be in JSON format and conform to the following schema:\n' +
                 '\n' +
                 '```\n' +
-                '{"type":"object","properties":{"foo":{"type":"string"}},"required":["foo"],"additionalProperties":true,"$schema":"http://json-schema.org/draft-07/schema#"}\n' +
+                '{"$schema":"http://json-schema.org/draft-07/schema#","type":"object","properties":{"foo":{"type":"string"}},"required":["foo"]}\n' +
                 '```\n',
             },
           ],
@@ -1077,7 +1076,6 @@ describe.only('simulateConstrainedGeneration', () => {
         format: 'json',
         schema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
-          additionalProperties: true,
           properties: {
             foo: {
               type: 'string',

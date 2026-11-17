@@ -41,9 +41,9 @@ const randomUUID = () => globalThis.crypto.randomUUID();
  * A wrapper object containing an action with its associated options.
  */
 export type ActionWithOptions<
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = {
   action: Action<I, O, S>;
   options: {
@@ -58,7 +58,7 @@ export type ActionWithOptions<
  */
 export interface FetchHandlerOptions<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   contextProvider?: ContextProvider<C, I>;
   streamManager?: StreamManager;
@@ -68,9 +68,9 @@ export interface FetchHandlerOptions<
  * Wraps an action (flow, model, etc.) with options for use with {@link fetchHandlers}.
  */
 export function withActionOptions<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any>,
 >(
   action: Action<I, O, S>,
   options: {
@@ -99,7 +99,10 @@ function headersToObject(headers: Headers): Record<string, string> {
 /**
  * Gets context from the request using the context provider if available.
  */
-async function getContext<C extends ActionContext, I extends z.ZodTypeAny>(
+async function getContext<
+  C extends ActionContext,
+  I extends z.ZodType<any, any>,
+>(
   request: Request,
   input: z.infer<I>,
   provider?: ContextProvider<C, I>
@@ -205,10 +208,10 @@ async function subscribeToStream(
  * Runs an action with durable streaming support.
  */
 async function runActionWithDurableStreaming<
-  I extends z.ZodTypeAny,
-  O extends z.ZodTypeAny,
-  S extends z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  O extends z.ZodType<any, any>,
+  S extends z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   action: Action<I, O, S, any, Init>,
   streamManager: StreamManager | undefined,
@@ -306,10 +309,10 @@ async function runActionWithDurableStreaming<
  */
 async function handleActionRequest<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   request: Request,
   action: Action<I, O, S, any, Init>,
@@ -443,10 +446,10 @@ async function handleActionRequest<
 
 export function fetchHandler<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   action: Action<I, O, S, any, Init>,
   options?: FetchHandlerOptions<C, I>

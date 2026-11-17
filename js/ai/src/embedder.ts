@@ -46,7 +46,7 @@ export type Embedding = z.infer<typeof EmbeddingSchema>;
 /**
  * A function used for embedder definition, encapsulates embedder implementation.
  */
-export type EmbedderFn<EmbedderOptions extends z.ZodTypeAny> = (
+export type EmbedderFn<EmbedderOptions extends z.ZodType<any, any>> = (
   input: Document[],
   embedderOpts?: z.infer<EmbedderOptions>
 ) => Promise<EmbedResponse>;
@@ -77,16 +77,17 @@ type EmbedResponse = z.infer<typeof EmbedResponseSchema>;
 /**
  * Embedder action -- a subtype of {@link Action} with input/output types for embedders.
  */
-export type EmbedderAction<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> =
-  Action<typeof EmbedRequestSchema, typeof EmbedResponseSchema> & {
-    __configSchema?: CustomOptions;
-  };
+export type EmbedderAction<
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+> = Action<typeof EmbedRequestSchema, typeof EmbedResponseSchema> & {
+  __configSchema?: CustomOptions;
+};
 
 /**
  * Options of an `embed` function.
  */
 export interface EmbedderParams<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   embedder: EmbedderArgument<CustomOptions>;
   content: string | DocumentData;
@@ -94,7 +95,7 @@ export interface EmbedderParams<
   options?: z.infer<CustomOptions>;
 }
 
-function withMetadata<CustomOptions extends z.ZodTypeAny>(
+function withMetadata<CustomOptions extends z.ZodType<any, any>>(
   embedder: Action<typeof EmbedRequestSchema, typeof EmbedResponseSchema>,
   configSchema?: CustomOptions
 ): EmbedderAction<CustomOptions> {
@@ -104,7 +105,7 @@ function withMetadata<CustomOptions extends z.ZodTypeAny>(
 }
 
 /** Configuration options for defining an embedder via {@link defineEmbedder} or {@link embedder}. */
-export interface EmbedderOptions<ConfigSchema extends z.ZodTypeAny> {
+export interface EmbedderOptions<ConfigSchema extends z.ZodType<any, any>> {
   name: string;
   configSchema?: ConfigSchema;
   info?: EmbedderInfo;
@@ -115,7 +116,9 @@ export interface EmbedderOptions<ConfigSchema extends z.ZodTypeAny> {
  *
  * Unlike `defineEmbedder` this function does not register the embedder in the reigistry.
  */
-export function embedder<ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny>(
+export function embedder<
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
+>(
   options: EmbedderOptions<ConfigSchema>,
   runner: (
     input: EmbedRequest<z.infer<ConfigSchema>>,
@@ -139,7 +142,7 @@ export function embedder<ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny>(
 }
 
 function embedderActionOptions<
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: EmbedderOptions<ConfigSchema>
 ): ActionParams<typeof EmbedRequestSchema, typeof EmbedResponseSchema> {
@@ -164,7 +167,7 @@ function embedderActionOptions<
  * Creates embedder model for the provided {@link EmbedderFn} model implementation.
  */
 export function defineEmbedder<
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   options: EmbedderOptions<ConfigSchema>,
@@ -187,13 +190,15 @@ export function defineEmbedder<
  * A union type representing all the types that can refer to an embedder.
  */
 export type EmbedderArgument<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > = string | EmbedderAction<CustomOptions> | EmbedderReference<CustomOptions>;
 
 /**
  * A veneer for interacting with embedder models.
  */
-export async function embed<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny>(
+export async function embed<
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+>(
   registry: Registry,
   params: EmbedderParams<CustomOptions>
 ): Promise<Embedding[]> {
@@ -223,14 +228,16 @@ export async function embed<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny>(
   return response.embeddings;
 }
 
-interface ResolvedEmbedder<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> {
+interface ResolvedEmbedder<
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
+> {
   embedderAction: EmbedderAction<CustomOptions>;
   config?: z.infer<CustomOptions>;
   version?: string;
 }
 
 async function resolveEmbedder<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   params: EmbedderParams<CustomOptions>
@@ -264,7 +271,7 @@ async function resolveEmbedder<
  * A veneer for interacting with embedder models in bulk.
  */
 export async function embedMany<
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   registry: Registry,
   params: {
@@ -322,7 +329,7 @@ export type EmbedderInfo = z.infer<typeof EmbedderInfoSchema>;
  * about the specific embedder, e.g. custom config options schema.
  */
 export interface EmbedderReference<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   name: string;
   configSchema?: CustomOptions;
@@ -335,7 +342,7 @@ export interface EmbedderReference<
  * Helper method to configure a {@link EmbedderReference} to a plugin.
  */
 export function embedderRef<
-  CustomOptionsSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptionsSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: EmbedderReference<CustomOptionsSchema> & {
     namespace?: string;
@@ -358,7 +365,7 @@ export function embedderActionMetadata({
 }: {
   name: string;
   info?: EmbedderInfo;
-  configSchema?: z.ZodTypeAny;
+  configSchema?: z.ZodType<any, any>;
 }): ActionMetadata {
   return {
     actionType: 'embedder',

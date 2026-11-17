@@ -32,14 +32,14 @@ const AnswerRelevancyResponseSchema = z.object({
 });
 
 export async function answerRelevancyScore<
-  CustomModelOptions extends z.ZodTypeAny,
-  CustomEmbedderOptions extends z.ZodTypeAny,
+  CustomModelOptions extends z.ZodType<any, any>,
+  CustomEmbedderOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   embedder: EmbedderArgument<CustomEmbedderOptions>,
-  judgeConfig?: CustomModelOptions,
+  judgeConfig?: z.infer<CustomModelOptions>,
   embedderOptions?: z.infer<CustomEmbedderOptions>
 ): Promise<Score> {
   try {

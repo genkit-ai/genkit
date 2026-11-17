@@ -316,7 +316,7 @@ export type VertexAIPlugin = {
     name: keyof typeof ACTUAL_IMAGEN_MODELS | (`imagen${string}` & {}),
     config?: z.infer<typeof ImagenConfigSchema>
   ): ModelReference<typeof ImagenConfigSchema>;
-  model(name: string, config?: any): ModelReference<z.ZodTypeAny>;
+  model(name: string, config?: any): ModelReference<z.ZodType<any, any>>;
   embedder(
     name: string,
     config?: VertexEmbeddingConfig
@@ -333,7 +333,7 @@ export const vertexAI = vertexAIPlugin as VertexAIPlugin;
 (vertexAI as any).model = (
   name: string,
   config?: any
-): ModelReference<z.ZodTypeAny> => {
+): ModelReference<z.ZodType<any, any>> => {
   warnDeprecated();
   if (name.startsWith('imagen')) {
     return modelRef({

@@ -67,7 +67,7 @@ export interface ByoMetric {
 /**
  * Plugin option definition for the PII evaluator
  */
-export interface PluginOptions<ModelCustomOptions extends z.ZodTypeAny> {
+export interface PluginOptions<ModelCustomOptions extends z.ZodType<any, any>> {
   judge: ModelReference<ModelCustomOptions>;
   judgeConfig?: z.infer<ModelCustomOptions>;
   metrics?: Array<ByoMetric>;
@@ -76,7 +76,7 @@ export interface PluginOptions<ModelCustomOptions extends z.ZodTypeAny> {
 /**
  * Configurable Eval plugin that provides different kinds of custom evaluators.
  */
-export function byoEval<ModelCustomOptions extends z.ZodTypeAny>(
+export function byoEval<ModelCustomOptions extends z.ZodType<any, any>>(
   params: PluginOptions<ModelCustomOptions>
 ): GenkitPlugin {
   // Define the new plugin

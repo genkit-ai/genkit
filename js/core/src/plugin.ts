@@ -35,11 +35,11 @@ export interface PluginProvider {
 }
 
 export interface InitializedPlugin {
-  models?: Action<z.ZodTypeAny, z.ZodTypeAny>[];
-  retrievers?: Action<z.ZodTypeAny, z.ZodTypeAny>[];
-  embedders?: Action<z.ZodTypeAny, z.ZodTypeAny>[];
-  indexers?: Action<z.ZodTypeAny, z.ZodTypeAny>[];
-  evaluators?: Action<z.ZodTypeAny, z.ZodTypeAny>[];
+  models?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
+  retrievers?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
+  embedders?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
+  indexers?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
+  evaluators?: Action<z.ZodType<any, any>, z.ZodType<any, any>>[];
   /** @deprecated */
   flowStateStore?: Provider<any> | Provider<any>[];
   /** @deprecated */

@@ -143,10 +143,10 @@ async function getContext<C extends ActionContext, T>(
 
 function appRoute<
   C extends ActionContext = ActionContext,
-  I extends z.ZodTypeAny = z.ZodTypeAny,
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  S extends z.ZodTypeAny = z.ZodTypeAny,
-  Init extends z.ZodTypeAny = z.ZodTypeAny,
+  I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  S extends z.ZodType<any, any> = z.ZodType<any, any>,
+  Init extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   action: Action<I, O, S, any, Init>,
   opts?: {

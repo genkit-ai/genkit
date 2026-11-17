@@ -24,67 +24,65 @@ import {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 
-export const RetryOptionsSchema = z
-  .object({
-    /**
-     * The maximum number of times to retry a failed request.
-     * @default 3
-     */
-    maxRetries: z
-      .number()
-      .gt(0)
-      .optional()
-      .describe('The maximum number of times to retry a failed request.'),
-    /**
-     * An array of `StatusName` values that should trigger a retry.
-     * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']
-     */
-    statuses: z
-      .array(StatusNameSchema)
-      .optional()
-      .describe('An array of StatusName values that should trigger a retry.'),
-    /**
-     * The initial delay between retries, in milliseconds.
-     * @default 1000
-     */
-    initialDelayMs: z
-      .number()
-      .optional()
-      .describe('The initial delay between retries, in milliseconds.'),
-    /**
-     * The maximum delay between retries, in milliseconds.
-     * @default 60000
-     */
-    maxDelayMs: z
-      .number()
-      .gt(0)
-      .optional()
-      .describe('The maximum delay between retries, in milliseconds.'),
-    /**
-     * The factor by which the delay increases after each retry (exponential backoff).
-     * @default 2
-     */
-    backoffFactor: z
-      .number()
-      .gt(0)
-      .optional()
-      .describe(
-        'The factor by which the delay increases after each retry (exponential backoff).'
-      ),
-    /**
-     * Whether to disable jitter on the delay. Jitter adds a random factor to the
-     * delay to help prevent a "thundering herd" of clients all retrying at the
-     * same time.
-     * @default false
-     */
-    noJitter: z
-      .boolean()
-      .optional()
-      .describe(
-        'Whether to disable jitter on the delay. Jitter adds a random factor to the delay to help prevent a "thundering herd" of clients all retrying at the same time.'
-      ),
-  })
-  .passthrough();
+export const RetryOptionsSchema = z.looseObject({
+  /**
+   * The maximum number of times to retry a failed request.
+   * @default 3
+   */
+  maxRetries: z
+    .number()
+    .gt(0)
+    .optional()
+    .describe('The maximum number of times to retry a failed request.'),
+  /**
+   * An array of `StatusName` values that should trigger a retry.
+   * @default ['UNAVAILABLE', 'DEADLINE_EXCEEDED', 'RESOURCE_EXHAUSTED', 'ABORTED', 'INTERNAL']
+   */
+  statuses: z
+    .array(StatusNameSchema)
+    .optional()
+    .describe('An array of StatusName values that should trigger a retry.'),
+  /**
+   * The initial delay between retries, in milliseconds.
+   * @default 1000
+   */
+  initialDelayMs: z
+    .number()
+    .optional()
+    .describe('The initial delay between retries, in milliseconds.'),
+  /**
+   * The maximum delay between retries, in milliseconds.
+   * @default 60000
+   */
+  maxDelayMs: z
+    .number()
+    .gt(0)
+    .optional()
+    .describe('The maximum delay between retries, in milliseconds.'),
+  /**
+   * The factor by which the delay increases after each retry (exponential backoff).
+   * @default 2
+   */
+  backoffFactor: z
+    .number()
+    .gt(0)
+    .optional()
+    .describe(
+      'The factor by which the delay increases after each retry (exponential backoff).'
+    ),
+  /**
+   * Whether to disable jitter on the delay. Jitter adds a random factor to the
+   * delay to help prevent a "thundering herd" of clients all retrying at the
+   * same time.
+   * @default false
+   */
+  noJitter: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether to disable jitter on the delay. Jitter adds a random factor to the delay to help prevent a "thundering herd" of clients all retrying at the same time.'
+    ),
+});
 
 export type RetryOptions = z.infer<typeof RetryOptionsSchema>;
 

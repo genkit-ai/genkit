@@ -57,7 +57,7 @@ export const ArtifactSchema = z.object({
   /** Parts contains the artifact content (text, media, etc.). */
   parts: z.array(PartSchema),
   /** Metadata contains additional artifact-specific data. */
-  metadata: z.record(z.any()).optional(),
+  metadata: z.record(z.string(), z.any()).optional(),
 });
 
 /**
@@ -564,7 +564,7 @@ export const AgentMetadataSchema = z.object({
    * `SessionState`), inferred from the agent's state type. Omitted when the
    * state type carries no schema to infer.
    */
-  stateSchema: z.record(z.any()).optional(),
+  stateSchema: z.record(z.string(), z.any()).optional(),
 });
 
 /**

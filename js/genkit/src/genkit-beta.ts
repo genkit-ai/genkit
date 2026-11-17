@@ -142,7 +142,7 @@ export class GenkitBeta extends Genkit {
    */
   definePromptAgent<
     State = unknown,
-    I extends z.ZodTypeAny = z.ZodTypeAny,
+    I extends z.ZodType<any, any> = z.ZodType<any, any>,
   >(config: {
     promptName: string;
     /**
@@ -181,9 +181,10 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineAgent<State = unknown, I extends z.ZodTypeAny = z.ZodTypeAny>(
-    config: AgentConfig<State, I>
-  ) {
+  defineAgent<
+    State = unknown,
+    I extends z.ZodType<any, any> = z.ZodType<any, any>,
+  >(config: AgentConfig<State, I>) {
     return defineAgent<State, I>(this.registry, config);
   }
 
@@ -239,7 +240,7 @@ export class GenkitBeta extends Genkit {
    *
    * @beta
    */
-  defineInterrupt<I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
+  defineInterrupt<I extends z.ZodType<any, any>, O extends z.ZodType<any, any>>(
     config: InterruptConfig<I, O>
   ): ToolAction<I, O> {
     return defineInterrupt(this.registry, config);
@@ -261,8 +262,11 @@ export class GenkitBeta extends Genkit {
    * The status of the operation and final result can be obtained using {@link Genkit.checkOperation}.
    */
   generateOperation<
-    O extends z.ZodTypeAny = z.ZodTypeAny,
-    CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+    O extends z.ZodType<any, any> = z.ZodType<any, any>,
+    CustomOptions extends z.ZodType<
+      any,
+      any
+    > = typeof GenerationCommonConfigSchema,
   >(
     opts:
       | GenerateOptions<O, CustomOptions>

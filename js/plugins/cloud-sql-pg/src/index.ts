@@ -88,7 +88,7 @@ export const postgresIndexerRef = (params: { tableName: string }) => {
  * @param params.embedderOptions Options to customize the embedder
  * @returns The Postgres Genkit plugin
  */
-export function postgres<EmbedderCustomOptions extends z.ZodTypeAny>(
+export function postgres<EmbedderCustomOptions extends z.ZodType<any, any>>(
   params: {
     tableName: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
@@ -123,7 +123,7 @@ export default postgres;
  * @returns A Postgres retriever
  */
 export async function configurePostgresRetriever<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: {
@@ -319,7 +319,7 @@ export async function configurePostgresRetriever<
  * @returns Add documents to vector store
  */
 export function configurePostgresIndexer<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: {

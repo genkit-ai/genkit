@@ -88,7 +88,9 @@ export { GenerateResponse, GenerateResponseChunk };
 export type ToolChoice = 'auto' | 'required' | 'none';
 
 /** Configuration for the desired output format and schema of a generate request. */
-export interface OutputOptions<O extends z.ZodTypeAny = z.ZodTypeAny> {
+export interface OutputOptions<
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+> {
   format?: string;
   contentType?: string;
   instructions?: boolean | string;
@@ -127,8 +129,8 @@ export interface ResumeOptions {
  * Options for making a generation request using {@link Genkit.generate} or {@link Genkit.generateStream}.
  */
 export interface GenerateOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 > {
   /** A model name (e.g. `vertexai/gemini-1.0-pro`) or reference. */
   model?: ModelArgument<CustomOptions>;
@@ -622,8 +624,11 @@ export async function normalizeMiddleware(
  * @returns The generated response based on the provided parameters.
  */
 export async function generate<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 >(
   registry: Registry,
   options:
@@ -689,15 +694,18 @@ export async function generate<
     tools,
     resources,
   });
-  return new GenerateResponse<O>(response, {
+  return new GenerateResponse<z.infer<O>>(response, {
     request: response.request ?? request,
     parser: resolvedFormat?.handler(request.output?.schema).parseMessage,
   });
 }
 
 export async function generateOperation<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 >(
   registry: Registry,
   options:
@@ -741,8 +749,11 @@ export function maybeRegisterDynamicMiddlewareTools(
 }
 
 function maybeRegisterDynamicTools<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 >(registry: Registry, options: GenerateOptions<O, CustomOptions>) {
   options?.tools?.forEach((t) => {
     if (isDynamicTool(t)) {
@@ -756,8 +767,11 @@ function maybeRegisterDynamicTools<
 }
 
 function maybeRegisterDynamicResources<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 >(registry: Registry, options: GenerateOptions<O, CustomOptions>) {
   options?.resources?.forEach((r) => {
     if (isDynamicResourceAction(r)) {
@@ -767,8 +781,11 @@ function maybeRegisterDynamicResources<
 }
 
 export async function toGenerateActionOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 >(
   registry: Registry,
   options: GenerateOptions<O, CustomOptions>
@@ -903,25 +920,31 @@ async function resolveFullResourceNames(
 
 /** Options for {@link Genkit.generateStream}. Same as {@link GenerateOptions} but without `streamingCallback`. */
 export type GenerateStreamOptions<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 > = Omit<GenerateOptions<O, CustomOptions>, 'streamingCallback'>;
 
 /** The return type of {@link Genkit.generateStream}, providing both a stream of chunks and the final response. */
-export interface GenerateStreamResponse<O extends z.ZodTypeAny = z.ZodTypeAny> {
+export interface GenerateStreamResponse<O = unknown> {
   get stream(): AsyncIterable<GenerateResponseChunk>;
   get response(): Promise<GenerateResponse<O>>;
 }
 
 export function generateStream<
-  O extends z.ZodTypeAny = z.ZodTypeAny,
-  CustomOptions extends z.ZodTypeAny = typeof GenerationCommonConfigSchema,
+  O extends z.ZodType<any, any> = z.ZodType<any, any>,
+  CustomOptions extends z.ZodType<
+    any,
+    any
+  > = typeof GenerationCommonConfigSchema,
 >(
   registry: Registry,
   options:
     | GenerateOptions<O, CustomOptions>
     | PromiseLike<GenerateOptions<O, CustomOptions>>
-): GenerateStreamResponse<O> {
+): GenerateStreamResponse<z.infer<O>> {
   const channel = new Channel<GenerateResponseChunk>();
 
   const generated = Promise.resolve(options).then((resolvedOptions) =>

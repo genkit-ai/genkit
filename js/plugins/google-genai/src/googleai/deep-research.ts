@@ -104,19 +104,19 @@ export const DeepResearchConfigSchema = z
     // TODO(V2): Remove googleSearch, urlContext, and codeExecution wrappers
     // and rely entirely on `config.tools` being passed through.
     googleSearch: z
-      .union([z.boolean(), z.object({}).passthrough()])
+      .union([z.boolean(), z.looseObject({})])
       .describe(
         'Search the public web. Enabled by default if no tools are provided.'
       )
       .optional(),
     urlContext: z
-      .union([z.boolean(), z.object({}).passthrough()])
+      .union([z.boolean(), z.looseObject({})])
       .describe(
         'Read and summarize web page content. Enabled by default if no tools are provided.'
       )
       .optional(),
     codeExecution: z
-      .union([z.boolean(), z.object({}).passthrough()])
+      .union([z.boolean(), z.looseObject({})])
       .describe(
         'Execute code to perform calculations and data analysis. Enabled by default if no tools are provided.'
       )
@@ -133,7 +133,7 @@ export const DeepResearchConfigSchema = z
           .object({
             name: z.string().optional(),
             url: z.string().optional(),
-            headers: z.record(z.string()).optional(),
+            headers: z.record(z.string(), z.string()).optional(),
             allowedTools: z
               .union([
                 z.array(z.string()),

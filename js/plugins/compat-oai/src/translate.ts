@@ -156,7 +156,7 @@ export function translationToGenerateResponse(
  * @returns the created {@link ModelAction}
  */
 export function defineCompatOpenAITranslationModel<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   client: OpenAI;
@@ -198,7 +198,7 @@ export function defineCompatOpenAITranslationModel<
 /** Translation ModelRef helper, with reasonable defaults for
  * OpenAI-compatible providers */
 export function compatOaiTranslationModelRef<
-  CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
+  CustomOptions extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(params: {
   name: string;
   info?: ModelInfo;
@@ -215,7 +215,10 @@ export function compatOaiTranslationModelRef<
   } = params;
   return modelRef({
     name,
-    configSchema: configSchema || (TranslationConfigSchema as any),
+    // When configSchema is omitted, CustomOptions is its default (untyped), so the
+    // common schema is a valid stand-in.
+    configSchema:
+      configSchema ?? (TranslationConfigSchema as unknown as CustomOptions),
     info,
     config,
     namespace,

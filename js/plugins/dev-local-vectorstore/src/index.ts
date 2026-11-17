@@ -57,7 +57,7 @@ function addDocument(
   }
 }
 
-interface Params<EmbedderCustomOptions extends z.ZodTypeAny> {
+interface Params<EmbedderCustomOptions extends z.ZodType<any, any>> {
   indexName: string;
   embedder: EmbedderArgument<EmbedderCustomOptions>;
   embedderOptions?: z.infer<EmbedderCustomOptions>;
@@ -68,9 +68,9 @@ interface Params<EmbedderCustomOptions extends z.ZodTypeAny> {
  *
  * NOT INTENDED FOR USE IN PRODUCTION
  */
-export function devLocalVectorstore<EmbedderCustomOptions extends z.ZodTypeAny>(
-  params: Params<EmbedderCustomOptions>[]
-): GenkitPlugin {
+export function devLocalVectorstore<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(params: Params<EmbedderCustomOptions>[]): GenkitPlugin {
   return genkitPlugin('devLocalVectorstore', async (ai) => {
     params.map((p) => configureDevLocalRetriever(ai, p));
     params.map((p) => configureDevLocalIndexer(ai, p));
@@ -106,7 +106,7 @@ export function devLocalIndexerRef(indexName: string) {
 }
 
 async function importDocumentsToLocalVectorstore<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(
   ai: Genkit,
   params: {
@@ -141,8 +141,8 @@ async function importDocumentsToLocalVectorstore<
 }
 
 async function getClosestDocuments<
-  I extends z.ZodTypeAny,
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  I extends z.ZodType<any, any>,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 >(params: {
   queryEmbeddings: Array<number>;
   db: Record<string, DbValue>;
@@ -166,7 +166,9 @@ async function getClosestDocuments<
 /**
  * Configures a local vectorstore retriever
  */
-function configureDevLocalRetriever<EmbedderCustomOptions extends z.ZodTypeAny>(
+function configureDevLocalRetriever<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(
   ai: Genkit,
   params: {
     indexName: string;
@@ -202,7 +204,9 @@ function configureDevLocalRetriever<EmbedderCustomOptions extends z.ZodTypeAny>(
 /**
  * Configures a local vectorstore indexer.
  */
-function configureDevLocalIndexer<EmbedderCustomOptions extends z.ZodTypeAny>(
+function configureDevLocalIndexer<
+  EmbedderCustomOptions extends z.ZodType<any, any>,
+>(
   ai: Genkit,
   params: {
     indexName: string;

@@ -899,7 +899,7 @@ export function toInteractionRole(role: MessageData['role']): string {
 const GoogleSearchArgsSchema = z
   .object({ queries: z.array(z.string()).optional() })
   .passthrough();
-const RecordUnknownSchema = z.record(z.unknown());
+const RecordUnknownSchema = z.record(z.string(), z.unknown());
 
 const MediaResolutionSchema = z.enum(['low', 'medium', 'high', 'ultra_high']);
 

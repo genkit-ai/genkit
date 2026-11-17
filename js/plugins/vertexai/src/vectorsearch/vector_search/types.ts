@@ -23,7 +23,7 @@ import type { PluginOptions } from '../types.js';
 
 // This internal interface will be passed to the vertexIndexers and vertexRetrievers functions
 export interface VertexVectorSearchOptions<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
 > {
   pluginOptions: PluginOptions;
   authClient: GoogleAuth;
@@ -172,7 +172,7 @@ export type DocumentIndexer<Options extends {} = {}> = (
 ) => Promise<string[]>;
 
 export interface VectorSearchOptions<
-  EmbedderCustomOptions extends z.ZodTypeAny,
+  EmbedderCustomOptions extends z.ZodType<any, any>,
   IndexerOptions extends {},
   RetrieverOptions extends { k?: number },
 > {

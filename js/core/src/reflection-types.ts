@@ -43,7 +43,7 @@ export type ReflectionRegisterParams = z.infer<
  */
 export const ReflectionStreamChunkParamsSchema = z.object({
   requestId: z.string(),
-  chunk: z.any(),
+  chunk: z.any().optional(),
 });
 
 export type ReflectionStreamChunkParams = z.infer<
@@ -121,7 +121,7 @@ export type ReflectionCancelActionParams = z.infer<
  */
 export const ReflectionSendInputStreamChunkParamsSchema = z.object({
   requestId: z.string(),
-  chunk: z.any(),
+  chunk: z.any().optional(),
 });
 
 export type ReflectionSendInputStreamChunkParams = z.infer<
@@ -154,7 +154,7 @@ export type ReflectionListActionsResponse = z.infer<
  * ReflectionListValuesResponseSchema is the result for the 'listValues' method.
  */
 export const ReflectionListValuesResponseSchema = z.object({
-  values: z.record(z.any()),
+  values: z.record(z.string(), z.any()),
 });
 
 export type ReflectionListValuesResponse = z.infer<

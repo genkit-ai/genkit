@@ -160,8 +160,8 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
     .object({
       user_id: z.string().optional(),
     })
-    .describe('The metadata to include in the request.')
     .passthrough()
+    .describe('The metadata to include in the request.')
     .optional(),
   /** Optional shorthand to pick API surface for this request. */
   apiVersion: z

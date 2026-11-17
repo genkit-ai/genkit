@@ -232,7 +232,7 @@ export function statusNameToCode(
   return typeof val === 'number' ? (val as StatusCodes) : undefined;
 }
 
-const StatusCodesSchema = z.nativeEnum(StatusCodes);
+const StatusCodesSchema = z.enum(StatusCodes);
 
 // If changing below
 export const StatusSchema = z.object({

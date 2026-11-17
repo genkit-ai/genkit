@@ -153,7 +153,6 @@ describe('toJsonSchema', () => {
       }),
       {
         $schema: 'http://json-schema.org/draft-07/schema#',
-        additionalProperties: true,
         properties: {
           output: {
             type: 'string',
@@ -163,6 +162,103 @@ describe('toJsonSchema', () => {
         type: 'object',
       }
     );
+  });
+});
+
+describe('toJsonSchema() zod v3 output compat', () => {
+  it('emits date-time strings for z.date()', () => {
+    const json = toJsonSchema({ schema: z.object({ d: z.date() }) });
+    assert.deepStrictEqual(json.properties.d, {
+      type: 'string',
+      format: 'date-time',
+    });
+  });
+
+  it('emits anyOf (not oneOf) for discriminated unions', () => {
+    const json = toJsonSchema({
+      schema: z.discriminatedUnion('t', [
+        z.object({ t: z.literal('a') }),
+        z.object({ t: z.literal('b') }),
+      ]),
+    });
+    assert.strictEqual(json.oneOf, undefined);
+    assert.strictEqual(json.anyOf.length, 2);
+  });
+
+  it('emits type arrays for described nullable primitives', () => {
+    const json = toJsonSchema({ schema: z.string().describe('d').nullable() });
+    assert.deepStrictEqual(json.type, ['string', 'null']);
+    assert.strictEqual(json.description, 'd');
+    assert.strictEqual(json.anyOf, undefined);
+  });
+
+  it('emits string formats without the internal regex pattern', () => {
+    const json = toJsonSchema({ schema: z.string().datetime() });
+    assert.deepStrictEqual(
+      { type: json.type, format: json.format, pattern: json.pattern },
+      { type: 'string', format: 'date-time', pattern: undefined }
+    );
+  });
+
+  it('drops implicit safe-integer bounds from .int()', () => {
+    const json = toJsonSchema({ schema: z.number().int().min(0) });
+    assert.deepStrictEqual(
+      { type: json.type, minimum: json.minimum, maximum: json.maximum },
+      { type: 'integer', minimum: 0, maximum: undefined }
+    );
+  });
+
+  it('omits no-op propertyNames for string-keyed records', () => {
+    const json = toJsonSchema({ schema: z.record(z.string(), z.number()) });
+    assert.strictEqual(json.propertyNames, undefined);
+    assert.deepStrictEqual(json.additionalProperties, { type: 'number' });
+  });
+
+  it('keeps oneOf for non-discriminated oneOf unions (z.xor)', () => {
+    const json = toJsonSchema({ schema: z.xor([z.string(), z.number()]) });
+    assert.strictEqual(json.anyOf, undefined);
+    assert.strictEqual(json.oneOf.length, 2);
+  });
+
+  it('prefers the outer description when collapsing nullable primitives', () => {
+    const json = toJsonSchema({
+      schema: z.string().describe('inner').nullable().describe('outer'),
+    });
+    assert.deepStrictEqual(json.type, ['string', 'null']);
+    assert.strictEqual(json.description, 'outer');
+  });
+
+  it('keeps only the pattern for formats the validators do not know', () => {
+    for (const schema of [
+      z.cuid(),
+      z.ulid(),
+      z.base64(),
+      z.nanoid(),
+      z.string().startsWith('ab'),
+    ]) {
+      const json = toJsonSchema({ schema });
+      assert.strictEqual(typeof json.pattern, 'string', json.pattern);
+      assert.strictEqual(json.format, undefined, json.pattern);
+      assert.strictEqual(
+        validateSchema('!!not valid!!', { schema }).valid,
+        false,
+        json.pattern
+      );
+    }
+  });
+
+  it('keeps anyOf for nullable strings with several patterns', () => {
+    const schema = z.string().regex(/^a/).regex(/b$/).nullable();
+    assert.strictEqual(validateSchema(null, { schema }).valid, true);
+    assert.strictEqual(validateSchema('ab', { schema }).valid, true);
+    assert.strictEqual(validateSchema('xb', { schema }).valid, false);
+  });
+
+  it('drops the pattern for formats the validators check', () => {
+    for (const schema of [z.email(), z.uuid(), z.url(), z.iso.date()]) {
+      const json = toJsonSchema({ schema });
+      assert.strictEqual(json.pattern, undefined, json.format);
+    }
   });
 });
 
@@ -287,6 +383,24 @@ describe('annotateSchema()', () => {
     assert.strictEqual(json.items[1]['x-hint'], 'second');
   });
 
+  it('applies annotations inside recursive (z.lazy) schemas', () => {
+    interface Node {
+      name: string;
+      children?: Node[];
+    }
+    const NodeSchema: z.ZodType<Node> = z.lazy(() =>
+      z.object({
+        name: annotateSchema(z.string(), { 'x-hint': 'name' }),
+        children: z.array(NodeSchema).optional(),
+      })
+    );
+    const json = toJsonSchema({ schema: z.object({ root: NodeSchema }) });
+    // The recursive definition is emitted once under definitions/$defs.
+    const defs = json.definitions ?? json.$defs;
+    const def = Object.values(defs ?? {})[0];
+    assert.strictEqual(def.properties.name['x-hint'], 'name');
+  });
+
   it('should merge annotations for ZodDiscriminatedUnion (anyOf)', () => {
     const schema = z.discriminatedUnion('type', [
       annotateSchema(z.object({ type: z.literal('a'), a: z.string() }), {
@@ -303,21 +417,16 @@ describe('annotateSchema()', () => {
     assert.strictEqual(json.anyOf[1]['x-hint'], 'b');
   });
 
-  it('should not overwrite existing JSON schema fields and log a warning', () => {
-    const warnSpy = mock.method(console, 'warn', () => {});
-    const schema = annotateSchema(z.string(), { type: 'number', 'x-ok': true });
+  it('annotations are merged over generated JSON schema fields', () => {
+    // zod v4 metadata semantics: registry metadata is applied on top of the
+    // generated schema, so conflicting keys win.
+    const schema = annotateSchema(z.string(), { 'x-ok': true, title: 'T' });
 
     const json = toJsonSchema({ schema });
 
     assert.strictEqual(json.type, 'string');
     assert.strictEqual(json['x-ok'], true);
-    assert.strictEqual(warnSpy.mock.callCount(), 1);
-    assert.ok(
-      warnSpy.mock.calls[0].arguments[0].includes(
-        'Annotation key "type" conflicts'
-      )
-    );
-    warnSpy.mock.restore();
+    assert.strictEqual(json.title, 'T');
   });
 });
 

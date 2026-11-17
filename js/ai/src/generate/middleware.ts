@@ -37,9 +37,9 @@ export const MiddlewareDescSchema = z.object({
   /** Human-readable description of what the middleware does. */
   description: z.string().optional(),
   /** JSON Schema for the middleware's configuration. */
-  configSchema: z.record(z.any()).nullish(),
+  configSchema: z.record(z.string(), z.any()).nullish(),
   /** User defined metadata for the middleware. */
-  metadata: z.record(z.any()).nullish(),
+  metadata: z.record(z.string(), z.any()).nullish(),
 });
 /** Descriptor for a registered middleware, returned by reflection API. */
 export type MiddlewareDesc = z.infer<typeof MiddlewareDescSchema>;
@@ -50,7 +50,7 @@ export type MiddlewareDesc = z.infer<typeof MiddlewareDescSchema>;
  * inclusion in a `GenerateOptions.use` array.
  */
 export interface GenerateMiddleware<
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
   PluginOptions = void,
 > extends MiddlewareDesc {
   /** Configures the middleware, returning a MiddlewareRef for usage in `generate({use: [...]})`. */
@@ -81,7 +81,7 @@ export interface GenerateMiddleware<
 }
 
 interface GenerateMiddlewarePluginInstance<
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
   PluginOptions = void,
 > extends GenerateMiddleware<ConfigSchema, PluginOptions> {
   /** Options passed to the middleware plugin function. */
@@ -149,7 +149,7 @@ export interface GenerateMiddlewareDef {
  * Options passed to the middleware factory function.
  */
 export interface MiddlewareFnOptions<
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
   PluginOptions = void,
 > {
   config: z.infer<ConfigSchema> | undefined;
@@ -159,7 +159,7 @@ export interface MiddlewareFnOptions<
 
 export function generateMiddleware<
   PluginOptions = void,
-  ConfigSchema extends z.ZodTypeAny = z.ZodTypeAny,
+  ConfigSchema extends z.ZodType<any, any> = z.ZodType<any, any>,
 >(
   options: {
     name: string;
