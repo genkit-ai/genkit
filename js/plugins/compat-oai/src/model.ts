@@ -354,12 +354,20 @@ interface ContentChunk {
   signature?: string | null;
 }
 
+/** The text of a `thinking` chunk's `text` sub-chunks, joined. */
+function thinkingText(chunk: ContentChunk): string {
+  return (chunk.thinking ?? [])
+    .map((t) => (t.type === 'text' ? (t.text ?? '') : ''))
+    .join('');
+}
+
 /**
  * Converts an array of Mistral `ContentChunk`s to Genkit parts. `text` chunks
- * become text parts and `thinking` chunks become reasoning parts, with the
- * chunk's `signature` (if any) in `metadata.thoughtSignature`. Consecutive chunks of
- * the same kind are merged. Other chunk types (`image_url`, `reference`,
- * `document_url` and so on) are dropped.
+ * become text parts, with consecutive ones merged. Each `thinking` chunk
+ * becomes its own reasoning part, with the chunk's `signature` (if any) in
+ * `metadata.thoughtSignature`, so a signature only goes back with the text it
+ * signed. Other chunk types (`image_url`, `reference`, `document_url` and so
+ * on) are dropped.
  */
 function fromContentChunks(chunks: ContentChunk[]): Part[] {
   const parts: Part[] = [];
@@ -373,27 +381,52 @@ function fromContentChunks(chunks: ContentChunk[]): Part[] {
         parts.push({ text: chunk.text });
       }
     } else if (chunk.type === 'thinking') {
-      const text = (chunk.thinking ?? [])
-        .map((t) => (t.type === 'text' ? (t.text ?? '') : ''))
-        .join('');
+      const text = thinkingText(chunk);
       if (!text && !chunk.signature) continue;
-      let part: Part;
-      if (last?.reasoning !== undefined) {
-        part = last;
-        part.reasoning += text;
-      } else {
-        part = { reasoning: text };
-        parts.push(part);
-      }
-      if (chunk.signature) {
-        part.metadata = {
-          ...part.metadata,
-          thoughtSignature: chunk.signature,
-        };
-      }
+      parts.push(
+        chunk.signature
+          ? { reasoning: text, metadata: { thoughtSignature: chunk.signature } }
+          : { reasoning: text }
+      );
     }
   }
   return parts;
+}
+
+/**
+ * Joins streamed `ContentChunk` fragments back into whole chunks. A streamed
+ * `thinking` chunk arrives as many fragments, so consecutive `thinking`
+ * fragments are joined until one carries a `signature`, which closes the
+ * chunk: the next `thinking` fragment starts a new chunk. Consecutive `text`
+ * fragments are joined too. Other chunk types are kept as they are.
+ */
+function joinStreamedContentChunks(fragments: ContentChunk[]): ContentChunk[] {
+  const chunks: ContentChunk[] = [];
+  // The `thinking` chunk still taking fragments, if any.
+  let open: ContentChunk | undefined;
+  for (const fragment of fragments) {
+    const last = chunks[chunks.length - 1];
+    if (fragment.type === 'thinking') {
+      if (!open) {
+        open = { type: 'thinking', thinking: [] };
+        chunks.push(open);
+      }
+      const text = thinkingText(fragment);
+      if (text) open.thinking!.push({ type: 'text', text });
+      if (fragment.signature) {
+        open.signature = fragment.signature;
+        open = undefined;
+      }
+      continue;
+    }
+    open = undefined;
+    if (fragment.type === 'text' && last?.type === 'text') {
+      last.text = (last.text ?? '') + (fragment.text ?? '');
+    } else {
+      chunks.push({ ...fragment });
+    }
+  }
+  return chunks;
 }
 
 const finishReasonMap: Partial<
@@ -942,7 +975,8 @@ export function openAIModelRunner(
           for (const choice of response.choices) {
             const chunks = contentChunks.get(choice.index);
             if (chunks) {
-              (choice.message as { content: unknown }).content = chunks;
+              (choice.message as { content: unknown }).content =
+                joinStreamedContentChunks(chunks);
             }
           }
         }

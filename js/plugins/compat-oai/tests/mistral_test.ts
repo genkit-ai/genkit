@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
-import { genkit, z, type Genkit } from 'genkit';
+import { genkit, z, type Genkit, type MessageData } from 'genkit';
 import { mistral } from '../src/mistral';
 import { MistralChatCompletionConfigSchema } from '../src/mistral/mistral';
 import { FakeOpenAIServer } from './fake_openai_server';
@@ -1019,6 +1019,123 @@ describe('mistral plugin', () => {
         },
         { type: 'text', text: '4' },
       ],
+    });
+  });
+
+  describe('signed thinking chunks', () => {
+    const TWO_SIGNED_CHUNKS = [
+      {
+        type: 'thinking',
+        thinking: [{ type: 'text', text: 'First thought.' }],
+        signature: 'sig-1',
+      },
+      {
+        type: 'thinking',
+        thinking: [{ type: 'text', text: 'Second thought.' }],
+        signature: 'sig-2',
+      },
+      { type: 'text', text: '4' },
+    ];
+    const TWO_REASONING_PARTS = [
+      {
+        reasoning: 'First thought.',
+        metadata: { reasoningSource: 'mistral', thoughtSignature: 'sig-1' },
+      },
+      {
+        reasoning: 'Second thought.',
+        metadata: { reasoningSource: 'mistral', thoughtSignature: 'sig-2' },
+      },
+      { text: '4' },
+    ];
+
+    /** Checks that each signature goes back with the text it signed. */
+    async function expectReplayedChunks(messages: MessageData[]) {
+      await ai.generate({
+        model: mistral.model('mistral-small-latest'),
+        messages,
+        prompt: 'And 3 + 3?',
+      });
+      const body = server.requests[server.requests.length - 1].body;
+      expect(body.messages[1]).toEqual({
+        role: 'assistant',
+        content: [
+          ...TWO_SIGNED_CHUNKS.slice(0, 2),
+          { type: 'text', text: '4' },
+        ],
+      });
+    }
+
+    it('keeps one reasoning part per thinking chunk', async () => {
+      server.setNextResponse({
+        body: {
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: TWO_SIGNED_CHUNKS },
+              finish_reason: 'stop',
+            },
+          ],
+        },
+      });
+
+      const response = await ai.generate({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'What is 2 + 2?',
+      });
+
+      expect(response.message?.content).toEqual(TWO_REASONING_PARTS);
+      await expectReplayedChunks(response.messages);
+    });
+
+    it('joins streamed fragments until a signature closes the chunk', async () => {
+      const delta = (content: unknown) => ({
+        id: '1',
+        choices: [{ index: 0, delta: { content }, finish_reason: null }],
+      });
+      const fragment = (text: string, signature?: string) => [
+        {
+          type: 'thinking',
+          thinking: [{ type: 'text', text }],
+          ...(signature ? { signature } : {}),
+        },
+      ];
+      server.setNextResponse({
+        stream: true,
+        chunks: [
+          {
+            id: '1',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: '' },
+                finish_reason: null,
+              },
+            ],
+          },
+          delta(fragment('First ')),
+          delta(fragment('thought.', 'sig-1')),
+          delta(fragment('Second ')),
+          delta(fragment('thought.')),
+          delta(fragment('', 'sig-2')),
+          {
+            id: '1',
+            choices: [
+              { index: 0, delta: { content: '4' }, finish_reason: 'stop' },
+            ],
+          },
+        ],
+      });
+
+      const { stream, response } = ai.generateStream({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'What is 2 + 2?',
+      });
+      for await (const _ of stream) {
+      }
+      const final = await response;
+
+      expect(final.message?.content).toEqual(TWO_REASONING_PARTS);
+      await expectReplayedChunks(final.messages);
     });
   });
 

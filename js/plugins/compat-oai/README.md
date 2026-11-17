@@ -229,10 +229,12 @@ Mistral's own field names:
   before the request goes out: Mistral's chat API only takes uploaded files.
 
 With `reasoningEffort` set, the model's thinking comes back as reasoning parts
-(`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
-`thinking` content. Only reasoning parts marked `metadata.reasoningSource:
-'mistral'` (as Mistral's replies are, also in the Python plugin) are sent back;
-reasoning from other models in the history is dropped.
+(`response.reasoning`), one part per `thinking` chunk, with the chunk's
+signature in `metadata.thoughtSignature`. Reasoning from earlier turns is sent
+back to Mistral as `thinking` content. Only reasoning parts marked
+`metadata.reasoningSource: 'mistral'` (as Mistral's replies are, also in the
+Python plugin) are sent back; reasoning from other models in the history is
+dropped.
 
 Any model returned by `/v1/models` can be used by name, for example
 `mistral.model('ministral-14b-2512')` or `'mistral/ministral-14b-2512'`. When
