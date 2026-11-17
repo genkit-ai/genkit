@@ -184,7 +184,7 @@ console.log(result.text);
 
 The `mistral` plugin uses Mistral's OpenAI-compatible API at
 `https://api.mistral.ai/v1`. Pass `apiKey` or set the `MISTRAL_API_KEY`
-environment variable.
+environment variable. Set `baseURL` to go through a proxy.
 
 ```typescript
 import { genkit } from 'genkit';
@@ -216,13 +216,15 @@ Mistral's own field names:
 - `topK` is refused before the request goes out: Mistral's models reject
   `top_k` sampling.
 - `reasoningEffort` is sent as `reasoning_effort`. Allowed values vary by
-  model: Mistral Small and Medium take `none` and `high`, Mistral Large 4 takes
-  `low`, `medium` and `high`.
+  model: Mistral Small and Medium take `none` and `high`, Mistral Large 4
+  (`mistral-large-latest`) takes `low`, `medium` and `high`.
 - OpenAI's `user` and `max_completion_tokens`, and any other config the plugin
   doesn't map, are ignored.
 - The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are
   always requested as floats.
 - Streaming requests don't send `stream_options`.
+- Only image media is sent. Other media, such as inline PDFs, is refused
+  before the request goes out: Mistral's chat API only takes uploaded files.
 
 With `reasoningEffort` set, the model's thinking comes back as reasoning parts
 (`response.reasoning`). Reasoning from earlier turns is sent back to Mistral as
@@ -292,8 +294,8 @@ Want to contribute to the project? That's awesome! Head over to our [Contributio
 
 ## Need help?
 
-- [Genkit Discord](https://genkit.dev/discord)
-- [Github Issues](https://github.com/genkit-ai/genkit/issues)
+ - [Genkit Discord](https://genkit.dev/discord)
+ - [Github Issues](https://github.com/genkit-ai/genkit/issues)
 
 ## License
 

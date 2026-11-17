@@ -357,7 +357,7 @@ interface ContentChunk {
 /**
  * Converts an array of Mistral `ContentChunk`s to Genkit parts. `text` chunks
  * become text parts and `thinking` chunks become reasoning parts, with the
- * chunk's `signature` (if any) in `metadata.signature`. Consecutive chunks of
+ * chunk's `signature` (if any) in `metadata.thoughtSignature`. Consecutive chunks of
  * the same kind are merged. Other chunk types (`image_url`, `reference`,
  * `document_url` and so on) are dropped.
  */
@@ -386,7 +386,10 @@ function fromContentChunks(chunks: ContentChunk[]): Part[] {
         parts.push(part);
       }
       if (chunk.signature) {
-        part.metadata = { ...part.metadata, signature: chunk.signature };
+        part.metadata = {
+          ...part.metadata,
+          thoughtSignature: chunk.signature,
+        };
       }
     }
   }

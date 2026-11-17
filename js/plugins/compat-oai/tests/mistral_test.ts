@@ -17,6 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { genkit, z, type Genkit } from 'genkit';
 import { mistral } from '../src/mistral';
+import { MistralChatCompletionConfigSchema } from '../src/mistral/mistral';
 import { FakeOpenAIServer } from './fake_openai_server';
 
 const API_KEY = 'mistral-test-key';
@@ -76,6 +77,16 @@ const MISTRAL_MESSAGE_KEYS: Record<string, string[]> = {
   tool: ['role', 'content', 'tool_call_id', 'name'],
 };
 const MISTRAL_THINK_CHUNK_KEYS = ['type', 'thinking', 'signature', 'closed'];
+/**
+ * Keys of the content chunks the plugin sends in `user` messages, by chunk
+ * type. Mistral's `file` chunk only takes an uploaded `file_id`, so inline
+ * files are refused before the request goes out.
+ */
+const MISTRAL_USER_CHUNK_KEYS: Record<string, string[]> = {
+  text: ['type', 'text'],
+  image_url: ['type', 'image_url'],
+};
+const MISTRAL_IMAGE_URL_KEYS = ['url', 'detail'];
 
 /** Wire keys of Mistral's `EmbeddingRequest`, from the same SDK. */
 const MISTRAL_EMBEDDING_REQUEST_KEYS = [
@@ -102,6 +113,16 @@ function expectMistralChatRequest(body: Record<string, any>) {
         if (chunk.type === 'thinking') {
           expectKeysIn(chunk, MISTRAL_THINK_CHUNK_KEYS);
         }
+        if (message.role === 'user') {
+          expect(Object.keys(MISTRAL_USER_CHUNK_KEYS)).toContain(chunk.type);
+          expectKeysIn(chunk, MISTRAL_USER_CHUNK_KEYS[chunk.type] ?? []);
+          if (
+            chunk.type === 'image_url' &&
+            typeof chunk.image_url === 'object'
+          ) {
+            expectKeysIn(chunk.image_url, MISTRAL_IMAGE_URL_KEYS);
+          }
+        }
       }
     }
   }
@@ -123,10 +144,7 @@ function expectMistralRequests(server: FakeOpenAIServer) {
   }
 }
 
-/**
- * `baseURL` is not part of MistralPluginOptions, but the plugin passes it
- * through to the OpenAI client, which lets the tests use the fake server.
- */
+/** Points the plugin at the fake server through `baseURL`. */
 function fakeServerOptions(server: FakeOpenAIServer) {
   return { apiKey: API_KEY, baseURL: server.baseUrl };
 }
@@ -240,9 +258,90 @@ describe('mistral plugin', () => {
       ai.generate({
         model: mistral.model('mistral-small-latest'),
         prompt: 'hi',
-        config: { topK: 40 },
+        // `topK` isn't in the config schema, but untyped config can carry it.
+        config: { topK: 40 } as any,
       })
     ).rejects.toThrow(/topK/);
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it('sends seed and temperature when they are 0', async () => {
+    await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      prompt: 'hi',
+      config: { seed: 0, temperature: 0 },
+    });
+
+    const body = server.requests[0].body;
+    expect(body.random_seed).toBe(0);
+    expect(body.temperature).toBe(0);
+  });
+
+  it('accepts only Mistral reasoningEffort values in the config schema', () => {
+    const schema = MistralChatCompletionConfigSchema;
+    for (const value of [
+      'none',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]) {
+      expect(schema.safeParse({ reasoningEffort: value }).success).toBe(true);
+    }
+    expect(schema.safeParse({ reasoningEffort: 'hgih' }).success).toBe(false);
+  });
+
+  it('leaves topK out of the config schema', () => {
+    expect(MistralChatCompletionConfigSchema.shape).not.toHaveProperty('topK');
+  });
+
+  it('sends images as image_url chunks', async () => {
+    await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      prompt: [
+        { text: 'Describe this.' },
+        {
+          media: {
+            url: 'data:image/png;base64,iVBORw0KGgo=',
+            contentType: 'image/png',
+          },
+        },
+      ],
+    });
+
+    const body = server.requests[0].body;
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: 'Describe this.' },
+      {
+        type: 'image_url',
+        image_url: {
+          url: 'data:image/png;base64,iVBORw0KGgo=',
+          detail: 'auto',
+        },
+      },
+    ]);
+  });
+
+  it('refuses non-image media before the request goes out', async () => {
+    await expect(
+      ai.generate({
+        model: mistral.model('mistral-small-latest'),
+        prompt: [
+          { text: 'Summarize this.' },
+          {
+            media: {
+              url: 'data:application/pdf;base64,JVBERi0xLjQK',
+              contentType: 'application/pdf',
+            },
+          },
+        ],
+      })
+    ).rejects.toMatchObject({
+      status: 'INVALID_ARGUMENT',
+      message: expect.stringContaining('application/pdf'),
+    });
     expect(server.requests).toHaveLength(0);
   });
 
@@ -678,7 +777,10 @@ describe('mistral plugin', () => {
     });
 
     expect(response.message?.content).toEqual([
-      { reasoning: 'Two plus two.', metadata: { signature: 'sig-123' } },
+      {
+        reasoning: 'Two plus two.',
+        metadata: { thoughtSignature: 'sig-123' },
+      },
       { text: '4' },
     ]);
   });

@@ -41,8 +41,7 @@ export const mistralEmbedderRequestBuilder: EmbedderRequestBuilder = (
   params
 ) => {
   const { outputDimension } = req.options ?? {};
-  // Always request floats. Without an explicit format the OpenAI SDK asks for
-  // base64, and a base64 response would be returned as the embedding.
+  // Always request floats, rather than relying on the OpenAI SDK's default.
   params.encoding_format = 'float';
   if (outputDimension !== undefined) {
     (params as unknown as Record<string, unknown>).output_dimension =

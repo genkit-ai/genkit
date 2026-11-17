@@ -67,22 +67,26 @@ const MISTRAL_TEXT_MODEL_INFO: ModelInfo = {
   },
 };
 
-/** Mistral custom configuration schema. */
+/**
+ * Mistral custom configuration schema. `topK` is left out: Mistral's models
+ * reject `top_k` sampling.
+ */
 export const MistralChatCompletionConfigSchema =
-  ChatCompletionCommonConfigSchema.extend({
+  ChatCompletionCommonConfigSchema.omit({ topK: true }).extend({
     seed: z
       .number()
       .int()
       .optional()
       .describe('Seed for random sampling. Sent as `random_seed`.'),
     reasoningEffort: z
-      .string()
+      .enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
       .optional()
       .describe(
         'How much the model reasons before answering, such as `none`, `low`, ' +
           '`medium` or `high`. Allowed values vary by model: Mistral Small and ' +
-          'Medium take `none` and `high`, Mistral Large 4 takes `low`, ' +
-          '`medium` and `high`. Sent as `reasoning_effort`.'
+          'Medium take `none` and `high`, Mistral Large 4 ' +
+          '(`mistral-large-latest`) takes `low`, `medium` and `high`. ' +
+          'Sent as `reasoning_effort`.'
       ),
   });
 
@@ -93,7 +97,8 @@ export const MistralChatCompletionConfigSchema =
 export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
   const { maxOutputTokens, topK, seed, reasoningEffort } = req.config ?? {};
   // Mistral's schema declares `top_k`, but its models reject it ("top_k
-  // sampling is not enabled for this model"), so say so before sending.
+  // sampling is not enabled for this model"), so say so before sending. The
+  // config schema leaves `topK` out, but untyped config can still carry it.
   if (topK !== undefined) {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
@@ -112,10 +117,34 @@ export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
 };
 
 /**
+ * Mistral's chat API takes images (`image_url`) but not inline files: its
+ * `file` chunk only takes an uploaded `file_id`, so an OpenAI-style
+ * `{type: 'file', file: {file_data}}` chunk would be rejected. Refuse other
+ * media before the request goes out.
+ */
+function refuseNonImageMedia(messages: ChatCompletionMessageParam[]) {
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const chunk of message.content as { type?: string }[]) {
+      if (chunk.type === 'text' || chunk.type === 'image_url') continue;
+      const fileData = (chunk as { file?: { file_data?: string } }).file
+        ?.file_data;
+      const contentType = fileData?.match(/^data:([^;,]+)/)?.[1];
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Mistral only supports image media in chat requests, got ${
+          contentType ?? `a '${chunk.type}' content part`
+        }.`,
+      });
+    }
+  }
+}
+
+/**
  * Mistral has no `reasoning_content` field. Reasoning from earlier assistant
  * turns is sent back as `thinking` chunks in the `content` array instead,
  * which is the shape Mistral returns it in, with the chunk's `signature` when
- * the reasoning part kept one in `metadata.signature`.
+ * the reasoning part kept one in `metadata.thoughtSignature`.
  *
  * Each Genkit `model` message becomes exactly one `assistant` message, so the
  * two are matched up in order.
@@ -124,6 +153,7 @@ function toMistralMessages(
   source: MessageData[],
   messages: ChatCompletionMessageParam[]
 ): ChatCompletionMessageParam[] {
+  refuseNonImageMedia(messages);
   const modelMessages = source.filter((m) => m.role === 'model');
   let next = 0;
   return messages.map((message) => {
@@ -137,13 +167,13 @@ function toMistralMessages(
       .filter(
         (part) =>
           part.reasoning !== undefined &&
-          (part.reasoning || part.metadata?.signature)
+          (part.reasoning || part.metadata?.thoughtSignature)
       )
       .map((part) => ({
         type: 'thinking',
         thinking: [{ type: 'text', text: part.reasoning }],
-        ...(typeof part.metadata?.signature === 'string'
-          ? { signature: part.metadata.signature }
+        ...(typeof part.metadata?.thoughtSignature === 'string'
+          ? { signature: part.metadata.thoughtSignature }
           : {}),
       }));
     if (thinking.length === 0) {
@@ -187,8 +217,7 @@ export function mistralModelRef(params: {
  * `reasoningEffort` on the models below.
  */
 export const SUPPORTED_MISTRAL_MODELS = {
-  // Mistral Large 4. It has no `-latest` alias; `mistral-large-latest` still
-  // names Mistral Large 3.
+  // Mistral Large 4. `mistral-large-latest` is an alias for it.
   'mistral-large-4': mistralModelRef({
     name: 'mistral-large-4',
     info: MISTRAL_MODEL_INFO,
@@ -197,9 +226,10 @@ export const SUPPORTED_MISTRAL_MODELS = {
     name: 'mistral-large-latest',
     info: MISTRAL_MODEL_INFO,
   }),
+  // Mistral Medium 3.5, which Mistral has deprecated (retiring 2027-04-30).
   'mistral-medium-latest': mistralModelRef({
     name: 'mistral-medium-latest',
-    info: MISTRAL_MODEL_INFO,
+    info: { ...MISTRAL_MODEL_INFO, stage: 'legacy' },
   }),
   'mistral-small-latest': mistralModelRef({
     name: 'mistral-small-latest',

@@ -47,7 +47,11 @@ import {
 
 const MISTRAL_BASE_URL = 'https://api.mistral.ai/v1';
 
-export type MistralPluginOptions = Omit<PluginOptions, 'name' | 'baseURL'>;
+/**
+ * Options for the Mistral plugin. `baseURL` defaults to
+ * `https://api.mistral.ai/v1`; set it to go through a proxy.
+ */
+export type MistralPluginOptions = Omit<PluginOptions, 'name'>;
 
 function defineMistralModel(
   client: OpenAI,
@@ -206,9 +210,9 @@ export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
   // Request-scoped clients (a per-request `apiKey`) are built from
   // `pluginOptions`, so it must carry the Mistral base URL too.
   const pluginOptions: PluginOptions = {
-    name: 'mistral',
-    baseURL: MISTRAL_BASE_URL,
     ...options,
+    name: 'mistral',
+    baseURL: options?.baseURL ?? MISTRAL_BASE_URL,
   };
   return openAICompatible({
     ...pluginOptions,
