@@ -41,9 +41,10 @@ func TestPluginLive(t *testing.T) {
 			// Each of these fails on Mistral Small's own behavior, with the
 			// request and response on the wire checked to be correct.
 			Skip: map[string]string{
-				"generate/tool choice required":  "Mistral Small ignores a required tool choice on an unrelated prompt and generates until max_tokens, so the request does not return",
-				"generate/sequential tool calls": "Mistral Small issues both steps in parallel, guessing the second step's input, and answers with the wrong number",
-				"agent/media across turns":       "Mistral Small answers the gablorken question after an image turn without calling the tool",
+				"generate/tool choice required":        "Mistral Small ignores a required tool choice on an unrelated prompt and generates until max_tokens, so the request does not return",
+				"generate/sequential tool calls":       "Mistral Small issues both steps in parallel, guessing the second step's input, and answers with the wrong number",
+				"agent/media across turns":             "Mistral Small answers the gablorken question after an image turn without calling the tool",
+				"agent/structured output across turns": "Mistral Small, asked for the capital of the first country named, intermittently fills the city field with the country",
 			},
 		},
 		ExtraConfig: map[string]any{
