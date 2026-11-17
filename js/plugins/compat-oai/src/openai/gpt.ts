@@ -190,13 +190,22 @@ function gptModelSpec(name: string): GptModelSpec | undefined {
   if (spec || SHUT_DOWN_SNAPSHOTS.has(id)) {
     return spec;
   }
-  return lookup(GPT_MODEL_SPECS, id.replace(SNAPSHOT_DATE_SUFFIX, ''));
+  const aliasSpec = lookup(
+    GPT_MODEL_SPECS,
+    id.replace(SNAPSHOT_DATE_SUFFIX, '')
+  );
+  if (!aliasSpec) {
+    return undefined;
+  }
+  const { constrained: _, ...supports } = aliasSpec.supports;
+  return { ...aliasSpec, supports };
 }
 
 /**
- * Returns a chat model reference for an OpenAI model id. Catalogued ids and
- * their live dated snapshots carry catalog info (including stage); other ids
- * get generic info.
+ * Returns a chat model reference for an OpenAI model id. Catalogued ids carry
+ * catalog info (including stage). Live dated snapshots carry their alias's
+ * info without `constrained`, so JSON output uses prompt instructions. Other
+ * ids get generic info.
  */
 export function gptModelRef(
   name: string,

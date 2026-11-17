@@ -20,6 +20,7 @@ import {
   embedderActionMetadata,
   genkit,
   modelActionMetadata,
+  z,
   type ActionMetadata,
 } from 'genkit';
 import { modelRef, type GenerateRequest } from 'genkit/model';
@@ -57,6 +58,13 @@ import {
 } from '../src/openai/whisper';
 import { lookup } from '../src/utils';
 import * as LISTING_FIXTURE from './openai_listing_fixture.json';
+
+/** Info a dated snapshot gets from its alias: everything except `constrained`. */
+function snapshotInfo(alias: keyof typeof SUPPORTED_GPT_MODELS) {
+  const info = SUPPORTED_GPT_MODELS[alias].info!;
+  const { constrained: _, ...supports } = info.supports!;
+  return { ...info, supports };
+}
 
 describe('gptModel', () => {
   afterEach(() => {
@@ -351,7 +359,7 @@ describe('GPT model catalog', () => {
       }
     });
 
-    it('gives dated snapshots the info of their alias', () => {
+    it('gives dated snapshots the info of their alias, except constrained', () => {
       for (const [snapshot, alias] of [
         ['gpt-4o-2024-08-06', 'gpt-4o'],
         ['gpt-5-2025-08-07', 'gpt-5'],
@@ -361,8 +369,12 @@ describe('GPT model catalog', () => {
         const ref = gptModelRef(snapshot);
         expect({ name: ref.name, info: ref.info }).toEqual({
           name: `openai/${snapshot}`,
-          info: SUPPORTED_GPT_MODELS[alias].info,
+          info: snapshotInfo(alias),
         });
+        expect(ref.info?.supports?.constrained).toBeUndefined();
+        expect(SUPPORTED_GPT_MODELS[alias].info?.supports?.constrained).toBe(
+          'all'
+        );
       }
       expect(gptModelRef('gpt-5-2025-08-07').info?.stage).toBe('deprecated');
       expect(gptModelRef('gpt-5.5-2026-04-23').info?.stage).toBeUndefined();
@@ -523,7 +535,7 @@ describe('openAI listActions', () => {
     }
   });
 
-  it('uses the alias info for dated snapshots', async () => {
+  it('uses the alias info, except constrained, for dated snapshots', async () => {
     const actions = await listActions();
     for (const [snapshot, alias] of [
       ['gpt-5-2025-08-07', 'gpt-5'],
@@ -537,8 +549,8 @@ describe('openAI listActions', () => {
         supports: model?.supports,
       }).toEqual({
         snapshot,
-        stage: SUPPORTED_GPT_MODELS[alias].info?.stage,
-        supports: SUPPORTED_GPT_MODELS[alias].info?.supports,
+        stage: snapshotInfo(alias).stage,
+        supports: snapshotInfo(alias).supports,
       });
     }
     expect(
@@ -548,13 +560,13 @@ describe('openAI listActions', () => {
 });
 
 describe('openAI resolve', () => {
-  it('resolves a dated snapshot with the supports of its alias', async () => {
+  it('resolves a dated snapshot with the supports of its alias, except constrained', async () => {
     const ai = genkit({ plugins: [openAI({ apiKey: 'test-key' })] });
     const action = await ai.registry.lookupAction(
       '/model/openai/gpt-4o-2024-08-06'
     );
     expect(action?.__action.metadata?.model?.supports).toEqual(
-      SUPPORTED_GPT_MODELS['gpt-4o'].info?.supports
+      snapshotInfo('gpt-4o').supports
     );
   });
 
@@ -570,6 +582,62 @@ describe('openAI resolve', () => {
       gptModelRef(id).info?.supports
     );
   });
+});
+
+describe('openAI structured output', () => {
+  async function requestBody(model: string) {
+    let body: Record<string, unknown> | undefined;
+    const fakeFetch: Fetch = async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl-1',
+          object: 'chat.completion',
+          created: 0,
+          model,
+          choices: [
+            {
+              index: 0,
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: '{"answer":1}' },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    };
+    const ai = genkit({
+      plugins: [openAI({ apiKey: 'test-key', fetch: fakeFetch })],
+    });
+    await ai.generate({
+      model: `openai/${model}`,
+      prompt: 'Answer.',
+      output: { schema: z.object({ answer: z.number() }) },
+    });
+    return body!;
+  }
+
+  it.each(['gpt-4o-2024-08-06', 'gpt-4.1-2025-04-14', 'o3-2025-04-16'])(
+    'sends dated snapshot %s format instructions, not json_schema',
+    async (model) => {
+      const body = await requestBody(model);
+      expect(body.response_format).toBeUndefined();
+      expect(JSON.stringify(body.messages)).toContain(
+        'Output should be in JSON format'
+      );
+    }
+  );
+
+  it.each(['gpt-4o', 'gpt-4.1', 'o3', 'gpt-5-search-api'])(
+    'sends constrained alias %s a json_schema response format',
+    async (model) => {
+      const body = await requestBody(model);
+      expect(body.response_format).toMatchObject({ type: 'json_schema' });
+      expect(JSON.stringify(body.messages)).not.toContain(
+        'Output should be in JSON format'
+      );
+    }
+  );
 });
 
 describe('openAI.model', () => {
