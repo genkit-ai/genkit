@@ -256,54 +256,44 @@ export function toMistralRequest(
   model: string,
   input: GenerateRequest<typeof MistralConfigSchema>
 ): ChatCompletionRequest {
-  const messages = input.messages.map((msg) => {
-    // Handle regular text messages
-    if (msg.content.every((part) => part.text)) {
-      const content = msg.content.map((part) => part.text || '').join('');
-      return {
-        role: toMistralRole(msg.role),
-        content,
-      };
-    }
+  const messages = input.messages.flatMap(
+    (msg): ChatCompletionRequest['messages'] => {
+      const text = msg.content.map((part) => part.text || '').join('');
 
-    // Handle assistant's tool/function calls
-    const toolRequest = msg.content.find((part) => part.toolRequest);
-    if (toolRequest?.toolRequest) {
-      const functionCall = toMistralToolRequest(toolRequest.toolRequest);
-      return {
-        role: 'assistant' as const,
-        content: null,
-        toolCalls: [
+      const toolRequests = msg.content.flatMap(
+        (part) => part.toolRequest ?? []
+      );
+      if (toolRequests.length) {
+        return [
           {
-            id: toolRequest.toolRequest.ref,
-            type: ToolTypes.Function,
-            function: {
-              name: functionCall.name,
-              arguments: functionCall.arguments,
-            },
+            role: 'assistant',
+            content: text || null,
+            toolCalls: toolRequests.map((toolRequest) => ({
+              id: toolRequest.ref,
+              type: ToolTypes.Function,
+              function: toMistralToolRequest(toolRequest),
+            })),
           },
-        ],
-      };
+        ];
+      }
+
+      const toolResponses = msg.content.flatMap(
+        (part) => part.toolResponse ?? []
+      );
+      if (toolResponses.length) {
+        return toolResponses.map((toolResponse) => ({
+          role: 'tool',
+          name: toolResponse.name,
+          content: JSON.stringify(toolResponse.output),
+          toolCallId: toolResponse.ref,
+        }));
+      }
+
+      return [{ role: toMistralRole(msg.role), content: text }];
     }
+  );
 
-    // Handle tool responses
-    const toolResponse = msg.content.find((part) => part.toolResponse);
-    if (toolResponse?.toolResponse) {
-      return {
-        role: 'tool' as const,
-        name: toolResponse.toolResponse.name,
-        content: JSON.stringify(toolResponse.toolResponse.output),
-        toolCallId: toolResponse.toolResponse.ref, // This must match the id from tool_calls
-      };
-    }
-
-    return {
-      role: toMistralRole(msg.role),
-      content: msg.content.map((part) => part.text || '').join(''),
-    };
-  });
-
-  validateToolSequence(messages); // This line exists but might not be running?
+  validateToolSequence(messages);
 
   const request: ChatCompletionRequest = {
     model,

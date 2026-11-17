@@ -451,6 +451,117 @@ describe('validateToolSequence', () => {
   });
 });
 
+describe('parallel tool calls', () => {
+  const user = {
+    role: 'user' as const,
+    content: [{ text: 'Weather in Paris and London?' }],
+  };
+  const model = {
+    role: 'model' as const,
+    content: [
+      { text: 'Let me check both cities.' },
+      {
+        toolRequest: {
+          ref: 'call_A',
+          name: 'getWeather',
+          input: { city: 'Paris' },
+        },
+      },
+      {
+        toolRequest: {
+          ref: 'call_B',
+          name: 'getWeather',
+          input: { city: 'London' },
+        },
+      },
+    ],
+  };
+  const responseA = {
+    toolResponse: { ref: 'call_A', name: 'getWeather', output: { tempC: 18 } },
+  };
+  const responseB = {
+    toolResponse: { ref: 'call_B', name: 'getWeather', output: { tempC: 14 } },
+  };
+
+  it('should send every tool call, its text and every tool response', () => {
+    const result = toMistralRequest(MODEL_ID, {
+      messages: [
+        user,
+        model,
+        { role: 'tool' as const, content: [responseA, responseB] },
+      ],
+    });
+
+    assert.deepStrictEqual(result.messages, [
+      { role: 'user', content: 'Weather in Paris and London?' },
+      {
+        role: 'assistant',
+        content: 'Let me check both cities.',
+        toolCalls: [
+          {
+            id: 'call_A',
+            type: 'function',
+            function: { name: 'getWeather', arguments: '{"city":"Paris"}' },
+          },
+          {
+            id: 'call_B',
+            type: 'function',
+            function: { name: 'getWeather', arguments: '{"city":"London"}' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        name: 'getWeather',
+        content: '{"tempC":18}',
+        toolCallId: 'call_A',
+      },
+      {
+        role: 'tool',
+        name: 'getWeather',
+        content: '{"tempC":14}',
+        toolCallId: 'call_B',
+      },
+    ]);
+  });
+
+  it('should keep content null when a turn has only tool calls', () => {
+    const result = toMistralRequest(MODEL_ID, {
+      messages: [
+        user,
+        { role: 'model' as const, content: model.content.slice(1, 2) },
+        { role: 'tool' as const, content: [responseA] },
+      ],
+    });
+
+    assert.deepStrictEqual(result.messages[1], {
+      role: 'assistant',
+      content: null,
+      toolCalls: [
+        {
+          id: 'call_A',
+          type: 'function',
+          function: { name: 'getWeather', arguments: '{"city":"Paris"}' },
+        },
+      ],
+    });
+  });
+
+  it('should throw when one of several tool calls has no response', () => {
+    assert.throws(
+      () =>
+        toMistralRequest(MODEL_ID, {
+          messages: [
+            user,
+            model,
+            { role: 'tool' as const, content: [responseA] },
+          ],
+        }),
+      /Mismatch between tool calls \(2\) and responses \(1\)/
+    );
+  });
+});
+
 describe('edge cases', () => {
   it('should handle empty message content', () => {
     const input = {
