@@ -33,7 +33,7 @@
 //      re-exported here.
 //
 
-import { z } from '@genkit-ai/core';
+import { wireObject, z } from '@genkit-ai/core';
 import {
   GenerationUsageSchema,
   MessageSchema,
@@ -51,7 +51,7 @@ export { RuntimeErrorSchema, type RuntimeError } from './model-types.js';
 /**
  * Schema for tracking persistent artifacts generated during a session turn.
  */
-export const ArtifactSchema = z.object({
+export const ArtifactSchema = wireObject({
   /** Name identifies the artifact (e.g., "generated_code.go", "diagram.png"). */
   name: z.string().optional(),
   /** Parts contains the artifact content (text, media, etc.). */
@@ -141,7 +141,7 @@ export type AgentFinishReason = z.infer<typeof AgentFinishReasonSchema>;
 /**
  * Schema for session execution state.
  */
-export const SessionStateSchema = z.object({
+export const SessionStateSchema = wireObject({
   sessionId: z.string().optional(),
   messages: z.array(MessageSchema).optional(),
   custom: z.any().optional(),
@@ -184,16 +184,14 @@ export interface SessionState<S = unknown> {
  * again on the messages it committed. It is rejected on a conversation with
  * no messages to continue.
  */
-export const AgentInputSchema = z.object({
+export const AgentInputSchema = wireObject({
   /** User's input message for this turn. */
   message: MessageSchema.optional(),
   /** Options for resuming an interrupted generation. */
-  resume: z
-    .object({
-      respond: z.array(ToolResponsePartSchema).optional(),
-      restart: z.array(ToolRequestPartSchema).optional(),
-    })
-    .optional(),
+  resume: wireObject({
+    respond: z.array(ToolResponsePartSchema).optional(),
+    restart: z.array(ToolRequestPartSchema).optional(),
+  }).optional(),
   detach: z.boolean().optional(),
 });
 
@@ -205,7 +203,7 @@ export type AgentInput = z.infer<typeof AgentInputSchema>;
 /**
  * Schema for initializing an agent turn.
  */
-export const AgentInitSchema = z.object({
+export const AgentInitSchema = wireObject({
   snapshotId: z.string().optional(),
   sessionId: z.string().optional(),
   state: SessionStateSchema.optional(),
@@ -236,7 +234,7 @@ export interface AgentInit<S = unknown> {
 /**
  * Schema for final results of an agent execution.
  */
-export const AgentResultSchema = z.object({
+export const AgentResultSchema = wireObject({
   message: MessageSchema.optional(),
   artifacts: z.array(ArtifactSchema).optional(),
   /** The reason the whole invocation finished (e.g. `stop`, `interrupted`). */
@@ -251,7 +249,7 @@ export type AgentResult = z.infer<typeof AgentResultSchema>;
 /**
  * Schema for output returned at turn completion.
  */
-export const AgentOutputSchema = z.object({
+export const AgentOutputSchema = wireObject({
   /**
    * ID of the session this invocation belongs to, assigned by the framework
    * when the invocation starts.
@@ -326,7 +324,7 @@ export interface AgentOutput<S = unknown> {
 /**
  * Schema identifying a turn termination event.
  */
-export const TurnEndSchema = z.object({
+export const TurnEndSchema = wireObject({
   /**
    * ID of the snapshot persisted at the end of this turn, whether it
    * succeeded or failed. Empty if no snapshot was written (no store
@@ -368,7 +366,7 @@ export type JsonPatchOp = z.infer<typeof JsonPatchOpSchema>;
 /**
  * Schema for a single RFC 6902 (JSON Patch) operation.
  */
-export const JsonPatchOperationSchema = z.object({
+export const JsonPatchOperationSchema = wireObject({
   op: JsonPatchOpSchema,
   /** A JSON Pointer (RFC 6901) to the target location, e.g. `"/agentStatus"`. */
   path: z.string(),
@@ -386,7 +384,7 @@ export const JsonPatchSchema = z.array(JsonPatchOperationSchema);
 /**
  * Schema for stream chunks emitted during agent execution.
  */
-export const AgentStreamChunkSchema = z.object({
+export const AgentStreamChunkSchema = wireObject({
   modelChunk: ModelResponseChunkSchema.optional(),
   /**
    * An RFC 6902 JSON Patch describing a delta applied to the session's
@@ -409,7 +407,7 @@ export type AgentStreamChunk = z.infer<typeof AgentStreamChunkSchema>;
  * the `getSnapshot` companion action so the snapshot shape is discoverable in
  * the registry (rather than an opaque `z.any()`).
  */
-export const SessionSnapshotSchema = z.object({
+export const SessionSnapshotSchema = wireObject({
   snapshotId: z.string(),
   sessionId: z.string().optional(),
   parentId: z.string().optional(),
@@ -486,7 +484,7 @@ export interface SessionSnapshot<S = unknown> {
  * action takes the same request but requires `snapshotId`, and ignores
  * `metadataOnly`: a settled snapshot is what a wait is for.
  */
-export const GetSnapshotRequestSchema = z.object({
+export const GetSnapshotRequestSchema = wireObject({
   snapshotId: z.string().optional(),
   sessionId: z.string().optional(),
   /**
@@ -508,7 +506,7 @@ export type GetSnapshotRequest = z.infer<typeof GetSnapshotRequestSchema>;
 /**
  * Schema for the input of the `abort` companion action.
  */
-export const AgentAbortRequestSchema = z.object({
+export const AgentAbortRequestSchema = wireObject({
   snapshotId: z.string(),
 });
 
@@ -520,7 +518,7 @@ export type AgentAbortRequest = z.infer<typeof AgentAbortRequestSchema>;
 /**
  * Schema for the output of the `abort` companion action.
  */
-export const AgentAbortResponseSchema = z.object({
+export const AgentAbortResponseSchema = wireObject({
   snapshotId: z.string(),
   status: SnapshotStatusSchema.optional(),
 });
@@ -551,7 +549,7 @@ export type AgentStateManagement = z.infer<typeof AgentStateManagementSchema>;
  * render the right surface (e.g. hide the Abort button when the configured
  * store doesn't support it) without round-tripping through the reflection API.
  */
-export const AgentMetadataSchema = z.object({
+export const AgentMetadataSchema = wireObject({
   /** Who owns session state for this agent. */
   stateManagement: AgentStateManagementSchema,
   /**

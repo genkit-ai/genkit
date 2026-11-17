@@ -25,9 +25,11 @@ import {
   annotateSchema,
   assertGenkitSchema,
   parseSchema,
+  parseSchemaAsync,
   toJsonSchema,
   toZodSchema,
   validateSchema,
+  wireObject,
   z,
   type GenkitSchema,
 } from '../src/schema.js';
@@ -669,6 +671,207 @@ describe('unsupported schemas', () => {
     assert.throws(
       () => toZodSchema({ _def: {} } as unknown as GenkitSchema, 'X'),
       /X is not supported: found a zod v3 schema/
+    );
+  });
+});
+
+describe('parseSchema() / parseSchemaAsync()', () => {
+  const Search = z.object({
+    q: z.string().trim().min(1),
+    limit: z.number().default(10),
+    since: z
+      .string()
+      .optional()
+      .transform((s) => (s ? new Date(s) : undefined)),
+  });
+
+  it('returns the schema output: defaults and transforms applied', async () => {
+    const expected = { q: 'x', limit: 10, since: new Date('2026-01-01') };
+    const input = { q: ' x ', since: '2026-01-01' };
+    assert.deepStrictEqual(parseSchema(input, { schema: Search }), expected);
+    assert.deepStrictEqual(
+      await parseSchemaAsync(input, { schema: Search }),
+      expected
+    );
+  });
+
+  it('strips unknown keys from zod objects, keeps them for looseObject', () => {
+    assert.deepStrictEqual(
+      parseSchema(
+        { a: 1, extra: true },
+        { schema: z.object({ a: z.number() }) }
+      ),
+      { a: 1 }
+    );
+    assert.deepStrictEqual(
+      parseSchema(
+        { a: 1, extra: true },
+        { schema: z.looseObject({ a: z.number() }) }
+      ),
+      { a: 1, extra: true }
+    );
+  });
+
+  it('enforces refinements and reports zod issues as details', () => {
+    const schema = z
+      .object({ a: z.string(), b: z.number() })
+      .refine((v) => v.a !== 'no', {
+        message: 'a must not be no',
+        path: ['a'],
+      });
+    assert.throws(
+      () => parseSchema({ a: 'no', b: 1 }, { schema }),
+      (e: ValidationError) => {
+        assert.deepStrictEqual(e.detail.errors, [
+          { path: 'a', message: 'a must not be no' },
+        ]);
+        return true;
+      }
+    );
+    assert.throws(
+      () => parseSchema({}, { schema }),
+      (e: ValidationError) => {
+        assert.deepStrictEqual(
+          e.detail.errors.map((d: { path: string }) => d.path),
+          ['a', 'b']
+        );
+        return true;
+      }
+    );
+    assert.throws(
+      () => parseSchema('x', { schema: z.number() }),
+      (e: ValidationError) => e.detail.errors[0].path === '(root)'
+    );
+  });
+
+  it('supports async refinements only in parseSchemaAsync', async () => {
+    const schema = z.string().refine(async (s) => s === 'ok', 'not ok');
+    assert.strictEqual(await parseSchemaAsync('ok', { schema }), 'ok');
+    await assert.rejects(parseSchemaAsync('nope', { schema }), ValidationError);
+    assert.throws(
+      () => parseSchema('ok', { schema }),
+      /requires async validation/
+    );
+  });
+
+  it('parses non-zod Standard Schemas with ~standard.validate', async () => {
+    const schema = fakeStandardSchema();
+    assert.deepStrictEqual(parseSchema({ k: 1 }, { schema }), { k: 1 });
+    assert.throws(
+      () => parseSchema({ k: 'x' }, { schema }),
+      (e: ValidationError) => {
+        assert.deepStrictEqual(e.detail.errors, [
+          { path: 'k', message: 'k must be a number' },
+        ]);
+        return true;
+      }
+    );
+    const asyncSchema = fakeStandardSchema({ async: true });
+    assert.deepStrictEqual(
+      await parseSchemaAsync({ k: 2 }, { schema: asyncSchema }),
+      { k: 2 }
+    );
+    assert.throws(
+      () => parseSchema({ k: 2 }, { schema: asyncSchema }),
+      /requires async validation/
+    );
+  });
+
+  it('only validates JSON schemas and returns the data as is', () => {
+    const data = { a: 1, extra: true };
+    const jsonSchema = {
+      type: 'object',
+      properties: { a: { type: 'number' } },
+    };
+    assert.strictEqual(parseSchema(data, { jsonSchema }), data);
+    assert.throws(
+      () => parseSchema({ a: 'x' }, { jsonSchema }),
+      ValidationError
+    );
+  });
+});
+
+describe('parseSchema() with z.void()', () => {
+  it('passes values through as is, like a TS void return', async () => {
+    assert.strictEqual(parseSchema('done', { schema: z.void() }), 'done');
+    assert.strictEqual(
+      await parseSchemaAsync(null, { schema: z.void() }),
+      null
+    );
+  });
+});
+
+describe('wireObject()', () => {
+  const shape = { a: z.string(), n: z.number().optional() };
+  const Wire = wireObject(shape);
+
+  it('keeps unknown keys when parsing, also in derived schemas', () => {
+    const data = { a: 'x', extra: 1 };
+    const schemas = [
+      Wire,
+      Wire.extend({ b: z.string().optional() }),
+      Wire.pick({ a: true }),
+      Wire.omit({ n: true }),
+      Wire.partial(),
+    ];
+    for (const schema of schemas) {
+      assert.deepStrictEqual(parseSchema(data, { schema }), data);
+    }
+  });
+
+  it('keeps unknown keys in nested wire objects', () => {
+    const schema = wireObject({
+      items: z.array(z.union([Wire, wireObject({ b: z.boolean() })])),
+    });
+    const data = {
+      items: [
+        { a: 'x', extra: 1 },
+        { b: true, extra: 2 },
+      ],
+      extra: 3,
+    };
+    assert.deepStrictEqual(parseSchema(data, { schema }), data);
+  });
+
+  it('still validates known keys', () => {
+    assert.throws(
+      () => parseSchema({ a: 1, extra: 1 }, { schema: Wire }),
+      ValidationError
+    );
+  });
+
+  it('has the JSON schema of a plain z.object', () => {
+    assert.deepStrictEqual(
+      toJsonSchema({ schema: Wire }),
+      toJsonSchema({ schema: z.object(shape) })
+    );
+    assert.deepStrictEqual(
+      toJsonSchema({ schema: Wire.extend({ b: z.string() }) }),
+      toJsonSchema({ schema: z.object(shape).extend({ b: z.string() }) })
+    );
+  });
+});
+
+describe('validation errors with Standard Schemas', () => {
+  it('keeps the validation error when JSON schema conversion throws', () => {
+    const base = fakeStandardSchema();
+    const schema: GenkitSchema<{ k: number }, { k: number }> = {
+      '~standard': {
+        ...base['~standard'],
+        jsonSchema: {
+          input: () => {
+            throw new Error('unsupported target');
+          },
+          output: () => {
+            throw new Error('unsupported target');
+          },
+        },
+      },
+    };
+    assert.throws(
+      () => parseSchema({}, { schema }),
+      (e: unknown) =>
+        e instanceof ValidationError && /k must be a number/.test(e.message)
     );
   });
 });

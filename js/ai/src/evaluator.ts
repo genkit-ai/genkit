@@ -17,9 +17,11 @@
 import {
   action,
   toZodSchema,
+  wireObject,
   z,
   type Action,
   type GenkitSchema,
+  type InferInput,
   type InferOutput,
 } from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
@@ -32,7 +34,7 @@ export const ATTR_PREFIX = 'genkit';
 export const SPAN_STATE_ATTR = ATTR_PREFIX + ':state';
 
 /** Zod schema for a base evaluation data point containing input, output, context, and reference fields. */
-export const BaseDataPointSchema = z.object({
+export const BaseDataPointSchema = wireObject({
   input: z.unknown().optional(),
   output: z.unknown().optional(),
   context: z.array(z.unknown()).optional(),
@@ -57,7 +59,7 @@ export enum EvalStatusEnum {
 }
 
 /** Zod schema for an evaluation score, including optional numeric/string/boolean score, status, and details. */
-export const ScoreSchema = z.object({
+export const ScoreSchema = wireObject({
   id: z
     .string()
     .describe(
@@ -87,7 +89,7 @@ export type Dataset<
 > = Array<InferOutput<DataPoint>>;
 
 /** Zod schema for a single evaluation response, containing test case ID and evaluation score(s). */
-export const EvalResponseSchema = z.object({
+export const EvalResponseSchema = wireObject({
   sampleIndex: z.number().optional(),
   testCaseId: z.string(),
   traceId: z.string().optional(),
@@ -133,7 +135,7 @@ function withMetadata<
   return withMeta;
 }
 
-const EvalRequestSchema = z.object({
+const EvalRequestSchema = wireObject({
   dataset: z.array(BaseDataPointSchema),
   evalRunId: z.string(),
   options: z.unknown().optional(),
@@ -147,7 +149,7 @@ export interface EvaluatorParams<
   evaluator: EvaluatorArgument<DataPoint, CustomOptions>;
   dataset: Dataset<DataPoint>;
   evalRunId?: string;
-  options?: InferOutput<CustomOptions>;
+  options?: InferInput<CustomOptions>;
 }
 
 /** Configuration options for defining an evaluator via {@link defineEvaluator}. */

@@ -18,6 +18,7 @@ import * as assert from 'assert';
 import { z } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GenerateRequest, ModelReference } from 'genkit/model';
+import { toJsonSchema } from 'genkit/schema';
 import { GoogleAuth } from 'google-auth-library';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as sinon from 'sinon';
@@ -619,8 +620,11 @@ describe('Vertex AI Gemini', () => {
             {
               name: 'myFunc',
               description: 'Does something',
-              inputSchema: z.object({ foo: z.string() }),
-              outputSchema: z.string(),
+              // Requests carry JSON schemas (zod instances fail RequestSchema).
+              inputSchema: toJsonSchema({
+                schema: z.object({ foo: z.string() }),
+              }),
+              outputSchema: toJsonSchema({ schema: z.string() }),
             },
           ],
           config: {},

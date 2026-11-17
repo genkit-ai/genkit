@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '@genkit-ai/core';
+import { wireObject, z } from '@genkit-ai/core';
 import type { Embedding } from './embedder.js';
 import { PartSchema, type Part } from './parts.js';
 
@@ -22,7 +22,7 @@ import { PartSchema, type Part } from './parts.js';
  * Zod schema for the serializable data representation of a {@link Document}.
  * Contains an array of content parts and optional metadata.
  */
-export const DocumentDataSchema = z.object({
+export const DocumentDataSchema = wireObject({
   content: z.array(PartSchema),
   // We need both metadata and embedMetadata because they can
   // contain the same fields (e.g. video start/stop) with different values.
