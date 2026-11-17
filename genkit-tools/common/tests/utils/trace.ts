@@ -191,3 +191,54 @@ export class MockTrace {
     return this;
   }
 }
+
+/** Builds a minimal valid SpanData for unit tests with optional field overrides. */
+export function makeSpan(overrides: Partial<SpanData> = {}): SpanData {
+  const spanId = overrides.spanId ?? 'span-1';
+  return {
+    traceId: 'trace-1',
+    spanId,
+    startTime: 100,
+    endTime: 200,
+    attributes: {},
+    instrumentationLibrary: { name: 'genkit-tracer', version: 'v1' },
+    spanKind: 'INTERNAL',
+    status: { code: 0 },
+    ...overrides,
+    displayName: overrides.displayName ?? spanId,
+  };
+}
+
+/**
+ * Builds a TraceData record auto-keyed by each span's `spanId`.
+ * Infers `startTime` and `endTime` bounds from `spans` when not explicitly overridden.
+ */
+export function makeTrace(
+  spans: SpanData[],
+  overrides: Partial<TraceData> = {}
+): TraceData {
+  const traceId = overrides.traceId ?? spans[0]?.traceId ?? 'trace-1';
+  const keyedSpans: Record<string, SpanData> = {};
+  let minStart = Number.POSITIVE_INFINITY;
+  let maxEnd = 0;
+
+  for (const span of spans) {
+    keyedSpans[span.spanId] = overrides.traceId
+      ? { ...span, traceId }
+      : { ...span };
+    if (span.startTime < minStart) minStart = span.startTime;
+    if (span.endTime > maxEnd) maxEnd = span.endTime;
+  }
+
+  return {
+    traceId,
+    ...(spans.length > 0
+      ? {
+          startTime: Number.isFinite(minStart) ? minStart : 0,
+          endTime: maxEnd,
+        }
+      : {}),
+    ...overrides,
+    spans: overrides.spans ? { ...keyedSpans, ...overrides.spans } : keyedSpans,
+  };
+}
