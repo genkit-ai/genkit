@@ -1819,6 +1819,32 @@ describe('toOpenAiRequestBody', () => {
     expect(actualOutput.strict).toBeUndefined();
   });
 
+  it('keeps falsy config values and drops unset ones', () => {
+    const request = {
+      messages: [{ role: 'user', content: [{ text: 'hello' }] }],
+      config: {
+        temperature: 0,
+        presencePenalty: 0,
+        frequencyPenalty: 0,
+        logProbs: false,
+        parallel_tool_calls: false,
+        topP: undefined,
+      },
+      tools: [],
+    } as unknown as GenerateRequest;
+
+    const actualOutput = toOpenAIRequestBody('gpt-4o', request) as any;
+
+    expect(actualOutput.temperature).toBe(0);
+    expect(actualOutput.presence_penalty).toBe(0);
+    expect(actualOutput.frequency_penalty).toBe(0);
+    expect(actualOutput.logprobs).toBe(false);
+    expect(actualOutput.parallel_tool_calls).toBe(false);
+    expect(actualOutput).not.toHaveProperty('top_p');
+    expect(actualOutput).not.toHaveProperty('stop');
+    expect(actualOutput).not.toHaveProperty('tools');
+  });
+
   it('rejects strict output without a JSON schema', () => {
     const request = {
       messages: [{ role: 'user', content: [{ text: 'hello' }] }],
@@ -2526,6 +2552,16 @@ describe('openAIModelRunner', () => {
         error: new APIError(
           400,
           { error: { message: 'Invalid request' } },
+          '',
+          {}
+        ),
+        expectedStatus: 'INVALID_ARGUMENT',
+      },
+      {
+        name: '422',
+        error: new APIError(
+          422,
+          { detail: [{ type: 'extra_forbidden', loc: ['body', 'foo'] }] },
           '',
           {}
         ),

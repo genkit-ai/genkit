@@ -655,8 +655,11 @@ export function toOpenAIRequestBody(
   }
   const bodyRecord = body as unknown as Record<string, unknown>;
   for (const key in bodyRecord) {
+    // Only drop unset values and empty arrays: falsy values such as
+    // `temperature: 0`, `presence_penalty: 0` or `logprobs: false` are real
+    // settings.
     if (
-      !bodyRecord[key] ||
+      bodyRecord[key] == null ||
       (Array.isArray(bodyRecord[key]) && !(bodyRecord[key] as unknown[]).length)
     )
       delete bodyRecord[key];
@@ -761,6 +764,8 @@ export function openAIModelRunner(
             status = 'PERMISSION_DENIED';
             break;
           case 400:
+          // Request validation errors, e.g. an unknown or out-of-range field.
+          case 422:
             status = 'INVALID_ARGUMENT';
             break;
           case 500:
