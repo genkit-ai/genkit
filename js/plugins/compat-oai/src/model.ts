@@ -596,6 +596,7 @@ export function toOpenAIRequestBody(
     tools: toolsFromConfig,
     apiKey,
     strict,
+    visualDetailLevel,
     ...restOfConfig
   } = request.config ?? {};
 
