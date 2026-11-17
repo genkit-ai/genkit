@@ -604,8 +604,8 @@ export function action<
           }
         }
 
-        traceId = span.spanContext().traceId;
-        spanId = span.spanContext().spanId;
+        traceId = span.traceId;
+        spanId = span.spanId;
         if (options?.onTraceStart) {
           options.onTraceStart({ traceId, spanId });
         }

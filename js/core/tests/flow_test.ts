@@ -14,22 +14,19 @@
  * limitations under the License.
  */
 
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { defineFlow, run } from '../src/flow.js';
 import { defineAction, getContext, z } from '../src/index.js';
 import { initNodeFeatures } from '../src/node.js';
 import { Registry } from '../src/registry.js';
-import { enableTelemetry } from '../src/tracing.js';
-import { TestSpanExporter } from './utils.js';
+import { configureInstrumentation } from '../src/tracing.js';
+import { TestInstrumentation } from './utils.js';
 
 initNodeFeatures();
 
-const spanExporter = new TestSpanExporter();
-enableTelemetry({
-  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
-});
+const spanRecorder = new TestInstrumentation();
+configureInstrumentation(spanRecorder);
 
 function createTestFlow(registry: Registry) {
   return defineFlow(
@@ -360,7 +357,7 @@ describe('flow', () => {
 
   describe('telemetry', async () => {
     beforeEach(() => {
-      spanExporter.exportedSpans = [];
+      spanRecorder.exportedSpans = [];
     });
 
     it('should create a trace', async () => {
@@ -371,9 +368,9 @@ describe('flow', () => {
       });
 
       assert.equal(result, 'bar foo');
-      assert.strictEqual(spanExporter.exportedSpans.length, 1);
-      assert.strictEqual(spanExporter.exportedSpans[0].displayName, 'testFlow');
-      assert.deepStrictEqual(spanExporter.exportedSpans[0].attributes, {
+      assert.strictEqual(spanRecorder.exportedSpans.length, 1);
+      assert.strictEqual(spanRecorder.exportedSpans[0].displayName, 'testFlow');
+      assert.deepStrictEqual(spanRecorder.exportedSpans[0].attributes, {
         'genkit:input': '"foo"',
         'genkit:isRoot': true,
         'genkit:key': '/flow/testFlow',
@@ -396,9 +393,9 @@ describe('flow', () => {
       const result = await output;
 
       assert.equal(result, 'bar foo');
-      assert.strictEqual(spanExporter.exportedSpans.length, 1);
-      assert.strictEqual(spanExporter.exportedSpans[0].displayName, 'testFlow');
-      assert.deepStrictEqual(spanExporter.exportedSpans[0].attributes, {
+      assert.strictEqual(spanRecorder.exportedSpans.length, 1);
+      assert.strictEqual(spanRecorder.exportedSpans[0].displayName, 'testFlow');
+      assert.deepStrictEqual(spanRecorder.exportedSpans[0].attributes, {
         'genkit:input': '"foo"',
         'genkit:isRoot': true,
         'genkit:key': '/flow/testFlow',
@@ -448,13 +445,13 @@ describe('flow', () => {
       });
 
       assert.equal(result, 'foo bar');
-      assert.strictEqual(spanExporter.exportedSpans.length, 3);
+      assert.strictEqual(spanRecorder.exportedSpans.length, 3);
 
       assert.strictEqual(
-        spanExporter.exportedSpans[0].displayName,
+        spanRecorder.exportedSpans[0].displayName,
         'testAction'
       );
-      assert.deepStrictEqual(spanExporter.exportedSpans[0].attributes, {
+      assert.deepStrictEqual(spanRecorder.exportedSpans[0].attributes, {
         'genkit:key': '/tool/testAction',
         'genkit:metadata:subtype': 'tool',
         'genkit:name': 'testAction',
@@ -465,8 +462,8 @@ describe('flow', () => {
         'genkit:type': 'action',
       });
 
-      assert.strictEqual(spanExporter.exportedSpans[1].displayName, 'custom');
-      assert.deepStrictEqual(spanExporter.exportedSpans[1].attributes, {
+      assert.strictEqual(spanRecorder.exportedSpans[1].displayName, 'custom');
+      assert.deepStrictEqual(spanRecorder.exportedSpans[1].attributes, {
         'genkit:name': 'custom',
         'genkit:output': '"foo bar"',
         'genkit:path': '/{testFlow,t:flow}/{custom,t:flowStep}',
@@ -474,8 +471,8 @@ describe('flow', () => {
         'genkit:type': 'flowStep',
       });
 
-      assert.strictEqual(spanExporter.exportedSpans[2].displayName, 'testFlow');
-      assert.deepStrictEqual(spanExporter.exportedSpans[2].attributes, {
+      assert.strictEqual(spanRecorder.exportedSpans[2].displayName, 'testFlow');
+      assert.deepStrictEqual(spanRecorder.exportedSpans[2].attributes, {
         'genkit:input': '"foo"',
         'genkit:isRoot': true,
         'genkit:key': '/flow/testFlow',

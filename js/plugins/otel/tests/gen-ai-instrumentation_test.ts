@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { SpanKind, TraceFlags, type Span } from '@opentelemetry/api';
+import { SpanKind } from '@opentelemetry/api';
 import {
   AlwaysOffSampler,
   BasicTracerProvider,
@@ -37,7 +37,6 @@ function info(overrides: Partial<InstrumentationSpanInfo> = {}) {
   return {
     metadata: { name: 'test', ...(overrides.metadata ?? {}) },
     labels: overrides.labels ?? {},
-    ...(overrides.links ? { links: overrides.links } : {}),
   } as InstrumentationSpanInfo;
 }
 
@@ -64,7 +63,7 @@ async function runAndGetSpan(
   spanInfo: InstrumentationSpanInfo,
   result: unknown
 ): Promise<ReadableSpan> {
-  await inst.runInNewSpan(spanInfo, async (_span: Span, _ctx) => result);
+  await inst.runInNewSpan(spanInfo, async () => result);
   const spans = exporter.getFinishedSpans();
   return spans[spans.length - 1];
 }
@@ -390,14 +389,7 @@ describe('GenAiInstrumentation', () => {
     );
   });
 
-  it('forwards span links and labels', async () => {
-    const link = {
-      context: {
-        traceId: 'a'.repeat(32),
-        spanId: 'b'.repeat(16),
-        traceFlags: TraceFlags.SAMPLED,
-      },
-    };
+  it('forwards labels', async () => {
     const inst = new GenAiInstrumentation({ tracer, emitToolSpans: true });
     const labels = {
       'genkit:metadata:subtype': 'tool',
@@ -407,13 +399,11 @@ describe('GenAiInstrumentation', () => {
     };
     const span = await runAndGetSpan(
       inst,
-      info({ metadata: { name: 'getWeather' }, labels, links: [link] }),
+      info({ metadata: { name: 'getWeather' }, labels }),
       'ok'
     );
     assert.strictEqual(span.attributes['team'], 'search');
     assert.strictEqual(span.attributes['gen_ai.tool.name'], 'getWeather');
-    assert.strictEqual(span.links.length, 1);
-    assert.strictEqual(span.links[0].context.traceId, link.context.traceId);
   });
 
   it('captures raw action IO only when enabled', async () => {
@@ -516,7 +506,7 @@ describe('GenAiInstrumentation', () => {
         metadata: { name: 'myFlow' },
         labels: { 'genkit:metadata:subtype': 'flow' },
       }),
-      async (_span, ctx) => {
+      async (ctx) => {
         captured = ctx;
         ctx.setMetadata({ custom: 'value' });
         return 'ok';
@@ -537,7 +527,7 @@ describe('GenAiInstrumentation', () => {
         metadata: { name: 'myFlow' },
         labels: { 'genkit:metadata:subtype': 'flow' },
       }),
-      async (_span, ctx) => {
+      async (ctx) => {
         ctx.setMetadata({
           count: 3,
           flag: true,

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { trace, TraceFlags, type Span as ApiSpan } from '@opentelemetry/api';
 import * as assert from 'assert';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -60,15 +59,7 @@ class FakeInstrumentation
       spanId: this.spanId,
       setMetadata() {},
     };
-    // A wrapped-context span is enough; callers only read spanContext().
-    const span = {
-      spanContext: () => ({
-        traceId: this.traceId || '0'.repeat(32),
-        spanId: this.spanId || '0'.repeat(16),
-        traceFlags: 1,
-      }),
-    } as ApiSpan;
-    return next(span, ctx);
+    return next(ctx);
   }
 
   recordLog(record: GenkitLogRecord): void {
@@ -110,8 +101,8 @@ describe('instrumentation abstraction', () => {
     let seen = { traceId: '', spanId: '' };
     await runInNewSpan({ metadata: { name: 'ids' } }, async (_m, span) => {
       seen = {
-        traceId: span.spanContext().traceId,
-        spanId: span.spanContext().spanId,
+        traceId: span.traceId,
+        spanId: span.spanId,
       };
     });
 
@@ -132,7 +123,7 @@ describe('instrumentation abstraction', () => {
     await runInNewSpan(
       { metadata: { name: 'dev' }, labels: { 'genkit:type': 'flow' } },
       async (_m, span) => {
-        traceId = span.spanContext().traceId;
+        traceId = span.traceId;
       }
     );
 
@@ -150,12 +141,35 @@ describe('instrumentation abstraction', () => {
 
     let traceId = 'unset';
     await runInNewSpan({ metadata: { name: 'blank' } }, async (_m, span) => {
-      traceId = span.spanContext().traceId;
+      traceId = span.traceId;
     });
 
-    // Single empty provider => composite id is '' (surfaced as all-zeros on the
-    // wrapped OTel span).
+    // Single empty provider => composite id is '', surfaced to the callback
+    // as the all-zero W3C invalid id.
     assert.equal(traceId, '0'.repeat(32));
+  });
+
+  it('runs with no instrumentation configured', async () => {
+    let seen = { traceId: 'unset', spanId: 'unset' };
+    let path = '';
+    const out = await runInNewSpan(
+      { metadata: { name: 'bare' }, labels: { 'genkit:type': 'flow' } },
+      async (metadata, span) => {
+        seen = { traceId: span.traceId, spanId: span.spanId };
+        path = metadata.path ?? '';
+        span.setMetadata({ ignored: true }); // no providers, no-op
+        return 'ok';
+      }
+    );
+
+    assert.equal(out, 'ok');
+    // Untraced spans report the all-zero W3C invalid ids, never ''.
+    assert.deepStrictEqual(seen, {
+      traceId: '0'.repeat(32),
+      spanId: '0'.repeat(16),
+    });
+    // Genkit semantics still apply without any provider.
+    assert.equal(path, '/{bare,t:flow}');
   });
 
   it('fans out logs to providers with recordLog', async () => {
@@ -178,18 +192,14 @@ describe('instrumentation abstraction', () => {
           spanId: '4'.repeat(16),
           setMetadata: (values) => written.push(values),
         };
-        const span = trace.wrapSpanContext({
-          traceId: ctx.traceId,
-          spanId: ctx.spanId,
-          traceFlags: TraceFlags.SAMPLED,
-        });
-        return next(span, ctx);
+        return next(ctx);
       },
     };
     configureInstrumentation(recording);
 
     await runInNewSpan({ metadata: { name: 'attrs' } }, async (_m, span) => {
-      span.setAttribute('a', 1).setAttributes({ b: 'two' });
+      span.setMetadata({ a: 1 });
+      span.setMetadata({ b: 'two' });
     });
 
     assert.deepStrictEqual(written, [{ a: 1 }, { b: 'two' }]);
@@ -263,7 +273,7 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
         labels: { 'genkit:type': 'flow' },
       },
       async (_m, span) => {
-        spanId = span.spanContext().spanId;
+        spanId = span.spanId;
         // Let the fire-and-forget start POST land while we're still running.
         for (let i = 0; i < 50 && pendingSeen.length === 0; i++) {
           await sleep(10);
@@ -299,7 +309,7 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     await runInNewSpan(
       { metadata: { name: 'norealtime' }, labels: { 'genkit:type': 'flow' } },
       async (_m, span) => {
-        spanId = span.spanContext().spanId;
+        spanId = span.spanId;
         await sleep(30);
         midRun = posted
           .flatMap((t) => Object.values(t.spans ?? {}))
@@ -323,7 +333,7 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     await runInNewSpan(
       { metadata: { name: 'flushme' }, labels: { 'genkit:type': 'flow' } },
       async (_m, span) => {
-        spanId = span.spanContext().spanId;
+        spanId = span.spanId;
       }
     );
     await flushTracing();
@@ -344,14 +354,14 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     await runInNewSpan(
       { metadata: { name: 'outer' }, labels: { 'genkit:type': 'flow' } },
       async (_m, outerSpan) => {
-        outer = outerSpan.spanContext();
+        outer = { traceId: outerSpan.traceId, spanId: outerSpan.spanId };
         await runInNewSpan(
           {
             metadata: { name: 'inner', isRoot: true },
             labels: { 'genkit:type': 'flow' },
           },
           async (_m2, innerSpan) => {
-            inner = innerSpan.spanContext();
+            inner = { traceId: innerSpan.traceId, spanId: innerSpan.spanId };
           }
         );
       }
@@ -374,9 +384,9 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
     await runInNewSpan(
       { metadata: { name: 'attrs' }, labels: { 'genkit:type': 'flow' } },
       async (_m, span) => {
-        spanId = span.spanContext().spanId;
-        span.setAttribute('custom:count', 3);
-        span.setAttributes({ 'custom:flag': true, 'genkit:name': 'spoofed' });
+        spanId = span.spanId;
+        span.setMetadata({ 'custom:count': 3 });
+        span.setMetadata({ 'custom:flag': true, 'genkit:name': 'spoofed' });
       }
     );
     await flushTracing();
@@ -398,7 +408,7 @@ describe('DirectTelemetryInstrumentation realtime export', () => {
       runInNewSpan(
         { metadata: { name: 'boom' }, labels: { 'genkit:type': 'flow' } },
         async (_m, span) => {
-          spanId = span.spanContext().spanId;
+          spanId = span.spanId;
           throw err;
         }
       )

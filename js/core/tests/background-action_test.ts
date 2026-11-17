@@ -14,25 +14,22 @@
  * limitations under the License.
  */
 
-import { SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
 import { backgroundAction } from '../src/background-action.js';
 import { initNodeFeatures } from '../src/node.js';
 import { ActionType } from '../src/registry.js';
-import { enableTelemetry } from '../src/tracing.js';
-import { TestSpanExporter } from './utils.js';
+import { configureInstrumentation } from '../src/tracing.js';
+import { TestInstrumentation } from './utils.js';
 
 initNodeFeatures();
 
-const spanExporter = new TestSpanExporter();
-enableTelemetry({
-  spanProcessors: [new SimpleSpanProcessor(spanExporter)],
-});
+const spanRecorder = new TestInstrumentation();
+configureInstrumentation(spanRecorder);
 
 describe('background action', () => {
   beforeEach(() => {
-    spanExporter.exportedSpans = [];
+    spanRecorder.exportedSpans = [];
   });
   it('does not validate operations against the start input JSON schema', async () => {
     const action = backgroundAction({

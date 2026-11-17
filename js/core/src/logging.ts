@@ -51,7 +51,7 @@ function getLogger() {
 class Logger {
   readonly defaultLogger = _defaultLogger;
 
-  private _emitOtel(
+  private _emitToInstrumentations(
     level: string,
     args: any[],
     explicitBody?: string,
@@ -83,7 +83,8 @@ class Logger {
       };
 
       // Fan out to any provider that records logs. Each attaches correlation
-      // from its own context source (OTel active context vs Genkit ALS).
+      // from its own context source (e.g. Genkit ALS, or an OTel plugin's
+      // active context).
       for (const p of activeInstrumentations()) {
         if (hasRecordLog(p)) {
           p.recordLog(record);
@@ -139,12 +140,12 @@ class Logger {
         );
       } else if (args.length > 1) {
         getLogger()[level].apply(getLogger(), args);
-        this._emitOtel(level, args);
+        this._emitToInstrumentations(level, args);
         return;
       }
     } else {
       getLogger()[level].apply(getLogger(), args);
-      this._emitOtel(level, args);
+      this._emitToInstrumentations(level, args);
       return;
     }
 
@@ -153,7 +154,7 @@ class Logger {
     } else {
       getLogger()[level](msg);
     }
-    this._emitOtel(level, [], msg, metadata);
+    this._emitToInstrumentations(level, [], msg, metadata);
   }
 
   init(fn: any) {

@@ -170,7 +170,6 @@ export {
   type StatusName,
   type StreamingCallback,
   type StreamingResponse,
-  type TelemetryConfig,
 } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 

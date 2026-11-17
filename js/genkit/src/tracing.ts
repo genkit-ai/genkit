@@ -17,11 +17,17 @@
  */
 
 /**
- * Tracing and telemetry — span/trace schemas, custom metadata helpers, and
- * OpenTelemetry integration utilities.
+ * Tracing and telemetry: span/trace schemas, custom metadata helpers, and the
+ * pluggable instrumentation API.
+ *
+ * Genkit records nothing outside the Developer UI unless an instrumentation is
+ * configured, e.g. OpenTelemetry via `@genkit-ai/otel`:
  *
  * ```ts
- * import { runInNewSpan, setCustomMetadataAttributes } from 'genkit/tracing';
+ * import { GenAiInstrumentation } from '@genkit-ai/otel';
+ * import { configureInstrumentation } from 'genkit/tracing';
+ *
+ * configureInstrumentation(new GenAiInstrumentation());
  * ```
  *
  * @module tracing
@@ -29,7 +35,6 @@
 
 export {
   DirectTelemetryInstrumentation,
-  OTelInstrumentation,
   SPAN_TYPE_ATTR,
   SpanContextSchema,
   SpanDataSchema,
@@ -38,12 +43,7 @@ export {
   TimeEventSchema,
   TraceDataSchema,
   TraceMetadataSchema,
-  TraceServerExporter,
-  appendSpan,
   configureInstrumentation,
-  disableGenkitOTelInitialization,
-  disableOTelRootSpanDetection,
-  enableTelemetry,
   flushTracing,
   resetInstrumentation,
   runInNewSpan,

@@ -14,12 +14,6 @@
  * limitations under the License.
  */
 
-import type {
-  Span as ApiSpan,
-  Link,
-  SpanAttributes,
-  SpanAttributeValue,
-} from '@opentelemetry/api';
 import type { SpanMetadata } from './types.js';
 
 /**
@@ -29,22 +23,37 @@ import type { SpanMetadata } from './types.js';
 export const ATTR_PREFIX = 'genkit';
 /** @hidden */
 export const SPAN_TYPE_ATTR = ATTR_PREFIX + ':type';
-/** @hidden */
-export const TRACER_NAME = 'genkit-tracer';
-/** @hidden */
-export const TRACER_VERSION = 'v1';
 
 /** ALS key under which the dispatcher stores the current span context. */
 export const spanMetadataAlsKey = 'core.tracing.instrumentation.span';
 
 /**
- * A backend-independent view of the span handed to the wrapped function.
+ * A span attribute value. Same shape OpenTelemetry accepts, so OTel-backed
+ * instrumentations can pass values straight through.
+ *
+ * @hidden
+ */
+export type SpanAttributeValue =
+  | string
+  | number
+  | boolean
+  | Array<null | undefined | string>
+  | Array<null | undefined | number>
+  | Array<null | undefined | boolean>;
+
+/** @hidden */
+export type SpanAttributes = Record<string, SpanAttributeValue | undefined>;
+
+/**
+ * A backend-independent view of the current span. Handed to `runInNewSpan`
+ * callbacks and, per provider, to the dispatcher.
  *
  * `traceId` / `spanId` are the composite-resolved ids (first non-empty across
- * the active instrumentation chain); both are '' when nothing is instrumented.
+ * the active instrumentation chain). A provider may report '' when it has no
+ * ids; `runInNewSpan` callbacks then see the all-zero W3C "invalid" ids.
  *
- * `setMetadata` receives custom attribute writes made on the span handed to the
- * `runInNewSpan` callback (`span.setAttribute(s)`).
+ * `setMetadata` records custom attributes on the span (fanned out to every
+ * provider in the chain).
  *
  * @hidden
  */
@@ -64,19 +73,15 @@ export interface GenkitSpanContext {
 export interface InstrumentationSpanInfo {
   metadata: SpanMetadata;
   labels?: Record<string, string>;
-  links?: Link[];
 }
 
 /**
  * Continuation passed to a provider's `runInNewSpan`. Providers must call it
- * exactly once and return its result.
+ * exactly once, with their span's context, and return its result.
  *
  * @hidden
  */
-export type InstrumentationNext<T> = (
-  span: ApiSpan,
-  ctx: GenkitSpanContext
-) => Promise<T>;
+export type InstrumentationNext<T> = (ctx: GenkitSpanContext) => Promise<T>;
 
 /**
  * A pluggable telemetry instrumentation provider. Middleware over span
@@ -93,7 +98,7 @@ export interface Instrumentation {
 
 /**
  * A correlation-free log record. Each provider attaches trace/span correlation
- * from its own context source (OTel active context vs Genkit ALS).
+ * from its own context source.
  *
  * @hidden
  */
@@ -122,7 +127,7 @@ export function hasRecordLog(
   );
 }
 
-/** An OTel id made entirely of zeros is the no-op / unknown id. */
+/** An id made entirely of zeros is the W3C/OTel no-op / unknown id. */
 export function isValidId(id: string | undefined): id is string {
   return !!id && !/^0+$/.test(id);
 }
@@ -169,9 +174,8 @@ export function metadataToAttributes(
 
 /**
  * Normalizes custom attribute writes (`GenkitSpanContext.setMetadata`) into
- * valid OTel attribute values. Primitives and homogeneous primitive arrays pass
- * through as-is, matching what `span.setAttribute` would record; anything else
- * is JSON-encoded. undefined/null are dropped.
+ * valid attribute values. Primitives and homogeneous primitive arrays pass
+ * through as-is; anything else is JSON-encoded. undefined/null are dropped.
  *
  * @hidden
  */
@@ -208,24 +212,4 @@ export function getErrorMessage(e: any): string {
     return e.message;
   }
   return `${e}`;
-}
-
-const rootSpanDetectionKey = '__genkit_disableRootSpanDetection';
-
-/** @hidden */
-export function isDisableRootSpanDetection(): boolean {
-  return global[rootSpanDetectionKey] === true;
-}
-
-/**
- * Disables Genkit's custom root span detection and leaves default Otel root span.
- *
- * This function attempts to control Genkit's internal OTel instrumentation behaviour,
- * since internal implementation details are subject to change at any time consider
- * this function "unstable" and subject to breaking changes as well.
- *
- * @hidden
- */
-export function disableOTelRootSpanDetection() {
-  global[rootSpanDetectionKey] = true;
 }

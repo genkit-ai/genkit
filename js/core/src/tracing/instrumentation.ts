@@ -14,42 +14,26 @@
  * limitations under the License.
  */
 
-import {
-  ROOT_CONTEXT,
-  TraceFlags,
-  trace,
-  type Span as ApiSpan,
-  type Link,
-  type SpanContext as OTelSpanContext,
-  type SpanAttributeValue,
-  type SpanAttributes,
-} from '@opentelemetry/api';
 import { performance } from 'node:perf_hooks';
 import { getAsyncContext } from '../async-context.js';
 import type { HasRegistry, Registry } from '../registry.js';
-import { ensureBasicTelemetryInstrumentation } from '../tracing.js';
 import { DirectTelemetryInstrumentation } from './direct-instrumentation.js';
-import { telemetryServerUrl } from './exporter.js';
 import {
   ATTR_PREFIX,
   SPAN_TYPE_ATTR,
-  TRACER_NAME,
-  TRACER_VERSION,
   firstNonEmpty,
-  metadataToAttributes,
   spanMetadataAlsKey,
   type GenkitSpanContext,
   type Instrumentation,
   type InstrumentationSpanInfo,
 } from './instrumentation-api.js';
-import { OTelInstrumentation } from './otel-instrumentation.js';
+import { telemetryServerUrl } from './telemetry-server.js';
 import type { PathMetadata, SpanMetadata, TraceMetadata } from './types.js';
 
 export { DirectTelemetryInstrumentation } from './direct-instrumentation.js';
 export {
   ATTR_PREFIX,
   SPAN_TYPE_ATTR,
-  disableOTelRootSpanDetection,
   spanMetadataAlsKey,
   type GenkitLogRecord,
   type GenkitSpanContext,
@@ -58,7 +42,6 @@ export {
   type InstrumentationSpanInfo,
   type LogRecordingInstrumentation,
 } from './instrumentation-api.js';
-export { OTelInstrumentation } from './otel-instrumentation.js';
 
 type SpanContext = {
   metadata: SpanMetadata;
@@ -69,12 +52,11 @@ type SpanContext = {
 interface RunInNewSpanOpts {
   metadata: SpanMetadata;
   labels?: Record<string, string>;
-  links?: Link[];
 }
 
 type RunInNewSpanFn<T> = (
   metadata: SpanMetadata,
-  otSpan: ApiSpan
+  span: GenkitSpanContext
 ) => Promise<T>;
 
 // ---------------------------------------------------------------------------
@@ -83,13 +65,13 @@ type RunInNewSpanFn<T> = (
 
 const configuredInstrumentationKey = '__GENKIT_CONFIGURED_INSTRUMENTATION';
 const directInstrumentationKey = '__GENKIT_DIRECT_INSTRUMENTATION';
-const defaultOTelInstrumentationKey = '__GENKIT_DEFAULT_OTEL_INSTRUMENTATION';
 
 /**
- * Replaces the implicit default (`OTelInstrumentation`) with the provided
- * instrumentation. `DirectTelemetryInstrumentation` is still prepended in dev
- * (when a telemetry server is configured), so a typical dev chain becomes
- * `[Direct, x]`.
+ * Sets the instrumentation that records Genkit spans and logs (e.g.
+ * `GenAiInstrumentation` from `@genkit-ai/otel`). Without one, nothing is
+ * recorded outside the Developer UI. `DirectTelemetryInstrumentation` is still
+ * prepended in dev (when a telemetry server is configured), so a typical dev
+ * chain is `[Direct, configured]`.
  *
  * @hidden
  */
@@ -105,14 +87,6 @@ export function configureInstrumentation(i: Instrumentation) {
 export function resetInstrumentation() {
   delete global[configuredInstrumentationKey];
   delete global[directInstrumentationKey];
-  delete global[defaultOTelInstrumentationKey];
-}
-
-function defaultOTelInstrumentation(): OTelInstrumentation {
-  if (!global[defaultOTelInstrumentationKey]) {
-    global[defaultOTelInstrumentationKey] = new OTelInstrumentation();
-  }
-  return global[defaultOTelInstrumentationKey];
 }
 
 /**
@@ -130,19 +104,21 @@ function directInstrumentation(): Instrumentation | undefined {
 }
 
 /**
- * Resolves the active instrumentation chain for this call.
- * - base: `[configured]` if `configureInstrumentation` was called, else the
- *   implicit `[OTelInstrumentation]` default.
- * - dev: `DirectTelemetryInstrumentation` is prepended when a telemetry server
- *   is configured, so ids from Direct win and the Dev UI is fed without OTel.
+ * Resolves the active instrumentation chain for this call: the configured
+ * instrumentation (if any), with `DirectTelemetryInstrumentation` prepended
+ * when a telemetry server is configured, so ids from Direct win in dev. The
+ * chain may be empty, in which case spans are not recorded anywhere.
  *
  * @hidden
  */
 export function activeInstrumentations(): Instrumentation[] {
-  const base: Instrumentation =
-    global[configuredInstrumentationKey] ?? defaultOTelInstrumentation();
+  const chain: Instrumentation[] = [];
   const direct = directInstrumentation();
-  return direct ? [direct, base] : [base];
+  if (direct) chain.push(direct);
+  const configured: Instrumentation | undefined =
+    global[configuredInstrumentationKey];
+  if (configured) chain.push(configured);
+  return chain;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,7 +163,6 @@ export async function runInNewSpan<T>(
     opts = registryOrOprs as RunInNewSpanOpts;
     fn = optsOrFn as RunInNewSpanFn<T>;
   }
-  await ensureBasicTelemetryInstrumentation();
 
   const parentStep =
     getAsyncContext().getStore<SpanContext>(spanMetadataAlsKey);
@@ -221,7 +196,6 @@ export async function runInNewSpan<T>(
   const info: InstrumentationSpanInfo = {
     metadata: opts.metadata,
     labels,
-    links: opts.links,
   };
 
   // Innermost callback: every provider span/context is collected by now, so we
@@ -232,10 +206,14 @@ export async function runInNewSpan<T>(
     if (isGenkitSpan) {
       spanContext.spanId = compositeCtx.spanId || undefined;
     }
-    const compositeSpan = new CompositeSpan(compositeCtx);
 
     return await getAsyncContext().run(spanMetadataAlsKey, spanContext, () =>
-      runWithGenkitState(opts.metadata, spanContext, compositeSpan, fn)
+      runWithGenkitState(
+        opts.metadata,
+        spanContext,
+        withInvalidIdFallback(compositeCtx),
+        fn
+      )
     );
   };
 
@@ -244,7 +222,8 @@ export async function runInNewSpan<T>(
 
 /**
  * Nests each provider's `runInNewSpan` (outermost first), collecting the
- * context each hands to `next`, and invokes `runBody` at the center.
+ * context each hands to `next`, and invokes `runBody` at the center. An empty
+ * chain runs `runBody` directly.
  */
 async function dispatch<T>(
   chain: Instrumentation[],
@@ -255,7 +234,7 @@ async function dispatch<T>(
 
   const at =
     (i: number) =>
-    async (_span: ApiSpan, ctx: GenkitSpanContext): Promise<T> => {
+    async (ctx: GenkitSpanContext): Promise<T> => {
       contexts[i] = ctx;
       if (i + 1 < chain.length) {
         return chain[i + 1].runInNewSpan(info, at(i + 1));
@@ -263,6 +242,7 @@ async function dispatch<T>(
       return runBody(contexts);
     };
 
+  if (chain.length === 0) return runBody(contexts);
   return chain[0].runInNewSpan(info, at(0));
 }
 
@@ -273,11 +253,11 @@ async function dispatch<T>(
 async function runWithGenkitState<T>(
   metadata: SpanMetadata,
   spanContext: SpanContext,
-  compositeSpan: ApiSpan,
+  span: GenkitSpanContext,
   fn: RunInNewSpanFn<T>
 ): Promise<T> {
   try {
-    const output = await fn(metadata, compositeSpan);
+    const output = await fn(metadata, span);
     if (metadata.state !== 'error') {
       metadata.state = 'success';
     }
@@ -300,62 +280,9 @@ async function runWithGenkitState<T>(
 }
 
 /**
- * The span handed to `fn`. `spanContext()` returns the composite-resolved ids
- * and attribute writes fan out to every provider via `ctx.setMetadata`.
- *
- * Lifecycle (status, exceptions, end) is owned by the providers, so those
- * methods are deliberate no-ops here.
+ * Composite-resolved ids ('' when no provider reported one), with attribute
+ * writes fanned out to every provider in the chain.
  */
-class CompositeSpan implements ApiSpan {
-  constructor(private readonly ctx: GenkitSpanContext) {}
-
-  spanContext(): OTelSpanContext {
-    return {
-      traceId: this.ctx.traceId || '0'.repeat(32),
-      spanId: this.ctx.spanId || '0'.repeat(16),
-      traceFlags: TraceFlags.SAMPLED,
-    };
-  }
-
-  setAttribute(key: string, value: SpanAttributeValue): this {
-    this.ctx.setMetadata({ [key]: value });
-    return this;
-  }
-
-  setAttributes(attributes: SpanAttributes): this {
-    this.ctx.setMetadata(attributes);
-    return this;
-  }
-
-  addEvent(): this {
-    return this;
-  }
-
-  addLink(): this {
-    return this;
-  }
-
-  addLinks(): this {
-    return this;
-  }
-
-  setStatus(): this {
-    return this;
-  }
-
-  updateName(): this {
-    return this;
-  }
-
-  end(): void {}
-
-  isRecording(): boolean {
-    return true;
-  }
-
-  recordException(): void {}
-}
-
 function makeCompositeContext(
   contexts: GenkitSpanContext[]
 ): GenkitSpanContext {
@@ -373,35 +300,25 @@ function makeCompositeContext(
   };
 }
 
+const INVALID_TRACE_ID = '0'.repeat(32);
+const INVALID_SPAN_ID = '0'.repeat(16);
+
 /**
- * Creates a new child span and attaches it to a previously created trace. This
- * is useful, for example, for adding deferred user engagement metadata.
- *
- * @hidden
+ * The context handed to `fn`. Untraced spans report the all-zero W3C
+ * "invalid" ids rather than '': that is what callers always saw (OTel's no-op
+ * span), and they forward them as-is, e.g. as `x-genkit-trace-id` headers and
+ * in `ActionResult.telemetry`.
  */
-export async function appendSpan(
-  traceId: string,
-  parentSpanId: string,
-  metadata: SpanMetadata,
-  labels?: Record<string, string>
-) {
-  await ensureBasicTelemetryInstrumentation();
-
-  const tracer = trace.getTracer(TRACER_NAME, TRACER_VERSION);
-
-  const spanContext = trace.setSpanContext(ROOT_CONTEXT, {
-    traceId: traceId,
-    traceFlags: 1, // sampled
-    spanId: parentSpanId,
-  });
-
-  // TODO(abrook): add explicit start time to align with parent
-  const span = tracer.startSpan(metadata.name, {}, spanContext);
-  span.setAttributes(metadataToAttributes(metadata));
-  if (labels) {
-    span.setAttributes(labels);
-  }
-  span.end();
+function withInvalidIdFallback(ctx: GenkitSpanContext): GenkitSpanContext {
+  return {
+    get traceId() {
+      return ctx.traceId || INVALID_TRACE_ID;
+    },
+    get spanId() {
+      return ctx.spanId || INVALID_SPAN_ID;
+    },
+    setMetadata: (values) => ctx.setMetadata(values),
+  };
 }
 
 /**

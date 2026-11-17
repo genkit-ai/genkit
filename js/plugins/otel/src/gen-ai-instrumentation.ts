@@ -36,6 +36,7 @@ import type {
 import type {
   GenkitSpanContext,
   Instrumentation,
+  InstrumentationNext,
   InstrumentationSpanInfo,
 } from 'genkit/tracing';
 import {
@@ -57,9 +58,6 @@ import {
   normalizeMessages,
 } from './genai/gen-ai-message-mapping.js';
 import { GenAiMetrics } from './genai/gen-ai-metrics.js';
-
-/** The continuation passed by the dispatcher; returns the raw action result. */
-type Next<T> = (span: Span, ctx: GenkitSpanContext) => Promise<T>;
 
 /** Options for {@link GenAiInstrumentation}. */
 export interface GenAiInstrumentationOptions {
@@ -203,7 +201,7 @@ export class GenAiInstrumentation implements Instrumentation {
 
   async runInNewSpan<T>(
     info: InstrumentationSpanInfo,
-    next: Next<T>
+    next: InstrumentationNext<T>
   ): Promise<T> {
     const actionType =
       info.labels?.[SUBTYPE_LABEL] ?? info.labels?.[TYPE_LABEL];
@@ -220,7 +218,7 @@ export class GenAiInstrumentation implements Instrumentation {
 
   private async runModelSpan<T>(
     info: InstrumentationSpanInfo,
-    next: Next<T>
+    next: InstrumentationNext<T>
   ): Promise<T> {
     const { model, prefix } = splitModelName(info.metadata.name);
     const provider = deriveProviderName(prefix);
@@ -247,7 +245,7 @@ export class GenAiInstrumentation implements Instrumentation {
       async (span) => {
         this.maybeWarnNotRecording(span);
         try {
-          const output = await next(span, spanContextOf(span));
+          const output = await next(spanContextOf(span));
           const response = asGenerateResponse(output);
           if (response) this.addResponseAttributes(span, response, false);
           if (this.contentCapturingMode !== 'NO_CONTENT') {
@@ -278,7 +276,7 @@ export class GenAiInstrumentation implements Instrumentation {
 
   private async runToolSpan<T>(
     info: InstrumentationSpanInfo,
-    next: Next<T>
+    next: InstrumentationNext<T>
   ): Promise<T> {
     const attrs: Attributes = {
       [GenAiAttr.operationName]: GenAiOperation.executeTool,
@@ -291,7 +289,7 @@ export class GenAiInstrumentation implements Instrumentation {
       async (span) => {
         this.maybeWarnNotRecording(span);
         try {
-          const output = await next(span, spanContextOf(span));
+          const output = await next(spanContextOf(span));
           if (this.contentCapturingMode !== 'NO_CONTENT') {
             this.recordToolContent(span, info.metadata.input, output);
           }
@@ -309,7 +307,7 @@ export class GenAiInstrumentation implements Instrumentation {
 
   private async runGenericSpan<T>(
     info: InstrumentationSpanInfo,
-    next: Next<T>,
+    next: InstrumentationNext<T>,
     subtype: string | undefined
   ): Promise<T> {
     const attrs: Attributes = subtype
@@ -321,7 +319,7 @@ export class GenAiInstrumentation implements Instrumentation {
       async (span) => {
         this.maybeWarnNotRecording(span);
         try {
-          const output = await next(span, spanContextOf(span));
+          const output = await next(spanContextOf(span));
           this.maybeCaptureActionIO(span, info.metadata.input, output);
           return output;
         } catch (e) {
@@ -565,10 +563,9 @@ function safeStringify(value: unknown): string {
 }
 
 /**
- * Builds the span options shared by all span kinds. Forwards span links and
- * copies Genkit labels (including user `telemetryLabels`) as attributes,
- * matching core's OTelInstrumentation and the Go plugin. GenAI attributes are
- * spread last so a label can never clobber them.
+ * Builds the span options shared by all span kinds. Copies Genkit labels
+ * (including user `telemetryLabels`) as attributes, matching the Go plugin.
+ * GenAI attributes are spread last so a label can never clobber them.
  */
 function spanOptions(
   info: InstrumentationSpanInfo,
@@ -578,7 +575,6 @@ function spanOptions(
   return {
     kind,
     attributes: { ...info.labels, ...attrs },
-    ...(info.links?.length ? { links: info.links } : {}),
   };
 }
 
