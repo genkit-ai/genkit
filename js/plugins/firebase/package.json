@@ -1,10 +1,9 @@
 {
   "name": "@genkit-ai/firebase",
-  "description": "Genkit AI framework plugin for Firebase including Firestore trace/state store and deployment helpers for Cloud Functions for Firebase.",
+  "description": "Genkit AI framework plugin for Firebase including a Firestore retriever, Firestore session store, durable streaming, auth context and Data Connect tools.",
   "keywords": [
     "genkit",
     "genkit-plugin",
-    "genkit-tracestore",
     "genkit-statestore",
     "genkit-deploy",
     "genkit-flow",
@@ -66,18 +65,6 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./user_engagement": {
-      "require": "./lib/user-engagement.js",
-      "import": "./lib/user-engagement.mjs",
-      "types": "./lib/user-engagement.d.ts",
-      "default": "./lib/user-engagement.js"
-    },
-    "./user-engagement": {
-      "require": "./lib/user-engagement.js",
-      "import": "./lib/user-engagement.mjs",
-      "types": "./lib/user-engagement.d.ts",
-      "default": "./lib/user-engagement.js"
-    },
     "./beta/data-connect": {
       "require": "./lib/beta/data-connect.js",
       "import": "./lib/beta/data-connect.mjs",
@@ -99,12 +86,6 @@
   },
   "typesVersions": {
     "*": {
-      "user_engagement": [
-        "lib/user-engagement"
-      ],
-      "user-engagement": [
-        "lib/user-engagement"
-      ],
       "beta/data-connect": [
         "lib/data-connect"
       ],

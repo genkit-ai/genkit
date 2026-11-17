@@ -26,22 +26,22 @@ npm i --save @genkit-ai/firebase
 
 ## Telemetry / Monitoring
 
-Call `enableFirebaseTelemetry()` to export Genkit traces, metrics, and logs to Google Cloud / Firebase:
+This plugin no longer exports telemetry (`enableFirebaseTelemetry` was removed).
+To send Genkit traces and metrics to Google Cloud (or any OpenTelemetry backend),
+use [`@genkit-ai/otel`](https://www.npmjs.com/package/@genkit-ai/otel):
 
 ```ts
-import { genkit } from 'genkit';
-import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
+import { TraceExporter } from '@google-cloud/opentelemetry-cloud-trace-exporter';
+import { GenAiInstrumentation } from '@genkit-ai/otel';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base';
+import { configureInstrumentation } from 'genkit/tracing';
 
-enableFirebaseTelemetry();
-
-const ai = genkit({
-  plugins: [
-    // ...
-  ],
-});
+new NodeSDK({
+  spanProcessors: [new BatchSpanProcessor(new TraceExporter())],
+}).start();
+configureInstrumentation(new GenAiInstrumentation());
 ```
-
-See the [monitoring documentation](https://genkit.dev/docs/js/observability/getting-started/) for details.
 
 ## Durable Streaming (Beta)
 

@@ -14,16 +14,9 @@
  * limitations under the License.
  */
 
-import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
-import {
-  FirebaseUserEngagementSchema,
-  collectUserEngagement,
-} from '@genkit-ai/firebase/user_engagement';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { onCallGenkit, onRequest } from 'firebase-functions/https';
 import { genkit, z } from 'genkit';
-
-enableFirebaseTelemetry();
 
 const ai = genkit({
   plugins: [vertexAI()],
@@ -151,16 +144,5 @@ export const triggerJokeFlow = onRequest(
     });
     console.log('operation', op);
     res.send(op);
-  }
-);
-
-/** Example of user engagement collection using Firebase Functions. */
-export const collectEngagement = onRequest(
-  {
-    memory: '512MiB',
-  },
-  async (req, res) => {
-    await collectUserEngagement(FirebaseUserEngagementSchema.parse(req.body));
-    res.send({});
   }
 );

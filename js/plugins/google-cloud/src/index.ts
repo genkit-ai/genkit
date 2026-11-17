@@ -16,51 +16,15 @@
  */
 
 /**
- * Google Cloud telemetry plugin for Genkit.
+ * Google Cloud integrations for Genkit.
+ *
+ * Model Armor is also available from `@genkit-ai/google-cloud/model-armor`,
+ * and the Firestore session store from `@genkit-ai/google-cloud/beta`.
+ *
+ * For telemetry, use `@genkit-ai/otel` with a Google Cloud OpenTelemetry
+ * exporter.
  *
  * @module
  */
 
-import { getCurrentEnv } from 'genkit';
-import { logger } from 'genkit/logging';
-import { enableTelemetry } from 'genkit/tracing';
-import { credentialsFromEnvironment } from './auth.js';
-import { GcpLogger } from './gcpLogger.js';
-import { GcpOpenTelemetry } from './gcpOpenTelemetry.js';
-import { TelemetryConfigs } from './telemetry/defaults.js';
-import type { GcpTelemetryConfig, GcpTelemetryConfigOptions } from './types.js';
-
-/**
- * Enables telemetry export to the Google Cloud Observability suite.
- *
- * @param options configuration options
- */
-export function enableGoogleCloudTelemetry(
-  options?: GcpTelemetryConfigOptions
-) {
-  return enableTelemetry(
-    configureGcpPlugin(options).then(async (pluginConfig) => {
-      logger.init(await new GcpLogger(pluginConfig).getLogger(getCurrentEnv()));
-      return new GcpOpenTelemetry(pluginConfig).getConfig();
-    })
-  );
-}
-
-/**
- * Create a configuration object for the plugin.
- * Not normally needed, but exposed for use by the Firebase plugin.
- */
-async function configureGcpPlugin(
-  options?: GcpTelemetryConfigOptions
-): Promise<GcpTelemetryConfig> {
-  const envOptions = await credentialsFromEnvironment();
-  return {
-    projectId: options?.projectId || envOptions.projectId,
-    credentials: options?.credentials || envOptions.credentials,
-    ...TelemetryConfigs.defaults(options),
-  };
-}
-
-export * from './gcpLogger.js';
-export * from './gcpOpenTelemetry.js';
-export type { GcpTelemetryConfigOptions } from './types.js';
+export { modelArmor, type ModelArmorOptions } from './model-armor.js';

@@ -22,9 +22,9 @@ import { xAI } from '@genkit-ai/compat-oai/xai';
 import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { genkitEval } from '@genkit-ai/evaluator';
 import { expressHandler } from '@genkit-ai/express';
-import { enableFirebaseTelemetry } from '@genkit-ai/firebase';
+import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { firebaseContext } from '@genkit-ai/firebase/context';
-import { enableGoogleCloudTelemetry } from '@genkit-ai/google-cloud';
+import { modelArmor } from '@genkit-ai/google-cloud';
 import {
   googleAI,
   googleAI as newGoogleAI,
@@ -52,8 +52,8 @@ import { ollama } from 'genkitx-ollama';
 import { pinecone } from 'genkitx-pinecone';
 
 firebaseContext();
-enableFirebaseTelemetry;
-enableGoogleCloudTelemetry;
+defineFirestoreRetriever;
+modelArmor;
 checks;
 googleAI;
 vertexAI;
