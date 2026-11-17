@@ -240,7 +240,10 @@ type OpenAICompatible struct {
 	// is sent back as a leading thinking chunk, rather than as a
 	// reasoning_content field a provider with a closed schema rejects.
 	// Responses are read either way, since a content array is always unpacked
-	// into its text and its reasoning.
+	// into its text and its reasoning. Reasoning parts in the provider's
+	// replies are tagged with metadata["reasoningSource"] set to Provider, and
+	// only reasoning so tagged is sent back, so another model's reasoning in a
+	// mixed history is left out.
 	SendReasoningAsThinkingChunks bool
 
 	// descs caches the action descriptors of listed models by name; they are
@@ -303,6 +306,15 @@ func clearInheritedOpenAIIdentity() []option.RequestOption {
 	}
 }
 
+// reasoningSource is the provider's tag for its own reasoning when it reads
+// reasoning as thinking chunks, and empty otherwise.
+func (o *OpenAICompatible) reasoningSource() string {
+	if !o.SendReasoningAsThinkingChunks {
+		return ""
+	}
+	return o.Provider
+}
+
 // newGenerator returns a generator for model id served by client, carrying
 // every plugin-level setting that shapes the request or reads the response.
 // Each model constructor starts from it, so none can leave a setting out or
@@ -312,7 +324,7 @@ func (o *OpenAICompatible) newGenerator(client *openai.Client, id string) *Model
 		withSeparateReasoning(o.SeparateReasoningTokens).
 		withMediaTypes(o.MediaTypes).
 		withOmitStreamOptions(o.OmitStreamOptions).
-		withReasoningAsThinkingChunks(o.SendReasoningAsThinkingChunks)
+		withReasoningAsThinkingChunks(o.reasoningSource())
 }
 
 // Name implements genkit.Plugin.

@@ -122,7 +122,11 @@ content, which the plugin turns into Genkit reasoning parts, available
 through `response.Reasoning()`, with the chunk's `signature`, when it has one,
 in the part's `signature` metadata. When the conversation goes back to
 Mistral, as in a tool loop, the reasoning is sent back as the same `thinking`
-chunk, signature included, as Mistral asks for multi-turn reasoning.
+chunk, signature included, as Mistral asks for multi-turn reasoning. Each
+reasoning part from Mistral carries `reasoningSource: "mistral"` in its
+metadata, and only reasoning with that tag is sent back, so another model's
+reasoning in a mixed history, or its signature, never reaches Mistral. The
+Python and JS plugins use the same tag.
 
 ## Streaming
 

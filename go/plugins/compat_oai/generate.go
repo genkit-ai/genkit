@@ -54,8 +54,11 @@ type ModelGenerator struct {
 	mediaTypes []string
 	// omitStreamOptions is [OpenAICompatible.OmitStreamOptions].
 	omitStreamOptions bool
-	// reasoningAsThinkingChunks is [OpenAICompatible.SendReasoningAsThinkingChunks].
-	reasoningAsThinkingChunks bool
+	// reasoningSource is the provider name when the provider reads reasoning
+	// as thinking chunks ([OpenAICompatible.SendReasoningAsThinkingChunks]),
+	// and empty otherwise. Reasoning parts the provider answers with are
+	// tagged with it, and only parts so tagged are sent back.
+	reasoningSource string
 	// classify is the provider's [OpenAICompatible.ClassifyError].
 	classify func(*openai.Error) status.Name
 	// Store any errors that occur during building
@@ -100,12 +103,35 @@ func (g *ModelGenerator) withOmitStreamOptions(omit bool) *ModelGenerator {
 	return g
 }
 
-// withReasoningAsThinkingChunks sets whether a model turn's reasoning is sent
-// back as a thinking chunk; see [OpenAICompatible.SendReasoningAsThinkingChunks].
-// It must come before [ModelGenerator.WithMessages].
-func (g *ModelGenerator) withReasoningAsThinkingChunks(send bool) *ModelGenerator {
-	g.reasoningAsThinkingChunks = send
+// withReasoningAsThinkingChunks makes a model turn's reasoning go back as
+// thinking chunks, keeping only the reasoning source answered with; see
+// [OpenAICompatible.SendReasoningAsThinkingChunks]. An empty source leaves the
+// setting off. It must come before [ModelGenerator.WithMessages].
+func (g *ModelGenerator) withReasoningAsThinkingChunks(source string) *ModelGenerator {
+	g.reasoningSource = source
 	return g
+}
+
+// reasoningSourceKey is the reasoning part metadata key naming the provider
+// whose reply the reasoning came from, for a provider that reads reasoning
+// as thinking chunks. The Python and JS plugins use the same key and value,
+// so a history persisted by one replays the same way in another.
+const reasoningSourceKey = "reasoningSource"
+
+// tagReasoning marks every reasoning part of resp as source's.
+func tagReasoning(resp *ai.ModelResponse, source string) {
+	if resp == nil || resp.Message == nil {
+		return
+	}
+	for _, part := range resp.Message.Content {
+		if part == nil || !part.IsReasoning() {
+			continue
+		}
+		if part.Metadata == nil {
+			part.Metadata = map[string]any{}
+		}
+		part.Metadata[reasoningSourceKey] = source
+	}
 }
 
 // WithMessages adds messages to the request
@@ -133,14 +159,16 @@ func (g *ModelGenerator) WithMessages(messages []*ai.Message) *ModelGenerator {
 			am.Content.OfString = param.NewOpt(content)
 			switch {
 			case !slices.ContainsFunc(msg.Content, (*ai.Part).IsReasoning):
-			case g.reasoningAsThinkingChunks:
+			case g.reasoningSource != "":
 				// The content array replaces the string content: the SDK
 				// marshals an extra field over the struct field it collides
 				// with. Each reasoning part goes back as its own thinking
-				// chunk, so a signature stays with the block it signs. An
-				// empty chain of thought with no signature has nothing to
-				// send back.
-				if blocks := thinkingBlocks(msg.Content); len(blocks) > 0 {
+				// chunk, so a signature stays with the block it signs. Only
+				// the provider's own reasoning goes back: another model's
+				// chain of thought, and the signature it carries, mean
+				// nothing to it. An empty chain of thought with no
+				// signature has nothing to send back.
+				if blocks := thinkingBlocks(msg.Content, g.reasoningSource); len(blocks) > 0 {
 					am.SetExtraFields(map[string]any{
 						"content": thinkingContent(blocks, content),
 					})
@@ -585,10 +613,17 @@ func (g *ModelGenerator) Generate(ctx context.Context, req *ai.ModelRequest, han
 		g.applyResponseFormat(req.Output)
 	}
 
+	var resp *ai.ModelResponse
+	var err error
 	if handleChunk != nil {
-		return g.generateStream(ctx, req, handleChunk)
+		resp, err = g.generateStream(ctx, req, handleChunk)
+	} else {
+		resp, err = g.generateComplete(ctx, req)
 	}
-	return g.generateComplete(ctx, req)
+	if err == nil && g.reasoningSource != "" {
+		tagReasoning(resp, g.reasoningSource)
+	}
+	return resp, err
 }
 
 // applyResponseFormat sets the request's response format from the output
@@ -676,13 +711,18 @@ func concatenateTextContent(parts []*ai.Part) string {
 	return content.String()
 }
 
-// thinkingBlocks returns one block per reasoning part among parts, in order,
-// each with the signature its own part carries. A part with neither text nor
-// a signature is left out.
-func thinkingBlocks(parts []*ai.Part) []thinkingBlock {
+// thinkingBlocks returns one block per reasoning part among parts that
+// source answered with, in order, each with the signature its own part
+// carries. A part with neither text nor a signature is left out, as is one
+// without source's tag, such as another model's or one from history saved
+// before parts were tagged.
+func thinkingBlocks(parts []*ai.Part, source string) []thinkingBlock {
 	var blocks []thinkingBlock
 	for _, part := range parts {
 		if part == nil || !part.IsReasoning() {
+			continue
+		}
+		if tag, _ := part.Metadata[reasoningSourceKey].(string); tag != source {
 			continue
 		}
 		b := thinkingBlock{text: part.Text, signature: string(metadataSignature(part.Metadata))}

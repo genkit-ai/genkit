@@ -196,11 +196,21 @@ func TestConvertChatCompletionToModelResponseContentChunks(t *testing.T) {
 // reads reasoning as thinking chunks is sent: the reasoning as a leading
 // thinking chunk of the content array, the text after it, and no
 // reasoning_content field. A turn whose reasoning is empty goes back as plain
-// text, since an empty thinking chunk says nothing.
+// text, since an empty thinking chunk says nothing. Only reasoning tagged as
+// the provider's own goes back; the cases tag every reasoning part as the
+// provider's unless they set untagged.
 func TestWithMessagesSendsThinkingChunks(t *testing.T) {
+	mine := func(p *ai.Part) *ai.Part {
+		if p.Metadata == nil {
+			p.Metadata = map[string]any{}
+		}
+		p.Metadata[reasoningSourceKey] = "mistral"
+		return p
+	}
 	for name, tc := range map[string]struct {
-		parts []*ai.Part
-		want  any
+		parts    []*ai.Part
+		untagged bool
+		want     any
 	}{
 		"reasoning and text": {
 			parts: []*ai.Part{ai.NewReasoningPart("Think carefully.", nil), ai.NewTextPart("Final answer")},
@@ -247,9 +257,38 @@ func TestWithMessagesSendsThinkingChunks(t *testing.T) {
 			parts: []*ai.Part{ai.NewReasoningPart("", nil), ai.NewTextPart("Final answer")},
 			want:  "Final answer",
 		},
+		// Another model's reasoning in a mixed history, signed or not, stays
+		// out; the provider's own goes back.
+		"mixed history": {
+			parts: []*ai.Part{
+				{Kind: ai.PartReasoning, Text: "Gemini thought.", Metadata: map[string]any{"signature": []byte("gemini-sig"), reasoningSourceKey: "googleai"}},
+				ai.NewReasoningPart("Claude thought.", []byte("claude-sig")),
+				mine(ai.NewReasoningPart("Mistral thought.", []byte("sig-1"))),
+				ai.NewTextPart("Final answer"),
+			},
+			untagged: true,
+			want: []any{
+				map[string]any{"type": "thinking", "thinking": []any{map[string]any{"type": "text", "text": "Mistral thought."}}, "signature": "sig-1"},
+				map[string]any{"type": "text", "text": "Final answer"},
+			},
+		},
+		// Reasoning with no tag, such as history saved before parts were
+		// tagged, goes back as plain text.
+		"untagged reasoning": {
+			parts:    []*ai.Part{ai.NewReasoningPart("Think carefully.", []byte("sig-1")), ai.NewTextPart("Final answer")},
+			untagged: true,
+			want:     "Final answer",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			g := newGen().withReasoningAsThinkingChunks(true).WithMessages([]*ai.Message{{Role: ai.RoleModel, Content: tc.parts}})
+			if !tc.untagged {
+				for _, p := range tc.parts {
+					if p.IsReasoning() {
+						mine(p)
+					}
+				}
+			}
+			g := newGen().withReasoningAsThinkingChunks("mistral").WithMessages([]*ai.Message{{Role: ai.RoleModel, Content: tc.parts}})
 			if g.err != nil {
 				t.Fatalf("WithMessages() error = %v", g.err)
 			}

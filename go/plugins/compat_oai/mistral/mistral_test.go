@@ -392,6 +392,7 @@ func TestThinkingChunks(t *testing.T) {
 		if got := resp.Text(); got != "Complete answer" {
 			t.Errorf("Text() = %q, want %q", got, "Complete answer")
 		}
+		wantReasoningSource(t, resp.Message)
 	})
 
 	t.Run("streaming", func(t *testing.T) {
@@ -419,7 +420,38 @@ func TestThinkingChunks(t *testing.T) {
 		if got := resp.Text(); got != "Streamed answer" {
 			t.Errorf("final Text() = %q, want %q", got, "Streamed answer")
 		}
+		wantReasoningSource(t, resp.Message)
 	})
+}
+
+// wantReasoningSource checks that every reasoning part of msg is tagged as
+// Mistral's, the tag the plugin sends reasoning back on, and that the tag
+// survives a JSON round trip, as of a persisted history.
+func wantReasoningSource(t *testing.T, msg *ai.Message) {
+	t.Helper()
+	data, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var restored ai.Message
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	var n int
+	for _, m := range []*ai.Message{msg, &restored} {
+		for _, p := range m.Content {
+			if !p.IsReasoning() {
+				continue
+			}
+			n++
+			if got := p.Metadata["reasoningSource"]; got != "mistral" {
+				t.Errorf("reasoning part reasoningSource = %v, want %q", got, "mistral")
+			}
+		}
+	}
+	if n == 0 {
+		t.Error("message has no reasoning part")
+	}
 }
 
 // TestReasoningGoesBackAsThinkingChunk pins the turn after a reasoning tool
