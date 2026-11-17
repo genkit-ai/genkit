@@ -46,6 +46,7 @@ export {
   compatOaiModelRef,
   defineCompatOpenAIModel,
   openAIModelRunner,
+  type ErrorStatusClassifier,
   type ModelRequestBuilder,
   type ModelRunnerOptions,
 } from './model.js';
