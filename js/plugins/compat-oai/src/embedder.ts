@@ -20,9 +20,10 @@
 import type { EmbedderAction, EmbedderReference } from 'genkit';
 import type { EmbedRequest } from 'genkit/embedder';
 import { embedder } from 'genkit/plugin';
-import OpenAI from 'openai';
+import OpenAI, { APIError } from 'openai';
 import type { EmbeddingCreateParams } from 'openai/resources/index.mjs';
 import { PluginOptions } from './index.js';
+import { toGenkitError, type ErrorStatusClassifier } from './model.js';
 import { maybeCreateRequestScopedOpenAIClient, toModelName } from './utils.js';
 
 /**
@@ -47,6 +48,9 @@ export type EmbedderRequestBuilder = (
  * custom options.
  * @param params.requestBuilder Optional hook to modify the request body, see
  * {@link EmbedderRequestBuilder}.
+ * @param params.errorStatus Optional error classifier. When set, API errors
+ * are thrown as Genkit errors, with the status it returns or else one from the
+ * HTTP status code. Without it, API errors are thrown as they are.
 
  * @returns the created {@link EmbedderAction}
  */
@@ -56,6 +60,7 @@ export function defineCompatOpenAIEmbedder(params: {
   pluginOptions?: PluginOptions;
   embedderRef?: EmbedderReference;
   requestBuilder?: EmbedderRequestBuilder;
+  errorStatus?: ErrorStatusClassifier;
 }): EmbedderAction {
   const {
     name,
@@ -63,6 +68,7 @@ export function defineCompatOpenAIEmbedder(params: {
     pluginOptions,
     embedderRef,
     requestBuilder,
+    errorStatus,
   } = params;
 
   const modelName = toModelName(name, pluginOptions?.name);
@@ -92,7 +98,15 @@ export function defineCompatOpenAIEmbedder(params: {
       } else {
         body = { ...body, ...restOfConfig };
       }
-      const embeddings = await client.embeddings.create(body);
+      let embeddings: OpenAI.CreateEmbeddingResponse;
+      try {
+        embeddings = await client.embeddings.create(body);
+      } catch (e) {
+        if (errorStatus && e instanceof APIError) {
+          throw toGenkitError(e, errorStatus);
+        }
+        throw e;
+      }
       return {
         embeddings: embeddings.data.map((d) => ({ embedding: d.embedding })),
       };

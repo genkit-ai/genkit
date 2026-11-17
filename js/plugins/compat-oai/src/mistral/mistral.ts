@@ -23,6 +23,7 @@ import {
   ModelRunnerOptions,
   compatOaiModelRef,
 } from '../model.js';
+import { mistralErrorStatus } from './errors.js';
 
 /**
  * Models with text and image input, tool calling and structured output.
@@ -201,12 +202,14 @@ function toMistralMessages(
 /**
  * Mistral reports usage on the last streamed chunk without being asked, so
  * `stream_options` isn't sent, and it streams reasoning as `thinking` chunks
- * in a `content` array. Its reasoning parts are marked as Mistral's.
+ * in a `content` array. Its reasoning parts are marked as Mistral's, and an
+ * unknown model is reported as NOT_FOUND.
  */
 export const MISTRAL_RUNNER_OPTIONS: ModelRunnerOptions = {
   streamOptions: false,
   contentChunks: true,
   reasoningSource: MISTRAL_REASONING_SOURCE,
+  errorStatus: mistralErrorStatus,
 };
 
 /** Mistral ModelRef helper, with Mistral specific config. */

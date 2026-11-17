@@ -345,6 +345,78 @@ describe('mistral plugin', () => {
     expect(server.requests).toHaveLength(0);
   });
 
+  describe('unknown models', () => {
+    /** Mistral's answer to an unknown or retired model, as sent live. */
+    const INVALID_MODEL = {
+      statusCode: 400,
+      body: {
+        object: 'error',
+        message: 'Invalid model: no-such-model-xyz',
+        type: 'invalid_model',
+        param: null,
+        code: '1500',
+        raw_status_code: 400,
+      },
+    };
+
+    it('reports an unknown model as NOT_FOUND', async () => {
+      server.setNextResponse(INVALID_MODEL);
+      await expect(
+        ai.generate({ model: 'mistral/no-such-model-xyz', prompt: 'hi' })
+      ).rejects.toMatchObject({
+        status: 'NOT_FOUND',
+        message: expect.stringContaining('Invalid model: no-such-model-xyz'),
+      });
+    });
+
+    it('reports an unknown model as NOT_FOUND when streaming', async () => {
+      server.setNextResponse(INVALID_MODEL);
+      const { stream, response } = ai.generateStream({
+        model: 'mistral/no-such-model-xyz',
+        prompt: 'hi',
+      });
+      await expect(
+        (async () => {
+          for await (const _ of stream) {
+          }
+          return response;
+        })()
+      ).rejects.toMatchObject({ status: 'NOT_FOUND' });
+      await expect(response).rejects.toMatchObject({ status: 'NOT_FOUND' });
+    });
+
+    it('reports an unknown embedder as NOT_FOUND', async () => {
+      server.setNextResponse(INVALID_MODEL);
+      await expect(
+        ai.embed({ embedder: 'mistral/no-such-model-xyz', content: 'hi' })
+      ).rejects.toMatchObject({ status: 'NOT_FOUND' });
+    });
+
+    it('keeps other 400 errors as INVALID_ARGUMENT', async () => {
+      const badRequest = {
+        statusCode: 400,
+        body: {
+          object: 'error',
+          message: 'Something else is wrong.',
+          type: 'invalid_request_error',
+          param: null,
+          code: '3000',
+        },
+      };
+      server.setNextResponse(badRequest);
+      await expect(
+        ai.generate({ model: 'mistral/mistral-small-latest', prompt: 'hi' })
+      ).rejects.toMatchObject({
+        status: 'INVALID_ARGUMENT',
+        message: expect.stringContaining('Something else is wrong.'),
+      });
+      server.setNextResponse(badRequest);
+      await expect(
+        ai.embed({ embedder: 'mistral/mistral-embed', content: 'hi' })
+      ).rejects.toMatchObject({ status: 'INVALID_ARGUMENT' });
+    });
+  });
+
   it('does not pass unknown config through to the request', async () => {
     await ai.generate({
       model: mistral.model('mistral-small-latest'),

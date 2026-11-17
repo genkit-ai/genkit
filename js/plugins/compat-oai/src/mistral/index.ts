@@ -37,6 +37,7 @@ import {
   MistralEmbeddingConfigSchema,
   SUPPORTED_MISTRAL_EMBEDDERS,
 } from './embedder.js';
+import { mistralErrorBodyFetch, mistralErrorStatus } from './errors.js';
 import {
   MISTRAL_RUNNER_OPTIONS,
   MistralChatCompletionConfigSchema,
@@ -79,6 +80,7 @@ function defineMistralEmbedder(
     pluginOptions,
     embedderRef,
     requestBuilder: mistralEmbedderRequestBuilder,
+    errorStatus: mistralErrorStatus,
   });
 }
 
@@ -213,6 +215,9 @@ export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
     ...options,
     name: 'mistral',
     baseURL: options?.baseURL ?? MISTRAL_BASE_URL,
+    // Lets the SDK read Mistral's error bodies, e.g. to report an unknown
+    // model as NOT_FOUND.
+    fetch: mistralErrorBodyFetch(options),
   };
   return openAICompatible({
     ...pluginOptions,

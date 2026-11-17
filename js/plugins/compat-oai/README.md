@@ -223,6 +223,8 @@ Mistral's own field names:
 - The embedder's `outputDimension` is sent as `output_dimension`. Embeddings are
   always requested as floats.
 - Streaming requests don't send `stream_options`.
+- An unknown or retired model is reported as `NOT_FOUND`, with Mistral's error
+  message.
 - Only image media is sent. Other media, such as inline PDFs, is refused
   before the request goes out: Mistral's chat API only takes uploaded files.
 

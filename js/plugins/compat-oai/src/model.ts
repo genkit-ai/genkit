@@ -771,6 +771,12 @@ export interface ModelRunnerOptions {
    * mark stays with the part through a JSON round trip of the history.
    */
   reasoningSource?: string;
+  /**
+   * Classifies API errors before the HTTP status code is used, for providers
+   * whose error bodies say more than the status code, such as an unknown
+   * model reported as HTTP 400.
+   */
+  errorStatus?: ErrorStatusClassifier;
 }
 
 /** Marks the reasoning parts in `parts` with `metadata.reasoningSource`. */
@@ -781,6 +787,63 @@ function markReasoningSource(parts: Part[] | undefined, source?: string) {
       part.metadata = { ...part.metadata, reasoningSource: source };
     }
   }
+}
+
+/**
+ * Classifies an API error from a provider, see
+ * {@link ModelRunnerOptions.errorStatus}. Returns `undefined` to use the status
+ * from the HTTP status code.
+ */
+export type ErrorStatusClassifier = (e: APIError) => StatusName | undefined;
+
+/**
+ * Converts an OpenAI SDK API error to a {@link GenkitError}, with a status
+ * from `errorStatus` when it returns one, or else from the HTTP status code.
+ */
+export function toGenkitError(
+  e: APIError,
+  errorStatus?: ErrorStatusClassifier
+): GenkitError {
+  let status: StatusName = 'UNKNOWN';
+  switch (e.status) {
+    case 429:
+      status = 'RESOURCE_EXHAUSTED';
+      break;
+    case 401:
+      status = 'UNAUTHENTICATED';
+      break;
+    case 403:
+      status = 'PERMISSION_DENIED';
+      break;
+    case 400:
+    // Request validation errors, e.g. an unknown or out-of-range field.
+    case 422:
+      status = 'INVALID_ARGUMENT';
+      break;
+    case 500:
+      status = 'INTERNAL';
+      break;
+    case 503:
+      status = 'UNAVAILABLE';
+      break;
+  }
+  // `headers` is a plain object in openai 4.x and a `Headers` in later
+  // versions.
+  const headers = e.headers as any;
+  const retryAfterHeader =
+    headers?.get?.('retry-after') ?? headers?.['retry-after'];
+  const retryAfterMs = retryAfterHeader
+    ? parseRetryAfterMs(retryAfterHeader)
+    : undefined;
+  const responseMetadata: ErrorResponseMetadata | undefined =
+    retryAfterMs !== undefined ? { retryAfterMs } : undefined;
+  const classified = errorStatus?.(e);
+  if (classified) status = classified;
+  return new GenkitError({
+    status,
+    message: e.message,
+    responseMetadata,
+  });
 }
 
 /**
@@ -915,42 +978,7 @@ export function openAIModelRunner(
       }
     } catch (e) {
       if (e instanceof APIError) {
-        let status: StatusName = 'UNKNOWN';
-        switch (e.status) {
-          case 429:
-            status = 'RESOURCE_EXHAUSTED';
-            break;
-          case 401:
-            status = 'UNAUTHENTICATED';
-            break;
-          case 403:
-            status = 'PERMISSION_DENIED';
-            break;
-          case 400:
-          // Request validation errors, e.g. an unknown or out-of-range field.
-          case 422:
-            status = 'INVALID_ARGUMENT';
-            break;
-          case 500:
-            status = 'INTERNAL';
-            break;
-          case 503:
-            status = 'UNAVAILABLE';
-            break;
-        }
-        const retryAfterHeader =
-          e.headers?.get?.('retry-after') ??
-          (e.headers as any)?.['retry-after'];
-        const retryAfterMs = retryAfterHeader
-          ? parseRetryAfterMs(retryAfterHeader)
-          : undefined;
-        const responseMetadata: ErrorResponseMetadata | undefined =
-          retryAfterMs !== undefined ? { retryAfterMs } : undefined;
-        throw new GenkitError({
-          status,
-          message: e.message,
-          responseMetadata,
-        });
+        throw toGenkitError(e, runnerOptions?.errorStatus);
       }
       throw e;
     }
