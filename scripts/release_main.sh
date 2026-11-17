@@ -52,7 +52,6 @@ JS_PACKAGES=(
   js/plugins/pinecone
   js/plugins/vertexai
   js/plugins/evaluators
-  js/plugins/langchain
   js/plugins/checks
   js/plugins/mcp
   js/plugins/express
