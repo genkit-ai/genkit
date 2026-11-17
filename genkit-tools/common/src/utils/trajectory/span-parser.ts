@@ -15,14 +15,16 @@
  */
 
 import type { RuntimeError } from '../../types/error.js';
-import type {
-  AgentInput,
-  GenerationUsage,
-  MessageData,
-  NestedSpanData,
-  Part,
-  SpanData,
-  ToolDefinition,
+import {
+  FinishReasonSchema,
+  type AgentInput,
+  type FinishReason,
+  type GenerationUsage,
+  type MessageData,
+  type NestedSpanData,
+  type Part,
+  type SpanData,
+  type ToolDefinition,
 } from '../../types/index.js';
 import {
   cleanActionName,
@@ -81,7 +83,7 @@ export interface ParsedSpanOutput {
 /** Normalized output extracted from a model execution span. */
 export interface ModelOutputData {
   message?: MessageData;
-  finishReason?: string;
+  finishReason: FinishReason;
   usage?: GenerationUsage;
   error?: RuntimeError;
 }
@@ -195,19 +197,37 @@ export function extractSpanRuntimeError(
   return undefined;
 }
 
+function normalizeFinishReason(
+  finishReason?: string,
+  error?: RuntimeError
+): FinishReason {
+  if (error || finishReason === 'failed') return 'failed';
+  if (finishReason === 'cancelled') return 'aborted';
+  const parsed = FinishReasonSchema.safeParse(finishReason);
+  return parsed.success ? parsed.data : 'stop';
+}
+
 /**
- * Extracts the output message, finish reason, token usage, and normalized error from a model span.
+ * Extracts the output message, normalized finish reason, token usage, and error from a model span.
  */
 export function getModelOutputData(modelSpan: SpanData): ModelOutputData {
   const out = parseSpanObject<ParsedSpanOutput>(
     modelSpan.attributes?.['genkit:output']
   );
   const candidate = out?.candidates?.[0];
+  const error = extractSpanRuntimeError(
+    modelSpan,
+    'Model execution failed',
+    out
+  );
   return {
     message: out?.message ?? candidate?.message,
-    finishReason: out?.finishReason ?? candidate?.finishReason,
+    finishReason: normalizeFinishReason(
+      out?.finishReason ?? candidate?.finishReason,
+      error
+    ),
     usage: out?.usage ?? candidate?.usage,
-    error: extractSpanRuntimeError(modelSpan, 'Model execution failed', out),
+    error,
   };
 }
 

@@ -21,4 +21,5 @@ export * from './logger.js';
 export * from './package.js';
 export * from './prompt.js';
 export * from './trace.js';
+export * from './trajectory/index.js';
 export * from './utils.js';
