@@ -53,6 +53,7 @@ export interface TrajectorySpans {
   toolSpans: NestedSpanData[];
   /** All spans belonging to this trajectory in traversal order. */
   scopeSpans: NestedSpanData[];
+  subagentByToolSpanId: Map<string, string>;
 }
 
 /** Parsed structure of a model span's `genkit:input` JSON attribute. */
