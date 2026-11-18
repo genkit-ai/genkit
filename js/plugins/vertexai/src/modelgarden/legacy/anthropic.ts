@@ -381,6 +381,8 @@ export function fromAnthropicResponse(
     role: 'model',
     content: parts.map(fromAnthropicPart),
   };
+  const cachedContentTokens = response.usage.cache_read_input_tokens;
+  const cacheWriteTokens = response.usage.cache_creation_input_tokens;
   return {
     message,
     finishReason: toGenkitFinishReason(
@@ -398,7 +400,12 @@ export function fromAnthropicResponse(
     },
     usage: {
       ...getBasicUsageStats(input.messages, message),
-      inputTokens: response.usage.input_tokens,
+      inputTokens:
+        response.usage.input_tokens +
+        (cachedContentTokens ?? 0) +
+        (cacheWriteTokens ?? 0),
+      ...(cachedContentTokens != null && { cachedContentTokens }),
+      ...(cacheWriteTokens != null && { cacheWriteTokens }),
       outputTokens: response.usage.output_tokens,
     },
   };
