@@ -215,7 +215,8 @@ must have reflection turned on; outside `GENKIT_ENV=dev` that takes
   WebSocket (`GENKIT_REFLECTION_V2_SERVER`) and must present its per-host
   `secret` (`GENKIT_REFLECTION_SECRET_TOKEN`) in `register`.
 - `ReflectionClientV1`: a client for the **v1** HTTP API, for runtimes that
-  serve reflection themselves (e.g. in a container with a published port).
+  serve reflection themselves (a container with a published port, or a
+  runtime someone else started; see `remoteRunner()`).
 
 ```ts
 const client = new ReflectionClientV1('http://127.0.0.1:54321', { secret });
@@ -421,6 +422,32 @@ The runner starts each container with:
   `127.0.0.1` as well.
 
 > Cross-language boxes need a runtime that honors these variables.
+
+## Already-running runtimes: `remoteRunner()`
+
+When something else starts the runtime (a Cloud Run sidecar, a service on
+another machine), point a box at its reflection v1 endpoint:
+
+```ts
+import { box, remoteRunner } from '@genkit-ai/box';
+
+const myBox = box(ai, {
+  runner: remoteRunner({
+    url: 'http://127.0.0.1:3100',
+    secret: process.env.BOX_REFLECTION_SECRET,
+  }),
+});
+```
+
+Start the runtime with the same contract as above: `GENKIT_REFLECTION_ENABLED`,
+`GENKIT_REFLECTION_PORT`, and the matching `GENKIT_REFLECTION_SECRET_TOKEN`
+(plus `GENKIT_REFLECTION_HOST=0.0.0.0` if it is reached from outside its own
+loopback).
+
+There is no lifecycle to own: every routing key goes to the same runtime, and
+`release`/`close` leave it running. Routes are accepted rather than rejected,
+so the same config can use `execRunner` locally and `remoteRunner` in
+production.
 
 ## Tracing
 
