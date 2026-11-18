@@ -69,55 +69,40 @@ func TestNewGeminiModelsResolveToRegisteredEntries(t *testing.T) {
 	}
 }
 
-// gemmaModels are the concrete Gemma models registered for Google AI. They are
-// classified as Gemini-family by prefix and, matching the JS google-genai
-// plugin, advertise the standard Gemini capabilities (Gemma 4 supports tools and
-// system instructions). Gemma-specific behavior is the temperature clamp and the
-// stripping of prior thoughts in the generate path.
-var gemmaModels = []string{gemma426bA4bIT, gemma431bIT}
-
-func TestGemmaModelsClassifyAsGemini(t *testing.T) {
-	for _, name := range gemmaModels {
-		if got := ClassifyModel(name); got != ModelTypeGemini {
-			t.Errorf("ClassifyModel(%q) = %v, want ModelTypeGemini", name, got)
-		}
-	}
+// gemmaModels are the concrete Gemma models registered for Google AI, with
+// the labels from their model cards. Matching the JS google-genai plugin they
+// advertise the standard Gemini capabilities (Gemma 4 supports function
+// calling, system instructions and image input per its model card). The
+// Gemma-specific behavior, stripping prior thoughts, is covered in
+// gemma_test.go.
+var gemmaModels = map[string]string{
+	gemma426bA4bIT: "Gemma 4 26B A4B",
+	gemma431bIT:    "Gemma 4 31B",
 }
 
 func TestGemmaModelOptions(t *testing.T) {
-	for _, name := range gemmaModels {
-		opts := GetModelOptions(name, googleAIProvider)
-
-		if opts.Supports == nil {
-			t.Fatalf("GetModelOptions(%q): Supports is nil", name)
-		}
-		// Gemma advertises the standard Gemini capabilities (matches JS).
-		if !opts.Supports.SystemRole {
-			t.Errorf("GetModelOptions(%q): SystemRole = false, want true", name)
-		}
-		if !opts.Supports.Tools {
-			t.Errorf("GetModelOptions(%q): Tools = false, want true", name)
-		}
-		if !opts.Supports.ToolChoice {
-			t.Errorf("GetModelOptions(%q): ToolChoice = false, want true", name)
-		}
-		if !opts.Supports.Multiturn {
-			t.Errorf("GetModelOptions(%q): Multiturn = false, want true", name)
-		}
-		if !opts.Supports.Media {
-			t.Errorf("GetModelOptions(%q): Media = false, want true", name)
-		}
-		// Registered (not the unknown-model fallback), so a config schema is set,
-		// and it carries the Gemma temperature clamp (applied by name).
-		if opts.ConfigSchema == nil {
-			t.Errorf("GetModelOptions(%q): ConfigSchema is nil", name)
-		} else if props, ok := opts.ConfigSchema["properties"].(map[string]any); ok {
-			if temp, ok := props["temperature"].(map[string]any); ok {
-				if temp["maximum"] != 1.0 {
-					t.Errorf("GetModelOptions(%q): temperature maximum = %v, want 1.0 (Gemma clamp)", name, temp["maximum"])
-				}
+	for name, label := range gemmaModels {
+		t.Run(name, func(t *testing.T) {
+			if got := ClassifyModel(name); got != ModelTypeGemini {
+				t.Errorf("ClassifyModel = %v, want ModelTypeGemini", got)
 			}
-		}
+			opts := GetModelOptions(name, googleAIProvider)
+			if hitUnknownModelFallback(opts, name) {
+				t.Fatalf("Label = %q: fell through to the unknown-model fallback, the model is not registered", opts.Label)
+			}
+			if want := "Google AI - " + label; opts.Label != want {
+				t.Errorf("Label = %q, want %q", opts.Label, want)
+			}
+			if opts.Stage != ai.ModelStageStable {
+				t.Errorf("Stage = %q, want %q", opts.Stage, ai.ModelStageStable)
+			}
+			if opts.Supports != &Multimodal {
+				t.Errorf("Supports = %#v, want Multimodal", opts.Supports)
+			}
+			if opts.ConfigSchema == nil {
+				t.Error("ConfigSchema is nil")
+			}
+		})
 	}
 }
 
@@ -193,7 +178,7 @@ func TestNewlyRegisteredModels(t *testing.T) {
 }
 
 func TestGemmaModelsRegisteredForGoogleAIOnly(t *testing.T) {
-	for _, name := range gemmaModels {
+	for name := range gemmaModels {
 		if !slices.Contains(googleAIModels, name) {
 			t.Errorf("googleAIModels missing %q", name)
 		}

@@ -159,22 +159,28 @@ func generate(
 	}
 	model = resolveVertexModelName(client, model)
 
-	cache, inline, err := handleCache(ctx, client, input, model)
+	// Gemma is served by the Gemini API only. Gemma does not accept previous
+	// thoughts, so they are stripped before anything else sees the messages:
+	// the cache prefix and its hash are built from the stripped content too,
+	// or the thoughts would reach the model through the cache. req carries
+	// the stripped copy; input stays as the caller sent it, for r.Request.
+	req := input
+	if isGemmaModelName(model) && client.ClientConfig().Backend == genai.BackendGeminiAPI {
+		if msgs, changed := stripGemmaThoughtsFromMessages(input.Messages); changed {
+			c := *input
+			c.Messages = msgs
+			req = &c
+		}
+	}
+
+	cache, inline, err := handleCache(ctx, client, req, model)
 	if err != nil {
 		return nil, err
 	}
 
-	gcc, err := toGeminiRequest(input, config, cache, model)
+	gcc, err := toGeminiRequest(req, config, cache, model)
 	if err != nil {
 		return nil, err
-	}
-
-	if isGemmaModelName(model) {
-		// Gemma does not accept previous thoughts; strip reasoning parts and any
-		// part carrying a thought signature before sending (mirrors the JS
-		// google-genai plugin). A turn that was entirely thoughts ends up with
-		// no parts and toGeminiContents skips it.
-		inline = stripGemmaThoughtsFromMessages(inline)
 	}
 
 	contents, err := toGeminiContents(inline)
@@ -588,55 +594,109 @@ func isImageModelName(name string) bool {
 	return strings.HasPrefix(id, "gemini-") && strings.Contains(id, "-image")
 }
 
-// isGemmaModelName reports whether the model is a Gemma model.
+// isGemmaModelName reports whether the model is a Gemma model. Like the other
+// name helpers it looks at the model ID only, so "gemma-4-31b-it",
+// "googleai/gemma-4-31b-it", "models/gemma-4-31b-it" and
+// "publishers/google/models/gemma-4-31b-it" all match. The "gemma-" prefix is
+// the one the JS google-genai plugin uses.
 func isGemmaModelName(name string) bool {
-	return strings.HasPrefix(strings.TrimPrefix(name, "googleai/"), "gemma")
+	return !isTunedGeminiName(name) && strings.HasPrefix(modelID(name), "gemma-")
 }
 
-// gemmaConfigSchema returns the standard Gemini config schema with the
-// temperature property clamped to [0, 1], matching the JS GemmaConfigSchema
-// (Gemma's valid temperature range is narrower than Gemini's 0-2).
-func gemmaConfigSchema() map[string]any {
-	schema := configToMap(genai.GenerateContentConfig{})
-	if props, ok := schema["properties"].(map[string]any); ok {
-		if temp, ok := props["temperature"].(map[string]any); ok {
-			temp["minimum"] = 0.0
-			temp["maximum"] = 1.0
+// stripGemmaThoughts prepares a message's content for Gemma, which rejects
+// previous thoughts (mirrors the JS google-genai plugin). It drops reasoning
+// parts and parts that carry nothing but a thought signature. Gemini attaches
+// the signature to the first part it emits ([translateCandidate]), which may
+// be text, a tool request or a code part, so a signed part that carries
+// content is kept and only the signature is removed, on a copy. Without this a
+// signed tool request would vanish and leave its tool response orphaned.
+//
+// It reports whether anything changed; when nothing did, the input slice is
+// returned as is and no part is copied.
+func stripGemmaThoughts(parts []*ai.Part) ([]*ai.Part, bool) {
+	var out []*ai.Part // allocated lazily, on the first change
+	for i, p := range parts {
+		var keep *ai.Part
+		switch {
+		case p.IsReasoning():
+			// dropped
+		case hasSignature(p):
+			if p.IsText() && p.Text == "" {
+				// A stream ends a text reply with an empty signed part; it
+				// carries nothing but the signature.
+				break
+			}
+			c := *p
+			c.Metadata = make(map[string]any, len(p.Metadata))
+			for k, v := range p.Metadata {
+				if k != "signature" {
+					c.Metadata[k] = v
+				}
+			}
+			if len(c.Metadata) == 0 {
+				c.Metadata = nil
+			}
+			keep = &c
+		default:
+			keep = p
 		}
-	}
-	return schema
-}
-
-// stripGemmaThoughts removes reasoning parts, and any part carrying a thought
-// signature, from a message's content. Gemma rejects previous thoughts, so they
-// must not be sent back on follow-up turns (mirrors the JS google-genai plugin).
-func stripGemmaThoughts(parts []*ai.Part) []*ai.Part {
-	out := make([]*ai.Part, 0, len(parts))
-	for _, p := range parts {
-		if p.IsReasoning() {
+		if keep == p {
+			if out != nil {
+				out = append(out, p)
+			}
 			continue
 		}
-		if p.Metadata != nil {
-			if _, ok := p.Metadata["signature"]; ok {
-				continue
-			}
+		if out == nil {
+			out = make([]*ai.Part, i, len(parts))
+			copy(out, parts[:i])
 		}
-		out = append(out, p)
+		if keep != nil {
+			out = append(out, keep)
+		}
 	}
-	return out
+	if out == nil {
+		return parts, false
+	}
+	return out, true
 }
 
-// stripGemmaThoughtsFromMessages returns msgs with [stripGemmaThoughts] applied
-// to each message. The input messages are left untouched, since the caller's
-// history is also what resp.History() returns.
-func stripGemmaThoughtsFromMessages(msgs []*ai.Message) []*ai.Message {
-	out := make([]*ai.Message, len(msgs))
+// hasSignature reports whether the part carries a thought signature.
+func hasSignature(p *ai.Part) bool {
+	if p.Metadata == nil {
+		return false
+	}
+	_, ok := p.Metadata["signature"]
+	return ok
+}
+
+// stripGemmaThoughtsFromMessages returns msgs with [stripGemmaThoughts]
+// applied to each message. The caller's messages are never modified, since
+// they are also what resp.History() returns: a changed message is copied, an
+// unchanged one is returned as the same pointer, and when nothing changes the
+// original slice is returned with false. A message left with no parts stays in place (so
+// cache marker indices still line up); [toGeminiContents] skips it.
+func stripGemmaThoughtsFromMessages(msgs []*ai.Message) ([]*ai.Message, bool) {
+	var out []*ai.Message // allocated lazily, on the first change
 	for i, m := range msgs {
+		content, changed := stripGemmaThoughts(m.Content)
+		if !changed {
+			if out != nil {
+				out[i] = m
+			}
+			continue
+		}
+		if out == nil {
+			out = make([]*ai.Message, len(msgs))
+			copy(out, msgs[:i])
+		}
 		c := *m
-		c.Content = stripGemmaThoughts(m.Content)
+		c.Content = content
 		out[i] = &c
 	}
-	return out
+	if out == nil {
+		return msgs, false
+	}
+	return out, true
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.

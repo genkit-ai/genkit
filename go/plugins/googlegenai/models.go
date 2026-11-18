@@ -358,11 +358,11 @@ var (
 			Stage:    ai.ModelStageStable,
 		},
 		// Gemma reuses the standard Gemini capabilities, matching the JS
-		// google-genai plugin. The Gemma-specific behavior (temperature clamped to
-		// [0, 1] via gemmaConfigSchema, applied by name in GetModelOptions; and
-		// stripping prior thoughts in the generate path) is not expressed here.
+		// google-genai plugin (Gemma 4 supports function calling, system
+		// instructions and image input per its model card). The Gemma-specific
+		// behavior, stripping prior thoughts, lives in the generate path.
 		gemma426bA4bIT: {
-			Label:    "Gemma 4 26B",
+			Label:    "Gemma 4 26B A4B",
 			Versions: []string{},
 			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
@@ -499,12 +499,6 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 
 	if opts.ConfigSchema == nil {
 		opts.ConfigSchema = mt.configSchema()
-	}
-
-	// All gemma-* models clamp temperature to [0, 1] (matches the JS
-	// GemmaConfigSchema), whether or not they are individually registered.
-	if isGemmaModelName(name) {
-		opts.ConfigSchema = gemmaConfigSchema()
 	}
 
 	if opts.Label == "" {
