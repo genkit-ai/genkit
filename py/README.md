@@ -111,6 +111,7 @@ Open the Dev UI in your browser to interact with registered flows and agents dir
 - **Migration Guides:** Upgrading between versions, see [docs/migrating-from-0.12.md](docs/migrating-from-0.12.md).
 - **Contributing & Standards:** For coding conventions, commit guidelines, and type-checking rules, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Release Playbook:** For maintainer release procedures, see [docs/release_playbook.md](docs/release_playbook.md).
+- **Dependencies:** For version bounds and lockfile updates, see [docs/dependencies.md](docs/dependencies.md).
 
 ## License
 Apache 2.0
