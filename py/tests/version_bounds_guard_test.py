@@ -99,7 +99,7 @@ def _make_workspace_fixture(py_root: Path, version: str = '0.12.0', *, include_e
         py_root,
         'genkit',
         version,
-        dependencies=['pydantic>=2.11'],
+        dependencies=['pydantic>=2.11,<3'],
         optional_dependencies=extras,
     )
     _write_pkg(
@@ -112,7 +112,7 @@ def _make_workspace_fixture(py_root: Path, version: str = '0.12.0', *, include_e
         py_root,
         'genkit-anthropic',
         version,
-        dependencies=[f'genkit>={version},<{cap}', 'anthropic>=0.96.0'],
+        dependencies=[f'genkit>={version},<{cap}', 'anthropic>=0.96.0,<1'],
     )
     _write_pkg(
         py_root,
@@ -175,11 +175,11 @@ def test_real_workspace_passes_consistency_and_extras_contract() -> None:
     }
     assert referenced_plugins == all_plugins
 
-    # genkit-openai bounds openai>=1.60.0,<3.
+    # genkit-openai bounds openai>=1.68.0,<3.
     openai_project = consistency.load_pyproject(str(PY_DIR / 'packages' / 'genkit-openai' / 'pyproject.toml'))[
         'project'
     ]
-    assert 'openai>=1.60.0,<3' in openai_project['dependencies']
+    assert 'openai>=1.68.0,<3' in openai_project['dependencies']
 
 
 def test_bump_transition_0_12_0_to_0_13_0_rolls_floors_and_preserves_lt1(tmp_path: Path) -> None:
@@ -286,6 +286,44 @@ def test_consistency_rejects_unbounded_or_misbounded_plugin_deps(
     assert any(expected_substring in err for err in errors), errors
 
 
+@pytest.mark.parametrize(
+    ('dep', 'expected_substring'),
+    [
+        ('anthropic>=0.96.0', 'must cap the next major'),
+        ('pydantic>=2.11', 'must cap the next major'),
+        ('starlette>=0.46.1,<1', 'caps a dep not in REQUIRED_CAPS'),
+        ('httpx~=0.28', 'caps a dep not in REQUIRED_CAPS'),
+        ('structlog', 'has no floor'),
+    ],
+)
+def test_consistency_enforces_third_party_bounds_policy(
+    tmp_path: Path,
+    dep: str,
+    expected_substring: str,
+) -> None:
+    _make_workspace_fixture(tmp_path, '0.12.0', include_evaluators=False)
+    _write_pkg(tmp_path, 'genkit-openai', '0.12.0', dependencies=['genkit>=0.12.0,<2', dep])
+
+    errors = _workspace_errors(tmp_path)
+    assert any(expected_substring in err for err in errors), errors
+
+
+@pytest.mark.parametrize(
+    'dep',
+    [
+        'starlette>=0.46.1',
+        'openai>=1.60.0,<3',
+        "strenum>=0.4.15; python_version < '3.11'",
+        "uvloop>=0.21.0; sys_platform != 'win32'",
+    ],
+)
+def test_consistency_accepts_policy_compliant_third_party_deps(tmp_path: Path, dep: str) -> None:
+    _make_workspace_fixture(tmp_path, '0.12.0', include_evaluators=False)
+    _write_pkg(tmp_path, 'genkit-openai', '0.12.0', dependencies=['genkit>=0.12.0,<2', dep])
+
+    assert _workspace_errors(tmp_path) == []
+
+
 def test_consistency_rejects_missing_py_typed_and_classifier(tmp_path: Path) -> None:
     _make_workspace_fixture(tmp_path, '0.12.0', include_evaluators=False)
     _write_pkg(
@@ -323,7 +361,7 @@ def test_consistency_rejects_unbounded_extra_and_stale_exact_pin(tmp_path: Path)
         tmp_path,
         'genkit',
         '0.12.0',
-        dependencies=['pydantic>=2.11'],
+        dependencies=['pydantic>=2.11,<3'],
         optional_dependencies={'openai': ['genkit-openai']},
     )
     _write_pkg(

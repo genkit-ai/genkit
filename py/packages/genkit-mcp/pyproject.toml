@@ -43,7 +43,7 @@ dependencies = [
   "exceptiongroup>=1.2.0; python_version < '3.11'",
   "genkit>=0.13.0,<2",
   "mcp>=1.26.0,<2",
-  "pydantic>=2.10.5",
+  "pydantic>=2.10.5,<3",
 ]
 description = "Model Context Protocol client for Genkit. Exposes an MCP server's tools as Genkit tools."
 keywords = [

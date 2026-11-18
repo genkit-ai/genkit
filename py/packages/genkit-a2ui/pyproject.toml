@@ -41,7 +41,7 @@ classifiers = [
 ]
 dependencies = [
   "genkit>=0.13.0,<2",
-  "pydantic>=2.11",
+  "pydantic>=2.11,<3",
 ]
 description = "A2UI (Agent-to-UI) middleware for Genkit."
 keywords = [

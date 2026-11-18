@@ -41,6 +41,38 @@ _INTRA_REPO_NAME_RE = re.compile(r'^\s*(genkit(?:-[a-z0-9-]+)?)\b')
 _EXACT_PIN_RE = re.compile(r'^(genkit(?:-[a-z0-9-]+)?)(?:\[[a-z0-9,_-]+\])?==([^,;\s]+)$')
 _CAPPED_RANGE_RE = re.compile(r'^(genkit(?:-[a-z0-9-]+)?)(?:\[[a-z0-9,_-]+\])?>=([^,;\s]+),<([^,;\s]+)$')
 _CORE_DEP_RE = re.compile(r'^genkit(?![a-z0-9-])')
+_THIRD_PARTY_RE = re.compile(r'^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(.*)$')
+
+# Third-party deps that must carry an upper cap in published packages, and the
+# only ones allowed to. A dep is capped at the next major (`<1` while 0.x) when
+#   (1) integration target: a genkit package exists to wrap it, or
+#   (2) contract: users write code or files against it and hand them to genkit.
+# Everything else is an internal implementation detail and stays floor-only, so
+# users can take upstream fixes without waiting on a genkit release.
+# See py/docs/dependencies.md.
+REQUIRED_CAPS: dict[str, str] = {
+    # (1) Integration targets.
+    'anthropic': 'integration target: genkit-anthropic',
+    'boto3': 'integration target: genkit-amazon-bedrock',
+    'botocore': 'integration target: genkit-amazon-bedrock',
+    'django': 'integration target: genkit-django',
+    'fastapi': 'integration target: genkit-fastapi',
+    'flask': 'integration target: genkit-flask',
+    'google-cloud-firestore': 'integration target: genkit-google-cloud',
+    'google-cloud-logging': 'integration target: genkit-google-cloud',
+    'google-genai': 'integration target: genkit-google-genai',
+    'mcp': 'integration target: genkit-mcp',
+    'ollama': 'integration target: genkit-ollama',
+    'openai': 'integration target: genkit-openai',
+    'opentelemetry-api': 'integration target: genkit-otel, genkit-google-cloud',
+    'opentelemetry-exporter-gcp-logging': 'integration target: genkit-google-cloud',
+    'opentelemetry-exporter-gcp-monitoring': 'integration target: genkit-google-cloud',
+    'opentelemetry-exporter-gcp-trace': 'integration target: genkit-google-cloud',
+    'opentelemetry-sdk': 'integration target: genkit-google-cloud',
+    # (2) Contract.
+    'dotpromptz': 'contract: users write .prompt files it evaluates',
+    'pydantic': 'contract: users define schemas as BaseModel subclasses',
+}
 
 
 def _strip_toml_comment(line: str) -> str:
@@ -169,6 +201,26 @@ def _check_intra_repo_spec(
     return None
 
 
+def _check_third_party_spec(section: str, spec: str) -> str | None:
+    """Validate a third-party dependency specifier against the bounds policy, returning an error if invalid."""
+    requirement = spec.split(';', 1)[0].strip()
+    if _INTRA_REPO_NAME_RE.match(requirement):
+        return None
+    m = _THIRD_PARTY_RE.match(requirement)
+    if not m:
+        return None
+    name = m.group(1).lower().replace('_', '-')
+    version_spec = m.group(2)
+    if not re.search(r'>=|==|~=', version_spec):
+        return f"{section}: '{spec}' has no floor (add '>=<oldest supported>')"
+    has_cap = bool(re.search(r'<|~=|==', version_spec))
+    if name in REQUIRED_CAPS and not has_cap:
+        return f"{section}: '{spec}' must cap the next major ({REQUIRED_CAPS[name]})"
+    if has_cap and name not in REQUIRED_CAPS:
+        return f"{section}: '{spec}' caps a dep not in REQUIRED_CAPS; drop the cap or add it with a reason"
+    return None
+
+
 def check_package(pkg_path: str, core_version: str) -> tuple[str, str, list[str]]:
     """Validate a single publishable package directory under py/packages/*."""
     toml_path = os.path.join(pkg_path, 'pyproject.toml')
@@ -204,15 +256,22 @@ def check_package(pkg_path: str, core_version: str) -> tuple[str, str, list[str]
         pkg_errors.append(f"dependencies: missing core 'genkit>={core_version},<{exp_cap}' dependency")
 
     for spec in dependencies:
-        err = _check_intra_repo_spec(pkg_name, 'dependencies', spec, core_version)
-        if err:
-            pkg_errors.append(err)
-
-    for extra_name in sorted(raw_opt_deps):
-        for obj in raw_opt_deps[extra_name]:
-            err = _check_intra_repo_spec(pkg_name, f'optional-dependencies.{extra_name}', str(obj), core_version)
+        for err in (
+            _check_intra_repo_spec(pkg_name, 'dependencies', spec, core_version),
+            _check_third_party_spec('dependencies', spec),
+        ):
             if err:
                 pkg_errors.append(err)
+
+    for extra_name in sorted(raw_opt_deps):
+        section = f'optional-dependencies.{extra_name}'
+        for obj in raw_opt_deps[extra_name]:
+            for err in (
+                _check_intra_repo_spec(pkg_name, section, str(obj), core_version),
+                _check_third_party_spec(section, str(obj)),
+            ):
+                if err:
+                    pkg_errors.append(err)
 
     return pkg_name, pkg_version, pkg_errors
 

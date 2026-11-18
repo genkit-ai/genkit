@@ -43,8 +43,8 @@ classifiers = [
 ]
 dependencies = [
   "genkit>=0.13.0,<2",
-  "pydantic>=2.11",
-  "django>=5.0",
+  "pydantic>=2.11,<3",
+  "django>=5.0,<7",
 ]
 description = "A Genkit flow as a Django view"
 keywords = [

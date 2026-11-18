@@ -224,6 +224,45 @@ jobs:
             uv run --no-sync --python "$PY_VER" --directory py pytest
           fi
 
+  # Floors in packages/*/pyproject.toml are what users resolve against, but the
+  # tests job only runs uv.lock (newest). This job resolves every direct dep at
+  # its declared floor. If it fails, the PR started using a newer API: run
+  # `py/bin/find_floor <package> <dep>` and raise the floor in the same PR.
+  lowest-deps:
+    name: Tests (lowest declared deps, Python 3.10)
+    needs: changes
+    if: >-
+      ${{ !cancelled() && (needs.changes.result != 'success' ||
+      needs.changes.outputs.python == 'true' ||
+      needs.changes.outputs.schema == 'true' ||
+      needs.changes.outputs.specs == 'true' ||
+      needs.changes.outputs.other == 'true') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install uv and setup Python
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+          python-version: "3.10"
+
+      - name: Resolve direct deps at their floors
+        run: uv lock --resolution lowest-direct --directory py
+
+      - name: Install dependencies
+        run: uv sync --frozen --python 3.10 --directory py
+
+      - name: Generate schema typing
+        run: ./py/bin/generate_schema_typing --ci
+
+      - name: Run tests
+        run: uv run --no-sync --python 3.10 --directory py pytest
+
   # =============================================================================
   # Build verification (runs after tests pass)
   # =============================================================================
@@ -232,13 +271,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [lint-and-format, type-check, security-and-compliance, tests]
+    needs: [lint-and-format, type-check, security-and-compliance, tests, lowest-deps]
     if: >-
       ${{ !cancelled() &&
       needs.lint-and-format.result == 'success' &&
       needs.type-check.result == 'success' &&
       needs.security-and-compliance.result == 'success' &&
-      needs.tests.result == 'success' }}
+      needs.tests.result == 'success' &&
+      needs.lowest-deps.result == 'success' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -290,7 +330,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [changes, lint-and-format, type-check, security-and-compliance, tests, build]
+    needs: [changes, lint-and-format, type-check, security-and-compliance, tests, lowest-deps, build]
     if: >-
       ${{ always() && (needs.changes.result != 'success' ||
       needs.changes.outputs.python == 'true' ||
@@ -301,10 +341,10 @@ jobs:
       - name: Verify all Python jobs succeeded
         env:
           RESULTS: >-
-            ${{ needs.lint-and-format.result }},${{ needs.type-check.result }},${{ needs.security-and-compliance.result }},${{ needs.tests.result }},${{ needs.build.result }}
+            ${{ needs.lint-and-format.result }},${{ needs.type-check.result }},${{ needs.security-and-compliance.result }},${{ needs.tests.result }},${{ needs.lowest-deps.result }},${{ needs.build.result }}
         run: |
           echo "Python job results: $RESULTS"
-          if [[ "$RESULTS" != "success,success,success,success,success" ]]; then
+          if [[ "$RESULTS" != "success,success,success,success,success,success" ]]; then
             echo "::error::One or more Python checks did not succeed: $RESULTS"
             exit 1
           fi

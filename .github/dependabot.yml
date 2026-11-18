@@ -23,6 +23,9 @@ version: 2
 #    that require code migrations are handled intentionally rather than turning the
 #    weekly PR red). Security/CVE updates bypass both `cooldown` and `ignore`, opening
 #    standalone PRs (including major bumps when required) outside the weekly group.
+# 3. Exception: the Python `uv` workspace routes majors into a separate `py-major`
+#    group instead of ignoring them. Published Python packages cap vendor SDKs, and
+#    the major PR is how we learn a cap went stale.
 updates:
   # Maintain dependencies for GitHub Actions
   - package-ecosystem: "github-actions"
@@ -133,6 +136,9 @@ updates:
           - "version-update:semver-major"
 
   # Maintain dependencies for Python (uv workspace)
+  # Majors get their own grouped PR instead of `ignore`: a red major PR doesn't
+  # block the minor/patch PR, and it's the signal that a capped vendor SDK
+  # shipped a new major. See py/docs/dependencies.md.
   - package-ecosystem: "uv"
     directory: "/py"
     schedule:
@@ -146,7 +152,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    ignore:
-      - dependency-name: "*"
+      py-major:
+        patterns:
+          - "*"
         update-types:
-          - "version-update:semver-major"
+          - "major"

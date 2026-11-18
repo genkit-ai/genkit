@@ -1,0 +1,136 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["certifi", "packaging"]
+# ///
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: T201, S603, S607
+
+"""Find the lowest version of a dependency that passes a package's tests.
+
+Use it when the `lowest-deps` CI job fails: it binary-searches PyPI releases
+between the declared floor and the version in uv.lock, running the package's
+tests in an isolated env at each step.
+
+    py/bin/find_floor genkit-openai openai
+    # => openai==1.64.0: FAIL (3 failed, 486 passed)
+    #    openai==1.68.0: PASS (489 passed)
+    #    genkit-openai: openai lowest passing 1.68.0 (declared floor 1.60.0)
+
+Assumes pass/fail is monotonic across versions, which holds for "we started
+using a newer API". Re-run the lowest-deps job after bumping the floor.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import ssl
+import subprocess
+import sys
+import tomllib
+import urllib.request
+from pathlib import Path
+
+import certifi
+from packaging.version import InvalidVersion, Version
+
+PY_DIR = Path(__file__).resolve().parents[1]
+
+
+def _declared_floor(package: str, dep: str) -> Version:
+    data = tomllib.loads((PY_DIR / 'packages' / package / 'pyproject.toml').read_text())
+    for spec in data['project'].get('dependencies', []):
+        m = re.match(r'([A-Za-z0-9._-]+)(?:\[[^\]]*\])?\s*([^;]*)', spec)
+        if m and m.group(1).lower().replace('_', '-') == dep:
+            floor = re.search(r'>=\s*([^,\s]+)', m.group(2))
+            if floor:
+                return Version(floor.group(1))
+    sys.exit(f'{package} has no floor for {dep}')
+
+
+def _locked_versions(dep: str) -> list[Version]:
+    text = (PY_DIR / 'uv.lock').read_text()
+    return [Version(v) for v in re.findall(rf'name = "{re.escape(dep)}"\nversion = "([^"]+)"', text)]
+
+
+def _releases(dep: str) -> list[Version]:
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(f'https://pypi.org/pypi/{dep}/json', timeout=30, context=ctx) as r:
+        data = json.load(r)
+    out = []
+    for v, files in data['releases'].items():
+        try:
+            pv = Version(v)
+        except InvalidVersion:
+            continue
+        if files and not pv.is_devrelease and not any(f.get('yanked') for f in files):
+            out.append(pv)
+    return sorted(out)
+
+
+def _passes(package: str, dep: str, version: Version, python: str | None) -> bool:
+    cmd = ['uv', 'run', '-q', '--isolated', '--directory', str(PY_DIR), '--package', package]
+    if python:
+        cmd += ['--python', python]
+    for extra in (f'{dep}=={version}', 'pytest', 'pytest-asyncio', 'pytest-mock', 'psutil'):
+        cmd += ['--with', extra]
+    cmd += ['pytest', '-q', '-p', 'no:cacheprovider', f'packages/{package}/tests']
+    env = {**os.environ, 'PYTEST_ADDOPTS': '-o addopts='}
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
+    last = (proc.stdout.strip().splitlines() or proc.stderr.strip().splitlines() or ['?'])[-1]
+    print(f'{dep}=={version}: {"PASS" if proc.returncode == 0 else "FAIL"} ({last[:100]})', flush=True)
+    return proc.returncode == 0
+
+
+def main() -> int:
+    """Run the floor search and print the lowest passing version."""
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('package', help='workspace package, e.g. genkit-openai')
+    parser.add_argument('dep', help='third-party dependency, e.g. openai')
+    parser.add_argument('--python', help='interpreter for test envs (default: uv picks)')
+    args = parser.parse_args()
+    dep = args.dep.lower().replace('_', '-')
+
+    floor = _declared_floor(args.package, dep)
+    locked = _locked_versions(dep)
+    if not locked:
+        sys.exit(f'{dep} is not in uv.lock')
+    ceiling = max(locked)
+    allow_pre = floor.is_prerelease or ceiling.is_prerelease
+    cands = [v for v in _releases(dep) if floor <= v <= ceiling and (allow_pre or not v.is_prerelease)]
+    if not cands:
+        sys.exit(f'no releases of {dep} between {floor} and {ceiling}')
+
+    if not _passes(args.package, dep, cands[-1], args.python):
+        print(f'{dep}=={cands[-1]} (locked) fails too; fix the tests before searching for a floor')
+        return 1
+    lo, hi = 0, len(cands) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if _passes(args.package, dep, cands[mid], args.python):
+            hi = mid
+        else:
+            lo = mid + 1
+    print(f'{args.package}: {dep} lowest passing {cands[lo]} (declared floor {floor})')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
