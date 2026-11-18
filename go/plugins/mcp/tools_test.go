@@ -18,9 +18,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/firebase/genkit/go/internal/base"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -245,4 +247,80 @@ func TestToolErrorsAnswerTheCall(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetActiveToolsRegistersTools(t *testing.T) {
+	ctx := context.Background()
+	srv := server.NewMCPServer("test", "1.0.0", server.WithToolCapabilities(true))
+	srv.AddTool(mcp.NewTool("ping"),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return mcp.NewToolResultText("pong"), nil
+		})
+
+	c, err := client.NewInProcessClient(srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if err := c.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	if _, err := c.Initialize(ctx, initReq); err != nil {
+		t.Fatal(err)
+	}
+
+	g := genkit.Init(ctx)
+	gc := &GenkitMCPClient{options: MCPClientOptions{Name: "srv"}, server: &ServerRef{Client: c}}
+
+	tools, err := gc.GetActiveTools(ctx, g)
+	if err != nil {
+		t.Fatalf("GetActiveTools failed: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name() != "srv_ping" {
+		t.Fatalf("got tools %v, want [srv_ping]", tools)
+	}
+
+	// Tool must be registered in g's action registry so prompts and LookupTool can resolve it by name.
+	registered := genkit.LookupTool(g, "srv_ping")
+	if registered == nil {
+		t.Fatal("LookupTool(g, \"srv_ping\") = nil, want registered tool")
+	}
+
+	// Calling GetActiveTools a second time with the same g must be idempotent and not panic.
+	toolsAgain, err := gc.GetActiveTools(ctx, g)
+	if err != nil {
+		t.Fatalf("second GetActiveTools failed: %v", err)
+	}
+	if len(toolsAgain) != 1 || toolsAgain[0].Name() != "srv_ping" {
+		t.Errorf("second GetActiveTools returned %v, want [srv_ping]", toolsAgain)
+	}
+
+	// Executing the looked-up tool must invoke the MCP handler.
+	out, err := registered.RunRawMultipart(ctx, map[string]any{})
+	if err != nil {
+		t.Fatalf("registered.RunRawMultipart failed: %v", err)
+	}
+	if out == nil {
+		t.Fatal("expected non-nil tool output")
+	}
+
+	// Concurrent GetActiveTools calls against a fresh Genkit instance must not race or panic.
+	gConcurrent := genkit.Init(ctx)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := gc.GetActiveTools(ctx, gConcurrent)
+			if err != nil {
+				t.Errorf("concurrent GetActiveTools failed: %v", err)
+			}
+			if len(got) != 1 || got[0].Name() != "srv_ping" {
+				t.Errorf("concurrent GetActiveTools returned %v, want [srv_ping]", got)
+			}
+		}()
+	}
+	wg.Wait()
 }
