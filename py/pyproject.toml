@@ -42,54 +42,38 @@ requires-python = ">=3.10"
 version = "0.1.0"
 
 [dependency-groups]
+# Dev and lint groups are never published, so they cap at the next major.
+# That keeps a blanket `uv lock --upgrade` from jumping a tool's major.
+# Published packages under packages/ keep floor-only bounds; see
+# docs/dependencies.md.
 dev = [
-  "bpython>=0.25",
-  "ipython~=8.22; python_version <= '3.10'",
-  "ipython~=9.0.2; python_version >= '3.11'",
-  "jupyter>=1.1.1",
-  "pytest-asyncio>=0.25.3",
-  "pytest>=8.3.4",
-  "pytest-cov>=6.0.0",
-  "pytest-xdist>=3.6.1",
-  "datamodel-code-generator>=0.27.3",
-  "pytest-mock>=3.14.0",
-  "twine>=7.0.0",
-  "pip>=25.0.1",
-  "nox>=2025.2.9",
-  "nox-uv>=0.2.2",
+  "nox-uv>=0.2.2,<1",
+  "nox>=2025.2.9",       # CalVer; no meaningful major.
+  "pip>=25.0.1",         # CalVer; no meaningful major.
+  "psutil>=5.9.0,<8",    # genkit-mcp tests track spawned server processes.
+  "pytest-asyncio>=0.25.3,<2",
+  "pytest-cov>=6.0.0,<8",
+  "pytest-mock>=3.14.0,<4",
+  "pytest-xdist>=3.6.1,<4",
+  "pytest>=8.3.4,<10",
+  "twine>=7.0.0,<8",
 ]
 
 lint = [
-  "liccheck>=0.9.2",
-  "setuptools>=75.0.0,<82",                   # Required by liccheck (provides pkg_resources, removed in setuptools 82+)
-  "bandit>=1.7.0",
-  "deptry>=0.22.0",
-  "litestar>=2.20.0",         # For web/typing.py type resolution
-  "mypy>=1.14.0",
-  "pip-audit>=2.7.0",
-  "pypdf>=6.7.5",
-  "pyrefly>=0.15.0",
-  "pyright>=1.1.392",
-  "pysentry-rs>=0.3.14",
-  "ruff>=0.9",
-  "strenum>=0.4.15",
-  "streamlit>=1.41.0",
-  "ty>=0.0.1",
-  "fastapi>=0.115.0",
-  "grpcio>=1.68.0",
-  "grpcio-reflection>=1.68.0",
-  "gunicorn>=22.0.0",
-  "hypercorn>=0.17.0",
-  "opentelemetry-exporter-otlp>=1.29.0",
-  "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
-  "opentelemetry-instrumentation-asgi>=0.41b0",
-  "opentelemetry-instrumentation-fastapi>=0.41b0",
-  "opentelemetry-instrumentation-grpc>=0.41b0",
-  "opentelemetry-sdk>=1.29.0",
-  "quart>=0.19.0",
-  "secure>=1.0.0",
-  "sentry-sdk>=2.0.0",
-  "structlog>=24.0.0",
+  "bandit>=1.7.0,<2",
+  "deptry>=0.22.0,<1",
+  "liccheck>=0.9.2,<1",
+  "pip-audit>=2.7.0,<3",
+  "pyrefly>=0.15.0,<1",
+  "pyright>=1.1.392,<2",
+  "pysentry-rs>=0.3.14,<1",
+  "ruff>=0.9,<1",
+  "setuptools>=75.0.0,<82", # Required by liccheck (provides pkg_resources, removed in setuptools 82+)
+  "strenum>=0.4.15,<1",     # pyright targets 3.10, so it resolves genkit's `< 3.11` StrEnum import.
+  "ty>=0.0.1,<1",
+  # ty checks samples/, so their third-party imports must resolve here.
+  "opentelemetry-exporter-otlp>=1.29.0,<2", # samples/otel-jaeger
+  "python-dotenv>=1.0.0,<2",                # samples/fastapi-bugbot
 ]
 
 # Pytest for unit testing and coverage.
@@ -357,6 +341,7 @@ authorized_licenses = [
   "cmu license (mit-cmu)",
   "isc license (iscl)",
   "isc license",
+  "isc",                                # SPDX form (dnspython >= 2.9)
   "mit license",
   "mit",
   "mit-cmu",
@@ -383,7 +368,7 @@ unauthorized_licenses = [
 [tool.liccheck.authorized_packages]
 aiohappyeyeballs      = "2.6.1"    # Python Software Foundation (transitive dep of xai-sdk)
 aiohttp               = "3.13.3"   # Apache-2.0 AND MIT (transitive dep of xai-sdk)
-certifi               = "2026.1.4" # TODO: Verify.
+certifi               = ">=2026.1.4" # MPL-2.0 CA bundle, used unmodified. Range: CalVer bumps often.
 dependencies          = true
 dotpromptz-handlebars = "0.2.0"    # Apache-2.0 "https://github.com/google/dotprompt/blob/main/LICENSE"
 google-crc32c         = "1.8.0"    # Apache-2.0
