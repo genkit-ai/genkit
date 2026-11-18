@@ -4,15 +4,21 @@
 package googlegenai
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"google.golang.org/genai"
 )
 
@@ -337,8 +343,8 @@ func TestDeepResearchDefensiveHandling(t *testing.T) {
 	if req == nil || req.Input == nil {
 		t.Fatalf("toDeepResearchInteractionRequest(nil) = %#v, want non-nil request and input", req)
 	}
-	if got := toDeepResearchResponseFormat(nil); got != nil {
-		t.Fatalf("toDeepResearchResponseFormat(nil) = %#v, want nil", got)
+	if got := toDeepResearchResponseFormat(nil, nil); got != nil {
+		t.Fatalf("toDeepResearchResponseFormat(nil, nil) = %#v, want nil", got)
 	}
 	if got := toInteractionTools(nil, &DeepResearchConfig{GoogleSearch: true}); len(got) != 1 || got[0]["type"] != "google_search" {
 		t.Fatalf("toInteractionTools(nil, googleSearch) = %#v, want google_search tool", got)
@@ -438,13 +444,19 @@ func assertDeepResearchStartRequest(t *testing.T, req map[string]any) {
 		t.Errorf("second tool = %#v, want google_search", tool1)
 	}
 
-	responseFormat := req["response_format"].(map[string]any)
-	if responseFormat["mime_type"] != "application/json" {
-		t.Errorf("response_format.mime_type = %v, want application/json", responseFormat["mime_type"])
+	if _, ok := req["response_modalities"]; ok {
+		t.Error("deprecated response_modalities was sent")
 	}
-	modalities := req["response_modalities"].([]any)
-	if modalities[0] != "text" || modalities[1] != "image" {
-		t.Errorf("response_modalities = %v, want [text image]", modalities)
+	formats := req["response_format"].([]any)
+	if len(formats) != 2 {
+		t.Fatalf("response_format = %v, want 2 entries", formats)
+	}
+	text := formats[0].(map[string]any)
+	if text["type"] != "text" || text["mime_type"] != "application/json" {
+		t.Errorf("response_format[0] = %v, want JSON text entry", text)
+	}
+	if image := formats[1].(map[string]any); image["type"] != "image" {
+		t.Errorf("response_format[1] = %v, want image entry", image)
 	}
 }
 
@@ -464,4 +476,413 @@ func newDeepResearchTestClient(t *testing.T, baseURL string) *genai.Client {
 		t.Fatalf("genai.NewClient() error = %v", err)
 	}
 	return client
+}
+
+// deepResearchTestServer serves handler and returns a model on it.
+func deepResearchTestModel(t *testing.T, handler http.HandlerFunc) (*ai.BackgroundModelAction, *genai.Client, *httptest.Server) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client := newDeepResearchTestClient(t, server.URL)
+	return newDeepResearchModel(client, deepResearchPreview042026, GetModelOptions(deepResearchPreview042026, googleAIProvider)), client, server
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func TestDeepResearchStatuses(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		status     string
+		wantDone   bool
+		wantFinish ai.FinishReason
+		wantMeta   bool
+		wantErr    string
+	}{
+		{status: "requires_action", wantDone: true, wantFinish: ai.FinishReasonStop, wantMeta: true},
+		{status: "incomplete", wantDone: true, wantFinish: ai.FinishReasonLength},
+		{status: "queued", wantDone: false},
+		{status: "bogus", wantDone: true, wantErr: "Unknown interaction status"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			t.Parallel()
+			model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, 200, map[string]any{
+					"id": "i-1", "status": tt.status,
+					"steps": []map[string]any{{"type": "model_output", "content": []map[string]any{{"type": "text", "text": "partial"}}}},
+				})
+			})
+			op, err := model.Check(context.Background(), &ai.ModelOperation{ID: "i-1"})
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if op.Done != tt.wantDone {
+				t.Fatalf("Done = %t, want %t", op.Done, tt.wantDone)
+			}
+			if tt.wantErr != "" {
+				if op.Error == nil || !strings.Contains(op.Error.Error(), tt.wantErr) {
+					t.Fatalf("Error = %v, want %q", op.Error, tt.wantErr)
+				}
+				return
+			}
+			if !tt.wantDone {
+				return
+			}
+			if op.Output.FinishReason != tt.wantFinish {
+				t.Errorf("FinishReason = %q, want %q", op.Output.FinishReason, tt.wantFinish)
+			}
+			if got := op.Output.Message.Metadata["interactionStatus"]; (got != nil) != tt.wantMeta {
+				t.Errorf("interactionStatus = %v, wantMeta %t", got, tt.wantMeta)
+			}
+			if tt.status == "incomplete" && !strings.Contains(op.Output.FinishMessage, "incomplete") {
+				t.Errorf("FinishMessage = %q", op.Output.FinishMessage)
+			}
+			if op.Output.Message.Content[0].Text != "partial" {
+				t.Errorf("content = %v", op.Output.Message.Content)
+			}
+		})
+	}
+}
+
+func TestDeepResearchFailedErrorMapping(t *testing.T) {
+	t.Parallel()
+	model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{
+			"id": "i-1", "status": "failed",
+			"errors": []map[string]any{{"code": "rate_limit_exceeded", "message": "slow down"}},
+		})
+	})
+	op, err := model.Check(context.Background(), &ai.ModelOperation{ID: "i-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := status.Of(op.Error); got != status.ResourceExhausted {
+		t.Errorf("status = %v, want RESOURCE_EXHAUSTED", got)
+	}
+	// The error must survive JSON marshaling.
+	data, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "RESOURCE_EXHAUSTED") || !strings.Contains(string(data), "slow down") {
+		t.Errorf("marshaled op lost the error: %s", data)
+	}
+}
+
+func TestDeepResearchFailedSafetyIsBlocked(t *testing.T) {
+	t.Parallel()
+	model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{
+			"id": "i-1", "status": "failed",
+			"errors": []map[string]any{{"code": "safety", "message": "blocked by policy"}},
+		})
+	})
+	op, err := model.Check(context.Background(), &ai.ModelOperation{ID: "i-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !op.Done || op.Error != nil || op.Output == nil || op.Output.FinishReason != ai.FinishReasonBlocked {
+		t.Fatalf("op = %#v, want done blocked output", op)
+	}
+}
+
+func TestDeepResearchResponseOverCap(t *testing.T) {
+	t.Parallel()
+	model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+		chunk := bytes.Repeat([]byte("a"), 1<<20)
+		w.Header().Set("Content-Type", "application/json")
+		for i := 0; i <= deepResearchMaxResponseBytes>>20; i++ {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	})
+	_, err := model.Check(context.Background(), &ai.ModelOperation{ID: "i-1"})
+	if err == nil || !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("Check() error = %v, want byte limit error", err)
+	}
+}
+
+func TestDeepResearchHTTPErrorMapping(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		code   int
+		body   string
+		want   status.Name
+		secret string
+	}{
+		{"404", 404, `{"error":{"code":404,"message":"no such interaction","status":"NOT_FOUND"}}`, status.NotFound, ""},
+		{"429", 429, `{"error":{"code":429,"message":"quota","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"7s"}]}}`, status.ResourceExhausted, ""},
+		{"opaque", 502, `<html>SECRET-BODY</html>`, status.Internal, "SECRET-BODY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.code)
+				_, _ = w.Write([]byte(tt.body))
+			})
+			_, err := model.Check(context.Background(), &ai.ModelOperation{ID: "i-1"})
+			if err == nil {
+				t.Fatal("Check() error = nil")
+			}
+			if got := status.Of(err); got != tt.want {
+				t.Errorf("status = %v, want %v (err %v)", got, tt.want, err)
+			}
+			if tt.secret != "" && strings.Contains(err.Error(), tt.secret) {
+				t.Errorf("error echoes raw body: %v", err)
+			}
+			if tt.code == 429 {
+				if d, ok := RetryDelay(err); !ok || d != 7*time.Second {
+					t.Errorf("RetryDelay = %v, %t, want 7s", d, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestDeepResearchTamperedOperation(t *testing.T) {
+	t.Parallel()
+	var evil atomic.Int32
+	evilServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		evil.Add(1)
+		if r.Header.Get("x-goog-api-key") != "" {
+			t.Errorf("API key reached attacker server")
+		}
+	}))
+	defer evilServer.Close()
+
+	var paths []string
+	var mu sync.Mutex
+	model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.RequestURI())
+		mu.Unlock()
+		writeJSON(w, 200, map[string]any{"id": "i-1", "status": "in_progress"})
+	})
+
+	op := &ai.ModelOperation{ID: "i-1", Metadata: map[string]any{
+		"clientOptions": map[string]any{"baseUrl": evilServer.URL, "apiVersion": "v1beta/../../x"},
+	}}
+	if _, err := model.Check(context.Background(), op); err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if evil.Load() != 0 {
+		t.Fatal("request was sent to the tampered baseUrl")
+	}
+	if len(paths) != 1 || paths[0] != "/v1beta/interactions/i-1" {
+		t.Errorf("paths = %v, want the default version path", paths)
+	}
+
+	for _, id := range []string{"a/b", "../x", "a?b=c", "a#b", "a b", "..", "a%2fb"} {
+		for name, fn := range map[string]func(context.Context, *ai.ModelOperation) (*ai.ModelOperation, error){"check": model.Check, "cancel": model.Cancel} {
+			if _, err := fn(context.Background(), &ai.ModelOperation{ID: id}); err == nil || status.Of(err) != status.InvalidArgument {
+				t.Errorf("%s(%q) error = %v, want INVALID_ARGUMENT", name, id, err)
+			}
+		}
+	}
+	if len(paths) != 1 {
+		t.Errorf("invalid IDs reached the server: %v", paths)
+	}
+}
+
+func TestDeepResearchJSONRoundTrippedOperation(t *testing.T) {
+	t.Parallel()
+	model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			writeJSON(w, 200, map[string]any{"id": "i-1", "status": "in_progress"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"id": "i-1", "status": "completed",
+			"steps": []map[string]any{{"type": "model_output", "content": []map[string]any{{"type": "text", "text": "done"}}}},
+		})
+	})
+	op, err := model.Start(context.Background(), &ai.ModelRequest{
+		Messages: []*ai.Message{{Role: ai.RoleUser, Content: []*ai.Part{ai.NewTextPart("go")}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rt ai.ModelOperation
+	if err := json.Unmarshal(data, &rt); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := deepResearchStartTime(rt.Metadata["startTime"]); !ok {
+		t.Fatalf("startTime = %#v did not survive the round trip", rt.Metadata["startTime"])
+	}
+	checked, err := model.Check(context.Background(), &rt)
+	if err != nil {
+		t.Fatalf("Check() error = %v", err)
+	}
+	if !checked.Done || checked.Output.LatencyMs <= 0 {
+		t.Errorf("checked = done %t latency %v, want done with latency", checked.Done, checked.Output)
+	}
+}
+
+func TestDeepResearchCancel(t *testing.T) {
+	t.Parallel()
+	t.Run("CANCELLED is success", func(t *testing.T) {
+		t.Parallel()
+		model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, 499, map[string]any{"error": map[string]any{"code": 499, "status": "CANCELLED", "message": "already cancelled"}})
+		})
+		op, err := model.Cancel(context.Background(), &ai.ModelOperation{ID: "i-1"})
+		if err != nil {
+			t.Fatalf("Cancel() error = %v", err)
+		}
+		if op.ID != "i-1" || !op.Done || op.Output == nil || op.Output.FinishReason != ai.FinishReasonInterrupted {
+			t.Errorf("op = %#v, want cancelled op with ID", op)
+		}
+	})
+	t.Run("empty body follows up with GET", func(t *testing.T) {
+		t.Parallel()
+		var gets atomic.Int32
+		model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				gets.Add(1)
+				writeJSON(w, 200, map[string]any{"id": "i-1", "status": "cancelled", "usage": map[string]any{"total_tokens": 9}})
+				return
+			}
+			w.WriteHeader(200)
+		})
+		op, err := model.Cancel(context.Background(), &ai.ModelOperation{ID: "i-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gets.Load() != 1 || !op.Done {
+			t.Errorf("gets = %d, done = %t", gets.Load(), op.Done)
+		}
+		if op.Output.Usage == nil || op.Output.Usage.TotalTokens != 9 {
+			t.Errorf("cancelled output usage = %#v, want 9 tokens", op.Output.Usage)
+		}
+	})
+	t.Run("terminal operation", func(t *testing.T) {
+		t.Parallel()
+		model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, 200, map[string]any{"id": "i-1", "status": "completed"})
+		})
+		op, err := model.Cancel(context.Background(), &ai.ModelOperation{ID: "i-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !op.Done || op.ID != "i-1" {
+			t.Errorf("op = %#v", op)
+		}
+	})
+	t.Run("own context cancellation is an error", func(t *testing.T) {
+		t.Parallel()
+		model, _, _ := deepResearchTestModel(t, func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, 200, map[string]any{"id": "i-1", "status": "cancelled"})
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := model.Cancel(ctx, &ai.ModelOperation{ID: "i-1"}); err == nil || !errors.Is(err, context.Canceled) {
+			t.Errorf("Cancel() error = %v, want context.Canceled", err)
+		}
+	})
+}
+
+func TestDeepResearchVertexBackendNotListedOrResolved(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]any{"models": []map[string]any{
+			{"name": "models/" + deepResearchPreview042026},
+			{"name": "models/gemini-2.5-flash"},
+		}})
+	}))
+	defer server.Close()
+	client := newDeepResearchTestClient(t, server.URL)
+	vertex := catalog{provider: vertexAIProvider}
+
+	for _, desc := range listActions(context.Background(), client, vertex) {
+		if strings.Contains(desc.Key, "deep-research") {
+			t.Errorf("Vertex listActions returned Deep Research action %q", desc.Key)
+		}
+	}
+	found := false
+	for _, desc := range listActions(context.Background(), client, catalog{provider: googleAIProvider}) {
+		found = found || strings.Contains(desc.Key, "deep-research")
+	}
+	if !found {
+		t.Error("Google AI listActions did not return Deep Research")
+	}
+	for atype, id := range map[api.ActionType]string{
+		api.ActionTypeBackgroundModel: deepResearchPreview042026,
+		api.ActionTypeCheckOperation:  deepResearchPreview042026 + "/check",
+		api.ActionTypeCancelOperation: deepResearchPreview042026 + "/cancel",
+	} {
+		if got := resolveAction(client, vertex, atype, id); got != nil {
+			t.Errorf("Vertex resolveAction(%s, %s) = %v, want nil", atype, id, got)
+		}
+	}
+}
+
+func TestResolveCancelKeyRefusedForVeo(t *testing.T) {
+	t.Parallel()
+	client := newDeepResearchTestClient(t, "http://127.0.0.1")
+	cat := catalog{provider: googleAIProvider}
+	if got := resolveAction(client, cat, api.ActionTypeCancelOperation, "veo-3.1-generate-preview/cancel"); got != nil {
+		t.Errorf("cancel key resolved for Veo (no cancel support): %v", got)
+	}
+	if got := resolveAction(client, cat, api.ActionTypeCheckOperation, "veo-3.1-generate-preview/check"); got == nil {
+		t.Error("check key not resolved for Veo")
+	}
+}
+
+func TestDeepResearchRequestShape(t *testing.T) {
+	t.Parallel()
+	req, err := toDeepResearchInteractionRequest(deepResearchPreview042026, &ai.ModelRequest{
+		Output: &ai.ModelOutputConfig{
+			Format: ai.OutputFormatJSON,
+			Schema: map[string]any{
+				"$schema":              "http://json-schema.org/draft-07/schema#",
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties":           map[string]any{"a": map[string]any{"type": []any{"string", "null"}}},
+			},
+		},
+	}, &DeepResearchConfig{ResponseModalities: []string{"TEXT"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(req)
+	got := string(data)
+	for _, bad := range []string{"response_modalities", "$schema", "additionalProperties", "null"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("request contains %q: %s", bad, got)
+		}
+	}
+	rf, ok := req.ResponseFormat.(map[string]any)
+	if !ok || rf["type"] != "text" || rf["mime_type"] != "application/json" {
+		t.Errorf("response_format = %#v, want single folded text entry", req.ResponseFormat)
+	}
+}
+
+func TestDeepResearchModelRef(t *testing.T) {
+	t.Parallel()
+	cfg := &DeepResearchConfig{ThinkingSummaries: "auto"}
+	ref := DeepResearchModelRef("googleai/"+deepResearchPreview042026, cfg)
+	if ref.Name() != "googleai/"+deepResearchPreview042026 {
+		t.Errorf("Name() = %q", ref.Name())
+	}
+	if ref.Config() != cfg {
+		t.Errorf("Config() = %v, want the supplied config", ref.Config())
+	}
+}
+
+func TestDeepResearchProIsDeprecated(t *testing.T) {
+	t.Parallel()
+	if got := GetModelOptions(deepResearchProPreview122025, googleAIProvider).Stage; got != ai.ModelStageDeprecated {
+		t.Errorf("Stage = %q, want deprecated", got)
+	}
 }

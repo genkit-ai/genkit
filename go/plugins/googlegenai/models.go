@@ -434,7 +434,7 @@ var (
 			Label:    "Deep Research Pro Preview 12 2025",
 			Versions: []string{},
 			Supports: &DeepResearchSupports,
-			Stage:    ai.ModelStageUnstable,
+			Stage:    ai.ModelStageDeprecated,
 		},
 		deepResearchPreview042026: {
 			Label:    "Deep Research Preview 04 2026",

@@ -7,16 +7,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/status"
 	"github.com/firebase/genkit/go/internal/base"
 	"google.golang.org/genai"
 )
@@ -24,10 +28,26 @@ import (
 const (
 	deepResearchAgentType   = "deep-research"
 	deepResearchAPIRevision = "2026-05-20"
+
+	// deepResearchMaxResponseBytes caps how much of an interactions response is read.
+	deepResearchMaxResponseBytes = 64 << 20 // 64 MiB
+)
+
+var (
+	// deepResearchOperationIDPattern matches the interaction IDs the service
+	// issues. Operations are caller-supplied, so the ID is validated before it
+	// is placed in a request path.
+	deepResearchOperationIDPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{1,512}$`)
+	// deepResearchAPIVersionPattern matches a plausible API version ("v1beta").
+	deepResearchAPIVersionPattern = regexp.MustCompile(`^v[0-9a-z]+$`)
 )
 
 // DeepResearchConfig configures Google AI Deep Research interactions.
 type DeepResearchConfig struct {
+	// APIKey overrides the client's API key for the start request only. Check
+	// and cancel calls use the plugin client's key, because the key is never
+	// stored in the operation; an operation started with a per-request key
+	// must therefore be polled by a client that can also access it.
 	APIKey                string                  `json:"apiKey,omitempty"`
 	BaseURL               string                  `json:"baseUrl,omitempty"`
 	APIVersion            string                  `json:"apiVersion,omitempty"`
@@ -69,26 +89,26 @@ type interactionRequest struct {
 	Agent                 string           `json:"agent,omitempty"`
 	Input                 any              `json:"input"`
 	Tools                 []map[string]any `json:"tools,omitempty"`
-	ResponseFormat        map[string]any   `json:"response_format,omitempty"`
-	ResponseModalities    []string         `json:"response_modalities,omitempty"`
+	ResponseFormat        any              `json:"response_format,omitempty"`
 	Store                 *bool            `json:"store,omitempty"`
 	Background            bool             `json:"background,omitempty"`
 	AgentConfig           map[string]any   `json:"agent_config,omitempty"`
 }
 
 type geminiInteraction struct {
-	Model                 string            `json:"model,omitempty"`
-	Agent                 string            `json:"agent,omitempty"`
-	EnvironmentID         string            `json:"environment_id,omitempty"`
-	ID                    string            `json:"id,omitempty"`
-	PreviousInteractionID string            `json:"previous_interaction_id,omitempty"`
-	Status                string            `json:"status,omitempty"`
-	Created               string            `json:"created,omitempty"`
-	Updated               string            `json:"updated,omitempty"`
-	Role                  string            `json:"role,omitempty"`
-	Steps                 []interactionStep `json:"steps,omitempty"`
-	Usage                 *interactionUsage `json:"usage,omitempty"`
-	Error                 *interactionError `json:"error,omitempty"`
+	Model                 string             `json:"model,omitempty"`
+	Agent                 string             `json:"agent,omitempty"`
+	EnvironmentID         string             `json:"environment_id,omitempty"`
+	ID                    string             `json:"id,omitempty"`
+	PreviousInteractionID string             `json:"previous_interaction_id,omitempty"`
+	Status                string             `json:"status,omitempty"`
+	Created               string             `json:"created,omitempty"`
+	Updated               string             `json:"updated,omitempty"`
+	Role                  string             `json:"role,omitempty"`
+	Steps                 []interactionStep  `json:"steps,omitempty"`
+	Usage                 *interactionUsage  `json:"usage,omitempty"`
+	Error                 *interactionError  `json:"error,omitempty"`
+	Errors                []interactionError `json:"errors,omitempty"`
 }
 
 type interactionError struct {
@@ -170,14 +190,13 @@ func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOption
 		if op.Metadata == nil {
 			op.Metadata = make(map[string]any)
 		}
-		// Persist only non-secret routing for later check/cancel calls. The API
-		// key is deliberately omitted: operation metadata is serialized back to
-		// the caller and persisted, so the key is re-derived from the live client
-		// rather than written into the operation.
-		routing := clientOptions
-		routing.APIKey = ""
-		op.Metadata["clientOptions"] = routing
-		op.Metadata["startTime"] = time.Now()
+		// Persist only the API version for later check/cancel calls. The API key
+		// and base URL are deliberately omitted: operation metadata is serialized
+		// back to the caller, who may hand it back altered, so both are
+		// re-derived from the live client rather than trusted from the operation.
+		op.Metadata["clientOptions"] = deepResearchClientOptions{APIVersion: clientOptions.APIVersion}
+		// RFC3339 string so it survives a JSON round trip.
+		op.Metadata["startTime"] = time.Now().UTC().Format(time.RFC3339Nano)
 		return op, nil
 	}
 
@@ -185,11 +204,11 @@ func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOption
 		if op == nil {
 			return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Deep Research operation is nil", nil)
 		}
-		if op.ID == "" {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Deep Research operation is missing an ID", nil)
+		if err := validateDeepResearchOperationID(op.ID); err != nil {
+			return nil, err
 		}
 		clientOptions := deepResearchOptionsFromOperation(client, op)
-		interaction, err := doDeepResearchRequest(ctx, client, clientOptions, http.MethodGet, "interactions/"+op.ID, nil)
+		interaction, err := doDeepResearchRequest(ctx, client, clientOptions, http.MethodGet, "interactions/"+url.PathEscape(op.ID), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -200,7 +219,7 @@ func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOption
 			// Token usage comes from the interaction's own usage block; this only
 			// backfills any output char/media counts the API left unset.
 			ai.CalculateInputOutputUsage(nil, updatedOp.Output)
-			if startTime, ok := updatedOp.Metadata["startTime"].(time.Time); ok && updatedOp.Output.LatencyMs == 0 {
+			if startTime, ok := deepResearchStartTime(updatedOp.Metadata["startTime"]); ok && updatedOp.Output.LatencyMs == 0 {
 				updatedOp.Output.LatencyMs = float64(time.Since(startTime).Nanoseconds()) / 1e6
 			}
 		}
@@ -211,13 +230,27 @@ func newDeepResearchModel(client *genai.Client, name string, info ai.ModelOption
 		if op == nil {
 			return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Deep Research operation is nil", nil)
 		}
-		if op.ID == "" {
-			return nil, core.NewPublicError(core.INVALID_ARGUMENT, "Deep Research operation is missing an ID", nil)
+		if err := validateDeepResearchOperationID(op.ID); err != nil {
+			return nil, err
 		}
 		clientOptions := deepResearchOptionsFromOperation(client, op)
-		interaction, err := doDeepResearchRequest(ctx, client, clientOptions, http.MethodPost, "interactions/"+op.ID+"/cancel", nil)
+		escapedID := url.PathEscape(op.ID)
+		interaction, err := doDeepResearchRequest(ctx, client, clientOptions, http.MethodPost, "interactions/"+escapedID+"/cancel", nil)
 		if err != nil {
-			return nil, err
+			// The service reports an interaction that is already cancelled (or
+			// is cancelling) as CANCELLED (HTTP 499). That is the outcome the
+			// caller asked for, unless it is our own context that was cancelled.
+			if ctx.Err() == nil && status.Of(err) == status.Cancelled {
+				interaction = &geminiInteraction{ID: op.ID, Status: "cancelled"}
+			} else {
+				return nil, err
+			}
+		} else if interaction.ID == "" && interaction.Status == "" {
+			// An empty 2xx body does not say what state the interaction is in.
+			interaction, err = doDeepResearchRequest(ctx, client, clientOptions, http.MethodGet, "interactions/"+escapedID, nil)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		updatedOp := fromDeepResearchInteraction(interaction)
@@ -282,13 +315,42 @@ func deepResearchOptionsFromOperation(client *genai.Client, op *ai.ModelOperatio
 			stored = s
 		}
 	}
-	if stored.BaseURL != "" {
-		opts.BaseURL = stored.BaseURL
-	}
-	if stored.APIVersion != "" {
+	// The base URL is never read from the operation: it is caller-supplied and
+	// requests carry the API key. The version is only honored if well-formed.
+	if deepResearchAPIVersionPattern.MatchString(stored.APIVersion) {
 		opts.APIVersion = stored.APIVersion
 	}
 	return opts
+}
+
+// validateDeepResearchOperationID rejects operation IDs that could alter the
+// request path or query.
+func validateDeepResearchOperationID(id string) error {
+	if id == "" {
+		return core.NewPublicError(core.INVALID_ARGUMENT, "Deep Research operation is missing an ID", nil)
+	}
+	if !deepResearchOperationIDPattern.MatchString(id) || strings.Contains(id, "..") {
+		return core.NewPublicError(core.INVALID_ARGUMENT, "Deep Research operation has an invalid ID", nil)
+	}
+	return nil
+}
+
+// deepResearchStartTime reads the start time stored in operation metadata,
+// tolerating the forms it takes after a JSON round trip.
+func deepResearchStartTime(v any) (time.Time, bool) {
+	switch t := v.(type) {
+	case time.Time:
+		return t, !t.IsZero()
+	case string:
+		if parsed, err := time.Parse(time.RFC3339Nano, t); err == nil {
+			return parsed, true
+		}
+	case float64:
+		return time.UnixMilli(int64(t)), true
+	case int64:
+		return time.UnixMilli(t), true
+	}
+	return time.Time{}, false
 }
 
 func toDeepResearchInteractionRequest(model string, req *ai.ModelRequest, config *DeepResearchConfig) (*interactionRequest, error) {
@@ -328,13 +390,12 @@ func toDeepResearchInteractionRequest(model string, req *ai.ModelRequest, config
 	}
 
 	interactionReq := &interactionRequest{
-		Agent:              model,
-		Input:              steps,
-		Background:         true,
-		AgentConfig:        agentConfig,
-		Tools:              toInteractionTools(req, config),
-		ResponseFormat:     toDeepResearchResponseFormat(req),
-		ResponseModalities: toDeepResearchResponseModalities(config),
+		Agent:          model,
+		Input:          steps,
+		Background:     true,
+		AgentConfig:    agentConfig,
+		Tools:          toInteractionTools(req, config),
+		ResponseFormat: toDeepResearchResponseFormat(req, config),
 	}
 	if config != nil {
 		interactionReq.PreviousInteractionID = config.PreviousInteractionID
@@ -343,32 +404,89 @@ func toDeepResearchInteractionRequest(model string, req *ai.ModelRequest, config
 	return interactionReq, nil
 }
 
-func toDeepResearchResponseFormat(req *ai.ModelRequest) map[string]any {
-	if req == nil || req.Output == nil {
+// toDeepResearchResponseFormat builds the interactions response_format: one
+// entry per requested modality, with JSON output folded into the text entry.
+// It returns a single entry when there is one, a list when there are several
+// and nil when nothing is requested. The deprecated top-level
+// response_modalities field is not used.
+func toDeepResearchResponseFormat(req *ai.ModelRequest, config *DeepResearchConfig) any {
+	var entries []map[string]any
+	index := map[string]map[string]any{}
+	entry := func(typ string) map[string]any {
+		if e, ok := index[typ]; ok {
+			return e
+		}
+		e := map[string]any{"type": typ}
+		index[typ] = e
+		entries = append(entries, e)
+		return e
+	}
+	if config != nil {
+		for _, modality := range config.ResponseModalities {
+			entry(strings.ToLower(modality))
+		}
+	}
+	if req != nil && req.Output != nil &&
+		(req.Output.Format == ai.OutputFormatJSON || req.Output.ContentType == "application/json") {
+		text := entry("text")
+		text["mime_type"] = "application/json"
+		if req.Output.Schema != nil {
+			text["schema"] = deepResearchCleanSchema(req.Output.Schema)
+		}
+	}
+	switch len(entries) {
+	case 0:
 		return nil
+	case 1:
+		return entries[0]
+	default:
+		return entries
 	}
-	if req.Output.Format != ai.OutputFormatJSON && req.Output.ContentType != "application/json" {
-		return nil
-	}
-	responseFormat := map[string]any{
-		"type":      "text",
-		"mime_type": "application/json",
-	}
-	if req.Output.Schema != nil {
-		responseFormat["schema"] = req.Output.Schema
-	}
-	return responseFormat
 }
 
-func toDeepResearchResponseModalities(config *DeepResearchConfig) []string {
-	if config == nil || len(config.ResponseModalities) == 0 {
-		return nil
+// deepResearchCleanSchema removes the JSON Schema keywords the interactions
+// API does not accept ($schema, additionalProperties) and collapses nullable
+// type arrays to their first non-null type, like the JS cleanSchema.
+func deepResearchCleanSchema(v any) any {
+	switch s := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(s))
+		for k, val := range s {
+			if k == "$schema" || k == "additionalProperties" {
+				continue
+			}
+			if k == "type" {
+				if types, ok := val.([]any); ok {
+					for _, t := range types {
+						if t != "null" {
+							out[k] = t
+							break
+						}
+					}
+					continue
+				}
+				if types, ok := val.([]string); ok {
+					for _, t := range types {
+						if t != "null" {
+							out[k] = t
+							break
+						}
+					}
+					continue
+				}
+			}
+			out[k] = deepResearchCleanSchema(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(s))
+		for i, val := range s {
+			out[i] = deepResearchCleanSchema(val)
+		}
+		return out
+	default:
+		return v
 	}
-	modalities := make([]string, 0, len(config.ResponseModalities))
-	for _, modality := range config.ResponseModalities {
-		modalities = append(modalities, strings.ToLower(modality))
-	}
-	return modalities
 }
 
 func toInteractionTools(req *ai.ModelRequest, config *DeepResearchConfig) []map[string]any {
@@ -384,7 +502,7 @@ func toInteractionTools(req *ai.ModelRequest, config *DeepResearchConfig) []map[
 				"description": tool.Description,
 			}
 			if tool.InputSchema != nil {
-				interactionTool["parameters"] = tool.InputSchema
+				interactionTool["parameters"] = deepResearchCleanSchema(tool.InputSchema)
 			}
 			tools = append(tools, interactionTool)
 		}
@@ -501,8 +619,13 @@ func toInteractionSteps(messages []*ai.Message) ([]interactionStep, error) {
 }
 
 func toInteractionContent(part *ai.Part) (interactionContent, error) {
-	if part.IsText() || part.IsData() {
+	if part.IsText() {
 		return interactionContent{Type: "text", Text: part.Text}, nil
+	}
+	if part.IsData() {
+		// The interactions API has no unstructured-data content (JS sends only
+		// text and media), so a data part is sent as its string form.
+		return interactionContent{Type: "text", Text: part.DataString()}, nil
 	}
 	if part.IsReasoning() {
 		content := interactionContent{
@@ -554,26 +677,36 @@ func doDeepResearchRequest(ctx context.Context, client *genai.Client, opts deepR
 	}
 	reqURL, err := deepResearchURL(opts, resourcePath)
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(status.ErrInvalidArgument, "invalid Deep Research endpoint: %w", err)
+	}
+
+	clientConfig := client.ClientConfig()
+	if t := clientConfig.HTTPOptions.Timeout; t != nil && *t > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, *t)
+		defer cancel()
 	}
 
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return nil, err
+			return nil, status.Errorf(status.ErrInternal, "encode Deep Research request: %w", err)
 		}
 		bodyReader = bytes.NewReader(data)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
-		return nil, err
+		return nil, status.Errorf(status.ErrInvalidArgument, "build Deep Research request: %w", err)
 	}
-	for k, values := range client.ClientConfig().HTTPOptions.Headers {
+	for k, values := range clientConfig.HTTPOptions.Headers {
 		for _, value := range values {
 			req.Header.Add(k, value)
 		}
+	}
+	if req.Header.Get(xGoogApiClientHeader) == "" {
+		req.Header.Set(xGoogApiClientHeader, genkitClientHeader.Get(xGoogApiClientHeader))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Api-Revision", deepResearchAPIRevision)
@@ -581,36 +714,151 @@ func doDeepResearchRequest(ctx context.Context, client *genai.Client, opts deepR
 		req.Header.Set("x-goog-api-key", opts.APIKey)
 	}
 
-	httpClient := client.ClientConfig().HTTPClient
+	httpClient := clientConfig.HTTPClient
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, deepResearchTransportError(ctx, method, resourcePath, err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, deepResearchMaxResponseBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, deepResearchTransportError(ctx, method, resourcePath, err)
+	}
+	if len(respBody) > deepResearchMaxResponseBytes {
+		return nil, status.Errorf(status.ErrInternal, "Deep Research response for %s %s exceeds the %d byte limit", method, resourcePath, deepResearchMaxResponseBytes)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg := strings.TrimSpace(string(respBody))
-		if msg == "" {
-			msg = resp.Status
-		}
-		return nil, core.NewError(core.StatusFromHTTPCode(resp.StatusCode), "deep research request failed: %s", msg)
+		return nil, deepResearchHTTPError(method, resourcePath, resp.StatusCode, respBody)
 	}
 
 	var interaction geminiInteraction
 	if len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, &interaction); err != nil {
-			return nil, err
+			return nil, status.Errorf(status.ErrInternal, "decode Deep Research response for %s %s: %w", method, resourcePath, err)
 		}
 	}
 	return &interaction, nil
+}
+
+// deepResearchTransportError maps a failure to send the request or read the
+// response. Context cancellation and deadlines keep their cause and map to the
+// matching status; other timeouts are DEADLINE_EXCEEDED, anything else is
+// UNAVAILABLE.
+func deepResearchTransportError(ctx context.Context, method, resourcePath string, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(ctx.Err(), context.Canceled):
+		return status.Errorf(status.ErrCancelled, "Deep Research request %s %s cancelled: %w", method, resourcePath, context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return status.Errorf(status.ErrDeadlineExceeded, "Deep Research request %s %s timed out: %w", method, resourcePath, context.DeadlineExceeded)
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return status.Errorf(status.ErrDeadlineExceeded, "Deep Research request %s %s timed out: %w", method, resourcePath, err)
+	}
+	return status.Errorf(status.ErrUnavailable, "Deep Research request %s %s failed: %w", method, resourcePath, err)
+}
+
+// deepResearchHTTPError maps a non-2xx response through [wrapAPIError], so the
+// status and any google.rpc.RetryInfo delay are reported as for other models.
+// The body is parsed as a Google or Interactions style error; the raw body is
+// never echoed, only the parsed message (or the HTTP status text).
+func deepResearchHTTPError(method, resourcePath string, httpStatus int, body []byte) error {
+	apiErr := genai.APIError{Code: httpStatus}
+	var parsed struct {
+		Error struct {
+			Code    any              `json:"code"`
+			Message string           `json:"message"`
+			Status  string           `json:"status"`
+			Details []map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		apiErr.Message = parsed.Error.Message
+		apiErr.Details = parsed.Error.Details
+		if status.Name(parsed.Error.Status).IsValid() {
+			apiErr.Status = parsed.Error.Status
+		} else if n, ok := deepResearchErrorCodeToStatus(parsed.Error.Code); ok {
+			apiErr.Status = string(n)
+		}
+	}
+	if apiErr.Message == "" {
+		apiErr.Message = http.StatusText(httpStatus)
+	}
+	return wrapAPIError(fmt.Errorf("Deep Research request %s %s: %w", method, resourcePath, apiErr))
+}
+
+// deepResearchContentBlockCodes are the Interactions error codes that report a
+// content-policy block.
+var deepResearchContentBlockCodes = map[string]bool{
+	"safety": true, "recitation": true, "language": true, "prohibited_content": true,
+	"spii": true, "blocklist": true, "image_safety": true, "image_prohibited_content": true,
+	"image_recitation": true, "image_other": true, "content_blocked": true,
+	"jailbreak": true, "model_armor": true,
+}
+
+// deepResearchErrorCodeStatus maps Interactions error codes to Genkit statuses.
+var deepResearchErrorCodeStatus = map[string]status.Name{
+	"malformed_function_call": status.Aborted,
+	"unexpected_tool_call":    status.Aborted,
+	"no_image":                status.Aborted,
+	"service_unavailable":     status.Unavailable,
+	"rate_limit_exceeded":     status.ResourceExhausted,
+	"quota_exceeded":          status.ResourceExhausted,
+	"invalid_request":         status.InvalidArgument,
+	"parameter_unknown":       status.InvalidArgument,
+	"failed_precondition":     status.FailedPrecondition,
+	"out_of_range":            status.OutOfRange,
+	"agent_max_token_limit":   status.InvalidArgument,
+	"model_not_found":         status.NotFound,
+	"not_found":               status.NotFound,
+	"authentication":          status.Unauthenticated,
+	"permission_denied":       status.PermissionDenied,
+	"already_exists":          status.AlreadyExists,
+	"aborted":                 status.Aborted,
+	"cancelled":               status.Cancelled,
+	"deadline_exceeded":       status.DeadlineExceeded,
+	"api_error":               status.Internal,
+	"unimplemented":           status.Unimplemented,
+}
+
+func isDeepResearchContentBlockCode(code string) bool {
+	return deepResearchContentBlockCodes[strings.ToLower(strings.TrimSpace(code))]
+}
+
+// deepResearchErrorCodeToStatus maps an Interactions error code (a string, or
+// a numeric HTTP code) to a Genkit status. The second result is false when the
+// code is unknown.
+func deepResearchErrorCodeToStatus(code any) (status.Name, bool) {
+	switch c := code.(type) {
+	case float64:
+		if n := status.FromHTTPCode(int(c)); n != status.Unknown {
+			return n, true
+		}
+	case string:
+		norm := strings.ToLower(strings.TrimSpace(c))
+		if norm == "" {
+			return "", false
+		}
+		if n, ok := deepResearchErrorCodeStatus[norm]; ok {
+			return n, true
+		}
+		if isDeepResearchContentBlockCode(norm) {
+			return status.FailedPrecondition, true
+		}
+		if upper := status.Name(strings.ToUpper(norm)); upper.IsValid() {
+			return upper, true
+		}
+		var num int
+		if _, err := fmt.Sscanf(norm, "%d", &num); err == nil && fmt.Sprint(num) == norm {
+			return deepResearchErrorCodeToStatus(float64(num))
+		}
+	}
+	return "", false
 }
 
 func deepResearchURL(opts deepResearchClientOptions, resourcePath string) (string, error) {
@@ -645,41 +893,113 @@ func fromDeepResearchInteraction(interaction *geminiInteraction) *ai.ModelOperat
 	}
 
 	switch interaction.Status {
-	case "in_progress", "requires_action", "":
+	case "in_progress", "queued", "":
 		op.Done = false
 	case "cancelled":
 		op.Done = true
-		op.Output = &ai.ModelResponse{
-			Message: &ai.Message{
-				Role:    ai.RoleModel,
-				Content: []*ai.Part{ai.NewTextPart("Operation cancelled.")},
-				Metadata: map[string]any{
-					"interactionId": interaction.ID,
-				},
-			},
-			FinishReason:  ai.FinishReasonInterrupted,
-			FinishMessage: "Operation cancelled",
-			Raw:           interaction,
-		}
+		op.Output = deepResearchCancelledOutput(interaction)
 	case "failed":
 		op.Done = true
-		op.Error = fmt.Errorf("deep research interaction failed: %s", deepResearchFailureDetail(interaction))
+		first := deepResearchFirstError(interaction)
+		if isDeepResearchContentBlockCode(first.Code) {
+			op.Output = deepResearchBlockedOutput(interaction, first)
+			break
+		}
+		name := status.Unknown
+		for _, code := range []any{first.Code, first.Status} {
+			if n, ok := deepResearchErrorCodeToStatus(code); ok {
+				name = n
+				break
+			}
+		}
+		op.Error = status.Errorf(status.Base(name), "deep research interaction failed: %s", deepResearchFailureDetail(interaction)).
+			WithDetails(map[string]any{"interactionId": interaction.ID, "code": first.Code})
 	case "completed":
 		op.Done = true
 		op.Output = fromCompletedDeepResearchInteraction(interaction)
+	case "requires_action":
+		// A deliberate pause (e.g. a plan awaiting approval or a client-side
+		// function call), not a failure: finish the operation and surface what
+		// was produced. The caller continues with previousInteractionId.
+		op.Done = true
+		op.Output = fromCompletedDeepResearchInteraction(interaction)
+		op.Output.Message.Metadata["interactionStatus"] = interaction.Status
+		if len(interaction.Steps) == 0 {
+			// Do not claim completion when nothing was produced.
+			op.Output.Message.Content = nil
+		}
+	case "incomplete":
+		op.Done = true
+		op.Output = fromCompletedDeepResearchInteraction(interaction)
+		op.Output.FinishReason = ai.FinishReasonLength
+		op.Output.FinishMessage = "Interaction incomplete (truncated output)"
 	default:
-		op.Done = false
+		// Finish rather than leave Done unset, which would make callers poll forever.
+		op.Done = true
+		op.Error = status.Errorf(status.ErrUnknown, "Unknown interaction status: %s", interaction.Status)
 	}
 	return op
+}
+
+func deepResearchFirstError(interaction *geminiInteraction) interactionError {
+	if len(interaction.Errors) > 0 {
+		return interaction.Errors[0]
+	}
+	if interaction.Error != nil {
+		return *interaction.Error
+	}
+	return interactionError{}
+}
+
+func deepResearchCancelledOutput(interaction *geminiInteraction) *ai.ModelResponse {
+	metadata := map[string]any{"interactionId": interaction.ID}
+	if interaction.EnvironmentID != "" {
+		metadata["environmentId"] = interaction.EnvironmentID
+	}
+	resp := &ai.ModelResponse{
+		Message: &ai.Message{
+			Role:     ai.RoleModel,
+			Content:  []*ai.Part{ai.NewTextPart("Operation cancelled.")},
+			Metadata: metadata,
+		},
+		FinishReason:  ai.FinishReasonInterrupted,
+		FinishMessage: "Operation cancelled",
+		Raw:           interaction,
+	}
+	if interaction.Usage != nil {
+		resp.Usage = fromInteractionUsage(interaction.Usage)
+	}
+	return resp
+}
+
+func deepResearchBlockedOutput(interaction *geminiInteraction, first interactionError) *ai.ModelResponse {
+	msg := first.Message
+	if msg == "" {
+		msg = deepResearchFailureDetail(interaction)
+	}
+	metadata := map[string]any{"interactionId": interaction.ID}
+	if interaction.EnvironmentID != "" {
+		metadata["environmentId"] = interaction.EnvironmentID
+	}
+	resp := &ai.ModelResponse{
+		Message:       &ai.Message{Role: ai.RoleModel, Metadata: metadata},
+		FinishReason:  ai.FinishReasonBlocked,
+		FinishMessage: msg,
+		Raw:           interaction,
+	}
+	if interaction.Usage != nil {
+		resp.Usage = fromInteractionUsage(interaction.Usage)
+	}
+	return resp
 }
 
 // deepResearchFailureDetail extracts a human-readable reason from a failed interaction,
 // falling back to a generic message when the API provides no detail.
 func deepResearchFailureDetail(interaction *geminiInteraction) string {
-	if interaction == nil || interaction.Error == nil {
+	if interaction == nil {
 		return "no error detail provided"
 	}
-	err := interaction.Error
+	err := deepResearchFirstError(interaction)
 	switch {
 	case err.Message != "":
 		return err.Message

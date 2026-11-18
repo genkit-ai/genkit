@@ -43,7 +43,11 @@ func listActions(ctx context.Context, client *genai.Client, c catalog) []api.Act
 	}
 
 	// Deep Research models (background models)
+	// Deep Research is a Gemini Developer API feature; Vertex AI does not serve it.
 	for _, name := range models.deep {
+		if !c.supportsDeepResearch(client) {
+			break
+		}
 		actions = append(actions, newDeepResearchModel(client, name, c.modelOptions(name)).Desc())
 	}
 
@@ -101,6 +105,9 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 		case ModelTypeVeo:
 			model = newVeoModel(client, modelID, c.modelOptions(modelID))
 		case ModelTypeDeepResearch:
+			if !c.supportsDeepResearch(client) {
+				return nil
+			}
 			model = newDeepResearchModel(client, modelID, c.modelOptions(modelID))
 		default:
 			return nil
@@ -114,4 +121,13 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 	}
 
 	return nil
+}
+
+// supportsDeepResearch reports whether Deep Research models may be listed or
+// resolved: they exist only on the Google AI backend, never on Vertex AI.
+func (c catalog) supportsDeepResearch(client *genai.Client) bool {
+	if c.provider == vertexAIProvider {
+		return false
+	}
+	return client == nil || client.ClientConfig().Backend != genai.BackendVertexAI
 }
