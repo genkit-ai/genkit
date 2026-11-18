@@ -50,7 +50,13 @@ export function mistralErrorBodyFetch(
   options: Pick<ClientOptions, 'fetch' | 'httpAgent'> | undefined
 ): Fetch | undefined {
   if (!options?.fetch && options?.httpAgent) return undefined;
-  const inner = (options?.fetch ?? globalThis.fetch) as unknown as typeof fetch;
+  // `globalThis.fetch` is looked up on each call, not when the plugin is
+  // created, so a fetch patched in later (tracing, test stubs) is used.
+  const inner: typeof fetch = (input, init) =>
+    ((options?.fetch as unknown as typeof fetch) ?? globalThis.fetch)(
+      input,
+      init
+    );
   const wrapped: typeof fetch = async (input, init) => {
     const response = await inner(input, init);
     if (response.ok) return response;

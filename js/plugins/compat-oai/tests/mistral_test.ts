@@ -1616,6 +1616,42 @@ describe('mistral plugin', () => {
     });
   });
 
+  it('uses a globalThis.fetch patched after the plugin is created', async () => {
+    const realFetch = globalThis.fetch;
+    const urls: string[] = [];
+    try {
+      const patchedAi = genkit({
+        plugins: [mistral({ apiKey: 'default-key' })],
+      });
+      // Patched after the plugin is created, as tracing or test stubs do.
+      globalThis.fetch = (async (input: any) => {
+        urls.push(String(input));
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                index: 0,
+                message: { role: 'assistant', content: 'stubbed' },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }) as typeof fetch;
+
+      const response = await patchedAi.generate({
+        model: mistral.model('mistral-small-latest'),
+        prompt: 'hi',
+      });
+
+      expect(response.text).toBe('stubbed');
+      expect(urls).toEqual(['https://api.mistral.ai/v1/chat/completions']);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   describe('request-scoped API keys', () => {
     const CHAT_RESPONSE = {
       choices: [
