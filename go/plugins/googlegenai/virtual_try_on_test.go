@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/core/api"
+	"google.golang.org/genai"
 )
 
 // taggedPart builds a media part carrying the person/product metadata the
@@ -164,5 +166,19 @@ func TestToRecontextImageSourceErrors(t *testing.T) {
 				t.Errorf("error = %v, want it to mention %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestResolveVirtualTryOnIsVertexOnly checks that the Google AI backend refuses
+// to register the model, while the Vertex AI backend resolves it.
+func TestResolveVirtualTryOnIsVertexOnly(t *testing.T) {
+	t.Parallel()
+
+	googleAI, err := genai.NewClient(t.Context(), &genai.ClientConfig{APIKey: "test-key", Backend: genai.BackendGeminiAPI})
+	if err != nil {
+		t.Fatalf("genai.NewClient: %v", err)
+	}
+	if a := resolveAction(googleAI, catalog{provider: googleAIProvider}, api.ActionTypeModel, virtualTryOn001); a != nil {
+		t.Errorf("Google AI resolved %q, want nil", virtualTryOn001)
 	}
 }

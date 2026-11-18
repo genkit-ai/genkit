@@ -79,6 +79,11 @@ func resolveAction(client *genai.Client, c catalog, atype api.ActionType, id str
 		if mt == ModelTypeVeo {
 			return nil
 		}
+		// Virtual try-on is served only by Vertex AI; refuse it at
+		// registration rather than failing on the first call.
+		if mt == ModelTypeVirtualTryOn && client.ClientConfig().Backend != genai.BackendVertexAI {
+			return nil
+		}
 		return newModel(client, id, c.modelOptions(id))
 
 	// A background model is a bundle: registering it registers both its start

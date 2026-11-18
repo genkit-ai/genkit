@@ -64,8 +64,13 @@ func translateImagenCandidates(images []*genai.GeneratedImage) *ai.ModelResponse
 
 	if len(filtered) > 0 {
 		m.FinishMessage = strings.Join(filtered, "; ")
-		if len(msg.Content) == 0 {
-			m.FinishReason = ai.FinishReasonBlocked
+	}
+	// Nothing usable came back: report it rather than a successful empty
+	// message, whether or not the service said why.
+	if len(msg.Content) == 0 {
+		m.FinishReason = ai.FinishReasonBlocked
+		if m.FinishMessage == "" {
+			m.FinishMessage = "no images returned"
 		}
 	}
 

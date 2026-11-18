@@ -126,3 +126,18 @@ func TestTranslateImagenCandidatesPartiallyFiltered(t *testing.T) {
 		t.Errorf("finish message = %q, want it to report the filtered image", res.FinishMessage)
 	}
 }
+
+// TestTranslateImagenCandidatesEmptyIsBlocked checks that a response with no
+// usable image is reported as blocked even when no filter reason is given.
+func TestTranslateImagenCandidatesEmptyIsBlocked(t *testing.T) {
+	t.Parallel()
+
+	res := translateImagenCandidates([]*genai.GeneratedImage{{Image: &genai.Image{}}})
+
+	if res.FinishReason != ai.FinishReasonBlocked {
+		t.Errorf("finish reason = %s, want %s", res.FinishReason, ai.FinishReasonBlocked)
+	}
+	if res.FinishMessage == "" {
+		t.Error("finish message is empty")
+	}
+}
