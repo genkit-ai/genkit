@@ -88,20 +88,37 @@ type interactionUsage struct {
 	TotalOutputTokens      int              `json:"total_output_tokens,omitempty"`
 	OutputTokensByModality []modalityTokens `json:"output_tokens_by_modality,omitempty"`
 	TotalThoughtTokens     int              `json:"total_thought_tokens,omitempty"`
+	TotalToolUseTokens     int              `json:"total_tool_use_tokens,omitempty"`
 	TotalTokens            int              `json:"total_tokens,omitempty"`
+	GroundingToolCount     []groundingCount `json:"grounding_tool_count,omitempty"`
+}
+
+// groundingCount is how many times a grounding tool (e.g. google_search) ran.
+type groundingCount struct {
+	Type  string `json:"type,omitempty"`
+	Count int    `json:"count,omitempty"`
+}
+
+// interactionError is an error recorded on an interaction, populated when its
+// status is "failed" (for example a safety block or an unrecoverable tool-call
+// error).
+type interactionError struct {
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // geminiInteraction is the response from creating (or fetching) an interaction.
 type geminiInteraction struct {
-	Model                 string            `json:"model,omitempty"`
-	Agent                 string            `json:"agent,omitempty"`
-	EnvironmentID         string            `json:"environment_id,omitempty"`
-	ID                    string            `json:"id,omitempty"`
-	PreviousInteractionID string            `json:"previous_interaction_id,omitempty"`
-	Status                string            `json:"status,omitempty"`
-	Created               string            `json:"created,omitempty"`
-	Updated               string            `json:"updated,omitempty"`
-	Role                  string            `json:"role,omitempty"`
-	Steps                 []interactionStep `json:"steps,omitempty"`
-	Usage                 *interactionUsage `json:"usage,omitempty"`
+	Model                 string             `json:"model,omitempty"`
+	Agent                 string             `json:"agent,omitempty"`
+	EnvironmentID         string             `json:"environment_id,omitempty"`
+	ID                    string             `json:"id,omitempty"`
+	PreviousInteractionID string             `json:"previous_interaction_id,omitempty"`
+	Status                string             `json:"status,omitempty"`
+	Created               string             `json:"created,omitempty"`
+	Updated               string             `json:"updated,omitempty"`
+	Role                  string             `json:"role,omitempty"`
+	Steps                 []interactionStep  `json:"steps,omitempty"`
+	Usage                 *interactionUsage  `json:"usage,omitempty"`
+	Errors                []interactionError `json:"errors,omitempty"`
 }
