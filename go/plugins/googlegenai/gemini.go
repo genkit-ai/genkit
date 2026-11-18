@@ -169,6 +169,14 @@ func generate(
 		return nil, err
 	}
 
+	if isGemmaModelName(model) {
+		// Gemma does not accept previous thoughts; strip reasoning parts and any
+		// part carrying a thought signature before sending (mirrors the JS
+		// google-genai plugin). A turn that was entirely thoughts ends up with
+		// no parts and toGeminiContents skips it.
+		inline = stripGemmaThoughtsFromMessages(inline)
+	}
+
 	contents, err := toGeminiContents(inline)
 	if err != nil {
 		return nil, err
@@ -578,6 +586,57 @@ func isTTSModelName(name string) bool {
 func isImageModelName(name string) bool {
 	id := modelID(name)
 	return strings.HasPrefix(id, "gemini-") && strings.Contains(id, "-image")
+}
+
+// isGemmaModelName reports whether the model is a Gemma model.
+func isGemmaModelName(name string) bool {
+	return strings.HasPrefix(strings.TrimPrefix(name, "googleai/"), "gemma")
+}
+
+// gemmaConfigSchema returns the standard Gemini config schema with the
+// temperature property clamped to [0, 1], matching the JS GemmaConfigSchema
+// (Gemma's valid temperature range is narrower than Gemini's 0-2).
+func gemmaConfigSchema() map[string]any {
+	schema := configToMap(genai.GenerateContentConfig{})
+	if props, ok := schema["properties"].(map[string]any); ok {
+		if temp, ok := props["temperature"].(map[string]any); ok {
+			temp["minimum"] = 0.0
+			temp["maximum"] = 1.0
+		}
+	}
+	return schema
+}
+
+// stripGemmaThoughts removes reasoning parts, and any part carrying a thought
+// signature, from a message's content. Gemma rejects previous thoughts, so they
+// must not be sent back on follow-up turns (mirrors the JS google-genai plugin).
+func stripGemmaThoughts(parts []*ai.Part) []*ai.Part {
+	out := make([]*ai.Part, 0, len(parts))
+	for _, p := range parts {
+		if p.IsReasoning() {
+			continue
+		}
+		if p.Metadata != nil {
+			if _, ok := p.Metadata["signature"]; ok {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// stripGemmaThoughtsFromMessages returns msgs with [stripGemmaThoughts] applied
+// to each message. The input messages are left untouched, since the caller's
+// history is also what resp.History() returns.
+func stripGemmaThoughtsFromMessages(msgs []*ai.Message) []*ai.Message {
+	out := make([]*ai.Message, len(msgs))
+	for i, m := range msgs {
+		c := *m
+		c.Content = stripGemmaThoughts(m.Content)
+		out[i] = &c
+	}
+	return out
 }
 
 // translateCandidate translates from a genai.GenerateContentResponse to an ai.ModelResponse.
