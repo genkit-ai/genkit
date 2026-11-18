@@ -86,8 +86,7 @@ describe('MCP runtime tools', () => {
 
   it('restart_runtime restarts the process and waits for the new runtime to register', async () => {
     let runtimeEventListener:
-      | ((event: RuntimeEvent, rt: any) => void)
-      | undefined;
+      ((event: RuntimeEvent, rt: any) => void) | undefined;
     const processPromise = new Promise<void>(() => {});
     const mockRuntimeManager = {
       listRuntimes: vi.fn().mockReturnValue([{ id: 'old-runtime' }]),

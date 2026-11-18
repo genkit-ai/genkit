@@ -313,10 +313,7 @@ function toAnthropicContent(
           type: 'base64',
           data: b64Data,
           media_type: p.media.contentType as
-            | 'image/jpeg'
-            | 'image/png'
-            | 'image/gif'
-            | 'image/webp',
+            'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
         },
       };
     }
@@ -385,11 +382,7 @@ export function fromAnthropicResponse(
     message,
     finishReason: toGenkitFinishReason(
       response.stop_reason as
-        | 'end_turn'
-        | 'max_tokens'
-        | 'stop_sequence'
-        | 'tool_use'
-        | null
+        'end_turn' | 'max_tokens' | 'stop_sequence' | 'tool_use' | null
     ),
     custom: {
       id: response.id,

@@ -575,8 +575,8 @@ export class Genkit extends GenkitAI implements HasRegistry {
    */
   defineEvaluator<
     DataPoint extends typeof BaseDataPointSchema = typeof BaseDataPointSchema,
-    EvalDataPoint extends
-      typeof BaseEvalDataPointSchema = typeof BaseEvalDataPointSchema,
+    EvalDataPoint extends typeof BaseEvalDataPointSchema =
+      typeof BaseEvalDataPointSchema,
     EvaluatorOptions extends z.ZodTypeAny = z.ZodTypeAny,
   >(
     options: {

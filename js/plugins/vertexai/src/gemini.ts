@@ -291,8 +291,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
  * @deprecated
  */
 export type GeminiVersionString =
-  | keyof typeof SUPPORTED_GEMINI_MODELS
-  | (string & {});
+  keyof typeof SUPPORTED_GEMINI_MODELS | (string & {});
 
 /**
  * Returns a reference to a model that can be used in generate calls.

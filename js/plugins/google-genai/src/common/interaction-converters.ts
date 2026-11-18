@@ -1149,9 +1149,7 @@ export function toInteractionSteps(messages: MessageData[]): Step[] {
         }
 
         let parsedResult:
-          | Record<string, unknown>
-          | string
-          | (ImageContent | TextContent)[];
+          Record<string, unknown> | string | (ImageContent | TextContent)[];
         try {
           parsedResult = RecordUnknownOrStringOrArraySchema.parse(result ?? {});
         } catch {

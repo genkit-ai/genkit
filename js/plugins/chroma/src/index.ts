@@ -58,8 +58,7 @@ const ChromaRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
 export const ChromaIndexerOptionsSchema = z.null().optional();
 
 type ChromaClientParams =
-  | NativeChromaClientParams
-  | (() => Promise<NativeChromaClientParams>);
+  NativeChromaClientParams | (() => Promise<NativeChromaClientParams>);
 
 type ChromaPluginParams<
   EmbedderCustomOptions extends z.ZodTypeAny = z.ZodTypeAny,

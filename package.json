@@ -41,7 +41,7 @@
     "inquirer": "^8.2.6",
     "lint-staged": "^17.5.0",
     "only-allow": "^1.2.1",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.10",
     "prettier-plugin-css-order": "2.0.1",
     "prettier-plugin-organize-imports": "^3.2.4",
     "rimraf": "^6.0.1",

@@ -817,8 +817,7 @@ export const KNOWN_IMAGE_MODELS = {
 } as const;
 export type KnownImageModels = keyof typeof KNOWN_IMAGE_MODELS;
 export type ImageModelName =
-  | `gemini-${string}-image${string}`
-  | `gemini-nano-banana-${string}`;
+  `gemini-${string}-image${string}` | `gemini-nano-banana-${string}`;
 export function isImageModelName(value?: string): value is ImageModelName {
   return !!(
     value?.startsWith('gemini-') &&
