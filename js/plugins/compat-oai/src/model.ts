@@ -584,7 +584,7 @@ export function toOpenAIRequestBody(
   );
   const {
     temperature,
-    maxOutputTokens, // unused
+    maxOutputTokens: max_tokens,
     topK, // unused
     topP: top_p,
     frequencyPenalty: frequency_penalty,
@@ -609,6 +609,7 @@ export function toOpenAIRequestBody(
     messages,
     tools: tools.length > 0 ? tools : undefined,
     temperature,
+    max_tokens,
     top_p,
     stop,
     frequency_penalty,
