@@ -150,8 +150,11 @@ export interface ActionRunOptions<S, Init = any> {
 /**
  * Options (side channel) data to pass to the model for bi-directional actions.
  */
-export interface BidiActionRunOptions<S, I = any, Init = any>
-  extends ActionRunOptions<S, Init> {
+export interface BidiActionRunOptions<
+  S,
+  I = any,
+  Init = any,
+> extends ActionRunOptions<S, Init> {
   /**
    * Streaming input (optional).
    */
@@ -381,8 +384,7 @@ export type MiddlewareWithOptions<I = any, O = any, S = any> = (
  * Middleware function for actions.
  */
 export type Middleware<I = any, O = any, S = any> =
-  | SimpleMiddleware<I, O>
-  | MiddlewareWithOptions<I, O, S>;
+  SimpleMiddleware<I, O> | MiddlewareWithOptions<I, O, S>;
 
 /**
  * Creates an action with provided middleware.

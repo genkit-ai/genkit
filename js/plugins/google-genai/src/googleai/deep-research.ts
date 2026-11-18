@@ -407,13 +407,9 @@ export function defineModel(
         agent_config: {
           type: 'deep-research',
           thinking_summaries: thinkingSummaries?.toLowerCase() as
-            | 'auto'
-            | 'none'
-            | undefined,
+            'auto' | 'none' | undefined,
           visualization: visualization?.toLowerCase() as
-            | 'auto'
-            | 'off'
-            | undefined,
+            'auto' | 'off' | undefined,
           collaborative_planning: collaborativePlanning,
         },
         previous_interaction_id: previousInteractionId,
