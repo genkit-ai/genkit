@@ -91,12 +91,12 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 
 	// Lyria posts to a Vertex-only predict endpoint - the genai SDK has no
 	// music method - so it takes neither the generateContent path nor the
-	// media-download middleware. generateMusic reads the config off the
-	// request, which normalizeConfig has already converted to LyriaConfig.
+	// media-download middleware. The framework hands the action its config
+	// already decoded into LyriaConfig.
 	if mt == ModelTypeLyria {
 		return ai.NewModelAction(api.NewName(provider, id), &opts,
-			func(ctx context.Context, input *ai.ModelRequest, _ LyriaConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
-				return generateMusic(ctx, client, id, input, cb)
+			func(ctx context.Context, input *ai.ModelRequest, config LyriaConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				return generateMusic(ctx, client, id, input, &config, cb)
 			})
 	}
 

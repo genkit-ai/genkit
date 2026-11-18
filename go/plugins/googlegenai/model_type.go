@@ -32,6 +32,9 @@ func ClassifyModel(name string) ModelType {
 	case strings.HasPrefix(name, "imagen"), strings.HasPrefix(name, "image"):
 		return ModelTypeImagen
 	case strings.HasPrefix(name, "lyria"):
+		// Every lyria* name classifies as Lyria (and so gets the Lyria config
+		// schema), but only lyria-002 is served: Lyria 3 uses the Interactions
+		// API, which is not implemented. Callers gate on lyriaSupported.
 		return ModelTypeLyria
 	case strings.Contains(name, "embedding"):
 		// Covers: text-embedding-*, embedding-*, textembedding-*,

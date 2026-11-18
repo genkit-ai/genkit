@@ -45,6 +45,16 @@ var (
 		Output:     []string{ai.OutputFormatMedia},
 	}
 
+	// LyriaSupports describes model capabilities for music generation models
+	// (Lyria): text prompt in, audio media out.
+	LyriaSupports = ai.ModelSupports{
+		Media:      false,
+		Multiturn:  false,
+		Tools:      false,
+		SystemRole: false,
+		Output:     []string{ai.OutputFormatMedia},
+	}
+
 	// VeoSupports describes model capabilities for video generation models (Veo).
 	VeoSupports = ai.ModelSupports{
 		Media:       true,
@@ -98,7 +108,7 @@ var (
 	}
 
 	defaultLyriaOpts = ai.ModelOptions{
-		Supports:     &Media,
+		Supports:     &LyriaSupports,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: lyriaConfigSchema,
 	}
@@ -407,7 +417,7 @@ var (
 		lyria002: {
 			Label:    "Lyria 002",
 			Versions: []string{},
-			Supports: &Media,
+			Supports: &LyriaSupports,
 			Stage:    ai.ModelStageStable,
 		},
 	}
