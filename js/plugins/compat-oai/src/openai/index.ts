@@ -205,7 +205,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
         });
       } else if (isResponsesOnlyModelName(model.id)) {
         const modelRef =
-          SUPPORTED_RESPONSES_MODELS[model.id] ??
+          lookup(SUPPORTED_RESPONSES_MODELS, model.id) ??
           openAIResponsesModelRef({ name: model.id });
         return modelActionMetadata({
           name: modelRef.name,
