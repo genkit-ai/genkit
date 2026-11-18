@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/firebase/genkit/go/core/logger"
@@ -91,6 +92,9 @@ type ServerRef struct {
 type GenkitMCPClient struct {
 	options MCPClientOptions
 	server  *ServerRef
+	// promptClient lets registered dynamic prompts read the active connection
+	// without racing with Disconnect, Disable, or Restart.
+	promptClient atomic.Pointer[client.Client]
 }
 
 // NewGenkitMCPClient creates a new GenkitMCPClient with the given options.
@@ -117,6 +121,7 @@ func NewGenkitMCPClient(options MCPClientOptions) (*GenkitMCPClient, error) {
 
 // connect establishes a connection to an MCP server
 func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
+	c.promptClient.Store(nil)
 	// Close existing connection if any
 	if c.server != nil {
 		if err := c.server.Client.Close(); err != nil {
@@ -150,6 +155,9 @@ func (c *GenkitMCPClient) connect(options MCPClientOptions) error {
 		Client:    mcpClient,
 		Transport: transport,
 		Error:     serverError,
+	}
+	if !options.Disabled && serverError == "" {
+		c.promptClient.Store(mcpClient)
 	}
 
 	return nil
@@ -261,6 +269,7 @@ func (c *GenkitMCPClient) Restart(ctx context.Context) error {
 
 // Disconnect closes the connection to the MCP server
 func (c *GenkitMCPClient) Disconnect() error {
+	c.promptClient.Store(nil)
 	if c.server != nil {
 		err := c.server.Client.Close()
 		c.server = nil
