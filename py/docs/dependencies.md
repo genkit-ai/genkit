@@ -27,6 +27,11 @@ another library needs the newer major.
 the test it passes. CI fails if a listed dep has no cap, or if an unlisted dep
 has one. To add a cap, add the dep there with its reason.
 
+If a dep is a contract in only one package, add it to `SCOPED_CAPS` instead.
+That caps it in that package and leaves it floor-only everywhere else. For
+example, `genkit-google-genai` caps `httpx<1` because `http_client_factory`
+returns an `httpx.AsyncClient`, while core `genkit` uses httpx internally.
+
 To exclude one known-bad release, use `!=x.y.z` instead of a cap.
 
 ## Floors (lower bounds) in published packages

@@ -46,7 +46,7 @@ classifiers = [
 dependencies = [
   "genkit>=0.13.0,<2",
   "google-genai>=2.17.0,<3",
-  "httpx>=0.28.1",
+  "httpx>=0.28.1,<1", # public: http_client_factory returns httpx.AsyncClient
   "pydantic>=2.11,<3",
   "typing_extensions>=4.2",
 ]

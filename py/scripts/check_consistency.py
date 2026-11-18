@@ -74,6 +74,12 @@ REQUIRED_CAPS: dict[str, str] = {
     'pydantic': 'contract: users define schemas as BaseModel subclasses',
 }
 
+# Caps that apply to one package only: the dep is a contract in that package's
+# public API but an internal detail everywhere else, where it stays floor-only.
+SCOPED_CAPS: dict[tuple[str, str], str] = {
+    ('genkit-google-genai', 'httpx'): 'contract: http_client_factory returns an httpx.AsyncClient',
+}
+
 
 def _strip_toml_comment(line: str) -> str:
     """Strip trailing TOML # comments outside quoted strings."""
@@ -201,7 +207,7 @@ def _check_intra_repo_spec(
     return None
 
 
-def _check_third_party_spec(section: str, spec: str) -> str | None:
+def _check_third_party_spec(pkg_name: str, section: str, spec: str) -> str | None:
     """Validate a third-party dependency specifier against the bounds policy, returning an error if invalid."""
     requirement = spec.split(';', 1)[0].strip()
     if _INTRA_REPO_NAME_RE.match(requirement):
@@ -214,10 +220,11 @@ def _check_third_party_spec(section: str, spec: str) -> str | None:
     if not re.search(r'>=|==|~=', version_spec):
         return f"{section}: '{spec}' has no floor (add '>=<oldest supported>')"
     has_cap = bool(re.search(r'<|~=|==', version_spec))
-    if name in REQUIRED_CAPS and not has_cap:
-        return f"{section}: '{spec}' must cap the next major ({REQUIRED_CAPS[name]})"
-    if has_cap and name not in REQUIRED_CAPS:
-        return f"{section}: '{spec}' caps a dep not in REQUIRED_CAPS; drop the cap or add it with a reason"
+    reason = REQUIRED_CAPS.get(name) or SCOPED_CAPS.get((pkg_name, name))
+    if reason and not has_cap:
+        return f"{section}: '{spec}' must cap the next major ({reason})"
+    if has_cap and not reason:
+        return f"{section}: '{spec}' caps a dep not in REQUIRED_CAPS/SCOPED_CAPS; drop the cap or add it with a reason"
     return None
 
 
@@ -258,7 +265,7 @@ def check_package(pkg_path: str, core_version: str) -> tuple[str, str, list[str]
     for spec in dependencies:
         for err in (
             _check_intra_repo_spec(pkg_name, 'dependencies', spec, core_version),
-            _check_third_party_spec('dependencies', spec),
+            _check_third_party_spec(pkg_name, 'dependencies', spec),
         ):
             if err:
                 pkg_errors.append(err)
@@ -268,7 +275,7 @@ def check_package(pkg_path: str, core_version: str) -> tuple[str, str, list[str]
         for obj in raw_opt_deps[extra_name]:
             for err in (
                 _check_intra_repo_spec(pkg_name, section, str(obj), core_version),
-                _check_third_party_spec(section, str(obj)),
+                _check_third_party_spec(pkg_name, section, str(obj)),
             ):
                 if err:
                     pkg_errors.append(err)

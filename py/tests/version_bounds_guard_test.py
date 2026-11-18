@@ -324,6 +324,31 @@ def test_consistency_accepts_policy_compliant_third_party_deps(tmp_path: Path, d
     assert _workspace_errors(tmp_path) == []
 
 
+@pytest.mark.parametrize(
+    ('pkg', 'dep', 'expected_substring'),
+    [
+        ('genkit-google-genai', 'httpx>=0.28.1', 'must cap the next major'),
+        ('genkit-google-genai', 'httpx>=0.28.1,<1', None),
+        ('genkit-openai', 'httpx>=0.28.1,<1', 'caps a dep not in REQUIRED_CAPS'),
+        ('genkit-openai', 'httpx>=0.28.1', None),
+    ],
+)
+def test_consistency_scopes_package_caps_to_their_package(
+    tmp_path: Path,
+    pkg: str,
+    dep: str,
+    expected_substring: str | None,
+) -> None:
+    _make_workspace_fixture(tmp_path, '0.12.0', include_evaluators=False)
+    _write_pkg(tmp_path, pkg, '0.12.0', dependencies=['genkit>=0.12.0,<2', dep])
+
+    errors = _workspace_errors(tmp_path)
+    if expected_substring is None:
+        assert errors == []
+    else:
+        assert any(expected_substring in err for err in errors), errors
+
+
 def test_consistency_rejects_missing_py_typed_and_classifier(tmp_path: Path) -> None:
     _make_workspace_fixture(tmp_path, '0.12.0', include_evaluators=False)
     _write_pkg(
