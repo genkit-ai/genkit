@@ -24,7 +24,7 @@ import (
 
 // GetActiveResources fetches resources from the MCP server
 func (c *GenkitMCPClient) GetActiveResources(ctx context.Context) ([]ai.Resource, error) {
-	if !c.IsEnabled() || c.server == nil {
+	if !c.isConnected() {
 		return nil, fmt.Errorf("MCP client is disabled or not connected")
 	}
 
@@ -144,7 +144,8 @@ func (c *GenkitMCPClient) toGenkitResourceTemplate(mcpTemplate mcp.ResourceTempl
 
 // readMCPResource fetches content from MCP server for a given URI
 func (c *GenkitMCPClient) readMCPResource(ctx context.Context, uri string) (ai.ResourceOutput, error) {
-	if !c.IsEnabled() || c.server == nil {
+	remoteClient := c.clientForRequest()
+	if remoteClient == nil {
 		return ai.ResourceOutput{}, fmt.Errorf("MCP client is disabled or not connected")
 	}
 
@@ -157,7 +158,7 @@ func (c *GenkitMCPClient) readMCPResource(ctx context.Context, uri string) (ai.R
 	}
 
 	// Call the MCP server to read the resource
-	readResp, err := c.server.Client.ReadResource(ctx, readReq)
+	readResp, err := remoteClient.ReadResource(ctx, readReq)
 	if err != nil {
 		return ai.ResourceOutput{}, fmt.Errorf("failed to read resource from MCP server %s: %w", c.options.Name, err)
 	}
@@ -198,6 +199,11 @@ func (c *GenkitMCPClient) getResources(ctx context.Context) ([]mcp.Resource, err
 
 // fetchResourcesPage retrieves a single page of resources from the MCP server
 func (c *GenkitMCPClient) fetchResourcesPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.Resource, mcp.Cursor, error) {
+	remoteClient := c.clientForRequest()
+	if remoteClient == nil {
+		return nil, "", fmt.Errorf("MCP client is disabled or not connected")
+	}
+
 	// Build the list request - include cursor if we have one for pagination
 	listReq := mcp.ListResourcesRequest{}
 	listReq.PaginatedRequest = mcp.PaginatedRequest{
@@ -207,7 +213,7 @@ func (c *GenkitMCPClient) fetchResourcesPage(ctx context.Context, cursor mcp.Cur
 	}
 
 	// Ask the MCP server for resources
-	result, err := c.server.Client.ListResources(ctx, listReq)
+	result, err := remoteClient.ListResources(ctx, listReq)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to list resources from MCP server %s: %w", c.options.Name, err)
 	}
@@ -242,6 +248,11 @@ func (c *GenkitMCPClient) getResourceTemplates(ctx context.Context) ([]mcp.Resou
 
 // fetchResourceTemplatesPage retrieves a single page of resource templates from the MCP server
 func (c *GenkitMCPClient) fetchResourceTemplatesPage(ctx context.Context, cursor mcp.Cursor) ([]mcp.ResourceTemplate, mcp.Cursor, error) {
+	remoteClient := c.clientForRequest()
+	if remoteClient == nil {
+		return nil, "", fmt.Errorf("MCP client is disabled or not connected")
+	}
+
 	listReq := mcp.ListResourceTemplatesRequest{
 		PaginatedRequest: mcp.PaginatedRequest{
 			Params: mcp.PaginatedParams{
@@ -250,7 +261,7 @@ func (c *GenkitMCPClient) fetchResourceTemplatesPage(ctx context.Context, cursor
 		},
 	}
 
-	result, err := c.server.Client.ListResourceTemplates(ctx, listReq)
+	result, err := remoteClient.ListResourceTemplates(ctx, listReq)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to list resource templates from MCP server %s: %w", c.options.Name, err)
 	}
