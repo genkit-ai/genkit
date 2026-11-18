@@ -1,0 +1,11 @@
+---
+model: googleai/gemini-flash-latest
+input:
+  schema:
+    text: string
+tools:
+  - demo_text_encode
+---
+
+Use the demo_text_encode tool with method base64_encode to encode {{text}}.
+Reply with only the encoded text.

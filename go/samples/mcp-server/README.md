@@ -6,8 +6,9 @@ This demo shows how you can use Genkit's MCP package to expose an MCP Server tha
 - `server.go` - MCP server with 2 tools: `text_encode` and `hash_generate`
 - `run-server.sh` - Simple wrapper script for easy client setup
 - `client.go` - Client that uses tools with Gemini AI
+- `dotprompt-client/main.go` and `dotprompt-client/prompts/encode.prompt` - Client that uses an MCP tool from DotPrompt
 
-## Two Ways to Run
+## Three Ways to Run
 
 ### Option A: Expose an MCP Server that works with Desktop Clients
 
@@ -35,6 +36,20 @@ go run client.go
 ```
 
 The `GenkitMCPClient` instance automatically spawns the server and makes tools available to use with `client.GetActiveTools()`. You can use these tools with any `Generate` method or `ExecutablePrompt`.
+
+### Option C: Use MCP tools from a DotPrompt file
+
+From `go/samples/mcp-server`, run the [DotPrompt client](dotprompt-client/main.go).
+It starts the existing `server.go` over stdio and executes
+[`encode.prompt`](dotprompt-client/prompts/encode.prompt).
+
+```bash
+export GEMINI_API_KEY=your_key
+go run ./dotprompt-client
+```
+
+The client registers the server's `text_encode` tool as `demo_text_encode`,
+matching the prompt's `tools:` entry.
 
 Alternatively, you can use the `MCPManager` for managing multiple servers:
 
