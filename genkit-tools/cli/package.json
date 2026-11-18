@@ -36,22 +36,22 @@
   "dependencies": {
     "@genkit-ai/telemetry-server": "workspace:*",
     "@genkit-ai/tools-common": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "axios": "^1.20.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "axios": "^1.21.0",
     "colorette": "^2.0.20",
     "commander": "^14.0.3",
     "get-port": "^7.2.0",
     "open": "^11.0.4",
     "semver": "^7.8.5",
     "yaml": "^2.9.1",
-    "zod": "3.25.67"
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
     "@types/semver": "^7.8.0",
-    "bun-types": "^1.4.3",
+    "bun-types": "^1.4.4",
     "genversion": "^3.2.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }
