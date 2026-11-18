@@ -58,9 +58,27 @@ func messagesOf(p *ai.Part) ([]any, bool) {
 		return nil, false
 	}
 	for _, key := range []string{"messages", "envelopes"} {
-		if v, present := data[key]; present {
-			list, ok := v.([]any)
-			return list, ok
+		v := data[key]
+		if v == nil {
+			continue
+		}
+		switch list := v.(type) {
+		case []any:
+			if list == nil {
+				continue
+			}
+			return list, true
+		case []Envelope:
+			if list == nil {
+				continue
+			}
+			out := make([]any, len(list))
+			for i, e := range list {
+				out[i] = e
+			}
+			return out, true
+		default:
+			return nil, false
 		}
 	}
 	return nil, false
