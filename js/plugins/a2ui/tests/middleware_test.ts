@@ -332,6 +332,54 @@ describe('a2ui() middleware', () => {
     assert.match(joined, /Tokyo/);
   });
 
+  it('still sanitizes legacy inbound a2ui parts written with `envelopes`', async () => {
+    const mw = modelHook({});
+    let seen:
+      | { messages: Array<{ role: string; content: Array<{ text?: string }> }> }
+      | undefined;
+    await mw(
+      {
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { text: 'clicked:' },
+              {
+                data: {
+                  envelopes: [
+                    {
+                      action: {
+                        name: 'refresh',
+                        surfaceId: 's1',
+                        sourceComponentId: 'btn',
+                        timestamp: 't',
+                        context: { city: 'Tokyo' },
+                      },
+                    },
+                  ],
+                },
+                metadata: { mimeType: 'application/a2ui+json' },
+              },
+            ],
+          },
+        ],
+      },
+      undefined,
+      async (r: {
+        messages: Array<{ role: string; content: Array<{ text?: string }> }>;
+      }) => {
+        seen = r;
+        return { message: { role: 'model', content: [] } };
+      }
+    );
+    const userMsg = seen?.messages.find((m) => m.role === 'user');
+    assert.ok(userMsg);
+    assert.ok(!userMsg.content.some((p) => isA2uiPart(p)));
+    const joined = userMsg.content.map((p) => p.text ?? '').join(' ');
+    assert.match(joined, /UI action "refresh"/);
+    assert.match(joined, /Tokyo/);
+  });
+
   it('replays a prior assistant surface as a fenced a2ui block, not a sentinel', async () => {
     const mw = modelHook({});
     let seen: any;

@@ -78,11 +78,7 @@ export function isA2uiPart(part: unknown): part is A2uiPart {
 
 /** The envelopes an a2ui part carries, whichever key it was written with. */
 export function a2uiPartMessages(part: A2uiPart): A2uiEnvelope[] {
-  // Read like messagesOf: a part from the wire can carry `messages: undefined`
-  // (or null) next to a legacy `envelopes`, which an `in` check would pick.
-  const data: { messages?: A2uiEnvelope[]; envelopes?: A2uiEnvelope[] } =
-    part.data;
-  return data.messages ?? data.envelopes ?? [];
+  return (messagesOf(part?.data) as A2uiEnvelope[] | undefined) ?? [];
 }
 
 /**

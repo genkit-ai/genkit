@@ -16,8 +16,11 @@
 
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { actionToMessage } from '../src/client.js';
-import { isA2uiPart } from '../src/part.js';
+import {
+  a2uiPartMessages,
+  actionToMessage,
+  isA2uiPart,
+} from '../src/client.js';
 import { A2UI_MIME_TYPE, type A2uiClientAction } from '../src/types.js';
 
 function makeAction(
@@ -55,6 +58,7 @@ describe('actionToMessage', () => {
       (dataPart as { data: { messages: unknown[] } }).data,
       { messages: [{ action }] }
     );
+    assert.deepStrictEqual(a2uiPartMessages(dataPart), [{ action }]);
   });
 
   it('includes the context in the summary when present', () => {
