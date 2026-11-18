@@ -109,7 +109,8 @@ export async function startCLI(): Promise<void> {
 
       if (
         !process.argv.includes('--non-interactive') &&
-        commandName !== 'config'
+        commandName !== 'config' &&
+        commandName !== 'mcp'
       ) {
         await notifyAnalyticsIfFirstRun();
       }
@@ -141,12 +142,14 @@ export async function startCLI(): Promise<void> {
     });
 
   // Check for updates and show notification if available,
-  // unless --no-update-notification is set
+  // unless --no-update-notification is set or running the mcp stdio server
   // Run this synchronously to ensure it shows before command execution
   const hasNoUpdateNotification = process.argv.includes(
     '--no-update-notification'
   );
-  if (!hasNoUpdateNotification) {
+  const { operands } = program.parseOptions(process.argv.slice(2));
+  const isMcpCommand = operands[0] === 'mcp';
+  if (!hasNoUpdateNotification && !isMcpCommand) {
     try {
       await showUpdateNotification();
     } catch (e) {
