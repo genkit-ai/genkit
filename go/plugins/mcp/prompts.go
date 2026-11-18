@@ -85,16 +85,26 @@ func (c *GenkitMCPClient) convertMCPMessages(mcpMessages []mcp.PromptMessage) []
 	var messages []*ai.Message
 
 	for _, msg := range mcpMessages {
-		text := ExtractTextFromContent(msg.Content)
-		if text == "" {
+		var part *ai.Part
+		switch content := msg.Content.(type) {
+		case mcp.ImageContent:
+			part = ai.NewMediaPart(content.MIMEType, "data:"+content.MIMEType+";base64,"+content.Data)
+		case mcp.AudioContent:
+			part = ai.NewMediaPart(content.MIMEType, "data:"+content.MIMEType+";base64,"+content.Data)
+		default:
+			if text := ExtractTextFromContent(msg.Content); text != "" {
+				part = ai.NewTextPart(text)
+			}
+		}
+		if part == nil {
 			continue
 		}
 
 		switch msg.Role {
 		case mcp.RoleUser:
-			messages = append(messages, ai.NewUserTextMessage(text))
+			messages = append(messages, ai.NewUserMessage(part))
 		case mcp.RoleAssistant:
-			messages = append(messages, ai.NewModelTextMessage(text))
+			messages = append(messages, ai.NewModelMessage(part))
 		}
 	}
 
