@@ -97,9 +97,14 @@ only when:
 
    If a package won't move, a parent is holding it back. Run
    `uv tree --invert --package <name>` and upgrade the parent too.
-4. **Newest-version canary (weekly):** `python-deps-canary.yml` resolves every
+4. **Newest-version canary (daily):** `python-deps-canary.yml` resolves every
    dep to the newest version our bounds allow and runs the suite. That's what
-   a fresh `pip install` gets today. Fix failures before users report them.
+   a fresh `pip install` gets today. It isn't a PR gate, because its failures
+   come from upstream releases, not from the PR.
+   - On failure it opens one `py-deps-canary` issue, comments on it while the
+     canary stays red, and closes it on the next green run.
+   - Fix the code or exclude the bad release with `!=`. Cut a patch release if
+     users are affected.
 
 Avoid a blanket `uv lock --upgrade` in feature PRs. It moves every uncapped
 dependency at once, and reviewers can't tell which bump caused a failure.

@@ -18,12 +18,16 @@
 # newest version our bounds allow, not what uv.lock pins. Catches minor-version
 # breaks (pydantic 2.14, google-genai 2.34) and uncapped majors before users
 # report them. Floors are checked on every PR by the `lowest-deps` job in
-# python.yml. Scheduled and manual only. See py/docs/dependencies.md.
+# python.yml. Scheduled and manual only, never a PR gate: failures come from
+# upstream releases, not from the PR. See py/docs/dependencies.md.
+#
+# Scheduled runs on the default branch keep one open `py-deps-canary` issue:
+# opened on the first failure, commented on while it stays red, closed on green.
 name: Python Dependency Canary
 
 on:
   schedule:
-    - cron: "0 14 * * 1" # Mondays 14:00 UTC, after Dependabot's weekly run.
+    - cron: "0 14 * * *" # Daily 14:00 UTC.
   workflow_dispatch:
 
 permissions:
@@ -57,7 +61,8 @@ jobs:
       - name: Re-resolve to the newest allowed versions
         run: |
           uv lock --upgrade --directory py
-          git diff --stat py/uv.lock
+          # List every package whose version moved past uv.lock.
+          git diff -U1 py/uv.lock | grep -E '^[ +-](name|version) = ' || echo 'uv.lock already at newest'
 
       - name: Install dependencies
         env:
@@ -71,3 +76,56 @@ jobs:
         env:
           PY_VER: ${{ matrix.python-version }}
         run: uv run --no-sync --python "$PY_VER" --directory py pytest
+
+  # Runs once per workflow run, after the whole matrix, so two failing Python
+  # versions still produce one issue update.
+  report:
+    name: Update tracking issue
+    needs: canary
+    if: >-
+      ${{ !cancelled() && github.event_name == 'schedule' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open, comment on, or close the py-deps-canary issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RESULT: ${{ needs.canary.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          label=py-deps-canary
+          issue=$(gh issue list --label "$label" --state open --limit 1 --json number --jq '.[0].number // empty')
+
+          if [[ "$RESULT" == "success" ]]; then
+            if [[ -n "$issue" ]]; then
+              gh issue close "$issue" --comment "Green again on the newest allowed deps: $RUN_URL"
+            fi
+            exit 0
+          fi
+          if [[ "$RESULT" != "failure" ]]; then
+            exit 0
+          fi
+
+          if [[ -n "$issue" ]]; then
+            gh issue comment "$issue" --body "Still failing: $RUN_URL"
+            exit 0
+          fi
+
+          gh label create "$label" --force --color D93F0B \
+            --description "Python tests fail on the newest deps our bounds allow"
+          gh issue create --label "$label" \
+            --title "Python dependency canary: tests fail on newest allowed deps" \
+            --body-file - <<EOF
+          Tests fail when every Python dep resolves to the newest version our bounds allow. That's what a fresh \`pip install genkit-*\` gets today, so users may be hitting this.
+
+          Run: $RUN_URL
+
+          1. Open the run. The \`Re-resolve\` step lists every dep that moved past \`py/uv.lock\`.
+          2. Fix the code, or exclude the bad release with \`!=x.y.z\`. Cap it only if it passes the test in \`py/docs/dependencies.md\`.
+          3. Cut a patch release if users are affected.
+
+          This issue gets a comment on each failing daily run and closes itself on the next green run.
+          EOF
