@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { program } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
@@ -26,6 +25,7 @@ const {
   mockShowUpdateNotification,
   mockStartMcpServer,
   mockWarnIfLegacyGenkitContext,
+  mockLoadDocs,
 } = vi.hoisted(() => ({
   mockNotifyAnalyticsIfFirstRun: vi.fn(() => Promise.resolve()),
   mockRecord: vi.fn(() => Promise.resolve()),
@@ -35,6 +35,7 @@ const {
   mockShowUpdateNotification: vi.fn(() => Promise.resolve()),
   mockStartMcpServer: vi.fn(() => Promise.resolve()),
   mockWarnIfLegacyGenkitContext: vi.fn(() => Promise.resolve()),
+  mockLoadDocs: vi.fn(() => Promise.resolve({})),
 }));
 
 vi.mock('@genkit-ai/tools-common/utils', async (importOriginal) => {
@@ -68,27 +69,33 @@ vi.mock('../src/utils/legacy-context-warning.js', () => ({
   warnIfLegacyGenkitContext: mockWarnIfLegacyGenkitContext,
 }));
 
+vi.mock('../src/utils/docs.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/utils/docs.js')>();
+  return {
+    ...actual,
+    loadDocs: mockLoadDocs,
+  };
+});
+
 vi.mock('../src/commands/plugins.js', () => ({
   getPluginCommands: vi.fn(() => Promise.resolve([])),
   getPluginSubCommand: vi.fn(() => Promise.resolve(undefined)),
 }));
 
-import { startCLI } from '../src/cli.js';
-
 describe('startCLI', () => {
   const originalArgv = process.argv;
+  let startCLI: typeof import('../src/cli.js').startCLI;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     vi.clearAllMocks();
-    for (const cmd of program.commands) {
-      (cmd as { parent: unknown }).parent = null;
-    }
-    (program as unknown as { commands: unknown[] }).commands = [];
-    (program as unknown as { options: unknown[] }).options = [];
-    (
-      program as unknown as { _lifeCycleHooks: Record<string, unknown> }
-    )._lifeCycleHooks = {};
-    program.removeAllListeners();
+    const actualCommander =
+      await vi.importActual<typeof import('commander')>('commander');
+    vi.doMock('commander', () => ({
+      ...actualCommander,
+      program: new actualCommander.Command(),
+    }));
+    ({ startCLI } = await import('../src/cli.js'));
   });
 
   afterEach(() => {
@@ -114,5 +121,15 @@ describe('startCLI', () => {
     expect(mockNotifyAnalyticsIfFirstRun).not.toHaveBeenCalled();
     expect(mockShowUpdateNotification).not.toHaveBeenCalled();
     expect(mockStartMcpServer).toHaveBeenCalled();
+  });
+
+  it('runs first-run analytics prompt and update notification for standard commands', async () => {
+    process.argv = ['node', 'genkit', 'docs:list', 'js'];
+
+    await startCLI();
+
+    expect(mockNotifyAnalyticsIfFirstRun).toHaveBeenCalledOnce();
+    expect(mockShowUpdateNotification).toHaveBeenCalledOnce();
+    expect(mockLoadDocs).toHaveBeenCalledOnce();
   });
 });
