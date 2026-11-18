@@ -86,12 +86,17 @@ export interface RemoteAgentOptions {
 /**
  * Whether a request failed because nothing is mounted at its URL, as opposed
  * to the action there reporting an error: a 404 whose body is not a Genkit
- * error (an action's NOT_FOUND carries its `status` in a JSON body).
+ * error (an action's NOT_FOUND carries its `status` in a JSON body, at the top
+ * level or under `error`).
  */
 function isMissingRoute(e: unknown): boolean {
   if (!(e instanceof HttpStatusError) || e.httpStatus !== 404) return false;
   try {
-    return typeof JSON.parse(e.body)?.status !== 'string';
+    const body = JSON.parse(e.body);
+    return (
+      typeof body?.status !== 'string' &&
+      typeof body?.error?.status !== 'string'
+    );
   } catch {
     return true;
   }

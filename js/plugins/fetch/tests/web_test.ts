@@ -22,8 +22,12 @@ import {
   type GenerateResponseData,
   type Genkit,
 } from 'genkit';
-import { InMemoryStreamManager } from 'genkit/beta';
-import { runFlow, streamFlow } from 'genkit/beta/client';
+import {
+  InMemorySessionStore,
+  InMemoryStreamManager,
+  genkit as genkitBeta,
+} from 'genkit/beta';
+import { remoteAgent, runFlow, streamFlow } from 'genkit/beta/client';
 import type { ContextProvider, RequestData } from 'genkit/context';
 import type { GenerateResponseChunkData, ModelAction } from 'genkit/model';
 import getPort from 'get-port';
@@ -800,8 +804,14 @@ describe('fetchHandlers (path routing)', () => {
     });
     const response = await fetchHandlers([flow])(request);
     assert.strictEqual(response.status, 404);
-    const json = (await response.json()) as { status: string };
-    assert.strictEqual(json.status, 'NOT_FOUND');
+    assert.strictEqual(
+      response.headers.get('Content-Type'),
+      'text/plain; charset=utf-8'
+    );
+    assert.strictEqual(
+      await response.text(),
+      'No action matched the request path.'
+    );
   });
 
   it('should route to flow by name', async () => {
@@ -861,8 +871,65 @@ describe('fetchHandlers (path routing)', () => {
     });
     const response = await fetchHandlers([flow], '/api/genkit')(request);
     assert.strictEqual(response.status, 404);
-    const json = (await response.json()) as { status: string };
-    assert.strictEqual(json.status, 'NOT_FOUND');
+    assert.strictEqual(
+      response.headers.get('Content-Type'),
+      'text/plain; charset=utf-8'
+    );
+    assert.strictEqual(
+      await response.text(),
+      'No action matched the request path.'
+    );
+  });
+});
+
+describe('fetchHandlers with remoteAgent', () => {
+  let server: http.Server;
+  let port: number;
+
+  beforeEach(async () => {
+    const ai = genkitBeta({});
+    const agent = ai.defineCustomAgent(
+      { name: 'bgAgent', store: new InMemorySessionStore() },
+      async (sess) => {
+        await sess.run(async () => {});
+        return {
+          artifacts: [],
+          message: { role: 'model', content: [{ text: 'done' }] },
+        };
+      }
+    );
+    const handler = fetchHandlers(
+      [
+        { action: agent, options: { path: 'bgAgent' } },
+        {
+          action: agent.getSnapshotDataAction,
+          options: { path: 'bgAgent/getSnapshot' },
+        },
+      ],
+      '/api'
+    );
+    port = await getPort();
+    server = http.createServer(async (req, res) => {
+      const body = await getRequestBody(req);
+      const request = nodeRequestToWebRequest(
+        req,
+        `http://localhost:${port}`,
+        body
+      );
+      await writeWebResponseToNode(await handler(request), res);
+    });
+    await new Promise<void>((resolve) => server.listen(port, resolve));
+  });
+
+  afterEach(() => {
+    server.close();
+  });
+
+  it('falls back to getSnapshot when waitForSnapshot is not mounted', async () => {
+    const agent = remoteAgent({ url: `http://localhost:${port}/api/bgAgent` });
+    const task = await agent.chat().detach('go');
+    const snap = await task.wait({ intervalMs: 10 });
+    assert.strictEqual(snap.status, 'completed');
   });
 });
 
