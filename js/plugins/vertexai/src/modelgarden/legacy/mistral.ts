@@ -200,7 +200,7 @@ export function toMistralRequest(
         return toolResponses.map((toolResponse) => ({
           role: 'tool',
           name: toolResponse.name,
-          content: JSON.stringify(toolResponse.output),
+          content: JSON.stringify(toolResponse.output ?? null),
           toolCallId: toolResponse.ref,
         }));
       }

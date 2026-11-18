@@ -547,6 +547,34 @@ describe('parallel tool calls', () => {
     });
   });
 
+  it('should send null content when a tool returns nothing', () => {
+    const result = toMistralRequest(MODEL_ID, {
+      messages: [
+        user,
+        { role: 'model' as const, content: model.content.slice(1, 2) },
+        {
+          role: 'tool' as const,
+          content: [
+            {
+              toolResponse: {
+                ref: 'call_A',
+                name: 'getWeather',
+                output: undefined,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    assert.deepStrictEqual(result.messages[2], {
+      role: 'tool',
+      name: 'getWeather',
+      content: 'null',
+      toolCallId: 'call_A',
+    });
+  });
+
   it('should throw when one of several tool calls has no response', () => {
     assert.throws(
       () =>
