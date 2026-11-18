@@ -122,6 +122,77 @@ describe('embed', () => {
       });
     });
   });
+
+  describe('embedMany', () => {
+    let ai: Genkit;
+    let embedder: EmbedderAction;
+
+    beforeEach(() => {
+      ai = genkit({});
+      embedder = defineTestEmbedder(ai);
+    });
+
+    it('works without options', async () => {
+      const response = await ai.embedMany({
+        embedder: 'echoEmbedder',
+        content: ['hi', 'bye'],
+      });
+      assert.deepStrictEqual(response, [{ embedding: [1, 2, 3, 4] }]);
+      assert.deepStrictEqual((embedder as any).lastRequest, [
+        [Document.fromText('hi'), Document.fromText('bye')],
+        { version: undefined },
+      ]);
+    });
+
+    it('accepts empty options', async () => {
+      await ai.embedMany({
+        embedder,
+        content: ['hi'],
+        options: {},
+      });
+      assert.deepStrictEqual((embedder as any).lastRequest[1], {
+        version: undefined,
+      });
+    });
+
+    it('resolves a ref without info and uses its config', async () => {
+      await ai.embedMany({
+        embedder: embedderRef({
+          name: 'echoEmbedder',
+          version: 'v1',
+          config: { dimensions: 8 },
+        }),
+        content: ['hi'],
+      });
+      assert.deepStrictEqual((embedder as any).lastRequest[1], {
+        version: 'v1',
+        dimensions: 8,
+      });
+    });
+
+    it('lets call options win over ref config', async () => {
+      await ai.embedMany({
+        embedder: embedderRef({
+          name: 'echoEmbedder',
+          config: { dimensions: 8, temperature: 1 },
+        }),
+        content: ['hi'],
+        options: { dimensions: 16 },
+      });
+      assert.deepStrictEqual((embedder as any).lastRequest[1], {
+        version: undefined,
+        dimensions: 16,
+        temperature: 1,
+      });
+    });
+
+    it('throws for an unknown embedder', async () => {
+      await assert.rejects(
+        ai.embedMany({ embedder: 'nope', content: ['hi'] }),
+        /Unable to utilize the provided embedder/
+      );
+    });
+  });
 });
 
 function defineTestEmbedder(ai: Genkit) {

@@ -233,7 +233,7 @@ async function resolveEmbedder<
   CustomOptions extends z.ZodTypeAny = z.ZodTypeAny,
 >(
   registry: Registry,
-  params: EmbedderParams<CustomOptions>
+  params: Pick<EmbedderParams<CustomOptions>, 'embedder'>
 ): Promise<ResolvedEmbedder<CustomOptions>> {
   if (typeof params.embedder === 'string') {
     return {
@@ -274,24 +274,19 @@ export async function embedMany<
     options?: z.infer<ConfigSchema>;
   }
 ): Promise<EmbeddingBatch> {
-  let embedder: EmbedderAction<ConfigSchema>;
-  if (typeof params.embedder === 'string') {
-    embedder = await registry.lookupAction(`/embedder/${params.embedder}`);
-  } else if (Object.hasOwnProperty.call(params.embedder, 'info')) {
-    embedder = await registry.lookupAction(
-      `/embedder/${(params.embedder as EmbedderReference).name}`
-    );
-  } else {
-    embedder = params.embedder as EmbedderAction<ConfigSchema>;
-  }
-  if (!embedder) {
+  const embedder = await resolveEmbedder(registry, params);
+  if (!embedder.embedderAction) {
     throw new Error('Unable to utilize the provided embedder');
   }
-  const response = await embedder({
+  const response = await embedder.embedderAction({
     input: params.content.map((i) =>
       typeof i === 'string' ? Document.fromText(i, params.metadata) : i
     ),
-    options: params.options,
+    options: {
+      version: embedder.version,
+      ...embedder.config,
+      ...params.options,
+    },
   });
   return response.embeddings;
 }
