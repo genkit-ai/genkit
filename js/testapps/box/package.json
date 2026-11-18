@@ -9,7 +9,8 @@
     "build": "pnpm build:clean && pnpm compile",
     "build:clean": "rimraf ./lib",
     "build:watch": "tsc --watch",
-    "genkit:dev": "genkit start -- tsx --watch src/index.ts"
+    "genkit:dev": "genkit start -- tsx --watch src/index.ts",
+    "genkit:dev:podman": "pnpm compile && genkit start -- tsx src/index-podman.ts"
   },
   "keywords": [],
   "author": "",
