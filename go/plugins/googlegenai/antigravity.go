@@ -516,7 +516,7 @@ func createInteraction(ctx context.Context, client *genai.Client, cfg *Antigravi
 
 	var interaction geminiInteraction
 	if err := json.Unmarshal(data, &interaction); err != nil {
-		return nil, status.Errorf(status.ErrInternal, "failed to decode interaction response from %s (%v): %s", url, err, excerpt(data))
+		return nil, status.Errorf(status.ErrInternal, "failed to decode interaction response from %s (%w): %s", url, err, excerpt(data))
 	}
 	return &interaction, nil
 }
