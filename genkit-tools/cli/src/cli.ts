@@ -147,8 +147,8 @@ export async function startCLI(): Promise<void> {
   const hasNoUpdateNotification = process.argv.includes(
     '--no-update-notification'
   );
-  const isMcpCommand =
-    process.argv.slice(2).find((arg) => !arg.startsWith('-')) === 'mcp';
+  const { operands } = program.parseOptions(process.argv.slice(2));
+  const isMcpCommand = operands[0] === 'mcp';
   if (!hasNoUpdateNotification && !isMcpCommand) {
     try {
       await showUpdateNotification();
