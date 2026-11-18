@@ -79,7 +79,7 @@ export function toOpenAIResponsesContent(
   part: Part,
   visualDetailLevel: VisualDetailLevel = 'auto'
 ): ResponseInputContent {
-  if (part.text) {
+  if (part.text !== undefined) {
     return { type: 'input_text', text: part.text };
   }
   if (part.media) {
@@ -136,16 +136,21 @@ export function toOpenAIResponsesContent(
  * @throws GenkitError if a part cannot be represented in assistant history.
  */
 function fromModelTurn(parts: Part[]): string {
-  let text = '';
+  const chunks: string[] = [];
   for (const part of parts) {
     if (part.text !== undefined) {
-      text += part.text;
+      chunks.push(part.text);
     } else if (part.data !== undefined) {
-      text += JSON.stringify(part.data);
+      chunks.push(JSON.stringify(part.data));
     } else if (part.reasoning !== undefined) {
       // Reasoning is replayed through the encrypted round-trip, which this
       // slice does not implement; the plain summary adds nothing on its own.
       continue;
+    } else if (part.media !== undefined) {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Media in a model turn cannot be replayed on the OpenAI Responses API transport (assistant messages carry text only). Remove the generated media from the history before sending it.`,
+      });
     } else {
       throw new GenkitError({
         status: 'INVALID_ARGUMENT',
@@ -153,14 +158,18 @@ function fromModelTurn(parts: Part[]): string {
       });
     }
   }
-  return text;
+  // Newline-joined so adjacent parts (e.g. text then structured data) do not
+  // fuse into one unreadable token run.
+  return chunks.join('\n');
 }
 
 /**
  * Converts Genkit messages into Responses API `input` items.
  *
- * System messages are hoisted into `instructions`, which is where the Responses
- * API takes them; the remaining messages keep their order in `input`.
+ * System messages before the first conversational message are hoisted into
+ * `instructions`, which is where the Responses API takes them. Later system
+ * messages stay in position as `developer` input items. Non-text parts of a
+ * system message are rejected. The remaining messages keep their order.
  * @param messages The Genkit messages to convert.
  * @param visualDetailLevel The visual detail level to use for image parts.
  * @returns The `input` items and, when any system message was present, the
@@ -175,9 +184,25 @@ export function toOpenAIResponsesInput(
   for (const message of messages) {
     const msg = new Message(message);
     switch (message.role) {
-      case 'system':
-        if (msg.text) instructions.push(msg.text);
+      case 'system': {
+        const nonText = msg.content.find((p) => p.text === undefined);
+        if (nonText) {
+          throw new GenkitError({
+            status: 'INVALID_ARGUMENT',
+            message: `System messages may only contain text parts on the OpenAI Responses API transport; got ${JSON.stringify(nonText)}.`,
+          });
+        }
+        if (!msg.text) break;
+        if (input.length === 0) {
+          instructions.push(msg.text);
+        } else {
+          // Hoisting a mid-conversation system message into `instructions`
+          // would move it to the front and change its meaning, so it stays in
+          // place as a `developer` input item (the SDK's input type allows it).
+          input.push({ role: 'developer', content: msg.text });
+        }
         break;
+      }
       case 'user':
         input.push({
           role: 'user',
@@ -252,13 +277,20 @@ export function toOpenAIResponsesRequestBody(
     stream,
     background,
     apiKey,
+    timeout: _timeout, // a request option for the SDK call, not a body field
     ...restOfConfig
   } = request.config ?? {};
 
-  if (transport !== undefined && transport !== 'responses') {
+  // Policy shared with the Chat Completions builder in model.ts: a model
+  // accepts its own transport and 'auto'; the other transport is an error.
+  if (
+    transport !== undefined &&
+    transport !== 'responses' &&
+    transport !== 'auto'
+  ) {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
-      message: `Unsupported transport '${transport}'; this model is served over the Responses API.`,
+      message: `Unsupported transport '${transport}' for ${modelName}; this model is served over the Responses API ('responses' or 'auto').`,
     });
   }
 
@@ -293,7 +325,10 @@ export function toOpenAIResponsesRequestBody(
     temperature,
     top_p,
     // The Responses API retains requests and responses server-side by default;
-    // pinning it off matches the Chat Completions retention posture.
+    // pinning it off matches the Chat Completions retention posture. A
+    // `previous_response_id` passthrough still works against an earlier stored
+    // response, but this response is then not itself chainable: pass
+    // `store: true` to keep a chain going.
     store: store ?? false,
     ...restOfConfig,
   };
@@ -468,6 +503,8 @@ export function openAIResponsesModelRunner(
       abortSignal?: AbortSignal;
     }
   ): Promise<GenerateResponseData> => {
+    const timeout = (request.config as { timeout?: unknown } | undefined)
+      ?.timeout;
     const client = maybeCreateRequestScopedOpenAIClient(
       pluginOptions,
       request,
@@ -476,15 +513,20 @@ export function openAIResponsesModelRunner(
     try {
       const response = await client.responses.create(
         toOpenAIResponsesRequestBody(name, request),
-        { signal: options?.abortSignal }
+        // The SDK's default timeout is 10 minutes and this runner is
+        // synchronous, so long `pro` runs can need a larger `timeout`.
+        {
+          signal: options?.abortSignal,
+          ...(typeof timeout === 'number' ? { timeout } : {}),
+        }
       );
       const converted = fromOpenAIResponse(
         response,
         request.output?.format === 'json'
       );
-      // The Responses event protocol is not mapped yet, so a streaming caller
-      // gets the completed response delivered as a single chunk rather than
-      // nothing at all.
+      // INTERIM (slice 2 replaces this): the Responses event protocol is not
+      // mapped yet, so a streaming caller gets the completed response
+      // delivered as a single chunk rather than nothing at all.
       if (options?.streamingRequested && options.sendChunk) {
         options.sendChunk({
           index: 0,

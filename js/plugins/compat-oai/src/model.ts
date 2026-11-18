@@ -547,7 +547,9 @@ export function toOpenAIRequestBody(
 
   // Silently ignoring the request would hand back a Chat Completions response
   // to a caller who asked for something else. This builder is shared by every
-  // OpenAI-compatible provider, so the message stays provider-neutral.
+  // OpenAI-compatible provider, so the message stays provider-neutral. Policy
+  // (mirrored in responses.ts): own transport and 'auto' are accepted and
+  // stripped; the other transport is an error.
   if (transport === 'responses') {
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',

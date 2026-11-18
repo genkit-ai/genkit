@@ -75,15 +75,37 @@ export function isResponsesOnlyModelName(
   );
 }
 
-/** OpenAI Responses API custom configuration schema. */
+/**
+ * OpenAI Responses API custom configuration schema.
+ *
+ * - `store` defaults to `false` here (the API itself defaults to retaining
+ *   responses). A raw `previous_response_id` passthrough can still chain off an
+ *   earlier stored response, but a response created with `store: false` cannot
+ *   itself be chained from later; pass `store: true` to keep a chain going.
+ * - `timeout` (ms) is forwarded to the SDK request. This runner is synchronous
+ *   (non-background), so long `pro` runs may need more than the SDK's default.
+ * - `temperature` / `topP` are passed through unchanged. Reasoning and `pro`
+ *   models are widely reported to reject non-default values with a 400, but
+ *   OpenAI's docs do not state it per model, so they are not stripped here.
+ * - Raw `tools` / `tool_choice` pass through, but a function tool call in the
+ *   output throws UNIMPLEMENTED until tool calling lands.
+ */
 export const OpenAIResponsesConfigSchema = ResponsesCommonConfigSchema.extend({
   store: z.boolean().optional(),
+  timeout: z.number().int().positive().optional(),
   transport: z.enum(['responses']).optional(),
 }).passthrough();
 
+// Per OpenAI's model pages, all of these are served only on /v1/responses and
+// accept image input and structured outputs (gpt-5.2-pro's structured-outputs
+// support is not stated on its page; json is kept). Several older entries
+// (o1-pro, the codex line) are listed there as deprecated or shut down; they
+// stay so the names keep routing to the right transport.
 const RESPONSES_MODEL_INFO: ModelInfo = {
   supports: {
     multiturn: true,
+    // The models support function calling; slice 2 flips this once the runner
+    // maps tool calls.
     tools: false,
     media: true,
     systemRole: true,

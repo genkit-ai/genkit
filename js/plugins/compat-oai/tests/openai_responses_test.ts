@@ -171,7 +171,7 @@ describe('toOpenAIResponsesRequestBody', () => {
     expect(body.input).toStrictEqual([
       {
         role: 'assistant',
-        content: 'here you go: {"colour":"blue"} (done)',
+        content: 'here you go: \n{"colour":"blue"}\n (done)',
       },
     ]);
   });
@@ -202,7 +202,83 @@ describe('toOpenAIResponsesRequestBody', () => {
           },
         ],
       })
-    ).toThrow(/Unsupported genkit part fields/);
+    ).toThrow(/Media in a model turn/);
+  });
+
+  test('rejects non-text parts in a system message', () => {
+    expect(() =>
+      toOpenAIResponsesRequestBody('gpt-5-pro', {
+        messages: [
+          {
+            role: 'system',
+            content: [{ media: { url: 'https://x/y.png' } }],
+          },
+        ],
+      })
+    ).toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
+  });
+
+  test('keeps a mid-conversation system message in place as a developer item', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [
+        { role: 'system', content: [{ text: 'first' }] },
+        { role: 'user', content: [{ text: 'hi' }] },
+        { role: 'system', content: [{ text: 'later' }] },
+        { role: 'user', content: [{ text: 'bye' }] },
+      ],
+    });
+    expect(body.instructions).toBe('first');
+    expect(body.input).toStrictEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      { role: 'developer', content: 'later' },
+      { role: 'user', content: [{ type: 'input_text', text: 'bye' }] },
+    ]);
+  });
+
+  test('keeps empty-string text parts', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [{ role: 'user', content: [{ text: '' }] }],
+    });
+    expect(body.input).toStrictEqual([
+      { role: 'user', content: [{ type: 'input_text', text: '' }] },
+    ]);
+  });
+
+  test('rejects media in a model turn', () => {
+    expect(() =>
+      toOpenAIResponsesRequestBody('gpt-5-pro', {
+        messages: [
+          {
+            role: 'model',
+            content: [{ media: { url: 'https://x/y.png' } }],
+          },
+        ],
+      })
+    ).toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
+  });
+
+  test('accepts transport auto and never serializes it', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      config: { transport: 'auto' },
+    });
+    expect(body).not.toHaveProperty('transport');
+  });
+
+  test('passes previous_response_id, tool_choice and max_output_tokens through', () => {
+    const body = toOpenAIResponsesRequestBody('gpt-5-pro', {
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      config: {
+        previous_response_id: 'resp_0',
+        tool_choice: 'none',
+        maxOutputTokens: 77,
+        store: true,
+      },
+    });
+    expect(body.previous_response_id).toBe('resp_0');
+    expect(body.tool_choice).toBe('none');
+    expect(body.max_output_tokens).toBe(77);
+    expect(body.store).toBe(true);
   });
 
   test('joins multiple system messages and omits instructions when there are none', () => {
@@ -547,6 +623,31 @@ describe('fromOpenAIResponse', () => {
     ]);
   });
 
+  test('refusal in json mode stays text and blocks', () => {
+    const converted = fromOpenAIResponse(
+      fakeResponse({
+        output: [
+          {
+            id: 'msg_1',
+            type: 'message',
+            role: 'assistant',
+            status: 'completed',
+            content: [{ type: 'refusal', refusal: 'no' }],
+          },
+        ],
+      }),
+      true
+    );
+    expect(converted.finishReason).toBe('blocked');
+    expect(converted.message?.content).toStrictEqual([{ text: 'no' }]);
+  });
+
+  test('tolerates a response with undefined usage', () => {
+    const converted = fromOpenAIResponse(fakeResponse({ usage: undefined }));
+    expect(converted.usage?.totalTokens).toBeUndefined();
+    expect(converted.finishReason).toBe('stop');
+  });
+
   test('maps incomplete_details.reason to a finish reason', () => {
     expect(
       fromOpenAIResponse(
@@ -704,6 +805,56 @@ describe('openAIResponsesModelRunner', () => {
       store: false,
     });
     expect(response.message?.content).toStrictEqual([{ text: 'hi there' }]);
+  });
+
+  test('uses a request-scoped client when config.apiKey is set', async () => {
+    server.setNextResponse({ body: textResponse('ok') });
+    const client = new OpenAI({
+      apiKey: 'default-key',
+      baseURL: server.baseUrl,
+    });
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+
+    await runner({
+      messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+      config: { apiKey: 'scoped-key' },
+    });
+
+    const request = server.requests[server.requests.length - 1];
+    expect(request.body).not.toHaveProperty('apiKey');
+    expect(JSON.stringify(request.headers)).toContain('scoped-key');
+    expect(JSON.stringify(request.headers)).not.toContain('default-key');
+  });
+
+  test('forwards abortSignal and timeout to the SDK', async () => {
+    const create = jest.fn(async () => textResponse('ok'));
+    const client = { responses: { create } } as unknown as OpenAI;
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+    const controller = new AbortController();
+
+    await runner(
+      {
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { timeout: 1234 },
+      },
+      { abortSignal: controller.signal }
+    );
+
+    const [body, options] = create.mock.calls[0] as unknown as [any, any];
+    expect(options.signal).toBe(controller.signal);
+    expect(options.timeout).toBe(1234);
+    expect(body).not.toHaveProperty('timeout');
+  });
+
+  test('rejects a chat-completions transport value', async () => {
+    const client = new OpenAI({ apiKey: 'key', baseURL: server.baseUrl });
+    const runner = openAIResponsesModelRunner('gpt-5-pro', client);
+    await expect(
+      runner({
+        messages: [{ role: 'user', content: [{ text: 'hi' }] }],
+        config: { transport: 'chat-completions' },
+      })
+    ).rejects.toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
   });
 
   test('delivers the completed response as a single chunk when streaming', async () => {
@@ -916,7 +1067,7 @@ describe('chat completions transport handling', () => {
     const runner = openAIModelRunner('gpt-4o', client);
     const request: GenerateRequest = {
       messages: [{ role: 'user', content: [{ text: 'hi' }] }],
-      config: { transport: 'chat_completions' },
+      config: { transport: 'auto' },
     };
 
     await runner(request);

@@ -20,14 +20,18 @@ import { openAIResponsesModelRunner } from '../src/responses';
 
 /**
  * Smoke tests against the real Responses API. They only run when
- * `OPENAI_API_KEY` is set, so the suite stays green without credentials.
+ * `OPENAI_API_KEY` and `OPENAI_LIVE_TESTS=1` are set, so the suite stays green without credentials.
  *
  * `gpt-5-nano` stands in for the registered Responses-only models: it is served
  * over the same endpoint with the same request and response shapes, at a
  * fraction of the latency and cost of `gpt-5-pro`.
  */
 const LIVE_MODEL = 'gpt-5-nano';
-const maybeDescribe = process.env.OPENAI_API_KEY ? describe : describe.skip;
+// Also requires OPENAI_LIVE_TESTS=1 so CI with a key present does not spend money.
+const maybeDescribe =
+  process.env.OPENAI_API_KEY && process.env.OPENAI_LIVE_TESTS === '1'
+    ? describe
+    : describe.skip;
 
 maybeDescribe('openAI responses live', () => {
   const runner = () =>
