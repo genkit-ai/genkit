@@ -400,7 +400,11 @@ describe('mistral plugin', () => {
       },
     };
 
+    /** `/v1/models`, which the resolver lists to find a model's info. */
+    const NO_MODELS = { body: { object: 'list', data: [] } };
+
     it('reports an unknown model as NOT_FOUND', async () => {
+      server.setNextResponse(NO_MODELS);
       server.setNextResponse(INVALID_MODEL);
       await expect(
         ai.generate({ model: 'mistral/no-such-model-xyz', prompt: 'hi' })
@@ -411,6 +415,7 @@ describe('mistral plugin', () => {
     });
 
     it('reports an unknown model as NOT_FOUND when streaming', async () => {
+      server.setNextResponse(NO_MODELS);
       server.setNextResponse(INVALID_MODEL);
       const { stream, response } = ai.generateStream({
         model: 'mistral/no-such-model-xyz',
@@ -1516,13 +1521,19 @@ describe('mistral plugin', () => {
   });
 
   it('resolves models that are not in the known list', async () => {
+    // `/v1/models` doesn't list the model, so it gets the text-only default.
+    server.setNextResponse({ body: { object: 'list', data: [] } });
     await ai.generate({
       model: 'mistral/ministral-14b-2512',
       prompt: 'hi',
       config: { maxOutputTokens: 10 },
     });
 
-    const body = server.requests[0].body;
+    expect(server.requests[0]).toMatchObject({
+      method: 'GET',
+      url: '/v1/models',
+    });
+    const body = server.requests[1].body;
     expect(body.model).toBe('ministral-14b-2512');
     expect(body.max_tokens).toBe(10);
     const action = await ai.registry.lookupAction(
@@ -1651,6 +1662,141 @@ describe('mistral plugin', () => {
         toolChoice: true,
         media: true,
       });
+    });
+  });
+
+  describe('resolving models outside the known list', () => {
+    const MODELS_RESPONSE = {
+      object: 'list',
+      data: [
+        {
+          id: 'devstral-medium-latest',
+          object: 'model',
+          capabilities: {
+            completion_chat: true,
+            function_calling: true,
+            vision: false,
+          },
+        },
+        {
+          id: 'pixtral-large-latest',
+          object: 'model',
+          capabilities: {
+            completion_chat: true,
+            function_calling: true,
+            vision: true,
+          },
+        },
+      ],
+    };
+    const TOOLS_SUPPORTS = {
+      ...UNKNOWN_MODEL_SUPPORTS,
+      tools: true,
+      toolChoice: true,
+    };
+
+    function modelRequests() {
+      return server.requests.filter((r) => r.url === '/v1/models');
+    }
+
+    it('takes capabilities from /v1/models without listing first', async () => {
+      server.setNextResponse({ body: MODELS_RESPONSE });
+      const getWeather = ai.defineTool(
+        {
+          name: 'getWeather',
+          description: 'Gets the weather.',
+          inputSchema: z.object({ city: z.string() }),
+        },
+        async () => 'sunny'
+      );
+
+      // Without the listed capabilities, Genkit refuses tools for this model.
+      await ai.generate({
+        model: mistral.model('devstral-medium-latest'),
+        prompt: 'weather in Paris?',
+        tools: [getWeather],
+      });
+
+      const action = await ai.registry.lookupAction(
+        '/model/mistral/devstral-medium-latest'
+      );
+      expect(action?.__action.metadata?.model.supports).toEqual(TOOLS_SUPPORTS);
+      const chat = server.requests.find((r) => r.body.messages);
+      expect(chat?.body.tools).toHaveLength(1);
+    });
+
+    it('lists /v1/models once for all resolved models and the Dev UI', async () => {
+      server.setNextResponse({ body: MODELS_RESPONSE });
+
+      await ai.registry.lookupAction('/model/mistral/devstral-medium-latest');
+      await ai.registry.lookupAction('/model/mistral/pixtral-large-latest');
+      await ai.registry.lookupAction('/model/mistral/not-listed-model');
+      const listed = await ai.registry.listResolvableActions();
+
+      expect(modelRequests()).toHaveLength(1);
+      const pixtral = await ai.registry.lookupAction(
+        '/model/mistral/pixtral-large-latest'
+      );
+      expect(pixtral?.__action.metadata?.model.supports).toEqual({
+        ...TOOLS_SUPPORTS,
+        media: true,
+      });
+      const notListed = await ai.registry.lookupAction(
+        '/model/mistral/not-listed-model'
+      );
+      expect(notListed?.__action.metadata?.model.supports).toEqual(
+        UNKNOWN_MODEL_SUPPORTS
+      );
+      expect(
+        listed['/model/mistral/devstral-medium-latest']?.metadata?.model
+          ?.supports
+      ).toEqual(TOOLS_SUPPORTS);
+    });
+
+    it('falls back to the text-only default when /v1/models fails, and retries later', async () => {
+      // No SDK retries, so the 500 isn't retried within the first lookup.
+      const noRetryAi = genkit({
+        plugins: [mistral({ ...fakeServerOptions(server), maxRetries: 0 })],
+      });
+      server.setNextResponse({
+        statusCode: 500,
+        body: { object: 'error', message: 'boom', type: 'internal' },
+      });
+      server.setNextResponse({ body: MODELS_RESPONSE });
+
+      const first = await noRetryAi.registry.lookupAction(
+        '/model/mistral/devstral-medium-latest'
+      );
+      const second = await noRetryAi.registry.lookupAction(
+        '/model/mistral/pixtral-large-latest'
+      );
+
+      expect(first?.__action.metadata?.model.supports).toEqual(
+        UNKNOWN_MODEL_SUPPORTS
+      );
+      expect(second?.__action.metadata?.model.supports?.media).toBe(true);
+      expect(modelRequests()).toHaveLength(2);
+    });
+
+    it('does not list /v1/models with apiKey: false', async () => {
+      const saved = process.env.MISTRAL_API_KEY;
+      delete process.env.MISTRAL_API_KEY;
+      try {
+        const keylessAi = genkit({
+          plugins: [mistral({ ...fakeServerOptions(server), apiKey: false })],
+        });
+
+        const action = await keylessAi.registry.lookupAction(
+          '/model/mistral/devstral-medium-latest'
+        );
+
+        expect(action?.__action.metadata?.model.supports).toEqual(
+          UNKNOWN_MODEL_SUPPORTS
+        );
+        expect(server.requests).toHaveLength(0);
+      } finally {
+        if (saved !== undefined) process.env.MISTRAL_API_KEY = saved;
+      }
     });
   });
 

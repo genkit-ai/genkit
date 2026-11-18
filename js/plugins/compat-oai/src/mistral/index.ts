@@ -115,13 +115,16 @@ function modelInfoFromCapabilities(
 }
 
 /**
- * @param listedModelInfo Model info derived from `/v1/models` capabilities,
- *   keyed by model id, so a listed model resolves with the info it was listed
- *   with.
+ * @param lookupModelInfo Finds the info of a model outside the known list, as
+ *   `/v1/models` lists it, so a model resolves with the same capabilities
+ *   whether or not the models were listed first.
  */
 function createResolver(
   pluginOptions: PluginOptions,
-  listedModelInfo: Map<string, ModelInfo>
+  lookupModelInfo: (
+    client: OpenAI,
+    name: string
+  ) => Promise<ModelInfo | undefined>
 ) {
   return async (client: OpenAI, actionType: ActionType, actionName: string) => {
     if (actionType === 'embedder') {
@@ -139,7 +142,7 @@ function createResolver(
         lookup(SUPPORTED_MISTRAL_MODELS, actionName) ??
           mistralModelRef({
             name: actionName,
-            info: listedModelInfo.get(actionName),
+            info: await lookupModelInfo(client, actionName),
           })
       );
     }
@@ -155,48 +158,85 @@ function createResolver(
  * media support from `capabilities`, or the text-only default when an entry
  * has no `capabilities`.
  */
-function createListActions(listedModelInfo: Map<string, ModelInfo>) {
-  return async (client: OpenAI): Promise<ActionMetadata[]> => {
-    const response = await client.models.list();
-    const actions: ActionMetadata[] = [];
-    for (const model of response.data) {
-      if (model.object !== 'model') continue;
-      if (model.id.includes('embed')) {
-        const embedderRef =
-          lookup(SUPPORTED_MISTRAL_EMBEDDERS, model.id) ??
-          mistralEmbedderRef({ name: model.id });
-        actions.push(
-          embedderActionMetadata({
-            name: embedderRef.name,
-            info: embedderRef.info,
-            configSchema: embedderRef.configSchema,
-          })
-        );
-        continue;
-      }
-      // `capabilities` is a Mistral field, not part of the OpenAI model type.
-      const capabilities = (
-        model as OpenAI.Model & { capabilities?: MistralModelCapabilities }
-      ).capabilities;
-      if (capabilities && !capabilities.completion_chat) continue;
-      let modelRef = lookup(SUPPORTED_MISTRAL_MODELS, model.id);
-      if (!modelRef) {
-        const info = capabilities
-          ? modelInfoFromCapabilities(capabilities)
-          : undefined;
-        if (info) listedModelInfo.set(model.id, info);
-        modelRef = mistralModelRef({ name: model.id, info });
-      }
+async function listMistralActions(
+  client: OpenAI,
+  listedModelInfo: Map<string, ModelInfo>
+): Promise<ActionMetadata[]> {
+  const response = await client.models.list();
+  const actions: ActionMetadata[] = [];
+  for (const model of response.data) {
+    if (model.object !== 'model') continue;
+    if (model.id.includes('embed')) {
+      const embedderRef =
+        lookup(SUPPORTED_MISTRAL_EMBEDDERS, model.id) ??
+        mistralEmbedderRef({ name: model.id });
       actions.push(
-        modelActionMetadata({
-          name: modelRef.name,
-          info: modelRef.info,
-          configSchema: modelRef.configSchema,
+        embedderActionMetadata({
+          name: embedderRef.name,
+          info: embedderRef.info,
+          configSchema: embedderRef.configSchema,
         })
       );
+      continue;
     }
-    return actions;
+    // `capabilities` is a Mistral field, not part of the OpenAI model type.
+    const capabilities = (
+      model as OpenAI.Model & { capabilities?: MistralModelCapabilities }
+    ).capabilities;
+    if (capabilities && !capabilities.completion_chat) continue;
+    let modelRef = lookup(SUPPORTED_MISTRAL_MODELS, model.id);
+    if (!modelRef) {
+      const info = capabilities
+        ? modelInfoFromCapabilities(capabilities)
+        : undefined;
+      if (info) listedModelInfo.set(model.id, info);
+      modelRef = mistralModelRef({ name: model.id, info });
+    }
+    actions.push(
+      modelActionMetadata({
+        name: modelRef.name,
+        info: modelRef.info,
+        configSchema: modelRef.configSchema,
+      })
+    );
+  }
+  return actions;
+}
+
+/**
+ * Lists `/v1/models` at most once, for both `listActions` and the resolver,
+ * and keeps the info of each listed model outside the known list. A model
+ * resolved before the models were listed (the usual case outside the Dev UI)
+ * then gets the same capabilities as a listed one. A failed listing is not
+ * kept, so the next call tries again.
+ *
+ * @param canList Whether the plugin has a default API key to list with.
+ *   Without one (`apiKey: false`), unknown models get the text-only default.
+ */
+function createModelCatalog(canList: boolean) {
+  const listedModelInfo = new Map<string, ModelInfo>();
+  let listing: Promise<ActionMetadata[]> | undefined;
+  const list = (client: OpenAI): Promise<ActionMetadata[]> => {
+    listing ??= listMistralActions(client, listedModelInfo).catch((e) => {
+      listing = undefined;
+      throw e;
+    });
+    return listing;
   };
+  const lookupModelInfo = async (
+    client: OpenAI,
+    name: string
+  ): Promise<ModelInfo | undefined> => {
+    if (!listedModelInfo.has(name) && canList) {
+      try {
+        await list(client);
+      } catch {
+        // Fall back to the text-only default.
+      }
+    }
+    return listedModelInfo.get(name);
+  };
+  return { list, lookupModelInfo };
 }
 
 export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
@@ -209,7 +249,7 @@ export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
         'Please pass in the API key or set the MISTRAL_API_KEY environment variable.',
     });
   }
-  const listedModelInfo = new Map<string, ModelInfo>();
+  const catalog = createModelCatalog(apiKey !== false);
   // Request-scoped clients (a per-request `apiKey`) are built from
   // `pluginOptions`, so it must carry the Mistral base URL too.
   const pluginOptions: PluginOptions = {
@@ -233,8 +273,8 @@ export function mistralPlugin(options?: MistralPluginOptions): GenkitPluginV2 {
         ),
       ];
     },
-    resolver: createResolver(pluginOptions, listedModelInfo),
-    listActions: createListActions(listedModelInfo),
+    resolver: createResolver(pluginOptions, catalog.lookupModelInfo),
+    listActions: catalog.list,
   });
 }
 
