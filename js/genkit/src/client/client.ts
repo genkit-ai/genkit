@@ -139,7 +139,13 @@ async function __flowRunEnvelope({
   let buffer = '';
   while (true) {
     const result = await reader.read();
-    const decodedValue = decoder.decode(result.value);
+    if (result.done) {
+      // Server closed without a result or error frame.
+      break;
+    }
+    // `stream: true` keeps the bytes of a multi-byte character that is split
+    // across two network chunks until the rest of it arrives.
+    const decodedValue = decoder.decode(result.value, { stream: true });
     if (decodedValue) {
       buffer += decodedValue;
     }
