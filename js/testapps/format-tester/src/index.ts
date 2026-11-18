@@ -25,7 +25,7 @@ const ai = genkit({
   plugins: [
     googleAI(),
     vertexAI({
-      location: 'us-east5',
+      location: 'global',
     }),
     vertexModelGarden({
       location: 'us-east5',
@@ -144,10 +144,10 @@ for (const format in prompts) {
 let models = process.argv.slice(2);
 if (!models.length) {
   models = [
-    'vertexai/gemini-2.5-pro',
-    'vertexai/gemini-2.5-flash',
-    'googleai/gemini-2.5-pro',
-    'googleai/gemini-2.5-flash',
+    'vertexai/gemini-3.1-pro-preview',
+    'vertexai/gemini-3.8-flash',
+    'googleai/gemini-pro-latest',
+    'googleai/gemini-flash-latest',
   ];
 }
 

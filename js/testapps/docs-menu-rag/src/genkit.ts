@@ -20,7 +20,7 @@ import { genkit } from 'genkit';
 
 export const ai = genkit({
   plugins: [
-    vertexAI(),
+    vertexAI({ location: 'global' }),
     devLocalVectorstore([
       {
         indexName: 'menuQA',

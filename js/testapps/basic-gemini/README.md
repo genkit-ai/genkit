@@ -11,23 +11,23 @@ TTS, and advanced features like search grounding and URL context.
 | Simple Generation | `basic-hi` | Basic text generation with Gemini |
 | Retry Middleware | `basic-hi-with-retry` | Generation with automatic retry on failure |
 | Fallback Middleware | `basic-hi-with-fallback` | Model fallback chain on failure |
-| Thinking (Pro) | `thinking-level-pro` | Chain-of-thought reasoning (Gemini 2.5 Pro) |
-| Thinking (Flash) | `thinking-level-flash` | Chain-of-thought reasoning (Gemini 2.5 Flash) |
-| Vision (Image) | `describe-image` | Describe a base64-encoded image |
+| Thinking (Argon) | `thinking-level` | Chain-of-thought reasoning (Gemini 4 Argon) |
+| Thinking (Flash) | `thinking-level-flash` | Chain-of-thought reasoning (Gemini 3 Flash) |
+| Vision (Image) | `multimodal-input` | Describe a base64-encoded image |
 | YouTube Videos | `youtube-videos` | Transcribe YouTube video content |
 | Search Grounding | `search-grounding` | Web search for real-time info |
 | URL Context | `url-context` | Analyze content from web pages |
 | File Search (RAG) | `file-search` | Search uploaded documents |
 | Tool Calling | `toolCalling` | Streaming tool use (weather + unit conversion) |
-| Screenshot Tool | `screenshot-tool-calling` | Screenshot-based tool use |
+| Screenshot Tool | `multipart-tool-calling` | Screenshot-based multipart tool use |
 | Structured Tool Calling | `structured-tool-calling` | Tool calling with structured output |
 | Structured Output | `structured-output` | JSON output with Zod schema (RPG character) |
-| Thinking + Structured | `thinking-structured-output` | Structured output with thinking budget |
-| Media Resolution | `gemini-media-resolution` | Image editing with Gemini 2.5 Pro |
-| Image Generation | `nano-banana-pro` | Image generation with Gemini 2.5 Pro Image |
-| Imagen | `imagen-image-generation` | Image generation with Imagen 3 |
-| Text-to-Speech | `basic-tts` | Text-to-speech with Gemini 2.5 Flash |
-| Vertex AI | `basic-hi-vertexai` | Same features via Vertex AI backend |
+| Media Resolution | `media-resolution` | Media resolution config (Gemini 3.1 Pro Preview) |
+| Image Editing | `image-editing` | Multi-image editing (Gemini Nano Banana 2.1) |
+| Image Config | `image-config` | Image generation with Gemini 3 Pro Image |
+| Image Generation | `image-generation` | Image generation with Gemini Nano Banana 2.1 |
+| Text-to-Speech | `tts-default-voice` | Text-to-speech with Gemini 3.8 Flash TTS |
+| Vertex AI | `basic-hi` (Vertex) | Same features via Vertex AI backend |
 
 ## Setup
 
@@ -80,11 +80,11 @@ pnpm run genkit:dev:vertexai
    - [ ] `basic-hi-with-fallback` — Fallback chain on model error
 
 3. **Test thinking modes**:
-   - [ ] `thinking-level-pro` — Input: `HIGH` (or `MINIMAL`, `LOW`, `MEDIUM`)
+   - [ ] `thinking-level` — Input: `HIGH` (or `LOW`, `MEDIUM`)
    - [ ] `thinking-level-flash` — Input: `MINIMAL`, `LOW`, `MEDIUM`, or `HIGH`
 
 4. **Test multimodal**:
-   - [ ] `describe-image` — Image description from base64
+   - [ ] `multimodal-input` — Image description from base64
    - [ ] `youtube-videos` — YouTube video transcription
 
 5. **Test tools**:
@@ -96,7 +96,7 @@ pnpm run genkit:dev:vertexai
    - [ ] `url-context` — URL content analysis
    - [ ] `file-search` — File search RAG
    - [ ] `structured-output` — RPG character generation
-   - [ ] `imagen-image-generation` — Image generation
+   - [ ] `image-generation` — Image generation
 
 7. **Expected behavior**:
    - All flows complete without errors

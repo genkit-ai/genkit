@@ -1742,13 +1742,7 @@ importers:
       partial-json:
         specifier: ^0.1.7
         version: 0.1.7
-      wav:
-        specifier: ^1.0.2
-        version: 1.0.2
     devDependencies:
-      '@types/wav':
-        specifier: ^1.0.4
-        version: 1.0.4
       genkit-cli:
         specifier: link:../../../genkit-tools/cli
         version: link:../../../genkit-tools/cli

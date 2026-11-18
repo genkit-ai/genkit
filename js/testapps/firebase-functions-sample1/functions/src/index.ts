@@ -26,7 +26,7 @@ import { genkit, z } from 'genkit';
 enableFirebaseTelemetry();
 
 const ai = genkit({
-  plugins: [vertexAI()],
+  plugins: [vertexAI({ location: 'global' })],
 });
 
 export const simpleFlow = ai.defineFlow(
@@ -55,7 +55,7 @@ const jokeFlow = ai.defineFlow(
 
     return await ai.run('call-llm', async () => {
       const llmResponse = await ai.generate({
-        model: vertexAI.model('gemini-2.5-flash'),
+        model: vertexAI.model('gemini-3.8-flash'),
         prompt: prompt,
       });
 

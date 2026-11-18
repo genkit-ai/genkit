@@ -1,5 +1,9 @@
 ---
-modelProvider: google-vertex
-modelName: gemini-pro
+model: vertexai/gemini-3.1-pro-preview
+config:
+  location: global
+input:
+  schema:
+    subject: string
 ---
-Tell a joke about {subject}
+Tell a joke about {{subject}}

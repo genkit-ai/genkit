@@ -1,7 +1,7 @@
 ---
-model: googleai/gemini-2.5-flash
+model: googleai/gemini-flash-latest
 input:
   schema:
     subject: string
 ---
-Tell a joke about {subject}
+Tell a joke about {{subject}}

@@ -19,7 +19,7 @@ import { z } from 'genkit';
 import { ai } from './genkit.js';
 
 export const augmentedVideoPrompt = ai.definePrompt({
-  model: vertexAI.model('gemini-2.5-flash'),
+  model: vertexAI.model('gemini-3.8-flash', { location: 'global' }),
   name: 'augmentedVideoPrompt',
   input: {
     schema: z.object({
@@ -47,7 +47,7 @@ export const augmentedVideoPrompt = ai.definePrompt({
 
 // Define a prompt that includes the retrieved context documents
 export const augmentedMultimodalPrompt = ai.definePrompt({
-  model: vertexAI.model('gemini-2.5-flash'),
+  model: vertexAI.model('gemini-3.8-flash', { location: 'global' }),
   name: 'augmentedMultimodalPrompt',
   input: {
     schema: z.object({

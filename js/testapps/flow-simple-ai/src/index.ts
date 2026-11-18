@@ -37,14 +37,13 @@ import {
 } from 'genkit/model';
 import type { PluginProvider } from 'genkit/plugin';
 import { Allow, parse } from 'partial-json';
-import wav from 'wav';
 
 logger.setLogLevel('debug');
 
 const ai = genkit({
   plugins: [
     googleAI({ experimental_debugTraces: true }),
-    vertexAI({ location: 'us-central1', experimental_debugTraces: true }),
+    vertexAI({ location: 'global', experimental_debugTraces: true }),
     genkitEval({
       metrics: [
         GenkitMetric.DEEP_EQUAL,
@@ -91,8 +90,8 @@ export const jokeFlow = ai.defineFlow(
   {
     name: 'jokeFlow',
     inputSchema: z.object({
-      modelName: z.string().default('vertexai/gemini-2.5-pro'),
-      modelVersion: z.string().optional().default('gemini-2.5-pro'),
+      modelName: z.string().default('vertexai/gemini-3.1-pro-preview'),
+      modelVersion: z.string().optional().default('gemini-3.1-pro-preview'),
       subject: z.string().default('bananas'),
     }),
     outputSchema: z.string(),
@@ -135,7 +134,7 @@ export const streamFlowVertex = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: vertexAI.model('gemini-3.8-flash', { temperature: 0.77 }),
       prompt,
     });
 
@@ -155,7 +154,7 @@ export const streamFlowGemini = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: googleAI.model('gemini-flash-latest', { temperature: 0.77 }),
       prompt,
     });
 
@@ -238,7 +237,7 @@ export const jokeWithToolsFlow = ai.defineFlow(
   {
     name: 'jokeWithToolsFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash', 'gemini-2.5-pro']),
+      modelName: z.enum(['gemini-flash-latest', 'gemini-pro-latest']),
       subject: z.string(),
     }),
     outputSchema: z.object({ model: z.string(), joke: z.string() }),
@@ -262,7 +261,7 @@ export const jokeWithOutputFlow = ai.defineFlow(
   {
     name: 'jokeWithOutputFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash']),
+      modelName: z.enum(['gemini-flash-latest']),
       subject: z.string(),
     }),
     outputSchema,
@@ -527,7 +526,7 @@ export const forcedToolCaller = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
@@ -552,7 +551,7 @@ export const toolCallerCharacterGenerator = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
@@ -894,7 +893,7 @@ ai.defineFlow(
   },
   async ({ url, prompt, model }) => {
     const { text } = await ai.generate({
-      model: model || 'googleai/gemini-2.5-flash',
+      model: model || 'googleai/gemini-flash-latest',
       prompt: [{ text: prompt }, { media: { url, contentType: 'video/mp4' } }],
     });
     return text;
@@ -903,7 +902,7 @@ ai.defineFlow(
 
 ai.defineFlow('geminiImages', async (_, { sendChunk }) => {
   const { response, stream } = ai.generateStream({
-    model: googleAI.model('gemini-2.5-flash-image'),
+    model: googleAI.model('gemini-nano-banana-2.1'),
     prompt: `generate an image of a banana riding a bicycle`,
     config: {
       responseModalities: ['TEXT', 'IMAGE'],
@@ -955,7 +954,7 @@ ai.defineFlow('reasoning', async (_, { sendChunk }) => {
     model: googleAI.model('gemini-flash-latest'),
     config: {
       thinkingConfig: {
-        thinkingBudget: 1024,
+        thinkingLevel: 'MEDIUM',
         includeThoughts: true,
       },
     },
@@ -973,10 +972,9 @@ ai.defineFlow(
   },
   async (query) => {
     const { media } = await ai.generate({
-      // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation#javascript
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation
+      model: googleAI.model('gemini-3.8-flash-tts'),
       config: {
-        responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
             prebuiltVoiceConfig: { voiceName: 'Algenib' },
@@ -988,66 +986,58 @@ ai.defineFlow(
     if (!media) {
       throw new Error('no media returned');
     }
-    const audioBuffer = Buffer.from(
-      media.url.substring(media.url.indexOf(',') + 1),
-      'base64'
-    );
-    return {
-      media: 'data:audio/wav;base64,' + (await toWav(audioBuffer)),
-    };
+    return { media: media.url };
   }
 );
 
-async function toWav(
-  pcmData: Buffer,
-  channels = 1,
-  rate = 24000,
-  sampleWidth = 2
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const writer = new wav.Writer({
-      channels,
-      sampleRate: rate,
-      bitDepth: sampleWidth * 8,
-    });
-
-    let bufs = [] as any[];
-    writer.on('error', reject);
-    writer.on('data', function (d) {
-      bufs.push(d);
-    });
-    writer.on('end', function () {
-      resolve(Buffer.concat(bufs).toString('base64'));
-    });
-
-    writer.write(pcmData);
-    writer.end();
-  });
-}
+const DEFAULT_SPEAKER_TURNS = [
+  {
+    speaker: 'Speaker1' as const,
+    text: 'Genkit is an amazing Gen AI library!',
+  },
+  {
+    speaker: 'Speaker2' as const,
+    text: 'Library? I thought it was a framework.',
+    style: 'excited',
+  },
+  {
+    speaker: 'Speaker1' as const,
+    text: "No, it's definitely a library. You just import components and use functions. It's a toolkit, not a prescriptive structure for your whole app.",
+  },
+  {
+    speaker: 'Speaker2' as const,
+    text: 'But it defines how you structure your Gen AI application. It has its own lifecycle, handles models and prompts. You build on top of it, which is framework-like.',
+  },
+];
 
 ai.defineFlow(
   {
     name: 'audioMultipleSpeakers',
     inputSchema: z
-      .string()
-      .default(
-        "Genkit (pronounced as Gen Kit). here's the dialog:\n\n" +
-          'Speaker1: "Genkit is an amazing Gen AI **library**!"\n' +
-          'Speaker2: "Library? I thought it was a **framework**."\n' +
-          'Speaker1: "No, it\'s definitely a library. You just import components and use functions. It\'s a toolkit, not a prescriptive structure for your whole app."\n' +
-          'Speaker2: "But it defines how you *structure* your Gen AI application. It has its own lifecycle, handles models and prompts. You build *on top* of it, which is framework-like."\n' +
-          "Speaker1: \"It doesn't dictate your *entire* app's architecture. You can use it for just one feature. Like NumPy, it's powerful functions, not an overall design.\"\n" +
-          'Speaker2: "Yet it orchestrates your Gen AI pipeline, managing things from data to output. That\'s more than just functions; it\'s an integrated system, providing the structure and conventions. That sounds like a framework."\n' +
-          'Speaker1: "It\'s an opinionated library then, or a specialized toolkit."\n' +
-          'Speaker2: "And that is why the line often blurs."'
-      ),
-    outputSchema: z.void(),
+      .array(
+        z.object({
+          speaker: z.enum(['Speaker1', 'Speaker2']),
+          text: z.string(),
+          style: z.string().optional(),
+        })
+      )
+      .default(DEFAULT_SPEAKER_TURNS),
+    outputSchema: z.object({ media: z.string() }),
   },
-  async (query) => {
+  async (turns) => {
+    const activeTurns = turns.length > 0 ? turns : DEFAULT_SPEAKER_TURNS;
     const { media } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      model: googleAI.model('gemini-3.8-flash-tts'),
+      prompt: activeTurns.map(({ speaker, text, style }) => ({
+        text,
+        metadata: {
+          speechMetadata: {
+            speaker,
+            ...(style ? { style } : {}),
+          },
+        },
+      })),
       config: {
-        responseModalities: ['AUDIO'],
         speechConfig: {
           multiSpeakerVoiceConfig: {
             speakerVoiceConfigs: [
@@ -1067,41 +1057,18 @@ ai.defineFlow(
           },
         },
       },
-      prompt: query,
     });
     if (!media) {
-      return;
+      throw new Error('no media returned');
     }
     const audioBuffer = Buffer.from(
       media.url.substring(media.url.indexOf(',') + 1),
       'base64'
     );
-    const fileName = 'out_multi.wav';
-    await saveWaveFile(fileName, audioBuffer);
+    await fs.promises.writeFile('out_multi.wav', audioBuffer);
+    return { media: media.url };
   }
 );
-
-async function saveWaveFile(
-  filename: string,
-  pcmData: Buffer,
-  channels = 1,
-  rate = 24000,
-  sampleWidth = 2
-) {
-  return new Promise((resolve, reject) => {
-    const writer = new wav.FileWriter(filename, {
-      channels,
-      sampleRate: rate,
-      bitDepth: sampleWidth * 8,
-    });
-
-    writer.on('finish', resolve);
-    writer.on('error', reject);
-
-    writer.write(pcmData);
-    writer.end();
-  });
-}
 
 ai.defineFlow('googleSearch', async (thing) => {
   const { text } = await ai.generate({
@@ -1115,7 +1082,7 @@ ai.defineFlow('googleSearch', async (thing) => {
 
 ai.defineFlow('googleSearchRetrieval', async (thing) => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-3.8-flash'),
     prompt: `What is a banana?`,
     config: { googleSearchRetrieval: {} },
   });
@@ -1333,7 +1300,7 @@ export const transferFlowManual = ai.defineFlow(
     const response = await ai.generate({
       prompt: 'Ask me a movie trivia question.',
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-pro-latest'),
     });
 
     const answers = [];
@@ -1355,7 +1322,7 @@ export const transferFlowManual = ai.defineFlow(
 
     const finalResponse = await ai.generate({
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-pro-latest'),
       messages: response.messages,
       resume: {
         respond: answers,

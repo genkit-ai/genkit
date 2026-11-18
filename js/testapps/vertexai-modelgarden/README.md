@@ -13,7 +13,7 @@ Gemini models, with tool calling, structured output, and streaming.
 | Structured Output | `mistral-medium - explainConcept` | Mistral Medium 3 | Concept explanation with examples |
 | Code Analysis | `mistral-small - analyzeCode` | Mistral Small | Code review and suggestions |
 | Code Generation | `codestral - generateFunction` | Codestral 2 | TypeScript function generation |
-| Gemini Tools | `gemini-2.5-flash - tool flow` | Gemini 2.5 Flash | Weather tools with native Gemini |
+| Gemini Tools | `gemini-3.8-flash - tool flow` | Gemini 3.8 Flash | Weather tools with native Gemini |
 
 ## Setup
 
@@ -63,7 +63,7 @@ pnpm run genkit:dev
    - [ ] `codestral - generateFunction` — Input: `{"description": "greets me and asks my favourite colour"}`
 
 6. **Test Gemini** (native, not via Model Garden):
-   - [ ] `gemini-2.5-flash - tool flow` — Input: `"Paris, France"`
+   - [ ] `gemini-3.8-flash - tool flow` — Input: `"Paris, France"`
 
 7. **Expected behavior**:
    - All models respond through the Model Garden API

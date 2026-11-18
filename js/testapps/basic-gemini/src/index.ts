@@ -402,7 +402,7 @@ ai.defineFlow('basic-hi-with-retry', async () => {
 
 ai.defineFlow('basic-hi-with-fallback', async () => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-something-that-does-not-exist'),
+    model: googleAI.model('gemini-something-that-does-not-exist'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
     use: [
       fallback(ai, {
@@ -868,26 +868,6 @@ ai.defineFlow(
     return (await response).output!;
   }
 );
-
-// Gemini reasoning example (legacy thinkingBudget). Kept on purpose:
-// thinkingBudget only works on generateContent models, which are all Gemini
-// 2.5 (legacy) now; newer models use thinkingLevel (see 'thinking-level').
-// Gemini 2.5 is only available to accounts that used it before.
-ai.defineFlow('reasoning - thinkingBudget', async (_, { sendChunk }) => {
-  const { message } = await ai.generate({
-    prompt: 'what is heavier, one kilo of steel or one kilo of feathers',
-    model: googleAI.model('gemini-2.5-pro'),
-    config: {
-      thinkingConfig: {
-        thinkingBudget: 1024,
-        includeThoughts: true,
-      },
-    },
-    onChunk: sendChunk,
-  });
-
-  return message;
-});
 
 // Media resolution
 ai.defineFlow('media-resolution', async (_) => {
