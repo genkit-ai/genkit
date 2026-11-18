@@ -300,6 +300,44 @@ describe('mistral plugin', () => {
     expect(MistralChatCompletionConfigSchema.shape).not.toHaveProperty('topK');
   });
 
+  it('leaves logProbs and topLogProbs out of the config schema', () => {
+    // Mistral's models answer `logprobs` with "Logprobs are not enabled for
+    // this model".
+    const shape = MistralChatCompletionConfigSchema.shape;
+    expect(shape).not.toHaveProperty('logProbs');
+    expect(shape).not.toHaveProperty('topLogProbs');
+  });
+
+  it('refuses logProbs and topLogProbs before the request goes out', async () => {
+    for (const config of [
+      { logProbs: true },
+      { topLogProbs: 2 },
+      { logProbs: true, topLogProbs: 2 },
+    ]) {
+      await expect(
+        ai.generate({
+          model: mistral.model('mistral-small-latest'),
+          prompt: 'hi',
+          // Not in the config schema, but untyped config can carry them.
+          config: config as any,
+        })
+      ).rejects.toThrow(/logProbs/);
+    }
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it('never sends logprobs, not even logprobs: false', async () => {
+    await ai.generate({
+      model: mistral.model('mistral-small-latest'),
+      prompt: 'hi',
+      config: { logProbs: false } as any,
+    });
+
+    const body = server.requests[0].body;
+    expect(body).not.toHaveProperty('logprobs');
+    expect(body).not.toHaveProperty('top_logprobs');
+  });
+
   it('sends images as image_url chunks', async () => {
     await ai.generate({
       model: mistral.model('mistral-small-latest'),

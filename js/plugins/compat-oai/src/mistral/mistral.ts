@@ -129,12 +129,19 @@ const MISTRAL_REQUEST_FIELDS = Object.keys(
 ) as (keyof typeof MistralRequestFieldsSchema.shape)[];
 
 /**
- * Mistral custom configuration schema. `topK` is left out: Mistral's models
- * reject `top_k` sampling. Bounds follow Mistral's request schema, so out of
- * range values are caught before the request goes out.
+ * Mistral custom configuration schema. `topK`, `logProbs` and `topLogProbs`
+ * are left out: Mistral's request schema declares `top_k`, `logprobs` and
+ * `top_logprobs`, but its models reject them ("top_k sampling is not enabled
+ * for this model", "Logprobs are not enabled for this model"). Bounds follow
+ * Mistral's request schema, so out of range values are caught before the
+ * request goes out.
  */
 export const MistralChatCompletionConfigSchema =
-  ChatCompletionCommonConfigSchema.omit({ topK: true })
+  ChatCompletionCommonConfigSchema.omit({
+    topK: true,
+    logProbs: true,
+    topLogProbs: true,
+  })
     .extend({
       temperature: z
         .number()
@@ -173,7 +180,14 @@ export const MistralChatCompletionConfigSchema =
  */
 export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
   const config = req.config ?? {};
-  const { maxOutputTokens, topK, seed, reasoningEffort } = config;
+  const {
+    maxOutputTokens,
+    topK,
+    logProbs,
+    topLogProbs,
+    seed,
+    reasoningEffort,
+  } = config;
   // Mistral's schema declares `top_k`, but its models reject it ("top_k
   // sampling is not enabled for this model"), so say so before sending. The
   // config schema leaves `topK` out, but untyped config can still carry it.
@@ -184,10 +198,23 @@ export const mistralRequestBuilder: ModelRequestBuilder = (req, params) => {
         "Mistral doesn't support topK: its models reject top_k sampling. Remove topK from the config.",
     });
   }
+  // Mistral's models also reject `logprobs` ("Logprobs are not enabled for
+  // this model") and `top_logprobs`, which the config schema leaves out too.
+  if (logProbs === true || topLogProbs !== undefined) {
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message:
+        "Mistral doesn't support logProbs or topLogProbs: its models reject them. Remove them from the config.",
+    });
+  }
   // `random_seed` and Mistral's `reasoning_effort` values are not part of the
   // OpenAI request type.
   const body = params as unknown as Record<string, unknown>;
 
+  // The common request body copies `logprobs` and `top_logprobs` from the
+  // config; never send them, not even `logprobs: false`.
+  delete body.logprobs;
+  delete body.top_logprobs;
   params.max_tokens = maxOutputTokens;
   body.random_seed = seed;
   body.reasoning_effort = reasoningEffort;
