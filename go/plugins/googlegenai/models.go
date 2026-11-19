@@ -144,6 +144,10 @@ const (
 	// Served under the same ID by both backends.
 	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
+	// Gemma is served by Google AI only.
+	gemma426bA4bIT = "gemma-4-26b-a4b-it"
+	gemma431bIT    = "gemma-4-31b-it"
+
 	// Vertex AI serves Veo 3.1 as GA "-001" IDs; Google AI serves it as
 	// "-preview". Each backend has retired the other's spelling.
 	veo31Generate001         = "veo-3.1-generate-001"
@@ -211,6 +215,9 @@ var (
 		gemini25FlashPreviewTTS,
 		gemini25ProPreviewTTS,
 		gemini31FlashTTSPreview,
+
+		gemma426bA4bIT,
+		gemma431bIT,
 
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
@@ -348,6 +355,22 @@ var (
 			Label:    "Gemini 3.1 Flash TTS Preview",
 			Versions: []string{},
 			Supports: &TTSSupports,
+			Stage:    ai.ModelStageStable,
+		},
+		// Gemma reuses the standard Gemini capabilities, matching the JS
+		// google-genai plugin (Gemma 4 supports function calling, system
+		// instructions and image input per its model card). The Gemma-specific
+		// behavior, stripping prior thoughts, lives in the generate path.
+		gemma426bA4bIT: {
+			Label:    "Gemma 4 26B A4B",
+			Versions: []string{},
+			Supports: &Multimodal,
+			Stage:    ai.ModelStageStable,
+		},
+		gemma431bIT: {
+			Label:    "Gemma 4 31B",
+			Versions: []string{},
+			Supports: &Multimodal,
 			Stage:    ai.ModelStageStable,
 		},
 	}
