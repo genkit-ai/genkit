@@ -101,6 +101,28 @@ describe('Vertex AI Veo', () => {
       assert.strictEqual(ref.name, `vertexai/${unknownModelName}`);
       assert.deepStrictEqual(ref.info, GENERIC_MODEL.info);
     });
+
+    it('names known and unlisted models under the given namespace', () => {
+      for (const name of [Object.keys(KNOWN_MODELS)[0], 'veo-unknown-model']) {
+        const ref = model(name, {}, 'googlegenai');
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, VeoConfigSchema);
+        assert.deepStrictEqual(ref.info, model(name).info);
+      }
+    });
+
+    it('defines the model under the given namespace', () => {
+      const action = defineModel(
+        'veo-3.1-generate-001',
+        defaultRegionalClientOptions,
+        undefined,
+        'googlegenai'
+      );
+      assert.strictEqual(
+        action.__action.name,
+        'googlegenai/veo-3.1-generate-001'
+      );
+    });
   });
 
   describe('defineModel()', () => {

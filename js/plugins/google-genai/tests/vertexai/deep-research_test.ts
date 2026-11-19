@@ -116,6 +116,31 @@ describe('Vertex AI Deep Research', () => {
       assert.strictEqual(ref.name, 'vertexai/deep-research-preview-12-2026');
       assert.deepStrictEqual(ref.info, TEST_ONLY.GENERIC_MODEL.info);
     });
+
+    it('names known and unlisted models under the given namespace', () => {
+      for (const name of [MODEL_NAME, 'deep-research-preview-12-2026']) {
+        const ref = model(name, {}, 'googlegenai');
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, DeepResearchConfigSchema);
+        assert.deepStrictEqual(ref.info, model(name).info);
+      }
+    });
+
+    it('sends the bare agent name under another namespace', async () => {
+      mockFetchResponse(inProgress);
+      const deepResearch = defineModel(
+        MODEL_NAME,
+        globalOptions,
+        undefined,
+        'googlegenai'
+      );
+      assert.strictEqual(
+        deepResearch.__action.name,
+        `googlegenai/${MODEL_NAME}`
+      );
+      await deepResearch.start(request);
+      assert.strictEqual(lastBody().agent, MODEL_NAME);
+    });
   });
 
   describe('start', () => {

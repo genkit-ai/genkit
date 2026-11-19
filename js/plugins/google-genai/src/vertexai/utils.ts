@@ -16,6 +16,7 @@
 
 import { GenkitError, type ActionContext } from 'genkit';
 import { GoogleAuth } from 'google-auth-library';
+import { type PluginNamespace } from '../common/utils.js';
 import {
   isMultiRegionalLocation,
   type ClientOptions,
@@ -35,7 +36,15 @@ export {
   extractText,
   extractVersion,
   modelName,
+  type PluginNamespace,
 } from '../common/utils.js';
+
+/**
+ * Namespace of the vertexAI plugin's actions (`vertexai/<model>`). Model and
+ * embedder functions take the namespace as a parameter so another plugin
+ * can register the same models under its own name.
+ */
+export const DEFAULT_NAMESPACE: PluginNamespace = 'vertexai';
 
 const CLOUD_PLATFORM_OAUTH_SCOPE =
   'https://www.googleapis.com/auth/cloud-platform';

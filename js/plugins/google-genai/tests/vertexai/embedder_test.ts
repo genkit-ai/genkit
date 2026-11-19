@@ -23,6 +23,7 @@ import { getGenkitClientHeader } from '../../src/common/utils.js';
 import { getVertexAIUrl } from '../../src/vertexai/client.js';
 import {
   EmbeddingConfig,
+  EmbeddingConfigSchema,
   defineEmbedder,
   model,
 } from '../../src/vertexai/embedder.js';
@@ -38,6 +39,47 @@ it('reports the default dimensions for multimodal embedders', () => {
     model('custom-multimodalembedding', { multimodal: true }).info?.dimensions,
     1408
   );
+});
+
+describe('embedder namespace', () => {
+  it('names refs vertexai/ by default', () => {
+    assert.strictEqual(
+      model('gemini-embedding-2').name,
+      'vertexai/gemini-embedding-2'
+    );
+  });
+
+  it('names known and unlisted embedders under the given namespace', () => {
+    for (const name of ['gemini-embedding-2', 'text-embedding-9']) {
+      const ref = model(name, {}, 'googlegenai');
+      assert.strictEqual(ref.name, `googlegenai/${name}`);
+      assert.strictEqual(ref.configSchema, EmbeddingConfigSchema);
+      assert.deepStrictEqual(ref.info, model(name).info);
+    }
+    const multimodal = model(
+      'custom-multimodalembedding',
+      { multimodal: true },
+      'googlegenai'
+    );
+    assert.strictEqual(
+      multimodal.name,
+      'googlegenai/custom-multimodalembedding'
+    );
+    assert.strictEqual(multimodal.info?.dimensions, 1408);
+  });
+
+  it('defines the embedder under the given namespace', () => {
+    const embedder = defineEmbedder(
+      'gemini-embedding-2',
+      { kind: 'express', apiKey: 'test-key' },
+      undefined,
+      'googlegenai'
+    );
+    assert.strictEqual(
+      embedder.__action.name,
+      'googlegenai/gemini-embedding-2'
+    );
+  });
 });
 
 describe('defineEmbedder', () => {

@@ -39,7 +39,9 @@ import {
   calculateApiKey,
   checkApiKey,
   checkModelName,
+  DEFAULT_NAMESPACE,
   extractVersion,
+  type PluginNamespace,
 } from './utils.js';
 
 export const EmbeddingConfigSchema = z
@@ -72,8 +74,9 @@ function commonRef(
   info?: EmbedderInfo,
   configSchema: ConfigSchemaType = EmbeddingConfigSchema
 ): EmbedderReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return embedderRef({
-    name: `googleai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info: info ?? {
       dimensions: 3072,
@@ -114,14 +117,15 @@ export function isEmbedderName(value: string): value is EmbedderModelName {
 
 export function model(
   version: string,
-  config: EmbeddingConfig = {}
+  config: EmbeddingConfig = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): EmbedderReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
     const known = ALL_MODELS[name];
     return embedderRef({
-      name: known.name,
+      name: `${namespace}/${name}`,
       info: known.info,
       configSchema: known.configSchema,
       config,
@@ -129,21 +133,24 @@ export function model(
   }
 
   return embedderRef({
-    name: `googleai/${name}`,
+    name: `${namespace}/${name}`,
     info: { ...GENERIC_MODEL.info },
     configSchema: GENERIC_MODEL.configSchema,
     config,
   });
 }
 
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return (
     models
       .filter((m) => m.supportedGenerationMethods.includes('embedContent'))
       // Filter out deprecated
       .filter((m) => !m.description || !m.description.includes('deprecated'))
       .map((m) => {
-        const ref = model(m.name);
+        const ref = model(m.name, {}, namespace);
         return embedderActionMetadata({
           name: ref.name,
           info: ref.info,
@@ -153,16 +160,22 @@ export function listActions(models: Model[]): ActionMetadata[] {
   );
 }
 
-export function listKnownModels(options?: GoogleAIPluginOptions) {
-  return Object.keys(ALL_MODELS).map((name) => defineEmbedder(name, options));
+export function listKnownModels(
+  options?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+) {
+  return Object.keys(ALL_MODELS).map((name) =>
+    defineEmbedder(name, options, namespace)
+  );
 }
 
 export function defineEmbedder(
   name: string,
-  pluginOptions?: GoogleAIPluginOptions
+  pluginOptions?: GoogleAIPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): EmbedderAction {
   checkApiKey(pluginOptions?.apiKey);
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
   const clientOptions: ClientOptions = {
     apiVersion: pluginOptions?.apiVersion,
     baseUrl: pluginOptions?.baseUrl,

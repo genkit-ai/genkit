@@ -44,11 +44,13 @@ import {
 } from './client.js';
 import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
+  DEFAULT_NAMESPACE,
   applyContextOverrides,
   calculateRequestOptions,
   checkModelName,
   extractVersion,
   toInteractionsClientOptions,
+  type PluginNamespace,
 } from './utils.js';
 
 export const DeepResearchConfigSchema = z
@@ -115,8 +117,9 @@ function commonRef(
   info: ModelInfo = DEEP_RESEARCH_INFO,
   configSchema: ConfigSchemaType = DeepResearchConfigSchema
 ): ModelReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info,
   });
@@ -149,27 +152,37 @@ export function isDeepResearchModelName(
 
 export function model(
   version: string,
-  config: DeepResearchConfig = {}
+  config: DeepResearchConfig = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
-    return ALL_MODELS[name].withConfig(config);
+    const known = ALL_MODELS[name];
+    return modelRef({
+      name: `${namespace}/${name}`,
+      config,
+      configSchema: known.configSchema,
+      info: known.info,
+    });
   }
 
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: DeepResearchConfigSchema,
     info: { ...GENERIC_MODEL.info },
   });
 }
 
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return models
     .filter((m: Model) => isDeepResearchModelName(m.name))
     .map((m: Model) => {
-      const ref = model(m.name);
+      const ref = model(m.name, {}, namespace);
       return modelActionMetadata({
         name: ref.name,
         info: ref.info,
@@ -180,10 +193,11 @@ export function listActions(models: Model[]): ActionMetadata[] {
 
 export function listKnownModels(
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ) {
   return Object.keys(ALL_MODELS).map((name: string) =>
-    defineModel(name, clientOptions, pluginOptions)
+    defineModel(name, clientOptions, pluginOptions, namespace)
   );
 }
 
@@ -211,9 +225,10 @@ function toDeepResearchResponseFormat(
 export function defineModel(
   name: string,
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): BackgroundModelAction<DeepResearchConfigSchemaType> {
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
 
   return pluginBackgroundModel({
     name: ref.name,

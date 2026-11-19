@@ -41,9 +41,11 @@ import { ClientOptions, Model, VertexPluginOptions } from './types.js';
 import {
   calculateRequestOptions,
   checkModelName,
+  DEFAULT_NAMESPACE,
   extractVersion,
   shouldUseLegacyEndpoint,
   toInteractionsClientOptions,
+  type PluginNamespace,
   type RequestClientOptions,
 } from './utils.js';
 
@@ -105,8 +107,9 @@ function commonRef(
   info?: ModelInfo,
   configSchema: ConfigSchemaType = Lyria3ConfigSchema
 ): ModelReference<ConfigSchemaType> {
+  // `model()` re-creates known refs under the requested namespace.
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${DEFAULT_NAMESPACE}/${name}`,
     configSchema,
     info: info ?? {
       supports: {
@@ -176,27 +179,37 @@ export function isLyriaModelName(value?: string): value is LyriaModelName {
 
 export function model(
   version: string,
-  config: ConfigSchema = {}
+  config: ConfigSchema = {},
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelReference<ConfigSchemaType> {
   const name = checkModelName(version);
 
   if (isKnownKey(name, ALL_MODELS)) {
-    return ALL_MODELS[name].withConfig(config);
+    const known = ALL_MODELS[name];
+    return modelRef({
+      name: `${namespace}/${name}`,
+      config,
+      configSchema: known.configSchema,
+      info: known.info,
+    });
   }
 
   return modelRef({
-    name: `vertexai/${name}`,
+    name: `${namespace}/${name}`,
     config,
     configSchema: Lyria3ConfigSchema,
     info: { ...GENERIC_MODEL.info },
   });
 }
 
-export function listActions(models: Model[]): ActionMetadata[] {
+export function listActions(
+  models: Model[],
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
+): ActionMetadata[] {
   return models
     .filter((m: Model) => isLyriaModelName(m.name))
     .map((m: Model) => {
-      const ref = model(m.name);
+      const ref = model(m.name, {}, namespace);
       return modelActionMetadata({
         name: ref.name,
         info: ref.info,
@@ -207,19 +220,21 @@ export function listActions(models: Model[]): ActionMetadata[] {
 
 export function listKnownModels(
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ) {
   return Object.keys(ALL_MODELS).map((name: string) =>
-    defineModel(name, clientOptions, pluginOptions)
+    defineModel(name, clientOptions, pluginOptions, namespace)
   );
 }
 
 export function defineModel(
   name: string,
   clientOptions: ClientOptions,
-  pluginOptions?: VertexPluginOptions
+  pluginOptions?: VertexPluginOptions,
+  namespace: PluginNamespace = DEFAULT_NAMESPACE
 ): ModelAction<ConfigSchemaType> {
-  const ref = model(name);
+  const ref = model(name, {}, namespace);
 
   return pluginModel(
     {
