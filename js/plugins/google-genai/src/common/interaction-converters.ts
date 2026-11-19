@@ -383,30 +383,33 @@ export function selectInteractionInput(
  * Converts `functionCallingConfig` (or, without it, the request's
  * `toolChoice`) to the Interactions `generation_config.tool_choice`.
  * Returns `undefined` when neither sets anything.
+ *
+ * The server only accepts `allowed_tools` with mode `any` or `validated`
+ * (`{"allowed_tools": {"mode": "none"}}` is a 400 "allowed_tools mode must
+ * be either ANY or VALIDATED."), so every other mode is sent as a plain
+ * string. `allowedFunctionNames` without `ANY` or `VALIDATED` can't be
+ * expressed and is dropped via `warnDropped`.
  */
 export function toInteractionToolChoice(
   functionCallingConfig?: { mode?: string; allowedFunctionNames?: string[] },
-  toolChoice?: string
-): InteractionToolChoiceConfig | undefined {
+  toolChoice?: string,
+  warnDropped?: (field: string) => void
+): string | InteractionToolChoiceConfig | undefined {
   if (functionCallingConfig) {
     const mode = functionCallingConfig.mode?.toLowerCase();
     const validMode = mode && mode !== 'mode_unspecified' ? mode : undefined;
-    if (!validMode && !functionCallingConfig.allowedFunctionNames?.length) {
-      return undefined;
+    const names = functionCallingConfig.allowedFunctionNames;
+    const hasNames = !!names?.length;
+    if (hasNames && (validMode === 'any' || validMode === 'validated')) {
+      return { allowed_tools: { mode: validMode, tools: names } };
     }
-    return {
-      allowed_tools: {
-        ...(validMode ? { mode: validMode } : {}),
-        ...(functionCallingConfig.allowedFunctionNames
-          ? { tools: functionCallingConfig.allowedFunctionNames }
-          : {}),
-      },
-    };
+    if (hasNames) {
+      warnDropped?.('functionCallingConfig.allowedFunctionNames');
+    }
+    return validMode;
   }
   if (toolChoice) {
-    return {
-      allowed_tools: { mode: toolChoice === 'required' ? 'any' : toolChoice },
-    };
+    return toolChoice === 'required' ? 'any' : toolChoice;
   }
   return undefined;
 }

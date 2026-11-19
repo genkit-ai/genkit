@@ -1269,7 +1269,8 @@ async function generateWithInteractions(params: {
   );
   const toolChoice = toInteractionToolChoice(
     functionCallingConfig,
-    request.toolChoice
+    request.toolChoice,
+    warnDropped
   );
   if (toolChoice) {
     generationConfig.tool_choice = toolChoice;

@@ -1301,7 +1301,8 @@ export function defineModel(
       if (useInteractions) {
         const toolChoice = toInteractionToolChoice(
           functionCallingConfig,
-          request.toolChoice
+          request.toolChoice,
+          (field) => warnDroppedConfigField(modelVersion, field)
         );
         if (toolChoice) {
           interactionGenerationConfig.tool_choice = toolChoice;
