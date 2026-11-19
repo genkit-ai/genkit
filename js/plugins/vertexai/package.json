@@ -41,24 +41,17 @@
     "@google-cloud/vertexai": "^1.9.3",
     "@mistralai/mistralai-gcp": "^1.3.5",
     "google-auth-library": "^9.14.2",
-    "googleapis": "^140.0.1",
     "node-fetch": "^3.3.2",
     "openai": "^4.52.7"
   },
   "peerDependencies": {
     "genkit": "workspace:^"
   },
-  "optionalDependencies": {
-    "@google-cloud/bigquery": "^7.8.0",
-    "firebase-admin": ">=12.2"
-  },
   "devDependencies": {
     "@types/node": "^20.11.16",
-    "@types/sinon": "^17.0.4",
     "cross-env": "10.1.0",
     "google-gax": "^4.4.1",
     "rimraf": "^6.0.1",
-    "sinon": "^21.0.0",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.9.3"
@@ -71,12 +64,6 @@
       "types": "./lib/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./rerankers": {
-      "require": "./lib/rerankers/index.js",
-      "import": "./lib/rerankers/index.mjs",
-      "types": "./lib/rerankers/index.d.ts",
-      "default": "./lib/rerankers/index.js"
-    },
     "./evaluation": {
       "require": "./lib/evaluation/index.js",
       "import": "./lib/evaluation/index.mjs",
@@ -88,27 +75,15 @@
       "import": "./lib/modelgarden/index.mjs",
       "types": "./lib/modelgarden/index.d.ts",
       "default": "./lib/modelgarden/index.js"
-    },
-    "./vectorsearch": {
-      "require": "./lib/vectorsearch/index.js",
-      "import": "./lib/vectorsearch/index.mjs",
-      "types": "./lib/vectorsearch/index.d.ts",
-      "default": "./lib/vectorsearch/index.js"
     }
   },
   "typesVersions": {
     "*": {
-      "rerankers": [
-        "./lib/rerankers/index"
-      ],
       "evaluation": [
         "./lib/evaluation/index"
       ],
       "modelgarden": [
         "./lib/modelgarden/index"
-      ],
-      "vectorsearch": [
-        "./lib/vectorsearch/index"
       ]
     }
   }
