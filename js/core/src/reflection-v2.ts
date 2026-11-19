@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { isValidTraceId } from '@opentelemetry/api';
 import WebSocket from 'ws';
 import { StatusCodes, statusNameToCode, type Status } from './action.js';
 import { Channel } from './async.js';
@@ -43,7 +44,7 @@ interface JsonRpcRequest {
   jsonrpc: '2.0';
   method: string;
   params?: any;
-  id?: string;
+  id?: string | number;
 }
 
 interface JsonRpcResponse {
@@ -54,7 +55,7 @@ interface JsonRpcResponse {
     message: string;
     data?: any;
   };
-  id: string;
+  id: string | number;
 }
 
 type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse;
@@ -229,7 +230,7 @@ export class ReflectionServerV2 {
     }
   }
 
-  private sendResponse(id: string, result: any) {
+  private sendResponse(id: string | number, result: any) {
     this.send({
       jsonrpc: '2.0',
       result,
@@ -237,7 +238,12 @@ export class ReflectionServerV2 {
     });
   }
 
-  private sendError(id: string, code: number, message: string, data?: any) {
+  private sendError(
+    id: string | number,
+    code: number,
+    message: string,
+    data?: any
+  ) {
     this.send({
       jsonrpc: '2.0',
       error: { code, message, data },
@@ -427,7 +433,8 @@ export class ReflectionServerV2 {
   }
 
   private async handleRunAction(request: JsonRpcRequest) {
-    if (!request.id) return;
+    if (request.id === undefined) return;
+    const requestId = String(request.id);
 
     const { key, input, init, context, telemetryLabels, stream, streamInput } =
       ReflectionRunActionParamsSchema.parse(request.params);
@@ -440,18 +447,21 @@ export class ReflectionServerV2 {
 
     const abortController = new AbortController();
     let traceId: string | undefined;
+    let cancellationId: string | undefined;
 
     // For bidi streaming, create a Channel to receive input chunks
     let inputChannel: Channel<any> | undefined;
     if (streamInput) {
       inputChannel = new Channel<any>();
-      this.inputStreams.set(request.id, inputChannel);
+      this.inputStreams.set(requestId, inputChannel);
     }
 
     try {
       const onTraceStartCallback = ({ traceId: tid }: { traceId: string }) => {
         traceId = tid;
-        this.activeActions.set(tid, {
+        const actionId = isValidTraceId(tid) ? tid : requestId;
+        cancellationId = actionId;
+        this.activeActions.set(actionId, {
           abortController,
           startTime: new Date(),
         });
@@ -459,8 +469,8 @@ export class ReflectionServerV2 {
         this.sendNotification(
           'runActionState',
           ReflectionRunActionStateParamsSchema.parse({
-            requestId: request.id,
-            state: { traceId: tid },
+            requestId,
+            state: { traceId: actionId },
           })
         );
       };
@@ -470,7 +480,7 @@ export class ReflectionServerV2 {
           this.sendNotification(
             'streamChunk',
             ReflectionStreamChunkParamsSchema.parse({
-              requestId: request.id,
+              requestId,
               chunk,
             })
           );
@@ -535,12 +545,10 @@ export class ReflectionServerV2 {
 
       this.sendError(request.id, -32000, errorResponse.message, errorResponse);
     } finally {
-      if (traceId) {
-        this.activeActions.delete(traceId);
+      if (cancellationId) {
+        this.activeActions.delete(cancellationId);
       }
-      if (request.id) {
-        this.inputStreams.delete(request.id);
-      }
+      this.inputStreams.delete(requestId);
     }
   }
 

@@ -542,6 +542,120 @@ describe('ReflectionServerV2', () => {
     await actionCancelled;
   });
 
+  it('should cancel the intended action when tracing is disabled', async () => {
+    const traceId = '0'.repeat(32);
+    const spanId = '0'.repeat(16);
+    const finish = new Map<string, () => void>();
+    const longAction = action(
+      {
+        name: 'untracedAction',
+        inputSchema: z.object({ id: z.string() }),
+        outputSchema: z.string(),
+        actionType: 'custom',
+      },
+      async () => ''
+    );
+    longAction.run = async (input, options) => {
+      assert.ok(input);
+      options?.onTraceStart?.({ traceId, spanId });
+      const result = await new Promise<string>((resolve, reject) => {
+        const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+        options?.abortSignal?.addEventListener('abort', onAbort, {
+          once: true,
+        });
+        finish.set(input.id, () => {
+          options?.abortSignal?.removeEventListener('abort', onAbort);
+          resolve(input.id);
+        });
+      });
+      return { result, telemetry: { traceId, spanId } };
+    };
+    registry.registerAction('custom', longAction);
+
+    const outcome = new Promise<{
+      states: Record<string, string>;
+      responses: Record<string, any>;
+    }>((resolve, reject) => {
+      const states: Record<string, string> = {};
+      const responses: Record<string, any> = {};
+      let cancelSent = false;
+      let cancelComplete = false;
+      const timeout = setTimeout(
+        () => reject(new Error('untraced cancellation timeout')),
+        2000
+      );
+      const maybeResolve = () => {
+        if (cancelComplete && responses['1'] && responses['2']) {
+          clearTimeout(timeout);
+          resolve({ states, responses });
+        }
+      };
+
+      wss.on('connection', (ws) => {
+        ws.on('message', (data) => {
+          try {
+            const msg = JSON.parse(data.toString());
+            if (msg.method === 'register') {
+              ws.send(
+                JSON.stringify({ jsonrpc: '2.0', result: {}, id: msg.id })
+              );
+              for (const [id, requestId] of [
+                ['first', 1],
+                ['second', 2],
+              ] as const) {
+                ws.send(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'runAction',
+                    params: {
+                      key: '/custom/untracedAction',
+                      input: { id },
+                    },
+                    id: requestId,
+                  })
+                );
+              }
+            } else if (msg.method === 'runActionState') {
+              states[msg.params.requestId] = msg.params.state.traceId;
+              if (states['1'] && states['2'] && !cancelSent) {
+                cancelSent = true;
+                ws.send(
+                  JSON.stringify({
+                    jsonrpc: '2.0',
+                    method: 'cancelAction',
+                    params: { traceId: states['1'] },
+                    id: 'cancel',
+                  })
+                );
+              }
+            } else if (msg.id === 'cancel') {
+              cancelComplete = true;
+              finish.get('first')?.();
+              finish.get('second')?.();
+              maybeResolve();
+            } else if (msg.id === 1 || msg.id === 2) {
+              responses[String(msg.id)] = msg;
+              maybeResolve();
+            }
+          } catch (e) {
+            clearTimeout(timeout);
+            reject(e);
+          }
+        });
+      });
+    });
+
+    server = new ReflectionServerV2(registry, {
+      url: `ws://localhost:${port}`,
+    });
+    await server.start();
+    const { states, responses } = await outcome;
+
+    assert.notStrictEqual(states['1'], states['2']);
+    assert.match(responses['1'].error.message, /cancelled/);
+    assert.strictEqual(responses['2'].result.result, 'second');
+  });
+
   it('should reconnect when lost connection and register again', async () => {
     let connectionCount = 0;
     const reconnected = new Promise<void>((resolve, reject) => {
@@ -685,7 +799,7 @@ describe('ReflectionServerV2', () => {
                     stream: true,
                     streamInput: true,
                   },
-                  id: 'bidi-1',
+                  id: 42,
                 })
               );
               // Send input stream chunks
@@ -694,27 +808,27 @@ describe('ReflectionServerV2', () => {
                   JSON.stringify({
                     jsonrpc: '2.0',
                     method: 'sendInputStreamChunk',
-                    params: { requestId: 'bidi-1', chunk: 'hello' },
+                    params: { requestId: '42', chunk: 'hello' },
                   })
                 );
                 ws.send(
                   JSON.stringify({
                     jsonrpc: '2.0',
                     method: 'sendInputStreamChunk',
-                    params: { requestId: 'bidi-1', chunk: 'world' },
+                    params: { requestId: '42', chunk: 'world' },
                   })
                 );
                 ws.send(
                   JSON.stringify({
                     jsonrpc: '2.0',
                     method: 'endInputStream',
-                    params: { requestId: 'bidi-1' },
+                    params: { requestId: '42' },
                   })
                 );
               }, 50);
             } else if (msg.method === 'streamChunk') {
               outputChunks.push(msg.params.chunk);
-            } else if (msg.id === 'bidi-1') {
+            } else if (msg.id === 42) {
               if (msg.error) {
                 reject(
                   new Error(`bidi action error: ${JSON.stringify(msg.error)}`)

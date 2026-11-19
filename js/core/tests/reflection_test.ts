@@ -174,6 +174,64 @@ describe('ReflectionServer API', () => {
     );
   });
 
+  it('cancels the intended action when tracing is disabled', async () => {
+    const traceId = '0'.repeat(32);
+    const spanId = '0'.repeat(16);
+    const finish = new Map<string, () => void>();
+    const longAction = action(
+      { name: 'untracedAction', actionType: 'custom' },
+      async () => undefined
+    );
+    longAction.run = async (input, options) => {
+      options?.onTraceStart?.({ traceId, spanId });
+      const result = await new Promise<string>((resolve, reject) => {
+        const id = (input as { id: string }).id;
+        const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+        options?.abortSignal?.addEventListener('abort', onAbort, {
+          once: true,
+        });
+        finish.set(id, () => {
+          options?.abortSignal?.removeEventListener('abort', onAbort);
+          resolve(id);
+        });
+      });
+      return { result, telemetry: { traceId, spanId } };
+    };
+    registry.registerAction('custom', longAction);
+
+    const startAction = async (id: string) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/runAction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: '/custom/untracedAction',
+          input: { id },
+        }),
+      });
+      return {
+        cancellationId: response.headers.get('x-genkit-trace-id'),
+        response,
+      };
+    };
+
+    const first = await startAction('first');
+    const second = await startAction('second');
+    const cancel = await postApi('/api/cancelAction', {
+      traceId: first.cancellationId,
+    });
+    finish.get('first')?.();
+    finish.get('second')?.();
+    const [firstBody, secondBody] = await Promise.all([
+      first.response.json(),
+      second.response.json(),
+    ]);
+
+    assert.strictEqual(cancel.status, 200);
+    assert.notStrictEqual(first.cancellationId, second.cancellationId);
+    assert.strictEqual(firstBody.error.code, 1);
+    assert.strictEqual(secondBody.result, 'second');
+  });
+
   it('tolerates concurrent stop() calls', async () => {
     // A quit request racing a signal handler must not close the server twice
     // (the second close would reject with ERR_SERVER_NOT_RUNNING).
