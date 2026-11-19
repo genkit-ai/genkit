@@ -113,6 +113,9 @@ const DEFAULT_OUTPUT_EXTRACTOR: EvalExtractorFn = (trace: TraceData) => {
   const rootSpan = getRootSpan(trace);
   return safeParse(rootSpan?.attributes['genkit:output'] as string);
 };
+// Only SDKs that still have retriever actions (e.g. Go) emit these spans. Genkit
+// JS has no retrievers, so JS flows configure a `context` extractor in
+// genkit-tools.conf.js instead.
 const DEFAULT_CONTEXT_EXTRACTOR: EvalExtractorFn = (trace: TraceData) => {
   return Object.values(trace.spans)
     .filter((s) => s.attributes['genkit:metadata:subtype'] === 'retriever')

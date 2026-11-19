@@ -25,7 +25,8 @@ import { z } from 'zod';
 import { DocumentDataSchema, DocumentPartSchema } from './document.js';
 
 //
-// IMPORTANT: Keep this file in sync with genkit/ai/src/reranker.ts!
+// Rerankers were removed from Genkit JS but are still used by other SDKs
+// (e.g. Go), so these schemas stay part of the shared genkit-schema.json.
 //
 
 /**

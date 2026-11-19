@@ -17,8 +17,8 @@
  */
 
 /**
- * Plugin authoring utilities — factory functions (`model`, `embedder`,
- * `retriever`, etc.), plugin lifecycle types, and the v1/v2 plugin
+ * Plugin authoring utilities: factory functions (`model`, `embedder`,
+ * `evaluator`, etc.), plugin lifecycle types, and the v1/v2 plugin
  * interfaces for building Genkit plugins.
  *
  * ```ts
@@ -46,8 +46,6 @@ export {
   model,
   modelActionMetadata,
 } from '@genkit-ai/ai/model';
-export { reranker } from '@genkit-ai/ai/reranker';
-export { indexer, retriever } from '@genkit-ai/ai/retriever';
 export { type GenerateMiddleware, type GenkitPluginV2, type ResolvableAction };
 
 /** A v1 plugin provider returned by a {@link GenkitPlugin} factory function. */

@@ -47,20 +47,6 @@ export async function flowCallersPassInput() {
   await f({ q: 'hi' });
 }
 
-export async function retrieverOptionsAreInput() {
-  const retriever = ai.defineRetriever(
-    {
-      name: 'r',
-      configSchema: z.object({ k: z.number().default(3) }),
-    },
-    async (_query, options) => {
-      const k: number = options.k;
-      return { documents: Array(k).fill({ content: [{ text: 'x' }] }) };
-    }
-  );
-  await ai.retrieve({ retriever, query: 'q', options: {} });
-}
-
 export function agentPromptInputIsInput() {
   ai.definePrompt({ name: 'agentPrompt', input: { schema: Input } });
   ai.definePromptAgent<unknown, typeof Input>({

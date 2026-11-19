@@ -723,7 +723,7 @@ export async function parseSchemaAsync<T = unknown>(
 
 /**
  * A top-level `z.void()` means "no meaningful value" (like a TS `void` return),
- * not "must be undefined": e.g. an indexer whose runner returns something, or
+ * not "must be undefined": e.g. an action whose runner returns something, or
  * a client sending `null` for a void input. Its JSON schema is `{}`, so it was
  * never enforced; keep passing the value through as is.
  */

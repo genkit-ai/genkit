@@ -99,18 +99,6 @@
       "import": "./lib/formats.mjs",
       "default": "./lib/formats.js"
     },
-    "./retriever": {
-      "types": "./lib/retriever.d.ts",
-      "require": "./lib/retriever.js",
-      "import": "./lib/retriever.mjs",
-      "default": "./lib/retriever.js"
-    },
-    "./reranker": {
-      "types": "./lib/reranker.d.ts",
-      "require": "./lib/reranker.js",
-      "import": "./lib/reranker.mjs",
-      "default": "./lib/reranker.js"
-    },
     "./embedder": {
       "types": "./lib/embedder.d.ts",
       "require": "./lib/embedder.js",
@@ -200,9 +188,6 @@
       ],
       "formats": [
         "lib/formats"
-      ],
-      "retriever": [
-        "lib/retriever"
       ],
       "embedder": [
         "lib/embedder"

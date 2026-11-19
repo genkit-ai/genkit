@@ -1,14 +1,12 @@
 {
   "entryPoints": [
     "src/index.ts",
-    "src/retriever.ts",
     "src/embedder.ts",
     "src/evaluator.ts",
     "src/model.ts",
     "src/model/middleware.ts",
     "src/extract.ts",
     "src/tool.ts",
-    "src/reranker.ts",
     "src/chat.ts",
     "src/session.ts"
   ]

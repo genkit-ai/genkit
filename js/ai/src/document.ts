@@ -39,8 +39,9 @@ function deepCopy<T>(value: T): T {
 }
 
 /**
- * Document represents document content along with its metadata that can be embedded, indexed or
- * retrieved. Each document can contain multiple parts (for example text and an image)
+ * Document represents document content along with its metadata, e.g. for embedding or for
+ * passing as context to `generate({ docs })`. Each document can contain multiple parts (for
+ * example text and an image).
  */
 export class Document implements DocumentData {
   content: Part[];
