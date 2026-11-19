@@ -1629,14 +1629,14 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			var streamValue Out
-			if err := chunk.Output(&streamValue); err != nil {
+			streamValue, ok, err := chunkOutput[Out](chunk)
+			if err != nil {
 				yield(nil, err)
 				done = true
 				return err
 			}
 			// Skip yielding if there's no parseable output yet (e.g., incomplete JSON during streaming).
-			if base.IsNil(streamValue) {
+			if !ok {
 				return nil
 			}
 			if !yield(&StreamValue[Out, Out]{Chunk: streamValue}, nil) {
@@ -1681,10 +1681,9 @@ func GenerateDataStream[Out any](ctx context.Context, r api.Registry, opts ...Ge
 			return
 		}
 
-		// Unlike text prompts, this helper requests JSON even for a string Out.
-		var output Out
-		if err := resp.Output(&output); err != nil {
-			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, fmt.Errorf("failed to parse output: %w", err))
+		output, err := extractTypedOutput[Out](resp)
+		if err != nil {
+			yield(&StreamValue[Out, Out]{Done: true, Response: resp}, err)
 			return
 		}
 
@@ -2221,7 +2220,25 @@ func (mr *ModelResponse) Output(v any) error {
 	if err != nil {
 		return err
 	}
+	return decodeOutput(output, v)
+}
 
+// jsonString returns the value of a JSON format response that holds a JSON
+// string, so a string Out reads the string rather than its quoted encoding.
+func (mr *ModelResponse) jsonString() (string, bool) {
+	if _, ok := mr.formatHandler.(*jsonHandler); !ok {
+		return "", false
+	}
+	output, err := mr.formatHandler.ParseOutput(mr.Message)
+	if err != nil {
+		return "", false
+	}
+	s, ok := output.(string)
+	return s, ok
+}
+
+// decodeOutput converts a value parsed by a format handler into v.
+func decodeOutput(output, v any) error {
 	b, err := json.Marshal(output)
 	if err != nil {
 		return fmt.Errorf("failed to marshal output: %w", err)
@@ -2361,26 +2378,57 @@ func (c *ModelResponseChunk) ToolResponses() []*Part {
 // Output parses the chunk using the format handler and unmarshals the result into v.
 // Returns an error if the format handler is not set or does not support parsing chunks.
 func (c *ModelResponseChunk) Output(v any) error {
-	if c == nil {
-		return errors.New("chunk is nil")
-	}
-	if c.formatHandler == nil {
-		return errors.New("output format chosen does not support parsing chunks")
-	}
-
-	output, err := c.formatHandler.ParseChunk(c)
+	output, err := c.parse()
 	if err != nil {
 		return err
 	}
+	return decodeOutput(output, v)
+}
 
-	b, err := json.Marshal(output)
-	if err != nil {
-		return fmt.Errorf("failed to marshal chunk output: %w", err)
+// parse returns what the chunk's format handler makes of the stream so far,
+// which is nil while nothing parseable has arrived. Handlers accumulate text
+// across chunks, so it runs once per chunk.
+func (c *ModelResponseChunk) parse() (any, error) {
+	if c == nil {
+		return nil, errors.New("chunk is nil")
 	}
-	if err := json.Unmarshal(b, v); err != nil {
-		return fmt.Errorf("failed to unmarshal output: %w", err)
+	if c.formatHandler == nil {
+		return nil, errors.New("output format chosen does not support parsing chunks")
 	}
-	return nil
+	return c.formatHandler.ParseChunk(c)
+}
+
+// chunkOutput decodes what has streamed so far into Out. ok is false while
+// nothing parseable has arrived, which a zero value cannot signal when Out is
+// a scalar such as bool or int.
+func chunkOutput[Out any](c *ModelResponseChunk) (out Out, ok bool, err error) {
+	parsed, err := c.parse()
+	if err != nil || parsed == nil {
+		return out, false, err
+	}
+	if err := decodeOutput(parsed, &out); err != nil {
+		return base.Zero[Out](), false, err
+	}
+	return out, true, nil
+}
+
+// promptChunkOutput is [chunkOutput] for a [DataPrompt]. A string Out takes
+// each chunk's text, or the decoded value when JSON output holds a JSON string.
+func promptChunkOutput[Out any](c *ModelResponseChunk) (Out, bool, error) {
+	var out Out
+	if _, ok := any(out).(string); !ok {
+		return chunkOutput[Out](c)
+	}
+	if _, ok := c.formatHandler.(*jsonHandler); ok {
+		parsed, err := c.parse()
+		if err != nil {
+			return out, false, err
+		}
+		if s, ok := parsed.(string); ok {
+			return any(s).(Out), true, nil
+		}
+	}
+	return any(c.Text()).(Out), true, nil
 }
 
 // outputer is an interface for types that can unmarshal structured output.
@@ -2404,16 +2452,20 @@ func OutputFrom[Out any](src outputer) Out {
 }
 
 // extractTypedOutput extracts the typed output from a model response.
-// It supports string output by calling Text() and returning the result.
+// A string Out reads the text, or the decoded value when a response's JSON
+// output holds a JSON string.
 func extractTypedOutput[Out any](o outputer) (Out, error) {
 	var output Out
 
 	switch any(output).(type) {
 	case string:
-		text := o.Text()
+		if resp, ok := o.(*ModelResponse); ok {
+			if s, ok := resp.jsonString(); ok {
+				return any(s).(Out), nil
+			}
+		}
 		// Type assertion to convert string to Out (which we know is string).
-		result := any(text).(Out)
-		return result, nil
+		return any(o.Text()).(Out), nil
 	default:
 		if err := o.Output(&output); err != nil {
 			return base.Zero[Out](), fmt.Errorf("failed to parse output: %w", err)

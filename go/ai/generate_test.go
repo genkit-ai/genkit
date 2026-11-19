@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
 	"math"
 	"reflect"
 	"runtime"
@@ -2461,42 +2462,52 @@ func TestGenerateData(t *testing.T) {
 	})
 }
 
+// TestGenerateDataJSONValues verifies that every typed helper decodes the
+// model's JSON value into Out, scalars included, both as it streams and once
+// it completes. A chunk is only yielded once something has parsed, so a scalar
+// stream never reports a zero value the model did not send.
 func TestGenerateDataJSONValues(t *testing.T) {
-	testGenerateDataJSONValue(t, "integer", 42)
-	testGenerateDataJSONValue(t, "zero", 0)
-	testGenerateDataJSONValue(t, "false", false)
-	testGenerateDataJSONValue(t, "escaped string", "line one\n\"line two\"\\end")
-	testGenerateDataJSONValue(t, "object", struct {
+	testGenerateDataJSONValue(t, "integer", int64(42), []string{" ", "42"}, []int64{42})
+	testGenerateDataJSONValue(t, "integer beyond float64", int64(9007199254740993), []string{"9007199254740993"}, []int64{9007199254740993})
+	testGenerateDataJSONValue(t, "zero", 0, []string{"0"}, []int{0})
+	testGenerateDataJSONValue(t, "false", false, []string{"fa", "lse"}, []bool{false})
+	testGenerateDataJSONValue(t, "escaped string", "line one\n\"line two\"\\end",
+		[]string{`"line one\n`, `\"line two\"\\end"`},
+		[]string{"line one\n", "line one\n\"line two\"\\end"})
+	type counter struct {
 		Count int `json:"count"`
-	}{Count: 42})
-	testGenerateDataJSONValue(t, "array", []int{1, 2})
+	}
+	testGenerateDataJSONValue(t, "object", counter{Count: 42}, []string{`{"count":42}`}, []counter{{Count: 42}})
+	testGenerateDataJSONValue(t, "array", []int{1, 2}, []string{"[1,2]"}, [][]int{{1, 2}})
 }
 
-func testGenerateDataJSONValue[Out any](t *testing.T, name string, want Out) {
+// testGenerateDataJSONValue runs GenerateData, GenerateDataStream, and a
+// DataPrompt stream against a model that streams chunks and then responds with
+// their concatenation.
+func testGenerateDataJSONValue[Out any](t *testing.T, name string, want Out, chunks []string, wantChunks []Out) {
 	t.Helper()
 	t.Run(name, func(t *testing.T) {
-		raw, err := json.Marshal(want)
-		if err != nil {
-			t.Fatal(err)
-		}
 		r := newTestRegistry(t)
 		model := defineFakeModel(t, r, fakeModelConfig{
 			handler: func(ctx context.Context, req *ModelRequest, cb ModelStreamCallback) (*ModelResponse, error) {
 				if cb != nil {
-					if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart(string(raw))}}); err != nil {
-						return nil, err
+					for _, c := range chunks {
+						if err := cb(ctx, &ModelResponseChunk{Content: []*Part{NewTextPart(c)}}); err != nil {
+							return nil, err
+						}
 					}
 				}
 				return &ModelResponse{
 					Request:      req,
-					Message:      NewModelTextMessage(string(raw)),
+					Message:      NewModelTextMessage(strings.Join(chunks, "")),
 					FinishReason: FinishReasonStop,
 				}, nil
 			},
 		})
+		const prompt = "Return the requested JSON value."
 
 		t.Run("GenerateData", func(t *testing.T) {
-			got, _, err := GenerateData[Out](t.Context(), r, WithModel(model), WithPrompt("Return the requested JSON value."))
+			got, resp, err := GenerateData[Out](t.Context(), r, WithModel(model), WithPrompt(prompt))
 			if err != nil {
 				t.Fatalf("GenerateData() error = %v", err)
 			}
@@ -2504,28 +2515,39 @@ func testGenerateDataJSONValue[Out any](t *testing.T, name string, want Out) {
 				t.Fatal("GenerateData() returned no output")
 			}
 			assertEqual(t, *got, want)
+			assertEqual(t, OutputFrom[Out](resp), want)
 		})
 
 		t.Run("GenerateDataStream", func(t *testing.T) {
-			var final *StreamValue[Out, Out]
-			var chunks []Out
-			for value, err := range GenerateDataStream[Out](t.Context(), r, WithModel(model), WithPrompt("Return the requested JSON value.")) {
-				if err != nil {
-					t.Fatalf("GenerateDataStream() error = %v", err)
-				}
-				if value.Done {
-					final = value
-				} else {
-					chunks = append(chunks, value.Chunk)
-				}
-			}
-			if final == nil {
-				t.Fatal("GenerateDataStream() yielded no final response")
-			}
-			assertEqual(t, final.Output, want)
-			assertEqual(t, chunks, []Out{want})
+			assertJSONValueStream(t, GenerateDataStream[Out](t.Context(), r, WithModel(model), WithPrompt(prompt)), want, wantChunks)
+		})
+
+		t.Run("DataPrompt.ExecuteStream", func(t *testing.T) {
+			dp := DefineDataPrompt[struct{}, Out](r, "jsonValue", WithModel(model), WithPrompt(prompt), WithOutputType(want))
+			assertJSONValueStream(t, dp.ExecuteStream(t.Context(), struct{}{}), want, wantChunks)
 		})
 	})
+}
+
+func assertJSONValueStream[Out any](t *testing.T, stream iter.Seq2[*StreamValue[Out, Out], error], want Out, wantChunks []Out) {
+	t.Helper()
+	var final *StreamValue[Out, Out]
+	var chunks []Out
+	for value, err := range stream {
+		if err != nil {
+			t.Fatalf("stream error = %v", err)
+		}
+		if value.Done {
+			final = value
+		} else {
+			chunks = append(chunks, value.Chunk)
+		}
+	}
+	if final == nil {
+		t.Fatal("stream yielded no final response")
+	}
+	assertEqual(t, final.Output, want)
+	assertEqual(t, chunks, wantChunks)
 }
 
 // TestGenerateDataCallerSchemaOverride verifies that GenerateData injects the
