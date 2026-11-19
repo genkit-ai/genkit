@@ -1202,8 +1202,53 @@ describe('Vertex AI Gemini', () => {
           max_output_tokens: 100,
           thinking_level: 'low',
           thinking_summaries: 'auto',
-          tool_choice: { allowed_tools: { mode: 'any' } },
+          tool_choice: 'any',
         });
+      });
+
+      // The platform rejects {allowed_tools: {mode: 'none' | 'auto'}} with a
+      // 400, as the Gemini API does: plain modes are sent as strings.
+      it('sends toolChoice none as a plain string', async () => {
+        mockFetchResponse(interactionResponse);
+        const model = defineModel(interactionsModel, clientOptions);
+        await model.run({ ...minimalRequest, toolChoice: 'none' });
+        assert.strictEqual(
+          lastRequestBody().generation_config.tool_choice,
+          'none'
+        );
+      });
+
+      it('drops allowedFunctionNames without ANY with a warning', async () => {
+        const warnStub = sinon.stub(logger, 'warn');
+        mockFetchResponse(interactionResponse);
+        // Its own model name: the warning is logged once per model and field.
+        const model = defineModel(
+          `gemini-allowed-names-${clientOptions.kind}`,
+          clientOptions
+        );
+        await model.run({
+          ...minimalRequest,
+          config: {
+            functionCallingConfig: {
+              mode: 'AUTO',
+              allowedFunctionNames: ['getWeather'],
+            },
+          },
+        });
+        assert.strictEqual(
+          lastRequestBody().generation_config.tool_choice,
+          'auto'
+        );
+        assert.ok(
+          warnStub
+            .getCalls()
+            .some((c) =>
+              String(c.args[0]).includes(
+                'functionCallingConfig.allowedFunctionNames is not supported'
+              )
+            ),
+          'expected a warning about allowedFunctionNames'
+        );
       });
 
       it('sends an empty schema for JSON output without a schema', async () => {
