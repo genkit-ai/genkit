@@ -104,7 +104,7 @@ describe('Antigravity', () => {
         'googlegenai/antigravity-preview-09-2026'
       );
       mockFetchResponse(mockInteractionResponse);
-      await antigravity(minimalRequest, {} as any);
+      await antigravity.run(minimalRequest);
       const body = JSON.parse(fetchStub.lastCall.args[1].body);
       assert.strictEqual(body.agent, 'antigravity-preview-09-2026');
     });

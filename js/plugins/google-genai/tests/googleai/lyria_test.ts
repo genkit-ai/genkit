@@ -102,7 +102,7 @@ describe('Lyria 3', () => {
       );
       assert.strictEqual(lyria.__action.name, 'googlegenai/lyria-3.5');
       mockFetchResponse(mockInteractionResponse);
-      await lyria(minimalRequest, {} as any);
+      await lyria.run(minimalRequest);
       const body = JSON.parse(fetchStub.lastCall.args[1].body);
       assert.strictEqual(body.model, 'lyria-3.5');
     });
