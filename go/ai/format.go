@@ -17,6 +17,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 
@@ -308,7 +309,7 @@ type jsonHandler struct{ baseHandler }
 
 // ParseOutput parses the final message and returns the parsed JSON value.
 func (j *jsonHandler) ParseOutput(m *Message) (any, error) {
-	result, err := j.parseJSON(m.Text())
+	result, err := j.parseJSON(m.Text(), false)
 	if err != nil {
 		return nil, err
 	}
@@ -324,7 +325,7 @@ func (j *jsonHandler) ParseOutput(m *Message) (any, error) {
 
 // ParseChunk processes a streaming chunk and returns parsed output.
 func (j *jsonHandler) ParseChunk(chunk *ModelResponseChunk) (any, error) {
-	return j.parseJSON(j.accumulate(chunk))
+	return j.parseJSON(j.accumulate(chunk), true)
 }
 
 // ParseMessage rewrites the message's text as a single JSON part, validated
@@ -367,7 +368,8 @@ func (j *jsonHandler) ParseMessage(m *Message) (*Message, error) {
 }
 
 // parseJSON is the shared parsing logic used by both ParseOutput and ParseChunk.
-func (j *jsonHandler) parseJSON(text string) (any, error) {
+// partial reports that text may stop mid-value, as it does while streaming.
+func (j *jsonHandler) parseJSON(text string, partial bool) (any, error) {
 	if text == "" {
 		return nil, nil
 	}
@@ -377,11 +379,13 @@ func (j *jsonHandler) parseJSON(text string) (any, error) {
 		return nil, nil
 	}
 
-	// Complete JSON can be a scalar, which the lenient object/array extractor
-	// does not recognize.
-	var result any
-	if json.Unmarshal([]byte(extracted), &result) == nil {
-		return result, nil
+	// The lenient extractor finds an object or array anywhere in the text but
+	// not a root scalar, so text that opens with neither is first decoded as
+	// one whole value.
+	if trimmed := strings.TrimSpace(extracted); trimmed != "" && trimmed[0] != '{' && trimmed[0] != '[' {
+		if result, ok := parseJSONScalar(trimmed, partial); ok {
+			return result, nil
+		}
 	}
 
 	result, err := base.ExtractJSON(extracted)
@@ -390,6 +394,27 @@ func (j *jsonHandler) parseJSON(text string) (any, error) {
 	}
 
 	return result, nil
+}
+
+// parseJSONScalar decodes text as exactly one JSON value. Numbers stay
+// [json.Number], so an integer beyond the exact range of float64 keeps every
+// digit on its way into the caller's type. When partial is set, a string cut
+// off mid-stream decodes to the part that has arrived; a truncated number or
+// keyword is not a value yet and waits for the rest.
+func parseJSONScalar(text string, partial bool) (any, bool) {
+	if partial && text[0] == '"' {
+		text = base.CompleteJSON(text)
+	}
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.UseNumber()
+	var result any
+	if err := dec.Decode(&result); err != nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return result, true
 }
 
 type jsonlFormatter struct{}
