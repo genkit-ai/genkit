@@ -45,6 +45,7 @@ import {
   parseStreamErrorText,
   processStream,
   toSnakeCaseObj,
+  unwrapErrorBody,
   withoutHeaders,
 } from '../../src/common/utils.js';
 
@@ -1945,6 +1946,46 @@ describe('Common Utils', () => {
       const err = parseInteractionStreamErrorText('not json at all');
       assert.ok(!(err instanceof GenkitError));
       assert.ok(err.message.includes('Failed to parse stream'));
+    });
+
+    it('reads an error body wrapped in a one-element array', () => {
+      // A bad API key returns the error in a list (seen live with the Dart
+      // plugin, Nov 2026).
+      const err = parseInteractionStreamErrorText(
+        JSON.stringify([
+          {
+            error: {
+              code: 400,
+              message: 'API key not valid. Please pass a valid API key.',
+              status: 'INVALID_ARGUMENT',
+            },
+          },
+        ])
+      );
+      assert.ok(err instanceof GenkitError, 'Expected GenkitError');
+      assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+      assert.strictEqual(
+        err.message,
+        'INVALID_ARGUMENT: API key not valid. Please pass a valid API key.'
+      );
+    });
+  });
+
+  describe('unwrapErrorBody', () => {
+    it('unwraps a one-element array', () => {
+      assert.deepStrictEqual(unwrapErrorBody([{ error: { code: 400 } }]), {
+        error: { code: 400 },
+      });
+    });
+
+    it('leaves objects, other arrays and other values as they are', () => {
+      const body = { error: { code: 400 } };
+      assert.strictEqual(unwrapErrorBody(body), body);
+      const two = [{ a: 1 }, { b: 2 }];
+      assert.strictEqual(unwrapErrorBody(two), two);
+      assert.deepStrictEqual(unwrapErrorBody([]), []);
+      assert.strictEqual(unwrapErrorBody('text'), 'text');
+      assert.strictEqual(unwrapErrorBody(null), null);
     });
   });
 });

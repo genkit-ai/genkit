@@ -1010,6 +1010,28 @@ describe('Vertex AI Client', () => {
               }
             );
           });
+
+          it('reads an error body wrapped in a one-element array', async () => {
+            mockFetchResponse(
+              [
+                {
+                  error: { code: 'model_not_found', message: 'No such model' },
+                },
+              ],
+              false,
+              400,
+              'Bad Request'
+            );
+            await assert.rejects(
+              createInteraction(request, currentOptions),
+              (err: any) => {
+                assert.strictEqual(err.name, 'GenkitError');
+                assert.strictEqual(err.status, 'NOT_FOUND');
+                assert.ok(err.message.endsWith('] No such model'), err.message);
+                return true;
+              }
+            );
+          });
         });
 
         describe('veoPredict', () => {
