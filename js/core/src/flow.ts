@@ -34,12 +34,12 @@ export interface Flow<
   S extends GenkitSchema = GenkitSchema,
   Init extends GenkitSchema = GenkitSchema,
 > extends Action<
-    I,
-    O,
-    S,
-    ActionRunOptions<InferOutput<S>, InferInput<Init>>,
-    Init
-  > {}
+  I,
+  O,
+  S,
+  ActionRunOptions<InferOutput<S>, InferInput<Init>>,
+  Init
+> {}
 
 /**
  * Configuration for a streaming flow.

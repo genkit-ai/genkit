@@ -73,10 +73,7 @@ export interface AnswerRelevancyGenkitMetricConfig<
   embedder: EmbedderReference<EmbedderCustomOptions>;
   embedderOptions?: InferOutput<EmbedderCustomOptions>;
 }
-export type GenkitMetricConfig<
-  M extends GenkitSchema,
-  E extends GenkitSchema,
-> =
+export type GenkitMetricConfig<M extends GenkitSchema, E extends GenkitSchema> =
   | GenkitMetric
   | FaithfulnessGenkitMetricConfig<M>
   | MaliciousnessGenkitMetricConfig<M>

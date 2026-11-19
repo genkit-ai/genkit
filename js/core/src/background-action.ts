@@ -313,8 +313,7 @@ export function backgroundAction<
       // wraps the start action, which actually returns an Operation<O>.
       // Previously hidden by zod v3's `any` inference; needs a proper fix.
       use: config.use as unknown as
-        | Middleware<InferInput<I>, Operation<InferOutput<O>>>[]
-        | undefined,
+        Middleware<InferInput<I>, Operation<InferOutput<O>>>[] | undefined,
     },
     async (input, options) => {
       const operation = await config.start(input, options);
