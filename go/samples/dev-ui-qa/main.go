@@ -27,6 +27,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/firebase/genkit/go/core/api"
 	"github.com/firebase/genkit/go/genkit"
@@ -35,25 +37,42 @@ import (
 	"github.com/firebase/genkit/go/plugins/server"
 )
 
+// Backend availability, derived from the environment once so main.go and the
+// flow registrations cannot drift apart.
+
+func hasGoogleAI() bool {
+	return os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != ""
+}
+
+func hasVertex() bool {
+	return os.Getenv("GOOGLE_CLOUD_PROJECT") != "" &&
+		(os.Getenv("GOOGLE_CLOUD_LOCATION") != "" || os.Getenv("GOOGLE_CLOUD_REGION") != "")
+}
+
+func hasAnthropic() bool {
+	return os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("ANTHROPIC_AUTH_TOKEN") != ""
+}
+
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Plugins init only when creds are present: both plugins panic at Init on
 	// missing auth (ANT-52, GGA-48), and a partial surface is more useful for
 	// QA than no surface. The panic itself is a lifecycle case; see
 	// lifecycle.go.
 	var plugins []api.Plugin
-	if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
+	if hasGoogleAI() {
 		plugins = append(plugins, &googlegenai.GoogleAI{})
 	} else {
 		log.Println("dev-ui-qa: GEMINI_API_KEY not set, skipping googleai")
 	}
-	if os.Getenv("GOOGLE_CLOUD_PROJECT") != "" && (os.Getenv("GOOGLE_CLOUD_LOCATION") != "" || os.Getenv("GOOGLE_CLOUD_REGION") != "") {
+	if hasVertex() {
 		plugins = append(plugins, &googlegenai.VertexAI{})
 	} else {
 		log.Println("dev-ui-qa: GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_LOCATION/REGION not set, skipping vertexai")
 	}
-	if os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("ANTHROPIC_AUTH_TOKEN") != "" {
+	if hasAnthropic() {
 		plugins = append(plugins, &anthropic.Anthropic{})
 	} else {
 		log.Println("dev-ui-qa: ANTHROPIC_API_KEY not set, skipping anthropic")

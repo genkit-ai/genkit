@@ -1,19 +1,20 @@
 # Dev UI x Go SDK - Flows and tools
 
 Setup: Dev UI (genkit-tools 1.41.0, built from this checkout) on :4000, Go
-runtime `go/samples/dev-ui-qa` on :3100. Models: `anthropic/claude-opus-5` for
+runtime `go/samples/dev-ui-qa` on :3100 (the reflection port the Dev UI talks
+to, not the sample's own :8080 mux). Models: `anthropic/claude-opus-5` for
 the tool loop and interrupts, `googleai/gemini-flash-latest` for code execution.
 Run on 2026-08-19.
 
-`flows.go` was an empty TODO stub, so the flows and tools below were written for
-this run.
+The flows and tools below were written for this run; they now live in
+`flows.go`. Flows that fail on purpose are listed in the README.
 
 | # | Case | Result |
 | --- | --- | --- |
 | 1a | Streaming chunks render | Pass |
 | 1b | Error flow shows a classified provider error | Partial - message and stack show, status does not |
 | 2 | Interrupt, then resume from the UI | Partial - works in code, no UI control for it |
-| 3 | Multi-turn code execution breaks turn 2 (GGA-4) | Reproduced |
+| 3 | Multi-turn code execution breaks turn 2 (GGA-4) | Reproduced on the audited build; not reproduced on current main (2026-11-19) |
 | 4 | Tool name with `/` hard-fails (GGA-25) | Reproduced, also affects anthropic |
 
 ## 1a. Streaming chunks (`streamProgress`)
@@ -73,25 +74,30 @@ as an error.
 
 ![](screenshots/05-resume-approved.jpg)
 
-## 3. Multi-turn code execution - GGA-4 reproduced
+## 3. Multi-turn code execution - GGA-4, fixed on current main
 
 `codeExecTwoTurn` runs code execution, then replays `first.History()` into a
-second turn. Turn 1 is fine. Turn 2 fails before any HTTP call (its `generate`
-span has no HTTP child):
+second turn. On the audited build turn 1 was fine and turn 2 failed before any
+HTTP call (its `generate` span had no HTTP child):
 
 ```
 unknown part in the request: '\x05'
-  googlegenai.toGeminiPart      plugins/googlegenai/gemini.go:774
-  googlegenai.toGeminiParts     plugins/googlegenai/gemini.go:696
-  googlegenai.toGeminiContents  plugins/googlegenai/gemini.go:335
+  googlegenai.toGeminiPart / toGeminiParts / toGeminiContents
 ```
 
-`\x05` is `PartCustom` (`ai/document.go:84`). The plugin produces custom parts
+`\x05` was `PartCustom` (`ai/document.go`). The plugin produced custom parts
 for `executableCode` and `codeExecutionResult` on turn 1, and its own converter
-rejects them on turn 2. `toGeminiPart`'s default branch needs cases for them -
-`GetExecutableCode` / `GetCodeExecutionResult` already read the same shape.
+rejected them on turn 2 because `toGeminiPart`'s default branch had no case for
+them.
+
+Re-verified on 2026-11-19 against current main: `toGeminiPart` now has a
+`case p.IsCustom():` branch, and running the flow live against
+`googleai/gemini-flash-latest` completed both turns (turn 2 answered 129 for
+the first 10 primes). Not reproduced. The flow stays as a regression guard.
 
 ![](screenshots/06-codeexec-turn2-fails.jpg)
+
+(The screenshot is from the audited build.)
 
 ## 4. Tool name with `/` - GGA-25 reproduced
 
@@ -99,8 +105,8 @@ Client-side rejection during conversion, confirmed. It is not only googleai:
 
 | Backend | Message | Site |
 | --- | --- | --- |
-| googleai | `invalid tool name: "math/add", must start with a letter or an underscore, ...` | `plugins/googlegenai/tools.go:29` |
-| anthropic | `tool name "math/add" must match regex: ^[a-zA-Z0-9_-]{1,64}$` | `plugins/internal/anthropic/anthropic.go:443` |
+| googleai | `invalid tool name: "math/add", must start with a letter or an underscore, ...` | `toGeminiTools` in `plugins/googlegenai/tools.go` |
+| anthropic | `tool name "math/add" must match regex: ^[a-zA-Z0-9_-]{1,64}$` | `toAnthropicTools` in `plugins/internal/anthropic/anthropic.go` |
 
 Nothing warns you before that point. `DefineTool(g, "math/add", ...)` registers
 fine, the Dev UI lists it, routes to `/tools/math/add` despite the slash, and
@@ -164,7 +170,8 @@ if it is not on PATH):
 cd "$R/genkit-tools" && pnpm build
 ```
 
-Needs `ANTHROPIC_API_KEY`, plus `GEMINI_API_KEY` or `GOOGLE_API_KEY` for the
-code execution case. Flows: `streamProgress`, `providerError`, `failingFlow`,
+Needs `ANTHROPIC_API_KEY` for the tool-loop and interrupt flows, and
+`GEMINI_API_KEY` or `GOOGLE_API_KEY` for `providerError` and `codeExecTwoTurn`
+(`slashToolLoop` needs either). Flows: `streamProgress`, `providerError`, `failingFlow`,
 `resumeSpend`, `codeExecTwoTurn`, `slashToolLoop`, `toolLoop`, `triageTicket`,
 `interruptedSpend`, `smoke`.

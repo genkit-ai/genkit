@@ -17,7 +17,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/firebase/genkit/go/ai"
@@ -83,6 +82,9 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 	// Structured in/out: does the runner render a schema form and a typed
 	// result, or fall back to a raw JSON textarea?
 	genkit.DefineFlow(g, "triageTicket", func(ctx context.Context, in ticketInput) (ticketOutput, error) {
+		if in.Urgency < 1 || in.Urgency > 5 {
+			return ticketOutput{}, core.NewError(core.INVALID_ARGUMENT, "urgency %d out of range 1-5", in.Urgency)
+		}
 		queue := "support"
 		if in.Urgency >= 4 {
 			queue = "oncall"
@@ -115,8 +117,9 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 		return fmt.Sprintf("completed %d steps", steps), nil
 	})
 
-	// Error classification: a flow that fails with a typed status the UI is
-	// expected to surface as more than "500 Internal Server Error".
+	// EXPECTED TO FAIL (by design): error classification. A flow that fails
+	// with a typed status the UI is expected to surface as more than
+	// "500 Internal Server Error".
 	genkit.DefineFlow(g, "failingFlow", func(ctx context.Context, mode string) (string, error) {
 		switch mode {
 		case "invalid":
@@ -137,8 +140,8 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 			return fmt.Sprintf("It is 22C and sunny in %s.", in.City), nil
 		})
 
-	// GGA-25: a tool whose name contains "/" - the same separator the action
-	// keys use, so a naive parse of "/tool/<name>" splits in the wrong place.
+	// EXPECTED TO FAIL once a model is involved (GGA-25): a tool whose name
+	// contains "/" - the same separator the action keys use, so a naive parse of "/tool/<name>" splits in the wrong place.
 	// It is deliberately not attached to toolLoop: googlegenai rejects "/" in
 	// a tool name before the request leaves the process, which would mask the
 	// tool-loop case behind that failure.
@@ -159,6 +162,7 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 			return fmt.Sprintf("spent $%.2f", in.Amount), nil
 		})
 
+	registerGoogleAIFlows(g, mathAdd)
 	if !modelBackendAvailable() {
 		return
 	}
@@ -175,20 +179,6 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 			ai.WithPrompt("What is the weather in %s, and in Nairobi?", city),
 			ai.WithTools(lookupWeather),
 		)
-		if err != nil {
-			return "", err
-		}
-		return resp.Text(), nil
-	})
-
-	// A real provider failure (not a locally constructed one): a model ID the
-	// backend resolves dynamically and the provider then rejects. This is the
-	// surface the ccfe1093d error overhaul classifies.
-	genkit.DefineFlow(g, "providerError", func(ctx context.Context, model string) (string, error) {
-		if model == "" {
-			model = "googleai/gemini-does-not-exist"
-		}
-		resp, err := genkit.Generate(ctx, g, ai.WithModelName(model), ai.WithPrompt("hello"))
 		if err != nil {
 			return "", err
 		}
@@ -247,24 +237,6 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 		return resp.Text(), nil
 	})
 
-	// GGA-25 as a model call: attach the slash-named tool to a real generate
-	// and see which side rejects it. Input picks the backend.
-	genkit.DefineFlow(g, "slashToolLoop", func(ctx context.Context, backend string) (string, error) {
-		model := qaModelName
-		if backend == "googleai" {
-			model = "googleai/gemini-flash-latest"
-		}
-		resp, err := genkit.Generate(ctx, g,
-			ai.WithModelName(model),
-			ai.WithPrompt("Add 2 and 40 using the math/add tool."),
-			ai.WithTools(mathAdd),
-		)
-		if err != nil {
-			return "", err
-		}
-		return resp.Text(), nil
-	})
-
 	// Interrupted generation: returns while the tool call is pending so the
 	// UI can show an interrupted finish reason and the interrupt metadata.
 	genkit.DefineFlow(g, "interruptedSpend", func(ctx context.Context, amount float64) (string, error) {
@@ -290,11 +262,66 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 		}
 		return "interrupted with no typed metadata", nil
 	})
+}
 
-	// GGA-4: multi-turn code execution. Turn one runs code; turn two replays
-	// the history, which now carries the custom executableCode and
-	// codeExecutionResult parts.
-	if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
+// qaModelName is the model the tool-loop cases generate with. Anthropic is the
+// default because the googleai catalog retires model IDs out from under a key
+// (gemini-2.5-flash now 404s), and a QA app should fail on the case under test,
+// not on model availability.
+const qaModelName = "anthropic/claude-opus-5"
+
+// modelBackendAvailable reports whether the plugin behind qaModelName was
+// initialized in main; the tool-loop flows are skipped without it rather than
+// registering flows that fail on every run.
+func modelBackendAvailable() bool { return hasAnthropic() }
+
+// registerGoogleAIFlows registers the flows that run on googleai (and the
+// slash-tool case, which runs on whichever backend is present). They are
+// independent of the anthropic gate in registerFlowAndToolCases.
+func registerGoogleAIFlows(g *genkit.Genkit, mathAdd ai.Tool) {
+	// Backend-specific flows register only when their plugin is initialized,
+	// so none is mis-registered when only another key is set.
+	if hasGoogleAI() {
+		// EXPECTED TO FAIL (by design): a real provider failure, not a locally
+		// constructed one: a model ID the backend resolves dynamically and the
+		// provider then rejects. This is the surface the ccfe1093d error
+		// overhaul classifies.
+		genkit.DefineFlow(g, "providerError", func(ctx context.Context, model string) (string, error) {
+			if model == "" {
+				model = "googleai/gemini-does-not-exist"
+			}
+			resp, err := genkit.Generate(ctx, g, ai.WithModelName(model), ai.WithPrompt("hello"))
+			if err != nil {
+				return "", err
+			}
+			return resp.Text(), nil
+		})
+	}
+	if hasGoogleAI() || hasAnthropic() {
+		// EXPECTED TO FAIL (GGA-25): the slash-named tool as a model call.
+		// Attach it to a real generate and see which side rejects it. Input
+		// picks the backend (defaults to whichever is configured).
+		genkit.DefineFlow(g, "slashToolLoop", func(ctx context.Context, backend string) (string, error) {
+			model := qaModelName
+			if backend == "googleai" || !hasAnthropic() {
+				model = "googleai/gemini-flash-latest"
+			}
+			resp, err := genkit.Generate(ctx, g,
+				ai.WithModelName(model),
+				ai.WithPrompt("Add 2 and 40 using the math/add tool."),
+				ai.WithTools(mathAdd),
+			)
+			if err != nil {
+				return "", err
+			}
+			return resp.Text(), nil
+		})
+	}
+	// GGA-4 regression guard: multi-turn code execution. Turn one runs code;
+	// turn two replays the history, which carries the custom executableCode
+	// and codeExecutionResult parts. This used to fail in toGeminiPart and is
+	// expected to pass on current main; a failure means the regression is back.
+	if hasGoogleAI() {
 		genkit.DefineFlow(g, "codeExecTwoTurn", func(ctx context.Context, _ struct{}) (string, error) {
 			cfg := &genai.GenerateContentConfig{
 				Tools: []*genai.Tool{{CodeExecution: &genai.ToolCodeExecution{}}},
@@ -323,17 +350,4 @@ func registerFlowAndToolCases(g *genkit.Genkit) {
 			return fmt.Sprintf("turn 1: %s\n\nturn 2: %s", first.Text(), second.Text()), nil
 		})
 	}
-}
-
-// qaModelName is the model the tool-loop cases generate with. Anthropic is the
-// default because the googleai catalog retires model IDs out from under a key
-// (gemini-2.5-flash now 404s), and a QA app should fail on the case under test,
-// not on model availability.
-const qaModelName = "anthropic/claude-opus-5"
-
-// modelBackendAvailable reports whether the plugin behind qaModelName was
-// initialized in main; the tool-loop flows are skipped without it rather than
-// registering flows that fail on every run.
-func modelBackendAvailable() bool {
-	return os.Getenv("ANTHROPIC_API_KEY") != "" || os.Getenv("ANTHROPIC_AUTH_TOKEN") != ""
 }

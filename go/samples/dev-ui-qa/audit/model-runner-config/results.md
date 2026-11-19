@@ -7,7 +7,7 @@ Same rig as the flows-and-tools run: Dev UI 1.41.0 on :4000, Go runtime
 Schema numbers come from `/api/actions` (`metadata.model.customOptions`).
 Runtime cases were sent through `/api/runAction`, the same path the config
 editor uses. Decode behaviour is reproducible with
-`go test ./samples/dev-ui-qa -run TestConfigDecodeProbe -v`.
+`go test ./samples/dev-ui-qa -run TestConfigDecodeProbe -v` (from `go/`).
 
 | Case | Result |
 | --- | --- |
@@ -61,7 +61,7 @@ description: `cachedContent`, `candidateCount`, `responseJsonSchema`,
 `responseMimeType`, `responseSchema`, `systemInstruction`. Anthropic has three
 (`messages`, `model`, `system`) - those are the deliberately hidden managed
 fields, kept permissive so they reach the guard in `rejectManagedConfig`
-(`plugins/internal/anthropic/anthropic.go:191`) instead of failing validation.
+(`rejectManagedConfig` in `plugins/internal/anthropic/anthropic.go`) instead of failing validation.
 
 ## ANT-25 - no value constraints
 
@@ -126,7 +126,7 @@ message says the field is for. Same error with the older
 
 The cause is decoding, not the guard. A server tool JSON lands in the union's
 custom-tool variant (`OfTool`), and the guard at
-`plugins/internal/anthropic/anthropic.go:203` rejects anything with `OfTool`
+the `OfTool` check in `rejectManagedConfig` (`plugins/internal/anthropic/anthropic.go`) rejects anything with `OfTool`
 set. From the probe:
 
 ```
@@ -196,7 +196,8 @@ curl -s localhost:4000/api/runAction -H 'Content-Type: application/json' -d '{
 }'
 ```
 
-Decode behaviour:
+Decode behaviour (from `go/`; the test now asserts the pinned behaviour, so an
+SDK change that alters a decode fails it):
 
 ```bash
 go test ./samples/dev-ui-qa -run TestConfigDecodeProbe -v

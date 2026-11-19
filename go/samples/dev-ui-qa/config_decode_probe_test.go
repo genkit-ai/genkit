@@ -21,28 +21,55 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 )
 
-// TestConfigDecodeProbe shows what the Dev UI config editor's JSON turns into
+// TestConfigDecodeProbe pins what the Dev UI config editor's JSON turns into
 // once the framework decodes it into anthropic.MessageNewParams. Fields that
 // decode to nothing are the ones that vanish without an error (ANT-9, ANT-15);
 // a server-side tool landing in OfTool is what makes ANT-10 misfire.
 //
-// Run: go test ./samples/dev-ui-qa -run TestConfigDecodeProbe -v
+// The expectations record the current SDK behaviour, not desired behaviour:
+// if an SDK upgrade fixes (or changes) a decode, this test fails and the
+// matching audit finding needs revisiting.
+//
+// Run from the go/ directory: go test ./samples/dev-ui-qa -run TestConfigDecodeProbe -v
 func TestConfigDecodeProbe(t *testing.T) {
-	for _, in := range []string{
-		`{"thinking":{"type":"adaptive"}}`,
-		`{"thinking":{"type":"adaptiv"}}`,
-		`{"thinking":{"type":"disabled"}}`,
-		`{"thinking":{"type":"enabled","budget_tokens":2048}}`,
-		`{"system":"be terse"}`,
-		`{"system":[{"type":"text","text":"be terse"}]}`,
-		`{"tools":[{"type":"web_search_20260209","name":"web_search"}]}`,
+	type decoded struct {
+		enabled, disabled, adaptive bool
+		system, tools               int
+		ofTool                      bool
+	}
+	for _, tc := range []struct {
+		in   string
+		want decoded
+	}{
+		// Adaptive thinking decodes to nothing and does not error.
+		{`{"thinking":{"type":"adaptive"}}`, decoded{}},
+		{`{"thinking":{"type":"adaptiv"}}`, decoded{}},
+		{`{"thinking":{"type":"disabled"}}`, decoded{disabled: true}},
+		{`{"thinking":{"type":"enabled","budget_tokens":2048}}`, decoded{enabled: true}},
+		// A string system prompt is dropped; only the block-array form lands.
+		{`{"system":"be terse"}`, decoded{}},
+		{`{"system":[{"type":"text","text":"be terse"}]}`, decoded{system: 1}},
+		// A server tool lands in the custom-tool variant.
+		{`{"tools":[{"type":"web_search_20260209","name":"web_search"}]}`, decoded{tools: 1, ofTool: true}},
 	} {
 		var p anthropic.MessageNewParams
-		err := json.Unmarshal([]byte(in), &p)
+		err := json.Unmarshal([]byte(tc.in), &p)
+		if err != nil {
+			t.Errorf("in=%s: unexpected decode error: %v", tc.in, err)
+			continue
+		}
+		got := decoded{
+			enabled:  p.Thinking.OfEnabled != nil,
+			disabled: p.Thinking.OfDisabled != nil,
+			adaptive: p.Thinking.OfAdaptive != nil,
+			system:   len(p.System),
+			tools:    len(p.Tools),
+			ofTool:   len(p.Tools) > 0 && p.Tools[0].OfTool != nil,
+		}
+		if got != tc.want {
+			t.Errorf("in=%s: decoded %+v, pinned %+v (SDK behaviour changed? revisit the audit finding)", tc.in, got, tc.want)
+		}
 		out, _ := json.Marshal(p)
-		t.Logf("in=%-52s err=%v thinking(en/dis/ad)=%v/%v/%v system=%d tools=%d ofTool=%v remarshal=%s",
-			in, err,
-			p.Thinking.OfEnabled != nil, p.Thinking.OfDisabled != nil, p.Thinking.OfAdaptive != nil,
-			len(p.System), len(p.Tools), len(p.Tools) > 0 && p.Tools[0].OfTool != nil, string(out))
+		t.Logf("in=%s decoded=%+v remarshal=%s", tc.in, got, out)
 	}
 }
