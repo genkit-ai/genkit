@@ -108,6 +108,11 @@ var (
 // shard count grows with the state's size; tune [WithCheckpointInterval] to
 // trade per-save diff reads against checkpoint write amplification.
 //
+// SaveSnapshot rejects, with FAILED_PRECONDITION, a change to the state of a
+// snapshot that another snapshot stores a diff against, since the change would
+// corrupt that snapshot (see [aix.SnapshotWriter]). Finding such a diff is a
+// query on parentId, served by Firestore's automatic single-field index.
+//
 // It implements [aix.SessionStore] and [aix.SnapshotSubscriber]; the latter
 // uses Firestore's native real-time listener, so an abort committed by one
 // process is observed by the process running the detached turn even across
@@ -678,7 +683,7 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 		if existingOK {
 			existingDocPtr = &existingDoc
 		}
-		plan, err := s.planWrite(tx, prefix, id, existingDocPtr, next, pointer)
+		plan, err := s.planWrite(tx, prefix, id, existingDocPtr, existingState, next, pointer)
 		if err != nil {
 			return err
 		}
@@ -701,14 +706,24 @@ func (s *FirestoreSessionStore[State]) SaveSnapshot(
 // performs only reads (it may reconstruct the parent's state to compute a diff);
 // the actual document writes happen in commitPlan, preserving Firestore's
 // reads-before-writes ordering within a transaction.
-func (s *FirestoreSessionStore[State]) planWrite(tx *firestore.Transaction, prefix, id string, existingDoc *snapshotDoc, next *aix.SessionSnapshot[State], pointer *pointerDoc) (writePlan, error) {
+func (s *FirestoreSessionStore[State]) planWrite(tx *firestore.Transaction, prefix, id string, existingDoc *snapshotDoc, existingState any, next *aix.SessionSnapshot[State], pointer *pointerDoc) (writePlan, error) {
 	newState := next.State
 
 	if existingDoc != nil {
 		// Upsert: preserve the document's role and chain position; only the state
-		// and metadata change. Callers must only upsert the leaf - rewriting a
-		// non-leaf's state would invalidate its descendants' diffs.
-		// TODO(#6810): reject such a rewrite instead of corrupting them.
+		// and metadata change. The state is compared by its JSON value, so a
+		// heartbeat or an abort can still rewrite a row that has diff children.
+		// existingState is decoded afresh rather than taken from the snapshot fn
+		// saw, which fn may have edited in place.
+		prevState, err := s.stateFromAny(existingState)
+		if err != nil {
+			return writePlan{}, err
+		}
+		if len(aix.Diff(prevState, newState)) > 0 {
+			if err := s.checkNoDiffChildren(tx, prefix, id); err != nil {
+				return writePlan{}, err
+			}
+		}
 		if existingDoc.Kind == kindCheckpoint {
 			return s.planCheckpoint(id, newState, existingDoc.CheckpointShardCount)
 		}
@@ -754,6 +769,25 @@ func (s *FirestoreSessionStore[State]) planWrite(tx *firestore.Transaction, pref
 	segment = append(segment, parentMeta.segmentPath...)
 	segment = append(segment, id)
 	return s.planDiff(id, parentMeta.checkpointID, parentMeta.shardCount, segment, parentState, newState)
+}
+
+// checkNoDiffChildren fails if a snapshot stores a diff against id: changing
+// id's state would change what that snapshot reads back. The query runs in tx,
+// so a diff child committed concurrently conflicts with the save.
+func (s *FirestoreSessionStore[State]) checkNoDiffChildren(tx *firestore.Transaction, prefix, id string) error {
+	q := s.client.Collection(s.collection).Doc(prefix).Collection("snapshots").
+		Where("parentId", "==", id).Select("kind")
+	children, err := tx.Documents(q).GetAll()
+	if err != nil {
+		return err
+	}
+	for _, child := range children {
+		if kind, err := child.DataAt("kind"); err == nil && kind == kindDiff {
+			return status.Errorf(status.ErrFailedPrecondition,
+				"cannot change the state of snapshot %q: snapshot %q stores its state as a change against it", id, child.Ref.ID)
+		}
+	}
+	return nil
 }
 
 // planDiff builds a diff plan from parentState to newState, marshaling the patch
