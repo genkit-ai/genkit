@@ -189,7 +189,17 @@ describe('embed', () => {
     it('throws for an unknown embedder', async () => {
       await assert.rejects(
         ai.embedMany({ embedder: 'nope', content: ['hi'] }),
-        /Unable to utilize the provided embedder/
+        /Unable to resolve embedder nope/
+      );
+    });
+
+    it('names an unknown embedder ref', async () => {
+      await assert.rejects(
+        ai.embedMany({
+          embedder: embedderRef({ name: 'nope' }),
+          content: ['hi'],
+        }),
+        /Unable to resolve embedder nope/
       );
     });
   });

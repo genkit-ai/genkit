@@ -199,15 +199,9 @@ export async function embed<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny>(
 ): Promise<Embedding[]> {
   const embedder = await resolveEmbedder(registry, params);
   if (!embedder.embedderAction) {
-    let embedderId: string;
-    if (typeof params.embedder === 'string') {
-      embedderId = params.embedder;
-    } else if ((params.embedder as EmbedderAction)?.__action?.name) {
-      embedderId = (params.embedder as EmbedderAction).__action.name;
-    } else {
-      embedderId = (params.embedder as EmbedderReference<any>).name;
-    }
-    throw new Error(`Unable to resolve embedder ${embedderId}`);
+    throw new Error(
+      `Unable to resolve embedder ${embedderId(params.embedder)}`
+    );
   }
   const response = await embedder.embedderAction({
     input:
@@ -221,6 +215,16 @@ export async function embed<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny>(
     },
   });
   return response.embeddings;
+}
+
+function embedderId(embedder: EmbedderArgument): string {
+  if (typeof embedder === 'string') {
+    return embedder;
+  }
+  if ((embedder as EmbedderAction)?.__action?.name) {
+    return (embedder as EmbedderAction).__action.name;
+  }
+  return (embedder as EmbedderReference<any>).name;
 }
 
 interface ResolvedEmbedder<CustomOptions extends z.ZodTypeAny = z.ZodTypeAny> {
@@ -276,7 +280,9 @@ export async function embedMany<
 ): Promise<EmbeddingBatch> {
   const embedder = await resolveEmbedder(registry, params);
   if (!embedder.embedderAction) {
-    throw new Error('Unable to utilize the provided embedder');
+    throw new Error(
+      `Unable to resolve embedder ${embedderId(params.embedder)}`
+    );
   }
   const response = await embedder.embedderAction({
     input: params.content.map((i) =>
