@@ -52,8 +52,7 @@ type ResponsesOnlyBaseName = (typeof RESPONSES_ONLY_MODELS)[number];
  * {@link RESPONSES_ONLY_MODELS} or any name extending one of them.
  */
 export type ResponsesOnlyModelName =
-  | ResponsesOnlyBaseName
-  | (`${ResponsesOnlyBaseName}-${string}` & {});
+  ResponsesOnlyBaseName | (`${ResponsesOnlyBaseName}-${string}` & {});
 
 /**
  * Checks whether a model name must be served over the Responses API.
