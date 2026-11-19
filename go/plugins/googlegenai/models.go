@@ -68,6 +68,20 @@ var (
 		SystemRole: false,
 		Output:     []string{ai.OutputFormatMedia},
 	}
+
+	// AntigravitySupports describes model capabilities for Antigravity preview
+	// models, matching the JS plugin: no native system role (the framework's
+	// simulateSystemPrompt folds a system message into the conversation), and
+	// function tools but no tool choice. Server-side built-in tools (search,
+	// code execution) run on the server and are enabled through the config.
+	AntigravitySupports = ai.ModelSupports{
+		Multiturn:  true,
+		Tools:      true,
+		ToolChoice: false,
+		SystemRole: false,
+		Media:      true,
+		Output:     []string{"text"},
+	}
 )
 
 // Config schemas advertised for each generation modality. Reflecting the SDK
@@ -100,6 +114,12 @@ var (
 		Supports:     &VeoSupports,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: veoConfigSchema,
+	}
+
+	defaultAntigravityOpts = ai.ModelOptions{
+		Supports:     &AntigravitySupports,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: antigravityConfigSchema,
 	}
 
 	defaultEmbedOpts = ai.EmbedderOptions{
@@ -152,6 +172,12 @@ const (
 	veo31GeneratePreview     = "veo-3.1-generate-preview"
 	veo31FastGeneratePreview = "veo-3.1-fast-generate-preview"
 	veo31LiteGeneratePreview = "veo-3.1-lite-generate-preview"
+
+	// antigravityPreview092026 is the current Antigravity model (the ID the JS
+	// and Python plugins ship). The earlier antigravityPreview052026 is still
+	// served by the API, so it keeps resolving, but it is not listed.
+	antigravityPreview092026 = "antigravity-preview-09-2026"
+	antigravityPreview052026 = "antigravity-preview-05-2026"
 
 	textembedding005             = "text-embedding-005"
 	textembedding004             = "text-embedding-004"
@@ -215,6 +241,8 @@ var (
 		veo31GeneratePreview,
 		veo31FastGeneratePreview,
 		veo31LiteGeneratePreview,
+
+		antigravityPreview092026,
 	}
 
 	supportedGeminiModels = map[string]ai.ModelOptions{
@@ -391,6 +419,15 @@ var (
 		},
 	}
 
+	supportedAntigravityModels = map[string]ai.ModelOptions{
+		antigravityPreview092026: {
+			Label:    "Antigravity Preview 09 2026",
+			Versions: []string{},
+			Supports: &AntigravitySupports,
+			Stage:    ai.ModelStageUnstable,
+		},
+	}
+
 	embedderConfig = map[string]ai.EmbedderOptions{
 		textembedding005: {
 			Dimensions: 768,
@@ -469,6 +506,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		opts, ok = supportedVideoModels[name]
 		if !ok {
 			opts = defaultVeoOpts
+		}
+	case ModelTypeAntigravity:
+		opts, ok = supportedAntigravityModels[name]
+		if !ok {
+			opts = defaultAntigravityOpts
 		}
 	default:
 		opts = defaultGeminiOpts
@@ -562,7 +604,16 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 			continue
 		}
 
-		// Only include models with known generative prefixes.
+		// Antigravity is served by the Gemini API's interactions endpoint
+		// only, so a Vertex AI listing never offers it.
+		if strings.HasPrefix(name, "antigravity") {
+			if client.ClientConfig().Backend != genai.BackendVertexAI {
+				models.gemini = append(models.gemini, name)
+			}
+			continue
+		}
+
+		// Only include models with known regular generation prefixes.
 		if strings.HasPrefix(name, "gemini") || strings.HasPrefix(name, "gemma") {
 			models.gemini = append(models.gemini, name)
 		}

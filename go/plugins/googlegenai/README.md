@@ -560,6 +560,27 @@ resp, err := genkit.Generate(ctx, g,
 )
 ```
 
+## Antigravity Models (Google AI only)
+
+`antigravity-preview-09-2026` (and the earlier `antigravity-preview-05-2026`) are agentic models served by the Gemini API's interactions endpoint. They are available through the `GoogleAI` plugin only; Vertex AI does not serve them, and asking for one there fails with `INVALID_ARGUMENT` or is not found.
+
+```go
+resp, err := genkit.Generate(ctx, g,
+	ai.WithModel(googlegenai.GoogleAIModelRef("antigravity-preview-09-2026", nil)),
+	ai.WithConfig(map[string]any{
+		"tools": []any{map[string]any{"type": "code_execution"}}, // built-in tools
+		"model": "gemini-3.5-flash-lite",                       // model the agent runs on
+	}),
+	ai.WithPrompt("Compute 123456 * 654321."))
+```
+
+- **Config.** `AntigravityConfig` declares `previousInteractionId`, `store`, `environment`, `responseModalities`, `model`, `tools` and the per-request `apiKey`/`baseUrl`/`apiVersion`. Any other key is forwarded to the request as-is, as in the JS plugin.
+- **Multi-turn.** The response message carries `interactionId` and `environmentId` in its metadata. When you send the history back, the plugin continues from the last model message that has an `interactionId`: it sets `previous_interaction_id`, sends only the messages after it and reuses its sandbox. Earlier steps are never replayed, because the server rejects replayed function calls.
+- **Tools.** Function tools passed with `ai.WithTools` are sent to the model; the server pauses (`requires_action`) for them and the usual tool loop answers. Built-in tools go in `config.tools`; the steps the server runs itself come back as custom parts, not tool requests.
+- **Streaming.** The endpoint is called without server-sent streaming (as in the JS plugin). A streaming caller receives the whole response as a single chunk.
+- **System prompt.** There is no native system role; the framework folds a system message into the conversation.
+- **Usage.** Token counts are in the token fields; per-modality counts (`inputTextTokens`, ...) are in `Usage.Custom`.
+
 ## Embedding Models
 
 ### Available Models

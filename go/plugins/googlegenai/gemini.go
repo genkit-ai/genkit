@@ -92,23 +92,23 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 	// The gemini api doesn't support downloading media from http(s).
 	var download ai.ModelMiddleware
 	if opts.Supports != nil && opts.Supports.Media {
-		download = ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
-			MaxBytes: 1024 * 1024 * 20, // 20MB
-			Filter: func(part *ai.Part) bool {
-				u, err := url.Parse(part.Text)
-				if err != nil {
-					return true
+		download = mediaDownloadMiddleware()
+	}
+
+	// Antigravity models are served by the interactions endpoint, which takes
+	// its own typed config and, like generateContent, cannot fetch http(s)
+	// media itself.
+	if mt == ModelTypeAntigravity {
+		return ai.NewModelAction(api.NewName(provider, id), &opts,
+			func(ctx context.Context, input *ai.ModelRequest, config AntigravityConfig, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+				run := func(ctx context.Context, input *ai.ModelRequest, cb ai.ModelStreamCallback) (*ai.ModelResponse, error) {
+					return generateAntigravity(ctx, client, id, input, &config, cb)
 				}
-				// Gemini can handle these URLs
-				return !slices.Contains(
-					[]string{
-						"generativelanguage.googleapis.com",
-						"www.youtube.com", "youtube.com", "youtu.be",
-					},
-					u.Hostname(),
-				)
-			},
-		})
+				if download != nil {
+					return download(run)(ctx, input, cb)
+				}
+				return run(ctx, input, cb)
+			})
 	}
 
 	return ai.NewModelAction(api.NewName(provider, id), &opts,
@@ -122,6 +122,29 @@ func newModel(client *genai.Client, id string, opts ai.ModelOptions) *ai.ModelAc
 			}
 			return generate(ctx, client, id, input, &config, cb)
 		})
+}
+
+// mediaDownloadMiddleware downloads http(s) media into the request, since the
+// Gemini API and interactions endpoint cannot fetch arbitrary URLs. URLs the
+// service can read itself (Files API, YouTube) are left alone.
+func mediaDownloadMiddleware() ai.ModelMiddleware {
+	return ai.DownloadRequestMedia(&ai.DownloadMediaOptions{
+		MaxBytes: 1024 * 1024 * 20, // 20MB
+		Filter: func(part *ai.Part) bool {
+			u, err := url.Parse(part.Text)
+			if err != nil {
+				return true
+			}
+			// Gemini can handle these URLs
+			return !slices.Contains(
+				[]string{
+					"generativelanguage.googleapis.com",
+					"www.youtube.com", "youtube.com", "youtu.be",
+				},
+				u.Hostname(),
+			)
+		},
+	})
 }
 
 // resolveVertexModelName prepares a model name for the google.golang.org/genai
