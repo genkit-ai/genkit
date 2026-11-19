@@ -113,16 +113,6 @@ export {
   type PromptGenerateOptions,
 } from './prompt.js';
 export {
-  rerank,
-  rerankerRef,
-  type RankedDocument,
-  type RerankerAction,
-  type RerankerArgument,
-  type RerankerInfo,
-  type RerankerParams,
-  type RerankerReference,
-} from './reranker.js';
-export {
   ResourceInputSchema,
   ResourceOutputSchema,
   defineResource,
@@ -136,22 +126,6 @@ export {
   type ResourceOptions,
   type ResourceOutput,
 } from './resource.js';
-export {
-  index,
-  indexerRef,
-  retrieve,
-  retrieverRef,
-  type IndexerAction,
-  type IndexerArgument,
-  type IndexerInfo,
-  type IndexerParams,
-  type IndexerReference,
-  type RetrieverAction,
-  type RetrieverArgument,
-  type RetrieverInfo,
-  type RetrieverParams,
-  type RetrieverReference,
-} from './retriever.js';
 export {
   ToolInterruptError,
   asTool,

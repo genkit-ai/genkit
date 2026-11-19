@@ -25,7 +25,6 @@ import {
   modelRef,
   prompt,
   type BaseDataPointSchema,
-  type Document,
   type EmbedderInfo,
   type ExecutablePrompt,
   type GenerateOptions,
@@ -38,8 +37,6 @@ import {
   type ModelReference,
   type PromptConfig,
   type PromptGenerateOptions,
-  type RetrieverAction,
-  type RetrieverInfo,
   type ToolAction,
   type ToolConfig,
 } from '@genkit-ai/ai';
@@ -65,27 +62,6 @@ import {
   type GenerateResponseChunkData,
   type ModelAction,
 } from '@genkit-ai/ai/model';
-import {
-  RankedDocument,
-  RerankerParams,
-  defineReranker,
-  rerank,
-  type RerankerFn,
-  type RerankerInfo,
-} from '@genkit-ai/ai/reranker';
-import {
-  IndexerParams,
-  RetrieverParams,
-  defineIndexer,
-  defineRetriever,
-  defineSimpleRetriever,
-  index,
-  retrieve,
-  type IndexerAction,
-  type IndexerFn,
-  type RetrieverFn,
-  type SimpleRetrieverOptions,
-} from '@genkit-ai/ai/retriever';
 import {
   dynamicTool,
   type MultipartToolAction,
@@ -530,49 +506,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
   }
 
   /**
-   * Creates a retriever action for the provided {@link RetrieverFn} implementation.
-   */
-  defineRetriever<OptionsType extends GenkitSchema = GenkitSchema>(
-    options: {
-      name: string;
-      configSchema?: OptionsType;
-      info?: RetrieverInfo;
-    },
-    runner: RetrieverFn<OptionsType>
-  ): RetrieverAction<OptionsType> {
-    return defineRetriever(this.registry, options, runner);
-  }
-
-  /**
-   * defineSimpleRetriever makes it easy to map existing data into documents that
-   * can be used for prompt augmentation.
-   *
-   * @param options Configuration options for the retriever.
-   * @param handler A function that queries a datastore and returns items from which to extract documents.
-   * @returns A Genkit retriever.
-   */
-  defineSimpleRetriever<C extends GenkitSchema = GenkitSchema, R = any>(
-    options: SimpleRetrieverOptions<C, R>,
-    handler: (query: Document, config: InferOutput<C>) => Promise<R[]>
-  ): RetrieverAction<C> {
-    return defineSimpleRetriever(this.registry, options, handler);
-  }
-
-  /**
-   * Creates an indexer action for the provided {@link IndexerFn} implementation.
-   */
-  defineIndexer<IndexerOptions extends GenkitSchema>(
-    options: {
-      name: string;
-      embedderInfo?: EmbedderInfo;
-      configSchema?: IndexerOptions;
-    },
-    runner: IndexerFn<IndexerOptions>
-  ): IndexerAction<IndexerOptions> {
-    return defineIndexer(this.registry, options, runner);
-  }
-
-  /**
    * Creates evaluator action for the provided {@link EvaluatorFn} implementation.
    */
   defineEvaluator<
@@ -623,20 +556,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
   }
 
   /**
-   *  Creates a reranker action for the provided {@link RerankerFn} implementation.
-   */
-  defineReranker<OptionsType extends GenkitSchema = GenkitSchema>(
-    options: {
-      name: string;
-      configSchema?: OptionsType;
-      info?: RerankerInfo;
-    },
-    runner: RerankerFn<OptionsType>
-  ) {
-    return defineReranker(this.registry, options, runner);
-  }
-
-  /**
    * Evaluates the given `dataset` using the specified `evaluator`.
    */
   evaluate<
@@ -644,33 +563,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
     CustomOptions extends GenkitSchema = GenkitSchema,
   >(params: EvaluatorParams<DataPoint, CustomOptions>): Promise<EvalResponses> {
     return evaluate(this.registry, params);
-  }
-
-  /**
-   * Reranks documents from a {@link RerankerArgument} based on the provided query.
-   */
-  rerank<CustomOptions extends GenkitSchema>(
-    params: RerankerParams<CustomOptions>
-  ): Promise<Array<RankedDocument>> {
-    return rerank(this.registry, params);
-  }
-
-  /**
-   * Indexes `documents` using the provided `indexer`.
-   */
-  index<CustomOptions extends GenkitSchema>(
-    params: IndexerParams<CustomOptions>
-  ): Promise<void> {
-    return index(this.registry, params);
-  }
-
-  /**
-   * Retrieves documents from the `retriever` based on the provided `query`.
-   */
-  retrieve<CustomOptions extends GenkitSchema>(
-    params: RetrieverParams<CustomOptions>
-  ): Promise<Array<Document>> {
-    return retrieve(this.registry, params);
   }
 
   /**

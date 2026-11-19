@@ -59,12 +59,6 @@
       "import": "./lib/index.mjs",
       "default": "./lib/index.js"
     },
-    "./retriever": {
-      "types": "./lib/retriever.d.ts",
-      "require": "./lib/retriever.js",
-      "import": "./lib/retriever.mjs",
-      "default": "./lib/retriever.js"
-    },
     "./embedder": {
       "types": "./lib/embedder.d.ts",
       "require": "./lib/embedder.js",
@@ -107,12 +101,6 @@
       "import": "./lib/testing/index.mjs",
       "default": "./lib/testing/index.js"
     },
-    "./reranker": {
-      "types": "./lib/reranker.d.ts",
-      "require": "./lib/reranker.js",
-      "import": "./lib/reranker.mjs",
-      "default": "./lib/reranker.js"
-    },
     "./session": {
       "types": "./lib/session.d.ts",
       "require": "./lib/session.js",
@@ -146,9 +134,6 @@
   },
   "typesVersions": {
     "*": {
-      "retriever": [
-        "lib/retriever"
-      ],
       "embedder": [
         "lib/embedder"
       ],
@@ -166,9 +151,6 @@
       ],
       "tool": [
         "lib/tool"
-      ],
-      "reranker": [
-        "lib/reranker"
       ],
       "chat": [
         "lib/chat"

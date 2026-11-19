@@ -15,7 +15,8 @@
  */
 
 //
-// IMPORTANT: Keep this file in sync with js/ai/src/retriever.ts!
+// Retrievers were removed from Genkit JS but are still used by other SDKs
+// (e.g. Go), so these schemas stay part of the shared genkit-schema.json.
 //
 import { z } from 'zod';
 import { DocumentDataSchema } from './document.js';

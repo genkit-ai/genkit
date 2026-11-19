@@ -34,9 +34,7 @@ export interface PluginProvider {
 
 export interface InitializedPlugin {
   models?: Action<GenkitSchema, GenkitSchema>[];
-  retrievers?: Action<GenkitSchema, GenkitSchema>[];
   embedders?: Action<GenkitSchema, GenkitSchema>[];
-  indexers?: Action<GenkitSchema, GenkitSchema>[];
   evaluators?: Action<GenkitSchema, GenkitSchema>[];
   /** @deprecated */
   flowStateStore?: Provider<any> | Provider<any>[];

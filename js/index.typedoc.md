@@ -64,11 +64,9 @@ The `genkit` package also provides subpath imports for specific functionality:
 | `genkit/beta`             | Beta features including interrupts (`defineInterrupt`)                              |
 | `genkit/beta/client`      | Client-side helpers (`runFlow`, `streamFlow`)                                       |
 | `genkit/model/middleware` | Model middleware (`retry`, `fallback`, `augmentWithContext`, etc.)                  |
-| `genkit/plugin`           | Plugin authoring utilities (`model`, `embedder`, `retriever`, etc.)                 |
+| `genkit/plugin`           | Plugin authoring utilities (`model`, `embedder`, `evaluator`, etc.)                 |
 | `genkit/model`            | Model types and helpers                                                             |
 | `genkit/embedder`         | Embedder types                                                                      |
-| `genkit/retriever`        | Retriever and indexer types                                                         |
-| `genkit/reranker`         | Reranker types                                                                      |
 | `genkit/evaluator`        | Evaluator types                                                                     |
 | `genkit/tool`             | Tool types                                                                          |
 | `genkit/schema`           | Schema utilities                                                                    |

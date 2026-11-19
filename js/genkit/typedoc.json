@@ -5,8 +5,6 @@
     "src/client/index.ts",
     "src/model.ts",
     "src/tool.ts",
-    "src/retriever.ts",
-    "src/reranker.ts",
     "src/context.ts",
     "src/plugin.ts",
     "src/middleware.ts",
