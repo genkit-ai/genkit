@@ -14,44 +14,28 @@
  * limitations under the License.
  */
 
-import {
-  devLocalIndexerRef,
-  devLocalRetrieverRef,
-} from '@genkit-ai/dev-local-vectorstore';
+import { vertexAI } from '@genkit-ai/google-genai';
 import fileTypeChecker from 'file-type-checker';
 import fs from 'fs';
 import { Document, z } from 'genkit';
-import { chromaIndexerRef, chromaRetrieverRef } from 'genkitx-chromadb';
-import { pineconeIndexerRef, pineconeRetrieverRef } from 'genkitx-pinecone';
 import path from 'path';
+import { vectraStore } from './vector-store.js';
 
 import { ai } from './genkit.js';
 import { augmentedVideoPrompt } from './prompt.js';
 
-export const localVideoRetriever = devLocalRetrieverRef('localMultiModalIndex');
-export const localVideoIndexer = devLocalIndexerRef('localMultiModalIndex');
-
-// Before using this, set up a pinecone database with
-// dimension: 1408 and metric: cosine.
-// Also set the PINECONE_API_KEY environment variable with your key.
-export const pineconeVideoRetriever = pineconeRetrieverRef({
-  indexId: 'pinecone-multimodal-index',
-  displayName: 'Pinecone video retriever',
+// The multimodal embedder returns one embedding per video segment; the store
+// keeps each segment as its own document, with the segment offsets in
+// `metadata.embedMetadata`.
+export const videoStore = vectraStore({
+  ai,
+  indexName: 'localMultiModalIndex',
+  embedder: vertexAI.embedder('multimodalembedding@001'),
 });
 
-export const pineconeVideoIndexer = pineconeIndexerRef({
-  indexId: 'pinecone-multimodal-index',
-  displayName: 'Pinecone video indexer',
-});
-
-export const chromaVideoRetriever = chromaRetrieverRef({
-  collectionName: 'multimodal_collection',
-  displayName: 'Chroma Video retriever',
-});
-
-export const chromaVideoIndexer = chromaIndexerRef({
-  collectionName: 'multimodal_collection',
-  displayName: 'Chroma video indexer',
+const VideoSegmentSchema = z.object({
+  startOffsetSec: z.number(),
+  endOffsetSec: z.number(),
 });
 
 // Define a local video indexer flow
@@ -68,52 +52,7 @@ export const localIndexVideo = ai.defineFlow(
       extractVideo(videoUrl)
     );
 
-    await ai.index({
-      indexer: localVideoIndexer,
-      documents,
-    });
-  }
-);
-
-// Define a pinecone video indexer flow
-export const pineconeIndexVideo = ai.defineFlow(
-  {
-    name: 'pineconeIndexVideo',
-    inputSchema: z
-      .string()
-      .describe('A Video URL')
-      .default('gs://cloud-samples-data/generative-ai/video/pixel8.mp4'),
-  },
-  async (videoUrl: string) => {
-    const documents = await ai.run('extract-video', () =>
-      extractVideo(videoUrl)
-    );
-
-    await ai.index({
-      indexer: pineconeVideoIndexer,
-      documents,
-    });
-  }
-);
-
-// Define a chroma video indexer flow
-export const chromaIndexVideo = ai.defineFlow(
-  {
-    name: 'chromaIndexVideo',
-    inputSchema: z
-      .string()
-      .describe('A Video URL')
-      .default('gs://cloud-samples-data/generative-ai/video/pixel8.mp4'),
-  },
-  async (videoUrl: string) => {
-    const documents = await ai.run('extract-video', () =>
-      extractVideo(videoUrl)
-    );
-
-    await ai.index({
-      indexer: chromaVideoIndexer,
-      documents,
-    });
+    await videoStore.index(documents);
   }
 );
 
@@ -208,122 +147,32 @@ export const localVideoQAFlow = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (query: string, { sendChunk }) => {
-    const docs = (await ai.retrieve({
-      retriever: localVideoRetriever,
-      query,
-      options: { k: 1 }, // we are choosing a single segment of video for context
-    })) as Document[];
+    // A single segment of video is enough context.
+    const [doc] = await ai.run('retrieve', () =>
+      videoStore.query(query, { k: 1 })
+    );
+    const video = doc?.media[0];
+    if (!video?.url || !video.contentType) {
+      throw new Error('No indexed video found. Run localIndexVideo first.');
+    }
+    const segment = VideoSegmentSchema.parse(doc.metadata?.embedMetadata);
+    console.log(
+      `Retrieved video: ${video.url} from ${segment.startOffsetSec}s to ${segment.endOffsetSec}s`
+    );
 
-    return augmentedVideoPrompt(
+    const { text } = await augmentedVideoPrompt(
       {
         question: query,
-        media: docs
-          .filter(
-            (d) => d.media[0]?.url?.length && d.media[0]?.contentType?.length
-          )
-          .map((d) => {
-            console.log(
-              `Retriever returned video: ${d.media[0].url} from ${d.metadata?.embedMetadata?.startOffsetSec}s to ${d.metadata?.embedMetadata?.endOffsetSec}s`
-            );
-            return {
-              gcsUrl: d.media[0]?.url,
-              contentType: d.media[0]?.contentType || '',
-              startOffsetSec: d.metadata?.embedMetadata
-                ?.startOffsetSec as number,
-              endOffsetSec: d.metadata?.embedMetadata?.endOffsetSec as number,
-            };
-          })[0],
+        media: {
+          gcsUrl: video.url,
+          contentType: video.contentType,
+          ...segment,
+        },
       },
       {
         onChunk: (c) => sendChunk(c.text),
       }
-    ).then((r) => r.text);
-  }
-);
-
-// Define a video QA flow
-export const pineconeVideoQAFlow = ai.defineFlow(
-  {
-    name: 'pineconeVideoQuestions',
-    inputSchema: z
-      .string()
-      .describe('A question about the video')
-      .default('describe the video'),
-    outputSchema: z.string(),
-  },
-  async (query: string, { sendChunk }) => {
-    const docs = (await ai.retrieve({
-      retriever: pineconeVideoRetriever,
-      query,
-      options: { k: 1 }, // we are choosing a single segment of video for context
-    })) as Document[];
-
-    return augmentedVideoPrompt(
-      {
-        question: query,
-        media: docs
-          .filter(
-            (d) => d.media[0]?.url?.length && d.media[0]?.contentType?.length
-          )
-          .map((d) => {
-            console.log(
-              `Retriever returned video: ${d.media[0].url} from ${d.metadata?.embedMetadata?.startOffsetSec}s to ${d.metadata?.embedMetadata?.endOffsetSec}s`
-            );
-            return {
-              gcsUrl: d.media[0]?.url,
-              contentType: d.media[0]?.contentType || '',
-              startOffsetSec: d.metadata?.embedMetadata
-                ?.startOffsetSec as number,
-              endOffsetSec: d.metadata?.embedMetadata?.endOffsetSec as number,
-            };
-          })[0],
-      },
-      {
-        onChunk: (c) => sendChunk(c.text),
-      }
-    ).then((r) => r.text);
-  }
-);
-
-export const chromaVideoQAFlow = ai.defineFlow(
-  {
-    name: 'chromaVideoQuestions',
-    inputSchema: z
-      .string()
-      .describe('A question about the video')
-      .default('describe the video'),
-    outputSchema: z.string(),
-  },
-  async (query: string, { sendChunk }) => {
-    const docs = (await ai.retrieve({
-      retriever: chromaVideoRetriever,
-      query,
-      options: { k: 1 }, // we are choosing a single segment of video for context
-    })) as Document[];
-
-    return augmentedVideoPrompt(
-      {
-        question: query,
-        media: docs
-          .filter(
-            (d) => d.media[0]?.url?.length && d.media[0]?.contentType?.length
-          )
-          .map((d) => {
-            console.log(
-              `Retriever returned video: ${d.media[0].url} from ${d.metadata?.embedMetadata?.startOffsetSec}s to ${d.metadata?.embedMetadata?.endOffsetSec}s`
-            );
-            return {
-              gcsUrl: d.media[0]?.url,
-              contentType: d.media[0]?.contentType || '',
-              startOffsetSec: d.metadata?.embedMetadata
-                ?.startOffsetSec as number,
-              endOffsetSec: d.metadata?.embedMetadata?.endOffsetSec as number,
-            };
-          })[0],
-      },
-      {
-        onChunk: (c) => sendChunk(c.text),
-      }
-    ).then((r) => r.text);
+    );
+    return text;
   }
 );

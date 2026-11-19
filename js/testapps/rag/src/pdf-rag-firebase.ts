@@ -14,16 +14,15 @@
  * limitations under the License.
  */
 
-import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { googleAI } from '@genkit-ai/google-genai';
 import { initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { readFile } from 'fs/promises';
-import { z } from 'genkit';
+import { Document, z } from 'genkit';
 import { chunk } from 'llm-chunk';
 import path from 'path';
 import pdf from 'pdf-parse';
-import { ai } from './genkit';
+import { ai } from './genkit.js';
 
 const app = initializeApp();
 const firestore = getFirestore(app);
@@ -55,17 +54,14 @@ Question: ${question}
 Helpful Answer:`;
 }
 
-export const pdfChatRetrieverFirebase = defineFirestoreRetriever(ai, {
-  name: 'pdfChatRetrieverFirebase',
-  firestore,
+// Firebase index config for pdfQA flow
+const indexConfig = {
   collection: 'pdf-qa',
   contentField: 'facts',
   vectorField: 'embedding',
+  distanceResultField: 'vector_distance',
   embedder: googleAI.embedder('gemini-embedding-001'),
-  //distanceMeasure: 'COSINE', // optional
-  //distanceResultField: 'vector_distance', // optional
-  //distanceThreshold: 0.8,  // optional
-});
+};
 
 // Define a simple RAG flow, we will evaluate this flow
 export const pdfQAFirebase = ai.defineFlow(
@@ -73,21 +69,14 @@ export const pdfQAFirebase = ai.defineFlow(
     name: 'pdfQAFirebase',
     inputSchema: z.object({
       distanceMeasure: z
-        .string()
-        .describe("One of 'COSINE', 'DOT_PRODUCT', 'EUCLIDEAN'")
-        .default('COSINE')
-        .optional(),
+        .enum(['COSINE', 'DOT_PRODUCT', 'EUCLIDEAN'])
+        .default('COSINE'),
       distanceThreshold: z
         .number()
         .describe(
           'The numeric distance threshold. The significance depends on distanceMeasure'
         )
         .default(0.56)
-        .optional(),
-      distanceResultField: z
-        .string()
-        .describe('The name of the metadata field that stores distance results')
-        .default('vector_distance')
         .optional(),
       query: z
         .string()
@@ -100,23 +89,32 @@ export const pdfQAFirebase = ai.defineFlow(
       response: z.string(),
     }),
   },
-  async ({
-    distanceMeasure,
-    distanceThreshold,
-    distanceResultField,
-    query,
-  }) => {
-    const docs = await ai.retrieve({
-      retriever: pdfChatRetrieverFirebase,
-      query,
-      options: {
-        limit: 10,
-        distanceMeasure,
-        distanceThreshold,
-        distanceResultField,
-      },
+  async ({ distanceMeasure, distanceThreshold, query }) => {
+    const docs = await ai.run('retrieve', async () => {
+      const [{ embedding }] = await ai.embed({
+        embedder: indexConfig.embedder,
+        content: query,
+      });
+      const snapshot = await firestore
+        .collection(indexConfig.collection)
+        .findNearest({
+          vectorField: indexConfig.vectorField,
+          queryVector: embedding,
+          limit: 10,
+          distanceMeasure,
+          distanceThreshold,
+          // Firestore writes the computed distance into this field of each
+          // result snapshot.
+          distanceResultField: indexConfig.distanceResultField,
+        })
+        .get();
+      return snapshot.docs.map((d) => {
+        const data = d.data();
+        const text: string = data[indexConfig.contentField];
+        const distance: number = data[indexConfig.distanceResultField];
+        return Document.fromText(text, { id: d.id, distance });
+      });
     });
-    console.log(docs);
 
     const augmentedPrompt = ragTemplate({
       question: query,
@@ -127,51 +125,28 @@ export const pdfQAFirebase = ai.defineFlow(
       prompt: augmentedPrompt,
     });
 
-    let distances: Array<number> = [];
-    let maxDistance = Number.NaN;
-    let minDistance = Number.NaN;
-    if (distanceResultField) {
-      // Note: if you change the default distanceResultField by setting it in
-      // defineFirestoreRetriever, then you need to change this code to look
-      // for that field as well i.e. distanceResultField || <default you set>
-      distances = docs
-        .map((d) => {
-          if (d.metadata && d.metadata[distanceResultField]) {
-            return d.metadata[distanceResultField];
-          }
-          return undefined;
-        })
-        .filter((n) => n !== undefined);
-      maxDistance = Math.max(...distances);
-      minDistance = Math.min(...distances);
-    }
+    const distances = docs
+      .map((d) => d.metadata?.distance)
+      .filter((n): n is number => typeof n === 'number');
 
     return {
       documentCount: `${docs.length} of 10`,
-      distances: `min: ${minDistance}, max: ${maxDistance}`,
+      distances: `min: ${Math.min(...distances)}, max: ${Math.max(...distances)}`,
       response: llmResponse.text,
     };
   }
 );
 
-// Firebase index config for pdfQA flow
-const indexConfig = {
-  collection: 'pdf-qa',
-  contentField: 'facts',
-  vectorField: 'embedding',
-  embedder: googleAI.embedder('gemini-embedding-001'),
-};
-
-const chunkingConfig = {
+const chunkingConfig: Parameters<typeof chunk>[1] = {
   minLength: 1000, // number of minimum characters into chunk
   maxLength: 2000, // number of maximum characters into chunk
   splitter: 'sentence', // paragraph | sentence
   overlap: 100, // number of overlap chracters
   delimiters: '', // regex for base split method
-} as any;
+};
 
 // Define a flow to index documents into the "vector store"
-// genkit flow:run indexPdf '"./docs/sfspca-cat-adoption-handbook-2023.pdf"'
+// genkit flow:run indexPdfFirestore '"./docs/flume-java.pdf"'
 export const indexPdfFirebase = ai.defineFlow(
   {
     name: 'indexPdfFirestore',

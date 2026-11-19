@@ -14,42 +14,29 @@
  * limitations under the License.
  */
 
-import {
-  devLocalIndexerRef,
-  devLocalRetrieverRef,
-} from '@genkit-ai/dev-local-vectorstore';
+import { googleAI } from '@genkit-ai/google-genai';
 import { Document, z } from 'genkit';
-import { chromaIndexerRef, chromaRetrieverRef } from 'genkitx-chromadb';
-import { pineconeIndexerRef, pineconeRetrieverRef } from 'genkitx-pinecone';
 import { ai } from './genkit.js';
 import { augmentedPrompt } from './prompt.js';
+import { vectraStore } from './vector-store.js';
 
-// Setup the models, embedders and "vector store"
-export const catFactsRetriever = pineconeRetrieverRef({
-  indexId: 'cat-facts',
-  displayName: 'Cat facts retriever',
+// Local vectra indexes (.vectra/cat-facts, .vectra/dog-facts), see
+// vector-store.ts. Swap in your vector database of choice; the flows only
+// need Documents.
+export const catFacts = vectraStore({
+  ai,
+  indexName: 'cat-facts',
+  embedder: googleAI.embedder('gemini-embedding-001'),
 });
 
-export const catFactsIndexer = pineconeIndexerRef({
-  indexId: 'cat-facts',
-  displayName: 'Cat facts indexer',
+export const dogFacts = vectraStore({
+  ai,
+  indexName: 'dog-facts',
+  embedder: googleAI.embedder('gemini-embedding-001'),
 });
-
-export const dogFactsRetriever = chromaRetrieverRef({
-  collectionName: 'dogfacts_collection',
-  displayName: 'Dog facts retriever',
-});
-
-export const dogFactsIndexer = chromaIndexerRef({
-  collectionName: 'dogfacts_collection',
-  displayName: 'Dog facts indexer',
-});
-
-// Simple aliases for readability
-export const nfsDogFactsRetriever = devLocalRetrieverRef('dog-facts');
-export const nfsDogFactsIndexer = devLocalIndexerRef('dog-facts');
 
 // Define a simple RAG flow, we will evaluate this flow
+// genkit flow:run askQuestionsAboutCats '"How much do cats sleep?"'
 export const askQuestionsAboutCatsFlow = ai.defineFlow(
   {
     name: 'askQuestionsAboutCats',
@@ -57,15 +44,14 @@ export const askQuestionsAboutCatsFlow = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (query) => {
-    const docs = await ai.retrieve({
-      retriever: catFactsRetriever,
-      query,
-      options: { k: 3 },
-    });
-    return augmentedPrompt({
+    const docs = await ai.run('retrieve', () =>
+      catFacts.query(query, { k: 3 })
+    );
+    const { text } = await augmentedPrompt({
       question: query,
       context: docs.map((d) => d.text),
-    }).then((r) => r.text);
+    });
+    return text;
   }
 );
 
@@ -78,51 +64,41 @@ export const askQuestionsAboutDogsFlow = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (query) => {
-    const docs = await ai.retrieve({
-      retriever: dogFactsRetriever,
-      query,
-      options: { k: 3 },
-    });
-    return augmentedPrompt({
+    const docs = await ai.run('retrieve', () =>
+      dogFacts.query(query, { k: 3 })
+    );
+    const { text } = await augmentedPrompt({
       question: query,
       context: docs.map((d) => d.text),
-    }).then((r) => r.text);
+    });
+    return text;
   }
 );
 
-// Define a simple RAG flow, we will evaluate this flow
+// genkit flow:run indexCatFactsDocuments '["Cats sleep 12-16 hours a day."]'
 export const indexCatFactsDocumentsFlow = ai.defineFlow(
   {
     name: 'indexCatFactsDocuments',
     inputSchema: z.array(z.string()),
     outputSchema: z.void(),
   },
-  async (docs) => {
-    const documents = docs.map((text) => {
-      return Document.fromText(text, { type: 'animal' });
-    });
-    await ai.index({
-      indexer: catFactsIndexer,
-      documents,
-    });
+  async (facts) => {
+    await catFacts.index(
+      facts.map((text) => Document.fromText(text, { type: 'animal' }))
+    );
   }
 );
 
-// Define a flow to index documents into the "vector store"
-// $ genkit flow:run indexDogFacts '["There are over 400 distinct dog breeds."]'
+// genkit flow:run indexDogFactsDocuments '["There are over 400 distinct dog breeds."]'
 export const indexDogFactsDocumentsFlow = ai.defineFlow(
   {
     name: 'indexDogFactsDocuments',
     inputSchema: z.array(z.string()),
     outputSchema: z.void(),
   },
-  async (docs) => {
-    const documents = docs.map((text) => {
-      return Document.fromText(text, { type: 'animal' });
-    });
-    await ai.index({
-      indexer: dogFactsIndexer,
-      documents,
-    });
+  async (facts) => {
+    await dogFacts.index(
+      facts.map((text) => Document.fromText(text, { type: 'animal' }))
+    );
   }
 );

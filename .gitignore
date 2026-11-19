@@ -36,8 +36,7 @@ firestore-debug.log
 # RAG sample files
 js/testapps/rag/*.json
 !js/testapps/rag/package.json
-js/testapps/evals/__db*.json
-js/testapps/menu/**/__db*.json
+js/testapps/**/.vectra/
 js/testapps/personal-testing
 
 # Test files

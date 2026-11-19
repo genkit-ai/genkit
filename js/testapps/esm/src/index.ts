@@ -19,10 +19,8 @@ import { openAICompatible } from '@genkit-ai/compat-oai';
 import { deepSeek } from '@genkit-ai/compat-oai/deepseek';
 import { openAI } from '@genkit-ai/compat-oai/openai';
 import { xAI } from '@genkit-ai/compat-oai/xai';
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { genkitEval } from '@genkit-ai/evaluator';
 import { expressHandler } from '@genkit-ai/express';
-import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { firebaseContext } from '@genkit-ai/firebase/context';
 import { modelArmor } from '@genkit-ai/google-cloud';
 import {
@@ -39,39 +37,21 @@ import { appRoute } from '@genkit-ai/next';
 import { vertexAI } from '@genkit-ai/vertexai';
 import { vertexAIEvaluation } from '@genkit-ai/vertexai/evaluation';
 import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
-import { vertexAIRerankers } from '@genkit-ai/vertexai/rerankers';
 import { genkit } from 'genkit';
-import { chroma } from 'genkitx-chromadb';
-import {
-  PostgresEngine,
-  postgres,
-  postgresIndexerRef,
-  postgresRetrieverRef,
-} from 'genkitx-cloud-sql-pg';
 import { ollama } from 'genkitx-ollama';
-import { pinecone } from 'genkitx-pinecone';
 
 firebaseContext();
-defineFirestoreRetriever;
 modelArmor;
 checks;
 googleAI;
 vertexAI;
 vertexModelGarden;
 vertexAIEvaluation;
-vertexAIRerankers;
 ollama;
-pinecone;
-chroma;
-devLocalVectorstore;
 genkitEval;
 createMcpClient;
 createMcpServer;
 createMcpHost;
-PostgresEngine;
-postgres;
-postgresRetrieverRef;
-postgresIndexerRef;
 openAICompatible;
 openAI;
 xAI;

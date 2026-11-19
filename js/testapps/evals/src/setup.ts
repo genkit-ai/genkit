@@ -15,7 +15,7 @@
  */
 
 import { z } from 'genkit';
-import { ai } from './genkit';
+import { ai } from './genkit.js';
 import { indexPdf } from './pdf-rag.js';
 
 const catFacts = ['./docs/cat-handbook.pdf'];

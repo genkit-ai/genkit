@@ -14,10 +14,6 @@
  * limitations under the License.
  */
 
-import {
-  devLocalIndexerRef,
-  devLocalRetrieverRef,
-} from '@genkit-ai/dev-local-vectorstore';
 import { googleAI } from '@genkit-ai/google-genai';
 import fs from 'fs';
 import { Document, z } from 'genkit';
@@ -25,10 +21,13 @@ import { chunk } from 'llm-chunk';
 import path from 'path';
 import pdf from 'pdf-parse';
 import { ai } from './genkit.js';
+import { vectraStore } from './vector-store.js';
 
-export const pdfChatRetriever = devLocalRetrieverRef('pdfQA');
-
-export const pdfChatIndexer = devLocalIndexerRef('pdfQA');
+export const pdfStore = vectraStore({
+  ai,
+  indexName: 'pdfQA',
+  embedder: googleAI.embedder('gemini-embedding-001'),
+});
 
 // Define a simple RAG flow, we will evaluate this flow
 export const pdfQA = ai.defineFlow(
@@ -38,11 +37,9 @@ export const pdfQA = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (query, { sendChunk }) => {
-    const docs = await ai.retrieve({
-      retriever: pdfChatRetriever,
-      query,
-      options: { k: 3 },
-    });
+    const docs = await ai.run('retrieve', () =>
+      pdfStore.query(query, { k: 3 })
+    );
 
     const { text } = await ai.generate({
       prompt: query,
@@ -53,13 +50,13 @@ export const pdfQA = ai.defineFlow(
   }
 );
 
-const chunkingConfig = {
+const chunkingConfig: Parameters<typeof chunk>[1] = {
   minLength: 1000, // number of minimum characters into chunk
   maxLength: 2000, // number of maximum characters into chunk
   splitter: 'sentence', // paragraph | sentence
   overlap: 100, // number of overlap chracters
   delimiters: '', // regex for base split method
-} as any;
+};
 
 // Define a flow to index documents into the "vector store"
 // genkit flow:run indexPdf '"./docs/flume-java.pdf"'
@@ -80,10 +77,7 @@ export const indexPdf = ai.defineFlow(
       return Document.fromText(text, { filePath });
     });
 
-    await ai.index({
-      indexer: pdfChatIndexer,
-      documents,
-    });
+    await ai.run('index', () => pdfStore.index(documents));
   }
 );
 

@@ -14,62 +14,14 @@
  * limitations under the License.
  */
 
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { vertexAI } from '@genkit-ai/google-genai';
 import { genkit, type Genkit } from 'genkit';
-import { chroma } from 'genkitx-chromadb';
-import { pinecone } from 'genkitx-pinecone';
-import { GoogleAuth, type IdTokenClient } from 'google-auth-library';
-
-const auth = new GoogleAuth();
-let authClient: IdTokenClient | undefined = undefined;
-
-/** Helper method to cache {@link IdTokenClient} instance */
-async function getCloudRunAuthClient(aud: string) {
-  if (!authClient) {
-    authClient = await auth.getIdTokenClient(aud);
-  }
-  return authClient;
-}
 
 export const ai: Genkit = genkit({
   plugins: [
     vertexAI({
       location: 'us-central1',
     }),
-    pinecone([
-      {
-        indexId: 'pinecone-multimodal-index',
-        embedder: vertexAI.embedder('multimodalembedding@001'),
-      },
-    ]),
-    chroma([
-      {
-        collectionName: 'multimodal_collection',
-        embedder: vertexAI.embedder('multimodalembedding@001'),
-        createCollectionIfMissing: true,
-        clientParams: async () => {
-          // Replace this with your Cloud Run Instance URL
-          const host = 'https://<my-cloud-run-url>.run.app';
-          const client = await getCloudRunAuthClient(host);
-          const idToken = await client.idTokenProvider.fetchIdToken(host);
-          return {
-            path: host,
-            fetchOptions: {
-              headers: {
-                Authorization: 'Bearer ' + idToken,
-              },
-            },
-          };
-        },
-      },
-    ]),
-    devLocalVectorstore([
-      {
-        indexName: 'localMultiModalIndex',
-        embedder: vertexAI.embedder('multimodalembedding@001'),
-      },
-    ]),
   ],
-  model: vertexAI.model('gemini-2.5-flash'),
+  model: vertexAI.model('gemini-3.8-flash'),
 });

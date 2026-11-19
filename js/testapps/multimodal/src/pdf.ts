@@ -14,10 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  devLocalIndexerRef,
-  devLocalRetrieverRef,
-} from '@genkit-ai/dev-local-vectorstore';
+import { vertexAI } from '@genkit-ai/google-genai';
 import fileTypeChecker from 'file-type-checker';
 import fs from 'fs';
 import { Document, z } from 'genkit';
@@ -25,14 +22,18 @@ import { chunk } from 'llm-chunk';
 import path from 'path';
 import { PDFDocument, PDFRawStream } from 'pdf-lib';
 import pdf from 'pdf-parse';
+import { vectraStore } from './vector-store.js';
 
 import { ai } from './genkit.js';
 import { augmentedMultimodalPrompt } from './prompt.js';
-//import { ExecutablePrompt } from '@genkit-ai/ai';
 
-export const pdfMultimodalRetriever = devLocalRetrieverRef('multiModalIndex');
-
-export const pdfMultimodalIndexer = devLocalIndexerRef('multiModalIndex');
+// Text chunks and images are embedded into the same vector space by the
+// multimodal embedder, so a text query can match either.
+export const pdfStore = vectraStore({
+  ai,
+  indexName: 'multiModalIndex',
+  embedder: vertexAI.embedder('multimodalembedding@001'),
+});
 
 // Define a multimodal PDF QA flow
 // (Index a PDF first)
@@ -43,11 +44,9 @@ export const multimodalPdfQAFlow = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (query: string, { sendChunk }) => {
-    const docs = (await ai.retrieve({
-      retriever: pdfMultimodalRetriever,
-      query,
-      options: { k: 3 },
-    })) as Document[];
+    const docs = await ai.run('retrieve', () =>
+      pdfStore.query(query, { k: 3 })
+    );
 
     return augmentedMultimodalPrompt(
       {
@@ -103,13 +102,13 @@ function makeDataUrl(media: unknown) {
   );
 }
 
-const chunkingConfig = {
+const chunkingConfig: Parameters<typeof chunk>[1] = {
   minLength: 800, // number of minimum characters into chunk
   maxLength: 1000, // number of maximum characters into chunk
   splitter: 'sentence', // paragraph | sentence
   overlap: 100, // number of overlap chracters
   delimiters: '', // regex for base split method
-} as any;
+};
 
 // Define a flow to index documents into the "vector store"
 // genkit flow:run indexMultimodalPdf '"./docs/BirthdayPets.pdf"'
@@ -147,10 +146,7 @@ export const indexMultimodalPdf = ai.defineFlow(
       documents = imageDocs.concat(textDocs);
     }
 
-    await ai.index({
-      indexer: pdfMultimodalIndexer,
-      documents,
-    });
+    await pdfStore.index(documents);
   }
 );
 
