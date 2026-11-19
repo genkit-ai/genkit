@@ -71,6 +71,18 @@ describe('toTTSRequest', () => {
     });
   });
 
+  it('should not include apiKey in speech requests', () => {
+    const request = {
+      messages: [{ role: 'user', content: [{ text: 'Hello' }] }],
+      config: { apiKey: 'request-key', speed: 1.25 },
+    } as GenerateRequest;
+
+    const actualOutput = toTTSRequest('gpt-4o-mini-tts', request);
+
+    expect(actualOutput).not.toHaveProperty('apiKey');
+    expect(actualOutput).toHaveProperty('speed', 1.25);
+  });
+
   it('should run with requestBuilder', () => {
     const requestBuilder = jest.fn((_, params) => {
       (params as any).foo = 'bar';
@@ -183,6 +195,31 @@ describe('toSttRequest', () => {
       prompt: '',
       response_format: 'text',
     });
+  });
+
+  it('should not include apiKey in transcription requests', () => {
+    const request = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              media: {
+                contentType: 'audio/wav',
+                url: 'data:audio/wav;base64,aGVsbG8=',
+              },
+            },
+          ],
+        },
+      ],
+      output: { format: 'text' },
+      config: { apiKey: 'request-key', language: 'en' },
+    } as GenerateRequest;
+
+    const actualOutput = toSttRequest('whisper-1', request);
+
+    expect(actualOutput).not.toHaveProperty('apiKey');
+    expect(actualOutput).toHaveProperty('language', 'en');
   });
 
   it('should allow verbose_json when output.format is json', () => {

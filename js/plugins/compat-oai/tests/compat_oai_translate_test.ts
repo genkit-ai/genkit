@@ -65,6 +65,30 @@ describe('toTranslationRequest', () => {
     });
   });
 
+  it('should not include apiKey in translation requests', () => {
+    const request = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              media: {
+                contentType: 'audio/wav',
+                url: 'data:audio/wav;base64,aGVsbG8=',
+              },
+            },
+          ],
+        },
+      ],
+      output: { format: 'text' },
+      config: { apiKey: 'request-key' },
+    } as GenerateRequest;
+
+    const actualOutput = toTranslationRequest('whisper-1', request);
+
+    expect(actualOutput).not.toHaveProperty('apiKey');
+  });
+
   it('should allow verbose_json when output.format is json', () => {
     const request = {
       messages: [

@@ -54,6 +54,29 @@ describe('toAnthropicRequest', () => {
       },
     },
     {
+      should: 'should not include apiKey in Anthropic requests',
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: 'Tell a joke about dogs.' }],
+          },
+        ],
+        config: { apiKey: 'request-key', temperature: 0.5 },
+      },
+      expectedOutput: {
+        max_tokens: 4096,
+        model: MODEL_ID,
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Tell a joke about dogs.' }],
+          },
+        ],
+        temperature: 0.5,
+      },
+    },
+    {
       should:
         'should transform genkit reasoning part back to anthropic thinking block',
       input: {

@@ -282,6 +282,7 @@ export function toAnthropicRequest(
     }
   }
   const {
+    apiKey,
     location,
     version,
     maxOutputTokens,

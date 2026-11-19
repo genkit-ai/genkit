@@ -111,6 +111,7 @@ export function toTTSRequest(
   requestBuilder?: SpeechRequestBuilder
 ): SpeechCreateParams {
   const {
+    apiKey,
     voice,
     version: modelVersion,
     temperature,
@@ -284,6 +285,7 @@ export function toSttRequest(
     type: contentType,
   });
   const {
+    apiKey,
     temperature,
     version: modelVersion,
     maxOutputTokens,
