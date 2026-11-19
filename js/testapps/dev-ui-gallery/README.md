@@ -3,9 +3,8 @@
 Loads plugins and flows to demonstrate and test Genkit Dev UI features.
 
 This test app registers a wide variety of flows, prompts, and tools to
-exercise the Dev UI — including Firebase Functions-compatible flows,
-Dotprompt templates, custom tools, evaluators, and multiple vector store
-backends.
+exercise the Dev UI, including Firebase Functions-compatible flows,
+Dotprompt templates, custom tools, evaluators, and middleware.
 
 ## Features Demonstrated
 
@@ -15,7 +14,7 @@ backends.
 | Firebase Functions | `flows-firebase-functions.ts` | Flows wrapped for Firebase Functions compatibility |
 | Dotprompt | `prompts.ts` | Prompt file templates with schemas |
 | Tools | `tools.ts` | Custom tools for model use |
-| Multiple Plugins | `genkit.ts` | Google AI, Vertex AI, Ollama, ChromaDB, Pinecone, Firebase |
+| Multiple Plugins | `genkit.ts` | Google AI, Vertex AI, Ollama, evaluators, middleware |
 
 ## Setup
 

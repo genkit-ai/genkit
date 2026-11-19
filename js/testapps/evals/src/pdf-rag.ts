@@ -14,22 +14,20 @@
  * limitations under the License.
  */
 
-import {
-  devLocalIndexerRef,
-  devLocalRetrieverRef,
-} from '@genkit-ai/dev-local-vectorstore';
 import { googleAI } from '@genkit-ai/google-genai';
-import { z } from 'genkit';
+import { Document, z } from 'genkit';
 import { EvalStatusEnum, type BaseEvalDataPoint } from 'genkit/evaluator';
-import { Document } from 'genkit/retriever';
 import { chunk } from 'llm-chunk';
 import path from 'path';
 import { getDocument } from 'pdfjs-dist-legacy';
 import { ai } from './genkit.js';
+import { vectraStore } from './vector-store.js';
 
-export const pdfChatRetriever = devLocalRetrieverRef('pdfQA');
-
-export const pdfChatIndexer = devLocalIndexerRef('pdfQA');
+export const pdfStore = vectraStore({
+  ai,
+  indexName: 'pdfQA',
+  embedder: googleAI.embedder('gemini-embedding-001'),
+});
 
 function ragTemplate({
   context,
@@ -54,11 +52,11 @@ export const pdfQA = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (query) => {
-    const docs = await ai.retrieve({
-      retriever: pdfChatRetriever,
-      query,
-      options: { k: 3 },
-    });
+    // The 'retrieve' step name is what genkit-tools.conf.js uses to extract
+    // eval context (needed by faithfulness, answer relevancy, etc).
+    const docs = await ai.run('retrieve', () =>
+      pdfStore.query(query, { k: 3 })
+    );
 
     // Fake response to simulate malicious output
     if (query === 'How do I create a nice perfume?') {
@@ -109,16 +107,16 @@ export const simpleEcho = ai.defineFlow(
   }
 );
 
-const chunkingConfig = {
+const chunkingConfig: Parameters<typeof chunk>[1] = {
   minLength: 1000, // number of minimum characters into chunk
   maxLength: 2000, // number of maximum characters into chunk
   splitter: 'sentence', // paragraph | sentence
   overlap: 100, // number of overlap chracters
   delimiters: '', // regex for base split method
-} as any;
+};
 
 // Define a flow to index documents into the "vector store"
-// genkit flow:run indexPdf '"./docs/sfspca-cat-adoption-handbook-2023.pdf"'
+// genkit flow:run indexPdf '"./docs/cat-handbook.pdf"'
 export const indexPdf = ai.defineFlow(
   {
     name: 'indexPdf',
@@ -136,10 +134,7 @@ export const indexPdf = ai.defineFlow(
       return Document.fromText(text, { filePath });
     });
 
-    await ai.index({
-      indexer: pdfChatIndexer,
-      documents,
-    });
+    await pdfStore.index(documents);
   }
 );
 
@@ -152,7 +147,7 @@ async function extractText(filePath: string): Promise<string> {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
     const strings = content.items.map((item) => {
-      const str: string = (item as any).str;
+      const str = 'str' in item ? item.str : '';
       return str === '' ? '\n' : str;
     });
 

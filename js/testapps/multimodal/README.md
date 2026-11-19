@@ -1,8 +1,9 @@
 # Multimodal RAG
 
 Demonstrates multimodal Retrieval-Augmented Generation (RAG) with PDFs and
-videos — index documents, extract text and images, embed them into vector
-stores, and query with natural language.
+videos: extract text and images, embed them with a multimodal embedder into a
+local [vectra](https://www.npmjs.com/package/vectra) index (see
+`src/vector-store.ts`), and query with natural language.
 
 ## Features Demonstrated
 
@@ -12,10 +13,6 @@ stores, and query with natural language.
 | PDF QA | `multimodalPdfQuestions` | RAG over indexed PDF content (text + images) |
 | Video Indexing (Local) | `localIndexVideo` | Extract video segments and index locally |
 | Video QA (Local) | `localVideoQuestions` | RAG over locally indexed video content |
-| Video Indexing (Pinecone) | `pineconeIndexVideo` | Index video segments in Pinecone |
-| Video QA (Pinecone) | `pineconeVideoQuestions` | RAG over Pinecone-indexed video content |
-| Video Indexing (Chroma) | `chromaIndexVideo` | Index video segments in ChromaDB |
-| Video QA (Chroma) | `chromaVideoQuestions` | RAG over Chroma-indexed video content |
 
 ## Setup
 
@@ -26,14 +23,11 @@ stores, and query with natural language.
 
 ### API Keys
 
-```bash
-export GEMINI_API_KEY='<your-api-key>'
-```
-
-For Pinecone:
+This sample uses Vertex AI (models and `multimodalembedding@001`):
 
 ```bash
-export PINECONE_API_KEY='<your-pinecone-key>'
+gcloud auth application-default login
+export GCLOUD_PROJECT='<your-project-id>'
 ```
 
 ### Build and Install
@@ -61,7 +55,7 @@ pnpm run genkit:dev
    ```
 
 3. **Query the indexed PDF**:
-   - [ ] `multimodalPdfQuestions` — Input: `"What pets are shown?"`
+   - [ ] `multimodalPdfQuestions`: input `"What pets are shown?"`
 
 4. **Index a video**:
    ```bash
@@ -69,7 +63,7 @@ pnpm run genkit:dev
    ```
 
 5. **Query the indexed video**:
-   - [ ] `localVideoQuestions` — Input: `"describe the video"`
+   - [ ] `localVideoQuestions`: input `"describe the video"`
 
 6. **Expected behavior**:
    - PDF text and images are extracted and indexed

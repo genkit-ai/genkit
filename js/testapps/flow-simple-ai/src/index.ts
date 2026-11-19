@@ -15,7 +15,6 @@
  */
 
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
-import { defineFirestoreRetriever } from '@genkit-ai/firebase';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 import { filesystem, skills, toolApproval } from '@genkit-ai/middleware';
 import { GoogleGenAI } from '@google/genai';
@@ -23,6 +22,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import {
+  Document,
   MessageSchema,
   dynamicTool,
   genkit,
@@ -91,8 +91,8 @@ export const jokeFlow = ai.defineFlow(
   {
     name: 'jokeFlow',
     inputSchema: z.object({
-      modelName: z.string().default('vertexai/gemini-2.5-pro'),
-      modelVersion: z.string().optional().default('gemini-2.5-pro'),
+      modelName: z.string().default('vertexai/gemini-3.1-pro-preview'),
+      modelVersion: z.string().optional().default('gemini-3.1-pro-preview'),
       subject: z.string().default('bananas'),
     }),
     outputSchema: z.string(),
@@ -135,7 +135,7 @@ export const streamFlowVertex = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: vertexAI.model('gemini-3.8-flash', { temperature: 0.77 }),
       prompt,
     });
 
@@ -155,7 +155,7 @@ export const streamFlowGemini = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: googleAI.model('gemini-flash-latest', { temperature: 0.77 }),
       prompt,
     });
 
@@ -238,14 +238,14 @@ export const jokeWithToolsFlow = ai.defineFlow(
   {
     name: 'jokeWithToolsFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash', 'gemini-2.5-pro']),
+      modelName: z.enum(['gemini-flash-latest', 'gemini-pro-latest']),
       subject: z.string(),
     }),
     outputSchema: z.object({ model: z.string(), joke: z.string() }),
   },
   async (input) => {
     const llmResponse = await ai.generate({
-      model: googleAI.model(input.modelName as string),
+      model: googleAI.model(input.modelName),
       tools,
       output: { schema: z.object({ joke: z.string() }) },
       prompt: `Tell a joke about ${input.subject}.`,
@@ -262,7 +262,7 @@ export const jokeWithOutputFlow = ai.defineFlow(
   {
     name: 'jokeWithOutputFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash']),
+      modelName: z.enum(['gemini-flash-latest']),
       subject: z.string(),
     }),
     outputSchema,
@@ -319,14 +319,7 @@ export const multimodalFlow = ai.defineFlow(
   }
 );
 
-const destinationsRetriever = defineFirestoreRetriever(ai, {
-  name: 'destinationsRetriever',
-  firestore: getFirestore(app),
-  collection: 'destinations',
-  contentField: 'knownFor',
-  embedder: googleAI.embedder('gemini-embedding-001'),
-  vectorField: 'embedding',
-});
+const firestore = getFirestore(app);
 
 export const searchDestinations = ai.defineFlow(
   {
@@ -335,10 +328,26 @@ export const searchDestinations = ai.defineFlow(
     outputSchema: z.string(),
   },
   async (input) => {
-    const docs = await ai.retrieve({
-      retriever: destinationsRetriever,
-      query: input,
-      options: { limit: 5 },
+    // Vector search with the Firestore SDK. Requires a vector index on
+    // `destinations.embedding`.
+    const docs = await ai.run('retrieve', async () => {
+      const [{ embedding }] = await ai.embed({
+        embedder: googleAI.embedder('gemini-embedding-001'),
+        content: input,
+      });
+      const snapshot = await firestore
+        .collection('destinations')
+        .findNearest({
+          vectorField: 'embedding',
+          queryVector: embedding,
+          limit: 5,
+          distanceMeasure: 'COSINE',
+        })
+        .get();
+      return snapshot.docs.map((d) => {
+        const { name, knownFor } = d.data();
+        return Document.fromText(knownFor, { name });
+      });
     });
 
     const result = await ai.generate({
@@ -527,7 +536,7 @@ export const forcedToolCaller = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
@@ -552,7 +561,7 @@ export const toolCallerCharacterGenerator = ai.defineFlow(
   },
   async (input, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: vertexAI.model('gemini-2.5-flash'),
+      model: vertexAI.model('gemini-3.8-flash'),
       config: {
         temperature: 1,
       },
@@ -894,7 +903,7 @@ ai.defineFlow(
   },
   async ({ url, prompt, model }) => {
     const { text } = await ai.generate({
-      model: model || 'googleai/gemini-2.5-flash',
+      model: model || 'googleai/gemini-flash-latest',
       prompt: [{ text: prompt }, { media: { url, contentType: 'video/mp4' } }],
     });
     return text;
@@ -903,7 +912,7 @@ ai.defineFlow(
 
 ai.defineFlow('geminiImages', async (_, { sendChunk }) => {
   const { response, stream } = ai.generateStream({
-    model: googleAI.model('gemini-2.5-flash-image'),
+    model: googleAI.model('gemini-3.1-flash-lite-image'),
     prompt: `generate an image of a banana riding a bicycle`,
     config: {
       responseModalities: ['TEXT', 'IMAGE'],
@@ -974,7 +983,7 @@ ai.defineFlow(
   async (query) => {
     const { media } = await ai.generate({
       // For all available options see https://ai.google.dev/gemini-api/docs/speech-generation#javascript
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      model: googleAI.model('gemini-3.8-flash-tts'),
       config: {
         responseModalities: ['AUDIO'],
         speechConfig: {
@@ -1045,7 +1054,7 @@ ai.defineFlow(
   },
   async (query) => {
     const { media } = await ai.generate({
-      model: googleAI.model('gemini-2.5-flash-preview-tts'),
+      model: googleAI.model('gemini-3.8-flash-tts'),
       config: {
         responseModalities: ['AUDIO'],
         speechConfig: {
@@ -1115,7 +1124,7 @@ ai.defineFlow('googleSearch', async (thing) => {
 
 ai.defineFlow('googleSearchRetrieval', async (thing) => {
   const { text } = await ai.generate({
-    model: vertexAI.model('gemini-2.5-flash'),
+    model: vertexAI.model('gemini-3.8-flash'),
     prompt: `What is a banana?`,
     config: { googleSearchRetrieval: {} },
   });
@@ -1333,7 +1342,7 @@ export const transferFlowManual = ai.defineFlow(
     const response = await ai.generate({
       prompt: 'Ask me a movie trivia question.',
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-pro-latest'),
     });
 
     const answers = [];
@@ -1355,7 +1364,7 @@ export const transferFlowManual = ai.defineFlow(
 
     const finalResponse = await ai.generate({
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-pro-latest'),
       messages: response.messages,
       resume: {
         respond: answers,

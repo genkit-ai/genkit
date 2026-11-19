@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import { devLocalVectorstore } from '@genkit-ai/dev-local-vectorstore';
 import { GenkitMetric, genkitEval } from '@genkit-ai/evaluator';
 import { googleAI, vertexAI } from '@genkit-ai/google-genai';
 import {
@@ -31,9 +30,7 @@ import {
 import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import { genkit } from 'genkit';
 import { logger } from 'genkit/logging';
-import { chroma } from 'genkitx-chromadb';
 import { ollama } from 'genkitx-ollama';
-import { pinecone } from 'genkitx-pinecone';
 import {
   alwaysFail,
   delay,
@@ -47,7 +44,7 @@ logger.setLogLevel('debug');
 
 // Turn off safety checks for evaluation so that the LLM as an evaluator can
 // respond appropriately to potentially harmful content without error.
-export const PERMISSIVE_SAFETY_SETTINGS: any = {
+export const PERMISSIVE_SAFETY_SETTINGS = {
   safetySettings: [
     {
       category: 'HARM_CATEGORY_HATE_SPEECH',
@@ -118,32 +115,6 @@ export const ai = genkit({
         },
       ],
     }),
-
-    // vector stores
-    chroma([
-      {
-        collectionName: 'chroma-collection',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
-      },
-    ]),
-    devLocalVectorstore([
-      {
-        indexName: 'naive-index',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
-      },
-    ]),
-    pinecone([
-      {
-        indexId: 'pinecone-index',
-        embedder: googleAI.embedder('gemini-embedding-001'),
-        embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
-        clientParams: {
-          apiKey: process.env.PINECONE_API_KEY || 'dummy-api-key',
-        },
-      },
-    ]),
 
     // evaluation
     genkitEval({

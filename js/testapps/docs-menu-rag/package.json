@@ -15,11 +15,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "genkit": "workspace:*",
-    "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/google-genai": "workspace:*",
+    "genkit": "workspace:*",
     "llm-chunk": "^0.0.1",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "vectra": "^0.15.0"
   },
   "devDependencies": {
     "rimraf": "^6.0.1",

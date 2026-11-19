@@ -14,19 +14,24 @@
  * limitations under the License.
  */
 
-import {
-  devLocalIndexerRef,
-  devLocalRetrieverRef,
-} from '@genkit-ai/dev-local-vectorstore';
+import { googleAI } from '@genkit-ai/google-genai';
 import { Document, z } from 'genkit';
 import { ai } from '../genkit.js';
 import {
   AnswerOutputSchema,
   MenuItemSchema,
   MenuQuestionInputSchema,
-  type MenuItem,
 } from '../types.js';
+import { vectraStore } from '../vector-store.js';
 import { s04_ragDataMenuPrompt } from './prompts.js';
+
+// A local vectra index (.vectra/menu-items, see ../vector-store.ts).
+const menuStore = vectraStore({
+  ai,
+  indexName: 'menu-items',
+  embedder: googleAI.embedder('gemini-embedding-001'),
+  embedderOptions: { taskType: 'RETRIEVAL_DOCUMENT' },
+});
 
 // Define a flow which indexes items on the menu.
 
@@ -43,10 +48,7 @@ export const s04_indexMenuItemsFlow = ai.defineFlow(
       const text = `${menuItem.title} ${menuItem.price} \n ${menuItem.description}`;
       return Document.fromText(text, menuItem);
     });
-    await ai.index({
-      indexer: devLocalIndexerRef('menu-items'),
-      documents,
-    });
+    await menuStore.index(documents);
     return { rows: menuItems.length };
   }
 );
@@ -64,14 +66,11 @@ export const s04_ragMenuQuestionFlow = ai.defineFlow(
   },
   async (input) => {
     // Retrieve the 3 most relevant menu items for the question
-    const docs = await ai.retrieve({
-      retriever: devLocalRetrieverRef('menu-items'),
-      query: input.question,
-      options: { k: 3 },
-    });
-    const menuData: Array<MenuItem> = docs.map(
-      (doc) => (doc.metadata || {}) as MenuItem
+    const docs = await ai.run('retrieve', () =>
+      menuStore.query(input.question, { k: 3 })
     );
+    // Each document's metadata is the original menu item (see indexing above).
+    const menuData = docs.map((doc) => MenuItemSchema.parse(doc.metadata));
 
     // Generate the response
     const response = await s04_ragDataMenuPrompt({

@@ -20,7 +20,6 @@
   "dependencies": {
     "@genkit-ai/checks": "workspace:*",
     "@genkit-ai/compat-oai": "workspace:*",
-    "@genkit-ai/dev-local-vectorstore": "workspace:*",
     "@genkit-ai/evaluator": "workspace:*",
     "@genkit-ai/express": "workspace:*",
     "@genkit-ai/firebase": "workspace:*",
@@ -30,10 +29,7 @@
     "@genkit-ai/next": "workspace:*",
     "@genkit-ai/vertexai": "workspace:*",
     "genkit": "workspace:*",
-    "genkitx-chromadb": "workspace:*",
-    "genkitx-cloud-sql-pg": "workspace:*",
-    "genkitx-ollama": "workspace:*",
-    "genkitx-pinecone": "workspace:*"
+    "genkitx-ollama": "workspace:*"
   },
   "devDependencies": {
     "genkit-cli": "link:../../../genkit-tools/cli",
