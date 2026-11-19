@@ -45,6 +45,16 @@ var (
 		Output:     []string{ai.OutputFormatMedia},
 	}
 
+	// LyriaSupports describes model capabilities for music generation models
+	// (Lyria): text prompt in, audio media out.
+	LyriaSupports = ai.ModelSupports{
+		Media:      false,
+		Multiturn:  false,
+		Tools:      false,
+		SystemRole: false,
+		Output:     []string{ai.OutputFormatMedia},
+	}
+
 	// VeoSupports describes model capabilities for video generation models (Veo).
 	VeoSupports = ai.ModelSupports{
 		Media:       true,
@@ -77,6 +87,7 @@ var (
 	geminiConfigSchema = configToMap(genai.GenerateContentConfig{})
 	imagenConfigSchema = configToMap(genai.GenerateImagesConfig{})
 	veoConfigSchema    = configToMap(genai.GenerateVideosConfig{})
+	lyriaConfigSchema  = configToMap(LyriaConfig{})
 )
 
 // Default options for unknown models of each type. Every catalog entry is
@@ -94,6 +105,12 @@ var (
 		Supports:     &Media,
 		Stage:        ai.ModelStageUnstable,
 		ConfigSchema: imagenConfigSchema,
+	}
+
+	defaultLyriaOpts = ai.ModelOptions{
+		Supports:     &LyriaSupports,
+		Stage:        ai.ModelStageUnstable,
+		ConfigSchema: lyriaConfigSchema,
 	}
 
 	defaultVeoOpts = ai.ModelOptions{
@@ -144,6 +161,9 @@ const (
 	// Served under the same ID by both backends.
 	gemini31FlashTTSPreview = "gemini-3.1-flash-tts-preview"
 
+	// Lyria music generation is served by Vertex AI only.
+	lyria002 = "lyria-002"
+
 	// Vertex AI serves Veo 3.1 as GA "-001" IDs; Google AI serves it as
 	// "-preview". Each backend has retired the other's spelling.
 	veo31Generate001         = "veo-3.1-generate-001"
@@ -189,6 +209,8 @@ var (
 		veo31Generate001,
 		veo31FastGenerate001,
 		veo31LiteGenerate001,
+
+		lyria002,
 	}
 
 	googleAIModels = []string{
@@ -391,6 +413,15 @@ var (
 		},
 	}
 
+	supportedLyriaModels = map[string]ai.ModelOptions{
+		lyria002: {
+			Label:    "Lyria 002",
+			Versions: []string{},
+			Supports: &LyriaSupports,
+			Stage:    ai.ModelStageStable,
+		},
+	}
+
 	embedderConfig = map[string]ai.EmbedderOptions{
 		textembedding005: {
 			Dimensions: 768,
@@ -470,6 +501,11 @@ func GetModelOptions(name, provider string) ai.ModelOptions {
 		if !ok {
 			opts = defaultVeoOpts
 		}
+	case ModelTypeLyria:
+		opts, ok = supportedLyriaModels[name]
+		if !ok {
+			opts = defaultLyriaOpts
+		}
 	default:
 		opts = defaultGeminiOpts
 	}
@@ -530,6 +566,7 @@ type genaiModels struct {
 	imagen    []string
 	embedders []string
 	veo       []string
+	lyria     []string
 }
 
 // listGenaiModels returns a list of supported models and embedders from the
@@ -559,6 +596,11 @@ func listGenaiModels(ctx context.Context, client *genai.Client) (genaiModels, er
 
 		if strings.Contains(name, "veo") {
 			models.veo = append(models.veo, name)
+			continue
+		}
+
+		if strings.HasPrefix(name, "lyria") {
+			models.lyria = append(models.lyria, name)
 			continue
 		}
 

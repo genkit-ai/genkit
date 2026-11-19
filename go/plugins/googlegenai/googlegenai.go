@@ -51,6 +51,16 @@ func rejectBackgroundModel(provider, id string) error {
 	return nil
 }
 
+// rejectUnsupportedLyria refuses Lyria models this plugin cannot serve:
+// anything but the Vertex AI `:predict` model (lyria-002), such as the Lyria 3
+// models that need the Interactions API, and any Lyria model on Google AI.
+func rejectUnsupportedLyria(client *genai.Client, provider, id string) error {
+	if ClassifyModel(id) == ModelTypeLyria && !lyriaSupported(client, id) {
+		return status.Errorf(status.ErrInvalidArgument, "%s: Lyria model %q is not supported: only %q on Vertex AI is available", provider, id, lyriaPredictModel)
+	}
+	return nil
+}
+
 // GoogleAI is a Genkit plugin for interacting with the Google AI service.
 type GoogleAI struct {
 	APIKey     string // API key to access the service. If empty, the values of the environment variables GEMINI_API_KEY or GOOGLE_API_KEY will be consulted, in that order.
@@ -445,6 +455,9 @@ func (ga *GoogleAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOptio
 	if err := rejectBackgroundModel(googleAIProvider, id); err != nil {
 		return nil, err
 	}
+	if err := rejectUnsupportedLyria(ga.gclient, googleAIProvider, id); err != nil {
+		return nil, err
+	}
 	if opts != nil {
 		return newModel(ga.gclient, id, *opts), nil
 	}
@@ -480,6 +493,9 @@ func (v *VertexAI) DefineModel(g *genkit.Genkit, id string, opts *ai.ModelOption
 	}
 	id = internal.TrimProvider(vertexAIProvider, id)
 	if err := rejectBackgroundModel(vertexAIProvider, id); err != nil {
+		return nil, err
+	}
+	if err := rejectUnsupportedLyria(v.gclient, vertexAIProvider, id); err != nil {
 		return nil, err
 	}
 	if opts != nil {
