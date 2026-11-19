@@ -15,10 +15,7 @@
     "plugins/next",
     "plugins/evaluators",
     "plugins/mcp",
-    "plugins/dev-local-vectorstore",
-    "plugins/ollama",
-    "plugins/chroma",
-    "plugins/pinecone"
+    "plugins/ollama"
   ],
   "name": "Genkit JS API reference",
   "out": "api-refs-js",

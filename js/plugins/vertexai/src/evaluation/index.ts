@@ -23,7 +23,7 @@ export { VertexAIEvaluationMetricType } from './types.js';
 export type { PluginOptions };
 
 /**
- * Add Google Cloud Vertex AI Rerankers API to Genkit.
+ * Add Google Cloud Vertex AI evaluation metrics to Genkit.
  */
 export function vertexAIEvaluation(options: PluginOptions): GenkitPlugin {
   return genkitPlugin('vertexAIEvaluation', async (ai: Genkit) => {
