@@ -118,9 +118,21 @@ def select_leaf(
                 'history). Resume by snapshot_id instead.'
             ),
         )
-    # created_at is an ISO-8601 string, so lexicographic max is chronological;
-    # snapshot_id breaks exact ties deterministically.
-    return max(leaves, key=lambda snap: (snap.created_at, snap.snapshot_id))
+
+    def creation_key(snapshot: SessionSnapshot) -> tuple[datetime, str]:
+        # ISO-8601 strings with different offsets or fractional precision do
+        # not sort chronologically. Normalize Z for Python 3.10 compatibility.
+        created_at = datetime.fromisoformat(snapshot.created_at.replace('Z', '+00:00'))
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        return created_at, snapshot.snapshot_id
+
+    try:
+        return max(leaves, key=creation_key)
+    except ValueError:
+        # Legacy stores may contain non-ISO strings. Keep their previous
+        # deterministic ordering rather than making them unreadable.
+        return max(leaves, key=lambda snap: (snap.created_at, snap.snapshot_id))
 
 
 def stamp_store_fields(*, snapshot: SessionSnapshot, snapshot_id: str) -> None:
