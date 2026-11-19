@@ -22,6 +22,7 @@ import { GeminiInteraction } from '../../src/common/interaction-types.js';
 import {
   AntigravityConfigSchema,
   defineModel,
+  model,
 } from '../../src/googleai/antigravity.js';
 import { GoogleAIPluginOptions } from '../../src/googleai/types.js';
 
@@ -74,6 +75,40 @@ describe('Antigravity', () => {
       },
     ],
   };
+
+  describe('namespace', () => {
+    it('names refs googleai/ by default', () => {
+      assert.strictEqual(
+        model('antigravity-preview-09-2026').name,
+        'googleai/antigravity-preview-09-2026'
+      );
+    });
+
+    it('names known and unlisted models under the given namespace', () => {
+      for (const name of ['antigravity-preview-09-2026', 'antigravity-9']) {
+        const ref = model(name, {}, 'googlegenai');
+        assert.strictEqual(ref.name, `googlegenai/${name}`);
+        assert.strictEqual(ref.configSchema, AntigravityConfigSchema);
+        assert.deepStrictEqual(ref.info, model(name).info);
+      }
+    });
+
+    it('defines the model under the given namespace, sending the bare name', async () => {
+      const antigravity = defineModel(
+        'antigravity-preview-09-2026',
+        defaultPluginOptions,
+        'googlegenai'
+      );
+      assert.strictEqual(
+        antigravity.__action.name,
+        'googlegenai/antigravity-preview-09-2026'
+      );
+      mockFetchResponse(mockInteractionResponse);
+      await antigravity(minimalRequest, {} as any);
+      const body = JSON.parse(fetchStub.lastCall.args[1].body);
+      assert.strictEqual(body.agent, 'antigravity-preview-09-2026');
+    });
+  });
 
   describe('defineModel', () => {
     it('sets agent field and correctly maps empty config', async () => {

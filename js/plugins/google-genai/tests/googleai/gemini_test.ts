@@ -1349,6 +1349,69 @@ describe('Google AI Gemini', () => {
         });
       }
 
+      describe('namespace', () => {
+        it('names refs and actions googleai/ by default', () => {
+          assert.strictEqual(
+            model('gemini-3.8-flash').name,
+            'googleai/gemini-3.8-flash'
+          );
+          assert.strictEqual(
+            defineModel('gemini-3.8-flash', defaultPluginOptions).__action.name,
+            'googleai/gemini-3.8-flash'
+          );
+        });
+
+        it('names a known model under the given namespace, keeping its schema and info', () => {
+          const known = model('gemini-3.1-flash-image');
+          const ref = model('gemini-3.1-flash-image', {}, 'googlegenai');
+          assert.strictEqual(ref.name, 'googlegenai/gemini-3.1-flash-image');
+          assert.strictEqual(ref.configSchema, GeminiImageConfigSchema);
+          assert.deepStrictEqual(ref.info, known.info);
+        });
+
+        it('names an unknown model under the given namespace', () => {
+          const ref = model('gemma-9-new', { temperature: 1 }, 'googlegenai');
+          assert.strictEqual(ref.name, 'googlegenai/gemma-9-new');
+          assert.strictEqual(ref.configSchema, GemmaConfigSchema);
+          assert.deepStrictEqual(ref.config, { temperature: 1 });
+        });
+
+        it('routes by the bare model name under another namespace', async () => {
+          // gemini-3.8-flash is on Interactions, gemini-3.1-flash-lite on
+          // generateContent: the routing map is keyed by the bare name.
+          const interactionsModel = defineModel(
+            'gemini-3.8-flash',
+            defaultPluginOptions,
+            'googlegenai'
+          );
+          assert.strictEqual(
+            interactionsModel.__action.name,
+            'googlegenai/gemini-3.8-flash'
+          );
+          mockFetchResponse(defaultApiResponse);
+          await interactionsModel.run(minimalRequest).catch(() => undefined);
+          const interactionsUrl: string = fetchStub.lastCall.args[0];
+          assert.ok(interactionsUrl.endsWith('/interactions'), interactionsUrl);
+          const apiRequest: CreateInteractionRequest = JSON.parse(
+            fetchStub.lastCall.args[1].body
+          );
+          assert.strictEqual(apiRequest.model, 'gemini-3.8-flash');
+
+          const generateContentModel = defineModel(
+            'gemini-3.1-flash-lite',
+            defaultPluginOptions,
+            'googlegenai'
+          );
+          mockFetchResponse(defaultApiResponse);
+          await generateContentModel.run(minimalRequest);
+          const url: string = fetchStub.lastCall.args[0];
+          assert.ok(
+            url.includes('models/gemini-3.1-flash-lite:generateContent'),
+            url
+          );
+        });
+      });
+
       it('streams TTS as PCM chunks and returns them joined in one part', async () => {
         const model = defineModel(
           'gemini-3.8-flash-lite-tts',
