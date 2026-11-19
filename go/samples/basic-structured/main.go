@@ -22,9 +22,6 @@
 // jsonschema tags describe each field to the model, which is what makes the
 // generated values sensible.
 //
-// Scalars work too: GenerateData[int] returns a decoded *int, including zero,
-// and GenerateDataStream[string] decodes JSON string chunks and its final Output.
-//
 // Run it:
 //
 //	go run .

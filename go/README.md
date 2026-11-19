@@ -460,9 +460,7 @@ for result, err := range genkit.GenerateDataStream[Recipe](ctx, g, /* same optio
 }
 ```
 
-Scalars are supported too: `GenerateData[int]` and `GenerateData[bool]` preserve
-values such as `0` and `false`. `GenerateDataStream[string]` decodes JSON quotes
-and escapes in both its chunks and final `Output`.
+Any JSON type works, scalars included: `GenerateData[int]`, `GenerateData[bool]`, `GenerateData[string]`.
 
 [Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go)
 
