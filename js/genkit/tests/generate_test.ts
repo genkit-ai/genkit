@@ -51,13 +51,8 @@ describe('generate', () => {
       assert.strictEqual(response.text, 'Echo: hi; config: {}');
     });
 
-    it('calls the default model with just a string prompt', async () => {
-      const response = await ai.generate('hi');
-      assert.strictEqual(response.text, 'Echo: hi; config: {}');
-    });
-
-    it('calls the default model with just parts prompt', async () => {
-      const response = await ai.generate([{ text: 'hi' }]);
+    it('calls the default model with a parts prompt', async () => {
+      const response = await ai.generate({ prompt: [{ text: 'hi' }] });
       assert.strictEqual(response.text, 'Echo: hi; config: {}');
     });
 
@@ -150,7 +145,7 @@ describe('generate', () => {
     });
 
     it('streams the default model', async () => {
-      const { response, stream } = await ai.generateStream('hi');
+      const { response, stream } = ai.generateStream({ prompt: 'hi' });
 
       const chunks: string[] = [];
       for await (const chunk of stream) {

@@ -25,9 +25,9 @@ export const tellJoke = ai.defineFlow(
     streamSchema: z.string(),
   },
   async (type: string | null, { sendChunk }) => {
-    const { response, stream } = ai.generateStream(
-      `Tell me a ${type || 'dad'} joke`
-    );
+    const { response, stream } = ai.generateStream({
+      prompt: `Tell me a ${type || 'dad'} joke`,
+    });
     for await (const chunk of stream) {
       sendChunk(chunk.text);
     }
