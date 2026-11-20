@@ -190,7 +190,11 @@ function withLatency<CustomOptionsSchema extends GenkitSchema>(
 
 /** Attaches the config schema, turning a plain action into a {@link ModelAction}. */
 function withConfigSchema<CustomOptionsSchema extends GenkitSchema>(
-  act: Action<typeof GenerateRequestSchema, typeof GenerateResponseSchema>,
+  act: Action<
+    typeof GenerateRequestSchema,
+    typeof GenerateResponseSchema,
+    typeof GenerateResponseChunkSchema
+  >,
   configSchema: CustomOptionsSchema | undefined
 ): ModelAction<CustomOptionsSchema> {
   Object.assign(act, { __configSchema: configSchema || z.unknown() });
@@ -201,7 +205,11 @@ function modelActionOptions<
   CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: DefineModelOptions<CustomOptionsSchema>
-): ActionParams<typeof GenerateRequestSchema, typeof GenerateResponseSchema> {
+): ActionParams<
+  typeof GenerateRequestSchema,
+  typeof GenerateResponseSchema,
+  typeof GenerateResponseChunkSchema
+> {
   const label = options.label || options.name;
   const middleware = getModelMiddleware(options);
   return {
