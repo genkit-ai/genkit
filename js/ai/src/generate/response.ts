@@ -241,11 +241,19 @@ export class GenerateResponse<O = unknown> implements ModelResponseData {
       error: this.error,
       usage: this.usage,
       custom: (this.custom as { toJSON?: () => any }).toJSON?.() || this.custom,
+      raw:
+        this.raw === this.custom
+          ? undefined
+          : typeof (this.raw as { toJSON?: unknown } | undefined)?.toJSON ===
+              'function'
+            ? (this.raw as { toJSON: () => unknown }).toJSON()
+            : this.raw,
       request: this.request,
       operation: this.operation,
     };
     if (!out.finishMessage) delete out.finishMessage;
     if (!out.error) delete out.error;
+    if (out.raw === undefined) delete out.raw;
     if (!out.request) delete out.request;
     if (!out.operation) delete out.operation;
     return out;
