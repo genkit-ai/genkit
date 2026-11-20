@@ -74,8 +74,12 @@ export function inheritSpanMarks(target: object, source: unknown): void {
   }
 }
 
+const GENKIT_ERROR_BRAND = Symbol.for('genkit.error');
+
 /**
  * Base error class for Genkit errors.
+ *
+ * `instanceof GenkitError` also matches branded errors from other copies and versions of `@genkit-ai/core`, so members added later may be missing on those errors.
  */
 export class GenkitError extends Error {
   source?: string;
@@ -151,6 +155,35 @@ export class GenkitError extends Error {
       message: this.publicMessage ?? this.originalMessage,
     };
   }
+
+  /**
+   * Matches a `GenkitError` from any copy of `@genkit-ai/core`. Subclasses
+   * keep the plain prototype check.
+   */
+  static [Symbol.hasInstance](instance: unknown): boolean {
+    if (Function.prototype[Symbol.hasInstance].call(this, instance)) {
+      return true;
+    }
+    return this === GenkitError && isGenkitError(instance);
+  }
+}
+
+Object.defineProperty(GenkitError.prototype, GENKIT_ERROR_BRAND, {
+  value: true,
+});
+
+/**
+ * Returns whether `e` is a {@link GenkitError}, including one created by
+ * another copy of `@genkit-ai/core` in the same process (for example the ESM
+ * and CJS builds, or two installed versions).
+ */
+export function isGenkitError(e: unknown): e is GenkitError {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    (e as { [GENKIT_ERROR_BRAND]?: unknown })[GENKIT_ERROR_BRAND] === true &&
+    typeof (e as { toJSON?: unknown }).toJSON === 'function'
+  );
 }
 
 export class UnstableApiError extends GenkitError {
@@ -195,15 +228,23 @@ export class UserFacingError extends GenkitError {
   }
 }
 
-export function getHttpStatus(e: any): number {
-  if (e instanceof GenkitError) {
+/**
+ * Returns the HTTP status code of `e` if it is a {@link GenkitError},
+ * otherwise 500.
+ */
+export function getHttpStatus(e: unknown): number {
+  if (isGenkitError(e)) {
     return e.code;
   }
   return 500;
 }
 
-export function getCallableJSON(e: any): HttpErrorWireFormat {
-  if (e instanceof GenkitError) {
+/**
+ * Returns the wire format of `e` that is safe to send to a client. Errors that
+ * are not a {@link GenkitError} become a generic internal error.
+ */
+export function getCallableJSON(e: unknown): HttpErrorWireFormat {
+  if (isGenkitError(e)) {
     return e.toJSON();
   }
   return {
