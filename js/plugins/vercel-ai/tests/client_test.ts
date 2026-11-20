@@ -108,7 +108,7 @@ describe('GenkitChatTransport e2e', () => {
 
     // ── Programmable model ──────────────────────────────────────────────
     ai.defineModel(
-      { name: 'programmableModel', apiVersion: 'v2' },
+      { name: 'programmableModel' },
       async (request, { sendChunk }) => {
         return modelHandler(request, sendChunk);
       }

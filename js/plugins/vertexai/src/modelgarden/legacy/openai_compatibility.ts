@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 
-import { Message, z, type Genkit, type StreamingCallback } from 'genkit';
+import { Message, z, type Genkit } from 'genkit';
 import {
   GenerationCommonConfigSchema,
   type CandidateData,
   type GenerateRequest,
-  type GenerateResponseChunkData,
   type GenerateResponseData,
   type MessageData,
   type ModelAction,
@@ -389,12 +388,12 @@ export function openaiCompatibleModel<C extends typeof OpenAIConfigSchema>(
     },
     async (
       request: GenerateRequest<C>,
-      sendChunk?: StreamingCallback<GenerateResponseChunkData>
+      { streamingRequested, sendChunk }
     ): Promise<GenerateResponseData> => {
       let response: ChatCompletion;
       const client = await clientFactory(request);
       const body = toRequestBody(model, request);
-      if (sendChunk) {
+      if (streamingRequested) {
         const stream = client.beta.chat.completions.stream({
           ...body,
           stream: true,

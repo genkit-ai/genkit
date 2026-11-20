@@ -587,9 +587,9 @@ describe('generate', () => {
       defineModel(
         registry,
         { name: 'echo-streaming', supports: { tools: true } },
-        async (input, streamingCallback) => {
-          streamingCallback!({ content: [{ text: 'hello, ' }] });
-          streamingCallback!({ content: [{ text: 'world!' }] });
+        async (input, { sendChunk }) => {
+          sendChunk({ content: [{ text: 'hello, ' }] });
+          sendChunk({ content: [{ text: 'world!' }] });
           return {
             message: input.messages[0],
             finishReason: 'stop',
@@ -629,7 +629,7 @@ describe('generate', () => {
 
       defineModel(
         registry,
-        { apiVersion: 'v2', name: 'echo-streaming', supports: { tools: true } },
+        { name: 'echo-streaming', supports: { tools: true } },
         async (input, { sendChunk }) => {
           sendChunk({ content: [{ text: 'hello, ' }] });
           sendChunk({ content: [{ text: 'world!' }] });
@@ -884,7 +884,6 @@ describe('generate', () => {
     const echoModel = defineModel(
       registry,
       {
-        apiVersion: 'v2',
         name: 'echoModel',
         supports: { tools: true },
       },
@@ -946,7 +945,6 @@ describe('generate', () => {
     const checkContextModel = defineModel(
       registry,
       {
-        apiVersion: 'v2',
         name: 'checkContextModel',
         supports: { context: true },
       },
@@ -989,7 +987,6 @@ describe('generate', () => {
     const checkContextModel = defineModel(
       registry,
       {
-        apiVersion: 'v2',
         name: 'checkContextModel',
         supports: { context: true },
       },
@@ -1585,7 +1582,7 @@ describe('generate failures', () => {
     it('drops streamed text with the failed model call while the chunks reached onChunk', async () => {
       defineModel(
         registry,
-        { name: 'streamThenDie', apiVersion: 'v2' },
+        { name: 'streamThenDie' },
         async (_, { sendChunk }) => {
           sendChunk({ content: [{ text: 'a' }] });
           sendChunk({ content: [{ text: 'b' }] });
