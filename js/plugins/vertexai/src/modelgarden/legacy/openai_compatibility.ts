@@ -16,7 +16,6 @@
 
 import { Message, z, type Genkit, type StreamingCallback } from 'genkit';
 import {
-  GenerationCommonConfigSchema,
   type CandidateData,
   type GenerateRequest,
   type GenerateResponseChunkData,
@@ -45,10 +44,41 @@ import type {
  * See https://platform.openai.com/docs/api-reference/chat/create.
  * @deprecated
  */
-export const OpenAIConfigSchema = GenerationCommonConfigSchema.extend({
-  // TODO: topK is not supported and some of the other common config options
-  // have different names in the above doc. Eg: max_completion_tokens.
-  // Update to use the parameters in above doc.
+export const OpenAIConfigSchema = z.looseObject({
+  // TODO: some of the common config options have different names in the
+  // above doc. Eg: max_completion_tokens. Update to use the parameters in
+  // above doc.
+  version: z
+    .string()
+    .describe('A specific model version to call instead of the selected model.')
+    .optional(),
+  temperature: z
+    .number()
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results.'
+    )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
+    .optional(),
+  topP: z
+    .number()
+    .describe(
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
+    )
+    .optional(),
   frequencyPenalty: z
     .number()
     .min(-2)

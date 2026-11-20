@@ -162,8 +162,8 @@ function isZod3Schema(schema: unknown): boolean {
 
 /**
  * Whether a zod v4 schema has zod v3 schemas nested in it, e.g.
- * `GenerationCommonConfigSchema.extend({ seed: z3.number() })`. Only called
- * after JSON schema conversion has already failed, so cost doesn't matter.
+ * `z.object({ seed: z3.number() })`. Only called after JSON schema
+ * conversion has already failed, so cost doesn't matter.
  */
 function containsZod3Schema(root: unknown): boolean {
   const seen = new Set<unknown>();

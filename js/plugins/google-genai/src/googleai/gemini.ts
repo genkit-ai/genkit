@@ -26,8 +26,6 @@ import {
 import { logger } from 'genkit/logging';
 import {
   CandidateData,
-  GenerationCommonConfigDescriptions,
-  GenerationCommonConfigSchema,
   ModelAction,
   ModelInfo,
   ModelMiddleware,
@@ -193,7 +191,46 @@ const VoiceConfigSchema = z
   .passthrough()
   .describe('Configuration for the voice to use');
 
-export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
+export const GeminiConfigSchema = z.looseObject({
+  version: z
+    .string()
+    .describe('A specific version of a model family, e.g. `gemini-3.6-flash`.')
+    .optional(),
+  temperature: z
+    .number()
+    .min(0)
+    .max(2)
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results. The default value is 1.0.'
+    )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
+    .optional(),
+  topK: z
+    .number()
+    .describe('The maximum number of tokens to consider when sampling.')
+    .optional(),
+  topP: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe(
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse. The default value is 0.95.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
+    )
+    .optional(),
   apiKey: z
     .string()
     .describe('Overrides the plugin-configured API key, if specified.')
@@ -306,23 +343,6 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .passthrough()
     .describe('Configuration for retrieval tools.')
     .optional(),
-  temperature: z
-    .number()
-    .min(0)
-    .max(2)
-    .describe(
-      GenerationCommonConfigDescriptions.temperature +
-        ' The default value is 1.0.'
-    )
-    .optional(),
-  topP: z
-    .number()
-    .min(0)
-    .max(1)
-    .describe(
-      GenerationCommonConfigDescriptions.topP + ' The default value is 0.95.'
-    )
-    .optional(),
   serviceTier: z
     .union([z.enum(['standard', 'flex', 'priority']), z.string()])
     .describe('Service tier for the Gemini API.')
@@ -375,7 +395,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     })
     .passthrough()
     .optional(),
-}).passthrough();
+});
 export type GeminiConfigSchemaType = typeof GeminiConfigSchema;
 export type GeminiConfig = InferOutput<GeminiConfigSchemaType>;
 
@@ -567,7 +587,11 @@ export const GemmaConfigSchema = GeminiConfigSchema.extend({
   // sent as is and the server validates it.
   temperature: z
     .number()
-    .describe(GenerationCommonConfigDescriptions.temperature)
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results.'
+    )
     .optional(),
 }).passthrough();
 export type GemmaConfigSchemaType = typeof GemmaConfigSchema;
