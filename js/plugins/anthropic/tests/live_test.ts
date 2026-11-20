@@ -187,7 +187,7 @@ describe('Live Anthropic API Tests', { skip: !API_KEY }, () => {
           ],
         },
       ],
-      streamingCallback: (chunk) => {
+      onChunk: (chunk) => {
         if (chunk.text) {
           streamedChunks.push(chunk.text);
         }

@@ -29,7 +29,6 @@
 
 export {
   asTool,
-  dynamicTool,
   interrupt,
   toToolDefinition,
   tool,

@@ -17,12 +17,16 @@
  */
 
 /**
- * Built-in model middleware — `retry`, `fallback`, `augmentWithContext`,
- * `validateSupport`, and other middleware for enhancing model requests.
+ * Built-in model middleware for use in a model's own pipeline
+ * (`defineModel({ use })`): `augmentWithContext`, `validateSupport`,
+ * `simulateSystemPrompt` and `downloadRequestMedia`.
  *
  * ```ts
- * import { retry, fallback } from 'genkit/model/middleware';
+ * import { validateSupport } from 'genkit/model/middleware';
  * ```
+ *
+ * For `retry`, `fallback` and other `generate({ use })` middleware, see the
+ * `@genkit-ai/middleware` package.
  *
  * @module model/middleware
  */
@@ -30,8 +34,6 @@
 export {
   augmentWithContext,
   downloadRequestMedia,
-  fallback,
-  retry,
   simulateSystemPrompt,
   validateSupport,
   type AugmentWithContextOptions,

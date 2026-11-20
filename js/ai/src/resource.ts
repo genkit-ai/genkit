@@ -77,6 +77,17 @@ export type ResourceFn = (
   ctx: ActionContext
 ) => ResourceOutput | Promise<ResourceOutput>;
 
+/** Identifies the resource a content part was read from. */
+interface ResourcePartRef {
+  uri: string;
+  template?: string;
+}
+
+/** Shape of `part.metadata.resource` on parts returned by a resource. */
+interface ResourcePartMetadata extends ResourcePartRef {
+  parent?: ResourcePartRef;
+}
+
 /**
  * A resource action.
  */
@@ -139,26 +150,11 @@ export function defineResource(
   opts: ResourceOptions,
   fn: ResourceFn
 ): ResourceAction {
-  const action = dynamicResource(opts, fn);
-  action.matches = createMatcher(opts.uri, opts.template);
-  action.__action.metadata.dynamic = false;
+  const action = resource(opts, fn);
+  action.__action.metadata = { ...action.__action.metadata, dynamic: false };
   registry.registerAction('resource', action);
   return action;
 }
-
-/**
- * A dynamic action with a `resource` type. Dynamic resources are detached actions -- not associated with any registry.
- */
-export type DynamicResourceAction = ResourceAction & {
-  __action: {
-    metadata: {
-      type: 'resource';
-    };
-  };
-  /** @deprecated no-op, for backwards compatibility only. */
-  attach(registry: Registry): ResourceAction;
-  matches(input: ResourceInput): boolean;
-};
 
 /**
  * Finds a matching resource in the registry. If not found returns undefined.
@@ -208,19 +204,6 @@ export function resource(
   opts: ResourceOptions,
   fn: ResourceFn
 ): ResourceAction {
-  return dynamicResource(opts, fn);
-}
-
-/**
- * Defines a dynamic resource. Dynamic resources are just like regular resources but will not be
- * registered in the Genkit registry and can be defined dynamically at runtime.
- *
- * @deprecated renamed to {@link resource}.
- */
-export function dynamicResource(
-  opts: ResourceOptions,
-  fn: ResourceFn
-): DynamicResourceAction {
   const uri = opts.uri ?? opts.template;
   if (!uri) {
     throw new GenkitError({
@@ -256,35 +239,26 @@ export function dynamicResource(
         });
       }
       const parts = await fn(input, ctx);
-      parts.content.map((p) => {
-        if (!p.metadata) {
-          p.metadata = {};
-        }
-        if (p.metadata?.resource) {
-          if (!(p.metadata as any).resource.parent) {
-            (p.metadata as any).resource.parent = {
-              uri: input.uri,
-            };
-            if (opts.template) {
-              (p.metadata as any).resource.parent.template = opts.template;
-            }
-          }
-        } else {
-          (p.metadata as any).resource = {
-            uri: input.uri,
-          };
-          if (opts.template) {
-            (p.metadata as any).resource.template = opts.template;
-          }
-        }
-        return p;
+      const ref = (): ResourcePartRef => ({
+        uri: input.uri,
+        ...(opts.template ? { template: opts.template } : {}),
       });
+      for (const p of parts.content) {
+        const metadata = (p.metadata ??= {});
+        // A part that already names its resource (e.g. one read through
+        // another resource) keeps it, and this resource becomes its parent.
+        const existing = metadata.resource as ResourcePartMetadata | undefined;
+        if (existing) {
+          existing.parent ??= ref();
+        } else {
+          metadata.resource = ref();
+        }
+      }
       return parts;
     }
-  ) as DynamicResourceAction;
+  ) as ResourceAction;
 
   act.matches = matcher;
-  act.attach = (_: Registry) => act;
   return act;
 }
 

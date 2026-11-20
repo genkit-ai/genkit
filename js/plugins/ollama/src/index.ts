@@ -384,13 +384,11 @@ async function getHeaders(
 ): Promise<Record<string, string> | void> {
   return requestHeaders
     ? typeof requestHeaders === 'function'
-      ? await requestHeaders(
-          {
-            serverAddress,
-            model,
-          },
-          input
-        )
+      ? await requestHeaders({
+          serverAddress,
+          model,
+          modelRequest: input,
+        })
       : requestHeaders
     : {};
 }

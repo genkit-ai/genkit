@@ -25,11 +25,11 @@ import {
 import {
   GenkitError,
   type DynamicActionProviderAction,
-  type DynamicResourceAction,
   type ExecutablePrompt,
   type Genkit,
   type MultipartToolAction,
   type PromptGenerateOptions,
+  type ResourceAction,
   type ToolAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
@@ -386,9 +386,9 @@ export class GenkitMcpClient<Multipart extends boolean = false> {
    * Fetches all resources available through this client, if the server
    * configuration is not disabled.
    */
-  async getActiveResources(ai: Genkit): Promise<DynamicResourceAction[]> {
+  async getActiveResources(ai: Genkit): Promise<ResourceAction[]> {
     await this.ready();
-    let resources: DynamicResourceAction[] = [];
+    let resources: ResourceAction[] = [];
 
     if (this._server) {
       const capabilities = this._server.client.getServerCapabilities();

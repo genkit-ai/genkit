@@ -87,7 +87,6 @@ import {
   type SimpleRetrieverOptions,
 } from '@genkit-ai/ai/retriever';
 import {
-  dynamicTool,
   type MultipartToolAction,
   type MultipartToolFn,
   type ToolFn,
@@ -134,14 +133,6 @@ import {
 } from './plugin.js';
 import { Registry, type ActionType } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
-
-/**
- * @deprecated use `ai.definePrompt({messages: fn})`
- */
-export type PromptFn<
-  I extends GenkitSchema = GenkitSchema,
-  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
-> = (input: InferOutput<I>) => Promise<GenerateRequest<CustomOptionsSchema>>;
 
 /**
  * Options for initializing Genkit.
@@ -271,17 +262,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
     fn: ToolFn<I, O> | MultipartToolFn<I, O>
   ): ToolAction<I, O> | MultipartToolAction<I, O> {
     return defineTool(this.registry, config as any, fn as any);
-  }
-
-  /**
-   * Defines a dynamic tool. Dynamic tools are just like regular tools ({@link Genkit.defineTool}) but will not be registered in the
-   * Genkit registry and can be defined dynamically at runtime.
-   */
-  dynamicTool<I extends GenkitSchema, O extends GenkitSchema>(
-    config: ToolConfig<I, O>,
-    fn?: ToolFn<I, O>
-  ): ToolAction<I, O> {
-    return dynamicTool(config, fn) as ToolAction<I, O>;
   }
 
   /**
@@ -417,7 +397,6 @@ export class Genkit extends GenkitAI implements HasRegistry {
       let channel = new Channel<GenerateResponseChunk>();
 
       const generated = runInNewSpan(
-        this.registry,
         {
           metadata: {
             name,
@@ -457,36 +436,29 @@ export class Genkit extends GenkitAI implements HasRegistry {
   }
 
   /**
-   * Defines and registers a prompt based on a function.
+   * Defines and registers a prompt.
    *
    * This is an alternative to defining and importing a .prompt file, providing
    * the most advanced control over how the final request to the model is made.
    *
    * @param options - Prompt metadata including model, model params,
-   * input/output schemas, etc
-   * @param fn - A function that returns a {@link GenerateRequest}. Any config
-   * parameters specified by the {@link GenerateRequest} will take precedence
-   * over any parameters specified by `options`.
+   * input/output schemas, messages, etc.
    *
    * ```ts
-   * const hi = ai.definePrompt(
-   *   {
-   *     name: 'hi',
-   *     input: {
-   *       schema: z.object({
-   *         name: z.string(),
-   *       }),
-   *     },
-   *     config: {
-   *       temperature: 1,
-   *     },
+   * const hi = ai.definePrompt({
+   *   name: 'hi',
+   *   input: {
+   *     schema: z.object({
+   *       name: z.string(),
+   *     }),
    *   },
-   *   async (input) => {
-   *     return {
-   *       messages: [ { role: 'user', content: [{ text: `hi ${input.name}` }] } ],
-   *     };
-   *   }
-   * );
+   *   config: {
+   *     temperature: 1,
+   *   },
+   *   messages: async (input) => [
+   *     { role: 'user', content: [{ text: `hi ${input.name}` }] },
+   *   ],
+   * });
    * const { text } = await hi({ name: 'Genkit' });
    * ```
    */
@@ -495,37 +467,8 @@ export class Genkit extends GenkitAI implements HasRegistry {
     O extends GenkitSchema = GenkitSchema,
     CustomOptions extends GenkitSchema = GenkitSchema,
   >(
-    options: PromptConfig<I, O, CustomOptions>,
-    /** @deprecated use `options.messages` with a template string instead. */
-    templateOrFn?: string | PromptFn<I>
+    options: PromptConfig<I, O, CustomOptions>
   ): ExecutablePrompt<InferInput<I>, O, CustomOptions> {
-    // For backwards compatibility...
-    if (templateOrFn) {
-      if (options.messages) {
-        throw new GenkitError({
-          status: 'INVALID_ARGUMENT',
-          message:
-            'Cannot specify template/function argument and `options.messages` at the same time',
-        });
-      }
-      if (typeof templateOrFn === 'string') {
-        return definePrompt(this.registry, {
-          ...options,
-          messages: templateOrFn,
-        });
-      } else {
-        // it's the PromptFn
-        return definePrompt(this.registry, {
-          ...options,
-          messages: async (input) => {
-            const response = await (
-              templateOrFn as PromptFn<InferOutput<I>, CustomOptions>
-            )(input);
-            return response.messages;
-          },
-        });
-      }
-    }
     return definePrompt(this.registry, options);
   }
 

@@ -15,9 +15,9 @@
  */
 
 import {
-  dynamicResource,
   genkit,
   modelRef,
+  resource,
   z,
   type GenerateRequest,
   type MessageData,
@@ -3519,7 +3519,7 @@ describe('contextCompression middleware', () => {
       usage: { inputTokens: 50 },
     }));
 
-    const readmeResource = dynamicResource(
+    const readmeResource = resource(
       { name: 'readme', uri: 'file:///workspace/README.md' },
       async () => ({ content: [{ text: '# Readme' }] })
     );

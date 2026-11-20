@@ -1258,6 +1258,9 @@ importers:
       '@genkit-ai/google-genai':
         specifier: workspace:*
         version: link:../../plugins/google-genai
+      '@genkit-ai/middleware':
+        specifier: workspace:*
+        version: link:../../plugins/middleware
       '@google/genai':
         specifier: ^1.30.0
         version: 1.44.0(@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(zod@4.6.7))

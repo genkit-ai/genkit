@@ -216,20 +216,6 @@ class Logger {
     }
     return mergedMetadata;
   }
-
-  /**
-   * @deprecated Use `logger.info(...)` instead.
-   */
-  logStructured(msg: string, metadata: any, err?: any) {
-    this.info(msg, metadata, err);
-  }
-
-  /**
-   * @deprecated Use `logger.error(...)` instead.
-   */
-  logStructuredError(msg: string, metadata: any, err?: any) {
-    this.error(msg, metadata, err);
-  }
 }
 
 /**

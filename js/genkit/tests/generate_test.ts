@@ -25,7 +25,7 @@ import { ModelAction } from '@genkit-ai/ai/model';
 import { Operation, z, type JSONSchema7 } from '@genkit-ai/core';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { dynamicResource, genkit, tool, type GenkitBeta } from '../src/beta';
+import { genkit, resource, tool, type GenkitBeta } from '../src/beta';
 import {
   defineEchoModel,
   defineProgrammableModel,
@@ -266,7 +266,7 @@ describe('generate', () => {
 
     it('passes the streaming callback to the model', async () => {
       const model = defineEchoModel(ai);
-      const flow = ai.defineFlow('wrapper', async (_, streamingCallback) => {
+      const flow = ai.defineFlow('wrapper', async () => {
         const response = await ai.generate({
           model: model,
           prompt: 'hi',
@@ -280,11 +280,12 @@ describe('generate', () => {
 
     it('strips out the noop streaming callback', async () => {
       const model = defineEchoModel(ai);
-      const flow = ai.defineFlow('wrapper', async (_, streamingCallback) => {
+      // A non-streamed flow's `sendChunk` is the noop sentinel.
+      const flow = ai.defineFlow('wrapper', async (_, { sendChunk }) => {
         const response = await ai.generate({
           model: model,
           prompt: 'hi',
-          onChunk: streamingCallback,
+          onChunk: sendChunk,
         });
         return response.text;
       });
@@ -509,7 +510,7 @@ describe('generate', () => {
         },
         async () => 'tool called 1'
       );
-      const dynamicTestTool2 = ai.dynamicTool(
+      const dynamicTestTool2 = tool(
         {
           name: 'dynamicTestTool2',
           inputJsonSchema: schema,
@@ -684,7 +685,7 @@ describe('generate', () => {
     });
 
     it('calls the dynamic resource', async () => {
-      const dynamicTestResource = dynamicResource(
+      const dynamicTestResource = resource(
         {
           name: 'dynamicTestTool',
           uri: 'foo://foo',
@@ -747,7 +748,7 @@ describe('generate', () => {
           foo: { type: 'string' },
         },
       } as JSONSchema7;
-      const dynamicTestTool = ai.dynamicTool({
+      const dynamicTestTool = tool({
         name: 'dynamicTestTool',
         inputJsonSchema: schema,
         description: 'description',

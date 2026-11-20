@@ -35,18 +35,16 @@ ai.defineTool(
   }
 );
 
-ai.definePrompt(
-  {
-    name: 'happy',
-    description: 'everybody together now',
-    input: {
-      schema: z.object({
-        action: z.string().default('clap your hands').optional(),
-      }),
-    },
+ai.definePrompt({
+  name: 'happy',
+  description: 'everybody together now',
+  input: {
+    schema: z.object({
+      action: z.string().default('clap your hands').optional(),
+    }),
   },
-  `If you're happy and you know it, {{action}}.`
-);
+  messages: `If you're happy and you know it, {{action}}.`,
+});
 
 ai.defineResource(
   {

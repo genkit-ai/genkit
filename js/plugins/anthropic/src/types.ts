@@ -194,14 +194,6 @@ export type ThinkingConfig = z.infer<typeof ThinkingConfigSchema>;
 export type ClaudeConfig = z.infer<typeof AnthropicConfigSchema>;
 export type AnthropicConfigSchemaType = typeof AnthropicConfigSchema;
 
-// Backwards compatibility aliases for previous schema naming convention
-export const AnthropicBaseConfigSchema = AnthropicConfigSchema;
-export const AnthropicThinkingConfigSchema = AnthropicConfigSchema;
-export type AnthropicBaseConfigSchemaType = typeof AnthropicConfigSchema;
-export type AnthropicThinkingConfigSchemaType = typeof AnthropicConfigSchema;
-export type AnthropicBaseConfig = ClaudeConfig;
-export type AnthropicThinkingConfig = ClaudeConfig;
-
 /**
  * Media object representation with URL and optional content type.
  */

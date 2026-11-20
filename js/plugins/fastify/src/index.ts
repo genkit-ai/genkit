@@ -382,21 +382,6 @@ async function subscribeToStream(
 }
 
 /**
- * A wrapper object containing a flow with its associated context provider.
- * @deprecated Use {@link withFlowOptions} instead.
- */
-export type FlowWithContextProvider<
-  C extends ActionContext = ActionContext,
-  I extends GenkitSchema = GenkitSchema,
-  O extends GenkitSchema = GenkitSchema,
-  S extends GenkitSchema = GenkitSchema,
-  Init extends GenkitSchema = GenkitSchema,
-> = {
-  flow: Flow<I, O, S, Init>;
-  context: ContextProvider<C, I>;
-};
-
-/**
  * A wrapper object containing a flow with its associated options.
  */
 export type FlowWithOptions<
@@ -412,26 +397,6 @@ export type FlowWithOptions<
     path?: string;
   };
 };
-
-/**
- * Attaches a context provider to a flow.
- * @deprecated Use {@link withFlowOptions} instead.
- */
-export function withContextProvider<
-  C extends ActionContext = ActionContext,
-  I extends GenkitSchema = GenkitSchema,
-  O extends GenkitSchema = GenkitSchema,
-  S extends GenkitSchema = GenkitSchema,
-  Init extends GenkitSchema = GenkitSchema,
->(
-  flow: Flow<I, O, S, Init>,
-  context: ContextProvider<C, I>
-): FlowWithContextProvider<C, I, O, S, Init> {
-  return {
-    flow,
-    context,
-  };
-}
 
 /**
  * Attaches options (context provider, stream manager, custom path) to a flow
@@ -461,11 +426,7 @@ export function withFlowOptions<
  */
 export interface GenkitFastifyOptions {
   /** Flows (or flows wrapped with {@link withFlowOptions}) to expose as routes. */
-  flows: (
-    | Flow<any, any, any, any>
-    | FlowWithContextProvider<any, any, any, any, any>
-    | FlowWithOptions<any, any, any, any>
-  )[];
+  flows: (Flow<any, any, any, any> | FlowWithOptions<any, any, any, any>)[];
   /** HTTP path prefix prepended to each exposed flow (e.g. `/api`). */
   pathPrefix?: string;
 }
@@ -511,13 +472,9 @@ export const genkitFastify: FastifyPluginAsync<GenkitFastifyOptions> = async (
   for (const flow of opts.flows ?? []) {
     if ('flow' in flow) {
       const flowPath = cleanPath(
-        `${pathPrefix}/${
-          ('options' in flow && flow.options.path) || flow.flow.__action.name
-        }`
+        `${pathPrefix}/${flow.options.path || flow.flow.__action.name}`
       );
-      const options =
-        'options' in flow ? flow.options : { contextProvider: flow.context };
-      registerFlow(instance, flowPath, fastifyHandler(flow.flow, options));
+      registerFlow(instance, flowPath, fastifyHandler(flow.flow, flow.options));
     } else {
       const flowPath = cleanPath(`${pathPrefix}/${flow.__action.name}`);
       registerFlow(instance, flowPath, fastifyHandler(flow));

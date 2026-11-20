@@ -1421,7 +1421,6 @@ export function defineGeminiModel({
       // API params as for input.
       return debugTraces
         ? await runInNewSpan(
-            ai.registry,
             {
               metadata: {
                 name: sendChunk ? 'sendMessageStream' : 'sendMessage',

@@ -18,11 +18,11 @@ This plugin provides utilities for conveninetly exposing Genkit flows and action
 // /genkit/simpleFlow.ts
 const simpleFlow = ai.defineFlow(
   'simpleFlow',
-  async (input, streamingCallback) => {
+  async (input, { sendChunk }) => {
     const { text } = await ai.generate({
       model: googleAI.model('gemini-flash-latest'),
       prompt: input,
-      streamingCallback: (chunk) => streamingCallback(chunk.text),
+      onChunk: (chunk) => sendChunk(chunk.text),
     });
     return text;
   }

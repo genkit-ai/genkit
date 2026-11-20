@@ -727,7 +727,7 @@ describe('createMcpHost', () => {
       const prompt = (await clientHost.getActiveResources(ai))[0];
       assert.ok(prompt);
 
-      const response = await prompt.attach(ai.registry)({
+      const response = await prompt({
         uri: 'test://resource/1',
       });
 

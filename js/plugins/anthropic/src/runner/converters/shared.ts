@@ -30,12 +30,6 @@ import {
   type AnthropicCitationInput,
 } from './citations.js';
 
-// Re-export citation utilities for backward compatibility
-export {
-  fromAnthropicCitation,
-  type AnthropicCitationInput,
-} from './citations.js';
-
 /**
  * Converts a text block to a Genkit Part, including citations if present.
  * Uses structural typing for compatibility with both stable and beta APIs.

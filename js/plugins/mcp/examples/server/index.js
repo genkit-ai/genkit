@@ -31,16 +31,14 @@ ai.defineTool(
   }
 );
 
-ai.definePrompt(
-  {
-    name: 'happy',
-    description: 'everybody together now',
-    input: {
-      schema: z.object({ action: z.string().optional() }),
-      default: { action: 'clap your hands' },
-    },
+ai.definePrompt({
+  name: 'happy',
+  description: 'everybody together now',
+  input: {
+    schema: z.object({ action: z.string().optional() }),
+    default: { action: 'clap your hands' },
   },
-  `If you're happy and you know it, {{action}}.`
-);
+  messages: `If you're happy and you know it, {{action}}.`,
+});
 
 createMcpServer(ai, { name: 'example_server', version: '0.0.1' }).start();

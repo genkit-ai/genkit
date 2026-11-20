@@ -112,16 +112,12 @@ export interface OllamaPluginParams {
 }
 
 // Function type for generating request headers dynamically
-export type RequestHeaderFunction = (
-  params: {
-    serverAddress: string;
-    model?: ModelDefinition | EmbeddingModelDefinition;
-    modelRequest?: GenerateRequest;
-    embedRequest?: EmbedRequest;
-  },
-  // @deprecated -- moved into params, here for backwards compatibility reasons.
-  modelRequest?: GenerateRequest
-) => Promise<Record<string, string> | void>;
+export type RequestHeaderFunction = (params: {
+  serverAddress: string;
+  model?: ModelDefinition | EmbeddingModelDefinition;
+  modelRequest?: GenerateRequest;
+  embedRequest?: EmbedRequest;
+}) => Promise<Record<string, string> | void>;
 
 // Union type for request headers, supporting both static and dynamic options
 export type RequestHeaders = Record<string, string> | RequestHeaderFunction;
