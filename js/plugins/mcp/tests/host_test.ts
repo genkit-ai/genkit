@@ -18,12 +18,12 @@ import * as assert from 'assert';
 import { Genkit, genkit, ToolAction } from 'genkit';
 import { logger } from 'genkit/logging';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { createMcpHost, GenkitMcpHost } from '../src/index.js';
+import { defineMcpClient, defineMcpHost, GenkitMcpHost } from '../src/index.js';
 import { defineEchoModel, FakeTransport } from './fakes.js';
 
 logger.setLogLevel('debug');
 
-describe('createMcpHost', () => {
+describe('defineMcpHost', () => {
   let ai: Genkit;
 
   beforeEach(async () => {
@@ -37,7 +37,7 @@ describe('createMcpHost', () => {
     let clientHost: GenkitMcpHost;
 
     beforeEach(() => {
-      clientHost = createMcpHost({
+      clientHost = defineMcpHost(ai, {
         name: 'test-mcp-host',
       });
 
@@ -184,7 +184,7 @@ describe('createMcpHost', () => {
 
     beforeEach(() => {
       fakeTransport = new FakeTransport();
-      clientHost = createMcpHost({
+      clientHost = defineMcpHost(ai, {
         name: 'test-mcp-host',
         mcpServers: {
           'test-server': {
@@ -218,6 +218,15 @@ describe('createMcpHost', () => {
       assert.deepStrictEqual(
         (await clientHost.getActiveTools(ai)).map((t) => t.__action.name),
         ['test-server/testTool']
+      );
+    });
+
+    it('should resolve tools through the registered dynamic action provider', async () => {
+      assert.deepStrictEqual(
+        await ai.registry.resolveActionNames(
+          '/dynamic-action-provider/test-mcp-host:tool/*'
+        ),
+        ['/dynamic-action-provider/test-mcp-host:tool/test-server/testTool']
       );
     });
 
@@ -259,7 +268,7 @@ describe('createMcpHost', () => {
     });
 
     it('should call the multipart tool', async () => {
-      const multipartHost = createMcpHost({
+      const multipartHost = defineMcpHost(ai, {
         name: 'test-multipart-host',
         multipart: true,
         mcpServers: {
@@ -333,7 +342,7 @@ describe('createMcpHost', () => {
     });
 
     it('should call the multipart tool and handle errors', async () => {
-      const multipartHost = createMcpHost({
+      const multipartHost = defineMcpHost(ai, {
         name: 'test-multipart-host',
         multipart: true,
         mcpServers: {
@@ -370,7 +379,7 @@ describe('createMcpHost', () => {
     });
 
     it('should return raw tool response when rawToolResponses is true alongside multipart', async () => {
-      const multipartHost = createMcpHost({
+      const multipartHost = defineMcpHost(ai, {
         name: 'test-multipart-host',
         multipart: true,
         rawToolResponses: true,
@@ -416,7 +425,7 @@ describe('createMcpHost', () => {
     beforeEach(() => {
       fakeTransport = new FakeTransport();
 
-      clientHost = createMcpHost({
+      clientHost = defineMcpHost(ai, {
         name: 'test-mcp-host',
         mcpServers: {
           'test-server': {
@@ -618,7 +627,7 @@ describe('createMcpHost', () => {
     beforeEach(() => {
       fakeTransport = new FakeTransport();
 
-      clientHost = createMcpHost({
+      clientHost = defineMcpHost(ai, {
         name: 'test-mcp-host',
         mcpServers: {
           'test-server': {
@@ -754,6 +763,37 @@ describe('createMcpHost', () => {
           },
         ],
       });
+    });
+  });
+
+  describe('defineMcpClient', () => {
+    it('should resolve tools through the registered dynamic action provider', async () => {
+      const fakeTransport = new FakeTransport();
+      fakeTransport.tools.push({
+        name: 'testTool',
+        inputSchema: {
+          type: 'object',
+          $schema: 'http://json-schema.org/draft-07/schema#',
+        },
+        description: 'test tool',
+      });
+      const client = defineMcpClient(ai, {
+        name: 'test-mcp-client',
+        serverName: 'test-server',
+        mcpServer: { transport: fakeTransport },
+        cacheTtlMillis: 1000,
+      });
+      try {
+        await client.ready();
+        assert.deepStrictEqual(
+          await ai.registry.resolveActionNames(
+            '/dynamic-action-provider/test-mcp-client:tool/*'
+          ),
+          ['/dynamic-action-provider/test-mcp-client:tool/test-server/testTool']
+        );
+      } finally {
+        await client.disable();
+      }
     });
   });
 });

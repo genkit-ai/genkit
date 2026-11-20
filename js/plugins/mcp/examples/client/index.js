@@ -15,22 +15,30 @@
  */
 
 import { googleAI } from '@genkit-ai/google-genai';
-import { createMcpClient } from '@genkit-ai/mcp';
+import { defineMcpClient } from '@genkit-ai/mcp';
 import { genkit } from 'genkit';
 import { logger } from 'genkit/logging';
 
 logger.setLogLevel('debug');
 
-const everythingClient = createMcpClient({
+const ai = genkit({
+  plugins: [googleAI()],
+  model: googleAI.model('gemini-flash-latest'),
+});
+
+defineMcpClient(ai, {
   name: 'everything',
   version: '1.0.0',
-  serverProcess: {
+  mcpServer: {
     command: 'npx',
-    args: ['@modelcontextprotocol/server-everything'],
+    args: ['-y', '@modelcontextprotocol/server-everything'],
   },
 });
 
-const ai = genkit({
-  plugins: [googleAI(), everythingClient],
-  model: googleAI.model('gemini-2.5-pro'),
+ai.defineFlow('everything-tools', async (prompt) => {
+  const { text } = await ai.generate({
+    prompt: prompt || 'Add 2 and 3 using the available tools.',
+    tools: ['everything:tool/*'],
+  });
+  return text;
 });
