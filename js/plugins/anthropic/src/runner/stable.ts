@@ -71,7 +71,7 @@ interface RunnerTypes extends BaseRunnerTypes {
   StreamingRequestBody: MessageCreateParamsStreaming;
   Tool: Tool;
   MessageParam: MessageParam;
-  ToolResponseContent: TextBlockParam | ImageBlockParam;
+  ToolResponseContent: TextBlockParam | ImageBlockParam | DocumentBlockParam;
   ContentBlockParam:
     | TextBlockParam
     | ImageBlockParam
@@ -202,7 +202,7 @@ export class Runner extends BaseRunner<RunnerTypes> {
       return {
         type: 'tool_result',
         tool_use_id: part.toolResponse.ref,
-        content: [this.toAnthropicToolResponseContent(part)],
+        content: this.toAnthropicToolResponseParts(part),
         cache_control: part.metadata
           ?.cache_control as ToolResultBlockParam['cache_control'],
       };
