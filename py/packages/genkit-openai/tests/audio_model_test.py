@@ -19,12 +19,13 @@
 from __future__ import annotations
 
 import base64
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from genkit_openai._models._audio import (
     SUPPORTED_STT_MODELS,
     SUPPORTED_TTS_MODELS,
+    OpenAISttConfig,
     OpenAISTTModel,
     OpenAITtsConfig,
     OpenAITTSModel,
@@ -350,7 +351,11 @@ class TestOpenAISTTModel:
             },
         )
 
-        got = await model.generate(request, MagicMock())
+        with patch('genkit_openai._models._audio.logger.warning') as warning:
+            got = await model.generate(request, MagicMock())
+
+        warning.assert_called_once()
+        assert 'February 26, 2027' in warning.call_args.args[0]
 
         mock_client.audio.translations.create.assert_called_once()
         mock_client.audio.transcriptions.create.assert_not_called()
@@ -362,6 +367,13 @@ class TestOpenAISTTModel:
         part = got.message.content[0]
         assert part.text is not None
         assert part.text == 'Translated text'
+
+    def test_translate_config_is_marked_deprecated(self) -> None:
+        """Expose the endpoint retirement in the generated config schema."""
+        schema = OpenAISttConfig.model_json_schema()
+
+        assert schema['properties']['translate']['deprecated'] is True
+        assert 'February 26, 2027' in schema['properties']['translate']['description']
 
     @pytest.mark.parametrize('model_name', ['gpt-4o-transcribe', 'gpt-4o-mini-transcribe'])
     @pytest.mark.asyncio
