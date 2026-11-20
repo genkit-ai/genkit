@@ -18,6 +18,7 @@
 import type { ModelReference } from 'genkit';
 import { modelRef, z } from 'genkit';
 import type { ModelAction, ModelInfo } from 'genkit/model';
+import { logger } from 'genkit/logging';
 import { model } from 'genkit/plugin';
 import OpenAI from 'openai';
 import {
@@ -47,8 +48,18 @@ export const WHISPER_MODEL_INFO: ModelInfo = {
  * a `translate` flag that switches between transcription and translation APIs.
  */
 export const WhisperConfigSchema = TranscriptionConfigSchema.extend({
-  /** When true, uses Translation API instead of Transcription. Default: false */
-  translate: z.boolean().optional().default(false),
+  /**
+   * Deprecated. When true, uses the /v1/audio/translations endpoint, scheduled
+   * to shut down on February 26, 2027. Realtime translation is the replacement,
+   * but it requires a Realtime session rather than a file-upload request.
+   */
+  translate: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe(
+      'Deprecated: uses /v1/audio/translations, scheduled to shut down on February 26, 2027. Realtime translation requires a Realtime session.'
+    ),
 });
 
 /**
@@ -95,6 +106,9 @@ export function defineOpenAIWhisperModel<
       );
 
       if (translate === true) {
+        logger.warn(
+          "OpenAI's /v1/audio/translations endpoint used by whisper-1 translate=true is scheduled to shut down on February 26, 2027. Realtime translation is the replacement, but it requires a Realtime session rather than a file-upload request: https://developers.openai.com/api/docs/guides/realtime-translation"
+        );
         const params = toTranslationRequest(modelName, cleanRequest);
         const result = await client.audio.translations.create(params, {
           signal: abortSignal,

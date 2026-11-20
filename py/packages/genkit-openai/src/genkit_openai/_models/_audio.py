@@ -44,9 +44,17 @@ from openai._legacy_response import HttpxBinaryResponseContent
 from openai.types.audio import Transcription, Translation
 from pydantic import Field
 
-from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role
+from genkit import FinishReason, GenkitError, Message, ModelResponse, Part, Role, get_logger
 from genkit.model import ModelContext, ModelInfo, ModelRequest, ModelSupports
 from genkit.plugin_api import GenkitConfig
+
+logger = get_logger(__name__)
+
+_TRANSLATION_DEPRECATION_MESSAGE = (
+    "OpenAI's /v1/audio/translations endpoint used by whisper-1 translate=True is scheduled to shut down on "
+    'February 26, 2027. Realtime translation is the replacement, but it requires a Realtime session rather than '
+    'a file-upload request: https://developers.openai.com/api/docs/guides/realtime-translation'
+)
 
 _AUDIO_EXTRA_DESCRIPTION = (
     'Audio API fields this class does not declare, in API wire names, sent as the request body. '
@@ -77,7 +85,12 @@ class OpenAISttConfig(GenkitConfig):
     response_format: str | None = None
     prompt: str | None = None
     translate: bool | None = Field(
-        default=None, description='Translate the audio to English with the translations API. whisper-1 only.'
+        default=None,
+        deprecated=True,
+        description=(
+            'Deprecated: translates audio to English with the /v1/audio/translations endpoint, scheduled to shut '
+            'down on February 26, 2027. whisper-1 only.'
+        ),
     )
     extra: dict[str, Any] | None = Field(default=None, description=_AUDIO_EXTRA_DESCRIPTION)
 
@@ -405,6 +418,8 @@ class OpenAISTTModel:
                     f"model '{self._model_name}' cannot use translate=True."
                 ),
             )
+        if translate:
+            logger.warning(_TRANSLATION_DEPRECATION_MESSAGE)
 
         try:
             params = _to_stt_params(self._model_name, request)
