@@ -17,8 +17,16 @@
 import * as assert from 'assert';
 import { GenerateRequest, modelRef } from 'genkit/model';
 import { describe, it } from 'node:test';
+import type {
+  ChatCompletion,
+  ChatCompletionChunk,
+} from 'openai/resources/index.mjs';
 import { LlamaConfigSchema } from '../../../src/modelgarden/v2/llama';
-import { toRequestBody } from '../../../src/modelgarden/v2/openai_compatibility';
+import {
+  fromOpenAiChoice,
+  fromOpenAiChunkChoice,
+  toRequestBody,
+} from '../../../src/modelgarden/v2/openai_compatibility';
 
 const fakeModel = modelRef({
   name: 'vertex-model-garden/meta/llama-4-maverick-17b-128e-instruct-maas',
@@ -145,5 +153,120 @@ describe('Llama request conversion', () => {
         content: '{"results":["cat1.jpg","cat2.jpg"]}',
       },
     ]);
+  });
+
+  it('should send text alongside tool calls on a replayed model turn', () => {
+    const genkitRequest: GenerateRequest<typeof LlamaConfigSchema> = {
+      messages: [
+        { role: 'user', content: [{ text: 'Weather in Paris?' }] },
+        {
+          role: 'model',
+          content: [
+            { text: 'Let me check the weather.' },
+            {
+              toolRequest: {
+                name: 'getWeather',
+                ref: 'call_1',
+                input: { city: 'Paris' },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const openAIRequest = toRequestBody(fakeModel, genkitRequest);
+    assert.deepStrictEqual(openAIRequest.messages[1], {
+      role: 'assistant',
+      content: 'Let me check the weather.',
+      tool_calls: [
+        {
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'getWeather', arguments: '{"city":"Paris"}' },
+        },
+      ],
+    });
+  });
+});
+
+describe('Llama response conversion', () => {
+  const toolCall = {
+    index: 0,
+    id: 'call_1',
+    type: 'function' as const,
+    function: { name: 'getWeather', arguments: '{"city":"Paris"}' },
+  };
+  const toolRequest = {
+    toolRequest: {
+      name: 'getWeather',
+      ref: 'call_1',
+      input: { city: 'Paris' },
+    },
+  };
+  const choice = (
+    message: Partial<ChatCompletion.Choice['message']>
+  ): ChatCompletion.Choice => ({
+    index: 0,
+    finish_reason: 'tool_calls',
+    logprobs: null,
+    message: { role: 'assistant', content: null, refusal: null, ...message },
+  });
+  const chunk = (
+    delta: ChatCompletionChunk.Choice['delta']
+  ): ChatCompletionChunk.Choice => ({ index: 0, finish_reason: null, delta });
+
+  it('should keep text that comes with tool calls', () => {
+    assert.deepStrictEqual(
+      fromOpenAiChoice(
+        choice({ content: 'Let me check the weather.', tool_calls: [toolCall] })
+      ).message.content,
+      [{ text: 'Let me check the weather.' }, toolRequest]
+    );
+  });
+
+  it('should return only tool requests when there is no text', () => {
+    for (const content of [null, '']) {
+      assert.deepStrictEqual(
+        fromOpenAiChoice(choice({ content, tool_calls: [toolCall] })).message
+          .content,
+        [toolRequest]
+      );
+    }
+  });
+
+  it('should return no parts for an empty reply', () => {
+    assert.deepStrictEqual(fromOpenAiChoice(choice({})).message.content, []);
+  });
+
+  it('should parse json only when there are no tool calls', () => {
+    assert.deepStrictEqual(
+      fromOpenAiChoice(choice({ content: '{"a":1}' }), true).message.content,
+      [{ data: { a: 1 } }]
+    );
+    assert.deepStrictEqual(
+      fromOpenAiChoice(
+        choice({ content: 'Let me check.', tool_calls: [toolCall] }),
+        true
+      ).message.content,
+      [{ text: 'Let me check.' }, toolRequest]
+    );
+  });
+
+  it('should keep text in a chunk that also has tool calls', () => {
+    assert.deepStrictEqual(
+      fromOpenAiChunkChoice(
+        chunk({ content: 'Let me check.', tool_calls: [toolCall] })
+      ).message.content,
+      [{ text: 'Let me check.' }, toolRequest]
+    );
+  });
+
+  it('should return no parts for an empty chunk', () => {
+    for (const delta of [{}, { content: null }, { content: '' }]) {
+      assert.deepStrictEqual(
+        fromOpenAiChunkChoice(chunk(delta)).message.content,
+        []
+      );
+    }
   });
 });
