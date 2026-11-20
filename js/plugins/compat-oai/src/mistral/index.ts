@@ -208,7 +208,8 @@ async function listMistralActions(
  * and keeps the info of each listed model outside the known list. A model
  * resolved before the models were listed (the usual case outside the Dev UI)
  * then gets the same capabilities as a listed one. A failed listing is not
- * kept, so the next call tries again.
+ * kept, so the next call tries again. A model resolved while the listing
+ * fails gets no `supports` at all, instead of the text-only default.
  *
  * @param canList Whether the plugin has a default API key to list with.
  *   Without one (`apiKey: false`), unknown models get the text-only default.
@@ -231,7 +232,11 @@ function createModelCatalog(canList: boolean) {
       try {
         await list(client);
       } catch {
-        // Fall back to the text-only default.
+        // The capabilities are unknown, so claim none. With `supports` unset,
+        // Genkit doesn't warn that the model lacks tools, and the Dev UI
+        // doesn't show the model as text only. The registry keeps this action
+        // until restart, so a text-only default would stick.
+        return {};
       }
     }
     return listedModelInfo.get(name);

@@ -14,9 +14,17 @@
  * limitations under the License.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  jest,
+} from '@jest/globals';
 import * as fs from 'fs';
 import { genkit, z, type Genkit, type MessageData } from 'genkit';
+import { logger } from 'genkit/logging';
 import * as path from 'path';
 import { mistral } from '../src/mistral';
 import { MistralChatCompletionConfigSchema } from '../src/mistral/mistral';
@@ -1710,7 +1718,8 @@ describe('mistral plugin', () => {
         async () => 'sunny'
       );
 
-      // Without the listed capabilities, Genkit refuses tools for this model.
+      // Without the listed capabilities, `generate` would warn that the model
+      // does not support tools.
       await ai.generate({
         model: mistral.model('devstral-medium-latest'),
         prompt: 'weather in Paris?',
@@ -1753,7 +1762,7 @@ describe('mistral plugin', () => {
       ).toEqual(TOOLS_SUPPORTS);
     });
 
-    it('falls back to the text-only default when /v1/models fails, and retries later', async () => {
+    it('leaves capabilities unset when /v1/models fails, and retries for other models', async () => {
       // No SDK retries, so the 500 isn't retried within the first lookup.
       const noRetryAi = genkit({
         plugins: [mistral({ ...fakeServerOptions(server), maxRetries: 0 })],
@@ -1771,11 +1780,56 @@ describe('mistral plugin', () => {
         '/model/mistral/pixtral-large-latest'
       );
 
-      expect(first?.__action.metadata?.model.supports).toEqual(
-        UNKNOWN_MODEL_SUPPORTS
-      );
+      expect(first?.__action.metadata?.model.supports).toBeUndefined();
       expect(second?.__action.metadata?.model.supports?.media).toBe(true);
       expect(modelRequests()).toHaveLength(2);
+    });
+
+    it('keeps capabilities unset when it is looked up again after a failed listing', async () => {
+      const noRetryAi = genkit({
+        plugins: [mistral({ ...fakeServerOptions(server), maxRetries: 0 })],
+      });
+      server.setNextResponse({
+        statusCode: 500,
+        body: { object: 'error', message: 'boom', type: 'internal' },
+      });
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const getWeather = noRetryAi.defineTool(
+        {
+          name: 'getWeather',
+          description: 'Gets the weather.',
+          inputSchema: z.object({ city: z.string() }),
+        },
+        async () => 'sunny'
+      );
+      try {
+        const first = await noRetryAi.registry.lookupAction(
+          '/model/mistral/devstral-medium-latest'
+        );
+        expect(first?.__action.metadata?.model.supports).toBeUndefined();
+
+        await noRetryAi.generate({
+          model: mistral.model('devstral-medium-latest'),
+          prompt: 'weather in Paris?',
+          tools: [getWeather],
+        });
+        expect(
+          warn.mock.calls.filter((c) => String(c[0]).includes('support tools'))
+        ).toHaveLength(0);
+        const chat = server.requests.find((r) => r.body.messages);
+        expect(chat?.body.tools).toHaveLength(1);
+
+        // A later successful listing doesn't change it: the registry keeps
+        // the first action. The capabilities stay unset, never wrong.
+        server.setNextResponse({ body: MODELS_RESPONSE });
+        await noRetryAi.registry.listResolvableActions();
+        const second = await noRetryAi.registry.lookupAction(
+          '/model/mistral/devstral-medium-latest'
+        );
+        expect(second?.__action.metadata?.model.supports).toBeUndefined();
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     it('does not list /v1/models with apiKey: false', async () => {
