@@ -17,7 +17,11 @@ package openai
 
 import (
 	"context"
+	"maps"
 	"os"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
@@ -42,20 +46,8 @@ const provider = "openai"
 // flags those already.
 type TextEmbeddingConfig = compat_oai.EmbeddingConfig
 
-// Capability sets shared by the entries below. Structured outputs
-// (response_format json_schema with strict) arrived with the gpt-4o-mini and
-// gpt-4o-2024-08-06 snapshots, so the models predating them advertise no
-// constrained generation and fall back to schema instructions in the prompt.
-// See https://developers.openai.com/api/docs/guides/structured-outputs.
+// Capability sets shared by the entries below.
 var (
-	textOnly = ai.ModelSupports{
-		Multiturn:   true,
-		Tools:       true,
-		SystemRole:  true,
-		Media:       false,
-		Output:      []string{"text", "json"},
-		Constrained: ai.ConstrainedSupportAll,
-	}
 	multimodal = ai.ModelSupports{
 		Multiturn:   true,
 		Tools:       true,
@@ -65,20 +57,22 @@ var (
 		Output:      []string{"text", "json"},
 		Constrained: ai.ConstrainedSupportAll,
 	}
-	textOnlyLegacy = ai.ModelSupports{
-		Multiturn:  true,
-		Tools:      true,
-		SystemRole: true,
-		Media:      false,
-		Output:     []string{"text", "json"},
+	// multimodalNoTools is for models that cannot call tools through Chat
+	// Completions.
+	multimodalNoTools = ai.ModelSupports{
+		Multiturn:   true,
+		SystemRole:  true,
+		Media:       true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
 	}
-	multimodalLegacy = ai.ModelSupports{
-		Multiturn:  true,
-		Tools:      true,
-		SystemRole: true,
-		Media:      true,
-		ToolChoice: true,
-		Output:     []string{"text", "json"},
+	// searchSupports is for gpt-5-search-api, which takes no tools and ignores
+	// image input.
+	searchSupports = ai.ModelSupports{
+		Multiturn:   true,
+		SystemRole:  true,
+		Output:      []string{"text", "json"},
+		Constrained: ai.ConstrainedSupportAll,
 	}
 )
 
@@ -88,159 +82,184 @@ var (
 var mediaTypes = []string{"image/*", "audio/*", "application/pdf"}
 
 // supportedModels curates capabilities for well-known OpenAI models. It is not
-// the set of usable models: any OpenAI model resolves on demand and takes
-// [dynamicModelOptions], so an ID absent here still works. Dated snapshots are
-// folded into Versions rather than registered as separate models. Model IDs are
-// spelled out rather than taken from the SDK's ChatModel constants, which trail
-// the catalog by whichever SDK version go.mod pins.
+// the set of usable models: any OpenAI model resolves on demand, so an ID
+// absent here still works. Dated snapshots are folded into Versions rather
+// than registered as separate models. A snapshot of a model here takes that
+// model's entry (see [curatedModels]); any other ID, a fine-tune included,
+// takes [dynamicModelOptions]. Model IDs are spelled out rather than taken
+// from the SDK's ChatModel constants, which trail the catalog by whichever SDK
+// version go.mod pins.
 //
-// Two kinds of model are deliberately absent. The "pro" tiers (gpt-5-pro,
-// gpt-5.2-pro, gpt-5.4-pro, gpt-5.5-pro, o1-pro, o3-pro) are served only by
-// the Responses API, and this plugin speaks Chat Completions. Audio, image,
-// realtime, transcription, and moderation models are not chat models.
+// Models are dropped from here once OpenAI shuts them down, and marked
+// deprecated once a shutdown date is announced for them.
 //
-// Catalog: https://developers.openai.com/api/docs/models
-// Retirements: https://developers.openai.com/api/docs/deprecations
+// The "pro" tiers (gpt-5-pro, gpt-5.2-pro, gpt-5.4-pro, gpt-5.5-pro) are
+// absent because only the Responses API serves them. Image, speech,
+// realtime, transcription, and moderation models are absent because they are
+// not chat models. Audio chat models (gpt-audio-*) are not curated but are
+// listed and resolve dynamically.
+//
+// gpt-5.4 and later chat models, except those that advertise no tools, call
+// tools in Chat Completions only with reasoning_effort "none": gpt-5.4,
+// gpt-5.4-mini, gpt-5.4-nano, gpt-5.5, the gpt-5.6 models, gpt-6-sol,
+// gpt-6-luna and gpt-6.1-terra.
 var supportedModels = map[string]ai.ModelOptions{
-	// GPT-5.6, the current frontier family. No dated snapshots yet; the
-	// bare gpt-5.6 alias routes to sol and resolves dynamically.
+	// GPT-6, the current frontier family. No dated snapshots yet. Astra and
+	// gpt-6.1-sol call tools only through the Responses API.
+	"gpt-6-astra": {
+		Label:    "OpenAI GPT-6 Astra",
+		Supports: &multimodalNoTools,
+		Versions: []string{"gpt-6-astra"},
+		Stage:    ai.ModelStageStable,
+	},
+	"gpt-6.1-sol": {
+		Label:    "OpenAI GPT-6.1 Sol",
+		Supports: &multimodalNoTools,
+		Versions: []string{"gpt-6.1-sol"},
+		Stage:    ai.ModelStageStable,
+	},
+	"gpt-6.1-terra": {
+		Label:    "OpenAI GPT-6.1 Terra",
+		Supports: &multimodal,
+		Versions: []string{"gpt-6.1-terra"},
+		Stage:    ai.ModelStageStable,
+	},
+	"gpt-6-sol": {
+		Label:    "OpenAI GPT-6 Sol",
+		Supports: &multimodal,
+		Versions: []string{"gpt-6-sol"},
+		Stage:    ai.ModelStageStable,
+	},
+	"gpt-6-luna": {
+		Label:    "OpenAI GPT-6 Luna",
+		Supports: &multimodal,
+		Versions: []string{"gpt-6-luna"},
+		Stage:    ai.ModelStageStable,
+	},
+
+	// GPT-5.6. No dated snapshots yet; the bare gpt-5.6 alias routes to sol
+	// and resolves dynamically.
 	"gpt-5.6-sol": {
 		Label:    "OpenAI GPT-5.6 Sol",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.6-sol"},
+		Stage:    ai.ModelStageStable,
 	},
 	"gpt-5.6-terra": {
 		Label:    "OpenAI GPT-5.6 Terra",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.6-terra"},
+		Stage:    ai.ModelStageStable,
 	},
 	"gpt-5.6-luna": {
 		Label:    "OpenAI GPT-5.6 Luna",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.6-luna"},
+		Stage:    ai.ModelStageStable,
+	},
+
+	"gpt-5-search-api": {
+		Label:    "OpenAI GPT-5 Search API",
+		Supports: &searchSupports,
+		Versions: []string{"gpt-5-search-api", "gpt-5-search-api-2025-10-14"},
+		Stage:    ai.ModelStageStable,
 	},
 
 	"gpt-5.5": {
 		Label:    "OpenAI GPT-5.5",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.5", "gpt-5.5-2026-04-23"},
+		Stage:    ai.ModelStageStable,
 	},
 	"gpt-5.4": {
 		Label:    "OpenAI GPT-5.4",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.4", "gpt-5.4-2026-03-05"},
+		Stage:    ai.ModelStageStable,
 	},
 	"gpt-5.4-mini": {
 		Label:    "OpenAI GPT-5.4-mini",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.4-mini", "gpt-5.4-mini-2026-03-17"},
+		Stage:    ai.ModelStageStable,
 	},
+	// Shuts down 2027-04-01.
 	"gpt-5.4-nano": {
 		Label:    "OpenAI GPT-5.4-nano",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.4-nano", "gpt-5.4-nano-2026-03-17"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 	"gpt-5.2": {
 		Label:    "OpenAI GPT-5.2",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.2", "gpt-5.2-2025-12-11"},
+		Stage:    ai.ModelStageStable,
 	},
+	// Shuts down 2027-04-01.
 	"gpt-5.1": {
 		Label:    "OpenAI GPT-5.1",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5.1", "gpt-5.1-2025-11-13"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 
-	// GPT-5. The dated snapshots shut down 2026-12-11; the aliases stay.
+	// GPT-5 and o3 shut down 2026-12-11.
 	"gpt-5": {
 		Label:    "OpenAI GPT-5",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5", "gpt-5-2025-08-07"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 	"gpt-5-mini": {
 		Label:    "OpenAI GPT-5-mini",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5-mini", "gpt-5-mini-2025-08-07"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 	"gpt-5-nano": {
 		Label:    "OpenAI GPT-5-nano",
 		Supports: &multimodal,
 		Versions: []string{"gpt-5-nano", "gpt-5-nano-2025-08-07"},
+		Stage:    ai.ModelStageDeprecated,
+	},
+	"o3": {
+		Label:    "OpenAI o3",
+		Supports: &multimodal,
+		Versions: []string{"o3", "o3-2025-04-16"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 
+	// The GPT-4.1 and GPT-4o snapshots shut down 2027-01-14, and each alias
+	// resolves to one of them.
 	"gpt-4.1": {
 		Label:    "OpenAI GPT-4.1",
 		Supports: &multimodal,
 		Versions: []string{"gpt-4.1", "gpt-4.1-2025-04-14"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 	"gpt-4.1-mini": {
 		Label:    "OpenAI GPT-4.1-mini",
 		Supports: &multimodal,
 		Versions: []string{"gpt-4.1-mini", "gpt-4.1-mini-2025-04-14"},
+		Stage:    ai.ModelStageDeprecated,
 	},
-	// Shuts down 2026-10-23, replaced by gpt-5.6-luna.
-	"gpt-4.1-nano": {
-		Label:    "OpenAI GPT-4.1-nano",
-		Supports: &multimodal,
-		Versions: []string{"gpt-4.1-nano", "gpt-4.1-nano-2025-04-14"},
-	},
-
 	"gpt-4o": {
 		Label:    "OpenAI GPT-4o",
 		Supports: &multimodal,
-		// gpt-4o-2024-05-13 shuts down 2026-10-23.
-		Versions: []string{"gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06", "gpt-4o-2024-05-13"},
+		Versions: []string{"gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 	"gpt-4o-mini": {
 		Label:    "OpenAI GPT-4o-mini",
 		Supports: &multimodal,
 		Versions: []string{"gpt-4o-mini", "gpt-4o-mini-2024-07-18"},
-	},
-
-	// Reasoning models. o1, o3-mini, and o4-mini shut down 2026-10-23;
-	// o3-2025-04-16 shuts down 2026-12-11.
-	"o3": {
-		Label:    "OpenAI o3",
-		Supports: &multimodal,
-		Versions: []string{"o3", "o3-2025-04-16"},
-	},
-	"o4-mini": {
-		Label:    "OpenAI o4-mini",
-		Supports: &multimodal,
-		Versions: []string{"o4-mini", "o4-mini-2025-04-16"},
-	},
-	"o3-mini": {
-		Label:    "OpenAI o3-mini",
-		Supports: &textOnly,
-		Versions: []string{"o3-mini", "o3-mini-2025-01-31"},
-	},
-	"o1": {
-		Label:    "OpenAI o1",
-		Supports: &multimodal,
-		Versions: []string{"o1", "o1-2024-12-17"},
-	},
-
-	// Legacy models, all shutting down 2026-10-23 except
-	// gpt-3.5-turbo-1106 and -instruct, which go 2026-09-28.
-	"gpt-4-turbo": {
-		Label:    "OpenAI GPT-4-turbo",
-		Supports: &multimodalLegacy,
-		Versions: []string{"gpt-4-turbo", "gpt-4-turbo-2024-04-09"},
-	},
-	"gpt-4": {
-		Label:    "OpenAI GPT-4",
-		Supports: &textOnlyLegacy,
-		Versions: []string{"gpt-4", "gpt-4-0613"},
-	},
-	"gpt-3.5-turbo": {
-		Label:    "OpenAI GPT-3.5-turbo",
-		Supports: &textOnlyLegacy,
-		Versions: []string{"gpt-3.5-turbo", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-instruct"},
+		Stage:    ai.ModelStageDeprecated,
 	},
 }
 
 // dynamicModelOptions is advertised for OpenAI models that resolve dynamically
-// rather than appearing in supportedModels.
+// and are neither in supportedModels nor a snapshot of a model there.
 var dynamicModelOptions = ai.ModelOptions{
 	Supports: &multimodal,
 	Versions: []string{},
@@ -295,7 +314,7 @@ type OpenAI struct {
 	// OpenAI does.
 	//
 	//	&openai.OpenAI{Models: map[string]ai.ModelOptions{
-	//		"gpt-4o": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
+	//		"gpt-5.4": {Supports: &ai.ModelSupports{Multiturn: true, Tools: true}},
 	//	}}
 	//
 	// Fields left at their zero value keep what the plugin resolves, so an
@@ -380,8 +399,28 @@ func (o *OpenAI) newEmbedder(id string, opts ai.EmbedderOptions) *ai.EmbedderAct
 // a caller's entry authoritative whether Init, ListActions or ResolveAction
 // gets there first.
 func (o *OpenAI) modelOptions(id string) ai.ModelOptions {
-	return compat_oai.ModelOptionsFor(provider, id, supportedModels, dynamicModelOptions, o.Models)
+	return compat_oai.ModelOptionsFor(provider, id, curatedModels, dynamicModelOptions, o.Models)
 }
+
+// curatedModels is supportedModels plus an entry for each dated snapshot in
+// its Versions, so a snapshot that is listed or resolved by name takes its
+// model's capabilities and stage (a deprecation included) rather than the
+// dynamic defaults. Init registers only the supportedModels entries.
+var curatedModels = func() map[string]ai.ModelOptions {
+	models := maps.Clone(supportedModels)
+	for name, opts := range supportedModels {
+		for _, v := range opts.Versions {
+			if v == name {
+				continue
+			}
+			snapshot := opts
+			snapshot.Label = opts.Label + " " + strings.TrimPrefix(v, name+"-")
+			snapshot.Versions = []string{v}
+			models[v] = snapshot
+		}
+	}
+	return models
+}()
 
 // embedderOptions is [OpenAI.modelOptions] for embedders. An unknown ID has no
 // curated entry and takes the caller's alone.
@@ -398,12 +437,12 @@ func (o *OpenAI) embedderOptions(id string) ai.EmbedderOptions {
 // runtime. The config is the OpenAI SDK's request params, the raw request the
 // plugin sends; a nil config leaves the request's config unset.
 //
-//	ai.WithModel(openai.ModelRef("gpt-4o", &openaiGo.ChatCompletionNewParams{
+//	ai.WithModel(openai.ModelRef("gpt-5.4", &openaiGo.ChatCompletionNewParams{
 //		Temperature: openaiGo.Float(0.7),
 //	}))
 //
-// name is the model ID, with or without the provider prefix: "gpt-4o" and
-// "openai/gpt-4o" name the same model, as they do everywhere else in this
+// name is the model ID, with or without the provider prefix: "gpt-5.4" and
+// "openai/gpt-5.4" name the same model, as they do everywhere else in this
 // package.
 func ModelRef(id string, config *openaiGo.ChatCompletionNewParams) ai.ModelRef {
 	return ai.NewModelRef(compat_oai.ActionName(provider, id), config)
@@ -423,7 +462,7 @@ func (o *OpenAI) DefineModel(id string, opts ai.ModelOptions) ai.Model {
 // Model returns a previously registered model.
 //
 // Deprecated: Generation resolves a model from its name, so looking one up
-// first is rarely necessary: pass ai.WithModelName("openai/gpt-4o") or, to
+// first is rarely necessary: pass ai.WithModelName("openai/gpt-5.4") or, to
 // carry config with it, [ModelRef]. Use [genkit.LookupModel] when the action
 // itself is what you need.
 func (o *OpenAI) Model(g *genkit.Genkit, id string) ai.Model {
@@ -481,15 +520,105 @@ func (o *OpenAI) Embedder(g *genkit.Genkit, id string) ai.Embedder {
 	return genkit.LookupEmbedder(g, compat_oai.ActionName(provider, id))
 }
 
-// ListActions lists the models the configured OpenAI endpoint exposes,
+// ListActions lists the chat models the configured endpoint exposes,
 // described by the SDK config schema and the capabilities the plugin resolves
-// for each ID, a caller's [OpenAI.Models] entry included.
+// for each ID, a caller's [OpenAI.Models] entry included. OpenAI's endpoint
+// also reports image, speech (TTS), transcription, realtime, embedding,
+// moderation, legacy completions and Responses-only models, which Chat
+// Completions cannot serve; those are left out (see [isChatModel]). IDs
+// outside OpenAI's naming, as a proxy or self-hosted server behind a custom
+// base URL may report, are all listed. If the endpoint cannot be listed, the
+// error is logged and nothing is listed.
 func (o *OpenAI) ListActions(ctx context.Context) []api.ActionDesc {
-	return compat_oai.ListModelActions(ctx, &o.openAICompatible, o.modelOptions)
+	actions := compat_oai.ListModelActions(ctx, &o.openAICompatible, o.modelOptions)
+	return slices.DeleteFunc(actions, func(a api.ActionDesc) bool {
+		return !isChatModel(strings.TrimPrefix(a.Name, provider+"/"))
+	})
 }
 
 // ResolveAction dynamically builds a model the OpenAI endpoint exposes,
 // described the same way [OpenAI.ListActions] describes it.
 func (o *OpenAI) ResolveAction(atype api.ActionType, id string) api.Action {
 	return compat_oai.ResolveModelAction(&o.openAICompatible, atype, id, o.modelOptions)
+}
+
+// nonChatPrefixes start the IDs of OpenAI's models that are not chat models
+// and do not follow the gpt- or o-series naming.
+var nonChatPrefixes = []string{
+	"dall-e-", "tts-", "whisper-", "text-embedding-", "omni-moderation-",
+	"text-moderation-", "sora-", "computer-use-", "codex-mini-",
+}
+
+// legacyCompletionID matches OpenAI's legacy completion, edit, similarity and
+// search model IDs and their fine-tunes, on any host.
+var legacyCompletionID = regexp.MustCompile(
+	`(^|-)(babbage|curie|davinci)(-|:|$)|^((text|code)-)?ada(-\d{3})?(:|$)|^(text|code)-(similarity|search)-`)
+
+// nonChatMarkers are ID words that mark models Chat Completions does not
+// serve.
+var nonChatMarkers = map[string]bool{
+	"image":      true,
+	"tts":        true,
+	"transcribe": true,
+	"realtime":   true,
+	"live":       true,
+	"instruct":   true,
+	"pro":        true,
+	"codex":      true,
+	"research":   true,
+	"rosalind":   true,
+	"daybreak":   true,
+}
+
+// responsesOnlyModels are single Responses-only IDs whose family is otherwise
+// served by Chat Completions: gpt-6-cyber takes Chat Completions, gpt-5.6-cyber
+// does not.
+var responsesOnlyModels = map[string]bool{
+	"gpt-5.6-cyber": true,
+}
+
+// isChatModel reports whether an ID from the models list names a model Chat
+// Completions serves. The filter only denies: it drops OpenAI's non-chat
+// models and passes every other ID, so a proxy or self-hosted server behind a
+// custom base URL keeps its whole listing. A fine-tuned model
+// (ft:<base>:<org>:...) is judged by its base model.
+func isChatModel(id string) bool {
+	if base, ok := fineTuneBase(id); ok {
+		id = base
+	}
+	for _, p := range nonChatPrefixes {
+		if strings.HasPrefix(id, p) {
+			return false
+		}
+	}
+	if responsesOnlyModels[id] || legacyCompletionID.MatchString(id) {
+		return false
+	}
+	if !strings.HasPrefix(id, "gpt-") && !strings.HasPrefix(id, "chatgpt-") && !isOSeries(id) {
+		return true
+	}
+	for word := range strings.SplitSeq(id, "-") {
+		if nonChatMarkers[word] {
+			return false
+		}
+	}
+	return true
+}
+
+// fineTuneBase returns the base model of a fine-tuned model ID
+// (ft:<base>:<org>:...).
+func fineTuneBase(id string) (string, bool) {
+	rest, ok := strings.CutPrefix(id, "ft:")
+	if !ok {
+		return "", false
+	}
+	base, _, _ := strings.Cut(rest, ":")
+	return base, true
+}
+
+// isOSeries reports whether id names an o-series reasoning model (o1, o3,
+// o4-mini and so on), as opposed to another ID starting with "o" such as
+// omni-moderation-latest.
+func isOSeries(id string) bool {
+	return len(id) >= 2 && id[0] == 'o' && id[1] >= '0' && id[1] <= '9'
 }

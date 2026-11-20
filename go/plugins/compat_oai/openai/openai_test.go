@@ -17,15 +17,21 @@
 package openai
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/firebase/genkit/go/core/api"
+	"github.com/firebase/genkit/go/core/logger"
 	"github.com/firebase/genkit/go/genkit"
 	openaiGo "github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -407,34 +413,363 @@ func TestSupportedModelCatalog(t *testing.T) {
 	}
 }
 
-// TestConstrainedSupport pins which models advertise native structured output.
-// OpenAI gates response_format json_schema on the gpt-4o-mini and
-// gpt-4o-2024-08-06 snapshots and later, so the three models predating it must
-// stay unset: claiming support there would drop the schema instructions Genkit
-// injects into the prompt and leave nothing enforcing the schema.
+// TestConstrainedSupport pins that every curated model advertises native
+// structured output. Every model left in the catalog postdates the
+// gpt-4o-2024-08-06 snapshot that introduced response_format json_schema.
 func TestConstrainedSupport(t *testing.T) {
-	// Models OpenAI released before Structured Outputs.
-	legacy := map[string]bool{"gpt-4-turbo": true, "gpt-4": true, "gpt-3.5-turbo": true}
-
 	for id, opts := range supportedModels {
-		got := opts.Supports.Constrained
-		want := ai.ConstrainedSupportAll
-		if legacy[id] {
-			want = ""
-		}
-		if got != want {
-			t.Errorf("%s constrained = %q, want %q", id, got, want)
+		if got := opts.Supports.Constrained; got != ai.ConstrainedSupportAll {
+			t.Errorf("%s constrained = %q, want %q", id, got, ai.ConstrainedSupportAll)
 		}
 	}
-
-	for id := range legacy {
-		if _, ok := supportedModels[id]; !ok {
-			t.Errorf("%s is no longer in the catalog; drop it from this test", id)
-		}
-	}
-
 	if got := dynamicModelOptions.Supports.Constrained; got != ai.ConstrainedSupportAll {
 		t.Errorf("dynamic constrained = %q, want %q", got, ai.ConstrainedSupportAll)
+	}
+}
+
+// TestCatalogOmitsShutDownModels pins that no shut-down model or snapshot is registered.
+func TestCatalogOmitsShutDownModels(t *testing.T) {
+	registered := map[string]string{}
+	for name, opts := range supportedModels {
+		registered[name] = name
+		for _, v := range opts.Versions {
+			registered[v] = name
+		}
+	}
+	shutDown := []string{
+		"gpt-4.1-nano", "gpt-4.1-nano-2025-04-14", "gpt-4o-2024-05-13",
+		"o4-mini", "o4-mini-2025-04-16", "o3-mini", "o3-mini-2025-01-31",
+		"o1", "o1-2024-12-17", "gpt-4-turbo", "gpt-4-turbo-2024-04-09",
+		"gpt-4", "gpt-4-0613", "gpt-3.5-turbo", "gpt-3.5-turbo-0125",
+		"gpt-3.5-turbo-1106", "gpt-3.5-turbo-instruct",
+	}
+	for _, id := range shutDown {
+		if under, ok := registered[id]; ok {
+			t.Errorf("%s is shut down but still registered under %s", id, under)
+		}
+	}
+}
+
+// TestModelStagesAndTools pins the two per-model facts the catalog states
+// beyond the shared capability sets: which models are deprecated, and which
+// cannot call tools or read media through Chat Completions.
+func TestModelStagesAndTools(t *testing.T) {
+	// Every model with an announced shutdown date.
+	deprecated := map[string]bool{
+		"gpt-5": true, "gpt-5-mini": true, "gpt-5-nano": true, "o3": true, // 2026-12-11
+		"gpt-4.1": true, "gpt-4.1-mini": true, "gpt-4o": true, "gpt-4o-mini": true, // 2027-01-14
+		"gpt-5.1": true, "gpt-5.4-nano": true, // 2027-04-01
+	}
+	// The first two call tools only through the Responses API; the search
+	// model rejects tools outright.
+	noTools := map[string]bool{
+		"gpt-6-astra": true, "gpt-6.1-sol": true,
+		"gpt-5-search-api": true,
+	}
+	// The search model ignores image input.
+	noMedia := map[string]bool{"gpt-5-search-api": true}
+
+	for _, id := range []string{
+		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra",
+		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5-search-api",
+	} {
+		if _, ok := supportedModels[id]; !ok {
+			t.Errorf("%s is missing from the catalog", id)
+		}
+	}
+	for id, opts := range supportedModels {
+		want := ai.ModelStageStable
+		if deprecated[id] {
+			want = ai.ModelStageDeprecated
+		}
+		if opts.Stage != want {
+			t.Errorf("%s stage = %q, want %q", id, opts.Stage, want)
+		}
+		if got := opts.Supports.Tools; got == noTools[id] {
+			t.Errorf("%s tools = %v, want %v", id, got, !noTools[id])
+		}
+		if got := opts.Supports.Media; got == noMedia[id] {
+			t.Errorf("%s media = %v, want %v", id, got, !noMedia[id])
+		}
+		if opts.Supports.ToolChoice && !opts.Supports.Tools {
+			t.Errorf("%s advertises tool choice without tools", id)
+		}
+	}
+}
+
+// TestSnapshotsTakeTheirModelsOptions pins that a dated snapshot resolved by
+// name is described like the model it is a version of, deprecation included,
+// rather than with the dynamic defaults.
+func TestSnapshotsTakeTheirModelsOptions(t *testing.T) {
+	o, g := initPlugin(t)
+
+	for snapshot, parent := range map[string]string{
+		"gpt-5-2025-08-07":            "gpt-5",
+		"o3-2025-04-16":               "o3",
+		"gpt-5.5-2026-04-23":          "gpt-5.5",
+		"gpt-5-search-api-2025-10-14": "gpt-5-search-api",
+	} {
+		got := o.modelOptions(snapshot)
+		want := supportedModels[parent]
+		if got.Stage != want.Stage || got.Supports != want.Supports {
+			t.Errorf("%s: stage %q supports %p, want %s's stage %q supports %p", snapshot, got.Stage, got.Supports, parent, want.Stage, want.Supports)
+		}
+		if !slices.Equal(got.Versions, []string{snapshot}) {
+			t.Errorf("%s: versions = %v, want just the snapshot", snapshot, got.Versions)
+		}
+	}
+	if got := o.modelOptions("gpt-5-search-api-2025-10-14").Supports; got.Tools || got.Media {
+		t.Errorf("search snapshot tools %v media %v, want neither", got.Tools, got.Media)
+	}
+	if got := o.modelOptions("gpt-5-2025-08-07").Label; got != "OpenAI GPT-5 2025-08-07" {
+		t.Errorf("snapshot label = %q, want %q", got, "OpenAI GPT-5 2025-08-07")
+	}
+	m := genkit.LookupModel(g, "openai/gpt-5-2025-08-07")
+	if m == nil {
+		t.Fatal("gpt-5-2025-08-07 did not resolve")
+	}
+	if got := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)["stage"]; got != ai.ModelStageDeprecated {
+		t.Errorf("resolved snapshot stage = %v, want %q", got, ai.ModelStageDeprecated)
+	}
+}
+
+// TestFineTunesTakeDynamicDefaults pins that a fine-tuned model takes the
+// dynamic defaults whatever its base, rather than its base model's curated
+// entry.
+func TestFineTunesTakeDynamicDefaults(t *testing.T) {
+	o, g := initPlugin(t)
+
+	for _, ft := range []string{
+		"ft:gpt-4o-mini-2024-07-18:acme::abc123",
+		"ft:gpt-4.1:acme:custom:def456",
+		"ft:gpt-5-search-api:acme::x1",
+		"ft:my-base:acme::xyz",
+	} {
+		got := o.modelOptions(ft)
+		if got.Stage != dynamicModelOptions.Stage || got.Supports != dynamicModelOptions.Supports {
+			t.Errorf("%s: stage %q supports %p, want the dynamic defaults' stage %q supports %p", ft, got.Stage, got.Supports, dynamicModelOptions.Stage, dynamicModelOptions.Supports)
+		}
+	}
+
+	m := genkit.LookupModel(g, "openai/ft:gpt-4o-mini-2024-07-18:acme::abc123")
+	if m == nil {
+		t.Fatal("fine-tune did not resolve")
+	}
+	if got := m.(*ai.ModelAction).Desc().Metadata["model"].(map[string]any)["stage"]; got != ai.ModelStageStable {
+		t.Errorf("resolved fine-tune stage = %v, want %q", got, ai.ModelStageStable)
+	}
+}
+
+// TestIsChatModel pins which IDs from OpenAI's models list are taken for chat
+// models. The list mixes in every other kind of model the account can use.
+func TestIsChatModel(t *testing.T) {
+	chat := []string{
+		"gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.5-2026-04-23",
+		"gpt-5-nano", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini-2024-07-18",
+		"o3", "o3-2025-04-16", "gpt-6-cyber", "gpt-5-search-api", "chat-latest",
+		"ft:gpt-4o-mini-2024-07-18:acme::abc123",
+		"gpt-audio-1.5", "gpt-audio-mini", "gpt-4o-audio-preview",
+		// IDs outside OpenAI's naming, from a proxy or self-hosted server,
+		// pass even when they carry a word that marks an OpenAI non-chat model.
+		"claude-sonnet-4-5", "meta-llama/Llama-3.1-8B-Instruct", "qwen2.5-7b-instruct", "acme-pro",
+		"my-realtime-llama", "llama-guard-moderation", "my-image-model", "ada-lovelace-7b", "adapter-llama",
+	}
+	notChat := []string{
+		// Image, speech, transcription, realtime and Live.
+		"dall-e-3", "gpt-image-2", "gpt-image-2.5-flare", "chatgpt-image-latest",
+		"tts-1", "gpt-4o-mini-tts", "whisper-1", "gpt-transcribe", "gpt-4o-transcribe-diarize",
+		"gpt-realtime-2.1", "gpt-4o-realtime-preview", "gpt-live-1", "gpt-live-transcribe",
+		"gpt-realtime-whisper",
+		// Embeddings, moderation, video, legacy completions.
+		"text-embedding-3-small", "omni-moderation-latest", "text-moderation-latest", "sora-2",
+		"babbage-002", "davinci-002", "gpt-3.5-turbo-instruct", "gpt-3.5-turbo-instruct-0914",
+		"curie:ft-acme-2023-06-07-10-19-42", "davinci:ft-acme-2023-01-01-00-00-00",
+		"babbage:ft-acme-2023-01-01-00-00-00", "ada:ft-acme-2023-01-01-00-00-00",
+		"davinci", "curie", "ada", "babbage", "davinci-instruct-beta", "curie-instruct-beta",
+		"text-davinci-003", "text-davinci-edit-001", "text-curie-001", "text-babbage-001", "text-ada-001",
+		"code-davinci-002", "code-davinci-edit-001", "code-search-ada-code-001", "code-search-babbage-text-001",
+		"text-similarity-ada-001", "text-similarity-davinci-001", "text-search-curie-doc-001",
+		"text-search-davinci-query-001", "ft:davinci-002:acme::abc123",
+		// Responses only.
+		"gpt-5.5-pro", "gpt-5.5-pro-2026-04-23", "gpt-5.2-pro", "o3-pro", "gpt-5-pro-2025-10-06",
+		"gpt-5.1-codex-max", "codex-mini-latest", "o3-deep-research", "computer-use-preview",
+		"gpt-5.6-cyber", "gpt-rosalind-research", "gpt-6-rosalind", "gpt-daybreak-blue-latest",
+		"ft:gpt-5.5-pro:acme::abc123",
+	}
+	for _, id := range chat {
+		if !isChatModel(id) {
+			t.Errorf("isChatModel(%q) = false, want true", id)
+		}
+	}
+	for _, id := range notChat {
+		if isChatModel(id) {
+			t.Errorf("isChatModel(%q) = true, want false", id)
+		}
+	}
+}
+
+// TestListActionsListsChatModelsOnly pins that the listing the Dev UI shows
+// holds only the models Chat Completions serves, not every model the
+// endpoint reports.
+func TestListActionsListsChatModelsOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/models" {
+			t.Errorf("request path = %q, want /models", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"list","data":[
+			{"id":"gpt-6-sol","object":"model","created":1,"owned_by":"openai"},
+			{"id":"o3","object":"model","created":1,"owned_by":"openai"},
+			{"id":"ft:gpt-4o-mini-2024-07-18:acme::abc123","object":"model","created":1,"owned_by":"acme"},
+			{"id":"dall-e-3","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-image-2","object":"model","created":1,"owned_by":"system"},
+			{"id":"tts-1","object":"model","created":1,"owned_by":"system"},
+			{"id":"whisper-1","object":"model","created":1,"owned_by":"system"},
+			{"id":"text-embedding-3-small","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-5.5-pro","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-realtime-2.1","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-audio-1.5","object":"model","created":1,"owned_by":"system"},
+			{"id":"gpt-4o-transcribe","object":"model","created":1,"owned_by":"system"},
+			{"id":"meta-llama/Llama-3.1-8B-Instruct","object":"model","created":1,"owned_by":"vllm"}
+		]}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	o := &OpenAI{Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}
+	genkit.Init(context.Background(), genkit.WithPlugins(o))
+
+	var got []string
+	for _, d := range o.ListActions(context.Background()) {
+		got = append(got, d.Name)
+	}
+	slices.Sort(got)
+	want := []string{
+		"openai/ft:gpt-4o-mini-2024-07-18:acme::abc123",
+		"openai/gpt-6-sol",
+		"openai/gpt-audio-1.5",
+		"openai/meta-llama/Llama-3.1-8B-Instruct",
+		"openai/o3",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("ListActions() names = %v, want %v", got, want)
+	}
+}
+
+// listingFixture holds OpenAI model IDs by how the listing treats them, and
+// the listed ones that advertise no tools.
+type listingFixture struct {
+	Chat   []string `json:"chat"`
+	Hidden []string `json:"hidden"`
+	Other  []string `json:"other"`
+	Tools  struct {
+		NeverOnChatCompletions []string `json:"never_on_chat_completions"`
+	} `json:"tools"`
+}
+
+// TestListActionsMatchesFixture pins, against a models list holding every ID
+// in the fixture, that each chat ID is listed and nothing else is, and
+// which listed models advertise tools.
+func TestListActionsMatchesFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/openai-listing-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx listingFixture
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatal(err)
+	}
+
+	type entry struct {
+		ID string `json:"id"`
+	}
+	var data []entry
+	for _, ids := range [][]string{fx.Chat, fx.Hidden, fx.Other} {
+		for _, id := range ids {
+			data = append(data, entry{id})
+		}
+	}
+	body, err := json.Marshal(map[string]any{"object": "list", "data": data})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	o := &OpenAI{Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}
+	genkit.Init(context.Background(), genkit.WithPlugins(o))
+
+	listed := map[string]map[string]any{}
+	for _, d := range o.ListActions(context.Background()) {
+		listed[strings.TrimPrefix(d.Name, "openai/")] = d.Metadata["model"].(map[string]any)["supports"].(map[string]any)
+	}
+
+	noTools := map[string]bool{}
+	for _, id := range fx.Tools.NeverOnChatCompletions {
+		noTools[id] = true
+	}
+	for _, tc := range []struct {
+		class  string
+		ids    []string
+		listed bool
+	}{
+		{"chat", fx.Chat, true},
+		{"hidden", fx.Hidden, false},
+		{"other", fx.Other, false},
+	} {
+		t.Run(tc.class, func(t *testing.T) {
+			for _, id := range tc.ids {
+				supports, ok := listed[id]
+				if ok != tc.listed {
+					t.Errorf("%s listed = %v, want %v", id, ok, tc.listed)
+					continue
+				}
+				if ok && supports["tools"] != !noTools[id] {
+					t.Errorf("%s tools = %v, want %v", id, supports["tools"], !noTools[id])
+				}
+			}
+		})
+	}
+	if len(listed) != len(fx.Chat) {
+		t.Errorf("listed %d models, want the %d chat IDs", len(listed), len(fx.Chat))
+	}
+}
+
+// TestListActionsLogsListError pins that a failed listing is reported rather
+// than swallowed: ListActions has no error to return, so it lists nothing and
+// logs why.
+func TestListActionsLogsListError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	o := &OpenAI{Opts: []option.RequestOption{option.WithBaseURL(server.URL)}}
+	genkit.Init(context.Background(), genkit.WithPlugins(o))
+
+	var logged bytes.Buffer
+	ctx := logger.WithContext(context.Background(), slog.New(slog.NewTextHandler(&logged, nil)))
+	if got := o.ListActions(ctx); len(got) != 0 {
+		t.Errorf("ListActions() = %v, want nothing listed", got)
+	}
+	out := logged.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "provider=openai") || !strings.Contains(out, "Incorrect API key") {
+		t.Errorf("log = %q, want a warning naming the provider and the API's error", out)
+	}
+
+	// Reflection polls the list, so a failure that persists is warned
+	// about once; the repeats go to debug, below the handler's level.
+	logged.Reset()
+	o.ListActions(ctx)
+	if out := logged.String(); out != "" {
+		t.Errorf("second failing ListActions() logged %q, want nothing at warn level", out)
 	}
 }
 
@@ -543,5 +878,45 @@ func TestModelsOverride(t *testing.T) {
 	info := embedder.(*ai.EmbedderAction).Desc().Metadata["info"].(map[string]any)
 	if got := info["dimensions"]; got != 64 {
 		t.Errorf("dimensions = %v (%T), want the override's 64", got, got)
+	}
+}
+
+// TestModelsEntrySilencesDeprecationWarning pins that a Models entry with a
+// stable stage stops the deprecation warning for exactly the ID it names: a
+// snapshot of that model still warns.
+func TestModelsEntrySilencesDeprecationWarning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"c1","object":"chat.completion","created":1,"model":"gpt-4o",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	o := &OpenAI{
+		Opts:   []option.RequestOption{option.WithBaseURL(server.URL)},
+		Models: map[string]ai.ModelOptions{"gpt-4o": {Stage: ai.ModelStageStable}},
+	}
+	g := genkit.Init(context.Background(), genkit.WithPlugins(o))
+
+	for _, tc := range []struct {
+		model string
+		warns bool
+	}{
+		{"openai/gpt-4o", false},
+		{"openai/gpt-4o-2024-11-20", true},
+		{"openai/gpt-4o-mini", true},
+	} {
+		var logged bytes.Buffer
+		ctx := logger.WithContext(context.Background(), slog.New(slog.NewTextHandler(&logged, nil)))
+		if _, err := genkit.Generate(ctx, g, ai.WithModelName(tc.model), ai.WithPrompt("hi")); err != nil {
+			t.Fatalf("Generate(%s) error = %v", tc.model, err)
+		}
+		if got := strings.Contains(logged.String(), "model is deprecated"); got != tc.warns {
+			t.Errorf("%s: deprecation warning logged = %v, want %v; log %q", tc.model, got, tc.warns, logged.String())
+		}
 	}
 }
