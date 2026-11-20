@@ -249,8 +249,8 @@ describes every model it resolves with one permissive capability set. `Models`
 is how a caller narrows one. Follow that shape for a gateway, and the curated
 shape above for a vendor.
 
-See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `openrouter`,
-`xai`, and `zai` directories for complete implementations.
+See the `openai`, `anthropic`, `dashscope`, `deepseek`, `kimi`, `nvidia`,
+`openrouter`, `xai`, and `zai` directories for complete implementations.
 
 ## Running Tests
 
@@ -261,6 +261,7 @@ export ANTHROPIC_API_KEY=<your-anthropic-key>
 export DASHSCOPE_API_KEY=<your-dashscope-key>
 export ZAI_API_KEY=<your-zai-key>
 export KIMI_API_KEY=<your-kimi-key>
+export NVIDIA_API_KEY=<your-nvidia-api-key>
 export XAI_API_KEY=<your-xai-key>
 export DEEPSEEK_API_KEY=<your-deepseek-key>
 export OPENROUTER_API_KEY=<your-openrouter-key>
@@ -287,6 +288,9 @@ go test -v ./zai
 
 # Kimi tests
 go test -v ./kimi
+
+# NVIDIA tests
+go test -v ./nvidia
 
 # xAI tests
 go test -v ./xai
