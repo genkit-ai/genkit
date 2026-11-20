@@ -43,7 +43,6 @@ import {
   type GenerateStreamOptions,
   type GenerateStreamResponse,
 } from './generate.js';
-import { GenerationCommonConfigSchema, type Part } from './model-types.js';
 import { type OperationOptions } from './operation.js';
 import { Session, getCurrentSession } from './session.js';
 
@@ -79,41 +78,6 @@ export class GenkitAI {
   }
 
   /**
-   * Make a generate call to the default model with a simple text prompt.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { text } = await ai.generate('hi');
-   * ```
-   */
-  generate<O extends GenkitSchema = GenkitSchema>(
-    strPrompt: string
-  ): Promise<GenerateResponse<InferOutput<O>>>;
-
-  /**
-   * Make a generate call to the default model with a multipart request.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { text } = await ai.generate([
-   *   { media: {url: 'http://....'} },
-   *   { text: 'describe this image' }
-   * ]);
-   * ```
-   */
-  generate<O extends GenkitSchema = GenkitSchema>(
-    parts: Part[]
-  ): Promise<GenerateResponse<InferOutput<O>>>;
-
-  /**
    * Generate calls a generative model based on the provided prompt and configuration. If
    * `messages` is provided, the generation will include a conversation history in its
    * request. If `tools` are provided, the generate method will automatically resolve
@@ -140,78 +104,16 @@ export class GenkitAI {
    */
   generate<
     O extends GenkitSchema = GenkitSchema,
-    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(
-    opts:
-      | GenerateOptions<O, CustomOptions>
-      | PromiseLike<GenerateOptions<O, CustomOptions>>
-  ): Promise<GenerateResponse<InferOutput<O>>>;
-
-  async generate<
-    O extends GenkitSchema = GenkitSchema,
-    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
-  >(
-    options:
-      | string
-      | Part[]
-      | GenerateOptions<O, CustomOptions>
-      | PromiseLike<GenerateOptions<O, CustomOptions>>
+    opts: GenerateOptions<O, CustomOptions>
   ): Promise<GenerateResponse<InferOutput<O>>> {
-    let resolvedOptions: GenerateOptions<O, CustomOptions>;
-    if (options instanceof Promise) {
-      resolvedOptions = await options;
-    } else if (typeof options === 'string' || Array.isArray(options)) {
-      resolvedOptions = {
-        prompt: options,
-      };
-    } else {
-      resolvedOptions = options as GenerateOptions<O, CustomOptions>;
-    }
-    return generate(this.registry, resolvedOptions);
+    // Deliberately a single, options-only signature (also for generateStream):
+    // overloads, or a `string | Part[] | GenerateOptions` union, make tsc
+    // report "No overload matches this call" or check the object against the
+    // wrong union member, instead of pointing at the offending property.
+    return generate(this.registry, opts);
   }
-
-  /**
-   * Make a streaming generate call to the default model with a simple text prompt.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { response, stream } = ai.generateStream('hi');
-   * for await (const chunk of stream) {
-   *   console.log(chunk.text);
-   * }
-   * console.log((await response).text);
-   * ```
-   */
-  generateStream<O extends GenkitSchema = GenkitSchema>(
-    strPrompt: string
-  ): GenerateStreamResponse<InferOutput<O>>;
-
-  /**
-   * Make a streaming generate call to the default model with a multipart request.
-   *
-   * ```ts
-   * const ai = genkit({
-   *   plugins: [googleAI()],
-   *   model: googleAI.model('gemini-flash-latest'), // default model
-   * })
-   *
-   * const { response, stream } = ai.generateStream([
-   *   { media: {url: 'http://....'} },
-   *   { text: 'describe this image' }
-   * ]);
-   * for await (const chunk of stream) {
-   *   console.log(chunk.text);
-   * }
-   * console.log((await response).text);
-   * ```
-   */
-  generateStream<O extends GenkitSchema = GenkitSchema>(
-    parts: Part[]
-  ): GenerateStreamResponse<InferOutput<O>>;
 
   /**
    * Streaming generate calls a generative model based on the provided prompt and configuration. If
@@ -244,27 +146,11 @@ export class GenkitAI {
    */
   generateStream<
     O extends GenkitSchema = GenkitSchema,
-    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+    CustomOptions extends GenkitSchema = GenkitSchema,
   >(
-    opts:
-      | GenerateStreamOptions<O, CustomOptions>
-      | PromiseLike<GenerateStreamOptions<O, CustomOptions>>
-  ): GenerateStreamResponse<InferOutput<O>>;
-
-  generateStream<
-    O extends GenkitSchema = GenkitSchema,
-    CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
-  >(
-    options:
-      | string
-      | Part[]
-      | GenerateStreamOptions<O, CustomOptions>
-      | PromiseLike<GenerateStreamOptions<O, CustomOptions>>
+    opts: GenerateStreamOptions<O, CustomOptions>
   ): GenerateStreamResponse<InferOutput<O>> {
-    if (typeof options === 'string' || Array.isArray(options)) {
-      options = { prompt: options };
-    }
-    return generateStream(this.registry, options);
+    return generateStream(this.registry, opts);
   }
 
   /**

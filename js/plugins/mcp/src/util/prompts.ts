@@ -103,7 +103,7 @@ function createExecutablePrompt<
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateResponse<InferOutput<O>>> => {
     logger.debug(`[MCP] Calling MCP prompt ${params.name}/${prompt.name}`);
-    return params.ai.generate(callPrompt.render(input, opts));
+    return params.ai.generate(await callPrompt.render(input, opts));
   }) as ExecutablePrompt<InferOutput<I>, O, CustomOptions>;
 
   callPrompt.ref = {
@@ -120,7 +120,21 @@ function createExecutablePrompt<
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): GenerateStreamResponse<InferOutput<O>> => {
     logger.debug(`[MCP] Streaming MCP prompt ${params.name}/${prompt.name}`);
-    return params.ai.generateStream(callPrompt.render(input, opts));
+    // generateStream takes resolved options, so render first and forward the
+    // stream and response once rendering is done.
+    const streaming = callPrompt
+      .render(input, opts)
+      .then((rendered) => params.ai.generateStream(rendered));
+    const response = streaming.then((s) => s.response);
+    // Like core generateStream: callers that only consume `stream` must not
+    // trigger an unhandled rejection; awaiting `response` still throws.
+    response.catch(() => {});
+    return {
+      stream: (async function* () {
+        yield* (await streaming).stream;
+      })(),
+      response,
+    };
   };
 
   callPrompt.render = async (

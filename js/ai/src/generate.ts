@@ -59,7 +59,6 @@ import {
   resolveModel,
   type GenerateActionOptions,
   type GenerateRequest,
-  type GenerationCommonConfigSchema,
   type MessageData,
   type MiddlewareRef,
   type ModelArgument,
@@ -622,7 +621,7 @@ export async function normalizeMiddleware(
  */
 export async function generate<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options:
@@ -696,7 +695,7 @@ export async function generate<
 
 export async function generateOperation<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options:
@@ -741,7 +740,7 @@ export function maybeRegisterDynamicMiddlewareTools(
 
 function maybeRegisterDynamicTools<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(registry: Registry, options: GenerateOptions<O, CustomOptions>) {
   options?.tools?.forEach((t) => {
     if (isDynamicTool(t)) {
@@ -756,7 +755,7 @@ function maybeRegisterDynamicTools<
 
 function maybeRegisterDynamicResources<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(registry: Registry, options: GenerateOptions<O, CustomOptions>) {
   options?.resources?.forEach((r) => {
     if (isDynamicResourceAction(r)) {
@@ -767,7 +766,7 @@ function maybeRegisterDynamicResources<
 
 export async function toGenerateActionOptions<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options: GenerateOptions<O, CustomOptions>
@@ -903,7 +902,7 @@ async function resolveFullResourceNames(
 /** Options for {@link Genkit.generateStream}. Same as {@link GenerateOptions} but without `streamingCallback`. */
 export type GenerateStreamOptions<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 > = Omit<GenerateOptions<O, CustomOptions>, 'streamingCallback'>;
 
 /** The return type of {@link Genkit.generateStream}, providing both a stream of chunks and the final response. */
@@ -914,7 +913,7 @@ export interface GenerateStreamResponse<O = unknown> {
 
 export function generateStream<
   O extends GenkitSchema = GenkitSchema,
-  CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
+  CustomOptions extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
   options:

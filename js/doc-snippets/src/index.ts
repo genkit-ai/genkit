@@ -24,7 +24,7 @@ const ai = genkit({
 
 async function main() {
   // make a generation request
-  const { text } = await ai.generate('Hello, Gemini!');
+  const { text } = await ai.generate({ prompt: 'Hello, Gemini!' });
   console.log(text);
 }
 
