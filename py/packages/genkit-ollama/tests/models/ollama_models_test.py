@@ -1075,6 +1075,67 @@ class TestBuildChatMessagesWithMedia(unittest.IsolatedAsyncioTestCase):
         assert len(messages[0]['images']) == 1
 
 
+class TestBuildChatMessagesWithTools(unittest.IsolatedAsyncioTestCase):
+    """Tests for build_chat_messages with tool request and tool response parts."""
+
+    async def test_tool_request_and_response_round_trip(self) -> None:
+        """The model's tool call and the matching tool result both reach Ollama."""
+        request = ModelRequest(
+            messages=[
+                Message(role=Role.USER, content=[Part.from_text('What time is it?')]),
+                Message(
+                    role=Role.MODEL,
+                    content=[Part.from_tool_request('getCurrentTime', input={'zone': 'CET'}, ref='0')],
+                ),
+                Message(
+                    role=Role.TOOL,
+                    content=[Part.from_tool_response('getCurrentTime', output={'time': '18:00'}, ref='0')],
+                ),
+            ]
+        )
+
+        messages = await OllamaModel.build_chat_messages(request)
+
+        assert len(messages) == 3
+        tool_calls = messages[1].tool_calls
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0].function.name == 'getCurrentTime'
+        assert dict(tool_calls[0].function.arguments) == {'zone': 'CET'}
+        assert messages[2].role == 'tool'
+        assert messages[2].tool_name == 'getCurrentTime'
+        assert json.loads(messages[2].content or '') == {'time': '18:00'}
+
+    async def test_parallel_tool_responses_become_separate_messages(self) -> None:
+        """Each tool response is its own message, and string output is sent as is."""
+        request = ModelRequest(
+            messages=[
+                Message(
+                    role=Role.MODEL,
+                    content=[
+                        Part.from_tool_request('getCurrentTime', input={}, ref='0'),
+                        Part.from_tool_request('getWeather', input={'city': 'Paris'}, ref='1'),
+                    ],
+                ),
+                Message(
+                    role=Role.TOOL,
+                    content=[
+                        Part.from_tool_response('getCurrentTime', output='18:00', ref='0'),
+                        Part.from_tool_response('getWeather', output={'sky': 'clear'}, ref='1'),
+                    ],
+                ),
+            ]
+        )
+
+        messages = await OllamaModel.build_chat_messages(request)
+
+        assert [call.function.name for call in messages[0].tool_calls or []] == ['getCurrentTime', 'getWeather']
+        assert [(m.tool_name, m.content) for m in messages[1:]] == [
+            ('getCurrentTime', '18:00'),
+            ('getWeather', '{"sky": "clear"}'),
+        ]
+
+
 class TestToOllamaRole:
     """Tests for OllamaModel._to_ollama_role.
 
