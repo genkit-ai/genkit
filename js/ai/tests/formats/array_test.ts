@@ -111,6 +111,22 @@ describe('arrayFormat', () => {
       want: [],
     },
     {
+      desc: 'parses array of strings',
+      message: {
+        role: 'model',
+        content: [{ text: '["red", "green", "blue"]' }],
+      },
+      want: ['red', 'green', 'blue'],
+    },
+    {
+      desc: 'parses array of numbers',
+      message: {
+        role: 'model',
+        content: [{ text: '[1, 2.5, -3]' }],
+      },
+      want: [1, 2.5, -3],
+    },
+    {
       desc: 'parses array with preamble and code fence',
       message: {
         role: 'model',

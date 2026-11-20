@@ -112,7 +112,7 @@ interface ExtractItemsResult {
 }
 
 /**
- * Extracts complete objects from the first array found in the text.
+ * Extracts complete items from the first array found in the text.
  * Processes text from the cursor position and returns both complete items
  * and the new cursor position.
  */
@@ -120,63 +120,60 @@ export function extractItems(text: string, cursor = 0): ExtractItemsResult {
   const items: unknown[] = [];
   let currentCursor = cursor;
 
-  // Find the first array start if we haven't already processed any text
   if (cursor === 0) {
     const arrayStart = text.indexOf('[');
     if (arrayStart === -1) {
-      return { items: [], cursor: text.length };
+      return { items: [], cursor: 0 };
     }
     currentCursor = arrayStart + 1;
   }
 
-  let objectStart = -1;
-  let braceCount = 0;
-  let inString = false;
+  let itemStart = -1;
+  let depth = 0;
+  let quote = '';
   let escapeNext = false;
 
-  // Process the text from the cursor position
+  const takeItem = (end: number, next: number) => {
+    try {
+      items.push(JSON5.parse(text.substring(itemStart, end)));
+    } catch {}
+    itemStart = -1;
+    currentCursor = next;
+  };
+
   for (let i = currentCursor; i < text.length; i++) {
     const char = text[i];
 
-    if (escapeNext) {
-      escapeNext = false;
-      continue;
-    }
-
-    if (char === '\\') {
-      escapeNext = true;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-
-    if (inString) {
-      continue;
-    }
-
-    if (char === '{') {
-      if (braceCount === 0) {
-        objectStart = i;
+    if (quote) {
+      if (escapeNext) {
+        escapeNext = false;
+      } else if (char === '\\') {
+        escapeNext = true;
+      } else if (char === quote) {
+        quote = '';
+        if (depth === 0) takeItem(i + 1, i + 1);
       }
-      braceCount++;
-    } else if (char === '}') {
-      braceCount--;
-      if (braceCount === 0 && objectStart !== -1) {
-        try {
-          const obj = JSON5.parse(text.substring(objectStart, i + 1));
-          items.push(obj);
-          currentCursor = i + 1;
-          objectStart = -1;
-        } catch {
-          // If parsing fails, continue
-        }
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === '{' || char === '[') {
+      if (depth === 0) itemStart = i;
+      if (char === '{' || char === '[') depth++;
+      else quote = char;
+    } else if (char === '}' || char === ']') {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0) takeItem(i + 1, i + 1);
+      } else if (char === ']') {
+        if (itemStart !== -1) takeItem(i, i);
+        break;
       }
-    } else if (char === ']' && braceCount === 0) {
-      // End of array
-      break;
+    } else if (depth === 0) {
+      if (char === ',') {
+        if (itemStart !== -1) takeItem(i, i + 1);
+      } else if (itemStart === -1 && char.trim()) {
+        itemStart = i;
+      }
     }
   }
 
