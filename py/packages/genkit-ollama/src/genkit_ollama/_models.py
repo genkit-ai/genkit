@@ -739,19 +739,39 @@ class OllamaModel:
         """
         messages: list[ollama_api.Message] = []
         for message in request.messages:
-            item = ollama_api.Message(
-                role=cls._to_ollama_role(role=cast(Role, message.role)),
-                content='',
-                images=[],
-            )
+            role = cls._to_ollama_role(role=cast(Role, message.role))
+            tool_responses = [part.tool_response for part in message.content if part.tool_response is not None]
+            if tool_responses:
+                for tool_response in tool_responses:
+                    output = tool_response.output
+                    messages.append(
+                        ollama_api.Message(
+                            role=role,
+                            content=output if isinstance(output, str) else json.dumps(output, default=str),
+                            tool_name=tool_response.name,
+                        )
+                    )
+                continue
+            item = ollama_api.Message(role=role, content='', images=[])
+            tool_calls: list[ollama_api.Message.ToolCall] = []
             for text_part in message.content:
                 if text_part.text is not None:
                     item.content = (item.content or '') + text_part.text
-                elif text_part.tool_response is not None:
-                    item.content = (item.content or '') + str(text_part.tool_response.output)
+                elif text_part.tool_request is not None:
+                    tool_input = text_part.tool_request.input
+                    tool_calls.append(
+                        ollama_api.Message.ToolCall(
+                            function=ollama_api.Message.ToolCall.Function(
+                                name=text_part.tool_request.name,
+                                arguments=tool_input if isinstance(tool_input, dict) else {},
+                            )
+                        )
+                    )
                 elif text_part.media is not None:
                     image_value = await cls._resolve_image(text_part.media.url)
                     item['images'].append(ollama_api.Image(value=image_value))
+            if tool_calls:
+                item.tool_calls = tool_calls
             messages.append(item)
         return messages
 
