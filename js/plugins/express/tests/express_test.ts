@@ -846,22 +846,22 @@ export function defineEchoModel(ai: Genkit): ModelAction {
     {
       name: 'echoModel',
     },
-    async (request, streamingCallback) => {
-      streamingCallback?.({
+    async (request, { sendChunk }) => {
+      sendChunk({
         content: [
           {
             text: '3',
           },
         ],
       });
-      streamingCallback?.({
+      sendChunk({
         content: [
           {
             text: '2',
           },
         ],
       });
-      streamingCallback?.({
+      sendChunk({
         content: [
           {
             text: '1',
@@ -895,7 +895,6 @@ export function defineEchoModel(ai: Genkit): ModelAction {
 export function defineEchoModelV2(ai: Genkit): ModelAction {
   return ai.defineModel(
     {
-      apiVersion: 'v2',
       name: 'echoModelV2',
     },
     async (request, { sendChunk }) => {

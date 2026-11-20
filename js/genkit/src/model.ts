@@ -69,6 +69,7 @@ export {
   type MessageData,
   type ModelAction,
   type ModelArgument,
+  type ModelFn,
   type ModelInfo,
   type ModelMiddleware,
   type ModelMiddlewareArgument,

@@ -33,7 +33,6 @@ import {
   type GenkitSchema,
   type InferOutput,
   type SimpleMiddleware,
-  type StreamingCallback,
 } from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
 import type { Registry } from '@genkit-ai/core/registry';
@@ -140,6 +139,15 @@ export type ModelMiddlewareWithOptions = MiddlewareWithOptions<
 export type ModelMiddlewareArgument =
   ModelMiddleware | ModelMiddlewareWithOptions;
 
+/**
+ * The function that implements a model. Receives the request and the action
+ * runtime options (`sendChunk`, `streamingRequested`, `abortSignal`, `context`, etc.).
+ */
+export type ModelFn<CustomOptionsSchema extends GenkitSchema = GenkitSchema> = (
+  request: GenerateRequest<CustomOptionsSchema>,
+  options: ActionFnArg<GenerateResponseChunkData>
+) => Promise<GenerateResponseData>;
+
 /** Options for defining a new model via {@link defineModel} or {@link model}. */
 export type DefineModelOptions<
   CustomOptionsSchema extends GenkitSchema = GenkitSchema,
@@ -163,24 +171,33 @@ export type DefineModelOptions<
  */
 export function model<CustomOptionsSchema extends GenkitSchema = GenkitSchema>(
   options: DefineModelOptions<CustomOptionsSchema>,
-  runner: (
-    request: GenerateRequest<CustomOptionsSchema>,
-    options: ActionFnArg<GenerateResponseChunkData>
-  ) => Promise<GenerateResponseData>
+  runner: ModelFn<CustomOptionsSchema>
 ): ModelAction<CustomOptionsSchema> {
-  const act = action(modelActionOptions(options), (input, ctx) => {
+  const act = action(modelActionOptions(options), withLatency(runner));
+  return withConfigSchema<CustomOptionsSchema>(act, options.configSchema);
+}
+
+/** Wraps a model runner to stamp `latencyMs` onto the response. */
+function withLatency<CustomOptionsSchema extends GenkitSchema>(
+  runner: ModelFn<CustomOptionsSchema>
+): ModelFn<CustomOptionsSchema> {
+  return async (request, options) => {
     const startTimeMs = performance.now();
-    return runner(input, ctx).then((response) => {
-      const timedResponse = {
-        ...response,
-        latencyMs: performance.now() - startTimeMs,
-      };
-      return timedResponse;
-    });
-  });
-  Object.assign(act, {
-    __configSchema: options.configSchema || z.unknown(),
-  });
+    const response = await runner(request, options);
+    return { ...response, latencyMs: performance.now() - startTimeMs };
+  };
+}
+
+/** Attaches the config schema, turning a plain action into a {@link ModelAction}. */
+function withConfigSchema<CustomOptionsSchema extends GenkitSchema>(
+  act: Action<
+    typeof GenerateRequestSchema,
+    typeof GenerateResponseSchema,
+    typeof GenerateResponseChunkSchema
+  >,
+  configSchema: CustomOptionsSchema | undefined
+): ModelAction<CustomOptionsSchema> {
+  Object.assign(act, { __configSchema: configSchema || z.unknown() });
   return act as ModelAction<CustomOptionsSchema>;
 }
 
@@ -188,7 +205,11 @@ function modelActionOptions<
   CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   options: DefineModelOptions<CustomOptionsSchema>
-): ActionParams<typeof GenerateRequestSchema, typeof GenerateResponseSchema> {
+): ActionParams<
+  typeof GenerateRequestSchema,
+  typeof GenerateResponseSchema,
+  typeof GenerateResponseChunkSchema
+> {
   const label = options.label || options.name;
   const middleware = getModelMiddleware(options);
   return {
@@ -221,63 +242,17 @@ export function defineModel<
   CustomOptionsSchema extends GenkitSchema = GenkitSchema,
 >(
   registry: Registry,
-  options: {
-    apiVersion: 'v2';
-  } & DefineModelOptions<CustomOptionsSchema>,
-  runner: (
-    request: GenerateRequest<CustomOptionsSchema>,
-    options: ActionFnArg<GenerateResponseChunkData>
-  ) => Promise<GenerateResponseData>
-): ModelAction<CustomOptionsSchema>;
-
-/**
- * Defines a new model and adds it to the registry.
- */
-export function defineModel<
-  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
->(
-  registry: Registry,
   options: DefineModelOptions<CustomOptionsSchema>,
-  runner: (
-    request: GenerateRequest<CustomOptionsSchema>,
-    streamingCallback?: StreamingCallback<GenerateResponseChunkData>
-  ) => Promise<GenerateResponseData>
-): ModelAction<CustomOptionsSchema>;
-
-export function defineModel<
-  CustomOptionsSchema extends GenkitSchema = GenkitSchema,
->(
-  registry: Registry,
-  options: any,
-  runner: (
-    request: GenerateRequest<CustomOptionsSchema>,
-    options: any
-  ) => Promise<GenerateResponseData>
+  runner: ModelFn<CustomOptionsSchema>
 ): ModelAction<CustomOptionsSchema> {
+  // Goes through defineAction (rather than model() + register) for its
+  // runtime-context guard and lazy plugin initialization.
   const act = defineAction(
     registry,
     modelActionOptions(options),
-    (input, ctx) => {
-      const startTimeMs = performance.now();
-      const secondParam =
-        options.apiVersion === 'v2'
-          ? ctx
-          : ctx.streamingRequested
-            ? ctx.sendChunk
-            : undefined;
-      return runner(input, secondParam).then((response) => {
-        const timedResponse = {
-          ...response,
-          latencyMs: performance.now() - startTimeMs,
-        };
-        return timedResponse;
-      });
-    }
+    withLatency(runner)
   );
-  Object.assign(act, {
-    __configSchema: options.configSchema || z.unknown(),
-  });
-  return act as ModelAction<CustomOptionsSchema>;
+  return withConfigSchema<CustomOptionsSchema>(act, options.configSchema);
 }
 
 /** Options for defining a background model that processes requests asynchronously. */
@@ -375,7 +350,8 @@ function getModelMiddleware(options: {
   name: string;
   supports?: ModelInfo['supports'];
 }) {
-  const middleware: ModelMiddlewareArgument[] = options.use || [];
+  // Copy so we don't mutate the caller's array (it may be shared across models).
+  const middleware: ModelMiddlewareArgument[] = [...(options.use ?? [])];
   if (!options?.supports?.context) middleware.push(augmentWithContext());
   const constratedSimulator = simulateConstrainedGeneration();
   const constrained: ModelMiddleware = (req, next) => {

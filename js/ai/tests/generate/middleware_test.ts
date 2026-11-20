@@ -365,10 +365,10 @@ describe('generateMiddleware', () => {
     const mockStreamingModel = defineModel(
       registry,
       { name: 'mockStreamingModel' },
-      async (req, streamingCallback) => {
-        if (streamingCallback) {
-          streamingCallback({ content: [{ text: 'chunk1' }] });
-          streamingCallback({ content: [{ text: 'chunk2' }] });
+      async (req, { streamingRequested, sendChunk }) => {
+        if (streamingRequested) {
+          sendChunk({ content: [{ text: 'chunk1' }] });
+          sendChunk({ content: [{ text: 'chunk2' }] });
         }
         return {
           message: {
@@ -1070,10 +1070,10 @@ describe('generateMiddleware', () => {
     const mockStreamingModel = defineModel(
       registry,
       { name: 'mockStreamingModel' },
-      async (req, streamingCallback) => {
-        if (streamingCallback) {
+      async (req, { streamingRequested, sendChunk }) => {
+        if (streamingRequested) {
           // The model emits a chunk
-          streamingCallback({ content: [{ text: 'model chunk' }] });
+          sendChunk({ content: [{ text: 'model chunk' }] });
         }
         return {
           message: { role: 'model', content: [{ text: 'done' }] },

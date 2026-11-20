@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  ActionFnArg,
-  sentinelNoopStreamingCallback,
-  StreamingCallback,
-} from '@genkit-ai/core';
+import { ActionFnArg, sentinelNoopStreamingCallback } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import assert from 'assert';
@@ -26,11 +22,12 @@ import { describe, it } from 'node:test';
 import { z } from 'zod';
 import { z as z3 } from 'zod/v3';
 import {
-  defineModel,
   GenerateResponseChunkData,
   GenerateResponseData,
   GenerationCommonConfigSchema,
+  defineModel,
   model,
+  type ModelMiddleware,
 } from '../../src/model.js';
 
 initNodeFeatures();
@@ -44,131 +41,106 @@ const GENERATE_RESPONSE = {
 } as GenerateResponseData;
 
 describe('model', () => {
-  describe('v1', () => {
-    it('defines a model', async () => {
-      const registry = new Registry();
-      let calledWithStreamingCallback:
-        StreamingCallback<GenerateResponseChunkData> | undefined;
-      const model = defineModel(
-        registry,
-        {
-          name: 'foo',
-        },
-        async (_, streamingCallback) => {
-          calledWithStreamingCallback = streamingCallback;
-          return GENERATE_RESPONSE;
-        }
-      );
-      let response = await model({ messages: [] });
+  it('defines a model', async () => {
+    const registry = new Registry();
+    let calledWithOptions: ActionFnArg<GenerateResponseChunkData> | undefined;
+    const model = defineModel(
+      registry,
+      {
+        name: 'foo',
+      },
+      async (_, opts) => {
+        calledWithOptions = opts;
+        opts.sendChunk({
+          content: [{ text: 'success' }],
+        });
+        return GENERATE_RESPONSE;
+      }
+    );
+    let response = await model({ messages: [] });
 
-      assert.strictEqual(calledWithStreamingCallback, undefined);
-      delete response.latencyMs;
-      assert.deepStrictEqual(response, GENERATE_RESPONSE);
+    assert.ok(calledWithOptions!);
+    assert.strictEqual(
+      calledWithOptions.sendChunk,
+      sentinelNoopStreamingCallback
+    );
+    assert.strictEqual(calledWithOptions.streamingRequested, false);
+    delete response.latencyMs;
+    assert.deepStrictEqual(response, GENERATE_RESPONSE);
 
-      const { output } = model.stream({ messages: [] });
-      response = await output;
+    const { output, stream } = model.stream({ messages: [] });
 
-      assert.notStrictEqual(calledWithStreamingCallback, undefined);
-      delete response.latencyMs;
-      assert.deepStrictEqual(response, GENERATE_RESPONSE);
-    });
+    const chunks = [] as GenerateResponseChunkData[];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
+
+    response = await output;
+
+    assert.ok(calledWithOptions!);
+    assert.ok(calledWithOptions.sendChunk);
+    assert.notStrictEqual(
+      calledWithOptions.sendChunk,
+      sentinelNoopStreamingCallback
+    );
+    assert.strictEqual(calledWithOptions.streamingRequested, true);
+    delete response.latencyMs;
+    assert.deepStrictEqual(response, GENERATE_RESPONSE);
+    assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
   });
 
-  describe('v2', () => {
-    it('defines a model', async () => {
-      const registry = new Registry();
-      let calledWithOptions: ActionFnArg<GenerateResponseChunkData> | undefined;
-      const model = defineModel(
-        registry,
-        {
-          apiVersion: 'v2',
-          name: 'foo',
-        },
-        async (_, opts) => {
-          calledWithOptions = opts;
-          opts.sendChunk({
-            content: [{ text: 'success' }],
-          });
-          return GENERATE_RESPONSE;
-        }
-      );
-      let response = await model({ messages: [] });
-
-      assert.ok(calledWithOptions!);
-      assert.strictEqual(
-        calledWithOptions.sendChunk,
-        sentinelNoopStreamingCallback
-      );
-      assert.strictEqual(calledWithOptions.streamingRequested, false);
-      delete response.latencyMs;
-      assert.deepStrictEqual(response, GENERATE_RESPONSE);
-
-      const { output, stream } = model.stream({ messages: [] });
-
-      const chunks = [] as GenerateResponseChunkData[];
-      for await (const chunk of stream) {
-        chunks.push(chunk);
+  it('defines a dynamic model', async () => {
+    let calledWithOptions: ActionFnArg<GenerateResponseChunkData> | undefined;
+    const testModel = model(
+      {
+        name: 'foo',
+      },
+      async (_, opts) => {
+        calledWithOptions = opts;
+        opts.sendChunk({
+          content: [{ text: 'success' }],
+        });
+        return GENERATE_RESPONSE;
       }
+    );
+    let response = await testModel({ messages: [] });
 
-      response = await output;
+    assert.ok(calledWithOptions!);
+    assert.strictEqual(
+      calledWithOptions.sendChunk,
+      sentinelNoopStreamingCallback
+    );
+    assert.strictEqual(calledWithOptions.streamingRequested, false);
+    delete response.latencyMs;
+    assert.deepStrictEqual(response, GENERATE_RESPONSE);
 
-      assert.ok(calledWithOptions!);
-      assert.ok(calledWithOptions.sendChunk);
-      assert.notStrictEqual(
-        calledWithOptions.sendChunk,
-        sentinelNoopStreamingCallback
-      );
-      assert.strictEqual(calledWithOptions.streamingRequested, true);
-      delete response.latencyMs;
-      assert.deepStrictEqual(response, GENERATE_RESPONSE);
-      assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
-    });
+    const { output, stream } = testModel.stream({ messages: [] });
 
-    it('defines a dynamic model', async () => {
-      let calledWithOptions: ActionFnArg<GenerateResponseChunkData> | undefined;
-      const testModel = model(
-        {
-          name: 'foo',
-        },
-        async (_, opts) => {
-          calledWithOptions = opts;
-          opts.sendChunk({
-            content: [{ text: 'success' }],
-          });
-          return GENERATE_RESPONSE;
-        }
-      );
-      let response = await testModel({ messages: [] });
+    const chunks = [] as GenerateResponseChunkData[];
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
 
-      assert.ok(calledWithOptions!);
-      assert.strictEqual(
-        calledWithOptions.sendChunk,
-        sentinelNoopStreamingCallback
-      );
-      assert.strictEqual(calledWithOptions.streamingRequested, false);
-      delete response.latencyMs;
-      assert.deepStrictEqual(response, GENERATE_RESPONSE);
+    response = await output;
 
-      const { output, stream } = testModel.stream({ messages: [] });
+    assert.ok(calledWithOptions!);
+    assert.ok(calledWithOptions.sendChunk);
+    assert.notStrictEqual(
+      calledWithOptions.sendChunk,
+      sentinelNoopStreamingCallback
+    );
+    assert.strictEqual(calledWithOptions.streamingRequested, true);
+    delete response.latencyMs;
+    assert.deepStrictEqual(response, GENERATE_RESPONSE);
+    assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
+  });
 
-      const chunks = [] as GenerateResponseChunkData[];
-      for await (const chunk of stream) {
-        chunks.push(chunk);
-      }
-
-      response = await output;
-
-      assert.ok(calledWithOptions!);
-      assert.ok(calledWithOptions.sendChunk);
-      assert.notStrictEqual(
-        calledWithOptions.sendChunk,
-        sentinelNoopStreamingCallback
-      );
-      assert.strictEqual(calledWithOptions.streamingRequested, true);
-      delete response.latencyMs;
-      assert.deepStrictEqual(response, GENERATE_RESPONSE);
-      assert.deepStrictEqual(chunks, [{ content: [{ text: 'success' }] }]);
-    });
+  it("does not mutate the caller's `use` array", () => {
+    const registry = new Registry();
+    const use: ModelMiddleware[] = [(req, next) => next(req)];
+    defineModel(registry, { name: 'a', use }, async () => GENERATE_RESPONSE);
+    defineModel(registry, { name: 'b', use }, async () => GENERATE_RESPONSE);
+    assert.strictEqual(use.length, 1);
   });
 });
 

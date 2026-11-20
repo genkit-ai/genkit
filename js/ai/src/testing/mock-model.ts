@@ -366,7 +366,6 @@ export function mockModel(
   const model = defineModel(
     resolveRegistry(registry),
     {
-      apiVersion: 'v2',
       name: options.name ?? 'mockModel',
       // Forward only the metadata fields defineModel accepts; ModelInfo's
       // `configSchema`/`stage` aren't part of DefineModelOptions.

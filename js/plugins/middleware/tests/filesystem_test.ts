@@ -16,7 +16,7 @@
 
 import * as assert from 'assert';
 import * as fs from 'fs/promises';
-import { genkit } from 'genkit';
+import { genkit, type Genkit } from 'genkit';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as os from 'os';
 import * as path from 'path';
@@ -40,17 +40,15 @@ describe('filesystem middleware', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  function createToolModel(ai: any, toolName: string, input: any) {
+  function createToolModel(ai: Genkit, toolName: string, input: unknown) {
     let turn = 0;
     return ai.defineModel(
       { name: `pm-${toolName}-${Math.random()}` },
-      async (_, sendChunk) => {
+      async (_, { sendChunk }) => {
         turn++;
         if (turn === 1) {
           const content = [{ toolRequest: { name: toolName, input } }];
-          if (sendChunk) {
-            sendChunk({ content });
-          }
+          sendChunk({ content });
 
           return {
             message: {
@@ -60,9 +58,7 @@ describe('filesystem middleware', () => {
           };
         }
         const content = [{ text: 'done' }];
-        if (sendChunk) {
-          sendChunk({ content });
-        }
+        sendChunk({ content });
         return { message: { role: 'model', content } };
       }
     );
@@ -652,7 +648,7 @@ describe('filesystem middleware image support', () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  function createToolModel(ai: any, toolName: string, input: any) {
+  function createToolModel(ai: Genkit, toolName: string, input: unknown) {
     let turn = 0;
     return ai.defineModel(
       { name: `pm-${toolName}-${Math.random()}` },

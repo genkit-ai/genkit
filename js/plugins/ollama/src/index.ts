@@ -235,7 +235,7 @@ function defineOllamaModel(
         tools: model.supports?.tools,
       },
     },
-    async (input, streamingCallback) => {
+    async (input, { streamingRequested, sendChunk }) => {
       const { topP, topK, stopSequences, maxOutputTokens, ...rest } =
         input.config as any;
       const options: Record<string, any> = { ...rest };
@@ -257,7 +257,7 @@ function defineOllamaModel(
         input,
         options,
         type,
-        !!streamingCallback
+        streamingRequested
       );
       logger.debug(request, `ollama request (${type})`);
 
@@ -298,7 +298,7 @@ function defineOllamaModel(
 
       let message: MessageData;
 
-      if (streamingCallback) {
+      if (streamingRequested) {
         const reader = res.body.getReader();
         const textDecoder = new TextDecoder();
         let textResponse = '';
@@ -307,7 +307,7 @@ function defineOllamaModel(
             const chunkText = textDecoder.decode(chunk);
             const json = JSON.parse(chunkText);
             const message = parseMessage(json, type);
-            streamingCallback({
+            sendChunk({
               index: 0,
               content: message.content,
             });

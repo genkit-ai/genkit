@@ -489,9 +489,9 @@ export function anthropicModel(
       supports: model.info?.supports,
       versions: model.info?.versions,
     },
-    async (input, sendChunk) => {
+    async (input, { streamingRequested, sendChunk }) => {
       const client = clientFactory(input.config?.location || region);
-      if (!sendChunk) {
+      if (!streamingRequested) {
         const response = await client.messages.create({
           ...toAnthropicRequest(input.config?.version ?? modelName, input),
           stream: false,
