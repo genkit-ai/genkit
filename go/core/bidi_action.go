@@ -210,10 +210,7 @@ func (b *BidiAction[In, Out, Stream, Init]) spanInitValue(init Init) any {
 // Experimental: bidirectional streaming is experimental and subject to change.
 func (b *BidiAction[In, Out, Stream, Init]) RunBidi(ctx context.Context, init Init, input In, cb StreamCallback[Stream]) (Out, error) {
 	r, err := b.Action.runWithTelemetry(ctx, input, cb, b.oneShotFn(init), b.spanInitValue(init))
-	if err != nil {
-		return base.Zero[Out](), err
-	}
-	return r.Result, nil
+	return r.Result, err
 }
 
 // RunBidiJSON runs the bidi action as a single one-shot call: input is

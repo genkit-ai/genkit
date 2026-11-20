@@ -361,6 +361,30 @@ func TestRunBidi(t *testing.T) {
 	}
 }
 
+// TestRunBidiPreservesPartialResult verifies that a one-shot call that fails
+// still returns what the function produced, like [Action.Run].
+func TestRunBidiPreservesPartialResult(t *testing.T) {
+	boom := errors.New("turn failed")
+	action := NewBidiActionOf(
+		api.ActionTypeCustom, "partial-oneshot", nil,
+		func(ctx context.Context, _ struct{}, inCh <-chan string, outCh chan<- string) (string, error) {
+			var out string
+			for in := range inCh {
+				out = in
+			}
+			return out, boom
+		},
+	)
+
+	got, err := action.RunBidi(context.Background(), struct{}{}, "partial result", nil)
+	if !errors.Is(err, boom) {
+		t.Errorf("RunBidi error = %v, want %v", err, boom)
+	}
+	if got != "partial result" {
+		t.Errorf("output = %q, want %q", got, "partial result")
+	}
+}
+
 // TestBidiActionInterfaceDetection verifies that registry lookups return
 // values whose api.BidiAction conformance matches the action kind: bidi
 // actions satisfy it (pinning the BidiAction.Register override, which must

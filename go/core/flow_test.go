@@ -18,6 +18,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -67,6 +68,52 @@ func TestRunFlow(t *testing.T) {
 	}
 	if want := 3; got != want {
 		t.Errorf("got %d, want %d", got, want)
+	}
+}
+
+func TestRunInFlowPreservesPartialResult(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(context.Context, string, func() (string, error)) (string, error)
+	}{
+		{"Run", Run[string]},
+		{"RunWithContext", func(ctx context.Context, name string, fn func() (string, error)) (string, error) {
+			return RunWithContext(ctx, name, func(context.Context) (string, error) { return fn() })
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := registry.New()
+			capture := tracingtest.Capture(t)
+			boom := errors.New("step failed")
+			var stepErr error
+			flow := defineFlow(r, "recover-partial", func(ctx context.Context, input string) (string, error) {
+				output, err := tc.run(ctx, "partial-step", func() (string, error) {
+					return input, boom
+				})
+				stepErr = err
+				return output, nil
+			})
+
+			const want = "partial result"
+			got, err := flow.Run(context.Background(), want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(stepErr, boom) {
+				t.Errorf("step error = %v, want %v", stepErr, boom)
+			}
+			if got != want {
+				t.Errorf("recovered flow output = %q, want %q", got, want)
+			}
+
+			step := capture.First("partial-step")
+			if step == nil {
+				t.Fatal("partial step span was not recorded")
+			}
+			if output, ok := tracingtest.Attr(step, "genkit:output"); !ok || output != `"partial result"` {
+				t.Errorf("step trace output = %q (present %v), want %q", output, ok, `"partial result"`)
+			}
+		})
 	}
 }
 
