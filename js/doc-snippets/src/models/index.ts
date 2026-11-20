@@ -94,9 +94,9 @@ function fn05() {
 
 async function fn06() {
   // [START ex08]
-  const { response, stream } = ai.generateStream(
-    'Suggest a complete menu for a pirate themed restaurant.'
-  );
+  const { response, stream } = ai.generateStream({
+    prompt: 'Suggest a complete menu for a pirate themed restaurant.',
+  });
   // [END ex08]
 
   // [START ex09]
@@ -142,10 +142,12 @@ async function fn07() {
 
 async function fn08() {
   // [START ex12]
-  const { text } = await ai.generate([
-    { media: { url: 'https://example.com/photo.jpg' } },
-    { text: 'Compose a poem about this image.' },
-  ]);
+  const { text } = await ai.generate({
+    prompt: [
+      { media: { url: 'https://example.com/photo.jpg' } },
+      { text: 'Compose a poem about this image.' },
+    ],
+  });
   // [END ex12]
 }
 
@@ -158,10 +160,12 @@ async function fn09() {
   const b64Data = await readFile('photo.jpg', { encoding: 'base64url' });
   const dataUrl = `data:image/jpeg;base64,${b64Data}`;
 
-  const { text } = await ai.generate([
-    { media: { url: dataUrl } },
-    { text: 'Compose a poem about this image.' },
-  ]);
+  const { text } = await ai.generate({
+    prompt: [
+      { media: { url: dataUrl } },
+      { text: 'Compose a poem about this image.' },
+    ],
+  });
   // [END ex13]
 }
 
