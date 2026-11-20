@@ -173,25 +173,48 @@ function toGeminiToolResponse(part: Part): GeminiPart {
       'Invalid ToolResponsePart: output or content must be provided.'
     );
   }
+  const { name, ref, output, content } = part.toolResponse!;
+  const { text, media } = splitToolResponseContent(name, content);
   const functionResponse: FunctionResponse = {
-    name: part.toolResponse!.name,
-    ...(part.toolResponse?.ref !== undefined
-      ? { id: part.toolResponse.ref }
-      : {}),
-    response: {
-      name: part.toolResponse!.name,
-      ...(part.toolResponse?.output !== undefined
-        ? { content: part.toolResponse.output }
-        : {}),
-    },
-    ...(part.toolResponse?.content !== undefined
-      ? { parts: part.toolResponse.content.map(toGeminiPart) }
-      : {}),
+    name,
+    ...(ref !== undefined ? { id: ref } : {}),
+    response: { name, ...toGeminiToolResult(output, text) },
+    ...(media.length ? { parts: media } : {}),
   };
 
   return maybeAddGeminiThoughtSignatureAndMetadata(part, {
     functionResponse,
   });
+}
+
+function toGeminiToolResult(output: unknown, text?: string): object {
+  return {
+    ...(output !== undefined ? { content: output } : {}),
+    ...(text !== undefined ? { text } : {}),
+  };
+}
+
+function splitToolResponseContent(
+  toolName: string,
+  content: Part[] | undefined
+): { text?: string; media: GeminiPart[] } {
+  const texts: string[] = [];
+  const media: GeminiPart[] = [];
+  for (const mapped of (content ?? []).map(toGeminiPart)) {
+    if (mapped.inlineData) {
+      media.push({ inlineData: mapped.inlineData });
+    } else if (mapped.fileData) {
+      media.push({ fileData: mapped.fileData });
+    } else if (typeof mapped.text === 'string' && !mapped.thought) {
+      if (mapped.text) texts.push(mapped.text);
+    } else {
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message: `Tool response content for ${toolName} may only contain text, media or resource parts.`,
+      });
+    }
+  }
+  return { text: texts.length ? texts.join('') : undefined, media };
 }
 
 function toGeminiResource(part: Part): GeminiPart {
@@ -650,6 +673,11 @@ function handleFunctionCallPartials(
   }
 }
 
+function isGeminiToolTextResult(response: Record<string, unknown>): boolean {
+  const keys = Object.keys(response);
+  return keys.length === 2 && 'text' in response;
+}
+
 function fromGeminiFunctionResponse(part: GeminiPart): Part {
   if (!part.functionResponse) {
     throw new Error(
@@ -657,15 +685,23 @@ function fromGeminiFunctionResponse(part: GeminiPart): Part {
     );
   }
 
-  let output: unknown = part.functionResponse.response;
-  if (isObject(output) && 'name' in output && 'content' in output) {
-    output = output.content;
+  const response = part.functionResponse.response;
+  let output: unknown = response;
+  let text: unknown;
+  if (
+    isObject(response) &&
+    'name' in response &&
+    ('content' in response || isGeminiToolTextResult(response))
+  ) {
+    output = response.content;
+    text = response.text;
   }
 
   const toolResponse: Part = {
     toolResponse: {
       name: part.functionResponse.name.replace(/__/g, '/'), // restore slashes
       output,
+      ...(typeof text === 'string' ? { content: [{ text }] } : {}),
     },
   };
   if (part.functionResponse.id) {
