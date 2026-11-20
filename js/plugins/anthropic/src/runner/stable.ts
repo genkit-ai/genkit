@@ -461,6 +461,8 @@ export class Runner extends BaseRunner<RunnerTypes> {
   }
 
   protected fromAnthropicResponse(response: Message): GenerateResponseData {
+    const cachedContentTokens = response.usage.cache_read_input_tokens;
+    const cacheWriteTokens = response.usage.cache_creation_input_tokens;
     return {
       candidates: [
         {
@@ -475,12 +477,16 @@ export class Runner extends BaseRunner<RunnerTypes> {
         },
       ],
       usage: {
-        inputTokens: response.usage.input_tokens,
+        inputTokens:
+          response.usage.input_tokens +
+          (cachedContentTokens ?? 0) +
+          (cacheWriteTokens ?? 0),
+        ...(cachedContentTokens != null && { cachedContentTokens }),
+        ...(cacheWriteTokens != null && { cacheWriteTokens }),
         outputTokens: response.usage.output_tokens,
         custom: {
-          cache_creation_input_tokens:
-            response.usage.cache_creation_input_tokens ?? 0,
-          cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: cacheWriteTokens ?? 0,
+          cache_read_input_tokens: cachedContentTokens ?? 0,
           ephemeral_5m_input_tokens:
             response.usage.cache_creation?.ephemeral_5m_input_tokens ?? 0,
           ephemeral_1h_input_tokens:

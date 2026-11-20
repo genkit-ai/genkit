@@ -420,6 +420,8 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
   }
 
   protected toGenkitResponse(message: BetaMessage): GenerateResponseData {
+    const cachedContentTokens = message.usage.cache_read_input_tokens;
+    const cacheWriteTokens = message.usage.cache_creation_input_tokens;
     return {
       candidates: [
         {
@@ -434,7 +436,12 @@ export class BetaRunner extends BaseRunner<BetaRunnerTypes> {
         },
       ],
       usage: {
-        inputTokens: message.usage.input_tokens,
+        inputTokens:
+          message.usage.input_tokens +
+          (cachedContentTokens ?? 0) +
+          (cacheWriteTokens ?? 0),
+        ...(cachedContentTokens != null && { cachedContentTokens }),
+        ...(cacheWriteTokens != null && { cacheWriteTokens }),
         outputTokens: message.usage.output_tokens,
       },
       custom: message,
