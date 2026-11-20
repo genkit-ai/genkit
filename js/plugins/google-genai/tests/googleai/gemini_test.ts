@@ -914,14 +914,13 @@ describe('Google AI Gemini', () => {
         );
       });
 
-      it('never sends thinkingBudget or contextCache (Interactions API)', async () => {
+      it('never sends thinkingBudget (Interactions API)', async () => {
         const model = defineModel('gemini-flash-latest', defaultPluginOptions);
         mockFetchResponse(defaultApiResponse);
         await model.run({
           ...minimalRequest,
           config: {
             thinkingConfig: { thinkingLevel: 'HIGH', thinkingBudget: 1024 },
-            contextCache: true,
           },
         });
 
@@ -1023,7 +1022,6 @@ describe('Google AI Gemini', () => {
           'audioFormat',
           'videoFormat',
           'thinkingConfig',
-          'contextCache',
           // Dropped with a warning (no `top_k` in generation_config).
           'topK',
           'toolConfig',

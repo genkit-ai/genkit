@@ -224,19 +224,6 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .union([z.boolean(), z.strictObject({})])
     .describe('Enables the model to generate and run code.')
     .optional(),
-  // TODO(v2): Remove. This plugin does not implement context caching, so this
-  // field has no effect (it is passed through on generateContent models and
-  // dropped with a warning on Interactions models, which reject it). Kept for
-  // now because removing it is a breaking change.
-  /** @deprecated Not implemented by this plugin. Will be removed in v2. */
-  contextCache: z
-    .boolean()
-    .describe(
-      'Context caching allows you to save and reuse precomputed input ' +
-        'tokens that you wish to use repeatedly. Not currently implemented ' +
-        'by this plugin.'
-    )
-    .optional(),
   functionCallingConfig: z
     .object({
       mode: z.enum(['MODE_UNSPECIFIED', 'AUTO', 'ANY', 'NONE']).optional(),

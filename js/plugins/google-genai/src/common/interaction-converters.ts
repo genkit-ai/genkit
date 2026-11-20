@@ -585,7 +585,6 @@ export function toInteractionSpeechConfig(
  *  - `thinkingConfig.thinkingLevel` / `includeThoughts` become
  *    `thinking_level` / `thinking_summaries`. There is no `thinking_config`,
  *    so other thinking fields (e.g. `thinkingBudget`) are dropped;
- *  - `contextCache` (not implemented by this plugin) is dropped;
  *  - `topK` is dropped: there's no `top_k` in the Interactions
  *    `generation_config` (Gemini Enterprise Agent Platform rejects it with a
  *    400; the Gemini API accepts and ignores it);
@@ -605,8 +604,6 @@ export function toInteractionGenerationConfig(
     speechConfig,
     thinkingConfig,
     thinking_config,
-    contextCache,
-    context_cache,
     topK,
     top_k,
     // Sent as `response_format` entries (see toInteractionResponseFormat).
@@ -636,10 +633,6 @@ export function toInteractionGenerationConfig(
         onDropped?.(`thinkingConfig.${key}`);
       }
     }
-  }
-
-  if (contextCache !== undefined || context_cache !== undefined) {
-    onDropped?.('contextCache');
   }
 
   if (topK !== undefined || top_k !== undefined) {

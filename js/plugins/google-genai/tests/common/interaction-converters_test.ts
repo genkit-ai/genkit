@@ -1161,16 +1161,6 @@ describe('Interaction Converters', () => {
       assert.deepStrictEqual(dropped, ['thinkingConfig.thinking_budget']);
     });
 
-    it('should drop contextCache and report it', () => {
-      const dropped: string[] = [];
-      const result = toInteractionGenerationConfig(
-        { contextCache: true, temperature: 0.5 },
-        (field) => dropped.push(field)
-      );
-      assert.deepStrictEqual(result, { temperature: 0.5 });
-      assert.deepStrictEqual(dropped, ['contextCache']);
-    });
-
     it('should drop topK (no top_k in generation_config) and report it', () => {
       // vertexAI rejects `top_k` with a 400 ("Unknown parameter 'top_k' at
       // 'generation_config'", seen live Oct 2026); the Gemini API ignores it.
