@@ -27,6 +27,7 @@ import (
 	"github.com/firebase/genkit/go/plugins/compat_oai/dashscope"
 	"github.com/firebase/genkit/go/plugins/compat_oai/deepseek"
 	"github.com/firebase/genkit/go/plugins/compat_oai/kimi"
+	"github.com/firebase/genkit/go/plugins/compat_oai/meta"
 	"github.com/firebase/genkit/go/plugins/compat_oai/openrouter"
 	"github.com/firebase/genkit/go/plugins/compat_oai/xai"
 	"github.com/firebase/genkit/go/plugins/compat_oai/zai"
@@ -60,6 +61,7 @@ func TestConfigSchemaConformance(t *testing.T) {
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("KIMI_API_KEY", "test-key")
+	t.Setenv("META_API_KEY", "test-key")
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	t.Setenv("XAI_API_KEY", "test-key")
 	t.Setenv("ZAI_API_KEY", "test-key")
@@ -79,6 +81,7 @@ func TestConfigSchemaConformance(t *testing.T) {
 		{&dashscope.DashScope{}, "qwen-plus"},
 		{&deepseek.DeepSeek{}, "deepseek-v4-pro"},
 		{&kimi.Kimi{}, "kimi-k3"},
+		{&meta.Meta{}, "muse-wonder-1.0"},
 		{&openrouter.OpenRouter{}, "openai/gpt-5"},
 		{&xai.XAI{}, "grok-4.5"},
 		{&zai.ZAI{}, "glm-5.1"},
@@ -171,6 +174,7 @@ func TestModelsOverrideConformance(t *testing.T) {
 	t.Setenv("DASHSCOPE_API_KEY", "test-key")
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("KIMI_API_KEY", "test-key")
+	t.Setenv("META_API_KEY", "test-key")
 	t.Setenv("XAI_API_KEY", "test-key")
 	t.Setenv("ZAI_API_KEY", "test-key")
 
@@ -185,6 +189,8 @@ func TestModelsOverrideConformance(t *testing.T) {
 		&deepseek.DeepSeek{Models: map[string]ai.ModelOptions{
 			"deepseek/deepseek-v4-pro": pinned}},
 		&kimi.Kimi{Models: map[string]ai.ModelOptions{"kimi-k3": pinned}},
+		&meta.Meta{Models: map[string]ai.ModelOptions{
+			"meta/muse-wonder-1.0": pinned}},
 		&xai.XAI{Models: map[string]ai.ModelOptions{"xai/grok-4.5": pinned}},
 		&zai.ZAI{Models: map[string]ai.ModelOptions{"glm-5.1": pinned}},
 	))
@@ -194,6 +200,7 @@ func TestModelsOverrideConformance(t *testing.T) {
 		"dashscope/qwen-plus",
 		"deepseek/deepseek-v4-pro",
 		"kimi/kimi-k3",
+		"meta/muse-wonder-1.0",
 		"xai/grok-4.5",
 		"zai/glm-5.1",
 	} {
@@ -234,6 +241,7 @@ func TestClosedEnumsUseNamedTypes(t *testing.T) {
 		"dashscope":  dashscope.ChatConfig{},
 		"deepseek":   deepseek.ChatConfig{},
 		"kimi":       kimi.ChatConfig{},
+		"meta":       meta.ChatConfig{},
 		"openrouter": openrouter.ChatConfig{},
 		"xai":        xai.ChatConfig{},
 		"zai":        zai.ChatConfig{},
