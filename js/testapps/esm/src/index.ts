@@ -31,9 +31,9 @@ import {
   vertexAI as newVertexAI,
 } from '@genkit-ai/google-genai';
 import {
-  createMcpClient,
-  createMcpHost,
   createMcpServer,
+  defineMcpClient,
+  defineMcpHost,
 } from '@genkit-ai/mcp';
 import { appRoute } from '@genkit-ai/next';
 import { vertexAI } from '@genkit-ai/vertexai';
@@ -65,9 +65,9 @@ pinecone;
 chroma;
 devLocalVectorstore;
 genkitEval;
-createMcpClient;
+defineMcpClient;
 createMcpServer;
-createMcpHost;
+defineMcpHost;
 PostgresEngine;
 postgres;
 postgresRetrieverRef;

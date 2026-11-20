@@ -125,8 +125,11 @@ export type McpClientOptionsWithCache<M extends boolean = false> =
  * It handles the lifecycle of the connection (connect, disconnect, disable, re-enable, reconnect)
  * and provides methods to fetch tools from the connected server.
  *
- * An instance of `GenkitMcpClient` is typically managed by a `GenkitMcpHost`
- * when dealing with multiple MCP server connections.
+ * Usually created with `defineMcpClient`, or managed by a `GenkitMcpHost` when
+ * dealing with multiple MCP server connections. Constructing it directly gives
+ * a client that is not registered with any Genkit instance, which suits
+ * short-lived connections (e.g. per request): `defineMcpClient` would register
+ * a new dynamic action provider under the same name on every call.
  */
 export class GenkitMcpClient<Multipart extends boolean = false> {
   _server?: McpServerRef;

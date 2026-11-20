@@ -48,54 +48,34 @@ export interface McpServerOptions {
 }
 
 /**
- * Creates an MCP Client Host that connects to one or more MCP servers.
- * Each server is defined in the `mcpClients` option, where the key is a
+ * Defines an MCP Client Host that connects to one or more MCP servers.
+ * Each server is defined in the `mcpServers` option, where the key is a
  * client-side name for the server and the value is the server's configuration.
  *
  * By default, all servers in the config will be attempted to connect unless
  * their configuration includes `{disabled: true}`.
  *
+ * The host is registered with `ai` as a dynamic action provider named
+ * `options.name`, so its tools and resources can be referenced by name (e.g.
+ * `'my-mcp-host:tool/*'`) in addition to being passed in directly.
+ *
  * ```ts
- * const clientHost = createMcpHost({
- *   name: "my-mcp-client-host", // Name for the host itself
+ * const mcpHost = defineMcpHost(ai, {
+ *   name: 'my-mcp-host',
  *   mcpServers: {
- *     // Each key is a name for this client/server configuration
- *     // Each value is an McpServerConfig object
- *     gitToolServer: { command: "uvx", args: ["mcp-server-git"] },
- *     customApiServer: { url: "http://localhost:1234/mcp" }
- *   }
+ *     // Each key becomes the namespace of that server's tools.
+ *     git: { command: 'uvx', args: ['mcp-server-git'] },
+ *     customApi: { url: 'http://localhost:1234/mcp' },
+ *   },
+ * });
+ *
+ * await ai.generate({
+ *   prompt: '<a prompt requiring tools>',
+ *   tools: ['my-mcp-host:tool/*'], // or: await mcpHost.getActiveTools(ai)
  * });
  * ```
  *
- * @param options Configuration for the MCP Client Host, including the definitions of MCP servers to connect to.
- * @returns A new instance of GenkitMcpHost.
- */
-export function createMcpHost<M extends boolean = false>(
-  options: McpHostOptions<M>
-) {
-  return new GenkitMcpHost<M>(options);
-}
-
-/**
- * Creates an MCP Client Host that connects to one or more MCP servers.
- * Each server is defined in the `mcpClients` option, where the key is a
- * client-side name for the server and the value is the server's configuration.
- *
- * By default, all servers in the config will be attempted to connect unless
- * their configuration includes `{disabled: true}`.
- *
- * ```ts
- * const clientHost = defineMcpHost(ai, {
- *   name: "my-mcp-client-host", // Name for the host itself
- *   mcpServers: {
- *     // Each key is a name for this client/server configuration
- *     // Each value is an McpServerConfig object
- *     gitToolServer: { command: "uvx", args: ["mcp-server-git"] },
- *     customApiServer: { url: "http://localhost:1234/mcp" }
- *   }
- * });
- * ```
- *
+ * @param ai The Genkit instance to register the host with.
  * @param options Configuration for the MCP Client Host, including the definitions of MCP servers to connect to.
  * @returns A new instance of GenkitMcpHost.
  */
@@ -121,53 +101,30 @@ export function defineMcpHost<M extends boolean = false>(
 }
 
 /**
- * Creates an MCP Client that connects to a single MCP server.
- * This is useful when you only need to interact with one MCP server,
- * or if you want to manage client instances individually.
- *
- * ```ts
- * const client = createMcpClient({
- *   name: "mySingleMcpClient", // A name for this client instance
- *   command: "npx", // Example: Launching a local server
- *   args: ["-y", "@modelcontextprotocol/server-everything", "/path/to/allowed/dir"],
- * });
- *
- * // To get tools from this client:
- * // const tools = await client.getActiveTools(ai);
- * ```
- *
- * @param options Configuration for the MCP Client, defining how it connects
- *                to the MCP server and its behavior.
- * @returns A new instance of GenkitMcpClient.
- */
-export function createMcpClient<M extends boolean = false>(
-  options: McpClientOptions<M>
-) {
-  return new GenkitMcpClient<M>(options);
-}
-
-/**
  * Defines an MCP Client that connects to a single MCP server.
  * This is useful when you only need to interact with one MCP server,
  * or if you want to manage client instances individually.
  *
+ * The client is registered with `ai` as a dynamic action provider named
+ * `options.name`, so its tools and resources can be referenced by name (e.g.
+ * `'my-mcp-client:tool/*'`) in addition to being passed in directly.
+ *
  * ```ts
- * const client = defineMcpClient(ai, {
- *   name: "mySingleMcpClient", // A name for this client instance
- *   command: "npx", // Example: Launching a local server
- *   args: ["-y", "@modelcontextprotocol/server-everything", "/path/to/allowed/dir"],
+ * const mcpClient = defineMcpClient(ai, {
+ *   name: 'my-mcp-client',
+ *   mcpServer: {
+ *     command: 'npx',
+ *     args: ['-y', '@modelcontextprotocol/server-everything'],
+ *   },
  * });
  *
- * // To get tools from this client:
- * // const tools = await client.getActiveTools(ai);
- *
- * // Or in a generate call you can use:
- * ai.generate({
-    prompt: `<a prompt requiring tools>`,
-    tools: ['mySingleMcpClient:tool/*'],
-  });
+ * await ai.generate({
+ *   prompt: '<a prompt requiring tools>',
+ *   tools: ['my-mcp-client:tool/*'], // or: await mcpClient.getActiveTools(ai)
+ * });
  * ```
  *
+ * @param ai The Genkit instance to register the client with.
  * @param options Configuration for the MCP Client, defining how it connects
  *                to the MCP server and its behavior.
  * @returns A new instance of GenkitMcpClient.

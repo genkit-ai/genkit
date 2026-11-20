@@ -348,14 +348,15 @@ export class GenkitMcpHost<Multipart extends boolean = false> {
    * not disabled, it calls the client's `getTools` method to fetch its
    * available tools. These are then aggregated into a single array.
    *
-   * This is useful for dynamically providing a list of all available MCP tools
-   * to Genkit, for example, when setting up a Genkit plugin.
+   * The returned tools are not registered with Genkit and can be passed
+   * directly to `generate`.
    *
    * ```ts
-   * const mcpHost = createMcpHost({ ... });
-   * // In your Genkit configuration:
-   * // const allMcpTools = await McpHost.getActiveTools(ai);
-   * // Then, these tools can be used or registered with Genkit.
+   * const mcpHost = defineMcpHost(ai, { ... });
+   * const { text } = await ai.generate({
+   *   prompt: '...',
+   *   tools: await mcpHost.getActiveTools(ai),
+   * });
    * ```
    *
    * @param ai The Genkit instance, used by individual clients to define dynamic
