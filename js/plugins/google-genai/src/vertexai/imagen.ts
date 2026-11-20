@@ -15,13 +15,7 @@
  */
 
 import { ActionMetadata, modelActionMetadata, z } from 'genkit';
-import {
-  GenerationCommonConfigSchema,
-  ModelAction,
-  ModelInfo,
-  ModelReference,
-  modelRef,
-} from 'genkit/model';
+import { ModelAction, ModelInfo, ModelReference, modelRef } from 'genkit/model';
 import { model as pluginModel } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import { isKnownKey } from '../common/utils.js';
@@ -38,10 +32,14 @@ import {
 /**
  * See https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/imagen-api.
  */
-export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
-  // TODO: Remove common config schema extension since Imagen models don't support
-  // most of the common config parameters. Also, add more parameters like sampleCount
-  // from the above reference.
+export const ImagenConfigSchema = z.looseObject({
+  // TODO: Add more parameters like sampleCount from the above reference.
+  apiKey: z
+    .string()
+    .describe(
+      'API Key to use for the model call, overrides API key provided in plugin config.'
+    )
+    .optional(),
   language: z
     .enum(['auto', 'en', 'es', 'hi', 'ja', 'ko', 'pt', 'zh-TW', 'zh', 'zh-CN'])
     .describe('Language of the prompt text.')
@@ -168,7 +166,7 @@ export const ImagenConfigSchema = GenerationCommonConfigSchema.extend({
     .passthrough()
     .describe('Configuration for upscaling.')
     .optional(),
-}).passthrough();
+});
 export type ImagenConfigSchemaType = typeof ImagenConfigSchema;
 export type ImagenConfig = InferOutput<ImagenConfigSchemaType>;
 

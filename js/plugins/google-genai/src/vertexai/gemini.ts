@@ -29,8 +29,6 @@ import {
   GenerateRequest,
   GenerateResponseChunkData,
   GenerateResponseData,
-  GenerationCommonConfigDescriptions,
-  GenerationCommonConfigSchema,
   MessageData,
   ModelAction,
   ModelInfo,
@@ -172,7 +170,46 @@ const GoogleSearchRetrievalSchema = z
  * Zod schema of Gemini model options.
  * Please refer to: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#generationconfig, for further information.
  */
-export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
+export const GeminiConfigSchema = z.looseObject({
+  version: z
+    .string()
+    .describe('A specific version of a model family, e.g. `gemini-3.6-flash`.')
+    .optional(),
+  temperature: z
+    .number()
+    .min(0.0)
+    .max(2.0)
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results. The default value is 1.0.'
+    )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
+    .optional(),
+  topK: z
+    .number()
+    .describe('The maximum number of tokens to consider when sampling.')
+    .optional(),
+  topP: z
+    .number()
+    .min(0)
+    .max(1.0)
+    .describe(
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse. The default value is 0.95.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
+    )
+    .optional(),
   apiKey: z
     .string()
     .describe('Overrides the plugin-configured API key, if specified.')
@@ -187,23 +224,6 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     .record(z.string(), z.string())
     .optional()
     .describe('Key-value labels to attach to the request for cost tracking.'),
-  temperature: z
-    .number()
-    .min(0.0)
-    .max(2.0)
-    .describe(
-      GenerationCommonConfigDescriptions.temperature +
-        ' The default value is 1.0.'
-    )
-    .optional(),
-  topP: z
-    .number()
-    .min(0)
-    .max(1.0)
-    .describe(
-      GenerationCommonConfigDescriptions.topP + ' The default value is 0.95.'
-    )
-    .optional(),
   location: z
     .string()
     .describe('Google Cloud region e.g. us-central1.')
@@ -401,7 +421,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
     })
     .passthrough()
     .optional(),
-}).passthrough();
+});
 export type GeminiConfigSchemaType = typeof GeminiConfigSchema;
 /**
  * Gemini model configuration options.

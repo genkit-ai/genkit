@@ -182,7 +182,7 @@ console.log(result.text);
 ### Custom models & other Cloud providers
 
 ```typescript
-import { GenerationCommonConfigSchema, genkit, z } from 'genkit';
+import { genkit, z } from 'genkit';
 import { ModelInfo } from 'genkit/model';
 import openAI from '@genkit-ai/compat-oai';
 
@@ -196,7 +196,16 @@ const modelInfo: ModelInfo = {
     output: ['json', 'text'],
   },
 };
-const schema = GenerationCommonConfigSchema.extend({});
+// Only list config the model actually supports. `.passthrough()` forwards any
+// other keys to the Chat Completions request body as-is.
+const schema = z
+  .object({
+    version: z.string().optional(),
+    temperature: z.number().min(0).max(1).optional(),
+    topP: z.number().optional(),
+    stopSequences: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 const ai = genkit({
   plugins: [

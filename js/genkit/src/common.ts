@@ -25,7 +25,6 @@ export {
   GenerateResponseChunk,
   GenerationAbortedError,
   GenerationBlockedError,
-  GenerationCommonConfigSchema,
   GenerationResponseError,
   LlmResponseSchema,
   LlmStatsSchema,

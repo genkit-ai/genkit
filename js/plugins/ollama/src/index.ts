@@ -29,8 +29,6 @@ import {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import {
-  GenerationCommonConfigDescriptions,
-  GenerationCommonConfigSchema,
   getBasicUsageStats,
   modelRef,
   type GenerateRequest,
@@ -190,22 +188,28 @@ async function listLocalModels(
 
 /**
  * Please refer to: https://github.com/ollama/ollama/blob/main/docs/modelfile.md
- * for further information.
+ * for further information. Unknown keys are forwarded as-is to the Ollama
+ * `options` object.
  */
-export const OllamaConfigSchema = GenerationCommonConfigSchema.extend({
+export const OllamaConfigSchema = z.looseObject({
   temperature: z
     .number()
     .min(0.0)
     .max(1.0)
     .describe(
-      GenerationCommonConfigDescriptions.temperature +
-        ' The default value is 0.8.'
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results. The default value is 0.8.'
     )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
     .optional(),
   topK: z
     .number()
     .describe(
-      GenerationCommonConfigDescriptions.topK + ' The default value is 40.'
+      'The maximum number of tokens to consider when sampling. The default value is 40.'
     )
     .optional(),
   topP: z
@@ -213,7 +217,16 @@ export const OllamaConfigSchema = GenerationCommonConfigSchema.extend({
     .min(0)
     .max(1.0)
     .describe(
-      GenerationCommonConfigDescriptions.topP + ' The default value is 0.9.'
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse. The default value is 0.9.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
     )
     .optional(),
 });
