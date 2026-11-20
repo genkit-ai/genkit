@@ -79,7 +79,10 @@ export function streamFlow<O = any, S = any, Init = any>({
   });
   operationPromise.then(
     () => channel.close(),
-    (err) => channel.error(err)
+    (err) => {
+      streamIdTask.resolve(null);
+      channel.error(err);
+    }
   );
 
   return {
