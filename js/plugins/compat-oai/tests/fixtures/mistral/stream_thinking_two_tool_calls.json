@@ -1,0 +1,657 @@
+[
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "role": "assistant",
+          "content": ""
+        },
+        "finish_reason": null
+      }
+    ]
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": "The user is asking"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwxyz01234567"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " for the weather in"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwxyz01"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " two"
+                }
+              ]
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefg"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " cities: Paris and"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "ab"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " London. They specifically"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmn"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " want me to call"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrst"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " the tool once for"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghij"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " each city. I"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstu"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " need"
+                }
+              ]
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwxyz012345678"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " to make"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwxyz012"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " two separate function"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijkl"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " calls to get_"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwx"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": "weather,"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwxyz0"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " one for Paris"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrs"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " and one for London"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdef"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": ".\n\nSince these"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcd"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " are independent calls ("
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "a"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": "no dependencies between them"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmno"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": "), I can make"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcdefghijklmnopqrstuvwxyz0123456789"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " both calls in the"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "abcd"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " same function_calls"
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "ab"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": [
+                {
+                  "type": "text",
+                  "text": " block."
+                }
+              ],
+              "closed": true
+            }
+          ]
+        },
+        "finish_reason": null
+      }
+    ],
+    "p": "a"
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935451,
+    "model": "mistral-large-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\": \"Paris\"}"
+              },
+              "index": 0
+            },
+            {
+              "id": "call_2",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\": \"London\"}"
+              },
+              "index": 1
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 94,
+      "total_tokens": 191,
+      "completion_tokens": 97,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 72
+      },
+      "service_tier": "standard"
+    },
+    "p": "abcdefghijkl"
+  }
+]
