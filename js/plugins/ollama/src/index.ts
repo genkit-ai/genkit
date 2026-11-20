@@ -349,21 +349,24 @@ function parseMessage(response: any, type: ApiType): MessageData {
   if (type === 'chat') {
     // Tool calling is available only on the 'chat' API, not on 'generate'
     // https://github.com/ollama/ollama/blob/main/docs/api.md#chat-request-with-tools
-    if (response.message.tool_calls && response.message.tool_calls.length > 0) {
-      return {
-        role: toGenkitRole(response.message.role),
-        content: toGenkitToolRequest(response.message.tool_calls),
-      };
-    } else {
-      return {
-        role: toGenkitRole(response.message.role),
-        content: [
-          {
-            text: response.message.content,
-          },
-        ],
-      };
+    const content: MessageData['content'] = [];
+    if (response.message.content) {
+      content.push({
+        text: response.message.content,
+      });
     }
+    if (response.message.tool_calls && response.message.tool_calls.length > 0) {
+      content.push(...toGenkitToolRequest(response.message.tool_calls));
+    }
+    if (content.length === 0) {
+      content.push({
+        text: response.message.content ?? '',
+      });
+    }
+    return {
+      role: toGenkitRole(response.message.role),
+      content,
+    };
   } else {
     return {
       role: 'model',
@@ -450,7 +453,7 @@ function toOllamaRequest(
       } else {
         messages.push({
           role: role,
-          content: toolRequests.length > 0 ? '' : messageText,
+          content: messageText,
           images: images.length > 0 ? images : undefined,
           tool_calls:
             toolRequests.length > 0
