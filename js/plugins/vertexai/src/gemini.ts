@@ -38,8 +38,6 @@ import {
 import { ApiClient } from '@google-cloud/vertexai/build/src/resources/index.js';
 import { GenkitError, z, type Genkit, type JSONSchema } from 'genkit';
 import {
-  GenerationCommonConfigDescriptions,
-  GenerationCommonConfigSchema,
   getBasicUsageStats,
   modelRef,
   type CandidateData,
@@ -137,22 +135,44 @@ const GoogleSearchRetrievalSchema = z.object({
  * Please refer to: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference#generationconfig, for further information.
  * @deprecated
  */
-export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
+export const GeminiConfigSchema = z.looseObject({
+  version: z
+    .string()
+    .describe('A specific version of a model family, e.g. `gemini-3.6-flash`.')
+    .optional(),
   temperature: z
     .number()
     .min(0.0)
     .max(2.0)
     .describe(
-      GenerationCommonConfigDescriptions.temperature +
-        ' The default value is 1.0.'
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results. The default value is 1.0.'
     )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
+    .optional(),
+  topK: z
+    .number()
+    .describe('The maximum number of tokens to consider when sampling.')
     .optional(),
   topP: z
     .number()
     .min(0)
     .max(1.0)
     .describe(
-      GenerationCommonConfigDescriptions.topP + ' The default value is 0.95.'
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse. The default value is 0.95.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
     )
     .optional(),
   location: z
@@ -284,7 +304,7 @@ export const GeminiConfigSchema = GenerationCommonConfigSchema.extend({
         .optional(),
     })
     .optional(),
-}).passthrough();
+});
 
 /**
  * Known model names, to allow code completion for convenience. Allows other model names.

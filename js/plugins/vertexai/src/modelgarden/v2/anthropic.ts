@@ -42,7 +42,6 @@ import {
   type Part,
 } from 'genkit';
 import {
-  GenerationCommonConfigSchema,
   ModelInfo,
   getBasicUsageStats,
   modelRef,
@@ -89,7 +88,38 @@ export const ThinkingConfigSchema = z
     }
   });
 
-export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
+export const AnthropicConfigSchema = z.looseObject({
+  temperature: z
+    .number()
+    .describe(
+      'Controls the degree of randomness in token selection. A lower value is ' +
+        'good for a more predictable response. A higher value leads to more ' +
+        'diverse or unexpected results.'
+    )
+    .optional(),
+  maxOutputTokens: z
+    .number()
+    .describe('The maximum number of tokens to include in the response.')
+    .optional(),
+  topK: z
+    .number()
+    .describe('The maximum number of tokens to consider when sampling.')
+    .optional(),
+  topP: z
+    .number()
+    .describe(
+      'Decides how many possible words to consider. A higher value means ' +
+        'that the model looks at more possible words, even the less likely ' +
+        'ones, which makes the generated text more diverse.'
+    )
+    .optional(),
+  stopSequences: z
+    .array(z.string())
+    .max(5)
+    .describe(
+      'Set of character sequences (up to 5) that will stop output generation.'
+    )
+    .optional(),
   location: z.string().optional(),
   thinking: ThinkingConfigSchema.optional().describe(
     'The thinking configuration to use for the request. Thinking is a feature that allows the model to think about the request and provide a better response.'
@@ -103,7 +133,7 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
       'Configuration for output generation, such as setting the effort parameter.'
     )
     .optional(),
-}).passthrough();
+});
 export type AnthropicConfigSchemaType = typeof AnthropicConfigSchema;
 export type AnthropicConfig = InferOutput<AnthropicConfigSchemaType>;
 
@@ -284,6 +314,8 @@ export function toAnthropicRequest(
   }
   const {
     location,
+    // Not in the schema (the model name always comes from the model ref), but
+    // still stripped so it isn't forwarded to the API.
     version,
     maxOutputTokens,
     stopSequences,
