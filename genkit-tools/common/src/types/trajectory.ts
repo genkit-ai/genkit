@@ -41,8 +41,7 @@ export type TrajectoryStatus = z.infer<typeof TrajectoryStatusSchema>;
  */
 export const TrajectoryActionSchema = z.object({
   /**
-   * Unique identifier for this action within the step. Set to `toolRequest.ref`
-   * (the model's tool call ID) when present, otherwise `<modelSpanId>-action-<1-based index>`.
+   * Unique identifier for this action within the step (e.g., the model's tool call ID when available).
    */
   actionId: z.string(),
   /**
@@ -65,12 +64,12 @@ export const TrajectoryActionSchema = z.object({
   endTime: z.number().optional(),
   /**
    * For `'subagent'` actions, the `trajectoryId` of the delegated child trajectory
-   * in `TrajectoryBundle.trajectories` (set to the child subagent span's `spanId`).
+   * in `TrajectoryBundle.trajectories`.
    */
   subtrajectoryId: z.string().optional(),
   /**
    * Interrupt metadata payload when this action triggered a human-in-the-loop
-   * interrupt (`status: 'interrupted'`).
+   * interrupt (while `status` is `'interrupted'` or after `resume` resolves it).
    */
   interrupt: z.unknown().optional(),
   resume: z
@@ -88,20 +87,13 @@ export type TrajectoryAction = z.infer<typeof TrajectoryActionSchema>;
  * Zod schema for a single chronological step in an agent or model trajectory.
  */
 export const TrajectoryStepSchema = z.object({
-  /**
-   * Unique identifier for this step, formatted as `<spanId>-<1-based per-span index>`
-   * (e.g. `<spanId>-1`, `<spanId>-2`).
-   */
+  /** Unique identifier for this step within the trajectory. */
   stepId: z.string(),
   /** 1-based sequential index of this step within its `Trajectory.steps` array. */
   stepNumber: z.number(),
-  /** `traceId` of the `TraceData` from which this step was extracted. */
+  /** `traceId` of the source `TraceData`, when extracted from a trace. */
   traceId: z.string().optional(),
-  /**
-   * Source span's `spanId`: the model execution span for `'agent'` steps, or the
-   * enclosing `runTurn-<N>` span (falling back to the model/scope span) for `'user'`
-   * and `'system'` input steps.
-   */
+  /** `spanId` of the source span, when extracted from a trace. */
   spanId: z.string().optional(),
   turnIndex: z.number().optional(),
   source: z.enum(['user', 'agent', 'system']),
@@ -124,8 +116,6 @@ export type TrajectoryStep = z.infer<typeof TrajectoryStepSchema>;
 export const TrajectorySchema = z.object({
   /**
    * Unique identifier for this trajectory (and its key in `TrajectoryBundle.trajectories`).
-   * Set to `trace.traceId` (or `'root'` if empty) for the root trajectory, and to the
-   * subagent root span's `spanId` for nested subagent trajectories.
    */
   trajectoryId: z.string(),
   /**
@@ -153,13 +143,11 @@ export type Trajectory = z.infer<typeof TrajectorySchema>;
  */
 export const TrajectoryBundleSchema = z.object({
   /**
-   * Key in `trajectories` for the top-level trajectory, set to `trace.traceId`
-   * (or `'root'` if `traceId` is empty).
+   * Key in `trajectories` for the top-level trajectory.
    */
   rootTrajectoryId: z.string(),
   /**
-   * Session identifier extracted from the shallowest span attribute
-   * `genkit:metadata:agent:sessionId` or `session.id`, if present.
+   * Session identifier for this trajectory bundle, if present.
    */
   sessionId: z.string().optional(),
   /**
