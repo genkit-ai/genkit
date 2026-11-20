@@ -293,9 +293,9 @@ func TestRequestShapingErrorsAreNotRetryable(t *testing.T) {
 			},
 		},
 		{
-			name: "schema missing type",
+			name: "schema enum with no string values",
 			call: func() error {
-				_, err := toGeminiSchema(map[string]any{}, map[string]any{"description": "no type"})
+				_, err := toGeminiSchema(map[string]any{}, map[string]any{"enum": []any{42}})
 				return err
 			},
 		},
