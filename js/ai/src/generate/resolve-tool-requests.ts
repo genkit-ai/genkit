@@ -79,7 +79,13 @@ function toRunOptions(
   part: ToolRequestPart,
   options?: ToolResolveOptions
 ): ToolRunOptions {
-  const out: ToolRunOptions = { metadata: part.metadata };
+  const out: ToolRunOptions = {
+    metadata: part.metadata,
+    toolRequest: stripUndefinedProps({
+      name: part.toolRequest.name,
+      ref: part.toolRequest.ref,
+    }),
+  };
   if (part.metadata?.resumed) out.resumed = part.metadata.resumed;
   if (options?.abortSignal) out.abortSignal = options.abortSignal;
   return out;

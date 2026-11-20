@@ -397,9 +397,127 @@ describe('resolveResumeOption', () => {
     assert.strictEqual(content[1].metadata.interrupt, undefined);
     assert.strictEqual(content[1].metadata.resolvedInterrupt, true);
   });
+
+  it('passes toolRequest { name, ref } to a restartable tool on initial execution and on restart', async () => {
+    const registry = new Registry();
+    registry.apiStability = 'beta';
+    const seen: Array<{
+      toolRequest: unknown;
+      resumed: unknown;
+    }> = [];
+    const restartableTool = defineTool(
+      registry,
+      {
+        name: 'transferMoney',
+        description: 'transfers money',
+        inputSchema: z.object({ amount: z.number() }),
+        outputSchema: z.string(),
+      },
+      async (_input, options) => {
+        seen.push({
+          toolRequest: options.toolRequest,
+          resumed: options.resumed,
+        });
+        if (!options.resumed) {
+          options.interrupt({ confirm: true });
+        }
+        return 'transferred';
+      }
+    );
+
+    const { revisedModelMessage } = await resolveToolRequests(
+      { messages: [] } as any,
+      {
+        role: 'model',
+        content: [
+          {
+            toolRequest: {
+              name: 'transferMoney',
+              ref: 'call_1',
+              input: { amount: 100 },
+            },
+          },
+        ],
+      },
+      [restartableTool]
+    );
+
+    assert.ok(revisedModelMessage);
+    const interruptPart = revisedModelMessage.content[0] as any;
+    assert.deepStrictEqual(interruptPart.metadata?.interrupt, {
+      confirm: true,
+    });
+
+    const resumed = await resolveResumeOption(
+      registry,
+      {
+        messages: [
+          { role: 'user', content: [{ text: 'transfer' }] },
+          revisedModelMessage,
+        ],
+        resume: {
+          restart: [
+            restartableTool.restart(interruptPart, { status: 'APPROVED' }),
+          ],
+        },
+      } as any,
+      [restartableTool]
+    );
+
+    assert.strictEqual(
+      (resumed.toolMessage?.content[0] as any).toolResponse.output,
+      'transferred'
+    );
+    assert.deepStrictEqual(seen, [
+      {
+        toolRequest: { name: 'transferMoney', ref: 'call_1' },
+        resumed: undefined,
+      },
+      {
+        toolRequest: { name: 'transferMoney', ref: 'call_1' },
+        resumed: { status: 'APPROVED' },
+      },
+    ]);
+  });
 });
 
 describe('resolveToolRequests', () => {
+  it('passes toolRequest { name, ref } in tool options and omits ref when undefined', async () => {
+    const registry = new Registry();
+    const seen: unknown[] = [];
+    const echoTool = defineTool(
+      registry,
+      {
+        name: 'echoTool',
+        description: 'echo tool',
+        inputSchema: z.object({}),
+        outputSchema: z.string(),
+      },
+      async (_input, options) => {
+        seen.push(options.toolRequest);
+        return 'ok';
+      }
+    );
+
+    await resolveToolRequests(
+      { messages: [] } as any,
+      {
+        role: 'model',
+        content: [
+          { toolRequest: { name: 'echoTool', ref: 'call_1', input: {} } },
+          { toolRequest: { name: 'echoTool', input: {} } },
+        ],
+      },
+      [echoTool]
+    );
+
+    assert.deepStrictEqual(seen, [
+      { name: 'echoTool', ref: 'call_1' },
+      { name: 'echoTool' },
+    ]);
+    assert.strictEqual('ref' in (seen[1] as Record<string, unknown>), false);
+  });
+
   it('emits tool responses in request order', async () => {
     const registry = new Registry();
     const slowTool = defineTool(

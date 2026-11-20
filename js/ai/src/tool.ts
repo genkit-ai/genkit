@@ -152,6 +152,8 @@ export interface ToolRunOptions extends ActionRunOptions<z.ZodTypeAny> {
   resumed?: boolean | Record<string, any>;
   /** The metadata from the tool request that triggered this run. */
   metadata?: Record<string, any>;
+  /** The tool request descriptor (name and optional ref) that triggered this run. */
+  toolRequest?: { name: string; ref?: string };
 }
 
 /**
