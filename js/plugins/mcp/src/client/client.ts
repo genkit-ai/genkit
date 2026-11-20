@@ -117,6 +117,14 @@ export type McpClientOptions<M extends boolean = false> = {
 
 export type McpClientOptionsWithCache<M extends boolean = false> =
   McpClientOptions<M> & {
+    /**
+     * Cache TTL for the list of actions served by the client's dynamic action
+     * provider. The cache is invalidated automatically when the connection
+     * changes.
+     *   Negative = no caching (expect noisy traces and slower resolution)
+     *   Zero or undefined = use the default 3000 millis (3 seconds)
+     *   Positive: The number of milliseconds to keep the cache.
+     */
     cacheTtlMillis?: number;
   };
 

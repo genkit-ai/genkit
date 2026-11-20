@@ -76,7 +76,7 @@ const mcpHost = defineMcpHost(ai, {
 -   **`name`**: (required, string) A name for the MCP host. It is advertised to MCP servers as the client name and is used to reference the host's tools and resources (e.g. `myMcpClients:tool/*`).
 -   **`version`**: (optional, string) The version of the MCP host. Defaults to "1.0.0".
 -   **`rawToolResponses`**: (optional, boolean) When `true`, tool responses are returned in their raw MCP format; otherwise, they are processed for Genkit compatibility. Defaults to `false`.
--   **`cacheTTLMillis`**: (optional, number) How long the list of available actions is cached. Defaults to 3000. Negative values disable caching. The cache is invalidated whenever a connection changes.
+-   **`cacheTtlMillis`**: (optional, number) How long the list of available actions is cached. Defaults to 3000. Negative values disable caching. The cache is invalidated whenever a connection changes.
 -   **`mcpServers`**: (optional, object) An object where each key is a client-side name (namespace) for an MCP server, and the value is the configuration for that server. Servers can also be added later with `mcpHost.connect(name, config)`.
 
     Each server configuration object can include:

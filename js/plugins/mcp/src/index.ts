@@ -88,7 +88,7 @@ export function defineMcpHost<M extends boolean = false>(
     {
       name: options.name,
       cacheConfig: {
-        ttlMillis: options.cacheTTLMillis,
+        ttlMillis: options.cacheTtlMillis,
       },
     },
     async () => ({

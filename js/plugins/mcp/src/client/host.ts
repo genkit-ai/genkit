@@ -80,7 +80,7 @@ export type McpHostOptionsWithCache<M extends boolean = false> = Omit<
    *   Zero or undefined = use the default 3000 millis (3 seconds)
    *   Positive: The number of milliseconds to keep the cache.
    */
-  cacheTTLMillis?: number;
+  cacheTtlMillis?: number;
 };
 
 /** Internal representation of client state for logging. */
