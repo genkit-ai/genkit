@@ -47,6 +47,26 @@ export async function flowCallersPassInput() {
   await f({ q: 'hi' });
 }
 
+export function flowOptionsAreTyped() {
+  ai.defineFlow(
+    {
+      name: 'typedOptions',
+      inputSchema: Input,
+      streamSchema: z.number(),
+      initSchema: z.object({ sessionId: z.string() }),
+    },
+    async (_input, options) => {
+      options.sendChunk(1);
+      // @ts-expect-error chunks must match `streamSchema`.
+      options.sendChunk('one');
+      // @ts-expect-error the options object isn't callable.
+      options(1);
+      const sessionId: string = options.init.sessionId;
+      return sessionId;
+    }
+  );
+}
+
 export async function retrieverOptionsAreInput() {
   const retriever = ai.defineRetriever(
     {

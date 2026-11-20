@@ -85,7 +85,6 @@ export {
   type Flow,
   type FlowConfig,
   type FlowFn,
-  type FlowSideChannel,
 } from './flow.js';
 export * from './plugin.js';
 // Only what `genkit()` needs; the rest of reflection-config is internal.

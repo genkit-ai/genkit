@@ -376,7 +376,7 @@ describe('fetchHandler (single action)', () => {
           initSchema: z.object({ sessionId: z.string() }),
         },
         async (input, { init }) =>
-          `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+          `input: ${input}, sessionId: ${init.sessionId}`
       );
       const request = new Request('http://localhost/flowWithInitSchema', {
         method: 'POST',
@@ -401,7 +401,7 @@ describe('fetchHandler (single action)', () => {
           initSchema: z.object({ sessionId: z.string() }),
         },
         async (input, { init }) =>
-          `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+          `input: ${input}, sessionId: ${init.sessionId}`
       );
       const request = new Request('http://localhost/flowWithInitSchema', {
         method: 'POST',
@@ -445,7 +445,7 @@ describe('fetchHandler (single action)', () => {
           name: 'streamingFlow',
           inputSchema: z.object({ question: z.string() }),
         },
-        async (input, sendChunk) => {
+        async (input, { sendChunk }) => {
           const { text } = await ai.generate({
             model: 'echoModel',
             prompt: input.question,
@@ -504,7 +504,7 @@ describe('fetchHandlers with HTTP server (runFlow/streamFlow)', () => {
         name: 'streamingFlow',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModel',
           prompt: input.question,

@@ -67,26 +67,28 @@ export interface FlowConfig<
 }
 
 /**
- * Flow execution context for flow to access the streaming callback and
- * side-channel context data. The context itself is a function, a short-cut
- * for streaming callback.
- */
-export interface FlowSideChannel<S> extends ActionFnArg<S> {
-  (chunk: S): void;
-}
-
-/**
  * Function to be executed in the flow.
+ *
+ * ```ts
+ * ai.defineFlow(
+ *   { name: 'countdown', inputSchema: z.number(), streamSchema: z.number() },
+ *   async (n, { sendChunk, abortSignal }) => {
+ *     for (let i = n; i > 0 && !abortSignal.aborted; i--) sendChunk(i);
+ *     return 'liftoff';
+ *   }
+ * );
+ * ```
  */
 export type FlowFn<
   I extends GenkitSchema = GenkitSchema,
   O extends GenkitSchema = GenkitSchema,
   S extends GenkitSchema = GenkitSchema,
+  Init extends GenkitSchema = GenkitSchema,
 > = (
   /** Input to the flow, parsed with `inputSchema` (defaults/transforms applied). */
   input: InferOutput<I>,
-  /** Callback for streaming functions only. */
-  streamingCallback: FlowSideChannel<InferOutput<S>>
+  /** Streaming (`sendChunk`), context, abort signal, trace info, etc. */
+  options: ActionFnArg<InferOutput<S>, InferOutput<I>, InferOutput<Init>>
   // The return value is parsed with `outputSchema`, so it's the schema's input type.
 ) => Promise<InferInput<O>> | InferInput<O>;
 
@@ -100,7 +102,7 @@ export function flow<
   Init extends GenkitSchema = GenkitSchema,
 >(
   config: FlowConfig<I, O, S, Init> | string,
-  fn: FlowFn<I, O, S>
+  fn: FlowFn<I, O, S, Init>
 ): Flow<I, O, S, Init> {
   const resolvedConfig: FlowConfig<I, O, S, Init> =
     typeof config === 'string' ? { name: config } : config;
@@ -119,7 +121,7 @@ export function defineFlow<
 >(
   registry: Registry,
   config: FlowConfig<I, O, S, Init> | string,
-  fn: FlowFn<I, O, S>
+  fn: FlowFn<I, O, S, Init>
 ): Flow<I, O, S, Init> {
   const f = flow(config, fn);
 
@@ -136,7 +138,10 @@ function flowAction<
   O extends GenkitSchema = GenkitSchema,
   S extends GenkitSchema = GenkitSchema,
   Init extends GenkitSchema = GenkitSchema,
->(config: FlowConfig<I, O, S, Init>, fn: FlowFn<I, O, S>): Flow<I, O, S, Init> {
+>(
+  config: FlowConfig<I, O, S, Init>,
+  fn: FlowFn<I, O, S, Init>
+): Flow<I, O, S, Init> {
   return action(
     {
       actionType: 'flow',
@@ -148,31 +153,8 @@ function flowAction<
       initJsonSchema: config.initJsonSchema,
       metadata: config.metadata,
     },
-    async (
-      input,
-      {
-        sendChunk,
-        context,
-        trace,
-        abortSignal,
-        streamingRequested,
-        inputStream,
-        init,
-      }
-    ) => {
-      const ctx = sendChunk;
-      (ctx as FlowSideChannel<InferOutput<S>>).sendChunk = sendChunk;
-      (ctx as FlowSideChannel<InferOutput<S>>).context = context;
-      (ctx as FlowSideChannel<InferOutput<S>>).trace = trace;
-      (ctx as FlowSideChannel<InferOutput<S>>).abortSignal = abortSignal;
-      (ctx as FlowSideChannel<InferOutput<S>>).streamingRequested =
-        streamingRequested;
-      // Forward inputStream/init so the side-channel object actually has the
-      // members ActionFnArg declares (avoids a type-vs-runtime mismatch).
-      (ctx as FlowSideChannel<InferOutput<S>>).inputStream = inputStream;
-      (ctx as FlowSideChannel<InferOutput<S>>).init = init;
-      return fn(input, ctx as FlowSideChannel<InferOutput<S>>);
-    }
+    // `action` expects a promise; flow fns may return a plain value.
+    async (input, options) => fn(input, options)
   );
 }
 

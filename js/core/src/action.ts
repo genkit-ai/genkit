@@ -170,7 +170,8 @@ export interface BidiActionRunOptions<
 }
 
 /**
- * Options (side channel) data to pass to the model.
+ * Second argument of an action's implementation function (flows, models,
+ * tools, etc.): streaming callback, context, abort signal, trace info.
  */
 export interface ActionFnArg<S, I = any, Init = any> {
   /**
@@ -179,7 +180,7 @@ export interface ActionFnArg<S, I = any, Init = any> {
   streamingRequested: boolean;
 
   /**
-   * Streaming callback (optional).
+   * Streaming callback. A no-op when the caller didn't request streaming.
    */
   sendChunk: StreamingCallback<S>;
 

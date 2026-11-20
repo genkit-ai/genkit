@@ -370,8 +370,7 @@ describe('appRoute', () => {
         outputSchema: z.string(),
         initSchema: z.object({ sessionId: z.string() }),
       },
-      async (input, { init }) =>
-        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+      async (input, { init }) => `input: ${input}, sessionId: ${init.sessionId}`
     );
 
     const route = appRoute(flowWithInitSchema);
@@ -400,8 +399,7 @@ describe('appRoute', () => {
         outputSchema: z.string(),
         initSchema: z.object({ sessionId: z.string() }),
       },
-      async (input, { init }) =>
-        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+      async (input, { init }) => `input: ${input}, sessionId: ${init.sessionId}`
     );
 
     const route = appRoute(flowWithInitSchema);

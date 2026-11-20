@@ -106,7 +106,7 @@ describe('expressHandler', async () => {
         name: 'streamingFlow',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModel',
           prompt: input.question,
@@ -199,8 +199,7 @@ describe('expressHandler', async () => {
         inputSchema: z.string(),
         initSchema: z.object({ sessionId: z.string() }),
       },
-      async (input, { init }) =>
-        `input: ${input}, sessionId: ${(init as { sessionId: string }).sessionId}`
+      async (input, { init }) => `input: ${input}, sessionId: ${init.sessionId}`
     );
 
     app.post('/flowWithInit', expressHandler(flowWithInit));
@@ -587,7 +586,7 @@ describe('startFlowServer', async () => {
         name: 'streamingFlow',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModel',
           prompt: input.question,
@@ -602,7 +601,7 @@ describe('startFlowServer', async () => {
         name: 'streamingFlowV2',
         inputSchema: z.object({ question: z.string() }),
       },
-      async (input, sendChunk) => {
+      async (input, { sendChunk }) => {
         const { text } = await ai.generate({
           model: 'echoModelV2',
           prompt: input.question,
