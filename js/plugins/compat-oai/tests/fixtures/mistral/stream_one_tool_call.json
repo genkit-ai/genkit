@@ -1,0 +1,56 @@
+[
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935440,
+    "model": "mistral-small-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "role": "assistant",
+          "content": ""
+        },
+        "finish_reason": null
+      }
+    ]
+  },
+  {
+    "id": "fixture",
+    "object": "chat.completion.chunk",
+    "created": 1794935440,
+    "model": "mistral-small-latest",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "tool_calls": [
+            {
+              "id": "call_1",
+              "type": "function",
+              "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\": \"Paris\"}"
+              },
+              "index": 0
+            }
+          ]
+        },
+        "finish_reason": "tool_calls"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 87,
+      "total_tokens": 99,
+      "completion_tokens": 12,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      },
+      "service_tier": "standard"
+    },
+    "p": "abcdefghijklmn"
+  }
+]
