@@ -68,6 +68,7 @@ import {
   findMatchingResource,
   resolveResources,
   type ResourceAction,
+  type ResourceInput,
 } from '../resource.js';
 import { resolveTools, toToolDefinition, type ToolAction } from '../tool.js';
 import { GenerateMiddlewareDef, resolveMiddleware } from './middleware.js';
@@ -1156,52 +1157,79 @@ function getRoleFromPart(part: Part): Role {
   throw new Error('No recognized fields in content');
 }
 
+function hasToolResource(part: Part): boolean {
+  return !!part.toolResponse?.content?.some((c) => c.resource);
+}
+
+function hasResource(part: Part): boolean {
+  return !!part.resource || hasToolResource(part);
+}
+
 async function applyResources(
   registry: Registry,
   rawRequest: GenerateActionOptions,
   resources: ResourceAction[]
 ): Promise<GenerateActionOptions> {
-  // quick check, if no resources bail.
-  if (!rawRequest.messages.find((m) => !!m.content.find((c) => c.resource))) {
+  if (!rawRequest.messages.some((m) => m.content?.some(hasResource))) {
     return rawRequest;
   }
 
   const updatedMessages = [] as MessageData[];
   for (const m of rawRequest.messages) {
-    if (!m.content.find((c) => c.resource)) {
+    if (!m.content?.some(hasResource)) {
       updatedMessages.push(m);
       continue;
     }
     const updatedContent = [] as Part[];
     for (const p of m.content) {
-      if (!p.resource) {
-        updatedContent.push(p);
-        continue;
-      }
-
-      const resource = await findMatchingResource(
-        registry,
-        resources,
-        p.resource
-      );
-      if (!resource) {
-        throw new GenkitError({
-          status: 'NOT_FOUND',
-          message: `failed to find matching resource for ${p.resource.uri}`,
-        });
-      }
-      const resourceParts = await resource(p.resource);
-      updatedContent.push(...resourceParts.content);
+      updatedContent.push(...(await expandPart(registry, resources, p)));
     }
-
-    updatedMessages.push({
-      ...m,
-      content: updatedContent,
-    });
+    updatedMessages.push({ ...m, content: updatedContent });
   }
 
   return {
     ...rawRequest,
     messages: updatedMessages,
   };
+}
+
+async function expandPart(
+  registry: Registry,
+  resources: ResourceAction[],
+  part: Part
+): Promise<Part[]> {
+  if (part.resource) {
+    return resolveResourcePart(registry, resources, part.resource, false);
+  }
+  if (!part.toolResponse?.content || !hasToolResource(part)) {
+    return [part];
+  }
+  const content = [] as Part[];
+  for (const c of part.toolResponse.content) {
+    content.push(
+      ...(c.resource
+        ? await resolveResourcePart(registry, resources, c.resource, true)
+        : [c])
+    );
+  }
+  return [{ ...part, toolResponse: { ...part.toolResponse, content } }];
+}
+
+async function resolveResourcePart(
+  registry: Registry,
+  resources: ResourceAction[],
+  input: ResourceInput,
+  fromTool: boolean
+): Promise<Part[]> {
+  const resource = await findMatchingResource(registry, resources, input);
+  if (resource) {
+    return (await resource(input)).content;
+  }
+  if (fromTool) {
+    return [{ text: `Resource link (${input.uri})` }];
+  }
+  throw new GenkitError({
+    status: 'NOT_FOUND',
+    message: `failed to find matching resource for ${input.uri}`,
+  });
 }
