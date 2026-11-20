@@ -266,7 +266,7 @@ describe('generate', () => {
 
     it('passes the streaming callback to the model', async () => {
       const model = defineEchoModel(ai);
-      const flow = ai.defineFlow('wrapper', async (_, streamingCallback) => {
+      const flow = ai.defineFlow('wrapper', async () => {
         const response = await ai.generate({
           model: model,
           prompt: 'hi',
@@ -280,11 +280,11 @@ describe('generate', () => {
 
     it('strips out the noop streaming callback', async () => {
       const model = defineEchoModel(ai);
-      const flow = ai.defineFlow('wrapper', async (_, streamingCallback) => {
+      const flow = ai.defineFlow('wrapper', async (_, { sendChunk }) => {
         const response = await ai.generate({
           model: model,
           prompt: 'hi',
-          onChunk: streamingCallback,
+          onChunk: sendChunk,
         });
         return response.text;
       });

@@ -100,7 +100,7 @@ export const menuSuggestionStreamingFlow = ai.defineFlow(
 
     for await (const chunk of response.stream) {
       // Here, you could process the chunk in some way before sending it to
-      // the output stream via streamingCallback(). In this example, we output
+      // the output stream via sendChunk(). In this example, we output
       // the text of the chunk, unmodified.
       sendChunk(chunk.text);
     }
