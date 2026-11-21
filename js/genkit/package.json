@@ -30,6 +30,7 @@
   "dependencies": {
     "@genkit-ai/ai": "workspace:*",
     "@genkit-ai/core": "workspace:*",
+    "@opentelemetry/api": "1.9.0",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
