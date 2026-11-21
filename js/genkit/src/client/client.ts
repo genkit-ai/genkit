@@ -145,19 +145,30 @@ async function __flowRunEnvelope({
     }
     // If buffer includes the delimiter that means we are still receiving chunks.
     while (buffer.includes(__flowStreamDelimiter)) {
-      const chunk = JSON.parse(
-        buffer
-          .substring(0, buffer.indexOf(__flowStreamDelimiter))
-          .substring('data: '.length)
-      );
+      const event = buffer.substring(0, buffer.indexOf(__flowStreamDelimiter));
+      const colon = event.indexOf(':');
+      const field = colon === -1 ? event : event.substring(0, colon);
+      let value = colon === -1 ? '' : event.substring(colon + 1);
+      // SSE allows one optional space after the field name.
+      if (value.startsWith(' ')) {
+        value = value.substring(1);
+      }
+      if (field !== 'data' && field !== 'error') {
+        throw new Error('unknown event format: ' + event);
+      }
+      const chunk = JSON.parse(value);
+      if (!chunk || typeof chunk !== 'object') {
+        throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
+      }
+      if (field === 'error') {
+        throw flowStreamError(chunk.error ?? chunk);
+      }
       if (chunk.hasOwnProperty('message')) {
         sendChunk(chunk.message);
       } else if (chunk.hasOwnProperty('result')) {
         return chunk.result;
       } else if (chunk.hasOwnProperty('error')) {
-        throw new Error(
-          `${chunk.error.status}: ${chunk.error.message}\n${chunk.error.details}`
-        );
+        throw flowStreamError(chunk.error);
       } else {
         throw new Error('unknown chunk format: ' + JSON.stringify(chunk));
       }
@@ -167,6 +178,10 @@ async function __flowRunEnvelope({
     }
   }
   throw new Error('stream did not terminate correctly');
+}
+
+function flowStreamError(error: any): Error {
+  return new Error(`${error.status}: ${error.message}\n${error.details}`);
 }
 
 /**
