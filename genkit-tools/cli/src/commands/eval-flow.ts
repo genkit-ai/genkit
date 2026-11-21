@@ -270,11 +270,12 @@ async function readInputs(
           cause: e,
         });
       }
-    case SourceType.DATASET:
+    case SourceType.DATASET: {
       const datasetStore = await getDatasetStore();
       const data = await datasetStore.getDataset(input!);
       parsedData = data;
       break;
+    }
   }
 
   try {
