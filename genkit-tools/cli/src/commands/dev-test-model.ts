@@ -131,7 +131,8 @@ const VALIDATORS: Record<
       JSON.parse(textPart.text!);
     } catch (e) {
       throw new Error(
-        `Response text is not valid JSON. Text: ${textPart.text}`
+        `Response text is not valid JSON. Text: ${textPart.text}`,
+        { cause: e }
       );
     }
   },
@@ -190,7 +191,9 @@ const VALIDATORS: Record<
     try {
       JSON.parse(streamedText);
     } catch (e) {
-      throw new Error(`Streamed text is not valid JSON: ${streamedText}`);
+      throw new Error(`Streamed text is not valid JSON: ${streamedText}`, {
+        cause: e,
+      });
     }
   },
   'text-starts-with': (response, expected) => {
@@ -233,7 +236,7 @@ const VALIDATORS: Record<
         try {
           new URL(url);
         } catch (e) {
-          throw new Error(`Invalid URL: ${url}`);
+          throw new Error(`Invalid URL: ${url}`, { cause: e });
         }
       } else {
         throw new Error(`Unknown URL format: ${url}`);

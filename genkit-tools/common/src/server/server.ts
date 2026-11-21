@@ -147,7 +147,6 @@ export function startServer(
   host: string = DEFAULT_HOST
 ) {
   const projectRuntime = detectRuntimeSync(manager.projectRoot) || 'unknown';
-  let server: Server;
   const app = express();
 
   app.use(
@@ -392,7 +391,7 @@ export function startServer(
   };
   app.use(errorHandler);
 
-  server = app.listen(port, host, async () => {
+  const server: Server = app.listen(port, host, async () => {
     const uiUrl = 'http://localhost:' + port;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);

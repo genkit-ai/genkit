@@ -15,6 +15,7 @@
  */
 
 // @ts-check
+import eslint from '@eslint/js';
 import vitestPlugin from '@vitest/eslint-plugin';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
@@ -25,7 +26,22 @@ export default tseslint.config(
   },
   {
     files: ['**/*.ts'],
-    extends: [tseslint.configs.base, eslintConfigPrettier],
+    extends: [
+      eslint.configs.recommended,
+      ...tseslint.configs.recommended,
+      eslintConfigPrettier,
+    ],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
+    },
   },
   {
     files: ['**/*.test.ts'],

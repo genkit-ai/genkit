@@ -29,7 +29,7 @@ export class GenkitToolsError extends Error {
     let msg = this.message;
     if (this.data) {
       if (this.data?.message) {
-        msg += `\Genkit Error: ${this.data?.message}`;
+        msg += `Genkit Error: ${this.data?.message}`;
       }
       if (this.data?.stack) {
         msg += `\nStack Trace:\n${this.data?.stack}`;
