@@ -14,6 +14,7 @@
   },
   "scripts": {
     "compile": "pnpm genversion && tsc",
+    "typecheck": "pnpm genversion && tsc --noEmit -p tsconfig.test.json",
     "build:clean": "rimraf ./lib",
     "build": "pnpm run build:clean && pnpm run compile",
     "test": "vitest run",
