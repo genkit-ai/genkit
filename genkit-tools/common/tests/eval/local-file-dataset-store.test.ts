@@ -656,9 +656,7 @@ describe('localFileDatasetStore', () => {
       expect(fetchedDataset).toMatchObject(dataset);
     });
 
-    it('fails for non existing dataset', async () => {
-      // TODO: Implement this.
-    });
+    it.todo('fails for non existing dataset');
   });
 
   describe('deleteDataset', () => {
