@@ -329,7 +329,7 @@ export async function hasAction(params: {
   const { manager, actionRef } = { ...params };
   const actionsRecord = await manager.listActions();
 
-  return actionsRecord.hasOwnProperty(actionRef);
+  return Object.hasOwn(actionsRecord, actionRef);
 }
 
 export async function getAction(params: {
@@ -381,7 +381,7 @@ export function groupBy(
     const key =
       typeof criteria === 'function' ? criteria(item) : item[criteria];
 
-    if (!obj.hasOwnProperty(key)) {
+    if (!Object.hasOwn(obj, key)) {
       obj[key] = [];
     }
     obj[key].push(item);
