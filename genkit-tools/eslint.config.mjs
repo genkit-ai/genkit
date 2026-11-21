@@ -35,6 +35,7 @@ export default defineConfig(
       'prefer-rest-params': 'error',
       'no-var': 'error',
       'prefer-const': 'error',
+      '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
     },
   },
   {
