@@ -72,6 +72,7 @@ export {
   FileSessionStore,
   GenkitBeta,
   InMemorySessionStore,
+  SessionDeletedError,
   SessionRunner,
   applyPatch,
   diff,
