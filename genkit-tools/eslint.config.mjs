@@ -38,6 +38,7 @@ export default defineConfig(
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
       'no-extra-boolean-cast': 'error',
       'no-prototype-builtins': 'error',
+      'no-useless-assignment': 'error',
     },
   },
   {

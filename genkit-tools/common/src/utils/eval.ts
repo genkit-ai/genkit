@@ -173,8 +173,8 @@ function getExtractorFromStepSelector(
   stepSelector: StepSelector
 ): EvalExtractorFn {
   return (trace: TraceData) => {
-    let stepName: string | undefined = undefined;
-    let selectedAttribute = 'genkit:output'; // default
+    let stepName: string | undefined;
+    let selectedAttribute: string;
 
     if (Object.hasOwn(stepSelector, 'inputOf')) {
       stepName = (stepSelector as InputStepSelector).inputOf;
