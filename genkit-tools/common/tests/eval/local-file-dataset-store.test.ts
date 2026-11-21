@@ -284,7 +284,7 @@ describe('localFileDatasetStore', () => {
           $schema: 'http://json-schema.org/draft-07/schema#',
         },
       });
-      expect(datasetMetadata.targetAction).toEqual('/flow/my-flow');
+      expect(datasetMetadata.targetAction).toBe('/flow/my-flow');
     });
 
     it('creates new dataset, with metrics', async () => {
@@ -500,7 +500,7 @@ describe('localFileDatasetStore', () => {
           $schema: 'http://json-schema.org/draft-07/schema#',
         },
       });
-      expect(datasetMetadata.targetAction).toEqual('/flow/my-flow-2');
+      expect(datasetMetadata.targetAction).toBe('/flow/my-flow-2');
     });
 
     it('succeeds for existing dataset -- with metrics', async () => {

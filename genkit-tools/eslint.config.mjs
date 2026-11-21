@@ -45,6 +45,7 @@ export default defineConfig(
         'error',
         { assertFunctionNames: ['expect', 'assert*'] },
       ],
+      'vitest/prefer-to-be': 'error',
     },
   }
 );

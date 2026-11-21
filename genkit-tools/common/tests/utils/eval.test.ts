@@ -38,8 +38,8 @@ describe('eval utils', () => {
       expect(Object.keys(extractors).sort()).toEqual(
         ['input', 'output', 'context'].sort()
       );
-      expect(extractors.input(trace)).toEqual('My input');
-      expect(extractors.output(trace)).toEqual('My output');
+      expect(extractors.input(trace)).toBe('My input');
+      expect(extractors.output(trace)).toBe('My output');
       expect(extractors.context(trace)).toEqual([]);
     });
   });
@@ -63,8 +63,8 @@ describe('eval utils', () => {
     expect(Object.keys(extractors).sort()).toEqual(
       ['input', 'output', 'context'].sort()
     );
-    expect(extractors.input(trace)).toEqual('My input');
-    expect(extractors.output(trace)).toEqual('My output');
+    expect(extractors.input(trace)).toBe('My input');
+    expect(extractors.output(trace)).toBe('My output');
     expect(extractors.context(trace)).toEqual(CONTEXT_TEXTS);
   });
 
@@ -100,7 +100,7 @@ describe('eval utils', () => {
 
     const extractors = await getEvalExtractors('/flow/multiSteps');
 
-    expect(extractors.input(trace)).toEqual('My input');
+    expect(extractors.input(trace)).toBe('My input');
     expect(extractors.output(trace)).toEqual({ out: 'my-object-output' });
     expect(extractors.context(trace)).toEqual(CONTEXT_TEXTS);
   });
@@ -144,8 +144,8 @@ describe('eval utils', () => {
 
     const extractors = await getEvalExtractors('/flow/multiSteps');
 
-    expect(extractors.input(trace)).toEqual('My input');
-    expect(extractors.output(trace)).toEqual('step2-input');
+    expect(extractors.input(trace)).toBe('My input');
+    expect(extractors.output(trace)).toBe('step2-input');
     expect(extractors.context(trace)).toEqual(['Hello', 'World']);
   });
 
@@ -202,7 +202,7 @@ describe('eval utils', () => {
     const extractors = await getEvalExtractors('/flow/multiSteps');
 
     expect(extractors.input(trace)).toEqual(['My input TEST TEST TEST']);
-    expect(extractors.output(trace)).toEqual('step2-input');
+    expect(extractors.output(trace)).toBe('step2-input');
     expect(extractors.context(trace)).toEqual(['Hello', 'World']);
   });
 
@@ -225,8 +225,8 @@ describe('eval utils', () => {
     expect(Object.keys(extractors).sort()).toEqual(
       ['input', 'output', 'context'].sort()
     );
-    expect(extractors.input(trace)).toEqual('My input');
-    expect(extractors.output(trace)).toEqual('');
+    expect(extractors.input(trace)).toBe('My input');
+    expect(extractors.output(trace)).toBe('');
     expect(extractors.context(trace)).toEqual(CONTEXT_TEXTS);
   });
 });

@@ -979,11 +979,11 @@ describe('index', () => {
       'trace_1',
       'trace_0',
     ]);
-    expect(result3.pageLastIndex).toBe(undefined);
+    expect(result3.pageLastIndex).toBeUndefined();
 
     const result4 = index.search({ limit: 10, startFromIndex: 18 });
     expect(result4.data.map((d) => d.id)).toEqual(['trace_1', 'trace_0']);
-    expect(result4.pageLastIndex).toBe(undefined);
+    expect(result4.pageLastIndex).toBeUndefined();
   });
 
   it('should deduplicate when root span is posted twice (start then end)', () => {
@@ -1020,7 +1020,7 @@ describe('index', () => {
   it('should return empty array for empty index', () => {
     const result = index.search({ limit: 10 });
     expect(result.data).toEqual([]);
-    expect(result.pageLastIndex).toBe(undefined);
+    expect(result.pageLastIndex).toBeUndefined();
   });
 
   it('should apply pagination correctly after deduplication', () => {
@@ -1102,7 +1102,7 @@ describe('index', () => {
     expect(result.data[0].id).toBe(TRACE_ID_1);
     expect(result.data[0].start).toBe(1000);
     // end should not be set for in-progress spans
-    expect(result.data[0].end).toBe(undefined);
+    expect(result.data[0].end).toBeUndefined();
   });
 
   it('should deduplicate when span updates from start to end', () => {
@@ -1161,7 +1161,7 @@ describe('index', () => {
     // Both should be returned, sorted by start time descending
     expect(result.data.length).toBe(2);
     expect(result.data[0].id).toBe(TRACE_ID_2); // start: 3000 (in-progress)
-    expect(result.data[0].end).toBe(undefined);
+    expect(result.data[0].end).toBeUndefined();
     expect(result.data[1].id).toBe(TRACE_ID_1); // start: 1000 (completed)
     expect(result.data[1].end).toBe(2000);
   });
