@@ -15,6 +15,7 @@
  */
 
 // @ts-check
+import eslint from '@eslint/js';
 import vitestPlugin from '@vitest/eslint-plugin';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import { defineConfig } from 'eslint/config';
@@ -26,20 +27,13 @@ export default defineConfig(
   },
   {
     files: ['**/*.ts'],
-    extends: [tseslint.configs.base, eslintConfigPrettier],
+    extends: [
+      eslint.configs.recommended,
+      ...tseslint.configs.recommended,
+      eslintConfigPrettier,
+    ],
     rules: {
-      'no-unsafe-finally': 'error',
-      'no-async-promise-executor': 'error',
-      'preserve-caught-error': 'error',
-      'no-case-declarations': 'error',
-      'prefer-rest-params': 'error',
-      'no-var': 'error',
-      'prefer-const': 'error',
-      '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
-      'no-extra-boolean-cast': 'error',
-      'no-prototype-builtins': 'error',
-      'no-useless-assignment': 'error',
-      'no-useless-escape': 'error',
+      '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': [
         'error',
         {

@@ -116,7 +116,6 @@ const loggedProcedure = t.procedure.use(async (opts) => {
   return result;
 });
 
-// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export const TOOLS_SERVER_ROUTER = (manager: BaseRuntimeManager) =>
   t.router({
     /** Retrieves all runnable actions. */
