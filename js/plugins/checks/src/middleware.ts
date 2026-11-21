@@ -14,66 +14,156 @@
  * limitations under the License.
  */
 
-import type { ModelMiddleware } from 'genkit/model';
-import type { GoogleAuth } from 'google-auth-library';
+import {
+  generateMiddleware,
+  z,
+  type GenerateMiddleware,
+  type GenerateResponseData,
+  type Part,
+} from 'genkit';
+import type { GoogleAuthOptions } from 'google-auth-library';
+import { initializeAuth } from './auth.js';
 import { Guardrails } from './guardrails.js';
-import type { ChecksEvaluationMetric } from './metrics.js';
+import {
+  ChecksEvaluationMetricType,
+  type ChecksEvaluationMetric,
+} from './metrics.js';
 
-export function checksMiddleware(options: {
-  auth: GoogleAuth;
-  metrics: ChecksEvaluationMetric[];
-  projectId?: string;
-}): ModelMiddleware {
-  const guardrails = new Guardrails(options.auth, options?.projectId);
+export const ChecksMiddlewareOptionsSchema = z.object({
+  /** The Checks policies to classify input and output text against. */
+  metrics: z
+    .array(
+      z.union([
+        z.enum(ChecksEvaluationMetricType),
+        z.object({
+          type: z.enum(ChecksEvaluationMetricType),
+          threshold: z.number().optional(),
+        }),
+      ])
+    )
+    .describe('Checks policies to classify input and output text against.'),
+});
 
-  const classifyContent = async (content: string) => {
-    const response = await guardrails.classifyContent(content, options.metrics);
+export type ChecksMiddlewareOptions = z.infer<
+  typeof ChecksMiddlewareOptionsSchema
+>;
 
-    // Filter for violations
-    const violatedPolicies = response.policyResults.filter(
-      (policy) => policy.violationResult === 'VIOLATIVE'
-    );
-
-    return violatedPolicies;
-  };
-
-  return async (req, next) => {
-    for (const message of req.messages) {
-      for (const content of message.content) {
-        if (content.text) {
-          const violatedPolicies = await classifyContent(content.text);
-
-          // If any input message violates a checks policy. Stop processing,
-          // return a blocked response and list of violated policies.
-          if (violatedPolicies.length > 0) {
-            return {
-              finishReason: 'blocked',
-              finishMessage: `Model input violated Checks policies: [${violatedPolicies.map((result) => result.policyType).join(' ')}], further processing blocked.`,
-            };
-          }
-        }
-      }
-    }
-
-    const generatedContent = await next(req);
-
-    for (const candidate of generatedContent.candidates ?? []) {
-      for (const content of candidate.message.content ?? []) {
-        if (content.text) {
-          const violatedPolicies = await classifyContent(content.text);
-
-          // If the output message violates a checks policy. Stop processing,
-          // return a blocked response and list of violated policies.
-          if (violatedPolicies.length > 0) {
-            return {
-              finishReason: 'blocked',
-              finishMessage: `Model output violated Checks policies: [${violatedPolicies.map((result) => result.policyType).join(' ')}], output blocked.`,
-            };
-          }
-        }
-      }
-    }
-
-    return generatedContent;
-  };
+/**
+ * Instance-level options for {@link checksMiddleware}, set once with
+ * `checksMiddleware.plugin(...)`. Kept out of the per-call config so
+ * credentials never end up in traces.
+ */
+export interface ChecksMiddlewarePluginOptions {
+  /**
+   * Google auth configuration for the Checks API. `projectId` is the project
+   * charged for quota. Defaults to Application Default Credentials.
+   */
+  authOptions?: GoogleAuthOptions;
 }
+
+// One Guardrails client per plugin instance, and a shared default for when
+// the middleware is used without `.plugin(...)`, so auth is not set up again
+// on every generate call.
+const guardrailsByPluginOptions = new WeakMap<
+  ChecksMiddlewarePluginOptions,
+  Guardrails
+>();
+let defaultGuardrails: Guardrails | undefined;
+
+function guardrailsFor(
+  pluginOptions: ChecksMiddlewarePluginOptions | undefined
+): Guardrails {
+  if (!pluginOptions) {
+    defaultGuardrails ??= new Guardrails(initializeAuth());
+    return defaultGuardrails;
+  }
+  let guardrails = guardrailsByPluginOptions.get(pluginOptions);
+  if (!guardrails) {
+    guardrails = new Guardrails(
+      initializeAuth(pluginOptions.authOptions),
+      pluginOptions.authOptions?.projectId
+    );
+    guardrailsByPluginOptions.set(pluginOptions, guardrails);
+  }
+  return guardrails;
+}
+
+/**
+ * Generate middleware that classifies model input and output with Google
+ * Checks, and blocks the response when a policy is violated.
+ *
+ * ```ts
+ * const ai = genkit({
+ *   plugins: [
+ *     googleAI(),
+ *     // Optional: only needed to configure auth.
+ *     checksMiddleware.plugin({ authOptions: { projectId: 'my-project' } }),
+ *   ],
+ * });
+ *
+ * const { text } = await ai.generate({
+ *   prompt,
+ *   use: [
+ *     checksMiddleware({
+ *       metrics: [ChecksEvaluationMetricType.DANGEROUS_CONTENT],
+ *     }),
+ *   ],
+ * });
+ * ```
+ */
+export const checksMiddleware: GenerateMiddleware<
+  typeof ChecksMiddlewareOptionsSchema,
+  ChecksMiddlewarePluginOptions | undefined
+> = generateMiddleware(
+  {
+    name: 'checks',
+    description:
+      'Blocks model input or output that violates Google Checks policies.',
+    configSchema: ChecksMiddlewareOptionsSchema,
+  },
+  ({ config, pluginConfig }) => {
+    const guardrails = guardrailsFor(pluginConfig);
+    const metrics: ChecksEvaluationMetric[] = config?.metrics ?? [];
+
+    // Returns the violated policy types of the first text part that has any.
+    const findViolations = async (parts: Part[]): Promise<string[]> => {
+      for (const part of parts) {
+        if (!part.text) continue;
+        const response = await guardrails.classifyContent(part.text, metrics);
+        const violated = response.policyResults
+          .filter((policy) => policy.violationResult === 'VIOLATIVE')
+          .map((policy) => policy.policyType);
+        if (violated.length > 0) return violated;
+      }
+      return [];
+    };
+
+    const blocked = (message: string): GenerateResponseData => ({
+      finishReason: 'blocked',
+      finishMessage: message,
+    });
+
+    return {
+      model: async (req, ctx, next) => {
+        for (const message of req.messages) {
+          const violated = await findViolations(message.content);
+          if (violated.length > 0) {
+            return blocked(
+              `Model input violated Checks policies: [${violated.join(' ')}], further processing blocked.`
+            );
+          }
+        }
+
+        const response = await next(req, ctx);
+
+        const violated = await findViolations(response.message?.content ?? []);
+        if (violated.length > 0) {
+          return blocked(
+            `Model output violated Checks policies: [${violated.join(' ')}], output blocked.`
+          );
+        }
+        return response;
+      },
+    };
+  }
+);

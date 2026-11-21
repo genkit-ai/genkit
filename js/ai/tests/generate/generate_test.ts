@@ -39,13 +39,16 @@ import {
   type GenerateOptions,
 } from '../../src/generate.js';
 import { defineGenerateAction } from '../../src/generate/action.js';
-import { generateMiddleware } from '../../src/generate/middleware.js';
+import {
+  generateMiddleware,
+  resolveMiddleware,
+  type GenerateMiddlewareArgument,
+} from '../../src/generate/middleware.js';
 import {
   defineModel,
   type GenerateResponseData,
   type ModelAction,
   type ModelMiddleware,
-  type ModelMiddlewareWithOptions,
 } from '../../src/model.js';
 import { defineResource } from '../../src/resource.js';
 import { ToolInterruptError, defineTool, tool } from '../../src/tool.js';
@@ -459,45 +462,35 @@ describe('generate', () => {
   });
 
   it('applies middleware', async () => {
-    const wrapRequest: ModelMiddleware = async (req, next) => {
-      return next({
-        ...req,
-        messages: [
+    const wrapRequest = generateMiddleware({ name: 'wrapRequest' }, () => ({
+      model: (req, ctx, next) => {
+        const text = req.messages
+          .map((m) => m.content.map((c) => c.text).join())
+          .join();
+        return next(
           {
-            role: 'user',
-            content: [
-              {
-                text:
-                  '(' +
-                  req.messages
-                    .map((m) => m.content.map((c) => c.text).join())
-                    .join() +
-                  ')',
-              },
-            ],
+            ...req,
+            messages: [{ role: 'user', content: [{ text: `(${text})` }] }],
           },
-        ],
-      });
-    };
-    const wrapResponse: ModelMiddleware = async (req, next) => {
-      const res = await next(req);
-      return {
-        message: {
-          role: 'model',
-          content: [
-            {
-              text: '[' + res.message!.content.map((c) => c.text).join() + ']',
-            },
-          ],
-        },
-        finishReason: res.finishReason,
-      };
-    };
+          ctx
+        );
+      },
+    }));
+    const wrapResponse = generateMiddleware({ name: 'wrapResponse' }, () => ({
+      model: async (req, ctx, next) => {
+        const res = await next(req, ctx);
+        const text = res.message!.content.map((c) => c.text).join();
+        return {
+          message: { role: 'model', content: [{ text: `[${text}]` }] },
+          finishReason: res.finishReason,
+        };
+      },
+    }));
 
     const response = await generate(registry, {
       prompt: 'banana',
       model: echoModel,
-      use: [wrapRequest, wrapResponse],
+      use: [wrapRequest(), wrapResponse()],
     });
     const want = '[Echo: (banana)]';
     assert.deepStrictEqual(response.text, want);
@@ -903,30 +896,31 @@ describe('generate', () => {
       }
     );
 
-    const interceptMiddleware: ModelMiddlewareWithOptions = async (
-      req,
-      opts,
-      next
-    ) => {
-      const originalOnChunk = opts!.onChunk;
-      return next(req, {
-        ...opts,
-        onChunk: (chunk) => {
-          if (originalOnChunk) {
-            const text = chunk.content?.[0]?.text;
-            originalOnChunk({
-              ...chunk,
-              content: [{ text: `intercepted: ${text}` }],
-            });
-          }
+    const interceptMiddleware = generateMiddleware(
+      { name: 'intercept' },
+      () => ({
+        model: (req, ctx, next) => {
+          const originalOnChunk = ctx.onChunk;
+          return next(req, {
+            ...ctx,
+            onChunk: (chunk) => {
+              if (originalOnChunk) {
+                const text = chunk.content?.[0]?.text;
+                originalOnChunk({
+                  ...chunk,
+                  content: [{ text: `intercepted: ${text}` }],
+                });
+              }
+            },
+          });
         },
-      });
-    };
+      })
+    );
 
     const { response, stream } = generateStream(registry, {
       model: echoModel,
       prompt: 'test',
-      use: [interceptMiddleware],
+      use: [interceptMiddleware()],
     });
 
     const streamed: any[] = [];
@@ -961,24 +955,15 @@ describe('generate', () => {
       }
     );
 
-    const contextMiddleware: ModelMiddlewareWithOptions = async (
-      req,
-      opts,
-      next
-    ) => {
-      return next(req, {
-        ...opts,
-        context: {
-          ...opts?.context,
-          myValue: 'foo',
-        },
-      });
-    };
+    const contextMiddleware = generateMiddleware({ name: 'context' }, () => ({
+      model: (req, ctx, next) =>
+        next(req, { ...ctx, context: { ...ctx.context, myValue: 'foo' } }),
+    }));
 
     const response = await generate(registry, {
       model: checkContextModel,
       prompt: 'test',
-      use: [contextMiddleware],
+      use: [contextMiddleware()],
     });
 
     assert.strictEqual(response.text, 'Context: foo');
@@ -1004,30 +989,28 @@ describe('generate', () => {
       }
     );
 
-    const middleware1: ModelMiddlewareWithOptions = async (req, opts, next) => {
-      return next(req, {
-        ...opts,
-        context: {
-          ...opts?.context,
-          val: [...(opts?.context?.val ?? []), 'A'],
-        },
-      });
-    };
-
-    const middleware2: ModelMiddlewareWithOptions = async (req, opts, next) => {
-      return next(req, {
-        ...opts,
-        context: {
-          ...opts?.context,
-          val: [...(opts?.context?.val ?? []), 'B'],
-        },
-      });
-    };
+    // Appends `value` to `context.val` before calling the model.
+    const appendToContext = generateMiddleware(
+      {
+        name: 'appendToContext',
+        configSchema: z.object({ value: z.string() }),
+      },
+      ({ config }) => ({
+        model: (req, ctx, next) =>
+          next(req, {
+            ...ctx,
+            context: {
+              ...ctx.context,
+              val: [...(ctx.context?.val ?? []), config?.value],
+            },
+          }),
+      })
+    );
 
     const response = await generate(registry, {
       model: checkContextModel,
       prompt: 'test',
-      use: [middleware1, middleware2],
+      use: [appendToContext({ value: 'A' }), appendToContext({ value: 'B' })],
     });
 
     const context = JSON.parse(response.text.substring('Context: '.length));
@@ -2280,22 +2263,52 @@ describe('generate failures', () => {
 });
 
 describe('normalizeMiddleware', () => {
-  it('handles legacy functional middleware by wrapping it', async () => {
+  it('rejects plain model middleware functions', async () => {
     const registry = new Registry();
-    const legacyMw = async (req: any, next: any) => {
-      return next(req);
-    };
+    const legacyMw: ModelMiddleware = async (req, next) => next(req);
 
-    const refs = await normalizeMiddleware(registry, [legacyMw]);
-
-    assert.strictEqual(refs.length, 1);
-    assert.match(refs[0].name, /^dynamic-middleware-\d+-/);
-
-    const registered = await registry.lookupValue<any>(
-      'middleware',
-      refs[0].name
+    await assert.rejects(
+      // Plain JS callers can still pass a function; the type rejects it.
+      normalizeMiddleware(registry, [
+        legacyMw as unknown as GenerateMiddlewareArgument,
+      ]),
+      (e: GenkitError) => {
+        assert.strictEqual(e.status, 'INVALID_ARGUMENT');
+        assert.match(e.message, /generateMiddleware/);
+        assert.match(e.message, /defineModel\(\{ use \}\)/);
+        return true;
+      }
     );
-    assert.ok(registered);
+  });
+
+  it('rejects entries that are not middleware refs', async () => {
+    const registry = new Registry();
+    await assert.rejects(
+      normalizeMiddleware(registry, [
+        42 as unknown as GenerateMiddlewareArgument,
+      ]),
+      { name: 'GenkitError', status: 'INVALID_ARGUMENT' }
+    );
+  });
+
+  it('prefers middleware registered up front over the ref definition', async () => {
+    const registry = new Registry();
+    const instances: (string | undefined)[] = [];
+    const myMw = generateMiddleware<{ tag: string } | undefined>(
+      { name: 'myMw' },
+      ({ pluginConfig }) => {
+        instances.push(pluginConfig?.tag);
+        return {};
+      }
+    );
+    for (const m of myMw.plugin({ tag: 'plugin' }).middleware!()) {
+      registry.registerValue('middleware', m.name, m);
+    }
+
+    const refs = await normalizeMiddleware(registry, [myMw()]);
+    await resolveMiddleware(registry, refs);
+
+    assert.deepStrictEqual(instances, ['plugin']);
   });
 
   it('handles MiddlewareRef objects created by calling middleware', async () => {
@@ -2330,7 +2343,9 @@ describe('normalizeMiddleware', () => {
     // Pass the definition function itself, which has .instantiate and .plugin
     await assert.rejects(
       async () => {
-        await normalizeMiddleware(registry, [myMw as any]);
+        await normalizeMiddleware(registry, [
+          myMw as unknown as GenerateMiddlewareArgument,
+        ]);
       },
       {
         name: 'GenkitError',

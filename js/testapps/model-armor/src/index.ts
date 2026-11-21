@@ -19,7 +19,16 @@ import { googleAI } from '@genkit-ai/google-genai';
 import { genkit, GenkitError, z } from 'genkit';
 
 const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [
+    googleAI(),
+    // Instance-level Model Armor settings (client, endpoint) go in the plugin;
+    // per-call settings go in `use: [modelArmor({...})]`.
+    modelArmor.plugin({
+      clientOptions: {
+        apiEndpoint: 'modelarmor.us-central1.rep.googleapis.com',
+      },
+    }),
+  ],
 });
 
 // Define a flow that uses Model Armor
@@ -46,9 +55,6 @@ ai.defineFlow(
           modelArmor({
             templateName: templateName,
             filters: ['pi_and_jailbreak', 'sdp'],
-            clientOptions: {
-              apiEndpoint: 'modelarmor.us-central1.rep.googleapis.com',
-            },
           }),
         ],
       });

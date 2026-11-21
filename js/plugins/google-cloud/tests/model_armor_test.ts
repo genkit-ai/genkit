@@ -15,8 +15,11 @@
  */
 
 import { beforeEach, describe, expect, it } from '@jest/globals';
-import { genkit } from 'genkit';
-import { modelArmor } from '../src/model-armor.js';
+import { genkit, type Genkit } from 'genkit';
+import {
+  modelArmor,
+  type ApplyDeidentificationResultsFn,
+} from '../src/model-armor.js';
 
 // Mock ModelArmorClient
 class MockModelArmorClient {
@@ -62,11 +65,13 @@ function createSdpBlockResult(replacementText: string) {
 }
 
 describe('modelArmor', () => {
-  let ai: any;
+  let ai: Genkit;
   let mockClient: any;
 
   beforeEach(() => {
-    ai = genkit({});
+    mockClient = new MockModelArmorClient();
+    // The client is instance-level, so it is set via the plugin.
+    ai = genkit({ plugins: [modelArmor.plugin({ client: mockClient })] });
     ai.defineModel({ name: 'echoModel' }, async (req: any) => {
       return {
         message: {
@@ -75,7 +80,6 @@ describe('modelArmor', () => {
         },
       };
     });
-    mockClient = new MockModelArmorClient();
   });
 
   it('passes through when no sanitization triggers', async () => {
@@ -85,7 +89,7 @@ describe('modelArmor', () => {
     const response = await ai.generate({
       model: 'echoModel',
       prompt: 'hello',
-      use: [modelArmor({ templateName: 'test', client: mockClient as any })],
+      use: [modelArmor({ templateName: 'test' })],
     });
 
     expect(response.text).toMatch(/Echo: hello/);
@@ -103,7 +107,6 @@ describe('modelArmor', () => {
       use: [
         modelArmor({
           templateName: 'test',
-          client: mockClient as any,
           applyDeidentificationResults: true,
         }),
       ],
@@ -120,7 +123,7 @@ describe('modelArmor', () => {
       ai.generate({
         model: 'echoModel',
         prompt: 'bad stuff',
-        use: [modelArmor({ templateName: 'test', client: mockClient as any })],
+        use: [modelArmor({ templateName: 'test' })],
       })
     ).rejects.toThrow(
       expect.objectContaining({
@@ -142,7 +145,6 @@ describe('modelArmor', () => {
       use: [
         modelArmor({
           templateName: 'test',
-          client: mockClient as any,
           applyDeidentificationResults: true,
         }),
       ],
@@ -159,7 +161,7 @@ describe('modelArmor', () => {
       ai.generate({
         model: 'echoModel',
         prompt: 'hello',
-        use: [modelArmor({ templateName: 'test', client: mockClient as any })],
+        use: [modelArmor({ templateName: 'test' })],
       })
     ).rejects.toThrow(
       expect.objectContaining({
@@ -181,7 +183,6 @@ describe('modelArmor', () => {
       use: [
         modelArmor({
           templateName: 'test',
-          client: mockClient as any,
           protectionTarget: 'userPrompt',
           applyDeidentificationResults: true,
         }),
@@ -203,7 +204,6 @@ describe('modelArmor', () => {
         use: [
           modelArmor({
             templateName: 'test',
-            client: mockClient as any,
             strictSdpEnforcement: true,
             applyDeidentificationResults: true,
           }),
@@ -236,7 +236,6 @@ describe('modelArmor', () => {
       use: [
         modelArmor({
           templateName: 'test',
-          client: mockClient as any,
           filters: ['csam'],
         }),
       ],
@@ -281,7 +280,6 @@ describe('modelArmor', () => {
       use: [
         modelArmor({
           templateName: 'test',
-          client: mockClient as any,
           applyDeidentificationResults: true,
         }),
       ],
@@ -313,24 +311,58 @@ describe('modelArmor', () => {
       createSdpResult('sanitized_text'),
     ];
 
-    const applyFn = ({ messages, sdpResult }: any) => {
+    const applyFn: ApplyDeidentificationResultsFn = ({ messages }) => {
       // Custom logic: replace with "CUSTOM APPLIED" instead of sdpResult data
       const newContent = [{ text: 'CUSTOM APPLIED' }];
       return [{ ...messages[0], content: newContent }];
     };
+    const customAi = genkit({
+      plugins: [
+        modelArmor.plugin({
+          client: mockClient,
+          applyDeidentificationResults: applyFn,
+        }),
+      ],
+    });
+    customAi.defineModel({ name: 'echoModel' }, async (req) => ({
+      message: {
+        role: 'model',
+        content: [{ text: `Echo: ${req.messages[0].content[0].text}` }],
+      },
+    }));
 
-    const response = await ai.generate({
+    const response = await customAi.generate({
+      model: 'echoModel',
+      prompt: 'hello',
+      use: [modelArmor({ templateName: 'test' })],
+    });
+    expect(response.text).toMatch(/Echo: CUSTOM APPLIED/);
+
+    // An explicit `false` turns the plugin's function off for a call.
+    const unchanged = await customAi.generate({
       model: 'echoModel',
       prompt: 'hello',
       use: [
         modelArmor({
           templateName: 'test',
-          client: mockClient as any,
-          applyDeidentificationResults: applyFn,
+          applyDeidentificationResults: false,
         }),
       ],
     });
+    expect(unchanged.text).toMatch(/Echo: hello/);
+  });
 
-    expect(response.text).toMatch(/Echo: CUSTOM APPLIED/);
+  it('keeps the client out of the traced middleware config', () => {
+    const ref = modelArmor({ templateName: 'test', filters: ['rai'] });
+    expect(JSON.parse(JSON.stringify(ref))).toEqual({
+      name: 'modelArmor',
+      config: { templateName: 'test', filters: ['rai'] },
+    });
+  });
+
+  it('requires a templateName', async () => {
+    await expect(
+      ai.generate({ model: 'echoModel', prompt: 'hi', use: [modelArmor()] })
+    ).rejects.toThrow(expect.objectContaining({ status: 'INVALID_ARGUMENT' }));
   });
 });

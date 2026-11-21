@@ -102,7 +102,7 @@ export function defineGenerateAction(registry: Registry): GenerateAction {
         childRegistry,
         request.use
       );
-      request.use = middlewareRefs; // Cast back because `use` can be generic
+      request.use = middlewareRefs;
 
       const resolvedMiddleware = await resolveMiddleware(
         childRegistry,

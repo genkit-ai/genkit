@@ -23,6 +23,7 @@ import type { DocumentData } from '../../src/document.js';
 import { configureFormats } from '../../src/formats/index.js';
 import { generate } from '../../src/generate.js';
 import {
+  defineModel,
   type GenerateRequest,
   type GenerateResponseData,
   type MessageData,
@@ -444,25 +445,34 @@ describe.only('simulateConstrainedGeneration', () => {
   });
 
   it('injects the instructions into the request idempotently', async () => {
-    const pm = defineProgrammableModel(registry);
-    pm.handleResponse = async (req, sc) => {
-      return {
-        message: {
-          role: 'model',
-          content: [{ text: '```\n{"foo": "bar"}\n```' }],
-        },
-      };
-    };
+    // A custom simulator in the model's own `use` runs before the built-in
+    // one, which must then leave the request alone.
+    let lastRequest: GenerateRequest | undefined;
+    defineModel(
+      registry,
+      {
+        name: 'customConstrainedModel',
+        use: [
+          simulateConstrainedGeneration({
+            instructionsRenderer: (schema) =>
+              `must be json: ${JSON.stringify(schema)}`,
+          }),
+        ],
+      },
+      async (req) => {
+        lastRequest = JSON.parse(JSON.stringify(req));
+        return {
+          message: {
+            role: 'model',
+            content: [{ text: '```\n{"foo": "bar"}\n```' }],
+          },
+        };
+      }
+    );
 
     const { output } = await generate(registry, {
-      model: 'programmableModel',
+      model: 'customConstrainedModel',
       prompt: 'generate json',
-      use: [
-        simulateConstrainedGeneration({
-          instructionsRenderer: (schema) =>
-            `must be json: ${JSON.stringify(schema)}`,
-        }),
-      ],
       output: {
         schema: z.object({
           foo: z.string(),
@@ -471,7 +481,7 @@ describe.only('simulateConstrainedGeneration', () => {
       },
     });
     assert.deepEqual(output, { foo: 'bar' });
-    assert.deepStrictEqual(pm.lastRequest, {
+    assert.deepStrictEqual(lastRequest, {
       config: {},
       messages: [
         {

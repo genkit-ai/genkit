@@ -36,7 +36,7 @@ OpenTelemetry exporter such as `@google-cloud/opentelemetry-cloud-trace-exporter
 
 ### Usage
 
-You can use the `modelArmor` middleware in your generation requests:
+`modelArmor` is generate middleware. Pass it in `use` with the per-call options, and optionally register `modelArmor.plugin(...)` to configure the Model Armor client:
 
 ```typescript
 import { modelArmor } from '@genkit-ai/google-cloud/model-armor';
@@ -44,7 +44,15 @@ import { googleAI } from '@genkit-ai/google-genai';
 import { genkit } from 'genkit';
 
 const ai = genkit({
-  plugins: [googleAI()],
+  plugins: [
+    googleAI(),
+    // Optional: configures the Model Armor client.
+    modelArmor.plugin({
+      clientOptions: {
+        apiEndpoint: 'modelarmor.us-central1.rep.googleapis.com',
+      },
+    }),
+  ],
 });
 
 const response = await ai.generate({
@@ -57,9 +65,6 @@ const response = await ai.generate({
       filters: ['pi_and_jailbreak', 'malicious_uris'], // Specific filters to enforce
       strictSdpEnforcement: true, // Block if sensitive data is found even if masked
       protectionTarget: 'all', // 'all', 'userPrompt', or 'modelResponse'
-      clientOptions: {
-        apiEndpoint: 'modelarmor.us-central1.rep.googleapis.com',
-      },
     }),
   ],
 });
@@ -67,11 +72,19 @@ const response = await ai.generate({
 
 ### Configuration Options
 
+Per call, in `modelArmor({...})`:
+
 *   `templateName` (Required): The resource name of your Model Armor template (e.g., `projects/.../locations/.../templates/...`).
 *   `filters` (Optional): A list of filters to enforce (e.g., `rai`, `pi_and_jailbreak`, `malicious_uris`, `csam`, `sdp`). If not specified, all filters enabled in the template are enforced.
 *   `strictSdpEnforcement` (Optional): If `true`, blocks execution if Sensitive Data Protection (SDP) detects sensitive info, even if it was successfully de-identified. Defaults to `false`.
-*   `protectionTarget` (Optional): specificies what to sanitize. Options: `'all'` (default), `'userPrompt'`, `'modelResponse'`.
-*   `clientOptions` (Optional): Additional options for the underlying Model Armor client.
+*   `protectionTarget` (Optional): specifies what to sanitize. Options: `'all'` (default), `'userPrompt'`, `'modelResponse'`.
+*   `applyDeidentificationResults` (Optional): If `true`, replaces the text with the de-identified text from SDP. Defaults to `false`.
+
+Once per app, in `modelArmor.plugin({...})`:
+
+*   `client` (Optional): A `ModelArmorClient` to use.
+*   `clientOptions` (Optional): Options for the default Model Armor client (e.g. `apiEndpoint`).
+*   `applyDeidentificationResults` (Optional): A function that applies SDP results to the messages. Used unless a call sets `applyDeidentificationResults: false`.
 
 ## Firestore Session Store (Beta)
 

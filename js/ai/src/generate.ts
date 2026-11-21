@@ -47,8 +47,8 @@ import { GenerateResponseChunk } from './generate/chunk.js';
 import {
   GenerateMiddleware,
   GenerateMiddlewareDef,
-  generateMiddleware,
   resolveMiddleware,
+  type GenerateMiddlewareArgument,
 } from './generate/middleware.js';
 import { GenerateResponse } from './generate/response.js';
 import { Message } from './message.js';
@@ -62,7 +62,6 @@ import {
   type MessageData,
   type MiddlewareRef,
   type ModelArgument,
-  type ModelMiddlewareArgument,
   type Part,
   type ToolRequestPart,
   type ToolResponsePart,
@@ -179,8 +178,11 @@ export interface GenerateOptions<
   maxTurns?: number;
   /** When provided, models supporting streaming will call the provided callback with chunks as generation progresses. */
   onChunk?: StreamingCallback<GenerateResponseChunk>;
-  /** Middleware to be used with this model call. */
-  use?: (ModelMiddlewareArgument | GenerateMiddleware | MiddlewareRef)[];
+  /**
+   * Generate middleware to apply to this call, e.g. `use: [retry()]`. Each
+   * entry is what calling a `generateMiddleware(...)` factory returns.
+   */
+  use?: GenerateMiddlewareArgument[];
   /** Additional context (data, like e.g. auth) to be passed down to tools, prompts and other sub actions. */
   context?: ActionContext;
   /** Abort signal for the generate request. */
@@ -467,103 +469,91 @@ function messagesFromOptions(options: GenerateOptions): MessageData[] {
 export class GenerationBlockedError extends GenerationResponseError {}
 
 /**
- * Normalizes a mix of middleware representations into an array of standardized `MiddlewareRef`s.
- * Any raw functional middleware or unregistered middleware objects are dynamically registered
- * into the provided registry.
+ * Converts the `use` list of a generate call into plain `MiddlewareRef`s,
+ * registering each ref's middleware definition (`__def`, set by calling a
+ * `generateMiddleware(...)` factory) if nothing is registered under its name
+ * yet. A middleware registered up front (e.g. via `myMiddleware.plugin()`)
+ * takes precedence, so its plugin options apply.
  *
- * @param registry The registry to use for looking up or dynamically registering middleware.
- * @param middlewareList An array of middleware functions, instances, or references.
- * @returns A promise resolving to an array of normalized `MiddlewareRef` objects.
+ * Throws INVALID_ARGUMENT for anything else, including plain model middleware
+ * functions: those belong in `defineModel({ use })`, or wrapped with
+ * `generateMiddleware`.
+ *
+ * @param registry The registry to look up and register middleware in.
+ * @param middlewareList The `use` entries.
+ * @returns The refs, without their definitions.
  */
 export async function normalizeMiddleware(
   registry: Registry,
-  middlewareList?: (
-    ModelMiddlewareArgument | GenerateMiddleware | MiddlewareRef
-  )[]
+  middlewareList?: readonly GenerateMiddlewareArgument[]
 ): Promise<MiddlewareRef[]> {
-  if (!middlewareList || middlewareList.length === 0) {
-    return [];
-  }
-
   const refs: MiddlewareRef[] = [];
-
-  for (let i = 0; i < middlewareList.length; i++) {
-    const middleware = middlewareList[i];
-
-    if (
-      typeof middleware === 'function' &&
-      (middleware as any).instantiate &&
-      (middleware as any).plugin
-    ) {
-      throw new GenkitError({
-        status: 'INVALID_ARGUMENT',
-        message: `Middleware ${(middleware as any).name || 'function'} must be called with () when used in 'use' array.`,
-      });
-    }
-
+  // Widened to `unknown`: plain JS callers can pass anything, so each entry
+  // is checked at runtime.
+  const entries: readonly unknown[] = middlewareList ?? [];
+  for (const middleware of entries) {
     if (typeof middleware === 'function') {
-      const name = `dynamic-middleware-${i}-${Math.random().toString(36).slice(2)}`;
-
-      const wrappedDef = generateMiddleware(
-        { name, metadata: { dynamic: true } },
-        () => ({
-          model: async (req, ctx, next) => {
-            if (middleware.length === 3) {
-              return (middleware as any)(
-                req,
-                ctx,
-                async (modifiedReq: any, opts: any) =>
-                  next(modifiedReq || req, opts || ctx)
-              );
-            } else {
-              return (middleware as any)(req, async (modifiedReq: any) =>
-                next(modifiedReq || req, ctx)
-              );
-            }
-          },
-        })
-      );
-      registry.registerValue('middleware', name, wrappedDef);
-      refs.push({ name });
-      continue;
+      throw invalidMiddlewareError(middleware);
     }
-
-    if (
-      typeof middleware === 'object' &&
-      middleware !== null &&
-      'instantiate' in middleware &&
-      typeof middleware.instantiate === 'function'
-    ) {
-      const def = middleware as GenerateMiddleware;
+    if (isMiddlewareRef(middleware)) {
       const registered = await registry.lookupValue<GenerateMiddleware>(
         'middleware',
-        def.name
+        middleware.name
       );
-      if (!registered) {
-        registry.registerValue('middleware', def.name, def);
+      if (!registered && middleware.__def) {
+        registry.registerValue('middleware', middleware.name, middleware.__def);
       }
-      refs.push({ name: def.name });
+      refs.push({ name: middleware.name, config: middleware.config });
       continue;
     }
-
-    if (
-      typeof middleware === 'object' &&
-      middleware !== null &&
-      'name' in middleware
-    ) {
-      const ref = middleware as MiddlewareRef & { __def?: GenerateMiddleware };
-      const registered = await registry.lookupValue<GenerateMiddleware>(
-        'middleware',
-        ref.name
-      );
-      if (!registered && ref.__def) {
-        registry.registerValue('middleware', ref.name, ref.__def);
-      }
-      refs.push({ name: ref.name, config: ref.config });
-    }
+    throw new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Unsupported entry in 'use': ${describeUseEntry(middleware)}. Expected generate middleware, e.g. 'use: [retry()]'.`,
+    });
   }
-
   return refs;
+}
+
+/**
+ * Short description of a rejected `use` entry for error messages. Avoids
+ * JSON.stringify, which throws on circular objects and could dump large or
+ * sensitive values into the error.
+ */
+function describeUseEntry(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value !== 'object') return `${typeof value} ${String(value)}`;
+  const ctor = Object.getPrototypeOf(value)?.constructor?.name;
+  return `object (${ctor || 'no prototype'}) with keys [${Object.keys(value).join(', ')}]`;
+}
+
+/** A `MiddlewareRef` as returned by a `generateMiddleware(...)` factory. */
+type MiddlewareRefWithDef = MiddlewareRef & { __def?: GenerateMiddleware };
+
+function isMiddlewareRef(value: unknown): value is MiddlewareRefWithDef {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'name' in value &&
+    typeof value.name === 'string'
+  );
+}
+
+function invalidMiddlewareError(fn: { name: string }): GenkitError {
+  if ('instantiate' in fn) {
+    return new GenkitError({
+      status: 'INVALID_ARGUMENT',
+      message: `Middleware '${fn.name}' must be called with () when used in 'use', e.g. 'use: [${fn.name}()]'.`,
+    });
+  }
+  return new GenkitError({
+    status: 'INVALID_ARGUMENT',
+    message:
+      `'use' in generate and prompt options only accepts generate middleware ` +
+      `(created with generateMiddleware()), got a function. Wrap a model ` +
+      `middleware function with generateMiddleware({ name }, () => ({ model: ` +
+      `(req, ctx, next) => ... })), or pass it to the model's own ` +
+      `defineModel({ use }).`,
+  });
 }
 
 /**
@@ -636,7 +626,7 @@ export async function generate<
     registry,
     resolvedOptions.use
   );
-  resolvedOptions.use = middlewareRefs; // Cast back because `use` can be generic
+  resolvedOptions.use = middlewareRefs;
 
   const params = await toGenerateActionOptions(registry, resolvedOptions);
 
@@ -810,7 +800,7 @@ export async function toGenerateActionOptions<
     returnToolRequests: options.returnToolRequests,
     maxTurns: options.maxTurns,
     stepName: options.stepName,
-    use: options.use as MiddlewareRef[] | undefined,
+    use: options.use,
   };
   // if config is empty and it was not explicitly passed in, we delete it, don't want {}
   if (Object.keys(params.config).length === 0 && !options.config) {

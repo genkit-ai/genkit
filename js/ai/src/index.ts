@@ -61,6 +61,7 @@ export {
   MiddlewareDescSchema,
   generateMiddleware,
   type GenerateMiddleware,
+  type GenerateMiddlewareArgument,
   type GenerateMiddlewareDef,
   type MiddlewareDesc,
 } from './generate/middleware.js';
