@@ -133,23 +133,6 @@ export type MultipartToolAction<
     };
   };
 
-/**
- * A dynamic action with a `tool` type. Dynamic tools are detached actions -- not associated with any registry.
- */
-export type DynamicToolAction<
-  I extends GenkitSchema = GenkitSchema,
-  O extends GenkitSchema = GenkitSchema,
-> = Action<I, O, GenkitSchema, ToolRunOptions> & {
-  /** @deprecated no-op, for backwards compatibility only. */
-  attach(registry: Registry): ToolAction<I, O>;
-} & Resumable<I, O> & {
-    __action: {
-      metadata: {
-        type: 'tool';
-      };
-    };
-  };
-
 /** Runtime options passed to a tool when it is executed by the framework. */
 export interface ToolRunOptions extends ActionRunOptions<GenkitSchema> {
   /**
@@ -677,19 +660,4 @@ function multipartTool<I extends GenkitSchema, O extends GenkitSchema>(
   ) as MultipartToolAction<I, O>;
   implementTool(a as any, config);
   return a;
-}
-
-/**
- * Defines a dynamic tool. Dynamic tools are just like regular tools but will not be registered in the
- * Genkit registry and can be defined dynamically at runtime.
- *
- * @deprecated renamed to {@link tool}.
- */
-export function dynamicTool<I extends GenkitSchema, O extends GenkitSchema>(
-  config: ToolConfig<I, O>,
-  fn?: ToolFn<I, O>
-): DynamicToolAction<I, O> {
-  const t = basicTool(config, fn) as DynamicToolAction<I, O>;
-  t.attach = (_: Registry) => t;
-  return t;
 }

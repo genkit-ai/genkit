@@ -53,7 +53,6 @@ import {
 import { GenerateResponse } from './generate/response.js';
 import { Message } from './message.js';
 import {
-  GenerateResponseChunkData,
   GenerateResponseData,
   ResolvedModel,
   resolveModel,
@@ -180,12 +179,6 @@ export interface GenerateOptions<
   maxTurns?: number;
   /** When provided, models supporting streaming will call the provided callback with chunks as generation progresses. */
   onChunk?: StreamingCallback<GenerateResponseChunk>;
-  /**
-   * When provided, models supporting streaming will call the provided callback with chunks as generation progresses.
-   *
-   * @deprecated use {@link onChunk} instead.
-   */
-  streamingCallback?: StreamingCallback<GenerateResponseChunk>;
   /** Middleware to be used with this model call. */
   use?: (ModelMiddlewareArgument | GenerateMiddleware | MiddlewareRef)[];
   /** Additional context (data, like e.g. auth) to be passed down to tools, prompts and other sub actions. */
@@ -652,9 +645,7 @@ export async function generate<
     registry,
     resolvedOptions.resources
   );
-  const streamingCallback = stripNoop(
-    resolvedOptions.onChunk ?? resolvedOptions.streamingCallback
-  ) as StreamingCallback<GenerateResponseChunkData>;
+  const streamingCallback = stripNoop(resolvedOptions.onChunk);
 
   const resolvedMiddleware = await resolveMiddleware(registry, middlewareRefs);
   maybeRegisterDynamicMiddlewareTools(registry, resolvedMiddleware);
@@ -900,11 +891,11 @@ async function resolveFullResourceNames(
   throw new Error(`Unable to resolve resource: ${name}`);
 }
 
-/** Options for {@link Genkit.generateStream}. Same as {@link GenerateOptions} but without `streamingCallback`. */
+/** Options for {@link Genkit.generateStream}. Same as {@link GenerateOptions}. */
 export type GenerateStreamOptions<
   O extends GenkitSchema = GenkitSchema,
   CustomOptions extends GenkitSchema = typeof GenerationCommonConfigSchema,
-> = Omit<GenerateOptions<O, CustomOptions>, 'streamingCallback'>;
+> = GenerateOptions<O, CustomOptions>;
 
 /** The return type of {@link Genkit.generateStream}, providing both a stream of chunks and the final response. */
 export interface GenerateStreamResponse<O = unknown> {

@@ -148,7 +148,7 @@ describe('Anthropic Integration', () => {
     const result = await ai.generate({
       model: 'anthropic/claude-3-5-haiku',
       prompt: 'Say hello world',
-      streamingCallback: (chunk) => {
+      onChunk: (chunk) => {
         chunks.push(chunk);
       },
     });
@@ -516,7 +516,7 @@ describe('Anthropic Integration', () => {
     const result = await ai.generate({
       model: 'anthropic/claude-3-5-haiku',
       prompt: 'Explain how you reason.',
-      streamingCallback: (chunk) => chunks.push(chunk),
+      onChunk: (chunk) => chunks.push(chunk),
       config: { thinking: thinkingConfig },
     });
 

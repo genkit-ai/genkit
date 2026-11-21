@@ -314,20 +314,6 @@ async function subscribeToStream(
 }
 
 /**
- * A wrapper object containing a flow with its associated auth policy.
- * @deprecated Use `withFlowOptions` instead.
- */
-export type FlowWithContextProvider<
-  C extends ActionContext = ActionContext,
-  I extends GenkitSchema = GenkitSchema,
-  O extends GenkitSchema = GenkitSchema,
-  S extends GenkitSchema = GenkitSchema,
-> = {
-  flow: Flow<I, O, S>;
-  context: ContextProvider<C, I>;
-};
-
-/**
  * A wrapper object containing a flow with its associated options.
  */
 export type FlowWithOptions<
@@ -342,25 +328,6 @@ export type FlowWithOptions<
     path?: string;
   };
 };
-
-/**
- * Adds an auth policy to the flow.
- * @deprecated Use `withFlowOptions` instead.
- */
-export function withContextProvider<
-  C extends ActionContext = ActionContext,
-  I extends GenkitSchema = GenkitSchema,
-  O extends GenkitSchema = GenkitSchema,
-  S extends GenkitSchema = GenkitSchema,
->(
-  flow: Flow<I, O, S>,
-  context: ContextProvider<C, I>
-): FlowWithContextProvider<C, I, O, S> {
-  return {
-    flow,
-    context,
-  };
-}
 
 /**
  * Adds an auth policy to the flow.
@@ -388,11 +355,7 @@ export function withFlowOptions<
  */
 export interface FlowServerOptions {
   /** List of flows to expose via the flow server. */
-  flows: (
-    | Flow<any, any, any>
-    | FlowWithContextProvider<any, any, any>
-    | FlowWithOptions<any, any, any>
-  )[];
+  flows: (Flow<any, any, any> | FlowWithOptions<any, any, any>)[];
   /** Port to run the server on. Defaults to env.PORT or 3400. */
   port?: number;
   /** CORS options for the server. */
@@ -450,12 +413,10 @@ export class FlowServer {
     this.options.flows?.forEach((flow) => {
       if ('flow' in flow) {
         const flowPath = `/${pathPrefix}${
-          ('options' in flow && flow.options.path) || flow.flow.__action.name
+          flow.options.path || flow.flow.__action.name
         }`;
         logger.debug(` - ${flowPath}`);
-        const options =
-          'options' in flow ? flow.options : { contextProvider: flow.context };
-        server.post(flowPath, expressHandler(flow.flow, options));
+        server.post(flowPath, expressHandler(flow.flow, flow.options));
       } else {
         const flowPath = `/${pathPrefix}${flow.__action.name}`;
         logger.debug(` - ${flowPath}`);

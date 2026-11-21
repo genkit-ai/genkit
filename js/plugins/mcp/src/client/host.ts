@@ -17,11 +17,11 @@
 import { Root } from '@modelcontextprotocol/sdk/types.js';
 import {
   type DynamicActionProviderAction,
-  type DynamicResourceAction,
   type ExecutablePrompt,
   type Genkit,
   type MultipartToolAction,
   type PromptGenerateOptions,
+  type ResourceAction,
   type ToolAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
@@ -402,12 +402,12 @@ export class GenkitMcpHost<Multipart extends boolean = false> {
    *
    * @param ai The Genkit instance, used by individual clients to define dynamic
    * resources.
-   * @returns A Promise that resolves to an array of `DynamicResourceAction` from all
+   * @returns A Promise that resolves to an array of `ResourceAction` from all
    * active MCP clients.
    */
-  async getActiveResources(ai: Genkit): Promise<DynamicResourceAction[]> {
+  async getActiveResources(ai: Genkit): Promise<ResourceAction[]> {
     await this.ready();
-    let allResources: DynamicResourceAction[] = [];
+    let allResources: ResourceAction[] = [];
 
     for (const serverName in this._clients) {
       const client = this._clients[serverName];

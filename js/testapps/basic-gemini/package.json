@@ -16,6 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@genkit-ai/google-genai": "workspace:*",
+    "@genkit-ai/middleware": "workspace:*",
     "@google/genai": "^1.30.0",
     "genkit": "workspace:*",
     "wav": "^1.0.2"

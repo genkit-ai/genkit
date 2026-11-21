@@ -229,7 +229,7 @@ describe('Effort Parameter Tests', () => {
           effort: 'high',
         },
       },
-      streamingCallback: () => {},
+      onChunk: () => {},
     });
 
     const betaStreamStub = mockClient.beta.messages.stream as any;

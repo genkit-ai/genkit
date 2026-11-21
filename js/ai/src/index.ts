@@ -126,10 +126,8 @@ export {
   ResourceInputSchema,
   ResourceOutputSchema,
   defineResource,
-  dynamicResource,
   isDynamicResourceAction,
   resource,
-  type DynamicResourceAction,
   type ResourceAction,
   type ResourceFn,
   type ResourceInput,
@@ -166,4 +164,3 @@ export {
   type ToolArgument,
   type ToolConfig,
 } from './tool.js';
-export * from './types.js';

@@ -509,7 +509,6 @@ function wrapInExecutablePrompt<
     opts?: PromptGenerateOptions<O, CustomOptions>
   ): Promise<GenerateResponse<InferOutput<O>>> => {
     return await runInNewSpan(
-      wrapOpts.registry,
       {
         metadata: {
           name: (await wrapOpts.rendererAction).__action.name,

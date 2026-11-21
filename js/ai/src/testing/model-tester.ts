@@ -170,48 +170,44 @@ export async function testModels(
     }
   );
 
-  return await runInNewSpan(
-    registry,
-    { metadata: { name: 'testModels' } },
-    async () => {
-      const report: TestReport = [];
-      for (const test of Object.keys(tests)) {
-        await runInNewSpan(registry, { metadata: { name: test } }, async () => {
-          report.push({
-            description: test,
-            models: [],
+  return await runInNewSpan({ metadata: { name: 'testModels' } }, async () => {
+    const report: TestReport = [];
+    for (const test of Object.keys(tests)) {
+      await runInNewSpan({ metadata: { name: test } }, async () => {
+        report.push({
+          description: test,
+          models: [],
+        });
+        const caseReport = report[report.length - 1];
+        for (const model of models) {
+          caseReport.models.push({
+            name: model,
+            passed: true, // optimistically
           });
-          const caseReport = report[report.length - 1];
-          for (const model of models) {
-            caseReport.models.push({
-              name: model,
-              passed: true, // optimistically
-            });
-            const modelReport = caseReport.models[caseReport.models.length - 1];
-            try {
-              await tests[test](registry, model);
-            } catch (e) {
-              modelReport.passed = false;
-              if (e instanceof SkipTestError) {
-                modelReport.skipped = true;
-              } else if (e instanceof Error) {
-                modelReport.error = {
-                  message: e.message,
-                  stack: e.stack,
-                };
-              } else {
-                modelReport.error = {
-                  message: `${e}`,
-                };
-              }
+          const modelReport = caseReport.models[caseReport.models.length - 1];
+          try {
+            await tests[test](registry, model);
+          } catch (e) {
+            modelReport.passed = false;
+            if (e instanceof SkipTestError) {
+              modelReport.skipped = true;
+            } else if (e instanceof Error) {
+              modelReport.error = {
+                message: e.message,
+                stack: e.stack,
+              };
+            } else {
+              modelReport.error = {
+                message: `${e}`,
+              };
             }
           }
-        });
-      }
-
-      return report;
+        }
+      });
     }
-  );
+
+    return report;
+  });
 }
 
 class SkipTestError extends Error {}

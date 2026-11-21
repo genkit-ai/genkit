@@ -163,14 +163,14 @@ describe('logging consolidated api', () => {
     assert.ok(metadata['exception.stacktrace']);
   });
 
-  it('should support deprecated logStructured* shims', () => {
-    logger.logStructured('Structured log', { key: 'val' });
+  it('passes structured metadata through info and error', () => {
+    logger.info('Structured log', { key: 'val' });
     assert.strictEqual(loggedArgs.length, 1);
     assert.strictEqual(loggedArgs[0][0], 'info');
     assert.strictEqual(loggedArgs[0][1], 'Structured log');
     assert.deepStrictEqual(loggedArgs[0][2], { key: 'val' });
 
-    logger.logStructuredError('Error log', { key: 'val' });
+    logger.error('Error log', { key: 'val' });
     assert.strictEqual(loggedArgs.length, 2);
     assert.strictEqual(loggedArgs[1][0], 'error');
     assert.strictEqual(loggedArgs[1][1], 'Error log');

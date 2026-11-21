@@ -77,7 +77,6 @@ export class EvaluatorFactory {
         ...partialRequest,
       };
     return await runInNewSpan(
-      ai,
       {
         metadata: {
           name: 'EvaluationService#evaluateInstances',

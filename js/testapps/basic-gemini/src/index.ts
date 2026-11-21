@@ -15,9 +15,9 @@
  */
 
 import { googleAI, type UrlCitation } from '@genkit-ai/google-genai';
+import { fallback, retry } from '@genkit-ai/middleware';
 import * as fs from 'fs';
 import { Document, genkit, z, type MediaPart } from 'genkit';
-import { fallback, retry } from 'genkit/model/middleware';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import {
@@ -392,7 +392,7 @@ ai.defineFlow('basic-hi-with-retry', async () => {
     use: [
       retry({
         maxRetries: 2,
-        onError: (e, attempt) => console.log('--- oops ', attempt, e),
+        initialDelayMs: 1000,
       }),
     ],
   });
@@ -402,10 +402,10 @@ ai.defineFlow('basic-hi-with-retry', async () => {
 
 ai.defineFlow('basic-hi-with-fallback', async () => {
   const { text } = await ai.generate({
-    model: googleAI.model('gemini-2.5-something-that-does-not-exist'),
+    model: googleAI.model('gemini-something-that-does-not-exist'),
     prompt: 'You are a helpful AI assistant named Walt, say hello',
     use: [
-      fallback(ai, {
+      fallback({
         models: [googleAI.model('gemini-flash-latest')],
         // A model that doesn't exist fails with NOT_FOUND.
         statuses: ['NOT_FOUND', 'UNKNOWN'],

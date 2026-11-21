@@ -16,7 +16,6 @@
 
 import { performance } from 'node:perf_hooks';
 import { getAsyncContext } from '../async-context.js';
-import type { HasRegistry, Registry } from '../registry.js';
 import { DirectTelemetryInstrumentation } from './direct-instrumentation.js';
 import {
   ATTR_PREFIX,
@@ -127,43 +126,12 @@ export function activeInstrumentations(): Instrumentation[] {
 
 /**
  * Runs the provided function in a new span.
- * @deprecated
- * @hidden
- */
-export async function runInNewSpan<T>(
-  registry: Registry | HasRegistry,
-  opts: RunInNewSpanOpts,
-  fn: RunInNewSpanFn<T>
-): Promise<T>;
-
-/**
- * Runs the provided function in a new span.
  * @hidden
  */
 export async function runInNewSpan<T>(
   opts: RunInNewSpanOpts,
   fn: RunInNewSpanFn<T>
-): Promise<T>;
-
-/**
- * Runs the provided function in a new span.
- * @hidden
- */
-export async function runInNewSpan<T>(
-  registryOrOprs: Registry | HasRegistry | RunInNewSpanOpts,
-  optsOrFn: RunInNewSpanOpts | RunInNewSpanFn<T>,
-  fnMaybe?: RunInNewSpanFn<T>
 ): Promise<T> {
-  let opts: RunInNewSpanOpts;
-  let fn: RunInNewSpanFn<T>;
-  if (arguments.length === 3) {
-    opts = optsOrFn as RunInNewSpanOpts;
-    fn = fnMaybe as RunInNewSpanFn<T>;
-  } else {
-    opts = registryOrOprs as RunInNewSpanOpts;
-    fn = optsOrFn as RunInNewSpanFn<T>;
-  }
-
   const parentStep =
     getAsyncContext().getStore<SpanContext>(spanMetadataAlsKey);
   if (!parentStep) opts.metadata.isRoot ||= true;

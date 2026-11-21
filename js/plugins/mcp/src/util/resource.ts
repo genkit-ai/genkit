@@ -22,28 +22,28 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import {
   GenkitError,
-  dynamicResource,
-  type DynamicResourceAction,
+  resource,
   type Genkit,
   type Part,
+  type ResourceAction,
 } from 'genkit';
 import { logger } from 'genkit/logging';
 
 function createDynamicResource(
   client: Client,
-  resource: Resource,
+  mcpResource: Resource,
   params: { serverName: string; name: string }
-): DynamicResourceAction {
-  return dynamicResource(
+): ResourceAction {
+  return resource(
     {
-      name: `${params.serverName}/${resource.name}`,
-      description: resource.description || undefined,
-      metadata: { mcp: { _meta: resource._meta || {} } },
-      uri: resource.uri,
+      name: `${params.serverName}/${mcpResource.name}`,
+      description: mcpResource.description || undefined,
+      metadata: { mcp: { _meta: mcpResource._meta || {} } },
+      uri: mcpResource.uri,
     },
     async (args, { context }) => {
       logger.debug(
-        `[MCP] calling resource '${params.serverName}/${resource.name}' in host '${params.name}'`
+        `[MCP] calling resource '${params.serverName}/${mcpResource.name}' in host '${params.name}'`
       );
       const result = await client.readResource({
         uri: args.uri,
@@ -60,8 +60,8 @@ function createDynamicResourceTemplate(
   client: Client,
   template: ResourceTemplate,
   params: { serverName: string; name: string }
-): DynamicResourceAction {
-  return dynamicResource(
+): ResourceAction {
+  return resource(
     {
       name: `${params.serverName}/${template.name}`,
       description: template.description || undefined,
@@ -115,9 +115,9 @@ export async function fetchDynamicResources(
   ai: Genkit,
   client: Client,
   params: { name: string; serverName: string }
-): Promise<DynamicResourceAction[]> {
+): Promise<ResourceAction[]> {
   let cursor: string | undefined;
-  let allResources: DynamicResourceAction[] = [];
+  let allResources: ResourceAction[] = [];
   while (true) {
     const { nextCursor, resources } = await client.listResources({ cursor });
     allResources.push(

@@ -21,7 +21,6 @@ import { beforeEach, describe, it } from 'node:test';
 import {
   ResourceOutputSchema,
   defineResource,
-  dynamicResource,
   findMatchingResource,
   isDynamicResourceAction,
   resource,
@@ -209,7 +208,7 @@ describe('resource', () => {
       }
     );
     const resList = [
-      dynamicResource({ uri: 'baz://qux' }, () => ({
+      resource({ uri: 'baz://qux' }, () => ({
         content: [{ text: `baz` }],
       })),
     ];
@@ -281,7 +280,7 @@ describe('isDynamicResourceAction', () => {
 
     assert.strictEqual(
       isDynamicResourceAction(
-        dynamicResource({ uri: 'bar://baz' }, () => ({
+        resource({ uri: 'bar://baz' }, () => ({
           content: [{ text: `bar` }],
         }))
       ),

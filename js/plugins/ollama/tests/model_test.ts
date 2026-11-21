@@ -17,7 +17,10 @@ import * as assert from 'assert';
 import { genkit, z, type Genkit } from 'genkit';
 import { beforeEach, describe, it } from 'node:test';
 import { ollama } from '../src/index.js';
-import type { OllamaPluginParams } from '../src/types.js';
+import type {
+  OllamaPluginParams,
+  RequestHeaderFunction,
+} from '../src/types.js';
 
 const MOCK_TOOL_CALL_RESPONSE = {
   model: 'llama3.2',
@@ -128,5 +131,31 @@ describe('ollama models', () => {
         tools: [get_current_weather, fooz],
       });
     });
+  });
+});
+
+describe('ollama request headers', () => {
+  it('passes the model request to the headers function', async () => {
+    let seen: Parameters<RequestHeaderFunction>[0] | undefined;
+    const ai = genkit({
+      plugins: [
+        ollama({
+          models: [{ name: 'test-model' }],
+          serverAddress: 'http://localhost:3000',
+          requestHeaders: async (params) => {
+            seen = params;
+            return { Authorization: 'Bearer token' };
+          },
+        }),
+      ],
+    });
+
+    await ai.generate({ model: 'ollama/test-model', prompt: MAGIC_WORD });
+
+    assert.strictEqual(seen?.serverAddress, 'http://localhost:3000');
+    assert.strictEqual(seen?.model?.name, 'test-model');
+    assert.deepStrictEqual(seen?.modelRequest?.messages[0].content, [
+      { text: MAGIC_WORD },
+    ]);
   });
 });

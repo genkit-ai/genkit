@@ -938,36 +938,14 @@ export function defineActionAsync<
 /** Callback function invoked with each streaming chunk during action execution. */
 export type StreamingCallback<T> = (chunk: T) => void;
 
-const streamingAlsKey = 'core.action.streamingCallback';
+/**
+ * The `sendChunk` an action receives when the caller did not ask for
+ * streaming. Kept as a recognizable identity (rather than `undefined`) so
+ * action code can always call `sendChunk`, while callers that forward it as
+ * `onChunk` (e.g. a non-streamed flow calling `generate`) are still treated as
+ * not streaming.
+ */
 export const sentinelNoopStreamingCallback = () => null;
-
-/**
- * Executes provided function with streaming callback in async local storage which can be retrieved
- * using {@link getStreamingCallback}.
- */
-export function runWithStreamingCallback<S, O>(
-  streamingCallback: StreamingCallback<S> | undefined,
-  fn: () => O
-): O {
-  return getAsyncContext().run(
-    streamingAlsKey,
-    streamingCallback || sentinelNoopStreamingCallback,
-    fn
-  );
-}
-
-/**
- * Retrieves the {@link StreamingCallback} previously set by {@link runWithStreamingCallback}
- *
- * @hidden
- */
-export function getStreamingCallback<S>(): StreamingCallback<S> | undefined {
-  const cb = getAsyncContext().getStore<StreamingCallback<S>>(streamingAlsKey);
-  if (cb === sentinelNoopStreamingCallback) {
-    return undefined;
-  }
-  return cb;
-}
 
 const runtimeContextAslKey = 'core.action.runtimeContext';
 

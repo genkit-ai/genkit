@@ -66,7 +66,7 @@ The `genkit` package also provides subpath imports for specific functionality:
 | `genkit`                  | Main entry — `Genkit` class, `generate`, `defineFlow`, `defineTool`, schemas, types |
 | `genkit/beta`             | Beta features including interrupts (`defineInterrupt`)                              |
 | `genkit/beta/client`      | Client-side helpers (`runFlow`, `streamFlow`)                                       |
-| `genkit/model/middleware` | Model middleware (`retry`, `fallback`, `augmentWithContext`, etc.)                  |
+| `genkit/model/middleware` | Model middleware (`augmentWithContext`, `validateSupport`, etc.)                    |
 | `genkit/plugin`           | Plugin authoring utilities (`model`, `embedder`, `retriever`, etc.)                 |
 | `genkit/model`            | Model types and helpers                                                             |
 | `genkit/embedder`         | Embedder types                                                                      |
@@ -311,10 +311,10 @@ for await (const chunk of stream) {
 
 ### Middleware
 
-Add common functionality to your AI requests with middleware (available in `genkit/model/middleware` and `@genkit-ai/middleware`):
+Add common functionality to your AI requests with middleware from `@genkit-ai/middleware`:
 
 ```ts
-import { retry } from 'genkit/model/middleware';
+import { retry } from '@genkit-ai/middleware';
 
 const { text } = await ai.generate({
   model: googleAI.model('gemini-flash-latest'),
