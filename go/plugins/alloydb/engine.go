@@ -40,16 +40,20 @@ const (
 // PostgresEngine postgres engine
 type PostgresEngine struct {
 	Pool *pgxpool.Pool
+
+	// dialer is the AlloyDB dialer behind a pool the engine built. Nil for a
+	// pool the caller supplied.
+	dialer *alloydbconn.Dialer
 }
 
 // NewPostgresEngine creates a new Postgres Engine.
 func NewPostgresEngine(ctx context.Context, opts ...Option) (*PostgresEngine, error) {
-	pgEngine := new(PostgresEngine)
 	cfg, err := applyEngineOptions(opts)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.connPool == nil {
+	engine := &PostgresEngine{Pool: cfg.connPool}
+	if engine.Pool == nil {
 		user, usingIAMAuth, err := getUser(ctx, cfg)
 		if err != nil {
 			// If no user can be determined, return an error.
@@ -58,18 +62,20 @@ func NewPostgresEngine(ctx context.Context, opts ...Option) (*PostgresEngine, er
 		if usingIAMAuth {
 			cfg.user = user
 		}
-		cfg.connPool, err = createPool(ctx, cfg, usingIAMAuth)
+		engine.Pool, engine.dialer, err = createPool(ctx, cfg, usingIAMAuth)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	if err := cfg.connPool.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect with database %v", err)
+	if err := engine.Pool.Ping(ctx); err != nil {
+		// Release what this call built; a caller's pool stays open.
+		if engine.dialer != nil {
+			engine.Close()
+		}
+		return nil, fmt.Errorf("failed to connect with database: %w", err)
 	}
-
-	pgEngine.Pool = cfg.connPool
-	return pgEngine, nil
+	return engine, nil
 }
 
 func (pgEngine *PostgresEngine) GetClient() *pgxpool.Pool {
@@ -142,20 +148,20 @@ func getServiceAccountEmail(ctx context.Context) (string, error) {
 	return userInfo.Email, nil
 }
 
-// createPool creates a connection pool to the PostgreSQL database.
-func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxpool.Pool, error) {
+// createPool creates a connection pool to the PostgreSQL database, dialed
+// through the AlloyDB connector, and returns the dialer behind it.
+func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxpool.Pool, *alloydbconn.Dialer, error) {
 	config, err := pgengine.PoolConfig(cfg.user, cfg.password, cfg.database, usingIAMAuth)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dialeropts := []alloydbconn.Option{alloydbconn.WithUserAgent(cfg.userAgents)}
 	if usingIAMAuth {
 		dialeropts = append(dialeropts, alloydbconn.WithIAMAuthN())
 	}
-	// TODO(#6811): keep the dialer and close it when the engine closes.
 	d, err := alloydbconn.NewDialer(ctx, dialeropts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize connection: %w", err)
+		return nil, nil, fmt.Errorf("failed to initialize connection: %w", err)
 	}
 	instanceURI := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/instances/%s", cfg.projectID, cfg.region, cfg.cluster, cfg.instance)
 	config.ConnConfig.DialFunc = func(ctx context.Context, _ string, _ string) (net.Conn, error) {
@@ -166,15 +172,20 @@ func createPool(ctx context.Context, cfg engineConfig, usingIAMAuth bool) (*pgxp
 	}
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		return nil, fmt.Errorf("unable to create connection pool: %w", err)
+		d.Close()
+		return nil, nil, fmt.Errorf("unable to create connection pool: %w", err)
 	}
-	return pool, nil
+	return pool, d, nil
 }
 
-// Close closes the pool connection.
+// Close closes the pool connection and the AlloyDB dialer behind a pool
+// [NewPostgresEngine] built.
 func (pgEngine *PostgresEngine) Close() {
 	if pgEngine.Pool != nil {
 		pgEngine.Pool.Close()
+	}
+	if pgEngine.dialer != nil {
+		pgEngine.dialer.Close()
 	}
 }
 
