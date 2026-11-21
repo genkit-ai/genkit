@@ -26,6 +26,7 @@ import {
   MessageSchema,
   dynamicTool,
   genkit,
+  tool,
   z,
   type GenerateResponseData,
   type MediaPart,
@@ -35,11 +36,37 @@ import {
   simulateConstrainedGeneration,
   type ModelMiddleware,
 } from 'genkit/model';
-import type { PluginProvider } from 'genkit/plugin';
+import { genkitPlugin } from 'genkit/plugin';
 import { Allow, parse } from 'partial-json';
 import wav from 'wav';
 
 logger.setLogLevel('debug');
+
+// A minimal local plugin: tools returned from `init` are registered as
+// `math/add` and `math/subtract`.
+const math = genkitPlugin({
+  name: 'math',
+  init: () => [
+    tool(
+      {
+        name: 'add',
+        description: 'add two numbers',
+        inputSchema: z.object({ a: z.number(), b: z.number() }),
+        outputSchema: z.number(),
+      },
+      async ({ a, b }) => a + b
+    ),
+    tool(
+      {
+        name: 'subtract',
+        description: 'subtract two numbers',
+        inputSchema: z.object({ a: z.number(), b: z.number() }),
+        outputSchema: z.number(),
+      },
+      async ({ a, b }) => a - b
+    ),
+  ],
+});
 
 const ai = genkit({
   plugins: [
@@ -55,35 +82,10 @@ const ai = genkit({
     filesystem.plugin(),
     skills.plugin(),
     toolApproval.plugin(),
+    math,
   ],
   model: googleAI.model('gemini-flash-latest'),
 });
-
-const math: PluginProvider = {
-  name: 'math',
-  initializer: async () => {
-    ai.defineTool(
-      {
-        name: 'math/add',
-        description: 'add two numbers',
-        inputSchema: z.object({ a: z.number(), b: z.number() }),
-        outputSchema: z.number(),
-      },
-      async ({ a, b }) => a + b
-    );
-
-    ai.defineTool(
-      {
-        name: 'math/subtract',
-        description: 'subtract two numbers',
-        inputSchema: z.object({ a: z.number(), b: z.number() }),
-        outputSchema: z.number(),
-      },
-      async ({ a, b }) => a - b
-    );
-  },
-};
-ai.registry.registerPluginProvider('math', math);
 
 const app = initializeApp();
 

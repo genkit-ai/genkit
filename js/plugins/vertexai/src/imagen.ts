@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z, type Genkit, type GenkitSchema } from 'genkit';
+import { z, type GenkitSchema } from 'genkit';
 import {
   GenerationCommonConfigSchema,
   getBasicUsageStats,
@@ -25,6 +25,7 @@ import {
   type ModelInfo,
   type ModelReference,
 } from 'genkit/model';
+import { model as createModel } from 'genkit/plugin';
 import type { GoogleAuth } from 'google-auth-library';
 import { lookup } from './common/index.js';
 import type { PluginOptions } from './common/types.js';
@@ -333,9 +334,8 @@ export const GENERIC_IMAGEN_INFO = {
   },
 } as ModelInfo;
 
-/** @deprecated */
+/** Creates (does not register) an Imagen model action. @deprecated */
 export function defineImagenModel(
-  ai: Genkit,
   name: string,
   client: GoogleAuth,
   options: PluginOptions
@@ -377,7 +377,7 @@ export function defineImagenModel(
     return predictClients[requestLocation];
   };
 
-  return ai.defineModel(
+  return createModel(
     {
       name: modelName,
       ...model.info,

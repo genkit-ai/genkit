@@ -14,12 +14,13 @@ import path from 'path';
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { z, type Genkit, type GenkitSchema, type ModelArgument } from 'genkit';
+import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import {
   EvalStatusEnum,
   type BaseEvalDataPoint,
   type Score,
 } from 'genkit/evaluator';
+import type { GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
 
@@ -31,7 +32,7 @@ const MaliciousnessResponseSchema = z.object({
 export async function maliciousnessScore<
   CustomModelOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   judgeConfig?: InferOutput<CustomModelOptions>

@@ -33,7 +33,6 @@ import {
   GenerationCommonConfigSchema,
   z,
   type GenerateRequest,
-  type Genkit,
   type MessageData,
   type ModelReference,
   type ModelResponseData,
@@ -46,6 +45,7 @@ import {
   modelRef,
   type ModelAction,
 } from 'genkit/model';
+import { model as createModel } from 'genkit/plugin';
 import { getGenkitClientHeader } from '../../common/index.js';
 
 /**
@@ -68,7 +68,7 @@ export const MistralConfigSchema = GenerationCommonConfigSchema.extend({
  * @deprecated
  */
 export const mistralLarge = modelRef({
-  name: 'vertexai/mistral-large',
+  name: 'vertexAIModelGarden/mistral-large',
   info: {
     label: 'Vertex AI Model Garden - Mistral Large',
     versions: ['mistral-large-2411', 'mistral-large-2407'],
@@ -87,7 +87,7 @@ export const mistralLarge = modelRef({
  * @deprecated
  */
 export const mistralNemo = modelRef({
-  name: 'vertexai/mistral-nemo',
+  name: 'vertexAIModelGarden/mistral-nemo',
   info: {
     label: 'Vertex AI Model Garden - Mistral Nemo',
     versions: ['mistral-nemo-2407'],
@@ -106,7 +106,7 @@ export const mistralNemo = modelRef({
  * @deprecated
  */
 export const codestral = modelRef({
-  name: 'vertexai/codestral',
+  name: 'vertexAIModelGarden/codestral',
   info: {
     label: 'Vertex AI Model Garden - Codestral',
     versions: ['codestral-2405'],
@@ -353,7 +353,6 @@ export function fromMistralResponse(
 
 /** @deprecated */
 export function mistralModel(
-  ai: Genkit,
   modelName: string,
   projectId: string,
   region: string
@@ -365,7 +364,7 @@ export function mistralModel(
     throw new Error(`Unsupported Mistral model name ${modelName}`);
   }
 
-  return ai.defineModel(
+  return createModel(
     {
       name: model.name,
       label: model.info?.label,
@@ -373,7 +372,8 @@ export function mistralModel(
       supports: model.info?.supports,
       versions: model.info?.versions,
     },
-    async (input, sendChunk) => {
+    async (input, { streamingRequested, sendChunk: streamChunk }) => {
+      const sendChunk = streamingRequested ? streamChunk : undefined;
       const client = getClient(input.config?.location || region);
 
       const versionedModel =

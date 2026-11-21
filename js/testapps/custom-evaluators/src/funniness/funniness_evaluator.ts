@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import type { Genkit, GenkitSchema, ModelReference } from 'genkit';
+import type { GenkitSchema, ModelReference } from 'genkit';
 import type { BaseEvalDataPoint, EvaluatorAction } from 'genkit/evaluator';
+import { evaluator, type GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import type { ByoMetric } from '..';
 import { funninessScore } from './funniness';
@@ -30,19 +31,19 @@ export const FUNNINESS: ByoMetric = {
 export function createFunninessEvaluator<
   ModelCustomOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   judge: ModelReference<ModelCustomOptions>,
   judgeConfig?: InferOutput<ModelCustomOptions>
 ): EvaluatorAction {
-  return ai.defineEvaluator(
+  return evaluator(
     {
-      name: `byo/${FUNNINESS.name}`,
+      name: FUNNINESS.name,
       displayName: 'Funniness',
       definition:
         'Judges whether a statement is a joke and whether that joke is funny.',
     },
     async (datapoint: BaseEvalDataPoint) => {
-      const score = await funninessScore(judge, datapoint, judgeConfig);
+      const score = await funninessScore(ai, judge, datapoint, judgeConfig);
       return {
         testCaseId: datapoint.testCaseId,
         evaluation: score,

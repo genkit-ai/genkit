@@ -20,7 +20,7 @@ import { googleAI } from '@genkit-ai/google-genai';
 import { vertexModelGarden } from '@genkit-ai/vertexai/modelgarden';
 import type { ModelArgument } from 'genkit';
 import { genkit } from 'genkit/beta';
-import { GenkitPluginV2 } from 'genkit/plugin';
+import { GenkitPlugin } from 'genkit/plugin';
 
 // ---------------------------------------------------------------------------
 // Model provider configuration — controlled by GENKIT_MODEL_PROVIDER env var.
@@ -31,7 +31,7 @@ import { GenkitPluginV2 } from 'genkit/plugin';
 // ---------------------------------------------------------------------------
 
 type ProviderConfig = {
-  plugins: () => GenkitPluginV2[];
+  plugins: () => GenkitPlugin[];
   defaultModel: ModelArgument;
   liteModel: ModelArgument;
 };

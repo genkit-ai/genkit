@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import { z, type Document, type Genkit } from 'genkit';
+import { z, type Document } from 'genkit';
 import {
   embedderRef,
   type EmbedderAction,
   type EmbedderReference,
 } from 'genkit/embedder';
+import { embedder as createEmbedder } from 'genkit/plugin';
 import type { GoogleAuth } from 'google-auth-library';
 import type { PluginOptions } from './common/types.js';
 import { predictModel, type PredictClient } from './predict.js';
@@ -270,9 +271,8 @@ type EmbeddingResult = {
   metadata?: Record<string, unknown>;
 };
 
-/** @deprecated */
+/** Creates (does not register) a Vertex AI embedder action. @deprecated */
 export function defineVertexAIEmbedder(
-  ai: Genkit,
   name: string,
   client: GoogleAuth,
   options: PluginOptions
@@ -316,13 +316,13 @@ export function defineVertexAIEmbedder(
     return predictClients[requestLocation];
   };
 
-  return ai.defineEmbedder(
+  return createEmbedder(
     {
       name: embedder.name,
       configSchema: embedder.configSchema,
       info: embedder.info!,
     },
-    async (input, options) => {
+    async ({ input, options }) => {
       const predictClient = predictClientFactory(options);
       const response = await predictClient(
         input.map((doc: Document) => {

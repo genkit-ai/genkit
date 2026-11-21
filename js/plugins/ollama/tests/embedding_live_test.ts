@@ -16,7 +16,6 @@
 import * as assert from 'assert';
 import { genkit } from 'genkit';
 import { describe, it } from 'node:test';
-import { defineOllamaEmbedder } from '../src/embeddings.js'; // Adjust the import path as necessary
 import { ollama } from '../src/index.js';
 import type { OllamaPluginParams } from '../src/types.js'; // Adjust the import path as necessary
 // Utility function to parse command-line arguments
@@ -31,24 +30,18 @@ function parseArgs() {
   return { serverAddress, modelName };
 }
 const { serverAddress, modelName } = parseArgs();
-describe('defineOllamaEmbedder - Live Tests', () => {
+describe('ollama embedders - Live Tests', () => {
   const options: OllamaPluginParams = {
-    models: [{ name: modelName }],
+    embedders: [{ name: modelName, dimensions: 768 }],
     serverAddress,
   };
   it('should successfully return embeddings', async () => {
     const ai = genkit({
       plugins: [ollama(options)],
     });
-    const embedder = defineOllamaEmbedder(ai, {
-      name: 'live-test-embedder',
-      modelName: 'nomic-embed-text',
-      dimensions: 768,
-      options,
-    });
     const result = (
       await ai.embed({
-        embedder,
+        embedder: `ollama/${modelName}`,
         content: 'Hello, world!',
       })
     )[0].embedding;

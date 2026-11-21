@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-import type { Genkit } from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import { getDerivedParams } from '../common/index.js';
 import { vertexEvaluators } from './evaluation.js';
@@ -26,9 +25,12 @@ export type { PluginOptions };
  * Add Google Cloud Vertex AI evaluation metrics to Genkit.
  */
 export function vertexAIEvaluation(options: PluginOptions): GenkitPlugin {
-  return genkitPlugin('vertexAIEvaluation', async (ai: Genkit) => {
-    const { projectId, location, authClient } = await getDerivedParams(options);
-
-    vertexEvaluators(ai, authClient, options.metrics, projectId, location);
+  return genkitPlugin({
+    name: 'vertexAIEvaluation',
+    init: async () => {
+      const { projectId, location, authClient } =
+        await getDerivedParams(options);
+      return vertexEvaluators(authClient, options.metrics, projectId, location);
+    },
   });
 }

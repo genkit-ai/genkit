@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 import { ActionMetadata } from 'genkit';
-import { ResolvableAction, genkitPluginV2 } from 'genkit/plugin';
+import { ResolvableAction, genkitPlugin } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import OpenAI, { type ClientOptions } from 'openai';
 import { compatOaiModelRef, defineCompatOpenAIModel } from './model.js';
@@ -128,7 +128,7 @@ export const openAICompatible = (options: PluginOptions) => {
     });
     return client;
   }
-  return genkitPluginV2({
+  return genkitPlugin({
     name: options.name,
     async init() {
       if (!options.initializer) {

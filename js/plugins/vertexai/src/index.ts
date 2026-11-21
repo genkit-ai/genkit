@@ -26,12 +26,15 @@ import {
   modelRef,
   type ActionMetadata,
   type EmbedderReference,
-  type Genkit,
   type GenkitSchema,
   type ModelReference,
   type z,
 } from 'genkit';
-import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import {
+  genkitPlugin,
+  type GenkitPlugin,
+  type ResolvableAction,
+} from 'genkit/plugin';
 import type { ActionType } from 'genkit/registry';
 import { getDerivedParams } from './common/index.js';
 import type { PluginOptions } from './common/types.js';
@@ -122,7 +125,9 @@ function warnDeprecated() {
   );
 }
 
-async function initializer(ai: Genkit, options?: PluginOptions) {
+async function initializer(
+  options?: PluginOptions
+): Promise<ResolvableAction[]> {
   warnDeprecated();
   if (options?.location === 'global') {
     // Not a breaking change, it already doesn't work.
@@ -136,19 +141,21 @@ async function initializer(ai: Genkit, options?: PluginOptions) {
   const { projectId, location, vertexClientFactory, authClient } =
     await getDerivedParams(options);
 
-  Object.keys(SUPPORTED_IMAGEN_MODELS).map((name) =>
-    defineImagenModel(ai, name, authClient, { projectId, location })
+  const actions: ResolvableAction[] = [];
+  Object.keys(SUPPORTED_IMAGEN_MODELS).forEach((name) =>
+    actions.push(defineImagenModel(name, authClient, { projectId, location }))
   );
-  Object.keys(SUPPORTED_GEMINI_MODELS).map((name) =>
-    defineGeminiKnownModel(
-      ai,
-      name,
-      vertexClientFactory,
-      {
-        projectId,
-        location,
-      },
-      options?.experimental_debugTraces
+  Object.keys(SUPPORTED_GEMINI_MODELS).forEach((name) =>
+    actions.push(
+      defineGeminiKnownModel(
+        name,
+        vertexClientFactory,
+        {
+          projectId,
+          location,
+        },
+        options?.experimental_debugTraces
+      )
     )
   );
   if (options?.models) {
@@ -160,61 +167,56 @@ async function initializer(ai: Genkit, options?: PluginOptions) {
             modelOrRef.name.split('/')[1];
       const modelRef =
         typeof modelOrRef === 'string' ? gemini(modelOrRef) : modelOrRef;
-      defineGeminiModel({
-        ai,
-        modelName: modelRef.name,
-        version: modelName,
-        modelInfo: modelRef.info,
-        vertexClientFactory,
-        options: {
-          projectId,
-          location,
-        },
-        debugTraces: options.experimental_debugTraces,
-      });
+      actions.push(
+        defineGeminiModel({
+          modelName: modelRef.name,
+          version: modelName,
+          modelInfo: modelRef.info,
+          vertexClientFactory,
+          options: {
+            projectId,
+            location,
+          },
+          debugTraces: options.experimental_debugTraces,
+        })
+      );
     }
   }
 
-  Object.keys(SUPPORTED_EMBEDDER_MODELS).map((name) =>
-    defineVertexAIEmbedder(ai, name, authClient, { projectId, location })
+  Object.keys(SUPPORTED_EMBEDDER_MODELS).forEach((name) =>
+    actions.push(
+      defineVertexAIEmbedder(name, authClient, { projectId, location })
+    )
   );
+  return actions;
 }
 
 async function resolver(
-  ai: Genkit,
   actionType: ActionType,
   actionName: string,
   options?: PluginOptions
-) {
+): Promise<ResolvableAction | undefined> {
   warnDeprecated();
   switch (actionType) {
     case 'model':
-      await resolveModel(ai, actionName, options);
-      break;
+      return await resolveModel(actionName, options);
     case 'embedder':
-      await resolveEmbedder(ai, actionName, options);
-      break;
+      return await resolveEmbedder(actionName, options);
     default:
-    // no-op
+      return undefined;
   }
 }
 
-async function resolveModel(
-  ai: Genkit,
-  actionName: string,
-  options?: PluginOptions
-) {
+async function resolveModel(actionName: string, options?: PluginOptions) {
   const { projectId, location, vertexClientFactory, authClient } =
     await getDerivedParams(options);
 
   if (actionName.startsWith('imagen')) {
-    defineImagenModel(ai, actionName, authClient, { projectId, location });
-    return;
+    return defineImagenModel(actionName, authClient, { projectId, location });
   }
 
   const modelRef = gemini(actionName);
-  defineGeminiModel({
-    ai,
+  return defineGeminiModel({
     modelName: modelRef.name,
     version: actionName,
     modelInfo: modelRef.info,
@@ -227,14 +229,13 @@ async function resolveModel(
   });
 }
 
-async function resolveEmbedder(
-  ai: Genkit,
-  actionName: string,
-  options?: PluginOptions
-) {
+async function resolveEmbedder(actionName: string, options?: PluginOptions) {
   const { projectId, location, authClient } = await getDerivedParams(options);
 
-  defineVertexAIEmbedder(ai, actionName, authClient, { projectId, location });
+  return defineVertexAIEmbedder(actionName, authClient, {
+    projectId,
+    location,
+  });
 }
 
 // Vertex AI list models still returns these and the API does not indicate in any way
@@ -291,17 +292,17 @@ async function listActions(options?: PluginOptions) {
  */
 function vertexAIPlugin(options?: PluginOptions): GenkitPlugin {
   let listActionsCache: ActionMetadata[] | undefined;
-  return genkitPlugin(
-    'vertexai',
-    async (ai: Genkit) => await initializer(ai, options),
-    async (ai: Genkit, actionType: ActionType, actionName: string) =>
-      await resolver(ai, actionType, actionName, options),
-    async () => {
+  return genkitPlugin({
+    name: 'vertexai',
+    init: () => initializer(options),
+    resolve: (actionType, actionName) =>
+      resolver(actionType, actionName, options),
+    list: async () => {
       if (listActionsCache) return listActionsCache;
       listActionsCache = await listActions(options);
       return listActionsCache;
-    }
-  );
+    },
+  });
 }
 
 /**

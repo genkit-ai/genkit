@@ -35,7 +35,7 @@ import {
   ToolRequestPart,
   ToolResponsePart,
 } from '../model.js';
-import { type GenkitPluginV2 } from '../plugin.js';
+import { type GenkitPlugin } from '../plugin.js';
 import { ToolAction } from '../tool.js';
 
 /** Descriptor for a registered middleware, returned by reflection API. */
@@ -83,7 +83,7 @@ export interface GenerateMiddleware<
   /**
    * Optional plugin wrapper exposing this middleware for framework-level registration.
    */
-  plugin: (pluginOptions: PluginOptions) => GenkitPluginV2;
+  plugin: (pluginOptions: PluginOptions) => GenkitPlugin;
   /** Generates a JSON-compatible representation of the middleware metadata. */
   toJson: () => MiddlewareDesc;
 }
@@ -193,7 +193,6 @@ export function generateMiddleware<
   def.instantiate = middlewareFn;
   def.plugin = (pluginConfig: PluginOptions) => ({
     name: `middleware:${options.name}`,
-    version: 'v2',
     middleware: () => {
       const wrappedDef = Object.assign(
         function (config?: InferOutput<ConfigSchema>) {
@@ -204,9 +203,6 @@ export function generateMiddleware<
       ) as GenerateMiddlewarePluginInstance<ConfigSchema, PluginOptions>;
       Object.defineProperty(wrappedDef, 'name', { value: options.name });
       return [wrappedDef];
-    },
-    model: (_) => {
-      throw new Error('Not supported for middleware plugins');
     },
   });
 

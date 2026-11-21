@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import type { Genkit, GenkitSchema, ModelArgument } from 'genkit';
+import type { GenkitSchema, ModelArgument } from 'genkit';
 import {
   EvalStatusEnum,
   type BaseEvalDataPoint,
   type Score,
 } from 'genkit/evaluator';
+import type { GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import path from 'path';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
@@ -27,7 +28,7 @@ import { getDirName, loadPromptFile, renderText } from './helper.js';
 export async function answerAccuracyScore<
   CustomModelOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   judgeConfig?: InferOutput<CustomModelOptions>

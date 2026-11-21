@@ -117,7 +117,7 @@ describe('GoogleAI Plugin', () => {
       delete process.env.GOOGLE_GENAI_API_KEY;
       const plugin = googleAI({});
       await assert.rejects(async () => {
-        await plugin.init!();
+        await plugin.init!({ ai: genkit({}) });
       }, MISSING_API_KEY_ERROR);
     });
 
@@ -127,7 +127,7 @@ describe('GoogleAI Plugin', () => {
       delete process.env.GOOGLE_GENAI_API_KEY;
       const plugin = googleAI({ apiKey: false });
       await assert.doesNotReject(async () => {
-        await plugin.init!();
+        await plugin.init!({ ai: genkit({}) });
       });
     });
   });

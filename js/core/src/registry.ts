@@ -433,7 +433,8 @@ export class Registry {
       throw new Error(`Plugin ${name} already registered`);
     }
     this.allPluginsInitialized = false;
-    let cached: any;
+    // Cached so concurrent lookups share one in-flight init.
+    let cached: void | Promise<void>;
     let isInitialized = false;
     this.pluginsByName[name] = {
       name: provider.name,

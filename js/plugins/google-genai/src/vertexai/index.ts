@@ -27,8 +27,8 @@ import {
   type GenkitSchema,
 } from 'genkit';
 import {
-  genkitPluginV2,
-  type GenkitPluginV2,
+  genkitPlugin,
+  type GenkitPlugin,
   type ResolvableAction,
 } from 'genkit/plugin';
 import { type ActionType } from 'genkit/registry';
@@ -130,9 +130,9 @@ async function listActions(options?: VertexPluginOptions) {
 /**
  * Add Google Cloud Vertex AI to Genkit. Includes Gemini and Imagen models and text embedder.
  */
-function vertexAIPlugin(options?: VertexPluginOptions): GenkitPluginV2 {
+function vertexAIPlugin(options?: VertexPluginOptions): GenkitPlugin {
   let listActionsCache: ActionMetadata[] | undefined;
-  return genkitPluginV2({
+  return genkitPlugin({
     name: 'vertexai',
     init: async () => await initializer(options),
     resolve: async (actionType: ActionType, actionName: string) =>
@@ -146,7 +146,7 @@ function vertexAIPlugin(options?: VertexPluginOptions): GenkitPluginV2 {
 }
 
 export type VertexAIPlugin = {
-  (pluginOptions?: VertexPluginOptions): GenkitPluginV2;
+  (pluginOptions?: VertexPluginOptions): GenkitPlugin;
   model(
     name: gemini.KnownTtsModels | (gemini.TTSModelName & {}),
     config?: gemini.GeminiTtsConfig

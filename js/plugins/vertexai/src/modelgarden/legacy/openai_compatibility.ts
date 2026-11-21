@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { Message, z, type Genkit, type StreamingCallback } from 'genkit';
+import { Message, z, type StreamingCallback } from 'genkit';
 import {
   GenerationCommonConfigSchema,
   type CandidateData,
@@ -29,6 +29,7 @@ import {
   type ToolDefinition,
   type ToolRequestPart,
 } from 'genkit/model';
+import { model as createModel } from 'genkit/plugin';
 import type OpenAI from 'openai';
 import type {
   ChatCompletion,
@@ -374,14 +375,13 @@ export function toRequestBody(
 
 /** @deprecated */
 export function openaiCompatibleModel<C extends typeof OpenAIConfigSchema>(
-  ai: Genkit,
   model: ModelReference<any>,
   clientFactory: (request: GenerateRequest<C>) => Promise<OpenAI>
 ): ModelAction<C> {
   const modelId = model.name;
   if (!model) throw new Error(`Unsupported model: ${name}`);
 
-  return ai.defineModel(
+  return createModel(
     {
       name: modelId,
       ...model.info,
@@ -389,8 +389,11 @@ export function openaiCompatibleModel<C extends typeof OpenAIConfigSchema>(
     },
     async (
       request: GenerateRequest<C>,
-      sendChunk?: StreamingCallback<GenerateResponseChunkData>
+      { streamingRequested, sendChunk: streamChunk }
     ): Promise<GenerateResponseData> => {
+      const sendChunk:
+        StreamingCallback<GenerateResponseChunkData> | undefined =
+        streamingRequested ? streamChunk : undefined;
       let response: ChatCompletion;
       const client = await clientFactory(request);
       const body = toRequestBody(model, request);

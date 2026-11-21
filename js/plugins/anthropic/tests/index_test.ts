@@ -23,6 +23,7 @@ import { TEST_ONLY } from '../src/models.js';
 import { PluginOptions, __testClient } from '../src/types.js';
 
 import { createMockAnthropicClient } from './mocks/anthropic-client.js';
+import { pluginContext } from './mocks/plugin-context.js';
 
 const { KNOWN_MODELS } = TEST_ONLY;
 
@@ -96,7 +97,11 @@ describe('Anthropic Plugin', () => {
     assert.ok(plugin.resolve, 'Plugin should have resolve method');
 
     // Test resolving a valid model
-    const validModel = plugin.resolve!('model', 'anthropic/claude-haiku-4-5');
+    const validModel = plugin.resolve!(
+      'model',
+      'claude-haiku-4-5',
+      pluginContext
+    );
     assert.ok(validModel, 'Should resolve valid model');
     assert.strictEqual(typeof validModel, 'function');
 
@@ -104,7 +109,8 @@ describe('Anthropic Plugin', () => {
     // (following Google GenAI pattern: accept any model name, let API validate)
     const unknownModel = plugin.resolve!(
       'model',
-      'anthropic/unknown-model-xyz'
+      'unknown-model-xyz',
+      pluginContext
     );
     assert.ok(unknownModel, 'Should resolve unknown model name');
     assert.strictEqual(
@@ -116,7 +122,8 @@ describe('Anthropic Plugin', () => {
     // Test resolving with invalid action type (using 'tool' as invalid for this context)
     const invalidActionType = plugin.resolve!(
       'tool',
-      'anthropic/claude-haiku-4-5'
+      'claude-haiku-4-5',
+      pluginContext
     );
     assert.strictEqual(
       invalidActionType,
@@ -256,7 +263,11 @@ describe('Per-request API key support', () => {
 
     try {
       const plugin = anthropic({ apiKey: false });
-      const modelAction = plugin.resolve!('model', 'claude-3-5-haiku') as any;
+      const modelAction = plugin.resolve!(
+        'model',
+        'claude-3-5-haiku',
+        pluginContext
+      ) as any;
 
       await assert.rejects(
         async () => {
@@ -285,7 +296,7 @@ describe('Anthropic resolve helpers', () => {
     const mockClient = createMockAnthropicClient();
     const plugin = anthropic({ [__testClient]: mockClient } as PluginOptions);
 
-    const action = plugin.resolve?.('model', 'claude-haiku-4-5');
+    const action = plugin.resolve?.('model', 'claude-haiku-4-5', pluginContext);
     assert.ok(action, 'Should resolve model without prefix');
     assert.strictEqual(typeof action, 'function');
   });
@@ -307,7 +318,7 @@ describe('Anthropic resolve helpers', () => {
       [__testClient]: mockClient,
     } as PluginOptions);
 
-    const action = plugin.resolve?.('model', 'anthropic/claude-haiku-4-5');
+    const action = plugin.resolve?.('model', 'claude-haiku-4-5', pluginContext);
     assert.ok(action, 'Action should be resolved');
 
     const abortSignal = new AbortController().signal;

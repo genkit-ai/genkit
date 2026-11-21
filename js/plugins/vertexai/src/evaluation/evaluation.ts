@@ -15,7 +15,7 @@
  */
 
 import type { protos } from '@google-cloud/aiplatform';
-import { z, type Action, type Genkit } from 'genkit';
+import { z, type EvaluatorAction } from 'genkit';
 import type { GoogleAuth } from 'google-auth-library';
 import { EvaluatorFactory } from './evaluator_factory.js';
 import {
@@ -29,12 +29,11 @@ function stringify(input: unknown) {
 }
 
 export function vertexEvaluators(
-  ai: Genkit,
   auth: GoogleAuth,
   metrics: VertexAIEvaluationMetric[],
   projectId: string,
   location: string
-): Action[] {
+): EvaluatorAction[] {
   const factory = new EvaluatorFactory(auth, location, projectId);
   return metrics.map((metric) => {
     const { type: metricType, metricSpec } = isConfig(metric)
@@ -43,28 +42,28 @@ export function vertexEvaluators(
 
     switch (metricType) {
       case VertexAIEvaluationMetricType.BLEU: {
-        return createBleuEvaluator(ai, factory, metricSpec);
+        return createBleuEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.ROUGE: {
-        return createRougeEvaluator(ai, factory, metricSpec);
+        return createRougeEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.FLUENCY: {
-        return createFluencyEvaluator(ai, factory, metricSpec);
+        return createFluencyEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.SAFETY: {
-        return createSafetyEvaluator(ai, factory, metricSpec);
+        return createSafetyEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.GROUNDEDNESS: {
-        return createGroundednessEvaluator(ai, factory, metricSpec);
+        return createGroundednessEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY: {
-        return createSummarizationQualityEvaluator(ai, factory, metricSpec);
+        return createSummarizationQualityEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS: {
-        return createSummarizationHelpfulnessEvaluator(ai, factory, metricSpec);
+        return createSummarizationHelpfulnessEvaluator(factory, metricSpec);
       }
       case VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY: {
-        return createSummarizationVerbosityEvaluator(ai, factory, metricSpec);
+        return createSummarizationVerbosityEvaluator(factory, metricSpec);
       }
     }
   });
@@ -84,12 +83,10 @@ const BleuResponseSchema = z.object({
 
 // TODO: Add support for batch inputs
 function createBleuEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.IBleuSpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.BLEU,
       displayName: 'BLEU',
@@ -129,12 +126,10 @@ const RougeResponseSchema = z.object({
 
 // TODO: Add support for batch inputs
 function createRougeEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.IRougeSpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.ROUGE,
       displayName: 'ROUGE',
@@ -175,12 +170,10 @@ const FluencyResponseSchema = z.object({
 });
 
 function createFluencyEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.IFluencySpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.FLUENCY,
       displayName: 'Fluency',
@@ -217,12 +210,10 @@ const SafetyResponseSchema = z.object({
 });
 
 function createSafetyEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.ISafetySpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.SAFETY,
       displayName: 'Safety',
@@ -259,12 +250,10 @@ const GroundednessResponseSchema = z.object({
 });
 
 function createGroundednessEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.IGroundednessSpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.GROUNDEDNESS,
       displayName: 'Groundedness',
@@ -303,12 +292,10 @@ const SummarizationQualityResponseSchema = z.object({
 });
 
 function createSummarizationQualityEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationQualitySpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.SUMMARIZATION_QUALITY,
       displayName: 'Summarization quality',
@@ -347,12 +334,10 @@ const SummarizationHelpfulnessResponseSchema = z.object({
 });
 
 function createSummarizationHelpfulnessEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationHelpfulnessSpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.SUMMARIZATION_HELPFULNESS,
       displayName: 'Summarization helpfulness',
@@ -392,12 +377,10 @@ const SummarizationVerbositySchema = z.object({
 });
 
 function createSummarizationVerbosityEvaluator(
-  ai: Genkit,
   factory: EvaluatorFactory,
   metricSpec: protos.google.cloud.aiplatform.v1.ISummarizationVerbositySpec
-): Action {
+): EvaluatorAction {
   return factory.create(
-    ai,
     {
       metric: VertexAIEvaluationMetricType.SUMMARIZATION_VERBOSITY,
       displayName: 'Summarization verbosity',

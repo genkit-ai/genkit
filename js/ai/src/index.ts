@@ -99,7 +99,7 @@ export {
 } from './model.js';
 export { type OperationOptions } from './operation.js';
 export { type ToolRequest, type ToolResponse } from './parts.js';
-export { type GenkitPluginV2 } from './plugin.js';
+export { type GenkitPlugin, type PluginContext } from './plugin.js';
 export {
   defineHelper,
   definePartial,

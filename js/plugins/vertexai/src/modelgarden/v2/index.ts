@@ -20,7 +20,7 @@ import {
   type ActionMetadata,
   type GenkitSchema,
 } from 'genkit';
-import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
+import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import { getDerivedParams } from '../../common/index.js';
 import * as anthropic from './anthropic.js';
@@ -75,11 +75,9 @@ async function listActions(options?: PluginOptions) {
 /**
  * Add Google Cloud Vertex AI Model Garden to Genkit.
  */
-export function vertexModelGardenPlugin(
-  options: PluginOptions
-): GenkitPluginV2 {
+export function vertexModelGardenPlugin(options: PluginOptions): GenkitPlugin {
   let listActionsCache: ActionMetadata[] | undefined;
-  return genkitPluginV2({
+  return genkitPlugin({
     name: 'vertex-model-garden',
     init: async () => await initializer(options),
     resolve: async (actionType: ActionType, actionName: string) =>
@@ -93,7 +91,7 @@ export function vertexModelGardenPlugin(
 }
 
 export type VertexModelGardenPlugin = {
-  (pluginOptions?: PluginOptions): GenkitPluginV2;
+  (pluginOptions?: PluginOptions): GenkitPlugin;
   model(
     name: anthropic.KnownModels | (anthropic.AnthropicModelName & {}),
     config?: anthropic.AnthropicConfig

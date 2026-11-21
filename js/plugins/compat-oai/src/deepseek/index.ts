@@ -23,7 +23,7 @@ import {
   type GenkitSchema,
 } from 'genkit';
 import { logger } from 'genkit/logging';
-import { type GenkitPluginV2 } from 'genkit/plugin';
+import { type GenkitPlugin } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import { openAICompatible, PluginOptions } from '../index.js';
@@ -77,9 +77,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
   );
 };
 
-export function deepSeekPlugin(
-  options?: DeepSeekPluginOptions
-): GenkitPluginV2 {
+export function deepSeekPlugin(options?: DeepSeekPluginOptions): GenkitPlugin {
   const apiKey = options?.apiKey ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
     throw new GenkitError({
@@ -111,7 +109,7 @@ export function deepSeekPlugin(
 }
 
 export type DeepSeekPlugin = {
-  (params?: DeepSeekPluginOptions): GenkitPluginV2;
+  (params?: DeepSeekPluginOptions): GenkitPlugin;
   model(
     name: keyof typeof SUPPORTED_DEEPSEEK_MODELS,
     config?: z.infer<typeof DeepSeekChatCompletionConfigSchema>

@@ -15,8 +15,9 @@
  */
 
 import type { protos } from '@google-cloud/aiplatform';
-import { type Action, type Genkit, type z } from 'genkit';
+import { type EvaluatorAction, type z } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import { evaluator } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import { runInNewSpan } from 'genkit/tracing';
 import type { GoogleAuth } from 'google-auth-library';
@@ -31,7 +32,6 @@ export class EvaluatorFactory {
   ) {}
 
   create<ResponseType extends z.ZodType<any, any>>(
-    ai: Genkit,
     config: {
       metric: VertexAIEvaluationMetricType;
       displayName: string;
@@ -42,17 +42,17 @@ export class EvaluatorFactory {
       datapoint: BaseEvalDataPoint
     ) => protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseHandler: (response: InferOutput<ResponseType>) => Score
-  ): Action {
-    return ai.defineEvaluator(
+  ): EvaluatorAction {
+    // Registered as `vertexAIEvaluation/<metric>` (namespaced by plugin name).
+    return evaluator(
       {
-        name: `vertexai/${config.metric.toLocaleLowerCase()}`,
+        name: config.metric.toLocaleLowerCase(),
         displayName: config.displayName,
         definition: config.definition,
       },
       async (datapoint: BaseEvalDataPoint) => {
         const responseSchema = config.responseSchema;
         const response = await this.evaluateInstances(
-          ai,
           toRequest(datapoint),
           responseSchema
         );
@@ -66,7 +66,6 @@ export class EvaluatorFactory {
   }
 
   async evaluateInstances<ResponseType extends z.ZodType<any, any>>(
-    ai: Genkit,
     partialRequest: protos.google.cloud.aiplatform.v1.IEvaluateInstancesRequest,
     responseSchema: ResponseType
   ): Promise<InferOutput<ResponseType>> {
@@ -77,7 +76,6 @@ export class EvaluatorFactory {
         ...partialRequest,
       };
     return await runInNewSpan(
-      ai,
       {
         metadata: {
           name: 'EvaluationService#evaluateInstances',

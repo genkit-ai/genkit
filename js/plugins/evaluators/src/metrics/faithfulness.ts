@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-import { z, type Genkit, type GenkitSchema, type ModelArgument } from 'genkit';
+import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import {
   EvalStatusEnum,
   type BaseEvalDataPoint,
   type Score,
 } from 'genkit/evaluator';
+import type { GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import path from 'path';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
@@ -43,7 +44,7 @@ const NliResponseSchema = z.object({
 export async function faithfulnessScore<
   CustomModelOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   judgeConfig?: InferOutput<CustomModelOptions>
