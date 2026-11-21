@@ -61,29 +61,22 @@ export async function startMcpServer(params: {
   defineTraceTools(server, options);
   defineRuntimeTools(server, options);
 
-  return new Promise(async (resolve) => {
-    const transport = new StdioServerTransport();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  logger.info('Genkit MCP Server running on stdio');
+
+  return new Promise((resolve) => {
     const cleanup = async () => {
       try {
         await manager.kill();
-      } catch (e) {
+      } catch {
         // ignore
       }
       resolve(undefined);
       process.exit(0);
     };
-    transport.onclose = async () => {
-      try {
-        await manager.kill();
-      } catch (e) {
-        // ignore
-      }
-      resolve(undefined);
-      process.exit(0);
-    };
+    server.server.onclose = cleanup;
     process.on('SIGINT', cleanup);
     process.on('SIGTERM', cleanup);
-    await server.connect(transport);
-    logger.info('Genkit MCP Server running on stdio');
   });
 }
