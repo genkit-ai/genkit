@@ -45,6 +45,22 @@ export default defineConfig(
     },
   },
   {
+    files: ['*/src/**/*.ts', '*/tests/**/*.ts'],
+    languageOptions: {
+      parserOptions: {
+        project: [
+          './cli/tsconfig.test.json',
+          './common/tsconfig.test.json',
+          './telemetry-server/tsconfig.test.json',
+        ],
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      '@typescript-eslint/await-thenable': 'error',
+    },
+  },
+  {
     files: ['**/*.test.ts'],
     plugins: {
       vitest: vitestPlugin,

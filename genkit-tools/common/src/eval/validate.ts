@@ -55,7 +55,7 @@ export async function validateSchema(
   const errorsMap: Record<string, ErrorDetail[]> = {};
 
   if (datasetId) {
-    const datasetStore = await getDatasetStore();
+    const datasetStore = getDatasetStore();
     const dataset = await datasetStore.getDataset(datasetId);
     if (dataset.length === 0) {
       return { valid: true };
