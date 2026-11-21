@@ -77,7 +77,7 @@ describe('Tools Server', () => {
         input: 'bar',
       });
     } catch (e: any) {
-      throw new Error(`runAction failed: ${e.message}`);
+      throw new Error(`runAction failed: ${e.message}`, { cause: e });
     }
 
     expect(response.data.result).toBe('bar');
@@ -142,7 +142,7 @@ describe('Tools Server', () => {
         traceId,
       });
     } catch (e: any) {
-      throw new Error(`send/end input failed: ${e.message}`);
+      throw new Error(`send/end input failed: ${e.message}`, { cause: e });
     }
 
     await collectPromise;
