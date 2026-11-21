@@ -74,6 +74,7 @@ export function toTranslationRequest(
       media.url.slice('data:'.length, media.url.indexOf(';')),
   });
   const {
+    apiKey,
     temperature,
     version: modelVersion,
     maxOutputTokens,
