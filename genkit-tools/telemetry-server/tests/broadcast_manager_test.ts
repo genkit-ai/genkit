@@ -15,10 +15,9 @@
  */
 
 import type { SpanData } from '@genkit-ai/tools-common';
-import * as assert from 'assert';
 import { EventEmitter } from 'events';
 import type { Response } from 'express';
-import { beforeEach, describe, it } from 'node:test';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { BroadcastManager, type SpanEvent } from '../src/broadcast-manager.js';
 
 /**
@@ -93,19 +92,19 @@ describe('BroadcastManager', () => {
     manager.broadcast('trace-1', event);
 
     const expectedData = `data: ${JSON.stringify(event)}\n\n`;
-    assert.strictEqual(response1.writtenData[0], expectedData);
-    assert.strictEqual(response2.writtenData[0], expectedData);
+    expect(response1.writtenData[0]).toBe(expectedData);
+    expect(response2.writtenData[0]).toBe(expectedData);
   });
 
   it('auto-unsubscribes when connection closes', () => {
     const response = createMockResponse();
     manager.subscribe('trace-1', response);
 
-    assert.strictEqual(manager.getConnectionCount('trace-1'), 1);
+    expect(manager.getConnectionCount('trace-1')).toBe(1);
 
     response.emit('close');
 
-    assert.strictEqual(manager.getConnectionCount('trace-1'), 0);
+    expect(manager.getConnectionCount('trace-1')).toBe(0);
   });
 
   it('close() ends all connections for a traceId', () => {
@@ -117,8 +116,8 @@ describe('BroadcastManager', () => {
 
     manager.close('trace-1');
 
-    assert.strictEqual(response1.ended, true);
-    assert.strictEqual(response2.ended, true);
-    assert.strictEqual(manager.hasConnections('trace-1'), false);
+    expect(response1.ended).toBe(true);
+    expect(response2.ended).toBe(true);
+    expect(manager.hasConnections('trace-1')).toBe(false);
   });
 });
