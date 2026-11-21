@@ -222,7 +222,7 @@ describe('exporter', () => {
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
-      const expectedRecord = `testCase1,\"{\"\"subject\"\":\"\"something\"\",\"\"style\"\":\"\"structured\"\"}\",output,[],[],0.5,faithful,,123,456`;
+      const expectedRecord = `testCase1,"{""subject"":""something"",""style"":""structured""}",output,[],[],0.5,faithful,,123,456`;
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
         CSV_OUTPUT_FILE,
         `${expectedHeader}\n${expectedRecord}`
@@ -250,10 +250,10 @@ describe('exporter', () => {
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
-      const expectedRecord = `testCase1,input,output,[],[],,,\"errored
+      const expectedRecord = `testCase1,input,output,[],[],,,"errored
 with
 a
-carriage return\",,`;
+carriage return",,`;
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
         CSV_OUTPUT_FILE,
         `${expectedHeader}\n${expectedRecord}`
@@ -284,7 +284,7 @@ carriage return\",,`;
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
-      const expectedRecord = `testCase1,input,output,\"[\"\"context1\"\",\"\"context2\"\"]\",\"[\"\"trace1\"\",\"\"trace2\"\"]\",0.5,faithful,,123,456`;
+      const expectedRecord = `testCase1,input,output,"[""context1"",""context2""]","[""trace1"",""trace2""]",0.5,faithful,,123,456`;
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
         CSV_OUTPUT_FILE,
         `${expectedHeader}\n${expectedRecord}`
@@ -315,7 +315,7 @@ carriage return\",,`;
 
       const expectedHeader =
         'testCaseId,input,output,context,traceIds,faithfulness_score,faithfulness_rationale,faithfulness_error,faithfulness_traceId,faithfulness_spanId';
-      const expectedRecord = `testCase1,\"input, with, extra, commas\",output,[],[],0.5,faithful,,123,456`;
+      const expectedRecord = `testCase1,"input, with, extra, commas",output,[],[],0.5,faithful,,123,456`;
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
         CSV_OUTPUT_FILE,
         `${expectedHeader}\n${expectedRecord}`

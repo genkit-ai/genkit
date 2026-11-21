@@ -39,6 +39,7 @@ export default defineConfig(
       'no-extra-boolean-cast': 'error',
       'no-prototype-builtins': 'error',
       'no-useless-assignment': 'error',
+      'no-useless-escape': 'error',
     },
   },
   {
