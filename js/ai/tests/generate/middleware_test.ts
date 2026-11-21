@@ -534,6 +534,33 @@ describe('generateMiddleware', () => {
     );
   });
 
+  it('rejects unknown entries without serializing them', async () => {
+    const mockModel = defineModel(
+      registry,
+      { name: 'mockModel' },
+      async () => ({
+        message: { role: 'model', content: [{ text: 'done' }] },
+        finishReason: 'stop',
+      })
+    );
+    // Circular, so JSON.stringify would throw while building the error.
+    const circular: Record<string, unknown> = { kind: 'not middleware' };
+    circular.self = circular;
+
+    await assert.rejects(
+      generate(registry, {
+        model: mockModel,
+        prompt: 'test',
+        use: [circular as unknown as GenerateMiddlewareArgument],
+      }),
+      (err: GenkitError) => {
+        assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+        assert.match(err.message, /Unsupported entry in 'use'.*\[kind, self\]/);
+        return true;
+      }
+    );
+  });
+
   it('injects tools from new-style generateMiddleware and executes tool requests', async () => {
     let toolExecutionCount = 0;
 

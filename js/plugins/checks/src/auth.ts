@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { GenkitError } from 'genkit';
 import { logger } from 'genkit/logging';
 import { GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
 
@@ -34,9 +35,20 @@ export function initializeAuth(options?: GoogleAuthOptions): GoogleAuth {
   // Allow customers to pass in cloud credentials from environment variables
   // following: https://github.com/googleapis/google-auth-library-nodejs?tab=readme-ov-file#loading-credentials-from-environment-variables
   if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
-    const serviceAccountCreds = JSON.parse(
-      process.env.GCLOUD_SERVICE_ACCOUNT_CREDS
-    );
+    let serviceAccountCreds: GoogleAuthOptions['credentials'];
+    try {
+      serviceAccountCreds = JSON.parse(
+        process.env.GCLOUD_SERVICE_ACCOUNT_CREDS
+      );
+    } catch {
+      // Don't include the value or the parser message: both can contain
+      // fragments of the private key.
+      throw new GenkitError({
+        status: 'INVALID_ARGUMENT',
+        message:
+          'Checks: GCLOUD_SERVICE_ACCOUNT_CREDS is set but is not valid JSON.',
+      });
+    }
     options = {
       credentials: serviceAccountCreds,
       scopes: [CLOUD_PLATFROM_OAUTH_SCOPE, CHECKS_OAUTH_SCOPE],

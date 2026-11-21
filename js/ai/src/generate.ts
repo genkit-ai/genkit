@@ -508,10 +508,22 @@ export async function normalizeMiddleware(
     }
     throw new GenkitError({
       status: 'INVALID_ARGUMENT',
-      message: `Unsupported entry in 'use': ${JSON.stringify(middleware)}. Expected generate middleware, e.g. 'use: [retry()]'.`,
+      message: `Unsupported entry in 'use': ${describeUseEntry(middleware)}. Expected generate middleware, e.g. 'use: [retry()]'.`,
     });
   }
   return refs;
+}
+
+/**
+ * Short description of a rejected `use` entry for error messages. Avoids
+ * JSON.stringify, which throws on circular objects and could dump large or
+ * sensitive values into the error.
+ */
+function describeUseEntry(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value !== 'object') return `${typeof value} ${String(value)}`;
+  const ctor = Object.getPrototypeOf(value)?.constructor?.name;
+  return `object (${ctor || 'no prototype'}) with keys [${Object.keys(value).join(', ')}]`;
 }
 
 /** A `MiddlewareRef` as returned by a `generateMiddleware(...)` factory. */
