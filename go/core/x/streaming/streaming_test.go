@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -400,6 +401,90 @@ func TestInMemoryStreamManager_LateSubscriberGetsBufferedChunks(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("Timeout waiting for buffered chunk %d", i)
 		}
+	}
+}
+
+func TestInMemoryStreamManager_ReplayLargeHistory(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name      string
+		completed bool
+		streamErr error
+	}{
+		{name: "open"},
+		{name: "done", completed: true},
+		{name: "error", completed: true, streamErr: errors.New("stream failed")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			m := NewInMemoryStreamManager()
+			defer m.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			writer, err := m.Open(ctx, "large-history")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const numChunks = 150
+			for i := 0; i < numChunks; i++ {
+				if err := writer.Write(ctx, json.RawMessage(strconv.Itoa(i))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			output := json.RawMessage(`{"final":true}`)
+			finish := func() {
+				t.Helper()
+				var err error
+				if tt.streamErr != nil {
+					err = writer.Error(ctx, tt.streamErr)
+				} else {
+					err = writer.Done(ctx, output)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.completed {
+				finish()
+			}
+			events, unsubscribe, err := m.Subscribe(ctx, "large-history")
+			if err != nil {
+				t.Fatalf("Subscribe: %v", err)
+			}
+			defer unsubscribe()
+			wantChunks := numChunks
+			if !tt.completed {
+				// Live events can arrive before the subscriber drains its replay.
+				const liveChunks = 50
+				wantChunks += liveChunks
+				for i := numChunks; i < wantChunks; i++ {
+					if err := writer.Write(ctx, json.RawMessage(strconv.Itoa(i))); err != nil {
+						t.Fatal(err)
+					}
+				}
+				finish()
+			}
+			for i := 0; i < wantChunks; i++ {
+				event, ok := <-events
+				if !ok || event.Type != StreamEventChunk || string(event.Chunk) != strconv.Itoa(i) {
+					t.Fatalf("chunk %d = %+v (open=%v), want chunk %d", i, event, ok, i)
+				}
+			}
+			event, ok := <-events
+			if !ok {
+				t.Fatal("stream closed before terminal event")
+			}
+			if tt.streamErr != nil {
+				if event.Type != StreamEventError || !errors.Is(event.Err, tt.streamErr) {
+					t.Errorf("terminal event = %+v, want error %v", event, tt.streamErr)
+				}
+			} else if event.Type != StreamEventDone || string(event.Output) != string(output) {
+				t.Errorf("terminal event = %+v, want done with output %s", event, output)
+			}
+			if _, ok := <-events; ok {
+				t.Error("stream remains open after terminal event")
+			}
+		})
 	}
 }
 
