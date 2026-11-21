@@ -158,7 +158,7 @@ export function startServer(
   );
 
   // Download UI assets from public GCS bucket and serve locally
-  downloadAndExtractUiAssets({
+  void downloadAndExtractUiAssets({
     fileUrl: UI_ASSETS_ZIP_GCS_PATH,
     extractPath: UI_ASSETS_ROOT,
     zipFileName: UI_ASSETS_ZIP_FILE_NAME,

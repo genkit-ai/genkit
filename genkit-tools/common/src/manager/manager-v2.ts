@@ -725,7 +725,7 @@ export class RuntimeManagerV2 extends BaseRuntimeManager {
       });
 
     if (inputStream) {
-      (async () => {
+      void (async () => {
         try {
           for await (const chunk of inputStream!) {
             this.sendNotification(runtimeId!, 'sendInputStreamChunk', {
