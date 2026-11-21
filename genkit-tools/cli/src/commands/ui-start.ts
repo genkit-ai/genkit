@@ -79,13 +79,13 @@ export const uiStart = new Command('ui:start')
           );
           logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
           return;
-        } catch (error) {
+        } catch {
           logger.debug(
             'Found UI server metadata but server is not healthy. Starting a new one...'
           );
         }
       }
-    } catch (error) {
+    } catch {
       logger.debug('No UI running. Starting a new one...');
     }
     logger.info('Starting...');
@@ -108,7 +108,7 @@ export const uiStart = new Command('ui:start')
           2
         )
       );
-    } catch (error) {
+    } catch {
       logger.error(
         `Failed to write UI server metadata. UI server will continue to run.`
       );
@@ -119,7 +119,7 @@ export const uiStart = new Command('ui:start')
     logger.info(`  To stop the UI, run \`genkit ui:stop\`.\n`);
     try {
       await axios.get(`http://localhost:${port}/api/trpc/listActions`);
-    } catch (error) {
+    } catch {
       logger.info(
         'Set env variable `GENKIT_ENV` to `dev` and start your app code to interact with it in the UI.'
       );

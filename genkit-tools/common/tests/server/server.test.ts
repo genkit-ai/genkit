@@ -55,12 +55,12 @@ describe('Tools Server', () => {
   afterEach(async () => {
     const exitSpy = vi
       .spyOn(process, 'exit')
-      .mockImplementation((code?: any) => {
+      .mockImplementation((_code?: any) => {
         return undefined as never;
       });
     try {
       await axios.post(`http://localhost:${port}/api/__quitquitquit`);
-    } catch (e) {
+    } catch {
       // Ignore
     }
     await serverPromise;
@@ -119,7 +119,7 @@ describe('Tools Server', () => {
 
     const traceId = 'test-trace-id';
     // Get the onTraceId callback from the mock call args
-    const [inputArg, cb, onTraceIdCallback] =
+    const [_inputArg, cb, onTraceIdCallback] =
       mockManager.runAction.mock.calls[0];
     onTraceIdCallback(traceId);
 

@@ -98,7 +98,7 @@ function safeParse(value?: string) {
   if (value) {
     try {
       return JSON.parse(value);
-    } catch (e) {
+    } catch {
       return '';
     }
   }
