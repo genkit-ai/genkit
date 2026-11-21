@@ -408,7 +408,7 @@ async function runPromptAction(params: {
     });
 
     renderedPrompt = {
-      traceId: runActionResponse.telemetry?.traceId!,
+      traceId: runActionResponse.telemetry?.traceId ?? '',
       result: runActionResponse.result as GenerateActionOptions,
     };
   } catch (e: any) {

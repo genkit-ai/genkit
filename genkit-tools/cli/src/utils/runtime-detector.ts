@@ -15,7 +15,7 @@
  */
 
 import { existsSync } from 'fs';
-import { basename, extname } from 'path';
+import { basename } from 'path';
 
 const RUNTIME_NODE = 'node';
 const RUNTIME_BUN = 'bun';
@@ -23,8 +23,6 @@ const RUNTIME_COMPILED = 'compiled-binary';
 
 const NODE_PATTERNS = ['node', 'nodejs'];
 const BUN_PATTERNS = ['bun'];
-
-const SCRIPT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx'];
 
 /**
  * CLI runtime types supported by the detector
@@ -59,18 +57,6 @@ function safeExistsSync(path: string | undefined): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Checks if the given path has a recognized script file extension
- * @param path - File path to check
- * @returns true if the path ends with a known script extension
- * @internal Kept for potential future use, though not currently used in detection logic
- */
-function isLikelyScriptFile(path: string | undefined): boolean {
-  if (!path) return false;
-  const ext = extname(path).toLowerCase();
-  return SCRIPT_EXTENSIONS.includes(ext);
 }
 
 /**

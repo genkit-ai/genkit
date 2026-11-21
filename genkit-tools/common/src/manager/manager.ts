@@ -558,7 +558,7 @@ export class RuntimeManager extends BaseRuntimeManager {
     input: apis.RunActionRequest,
     streamingCallback?: StreamingCallback<any>,
     onTraceId?: (traceId: string) => void,
-    inputStream?: AsyncIterable<any>
+    _inputStream?: AsyncIterable<any>
   ): Promise<RunActionResponse> {
     const runtime = input.runtimeId
       ? this.getRuntimeById(input.runtimeId)
@@ -1023,7 +1023,7 @@ export class RuntimeManager extends BaseRuntimeManager {
         const body = await this.streamToString(error.response.data);
         try {
           error.response.data = JSON.parse(body);
-        } catch (e) {
+        } catch {
           error.response.data = {
             message: body || 'Unknown error',
           };

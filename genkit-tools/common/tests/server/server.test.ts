@@ -55,12 +55,12 @@ describe('Tools Server', () => {
   afterEach(async () => {
     const exitSpy = vi
       .spyOn(process, 'exit')
-      .mockImplementation((code?: any) => {
+      .mockImplementation((_code?: any) => {
         return undefined as never;
       });
     try {
       await axios.post(`http://localhost:${port}/api/__quitquitquit`);
-    } catch (e) {
+    } catch {
       // Ignore
     }
     await serverPromise;
@@ -77,7 +77,7 @@ describe('Tools Server', () => {
         input: 'bar',
       });
     } catch (e: any) {
-      throw new Error(`runAction failed: ${e.message}`);
+      throw new Error(`runAction failed: ${e.message}`, { cause: e });
     }
 
     expect(response.data.result).toBe('bar');
@@ -119,7 +119,7 @@ describe('Tools Server', () => {
 
     const traceId = 'test-trace-id';
     // Get the onTraceId callback from the mock call args
-    const [inputArg, cb, onTraceIdCallback] =
+    const [_inputArg, cb, onTraceIdCallback] =
       mockManager.runAction.mock.calls[0];
     onTraceIdCallback(traceId);
 
@@ -142,7 +142,7 @@ describe('Tools Server', () => {
         traceId,
       });
     } catch (e: any) {
-      throw new Error(`send/end input failed: ${e.message}`);
+      throw new Error(`send/end input failed: ${e.message}`, { cause: e });
     }
 
     await collectPromise;
