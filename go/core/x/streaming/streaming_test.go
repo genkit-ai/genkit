@@ -452,10 +452,19 @@ func TestInMemoryStreamManager_ReplayLargeHistory(t *testing.T) {
 				t.Fatalf("Subscribe: %v", err)
 			}
 			defer unsubscribe()
+			wantChunks := numChunks
 			if !tt.completed {
+				// Live events can arrive before the subscriber drains its replay.
+				const liveChunks = 50
+				wantChunks += liveChunks
+				for i := numChunks; i < wantChunks; i++ {
+					if err := writer.Write(ctx, json.RawMessage(strconv.Itoa(i))); err != nil {
+						t.Fatal(err)
+					}
+				}
 				finish()
 			}
-			for i := 0; i < numChunks; i++ {
+			for i := 0; i < wantChunks; i++ {
 				event, ok := <-events
 				if !ok || event.Type != StreamEventChunk || string(event.Chunk) != strconv.Itoa(i) {
 					t.Fatalf("chunk %d = %+v (open=%v), want chunk %d", i, event, ok, i)
