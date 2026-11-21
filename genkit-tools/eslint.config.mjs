@@ -40,6 +40,7 @@ export default defineConfig(
         { fn: 'it', withinDescribe: 'it' },
       ],
       'vitest/require-top-level-describe': 'error',
+      'vitest/no-identical-title': 'error',
     },
   }
 );
