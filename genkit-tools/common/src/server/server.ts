@@ -391,12 +391,12 @@ export function startServer(
   };
   app.use(errorHandler);
 
-  const server: Server = app.listen(port, host, async () => {
+  const server: Server = app.listen(port, host, () => {
     const uiUrl = 'http://localhost:' + port;
     const projectRoot = manager.projectRoot;
     logger.info(`${clc.green(clc.bold('Project root:'))} ${projectRoot}`);
     logger.info(`${clc.green(clc.bold('Genkit Developer UI:'))} ${uiUrl}`);
-    await writeToolsInfoFile(uiUrl, projectRoot);
+    void writeToolsInfoFile(uiUrl, projectRoot);
   });
 
   return new Promise<void>((resolve) => {

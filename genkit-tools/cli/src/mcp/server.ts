@@ -66,14 +66,16 @@ export async function startMcpServer(params: {
   logger.info('Genkit MCP Server running on stdio');
 
   return new Promise((resolve) => {
-    const cleanup = async () => {
-      try {
-        await manager.kill();
-      } catch {
-        // ignore
-      }
-      resolve(undefined);
-      process.exit(0);
+    const cleanup = () => {
+      void (async () => {
+        try {
+          await manager.kill();
+        } catch {
+          // ignore
+        }
+        resolve(undefined);
+        process.exit(0);
+      })();
     };
     server.server.onclose = cleanup;
     process.on('SIGINT', cleanup);

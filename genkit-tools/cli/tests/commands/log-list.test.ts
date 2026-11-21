@@ -43,8 +43,8 @@ describe('log:list command', () => {
 
     (findProjectRoot as Mock<any>).mockResolvedValue('/mock/project/root');
 
-    (runWithManager as Mock<any>).mockImplementation(
-      async (projectRoot: any, action: any) => {
+    vi.mocked(runWithManager).mockImplementation(
+      async (_projectRoot, action) => {
         await action(mockManager);
       }
     );
