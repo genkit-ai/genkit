@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+import { isValidTraceId } from '@opentelemetry/api';
 import express from 'express';
 import fs from 'fs/promises';
 import getPort, { makeRange } from 'get-port';
 import type { Server } from 'http';
+import { randomUUID } from 'node:crypto';
 import path from 'path';
 import * as z from 'zod';
 import { StatusCodes, statusNameToCode, type Status } from './action.js';
@@ -120,7 +122,7 @@ export class ReflectionServer {
   private server: Server | null = null;
   /** Path to the runtime file. Null if server is not running. */
   private runtimeFilePath: string | null = null;
-  /** Map of active actions indexed by trace ID for cancellation support. */
+  /** Map of active actions indexed by their cancellation ID. */
   private activeActions = new Map<
     string,
     {
@@ -368,6 +370,8 @@ export class ReflectionServer {
       logger.debug(`Running action \`${key}\` with stream=${stream}...`);
       const abortController = new AbortController();
       let traceId: string | undefined;
+      let cancellationId: string | undefined;
+      const fallbackCancellationId = randomUUID();
       try {
         const action = await this.registry.lookupAction(key);
         if (!action) {
@@ -384,12 +388,13 @@ export class ReflectionServer {
           traceId: string;
           spanId: string;
         }) => {
-          traceId = tid; // Update traceId for cleanup later
-          this.activeActions.set(tid, {
+          traceId = tid;
+          cancellationId = isValidTraceId(tid) ? tid : fallbackCancellationId;
+          this.activeActions.set(cancellationId, {
             abortController,
             startTime: new Date(),
           });
-          response.setHeader('X-Genkit-Trace-Id', tid);
+          response.setHeader('X-Genkit-Trace-Id', cancellationId);
           response.setHeader('X-Genkit-Span-Id', spanId);
           response.setHeader('X-Genkit-Version', GENKIT_VERSION);
           if (stream === 'true') {
@@ -491,8 +496,8 @@ export class ReflectionServer {
           next({ message, stack });
         }
       } finally {
-        if (traceId) {
-          this.activeActions.delete(traceId);
+        if (cancellationId) {
+          this.activeActions.delete(cancellationId);
         }
       }
     });
