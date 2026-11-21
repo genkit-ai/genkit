@@ -437,7 +437,7 @@ for result, err := range genkit.GenerateStream(ctx, g, /* same options */) {
 
 ### Structured Output
 
-Get type-safe JSON output that maps directly to your Go structs:
+Get type-safe JSON output that maps directly to your Go types:
 
 ```go
 type Recipe struct {
@@ -459,6 +459,8 @@ for result, err := range genkit.GenerateDataStream[Recipe](ctx, g, /* same optio
     fmt.Println(len(result.Chunk.Ingredients)) // result.Chunk is the Recipe so far
 }
 ```
+
+Any JSON type works, scalars included: `GenerateData[int]`, `GenerateData[bool]`, `GenerateData[string]`.
 
 [Docs](https://genkit.dev/docs/go/models/#structured-output) &middot; [Example](samples/basic-structured/main.go)
 
