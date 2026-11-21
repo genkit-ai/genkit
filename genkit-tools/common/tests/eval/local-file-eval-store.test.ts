@@ -181,7 +181,7 @@ describe('localFileEvalStore', () => {
   });
 
   describe('save', () => {
-    const testSave = async (evalRun: EvalRun) => {
+    const assertSave = async (evalRun: EvalRun) => {
       await evalStore.save(evalRun);
 
       expect(fs.promises.writeFile).toHaveBeenCalledWith(
@@ -198,11 +198,11 @@ describe('localFileEvalStore', () => {
     };
 
     it('writes and updates index for eval run with actionId', async () => {
-      await testSave(EVAL_RUN_WITH_ACTION);
+      await assertSave(EVAL_RUN_WITH_ACTION);
     });
 
     it('persists a new evalRun file without an actionId', async () => {
-      await testSave(EVAL_RUN_WITHOUT_ACTION);
+      await assertSave(EVAL_RUN_WITHOUT_ACTION);
     });
   });
 

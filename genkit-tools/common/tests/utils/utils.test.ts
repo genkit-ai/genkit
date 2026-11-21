@@ -151,13 +151,11 @@ describe('utils', () => {
 
   describe('projectNameFromGenkitFilePath', () => {
     it('returns unknown for empty string', () => {
-      expect(projectNameFromGenkitFilePath('')).toEqual('unknown');
+      expect(projectNameFromGenkitFilePath('')).toBe('unknown');
     });
 
     it('returns unknown for an invalid path', () => {
-      expect(projectNameFromGenkitFilePath('/path/to/nowhere')).toEqual(
-        'unknown'
-      );
+      expect(projectNameFromGenkitFilePath('/path/to/nowhere')).toBe('unknown');
     });
 
     it('returns project name from a typical runtime file path', () => {
@@ -165,7 +163,7 @@ describe('utils', () => {
         projectNameFromGenkitFilePath(
           '/path/to/test-project/.genkit/runtimes/123.json'
         )
-      ).toEqual('test-project');
+      ).toBe('test-project');
     });
 
     it('returns project name from any path that contains a .genkit dir', () => {
@@ -173,7 +171,7 @@ describe('utils', () => {
         projectNameFromGenkitFilePath(
           '/path/to/test-project/.genkit/unexpected/but/valid/location'
         )
-      ).toEqual('test-project');
+      ).toBe('test-project');
     });
   });
 

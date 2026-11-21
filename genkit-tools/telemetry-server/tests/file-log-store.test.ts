@@ -78,11 +78,11 @@ describe('LocalFileLogStore', () => {
     const resultTrace2 = await logStore.list({ traceId: 'trace-2' });
 
     // Returns newest first based on the LogIndex implementation
-    expect(resultTrace1.logs.length).toBe(2);
+    expect(resultTrace1.logs).toHaveLength(2);
     expect(resultTrace1.logs[0].logId).toBe('log-3');
     expect(resultTrace1.logs[1].logId).toBe('log-1');
 
-    expect(resultTrace2.logs.length).toBe(1);
+    expect(resultTrace2.logs).toHaveLength(1);
     expect(resultTrace2.logs[0].logId).toBe('log-2');
   });
 
@@ -107,7 +107,7 @@ describe('LocalFileLogStore', () => {
     await logStore.save(mockLogs);
 
     const result = await logStore.list({ spanId: 'span-x' });
-    expect(result.logs.length).toBe(1);
+    expect(result.logs).toHaveLength(1);
     expect(result.logs[0].logId).toBe('log-1');
   });
 
@@ -125,7 +125,7 @@ describe('LocalFileLogStore', () => {
     await logStore.save(mockLogs);
 
     const result = await logStore.list({ traceId: 'trace-missing-id' });
-    expect(result.logs.length).toBe(1);
+    expect(result.logs).toHaveLength(1);
     expect(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
         result.logs[0].logId

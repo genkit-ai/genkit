@@ -218,6 +218,13 @@ describe('ui:start', () => {
       mockedFs.writeFile.mockResolvedValue(undefined);
 
       await createCommand().parseAsync(['node', 'ui:start']);
+
+      expect(mockedLogger.error).not.toHaveBeenCalled();
+      expect(mockedBuildServerHarnessSpawnConfig).toHaveBeenCalledWith(
+        mockCLIRuntime,
+        expect.any(Number),
+        mockLogPath
+      );
     });
   });
 
