@@ -16,7 +16,7 @@
     "compile": "pnpm genversion && tsc",
     "build:clean": "rimraf ./lib",
     "build": "pnpm run build:clean && pnpm run compile",
-    "test": "node --import tsx --test tests/*_test.ts",
+    "test": "vitest run",
     "build:watch": "pnpm genversion && tsc --watch",
     "genversion": "genversion -esf src/utils/version.ts"
   },
@@ -47,7 +47,8 @@
     "get-port": "^7.2.0",
     "rimraf": "^6.1.3",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   },
   "types": "./lib/index.d.ts",
   "exports": {

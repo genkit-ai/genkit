@@ -15,8 +15,7 @@
  */
 
 import type { SpanData } from '@genkit-ai/tools-common';
-import * as assert from 'assert';
-import { describe, it } from 'node:test';
+import { describe, expect, it } from 'vitest';
 import { spanBroadcastEvents } from '../src/index.js';
 
 function span(spanId: string, startTime: number, endTime: number): SpanData {
@@ -39,19 +38,13 @@ describe('spanBroadcastEvents', () => {
   it('emits span_start then span_end for a completed span', () => {
     const s = span('a', 100, 200);
     const events = spanBroadcastEvents('t', [s], { a: s });
-    assert.deepStrictEqual(
-      events.map((e) => e.type),
-      ['span_start', 'span_end']
-    );
+    expect(events.map((e) => e.type)).toEqual(['span_start', 'span_end']);
   });
 
   it('emits only span_start for an in-progress span', () => {
     const s = span('a', 100, 0);
     const events = spanBroadcastEvents('t', [s], { a: s });
-    assert.deepStrictEqual(
-      events.map((e) => e.type),
-      ['span_start']
-    );
+    expect(events.map((e) => e.type)).toEqual(['span_start']);
   });
 
   it('suppresses a stale start for a span the store already has as ended', () => {
@@ -60,7 +53,7 @@ describe('spanBroadcastEvents', () => {
     const incoming = span('a', 100, 0); // start payload, no endTime
     const merged = { a: span('a', 100, 200) }; // already ended on disk
     const events = spanBroadcastEvents('t', [incoming], merged);
-    assert.deepStrictEqual(events, []);
+    expect(events).toEqual([]);
   });
 
   it('still emits span_start for a genuinely new in-progress span', () => {
@@ -68,10 +61,7 @@ describe('spanBroadcastEvents', () => {
     const incoming = span('a', 100, 0);
     const merged = { a: span('a', 100, 0) };
     const events = spanBroadcastEvents('t', [incoming], merged);
-    assert.deepStrictEqual(
-      events.map((e) => e.type),
-      ['span_start']
-    );
+    expect(events.map((e) => e.type)).toEqual(['span_start']);
   });
 
   it('orders events chronologically, start before end on ties', () => {
@@ -81,14 +71,11 @@ describe('spanBroadcastEvents', () => {
       parent,
       child,
     });
-    assert.deepStrictEqual(
-      events.map((e) => `${e.type}:${e.span.spanId}`),
-      [
-        'span_start:parent',
-        'span_start:child',
-        'span_end:child',
-        'span_end:parent',
-      ]
-    );
+    expect(events.map((e) => `${e.type}:${e.span.spanId}`)).toEqual([
+      'span_start:parent',
+      'span_start:child',
+      'span_end:child',
+      'span_end:parent',
+    ]);
   });
 });

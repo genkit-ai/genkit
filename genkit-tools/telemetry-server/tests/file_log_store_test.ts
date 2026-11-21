@@ -15,11 +15,10 @@
  */
 
 import { LogRecordData } from '@genkit-ai/tools-common';
-import * as assert from 'assert';
 import * as fs from 'fs';
-import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LocalFileLogStore } from '../src/file-log-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -79,12 +78,12 @@ describe('LocalFileLogStore', () => {
     const resultTrace2 = await logStore.list({ traceId: 'trace-2' });
 
     // Returns newest first based on the LogIndex implementation
-    assert.strictEqual(resultTrace1.logs.length, 2);
-    assert.strictEqual(resultTrace1.logs[0].logId, 'log-3');
-    assert.strictEqual(resultTrace1.logs[1].logId, 'log-1');
+    expect(resultTrace1.logs.length).toBe(2);
+    expect(resultTrace1.logs[0].logId).toBe('log-3');
+    expect(resultTrace1.logs[1].logId).toBe('log-1');
 
-    assert.strictEqual(resultTrace2.logs.length, 1);
-    assert.strictEqual(resultTrace2.logs[0].logId, 'log-2');
+    expect(resultTrace2.logs.length).toBe(1);
+    expect(resultTrace2.logs[0].logId).toBe('log-2');
   });
 
   it('should retrieve logs by spanId', async () => {
@@ -108,8 +107,8 @@ describe('LocalFileLogStore', () => {
     await logStore.save(mockLogs);
 
     const result = await logStore.list({ spanId: 'span-x' });
-    assert.strictEqual(result.logs.length, 1);
-    assert.strictEqual(result.logs[0].logId, 'log-1');
+    expect(result.logs.length).toBe(1);
+    expect(result.logs[0].logId).toBe('log-1');
   });
 
   it('should populate logId if none belongs', async () => {
@@ -126,11 +125,11 @@ describe('LocalFileLogStore', () => {
     await logStore.save(mockLogs);
 
     const result = await logStore.list({ traceId: 'trace-missing-id' });
-    assert.strictEqual(result.logs.length, 1);
-    assert.ok(
+    expect(result.logs.length).toBe(1);
+    expect(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
         result.logs[0].logId
       )
-    );
+    ).toBeTruthy();
   });
 });

@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import * as assert from 'assert';
-import { describe, it } from 'node:test';
+import { describe, expect, it } from 'vitest';
 import { logDataFromOtlp, traceDataFromOtlp } from '../src/utils/otlp.js';
 
 describe('otlp-traces', () => {
@@ -146,7 +145,7 @@ describe('otlp-traces', () => {
     ];
 
     const result = traceDataFromOtlp(otlpPayload as any);
-    assert.deepStrictEqual(result, expectedTraceData);
+    expect(result).toEqual(expectedTraceData);
   });
 
   it('should transform OTLP payload with non-zero status to TraceData', () => {
@@ -211,7 +210,7 @@ describe('otlp-traces', () => {
     ];
 
     const result = traceDataFromOtlp(otlpPayload as any);
-    assert.deepStrictEqual(result, expectedTraceData);
+    expect(result).toEqual(expectedTraceData);
   });
 });
 
@@ -297,6 +296,6 @@ describe('otlp-logs', () => {
     const result = logDataFromOtlp(otlpPayload);
     // Overwrite the random logId generator for deep strict equal
     result.forEach((log) => (log.logId = ''));
-    assert.deepStrictEqual(result, expectedLogData);
+    expect(result).toEqual(expectedLogData);
   });
 });
