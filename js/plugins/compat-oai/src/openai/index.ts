@@ -25,7 +25,7 @@ import {
   z,
   type GenkitSchema,
 } from 'genkit';
-import { type GenkitPluginV2, type ResolvableAction } from 'genkit/plugin';
+import { type GenkitPlugin, type ResolvableAction } from 'genkit/plugin';
 import { type ActionType } from 'genkit/registry';
 import OpenAI from 'openai';
 import {
@@ -192,7 +192,7 @@ const listActions = async (client: OpenAI): Promise<ActionMetadata[]> => {
   );
 };
 
-export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
+export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPlugin {
   const pluginOptions = { name: 'openai', ...options };
   return openAICompatible({
     name: 'openai',
@@ -270,7 +270,7 @@ export function openAIPlugin(options?: OpenAIPluginOptions): GenkitPluginV2 {
 }
 
 export type OpenAIPlugin = {
-  (params?: OpenAIPluginOptions): GenkitPluginV2;
+  (params?: OpenAIPluginOptions): GenkitPlugin;
   model(
     name:
       | keyof typeof SUPPORTED_IMAGE_MODELS

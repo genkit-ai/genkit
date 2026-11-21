@@ -24,6 +24,7 @@ import {
   createMockAnthropicClient,
   createMockAnthropicMessage,
 } from './mocks/anthropic-client.js';
+import { pluginContext } from './mocks/plugin-context.js';
 
 describe('Model Execution Integration Tests', () => {
   test('should resolve and execute a model via plugin', async () => {
@@ -44,7 +45,8 @@ describe('Model Execution Integration Tests', () => {
     // Resolve the model action via plugin
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     assert.strictEqual(
@@ -100,7 +102,8 @@ describe('Model Execution Integration Tests', () => {
 
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const request: GenerateRequest = {
@@ -154,7 +157,8 @@ describe('Model Execution Integration Tests', () => {
 
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     // Claude can return a thinking block with an empty `thinking` string and
@@ -206,7 +210,8 @@ describe('Model Execution Integration Tests', () => {
 
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const request: GenerateRequest = {
@@ -271,7 +276,8 @@ describe('Model Execution Integration Tests', () => {
 
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -308,7 +314,8 @@ describe('Model Execution Integration Tests', () => {
 
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -345,45 +352,10 @@ describe('Model Execution Integration Tests', () => {
     // Resolve without prefix
     const modelAction = plugin.resolve(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
     assert.ok(modelAction, 'Model should be resolved without prefix');
-
-    const response = await modelAction(
-      {
-        messages: [{ role: 'user', content: [{ text: 'Hi' }] }],
-      },
-      {
-        streamingRequested: false,
-        sendChunk: mock.fn(),
-        abortSignal: new AbortController().signal,
-      } as Parameters<typeof modelAction>[1]
-    );
-
-    assert.ok(response, 'Response should be returned');
-  });
-
-  test('should resolve model with anthropic prefix', async () => {
-    const mockClient = createMockAnthropicClient({
-      messageResponse: createMockAnthropicMessage({
-        text: 'Response',
-      }),
-    });
-
-    const plugin = anthropic({
-      apiKey: 'test-key',
-      [__testClient]: mockClient,
-    } as PluginOptions);
-
-    // Verify plugin has resolve method
-    assert.ok(plugin.resolve, 'Plugin should have resolve method');
-
-    // Resolve with prefix
-    const modelAction = plugin.resolve(
-      'model',
-      'anthropic/claude-3-5-haiku-20241022'
-    ) as ModelAction;
-    assert.ok(modelAction, 'Model should be resolved with prefix');
 
     const response = await modelAction(
       {
@@ -417,7 +389,8 @@ describe('Model Execution Integration Tests', () => {
     // Resolve unknown model (passes through to API)
     const modelAction = plugin.resolve(
       'model',
-      'claude-99-experimental-12345'
+      'claude-99-experimental-12345',
+      pluginContext
     ) as ModelAction;
     assert.ok(modelAction, 'Unknown model should still be resolved');
 

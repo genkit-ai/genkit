@@ -14,12 +14,7 @@
  * limitations under the License.
  */
 import { googleAI } from '@genkit-ai/google-genai';
-import {
-  genkit,
-  type Genkit,
-  type GenkitSchema,
-  type ModelReference,
-} from 'genkit';
+import { genkit, type GenkitSchema, type ModelReference } from 'genkit';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import {
@@ -47,7 +42,7 @@ export const ai = genkit({
   plugins: [
     googleAI(),
     byoEval({
-      judge: googleAI.model('gemini-2.5-flash'),
+      judge: googleAI.model('gemini-flash-latest'),
       judgeConfig: PERMISSIVE_SAFETY_SETTINGS,
       metrics: [
         // regexMatcher will register an evaluator with a name in the format
@@ -85,31 +80,28 @@ export interface PluginOptions<ModelCustomOptions extends GenkitSchema> {
 export function byoEval<ModelCustomOptions extends GenkitSchema>(
   params: PluginOptions<ModelCustomOptions>
 ): GenkitPlugin {
-  // Define the new plugin
-  return genkitPlugin('byo', async (ai: Genkit) => {
-    const { judge, judgeConfig, metrics } = params;
-    if (!metrics) {
-      throw new Error(`Found no configured metrics.`);
-    }
-    const regexMetrics = metrics?.filter((metric) => isRegexMetric(metric));
-    const hasPiiMetric = metrics?.includes(PII_DETECTION);
-    const hasFunninessMetric = metrics?.includes(FUNNINESS);
-    const hasDelicousnessMetric = metrics?.includes(DELICIOUSNESS);
-
-    if (regexMetrics) {
-      createRegexEvaluators(ai, regexMetrics as RegexMetric[]);
-    }
-
-    if (hasPiiMetric) {
-      createPiiEvaluator(ai, judge, judgeConfig);
-    }
-
-    if (hasFunninessMetric) {
-      createFunninessEvaluator(ai, judge, judgeConfig);
-    }
-
-    if (hasDelicousnessMetric) {
-      createDeliciousnessEvaluator(ai, judge, judgeConfig);
-    }
+  const { judge, judgeConfig, metrics } = params;
+  if (!metrics) {
+    throw new Error(`Found no configured metrics.`);
+  }
+  return genkitPlugin({
+    name: 'byo',
+    // Evaluator names are namespaced by Genkit: `funniness` -> `byo/funniness`.
+    // `ai` is for calling the judge model from inside the evaluators.
+    init: ({ ai }) => {
+      const regexMetrics = metrics.filter((metric) => isRegexMetric(metric));
+      return [
+        ...createRegexEvaluators(regexMetrics as RegexMetric[]),
+        ...(metrics.includes(PII_DETECTION)
+          ? [createPiiEvaluator(ai, judge, judgeConfig)]
+          : []),
+        ...(metrics.includes(FUNNINESS)
+          ? [createFunninessEvaluator(ai, judge, judgeConfig)]
+          : []),
+        ...(metrics.includes(DELICIOUSNESS)
+          ? [createDeliciousnessEvaluator(ai, judge, judgeConfig)]
+          : []),
+      ];
+    },
   });
 }

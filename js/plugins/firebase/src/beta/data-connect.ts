@@ -29,7 +29,7 @@ import {
   queryRef,
 } from 'firebase/data-connect';
 import { readFileSync } from 'fs';
-import { GenkitError, type Genkit, type JSONSchema7 } from 'genkit';
+import { GenkitError, tool as createTool, type JSONSchema7 } from 'genkit';
 import { logger } from 'genkit/logging';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 
@@ -156,48 +156,53 @@ export function dataConnectTools(
     }
   }
 
-  return genkitPlugin(options.name, (ai: Genkit) => {
-    const config = options.config!;
-    for (const tool of config.tools) {
-      ai.defineTool(
-        {
-          name: `${options.name}/${tool.name}`,
-          description: tool.description || '',
-          inputJsonSchema: tool.parameters,
-        },
-        async (input, { context }) => {
-          const serverApp = serverAppFromContext(context, options.firebaseApp);
-          const dc = getDataConnect(serverApp, {
-            connector: config.connector,
-            location: config.location,
-            service: config.service,
-          });
+  const config = options.config;
+  return genkitPlugin({
+    name: options.name,
+    init: () =>
+      config.tools.map((tool) =>
+        createTool(
+          {
+            name: tool.name,
+            description: tool.description || '',
+            inputJsonSchema: tool.parameters,
+          },
+          async (input, { context }) => {
+            const serverApp = serverAppFromContext(
+              context,
+              options.firebaseApp
+            );
+            const dc = getDataConnect(serverApp, {
+              connector: config.connector,
+              location: config.location,
+              service: config.service,
+            });
 
-          try {
-            if (tool.type === 'query') {
-              const { data } = await executeQuery(
-                queryRef(dc, tool.name, input)
+            try {
+              if (tool.type === 'query') {
+                const { data } = await executeQuery(
+                  queryRef(dc, tool.name, input)
+                );
+                return data;
+              }
+
+              const { data } = await executeMutation(
+                mutationRef(dc, tool.name, input)
+              );
+              logger.debug(
+                `[dataConnectTools] ${tool.name}(${JSON.stringify(input)}) -> ${JSON.stringify(data)}`
               );
               return data;
+            } catch (e) {
+              logger.info('[dataConnectTools] error on tool call:', e);
+              if (options.onError === 'throw') throw e;
+              if (typeof options.onError === 'function')
+                return Promise.resolve(options.onError(tool, e as Error));
+              if (options.onError === 'return' || !options.onError)
+                return { error: (e as any).message };
             }
-
-            const { data } = await executeMutation(
-              mutationRef(dc, tool.name, input)
-            );
-            logger.debug(
-              `[dataConnectTools] ${tool.name}(${JSON.stringify(input)}) -> ${JSON.stringify(data)}`
-            );
-            return data;
-          } catch (e) {
-            logger.info('[dataConnectTools] error on tool call:', e);
-            if (options.onError === 'throw') throw e;
-            if (typeof options.onError === 'function')
-              return Promise.resolve(options.onError(tool, e as Error));
-            if (options.onError === 'return' || !options.onError)
-              return { error: (e as any).message };
           }
-        }
-      );
-    }
+        )
+      ),
   });
 }

@@ -102,11 +102,10 @@ import type {
   EvaluatorParams,
 } from './evaluator.js';
 import { logger } from './logging.js';
-import {
-  isPluginV2,
-  type GenkitPlugin,
-  type GenkitPluginV2,
-  type ResolvableAction,
+import type {
+  GenkitPlugin,
+  PluginContext,
+  ResolvableAction,
 } from './plugin.js';
 import { Registry, type ActionType } from './registry.js';
 import { SPAN_TYPE_ATTR, runInNewSpan } from './tracing.js';
@@ -124,7 +123,7 @@ export type PromptFn<
  */
 export interface GenkitOptions {
   /** List of plugins to load. */
-  plugins?: (GenkitPlugin | GenkitPluginV2)[];
+  plugins?: GenkitPlugin[];
   /** Directory where dotprompts are stored. Set to `null` to disable automatic prompt loading. */
   promptDir?: string | null;
   /** Default model to use if no model is specified. */
@@ -588,71 +587,56 @@ export class Genkit extends GenkitAI implements HasRegistry {
         ''
       );
     }
-    plugins.forEach((plugin) => {
-      if (isPluginV2(plugin)) {
-        logger.debug(`Registering v2 plugin ${plugin.name}...`);
-        plugin.middleware?.()?.forEach((middleware) => {
-          activeRegistry.registerValue(
-            'middleware',
-            middleware.name,
-            middleware
-          );
-        });
-        activeRegistry.registerPluginProvider(plugin.name, {
-          name: plugin.name,
-          async initializer() {
-            logger.debug(`Initializing plugin ${plugin.name}:`);
-            if (!plugin.init) return;
-            const resolvedActions = await plugin.init();
-            resolvedActions?.forEach((resolvedAction) => {
-              registerActionV2(activeRegistry, resolvedAction, plugin);
-            });
-          },
-          async resolver(action: ActionType, target: string) {
-            if (!plugin.resolve) return;
-            const resolvedAction = await plugin.resolve(action, target);
-            if (resolvedAction) {
-              registerActionV2(activeRegistry, resolvedAction, plugin);
-            }
-          },
-          async listActions() {
-            if (typeof plugin.list === 'function') {
-              return (await plugin.list()).map((a) => {
-                if (a.name.startsWith(`${plugin.name}/`)) {
-                  return a;
-                }
-                return {
-                  ...a,
-                  // Apply namespace for v2 plugins.
-                  name: `${plugin.name}/${a.name}`,
-                };
-              });
-            }
-            return [];
-          },
-        });
-      } else {
-        const loadedPlugin = (plugin as GenkitPlugin)(this);
-        logger.debug(`Registering plugin ${loadedPlugin.name}...`);
-        activeRegistry.registerPluginProvider(loadedPlugin.name, {
-          name: loadedPlugin.name,
-          async initializer() {
-            logger.debug(`Initializing plugin ${loadedPlugin.name}:`);
-            await loadedPlugin.initializer();
-          },
-          async resolver(action: ActionType, target: string) {
-            if (loadedPlugin.resolver) {
-              await loadedPlugin.resolver(action, target);
-            }
-          },
-          async listActions() {
-            if (loadedPlugin.listActions) {
-              return await loadedPlugin.listActions();
-            }
-            return [];
-          },
+    plugins.forEach((plugin, i) => {
+      // Not representable in the types; catches un-migrated JS callers and
+      // third-party plugins built against the 1.x API.
+      const raw: unknown = plugin;
+      if (typeof raw === 'function') {
+        throw new GenkitError({
+          status: 'INVALID_ARGUMENT',
+          message:
+            `Plugin at plugins[${i}] uses the v1 plugin API (a function), which was removed in Genkit 2.0. ` +
+            'Plugins are now objects that return actions: genkitPlugin({ name, init }) from genkit/plugin.',
         });
       }
+      logger.debug(`Registering plugin ${plugin.name}...`);
+      plugin.middleware?.()?.forEach((middleware) => {
+        activeRegistry.registerValue('middleware', middleware.name, middleware);
+      });
+      // A separate GenkitAI rather than `this`, so plugins can't reach define*.
+      const ctx: PluginContext = { ai: new GenkitAI(activeRegistry) };
+      activeRegistry.registerPluginProvider(plugin.name, {
+        name: plugin.name,
+        async initializer() {
+          logger.debug(`Initializing plugin ${plugin.name}:`);
+          if (!plugin.init) return;
+          const resolvedActions = await plugin.init(ctx);
+          resolvedActions?.forEach((resolvedAction) => {
+            registerPluginAction(activeRegistry, resolvedAction, plugin);
+          });
+        },
+        async resolver(action: ActionType, target: string) {
+          if (!plugin.resolve) return;
+          const resolvedAction = await plugin.resolve(action, target, ctx);
+          if (resolvedAction) {
+            registerPluginAction(activeRegistry, resolvedAction, plugin);
+          }
+        },
+        async listActions() {
+          if (typeof plugin.list === 'function') {
+            return (await plugin.list()).map((a) => {
+              if (a.name.startsWith(`${plugin.name}/`)) {
+                return a;
+              }
+              return {
+                ...a,
+                name: `${plugin.name}/${a.name}`,
+              };
+            });
+          }
+          return [];
+        },
+      });
     });
   }
 
@@ -665,10 +649,10 @@ export class Genkit extends GenkitAI implements HasRegistry {
   }
 }
 
-function registerActionV2(
+function registerPluginAction(
   registry: Registry,
   resolvedAction: ResolvableAction,
-  plugin: GenkitPluginV2
+  plugin: GenkitPlugin
 ) {
   if (isBackgroundAction(resolvedAction)) {
     registerBackgroundAction(registry, resolvedAction, {

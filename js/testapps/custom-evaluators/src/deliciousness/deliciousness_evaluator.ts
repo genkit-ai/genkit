@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import type { Genkit, GenkitSchema, ModelReference } from 'genkit';
+import type { GenkitSchema, ModelReference } from 'genkit';
 import type { BaseEvalDataPoint, EvaluatorAction } from 'genkit/evaluator';
+import { evaluator, type GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import type { ByoMetric } from '..';
 import { deliciousnessScore } from './deliciousness';
@@ -30,18 +31,18 @@ export const DELICIOUSNESS: ByoMetric = {
 export function createDeliciousnessEvaluator<
   ModelCustomOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   judge: ModelReference<ModelCustomOptions>,
   judgeConfig?: InferOutput<ModelCustomOptions>
 ): EvaluatorAction {
-  return ai.defineEvaluator(
+  return evaluator(
     {
-      name: `byo/${DELICIOUSNESS.name}`,
+      name: DELICIOUSNESS.name,
       displayName: 'Deliciousness',
       definition: 'Determines if output is considered delicous.',
     },
     async (datapoint: BaseEvalDataPoint) => {
-      const score = await deliciousnessScore(judge, datapoint, judgeConfig);
+      const score = await deliciousnessScore(ai, judge, datapoint, judgeConfig);
       return {
         testCaseId: datapoint.testCaseId,
         evaluation: score,

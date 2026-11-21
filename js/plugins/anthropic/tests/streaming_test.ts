@@ -26,6 +26,7 @@ import {
   mockTextChunk,
   mockToolUseChunk,
 } from './mocks/anthropic-client.js';
+import { pluginContext } from './mocks/plugin-context.js';
 
 describe('Streaming Integration Tests', () => {
   test('should use streaming API when onChunk is provided', async () => {
@@ -47,7 +48,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -107,7 +109,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -146,7 +149,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -197,7 +201,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     // Abort before starting
@@ -239,7 +244,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     try {
@@ -274,7 +280,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -310,7 +317,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     const response = await modelAction(
@@ -343,7 +351,8 @@ describe('Streaming Integration Tests', () => {
 
     const modelAction = plugin.resolve!(
       'model',
-      'claude-3-5-haiku-20241022'
+      'claude-3-5-haiku-20241022',
+      pluginContext
     ) as ModelAction;
 
     await modelAction(

@@ -17,25 +17,56 @@
 import type { ActionMetadata, ResolvableAction } from '@genkit-ai/core';
 import type { ActionType } from '@genkit-ai/core/registry';
 import type { GenerateMiddleware } from './generate/middleware.js';
-import type { ModelAction } from './model.js';
+import type { GenkitAI } from './genkit-ai.js';
 
 /**
- * The v2 plugin interface for Genkit. Plugins implement this interface to provide
- * models, tools, middleware, and other actions to the Genkit framework.
+ * Passed to {@link GenkitPlugin.init} and {@link GenkitPlugin.resolve}.
  */
-export interface GenkitPluginV2 {
-  version: 'v2';
+export interface PluginContext {
+  /**
+   * Bound to the registry the plugin is installed in. Lets plugin actions call
+   * `generate`, `embed` etc. (e.g. a judge model inside an evaluator), but not
+   * register anything.
+   *
+   * Use it inside the actions the plugin returns, not while `init` or
+   * `resolve` themselves run: plugin init is cached as a single in-flight
+   * promise, so calling one of the plugin's own actions during `init` waits on
+   * itself and never resolves.
+   */
+  ai: GenkitAI;
+}
+
+/**
+ * A Genkit plugin. Plugins return actions (models, embedders, evaluators,
+ * tools, ...) and Genkit registers them, namespaced with the plugin name: a
+ * model named `fast` from plugin `my` is registered as `my/fast`.
+ *
+ * Usually created with `genkitPlugin({...})` from `genkit/plugin`.
+ */
+export interface GenkitPlugin {
   name: string;
-  init?: () => ResolvableAction[] | Promise<ResolvableAction[]>;
+  /**
+   * Returns actions to register eagerly. Called once, lazily, on the first
+   * lookup that needs this plugin.
+   */
+  init?: (
+    ctx: PluginContext
+  ) => ResolvableAction[] | Promise<ResolvableAction[]>;
+  /**
+   * Returns an action that wasn't returned by `init`, or `undefined` if the
+   * plugin doesn't provide it. `name` is never namespaced: for `my/fast` the
+   * plugin gets `fast`.
+   */
   resolve?: (
     actionType: ActionType,
-    name: string
+    name: string,
+    ctx: PluginContext
   ) => ResolvableAction | undefined | Promise<ResolvableAction | undefined>;
+  /**
+   * Lists actions this plugin can resolve, for developer tooling. Names may
+   * be returned with or without the plugin namespace.
+   */
   list?: () => ActionMetadata[] | Promise<ActionMetadata[]>;
-
-  // A shortcut for resolving a model.
-  model(name: string): Promise<ModelAction>;
-
-  // Returns a list of generate middleware to be used in `generate({use: [...])`.
+  /** Generate middleware usable in `generate({ use: [...] })`. */
   middleware?: () => GenerateMiddleware<any, any>[];
 }

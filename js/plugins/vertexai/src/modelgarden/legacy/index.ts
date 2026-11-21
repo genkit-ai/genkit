@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
-import type { Genkit } from 'genkit';
-import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import {
+  genkitPlugin,
+  type GenkitPlugin,
+  type ResolvableAction,
+} from 'genkit/plugin';
 import { getDerivedParams } from '../../common/index.js';
 import { SUPPORTED_ANTHROPIC_MODELS, anthropicModel } from './anthropic.js';
 import { SUPPORTED_MISTRAL_MODELS, mistralModel } from './mistral.js';
@@ -30,40 +33,40 @@ import type { PluginOptions } from './types.js';
  * @deprecated Please use vertexModelGarden
  */
 export function vertexAIModelGarden(options: PluginOptions): GenkitPlugin {
-  return genkitPlugin('vertexAIModelGarden', async (ai: Genkit) => {
-    const { projectId, location, authClient } = await getDerivedParams(options);
+  return genkitPlugin({
+    name: 'vertexAIModelGarden',
+    init: async () => {
+      const { projectId, location, authClient } =
+        await getDerivedParams(options);
 
-    options.models.forEach((m) => {
-      const anthropicEntry = Object.entries(SUPPORTED_ANTHROPIC_MODELS).find(
-        ([_, value]) => value.name === m.name
-      );
-      if (anthropicEntry) {
-        anthropicModel(ai, anthropicEntry[0], projectId, location);
-        return;
-      }
-      const mistralEntry = Object.entries(SUPPORTED_MISTRAL_MODELS).find(
-        ([_, value]) => value.name === m.name
-      );
-      if (mistralEntry) {
-        mistralModel(ai, mistralEntry[0], projectId, location);
-        return;
-      }
-      const openaiModel = Object.entries(SUPPORTED_OPENAI_FORMAT_MODELS).find(
-        ([_, value]) => value.name === m.name
-      );
-      if (openaiModel) {
-        modelGardenOpenaiCompatibleModel(
-          ai,
-          openaiModel[0],
-          projectId,
-          location,
-          authClient,
-          options.openAiBaseUrlTemplate
+      return options.models.map((m): ResolvableAction => {
+        const anthropicEntry = Object.entries(SUPPORTED_ANTHROPIC_MODELS).find(
+          ([_, value]) => value.name === m.name
         );
-        return;
-      }
-      throw new Error(`Unsupported model garden model: ${m.name}`);
-    });
+        if (anthropicEntry) {
+          return anthropicModel(anthropicEntry[0], projectId, location);
+        }
+        const mistralEntry = Object.entries(SUPPORTED_MISTRAL_MODELS).find(
+          ([_, value]) => value.name === m.name
+        );
+        if (mistralEntry) {
+          return mistralModel(mistralEntry[0], projectId, location);
+        }
+        const openaiModel = Object.entries(SUPPORTED_OPENAI_FORMAT_MODELS).find(
+          ([_, value]) => value.name === m.name
+        );
+        if (openaiModel) {
+          return modelGardenOpenaiCompatibleModel(
+            openaiModel[0],
+            projectId,
+            location,
+            authClient,
+            options.openAiBaseUrlTemplate
+          );
+        }
+        throw new Error(`Unsupported model garden model: ${m.name}`);
+      });
+    },
   });
 }
 

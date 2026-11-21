@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import type { Genkit, GenkitSchema, ModelReference } from 'genkit';
+import type { GenkitSchema, ModelReference } from 'genkit';
 import type { BaseEvalDataPoint, EvaluatorAction } from 'genkit/evaluator';
+import { evaluator, type GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import type { ByoMetric } from '..';
 import { piiDetectionScore } from './pii_detection';
@@ -28,18 +29,18 @@ export const PII_DETECTION: ByoMetric = {
  * Create the PII detection evaluator.
  */
 export function createPiiEvaluator<ModelCustomOptions extends GenkitSchema>(
-  ai: Genkit,
+  ai: GenkitAI,
   judge: ModelReference<ModelCustomOptions>,
   judgeConfig?: InferOutput<ModelCustomOptions>
 ): EvaluatorAction {
-  return ai.defineEvaluator(
+  return evaluator(
     {
-      name: `byo/${PII_DETECTION.name}`,
+      name: PII_DETECTION.name,
       displayName: 'PII Detection',
       definition: 'Detects whether PII is present in the output.',
     },
     async (datapoint: BaseEvalDataPoint) => {
-      const score = await piiDetectionScore(judge, datapoint, judgeConfig);
+      const score = await piiDetectionScore(ai, judge, datapoint, judgeConfig);
       return {
         testCaseId: datapoint.testCaseId,
         evaluation: score,

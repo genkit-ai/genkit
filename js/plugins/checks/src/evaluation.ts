@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-import { z, type EvaluatorAction, type Genkit } from 'genkit';
+import { z, type EvaluatorAction } from 'genkit';
 import type { BaseEvalDataPoint } from 'genkit/evaluator';
+import { evaluator } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import { runInNewSpan } from 'genkit/tracing';
 import type { GoogleAuth } from 'google-auth-library';
@@ -26,7 +27,6 @@ import {
 } from './metrics.js';
 
 export function checksEvaluators(
-  ai: Genkit,
   auth: GoogleAuth,
   metrics: ChecksEvaluationMetric[],
   projectId: string
@@ -43,7 +43,7 @@ export function checksEvaluators(
     }
   );
 
-  return createPolicyEvaluator(projectId, auth, ai, policy_configs);
+  return createPolicyEvaluator(projectId, auth, policy_configs);
 }
 
 const ResponseSchema = z.object({
@@ -59,12 +59,11 @@ const ResponseSchema = z.object({
 function createPolicyEvaluator(
   projectId: string,
   auth: GoogleAuth,
-  ai: Genkit,
   policy_config: ChecksEvaluationMetricConfig[]
 ): EvaluatorAction {
-  return ai.defineEvaluator(
+  return evaluator(
     {
-      name: 'checks/guardrails',
+      name: 'guardrails',
       displayName: 'checks/guardrails',
       definition: `Evaluates input text against the Checks ${policy_config.map((policy) => policy.type)} policies.`,
     },
@@ -84,7 +83,6 @@ function createPolicyEvaluator(
       };
 
       const response = await checksEvalInstance(
-        ai,
         projectId,
         auth,
         partialRequest,
@@ -110,7 +108,6 @@ function createPolicyEvaluator(
 }
 
 async function checksEvalInstance<ResponseType extends z.ZodType<any, any>>(
-  ai: Genkit,
   projectId: string,
   auth: GoogleAuth,
   partialRequest: any,
@@ -120,7 +117,6 @@ async function checksEvalInstance<ResponseType extends z.ZodType<any, any>>(
     ...partialRequest,
   };
   return await runInNewSpan(
-    ai,
     {
       metadata: {
         name: 'EvaluationService#evaluateInstances',

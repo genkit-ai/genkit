@@ -16,8 +16,9 @@
 
 import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import type { GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
-import { ai } from '../index.js';
+import { renderPrompt } from '../prompts.js';
 
 const FUNNINESS_VALUES = [
   'FUNNY_JOKE',
@@ -26,14 +27,13 @@ const FUNNINESS_VALUES = [
   'NOT_A_JOKE',
 ] as const;
 
-const funninessPrompt = ai.prompt('funniness');
-
 const FunninessResponseSchema = z.object({
   reason: z.string(),
   verdict: z.enum(FUNNINESS_VALUES),
 });
 
 export async function funninessScore<CustomModelOptions extends GenkitSchema>(
+  ai: GenkitAI,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   judgeConfig?: InferOutput<CustomModelOptions>
@@ -43,13 +43,9 @@ export async function funninessScore<CustomModelOptions extends GenkitSchema>(
     if (!d.output) {
       throw new Error('Output is required for Funniness detection');
     }
-    const finalPrompt = (
-      await funninessPrompt.render({
-        output: d.output as string,
-      })
-    ).messages
-      ?.map((m) => m.content.map((c) => c.text).join())
-      .join();
+    const finalPrompt = await renderPrompt('funniness', {
+      output: d.output as string,
+    });
 
     const response = await ai.generate({
       model: judgeLlm,

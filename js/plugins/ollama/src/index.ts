@@ -20,7 +20,6 @@ import {
   z,
   type ActionMetadata,
   type EmbedderReference,
-  type Genkit,
   type ModelReference,
   type Role,
   type ToolRequest,
@@ -39,9 +38,14 @@ import {
   type ModelInfo,
   type ToolDefinition,
 } from 'genkit/model';
-import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import {
+  // Aliased: `model` is the ModelDefinition parameter name in ollamaModel().
+  model as createModel,
+  genkitPlugin,
+  type GenkitPlugin,
+} from 'genkit/plugin';
 import type { ActionType } from 'genkit/registry';
-import { defineOllamaEmbedder } from './embeddings.js';
+import { ollamaEmbedder } from './embeddings.js';
 import type {
   ApiType,
   ListLocalModelsResponse,
@@ -83,26 +87,23 @@ const GENERIC_MODEL_INFO = {
 
 const DEFAULT_OLLAMA_SERVER_ADDRESS = 'http://localhost:11434';
 
-async function initializer(
-  ai: Genkit,
-  serverAddress: string,
-  params?: OllamaPluginParams
-) {
-  params?.models?.map((model) =>
-    defineOllamaModel(ai, model, serverAddress, params?.requestHeaders)
-  );
-  params?.embedders?.map((model) =>
-    defineOllamaEmbedder(ai, {
-      name: model.name,
-      modelName: model.name,
-      dimensions: model.dimensions,
-      options: params!,
-    })
-  );
+function initActions(serverAddress: string, params?: OllamaPluginParams) {
+  return [
+    ...(params?.models ?? []).map((model) =>
+      ollamaModel(model, serverAddress, params?.requestHeaders)
+    ),
+    ...(params?.embedders ?? []).map((model) =>
+      ollamaEmbedder({
+        name: model.name,
+        modelName: model.name,
+        dimensions: model.dimensions,
+        options: params!,
+      })
+    ),
+  ];
 }
 
 function resolveAction(
-  ai: Genkit,
   actionType: ActionType,
   actionName: string,
   serverAddress: string,
@@ -110,8 +111,7 @@ function resolveAction(
 ) {
   // We can only dynamically resolve models, for embedders user must provide dimensions.
   if (actionType === 'model') {
-    defineOllamaModel(
-      ai,
+    return ollamaModel(
       {
         name: actionName,
       },
@@ -119,6 +119,7 @@ function resolveAction(
       requestHeaders
     );
   }
+  return undefined;
 }
 
 async function listActions(
@@ -132,7 +133,7 @@ async function listActions(
       ?.filter((m) => m.model && !m.model.includes('embed'))
       .map((m) =>
         modelActionMetadata({
-          name: `ollama/${m.model}`,
+          name: m.model,
           info: GENERIC_MODEL_INFO,
         })
       ) || []
@@ -147,22 +148,18 @@ function ollamaPlugin(params?: OllamaPluginParams): GenkitPlugin {
     params.serverAddress = DEFAULT_OLLAMA_SERVER_ADDRESS;
   }
   const serverAddress = params.serverAddress;
-  return genkitPlugin(
-    'ollama',
-    async (ai: Genkit) => {
-      await initializer(ai, serverAddress, params);
-    },
-    async (ai, actionType, actionName) => {
+  return genkitPlugin({
+    name: 'ollama',
+    init: () => initActions(serverAddress, params),
+    resolve: (actionType, actionName) =>
       resolveAction(
-        ai,
         actionType,
         actionName,
         serverAddress,
         params?.requestHeaders
-      );
-    },
-    async () => await listActions(serverAddress, params?.requestHeaders)
-  );
+      ),
+    list: () => listActions(serverAddress, params?.requestHeaders),
+  });
 }
 
 async function listLocalModels(
@@ -218,15 +215,14 @@ export const OllamaConfigSchema = GenerationCommonConfigSchema.extend({
     .optional(),
 });
 
-function defineOllamaModel(
-  ai: Genkit,
+function ollamaModel(
   model: ModelDefinition,
   serverAddress: string,
   requestHeaders?: RequestHeaders
 ) {
-  return ai.defineModel(
+  return createModel(
     {
-      name: `ollama/${model.name}`,
+      name: model.name,
       label: `Ollama - ${model.name}`,
       configSchema: OllamaConfigSchema,
       supports: {
@@ -235,7 +231,8 @@ function defineOllamaModel(
         tools: model.supports?.tools,
       },
     },
-    async (input, streamingCallback) => {
+    async (input, { streamingRequested, sendChunk }) => {
+      const streamingCallback = streamingRequested ? sendChunk : undefined;
       const { topP, topK, stopSequences, maxOutputTokens, ...rest } =
         input.config as any;
       const options: Record<string, any> = { ...rest };

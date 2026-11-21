@@ -14,15 +14,21 @@
  * limitations under the License.
  */
 
-import { z, type Genkit, type GenkitSchema } from 'genkit';
+import { z, type GenkitSchema } from 'genkit';
 import {
   evaluatorRef,
   type BaseEvalDataPoint,
   type EvalResponse,
   type EvalStatusEnum,
+  type EvaluatorAction,
   type Score,
 } from 'genkit/evaluator';
-import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
+import {
+  evaluator,
+  genkitPlugin,
+  type GenkitAI,
+  type GenkitPlugin,
+} from 'genkit/plugin';
 import { answerAccuracyScore } from './metrics/answer_accuracy.js';
 import {
   answerRelevancyScore,
@@ -66,8 +72,9 @@ export function genkitEval<
 >(
   params: PluginOptions<ModelCustomOptions, EmbedderCustomOptions>
 ): GenkitPlugin {
-  return genkitPlugin(`${PLUGIN_NAME}`, async (ai: Genkit) => {
-    genkitEvaluators(ai, params);
+  return genkitPlugin({
+    name: PLUGIN_NAME,
+    init: ({ ai }) => genkitEvaluators(ai, params),
   });
 }
 
@@ -86,15 +93,19 @@ function fillScores(
 }
 
 /**
- * Configures a Genkit evaluator
+ * Creates the configured Genkit evaluators. Names are not namespaced; the
+ * {@link genkitEval} plugin registers them as `genkitEval/<metric>`.
+ *
+ * @param ai Used by the judge-based metrics to call the judge model and
+ *   embedder at evaluation time.
  */
 export function genkitEvaluators<
   ModelCustomOptions extends GenkitSchema,
   EmbedderCustomOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   params: PluginOptions<ModelCustomOptions, EmbedderCustomOptions>
-) {
+): EvaluatorAction[] {
   const { metrics } = params;
   if (metrics.length === 0) {
     throw new Error('No metrics configured in genkitEval plugin');
@@ -108,7 +119,7 @@ export function genkitEvaluators<
       embedderOptions,
       statusOverrideFn,
     } = resolveConfig(metric, params);
-    const evaluator = `${PLUGIN_NAME}/${type.toLocaleLowerCase()}`;
+    const name = type.toLocaleLowerCase();
     switch (type) {
       case GenkitMetric.ANSWER_RELEVANCY: {
         if (!judge) {
@@ -121,9 +132,9 @@ export function genkitEvaluators<
             'Embedder must be specified if computing answer relvancy'
           );
         }
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'Answer Relevancy',
             definition:
               'Assesses how pertinent the generated answer is to the given prompt',
@@ -147,9 +158,9 @@ export function genkitEvaluators<
             'Judge llms must be specified if computing faithfulness'
           );
         }
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'Faithfulness',
             definition:
               'Measures the factual consistency of the generated answer against the given context',
@@ -171,9 +182,9 @@ export function genkitEvaluators<
             'Judge llms must be specified if computing maliciousness'
           );
         }
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'Maliciousness',
             definition:
               'Measures whether the generated output intends to deceive, harm, or exploit',
@@ -195,9 +206,9 @@ export function genkitEvaluators<
             'Judge llms must be specified if computing answer accuracy'
           );
         }
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'Answer Accuracy',
             definition:
               'Measures how accurately the generated output matches against the reference output',
@@ -214,9 +225,9 @@ export function genkitEvaluators<
         );
       }
       case GenkitMetric.REGEX: {
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'RegExp',
             definition: 'Tests output against the regexp provided as reference',
           },
@@ -226,9 +237,9 @@ export function genkitEvaluators<
         );
       }
       case GenkitMetric.DEEP_EQUAL: {
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'Deep Equals',
             definition:
               'Tests equality of output against the provided reference',
@@ -243,9 +254,9 @@ export function genkitEvaluators<
         );
       }
       case GenkitMetric.JSONATA: {
-        return ai.defineEvaluator(
+        return evaluator(
           {
-            name: evaluator,
+            name,
             displayName: 'JSONata',
             definition:
               'Tests JSONata expression (provided in reference) against output',

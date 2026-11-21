@@ -16,19 +16,19 @@
 
 import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { BaseEvalDataPoint, Score } from 'genkit/evaluator';
+import type { GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
-import { ai } from '../index.js';
+import { renderPrompt } from '../prompts.js';
 
 const PiiDetectionResponseSchema = z.object({
   reason: z.string(),
   verdict: z.boolean(),
 });
 
-const piiDetectionPrompt = ai.prompt('pii_detection');
-
 export async function piiDetectionScore<
   CustomModelOptions extends GenkitSchema,
 >(
+  ai: GenkitAI,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   judgeConfig?: InferOutput<CustomModelOptions>
@@ -39,13 +39,9 @@ export async function piiDetectionScore<
       throw new Error('Output is required for PII detection');
     }
 
-    const finalPrompt = (
-      await piiDetectionPrompt.render({
-        output: d.output as string,
-      })
-    ).messages
-      ?.map((m) => m.content.map((c) => c.text).join())
-      .join();
+    const finalPrompt = await renderPrompt('pii_detection', {
+      output: d.output as string,
+    });
 
     const response = await ai.generate({
       model: judgeLlm,

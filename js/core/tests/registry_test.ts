@@ -57,7 +57,6 @@ describe('registry class', () => {
         name: 'foo',
         async initializer() {
           registry.registerAction('model', fooSomethingAction);
-          return {};
         },
       });
       const fooSomethingAction = action(
@@ -75,7 +74,6 @@ describe('registry class', () => {
         async initializer() {
           registry.registerAction('model', barSomethingAction);
           registry.registerAction('model', barSubSomethingAction);
-          return {};
         },
       });
       const barSomethingAction = action(
@@ -120,7 +118,6 @@ describe('registry class', () => {
             async () => null
           );
           fooInitialized = true;
-          return {};
         },
       });
 
@@ -180,7 +177,6 @@ describe('registry class', () => {
         name: 'foo',
         async initializer() {
           registry.registerAction('model', fooSomethingAction);
-          return {};
         },
       });
       const fooSomethingAction = action(
@@ -198,7 +194,6 @@ describe('registry class', () => {
         async initializer() {
           registry.registerAction('model', barSomethingAction);
           registry.registerAction('model', barSubSomethingAction);
-          return {};
         },
       });
       const barSomethingAction = action(
@@ -243,7 +238,6 @@ describe('registry class', () => {
             async () => null
           );
           fooInitialized = true;
-          return {};
         },
       });
 
@@ -283,7 +277,6 @@ describe('registry class', () => {
         name: 'foo',
         async initializer() {
           registry.registerAction('model', fooSomethingAction);
-          return {};
         },
       });
       const fooSomethingAction = action(
@@ -301,7 +294,6 @@ describe('registry class', () => {
         async initializer() {
           registry.registerAction('model', barSomethingAction);
           registry.registerAction('model', barSubSomethingAction);
-          return {};
         },
         async listActions() {
           return [
@@ -385,7 +377,6 @@ describe('registry class', () => {
         name: 'foo',
         async initializer() {
           fooInitialized = true;
-          return {};
         },
       });
       let barInitialized = false;
@@ -393,7 +384,6 @@ describe('registry class', () => {
         name: 'bar',
         async initializer() {
           barInitialized = true;
-          return {};
         },
       });
 
@@ -508,7 +498,6 @@ describe('registry class', () => {
         async initializer() {
           registry.registerAction('model', somethingAction);
           registry.registerAction('model', subSomethingAction);
-          return {};
         },
       });
       const somethingAction = action(

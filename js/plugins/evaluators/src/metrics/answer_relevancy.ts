@@ -15,13 +15,14 @@
  */
 
 import similarity from 'compute-cosine-similarity';
-import { z, type Genkit, type GenkitSchema, type ModelArgument } from 'genkit';
+import { z, type GenkitSchema, type ModelArgument } from 'genkit';
 import type { EmbedderArgument } from 'genkit/embedder';
 import {
   EvalStatusEnum,
   type BaseEvalDataPoint,
   type Score,
 } from 'genkit/evaluator';
+import type { GenkitAI } from 'genkit/plugin';
 import type { InferOutput } from 'genkit/schema';
 import path from 'path';
 import { getDirName, loadPromptFile, renderText } from './helper.js';
@@ -36,7 +37,7 @@ export async function answerRelevancyScore<
   CustomModelOptions extends GenkitSchema,
   CustomEmbedderOptions extends GenkitSchema,
 >(
-  ai: Genkit,
+  ai: GenkitAI,
   judgeLlm: ModelArgument<CustomModelOptions>,
   dataPoint: BaseEvalDataPoint,
   embedder: EmbedderArgument<CustomEmbedderOptions>,

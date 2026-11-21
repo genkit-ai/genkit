@@ -36,7 +36,7 @@ import {
   type VertexAI,
 } from '@google-cloud/vertexai';
 import { ApiClient } from '@google-cloud/vertexai/build/src/resources/index.js';
-import { GenkitError, z, type Genkit, type JSONSchema } from 'genkit';
+import { GenkitError, z, type JSONSchema } from 'genkit';
 import {
   GenerationCommonConfigDescriptions,
   GenerationCommonConfigSchema,
@@ -57,6 +57,7 @@ import {
   downloadRequestMedia,
   simulateSystemPrompt,
 } from 'genkit/model/middleware';
+import { model } from 'genkit/plugin';
 import { runInNewSpan } from 'genkit/tracing';
 import { GoogleAuth } from 'google-auth-library';
 import { getGenkitClientHeader, lookup } from './common/index.js';
@@ -1116,11 +1117,10 @@ export function cleanSchema(schema: JSONSchema): JSONSchema {
 }
 
 /**
- * Define a Vertex AI Gemini model.
+ * Creates (does not register) a Vertex AI Gemini model action.
  * @deprecated
  */
 export function defineGeminiKnownModel(
-  ai: Genkit,
   name: string,
   vertexClientFactory: (
     request: GenerateRequest<typeof GeminiConfigSchema>
@@ -1134,7 +1134,6 @@ export function defineGeminiKnownModel(
   if (!model) throw new Error(`Unsupported model: ${name}`);
 
   return defineGeminiModel({
-    ai,
     modelName,
     version: name,
     modelInfo: model?.info,
@@ -1145,11 +1144,10 @@ export function defineGeminiKnownModel(
 }
 
 /**
- * Define a Vertex AI Gemini model.
+ * Creates (does not register) a Vertex AI Gemini model action.
  * @deprecated
  */
 export function defineGeminiModel({
-  ai,
   modelName,
   version,
   modelInfo,
@@ -1157,7 +1155,6 @@ export function defineGeminiModel({
   options,
   debugTraces,
 }: {
-  ai: Genkit;
   modelName: string;
   version: string;
   modelInfo: ModelInfo | undefined;
@@ -1193,14 +1190,15 @@ export function defineGeminiModel({
     );
   }
 
-  return ai.defineModel(
+  return model(
     {
       name: modelName,
       ...modelInfo,
       configSchema: GeminiConfigSchema,
       use: middlewares,
     },
-    async (request, sendChunk) => {
+    async (request, { streamingRequested, sendChunk: streamChunk }) => {
+      const sendChunk = streamingRequested ? streamChunk : undefined;
       const vertex = vertexClientFactory(request);
 
       // Make a copy of messages to avoid side-effects
@@ -1421,7 +1419,6 @@ export function defineGeminiModel({
       // API params as for input.
       return debugTraces
         ? await runInNewSpan(
-            ai.registry,
             {
               metadata: {
                 name: sendChunk ? 'sendMessageStream' : 'sendMessage',

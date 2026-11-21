@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z, type Genkit, type ModelReference } from 'genkit';
+import { z, type ModelReference } from 'genkit';
 import { modelRef, type GenerateRequest, type ModelAction } from 'genkit/model';
 import type { GoogleAuth } from 'google-auth-library';
 import OpenAI from 'openai';
@@ -31,7 +31,7 @@ export const ModelGardenModelConfigSchema = OpenAIConfigSchema.extend({
 
 /** @deprecated */
 export const llama31 = modelRef({
-  name: 'vertexai/llama-3.1',
+  name: 'vertexAIModelGarden/llama-3.1',
   info: {
     label: 'Llama 3.1',
     supports: {
@@ -52,7 +52,7 @@ export const llama31 = modelRef({
 
 /** @deprecated */
 export const llama32 = modelRef({
-  name: 'vertexai/llama-3.2',
+  name: 'vertexAIModelGarden/llama-3.2',
   info: {
     label: 'Llama 3.2',
     supports: {
@@ -72,7 +72,7 @@ export const llama32 = modelRef({
  * @deprecated use `llama31` instead
  */
 export const llama3 = modelRef({
-  name: 'vertexai/llama3-405b',
+  name: 'vertexAIModelGarden/llama3-405b',
   info: {
     label: 'Llama 3.1 405b',
     supports: {
@@ -97,7 +97,6 @@ export const SUPPORTED_OPENAI_FORMAT_MODELS = {
 
 /** @deprecated */
 export function modelGardenOpenaiCompatibleModel(
-  ai: Genkit,
   name: string,
   projectId: string,
   location: string,
@@ -125,5 +124,5 @@ export function modelGardenOpenaiCompatibleModel(
       },
     });
   };
-  return openaiCompatibleModel(ai, model, clientFactory);
+  return openaiCompatibleModel(model, clientFactory);
 }

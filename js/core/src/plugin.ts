@@ -17,33 +17,17 @@
 import type { Action, ActionMetadata } from './action.js';
 import type { BackgroundAction } from './background-action.js';
 import type { ActionType } from './registry.js';
-import type { GenkitSchema } from './schema.js';
 
-export interface Provider<T> {
-  id: string;
-  value: T;
-}
-
+/**
+ * Registry-level plugin hooks. Internal plumbing: plugin authors use
+ * `genkitPlugin({...})` from `genkit/plugin`, and `Genkit` adapts it into this
+ * shape when registering the plugin.
+ */
 export interface PluginProvider {
   name: string;
-  initializer: () =>
-    InitializedPlugin | void | Promise<InitializedPlugin | void>;
+  initializer: () => void | Promise<void>;
   resolver?: (action: ActionType, target: string) => Promise<void>;
   listActions?: () => Promise<ActionMetadata[]>;
 }
-
-export interface InitializedPlugin {
-  models?: Action<GenkitSchema, GenkitSchema>[];
-  embedders?: Action<GenkitSchema, GenkitSchema>[];
-  evaluators?: Action<GenkitSchema, GenkitSchema>[];
-  /** @deprecated */
-  flowStateStore?: Provider<any> | Provider<any>[];
-  /** @deprecated */
-  traceStore?: Provider<any> | Provider<any>[];
-  /** @deprecated */
-  telemetry?: any;
-}
-
-export type Plugin<T extends any[]> = (...args: T) => PluginProvider;
 
 export type ResolvableAction = Action | BackgroundAction;

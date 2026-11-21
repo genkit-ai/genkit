@@ -23,8 +23,8 @@ import {
 } from 'genkit';
 import { logger } from 'genkit/logging';
 import {
-  genkitPluginV2,
-  type GenkitPluginV2,
+  genkitPlugin,
+  type GenkitPlugin,
   type ResolvableAction,
 } from 'genkit/plugin';
 import { ActionType } from 'genkit/registry';
@@ -155,11 +155,9 @@ async function listActions(
 /**
  * Google Gemini Developer API plugin.
  */
-export function googleAIPlugin(
-  options?: GoogleAIPluginOptions
-): GenkitPluginV2 {
+export function googleAIPlugin(options?: GoogleAIPluginOptions): GenkitPlugin {
   let listActionsCache: ActionMetadata[];
-  return genkitPluginV2({
+  return genkitPlugin({
     name: 'googleai',
     init: async () => await initializer(options),
     resolve: async (actionType: ActionType, actionName: string) =>
@@ -173,7 +171,7 @@ export function googleAIPlugin(
 }
 
 export type GoogleAIPlugin = {
-  (pluginOptions?: GoogleAIPluginOptions): GenkitPluginV2;
+  (pluginOptions?: GoogleAIPluginOptions): GenkitPlugin;
   model(
     name: gemini.KnownGemmaModels | (gemini.GemmaModelName & {}),
     config: gemini.GemmaConfig

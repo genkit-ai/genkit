@@ -16,9 +16,7 @@
 import * as assert from 'assert';
 import { genkit, type Genkit } from 'genkit';
 import { beforeEach, describe, it } from 'node:test';
-import { defineOllamaEmbedder } from '../src/embeddings.js';
 import { ollama } from '../src/index.js';
-import type { OllamaPluginParams } from '../src/types.js';
 
 // Mock fetch to simulate API responses
 global.fetch = async (input: RequestInfo | URL, options?: RequestInit) => {
@@ -41,48 +39,32 @@ global.fetch = async (input: RequestInfo | URL, options?: RequestInit) => {
   throw new Error('Unknown API endpoint');
 };
 
-describe('defineOllamaEmbedder', () => {
-  const options: OllamaPluginParams = {
-    models: [{ name: 'test-model' }],
-    serverAddress: 'http://localhost:3000',
-  };
-
+describe('ollama embedders', () => {
   let ai: Genkit;
   beforeEach(() => {
     ai = genkit({
       plugins: [
         ollama({
           serverAddress: 'http://localhost:3000',
+          embedders: [{ name: 'test-embedder', dimensions: 123 }],
         }),
       ],
     });
   });
 
   it('should successfully return embeddings', async () => {
-    const embedder = defineOllamaEmbedder(ai, {
-      name: 'test-embedder',
-      modelName: 'test-model',
-      dimensions: 123,
-      options,
-    });
     const result = await ai.embed({
-      embedder,
+      embedder: 'ollama/test-embedder',
       content: 'Hello, world!',
     });
     assert.deepStrictEqual(result, [{ embedding: [0.1, 0.2, 0.3] }]);
   });
 
   it('should handle API errors correctly', async () => {
-    const embedder = defineOllamaEmbedder(ai, {
-      name: 'test-embedder',
-      modelName: 'test-model',
-      dimensions: 123,
-      options,
-    });
     await assert.rejects(
       async () => {
         await ai.embed({
-          embedder,
+          embedder: 'ollama/test-embedder',
           content: 'fail',
         });
       },

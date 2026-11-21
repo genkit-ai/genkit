@@ -32,7 +32,6 @@ import { AnthropicVertex } from '@anthropic-ai/vertex-sdk';
 import {
   z,
   type GenerateRequest,
-  type Genkit,
   type Part as GenkitPart,
   type MessageData,
   type ModelReference,
@@ -45,6 +44,7 @@ import {
   modelRef,
   type ModelAction,
 } from 'genkit/model';
+import { model as createModel } from 'genkit/plugin';
 import { getGenkitClientHeader } from '../../common/index.js';
 
 export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
@@ -55,7 +55,7 @@ export const AnthropicConfigSchema = GenerationCommonConfigSchema.extend({
  * @deprecated
  */
 export const claude35SonnetV2 = modelRef({
-  name: 'vertexai/claude-3-5-sonnet-v2',
+  name: 'vertexAIModelGarden/claude-3-5-sonnet-v2',
   info: {
     label: 'Vertex AI Model Garden - Claude 3.5 Sonnet',
     versions: ['claude-3-5-sonnet-v2@20241022'],
@@ -74,7 +74,7 @@ export const claude35SonnetV2 = modelRef({
  * @deprecated
  */
 export const claude35Sonnet = modelRef({
-  name: 'vertexai/claude-3-5-sonnet',
+  name: 'vertexAIModelGarden/claude-3-5-sonnet',
   info: {
     label: 'Vertex AI Model Garden - Claude 3.5 Sonnet',
     versions: ['claude-3-5-sonnet@20240620'],
@@ -93,7 +93,7 @@ export const claude35Sonnet = modelRef({
  * @deprecated
  */
 export const claude3Sonnet = modelRef({
-  name: 'vertexai/claude-3-sonnet',
+  name: 'vertexAIModelGarden/claude-3-sonnet',
   info: {
     label: 'Vertex AI Model Garden - Claude 3 Sonnet',
     versions: ['claude-3-sonnet@20240229'],
@@ -112,7 +112,7 @@ export const claude3Sonnet = modelRef({
  * @deprecated Please use vertexModelGarden.model('claude-3-5-haiku@20241022')
  */
 export const claude3Haiku = modelRef({
-  name: 'vertexai/claude-3-haiku',
+  name: 'vertexAIModelGarden/claude-3-haiku',
   info: {
     label: 'Vertex AI Model Garden - Claude 3 Haiku',
     versions: ['claude-3-haiku@20240307'],
@@ -131,7 +131,7 @@ export const claude3Haiku = modelRef({
  * @deprecated
  */
 export const claude3Opus = modelRef({
-  name: 'vertexai/claude-3-opus',
+  name: 'vertexAIModelGarden/claude-3-opus',
   info: {
     label: 'Vertex AI Model Garden - Claude 3 Opus',
     versions: ['claude-3-opus@20240229'],
@@ -150,7 +150,7 @@ export const claude3Opus = modelRef({
  * @deprecated please use vertexModelGarden.model('claude-sonnet-4@20250514')
  */
 export const claudeSonnet4 = modelRef({
-  name: 'vertexai/claude-sonnet-4',
+  name: 'vertexAIModelGarden/claude-sonnet-4',
   info: {
     label: 'Vertex AI Model Garden - Claude Sonnet 4',
     versions: ['claude-sonnet-4@20250514'],
@@ -169,7 +169,7 @@ export const claudeSonnet4 = modelRef({
  * @deprecated please use vertexModelGarden.model('claude-opus-4@20250514')
  */
 export const claudeOpus4 = modelRef({
-  name: 'vertexai/claude-opus-4',
+  name: 'vertexAIModelGarden/claude-opus-4',
   info: {
     label: 'Vertex AI Model Garden - Claude Opus 4',
     versions: ['claude-opus-4@20250514'],
@@ -188,7 +188,7 @@ export const claudeOpus4 = modelRef({
  * @deprecated please use vertexModelGarden.model('claude-opus-4-1@20250805')
  */
 export const claudeOpus41 = modelRef({
-  name: 'vertexai/claude-opus-4-1',
+  name: 'vertexAIModelGarden/claude-opus-4-1',
   info: {
     label: 'Vertex AI Model Garden - Claude Opus 4.1',
     versions: ['claude-opus-4-1@20250805'],
@@ -458,7 +458,6 @@ function toAnthropicToolResponse(part: Part): ToolResultBlockParam {
  * @deprecated
  */
 export function anthropicModel(
-  ai: Genkit,
   modelName: string,
   projectId: string,
   region: string
@@ -481,7 +480,7 @@ export function anthropicModel(
     throw new Error(`unsupported Anthropic model name ${modelName}`);
   }
 
-  return ai.defineModel(
+  return createModel(
     {
       name: model.name,
       label: model.info?.label,
@@ -489,9 +488,9 @@ export function anthropicModel(
       supports: model.info?.supports,
       versions: model.info?.versions,
     },
-    async (input, sendChunk) => {
+    async (input, { streamingRequested, sendChunk }) => {
       const client = clientFactory(input.config?.location || region);
-      if (!sendChunk) {
+      if (!streamingRequested) {
         const response = await client.messages.create({
           ...toAnthropicRequest(input.config?.version ?? modelName, input),
           stream: false,

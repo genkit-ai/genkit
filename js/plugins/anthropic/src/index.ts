@@ -16,7 +16,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { genkitPluginV2, type GenkitPluginV2 } from 'genkit/plugin';
+import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 
 import {
   type ActionMetadata,
@@ -111,7 +111,7 @@ function validateApiKey(options?: PluginOptions): void {
  * const model = anthropic.model('claude-sonnet-4');
  * ```
  */
-function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
+function anthropicPlugin(options?: PluginOptions): GenkitPlugin {
   // Validate API key at plugin init (unless deferred with apiKey: false)
   validateApiKey(options);
 
@@ -121,7 +121,7 @@ function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
 
   let listActionsCache: ActionMetadata[] | null = null;
 
-  return genkitPluginV2({
+  return genkitPlugin({
     name: 'anthropic',
     init: async () => {
       const actions: ModelAction[] = [];
@@ -132,10 +132,8 @@ function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
     },
     resolve: (actionType: ActionType, name: string) => {
       if (actionType === 'model') {
-        // Strip the 'anthropic/' namespace prefix if present
-        const modelName = name.startsWith('anthropic/') ? name.slice(10) : name;
         return claudeModel({
-          name: modelName,
+          name,
           pluginApiKey,
           defaultApiVersion,
           testClient,
@@ -162,7 +160,7 @@ function anthropicPlugin(options?: PluginOptions): GenkitPluginV2 {
 }
 
 export type AnthropicPlugin = {
-  (pluginOptions?: PluginOptions): GenkitPluginV2;
+  (pluginOptions?: PluginOptions): GenkitPlugin;
   model(
     name: KnownClaudeModels | (ClaudeModelName & {}),
     config?: ClaudeConfig

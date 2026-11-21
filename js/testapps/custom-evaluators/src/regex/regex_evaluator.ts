@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import type { Genkit } from 'genkit';
 import type {
   BaseEvalDataPoint,
   EvalResponse,
   EvaluatorAction,
   Score,
 } from 'genkit/evaluator';
+import { evaluator } from 'genkit/plugin';
 import type { ByoMetric } from '..';
 
 /** We allow multiple regex matchers to be defined. This is the prefix to use. */
@@ -58,14 +58,13 @@ export function isRegexMetric(metric: ByoMetric) {
  * Configures regex evaluators.
  */
 export function createRegexEvaluators(
-  ai: Genkit,
   metrics: RegexMetric[]
 ): EvaluatorAction[] {
   return metrics.map((metric) => {
     const regexMetric = metric as RegexMetric;
-    return ai.defineEvaluator(
+    return evaluator(
       {
-        name: `byo/${metric.name.toLocaleLowerCase()}`,
+        name: metric.name.toLocaleLowerCase(),
         displayName: 'Regex Match',
         definition:
           'Runs the output against a regex and responds with 1 if a match is found and 0 otherwise.',

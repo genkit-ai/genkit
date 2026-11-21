@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { GenkitError } from '@genkit-ai/core';
 import { logger } from '@genkit-ai/core/logging';
 import * as assert from 'assert';
 import { beforeEach, describe, it, mock } from 'node:test';
@@ -22,55 +23,16 @@ import { tool } from '../src/index';
 import {
   backgroundModel,
   embedderActionMetadata,
+  evaluator,
   genkitPlugin,
-  genkitPluginV2,
   model,
   modelActionMetadata,
+  type GenkitPlugin,
 } from '../src/plugin';
 import { defineEchoModel } from './helpers';
 
-const v1Plugin = genkitPlugin(
-  'myV1Plugin',
-  (ai) => {
-    ai.defineModel({ name: 'myV1Plugin/model_eager' }, async () => {
-      return {};
-    });
-  },
-  async (ai, actionType, name) => {
-    switch (actionType) {
-      case 'model':
-        ai.defineModel({ name: 'myV1Plugin/' + name }, async () => {
-          return {};
-        });
-      case 'background-model':
-        ai.defineBackgroundModel({
-          name: 'myV1Plugin/' + name,
-          async start() {
-            return { id: 'abc' };
-          },
-          async check(operation) {
-            return operation;
-          },
-          async cancel(operation) {
-            return operation;
-          },
-        });
-    }
-  },
-  async () => {
-    return [
-      modelActionMetadata({
-        name: 'myV1Plugin/potential_model',
-      }),
-      embedderActionMetadata({
-        name: 'myV1Plugin/potential_embedder',
-      }),
-    ];
-  }
-);
-
-const v2Plugin = genkitPluginV2({
-  name: 'myV2Plugin',
+const myPlugin = genkitPlugin({
+  name: 'myPlugin',
   init() {
     return [
       model({ name: 'model_eager' }, async () => {
@@ -109,19 +71,20 @@ const v2Plugin = genkitPluginV2({
         name: 'potential_model',
       }),
       embedderActionMetadata({
-        name: 'potential_embedder',
+        // Already-namespaced names are kept as is.
+        name: 'myPlugin/potential_embedder',
       }),
     ];
   },
 });
 
-describe('session', () => {
+describe('plugins', () => {
   let ai: GenkitBeta;
 
   beforeEach(() => {
     ai = genkit({
       model: 'echoModel',
-      plugins: [v1Plugin, v2Plugin],
+      plugins: [myPlugin],
     });
   });
 
@@ -133,12 +96,9 @@ describe('session', () => {
         )
       ),
       new Set([
-        '/embedder/myV1Plugin/potential_embedder',
-        '/embedder/myV2Plugin/potential_embedder',
-        '/model/myV1Plugin/potential_model',
-        '/model/myV1Plugin/model_eager',
-        '/model/myV2Plugin/model_eager',
-        '/model/myV2Plugin/potential_model',
+        '/embedder/myPlugin/potential_embedder',
+        '/model/myPlugin/model_eager',
+        '/model/myPlugin/potential_model',
       ])
     );
     assert.deepStrictEqual(
@@ -147,19 +107,16 @@ describe('session', () => {
           (a) => a.startsWith('/model') || a.startsWith('/embedder')
         )
       ),
-      new Set([
-        '/model/myV1Plugin/model_eager',
-        '/model/myV2Plugin/model_eager',
-      ])
+      new Set(['/model/myPlugin/model_eager'])
     );
   });
 
-  it('resolves from v1 plugin', async () => {
+  it('resolves actions', async () => {
     const act = await ai.registry.lookupAction(
-      '/model/myV1Plugin/potential_model'
+      '/model/myPlugin/potential_model'
     );
     assert.ok(act);
-    assert.strictEqual(act.__action.name, 'myV1Plugin/potential_model');
+    assert.strictEqual(act.__action.name, 'myPlugin/potential_model');
     assert.strictEqual(act.__action.actionType, 'model');
 
     assert.deepStrictEqual(
@@ -169,19 +126,25 @@ describe('session', () => {
         )
       ),
       new Set([
-        '/model/myV1Plugin/model_eager',
-        '/model/myV2Plugin/model_eager',
-        '/model/myV1Plugin/potential_model',
+        '/model/myPlugin/model_eager',
+        '/model/myPlugin/potential_model',
       ])
     );
   });
 
-  it('resolves background model from v1 plugin', async () => {
+  it('returns undefined for actions the plugin does not resolve', async () => {
+    assert.strictEqual(
+      await ai.registry.lookupAction('/model/myPlugin/not-found'),
+      undefined
+    );
+  });
+
+  it('resolves background models', async () => {
     const act = await ai.registry.lookupAction(
-      '/background-model/myV1Plugin/bg-model'
+      '/background-model/myPlugin/bg-model'
     );
     assert.ok(act);
-    assert.strictEqual(act.__action.name, 'myV1Plugin/bg-model');
+    assert.strictEqual(act.__action.name, 'myPlugin/bg-model');
     assert.strictEqual(act.__action.actionType, 'background-model');
 
     assert.deepStrictEqual(
@@ -194,76 +157,120 @@ describe('session', () => {
         )
       ),
       new Set([
-        '/background-model/myV1Plugin/bg-model',
-        '/check-operation/myV1Plugin/bg-model/check',
-        '/cancel-operation/myV1Plugin/bg-model/cancel',
+        '/background-model/myPlugin/bg-model',
+        '/check-operation/myPlugin/bg-model/check',
+        '/cancel-operation/myPlugin/bg-model/cancel',
       ])
     );
-  });
-
-  it('resolves from v2 plugin', async () => {
-    const act = await ai.registry.lookupAction(
-      '/model/myV2Plugin/potential_model'
-    );
-    assert.ok(act);
-    assert.strictEqual(act.__action.name, 'myV2Plugin/potential_model');
-    assert.strictEqual(act.__action.actionType, 'model');
-
-    assert.deepStrictEqual(
-      new Set(
-        Object.keys(await ai.registry.listActions()).filter(
-          (a) => a.startsWith('/model') || a.startsWith('/embedder')
-        )
-      ),
-      new Set([
-        '/model/myV1Plugin/model_eager',
-        '/model/myV2Plugin/model_eager',
-        '/model/myV2Plugin/potential_model',
-      ])
-    );
-  });
-
-  it('resolves background model from v2 plugin', async () => {
-    const act = await ai.registry.lookupAction(
-      '/background-model/myV2Plugin/bg-model'
-    );
-    assert.ok(act);
-    assert.strictEqual(act.__action.name, 'myV2Plugin/bg-model');
-    assert.strictEqual(act.__action.actionType, 'background-model');
-
-    assert.deepStrictEqual(
-      new Set(
-        Object.keys(await ai.registry.listActions()).filter(
-          (a) =>
-            a.startsWith('/background-model') ||
-            a.startsWith('/check-operation') ||
-            a.startsWith('/cancel-operation')
-        )
-      ),
-      new Set([
-        '/background-model/myV2Plugin/bg-model',
-        '/check-operation/myV2Plugin/bg-model/check',
-        '/cancel-operation/myV2Plugin/bg-model/cancel',
-      ])
-    );
-  });
-
-  it('resolves model using model resolve helper', async () => {
-    const act = await v2Plugin.model('foo-model');
-    assert.ok(act);
-    assert.strictEqual(act.__action.name, 'foo-model');
-    assert.strictEqual(act.__action.actionType, 'model');
-
-    await assert.rejects(v2Plugin.model('not-found'), {
-      name: 'GenkitError',
-      status: 'NOT_FOUND',
-    });
   });
 });
 
-describe('v2 plugin tools', () => {
+describe('plugin context', () => {
+  it('passes un-namespaced names to resolve', async () => {
+    const names: string[] = [];
+    const plugin = genkitPlugin({
+      name: 'ns',
+      resolve: (actionType, name) => {
+        names.push(name);
+        return actionType === 'model'
+          ? model({ name }, async () => ({}))
+          : undefined;
+      },
+    });
+    const ai = genkit({ plugins: [plugin] });
+    assert.ok(await ai.registry.lookupAction('/model/ns/foo'));
+    assert.deepStrictEqual(names, ['foo']);
+  });
+
+  it('gives actions an ai bound to the registry', async () => {
+    const judge = genkitPlugin({
+      name: 'judge',
+      init: ({ ai }) => [
+        evaluator(
+          {
+            name: 'echo',
+            displayName: 'echo',
+            definition: 'Scores with whatever the model says.',
+          },
+          async (dataPoint) => {
+            const { text } = await ai.generate({
+              model: 'echoModel',
+              prompt: String(dataPoint.output),
+            });
+            return {
+              testCaseId: dataPoint.testCaseId,
+              evaluation: { score: text },
+            };
+          }
+        ),
+      ],
+    });
+    const ai = genkit({ plugins: [judge] });
+    defineEchoModel(ai);
+    const [response] = await ai.evaluate({
+      evaluator: 'judge/echo',
+      dataset: [{ testCaseId: 't1', input: 'q', output: 'hello' }],
+    });
+    const evaluation = response.evaluation;
+    assert.ok(!Array.isArray(evaluation));
+    assert.match(String(evaluation.score), /^Echo: hello/);
+  });
+
+  it('does not expose define* on ctx.ai', async () => {
+    let ctxAi: unknown;
+    const plugin = genkitPlugin({
+      name: 'peek',
+      init: ({ ai }) => {
+        ctxAi = ai;
+        return [];
+      },
+    });
+    const ai = genkit({ plugins: [plugin] });
+    await ai.registry.initializeAllPlugins();
+    assert.ok(ctxAi);
+    assert.notStrictEqual(ctxAi, ai);
+    assert.strictEqual(
+      (ctxAi as Record<string, unknown>)['defineModel'],
+      undefined
+    );
+  });
+});
+
+describe('v1 plugins', () => {
+  it('genkitPlugin rejects the v1 call shape', () => {
+    // Simulates an un-migrated JS caller.
+    const v1GenkitPlugin = genkitPlugin as unknown as (
+      name: string,
+      initFn: () => void
+    ) => GenkitPlugin;
+    assert.throws(
+      () => v1GenkitPlugin('legacy', () => {}),
+      (e: unknown) =>
+        e instanceof GenkitError &&
+        e.status === 'INVALID_ARGUMENT' &&
+        e.message.includes('genkitPlugin({ name, init })')
+    );
+  });
+
+  it('genkit() rejects function plugins', () => {
+    const v1Plugin = (() => ({
+      name: 'legacy',
+      initializer: () => {},
+    })) as unknown as GenkitPlugin;
+    assert.throws(
+      () => genkit({ plugins: [v1Plugin] }),
+      (e: unknown) =>
+        e instanceof GenkitError &&
+        e.status === 'INVALID_ARGUMENT' &&
+        e.message.includes('plugins[0]') &&
+        e.message.includes('removed in Genkit 2.0')
+    );
+  });
+});
+
+describe('plugin tools', () => {
   it('are not registered again when passed to generate', async () => {
-    const toolPlugin = genkitPluginV2({
+    const toolPlugin = genkitPlugin({
       name: 'toolPlugin',
       init: () => [
         tool({ name: 'eager', description: 'eager' }, async () => 'ok'),
