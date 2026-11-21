@@ -15,18 +15,27 @@
  */
 
 import type { Genkit } from 'genkit';
-import { logger } from 'genkit/logging';
-import type { ModelMiddleware } from 'genkit/model';
 import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
-import { GoogleAuth, type GoogleAuthOptions } from 'google-auth-library';
+import type { GoogleAuthOptions } from 'google-auth-library';
+import { initializeAuth } from './auth.js';
 import { checksEvaluators } from './evaluation.js';
 import {
   ChecksEvaluationMetricType,
   type ChecksEvaluationMetric,
+  type ChecksEvaluationMetricConfig,
 } from './metrics.js';
-import { checksMiddleware as authorizedMiddleware } from './middleware.js';
 
-export { ChecksEvaluationMetricType };
+export {
+  ChecksMiddlewareOptionsSchema,
+  checksMiddleware,
+  type ChecksMiddlewareOptions,
+  type ChecksMiddlewarePluginOptions,
+} from './middleware.js';
+export {
+  ChecksEvaluationMetricType,
+  type ChecksEvaluationMetric,
+  type ChecksEvaluationMetricConfig,
+};
 
 export interface PluginOptions {
   /** The Google Cloud project id to call. Must have quota for the Checks API. */
@@ -39,17 +48,12 @@ export interface PluginOptions {
   };
 }
 
-const CLOUD_PLATFROM_OAUTH_SCOPE =
-  'https://www.googleapis.com/auth/cloud-platform';
-
-const CHECKS_OAUTH_SCOPE = 'https://www.googleapis.com/auth/checks';
-
 /**
  * Add Google Checks evaluators.
  */
 export function checks(options?: PluginOptions): GenkitPlugin {
   return genkitPlugin('checks', async (ai: Genkit) => {
-    const googleAuth = inititializeAuth(options?.googleAuthOptions);
+    const googleAuth = initializeAuth(options?.googleAuthOptions);
 
     const projectId = options?.projectId || (await googleAuth.getProjectId());
 
@@ -65,58 +69,6 @@ export function checks(options?: PluginOptions): GenkitPlugin {
         : [];
     checksEvaluators(ai, googleAuth, metrics, projectId);
   });
-}
-
-export function checksMiddleware(options: {
-  authOptions: GoogleAuthOptions;
-  metrics: ChecksEvaluationMetric[];
-}): ModelMiddleware {
-  const googleAuth = inititializeAuth(options.authOptions);
-
-  return authorizedMiddleware({
-    auth: googleAuth,
-    metrics: options.metrics,
-    projectId: options.authOptions.projectId,
-  });
-}
-
-/**
- * Helper function for initializing an instance of GoogleAuth.
- *
- * @param options Options for initializing a GoogleAuth instance.
- * @returns GoogleAuth
- */
-function inititializeAuth(options?: GoogleAuthOptions): GoogleAuth {
-  let googleAuth: GoogleAuth;
-
-  // Allow customers to pass in cloud credentials from environment variables
-  // following: https://github.com/googleapis/google-auth-library-nodejs?tab=readme-ov-file#loading-credentials-from-environment-variables
-  if (process.env.GCLOUD_SERVICE_ACCOUNT_CREDS) {
-    const serviceAccountCreds = JSON.parse(
-      process.env.GCLOUD_SERVICE_ACCOUNT_CREDS
-    );
-    options = {
-      credentials: serviceAccountCreds,
-      scopes: [CLOUD_PLATFROM_OAUTH_SCOPE, CHECKS_OAUTH_SCOPE],
-    };
-    googleAuth = new GoogleAuth(options);
-  } else {
-    googleAuth = new GoogleAuth(
-      options ?? {
-        scopes: [CLOUD_PLATFROM_OAUTH_SCOPE, CHECKS_OAUTH_SCOPE],
-      }
-    );
-  }
-
-  googleAuth.getClient().then((client) => {
-    if (client.quotaProjectId && options?.projectId) {
-      logger.warn(
-        `Checks Evaluator: Your Google cloud authentication has a default quota project(${client.quotaProjectId}) associated with it which will overrid the projectId in your Checks plugin config(${options?.projectId}).`
-      );
-    }
-  });
-
-  return googleAuth;
 }
 
 export default checks;

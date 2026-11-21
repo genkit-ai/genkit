@@ -24,17 +24,13 @@ import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import {
   MessageSchema,
+  generateMiddleware,
   genkit,
   tool,
   z,
-  type GenerateResponseData,
   type MediaPart,
 } from 'genkit/beta';
 import { logger } from 'genkit/logging';
-import {
-  simulateConstrainedGeneration,
-  type ModelMiddleware,
-} from 'genkit/model';
 import type { PluginProvider } from 'genkit/plugin';
 import { Allow, parse } from 'partial-json';
 import wav from 'wav';
@@ -155,7 +151,7 @@ export const streamFlowGemini = ai.defineFlow(
   },
   async (prompt, { sendChunk }) => {
     const { response, stream } = ai.generateStream({
-      model: googleAI.model('gemini-2.5-flash', { temperature: 0.77 }),
+      model: googleAI.model('gemini-flash-latest', { temperature: 0.77 }),
       prompt,
     });
 
@@ -238,7 +234,7 @@ export const jokeWithToolsFlow = ai.defineFlow(
   {
     name: 'jokeWithToolsFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash', 'gemini-2.5-pro']),
+      modelName: z.enum(['gemini-flash-latest', 'gemini-pro-latest']),
       subject: z.string(),
     }),
     outputSchema: z.object({ model: z.string(), joke: z.string() }),
@@ -262,7 +258,7 @@ export const jokeWithOutputFlow = ai.defineFlow(
   {
     name: 'jokeWithOutputFlow',
     inputSchema: z.object({
-      modelName: z.enum(['gemini-2.5-flash']),
+      modelName: z.enum(['gemini-flash-latest']),
       subject: z.string(),
     }),
     outputSchema,
@@ -270,12 +266,15 @@ export const jokeWithOutputFlow = ai.defineFlow(
   async (input, { sendChunk }) => {
     const llmResponse = await ai.generate({
       model: googleAI.model(input.modelName),
+      // Asks for JSON via prompt instructions instead of the model's native
+      // constrained decoding.
       output: {
         format: 'json',
         schema: outputSchema,
+        constrained: false,
+        instructions: true,
       },
       prompt: `Tell a long joke about ${input.subject}.`,
-      use: [simulateConstrainedGeneration()],
       onChunk: (c) => sendChunk(c.output),
     });
     return { ...llmResponse.output! };
@@ -756,21 +755,27 @@ ai.defineModel(
   }
 );
 
-const blockingMiddleware: ModelMiddleware = async (req, next) => {
-  logger.warn(
-    'blockingMiddleware invoked: request blocked due to policy violation.'
-  );
-  return {
-    finishReason: 'blocked',
-    finishMessage: `Model input violated policies: further processing blocked.`,
-  } as GenerateResponseData;
-};
+// Blocks every model call, to show how a blocked response surfaces.
+const blockingMiddleware = generateMiddleware(
+  { name: 'blockingMiddleware' },
+  () => ({
+    model: async () => {
+      logger.warn(
+        'blockingMiddleware invoked: request blocked due to policy violation.'
+      );
+      return {
+        finishReason: 'blocked',
+        finishMessage: `Model input violated policies: further processing blocked.`,
+      };
+    },
+  })
+);
 
 ai.defineFlow('blockingMiddleware', async () => {
   const { text } = await ai.generate({
     prompt: 'hi',
     model: 'hiModel',
-    use: [blockingMiddleware],
+    use: [blockingMiddleware()],
   });
   return text;
 });
@@ -894,7 +899,7 @@ ai.defineFlow(
   },
   async ({ url, prompt, model }) => {
     const { text } = await ai.generate({
-      model: model || 'googleai/gemini-2.5-flash',
+      model: model || 'googleai/gemini-flash-latest',
       prompt: [{ text: prompt }, { media: { url, contentType: 'video/mp4' } }],
     });
     return text;
@@ -1333,7 +1338,7 @@ export const transferFlowManual = ai.defineFlow(
     const response = await ai.generate({
       prompt: 'Ask me a movie trivia question.',
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-pro-latest'),
     });
 
     const answers = [];
@@ -1355,7 +1360,7 @@ export const transferFlowManual = ai.defineFlow(
 
     const finalResponse = await ai.generate({
       tools: [askQuestion],
-      model: googleAI.model('gemini-2.5-pro'),
+      model: googleAI.model('gemini-pro-latest'),
       messages: response.messages,
       resume: {
         respond: answers,

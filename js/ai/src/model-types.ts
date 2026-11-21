@@ -33,12 +33,15 @@ export { Part, PartSchema };
 /** Zod schema for a serializable reference to a registered generate middleware. */
 // Loose: in-process callers attach the middleware definition (`__def`) so it
 // can run without being registered; parsing must not strip it.
-export const MiddlewareRefSchema: z.ZodType<any, any> = z.looseObject({
+export const MiddlewareRefSchema: z.ZodType<MiddlewareRef> = z.looseObject({
   name: z.string(),
   config: z.any().optional(),
 });
 /** A serializable reference to a registered generate middleware, identified by name and optional config. */
-export type MiddlewareRef = z.infer<typeof MiddlewareRefSchema>;
+export interface MiddlewareRef {
+  name: string;
+  config?: any;
+}
 
 //
 // IMPORTANT: Please keep type definitions in sync with

@@ -63,6 +63,7 @@ export {
   type EvaluatorReference,
   type ExecutablePrompt,
   type GenerateMiddleware,
+  type GenerateMiddlewareArgument,
   type GenerateMiddlewareDef,
   type GenerateOptions,
   type GenerateRequest,

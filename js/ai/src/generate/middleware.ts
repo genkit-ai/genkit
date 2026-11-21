@@ -38,6 +38,15 @@ import {
 import { type GenkitPluginV2 } from '../plugin.js';
 import { ToolAction } from '../tool.js';
 
+/**
+ * An entry of `use` in generate and prompt options: the ref returned by
+ * calling a `generateMiddleware(...)` factory (e.g. `retry()`), or a
+ * `{ name, config }` ref to registered middleware.
+ */
+// `bind?: never` keeps plain functions, which have a `name`, from matching
+// structurally. Model middleware functions go in `defineModel({ use })`.
+export type GenerateMiddlewareArgument = MiddlewareRef & { bind?: never };
+
 /** Descriptor for a registered middleware, returned by reflection API. */
 export const MiddlewareDescSchema = z.object({
   /** Unique name of the middleware. */

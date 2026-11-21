@@ -27,4 +27,10 @@
  * @module
  */
 
-export { modelArmor, type ModelArmorOptions } from './model-armor.js';
+export {
+  ModelArmorOptionsSchema,
+  modelArmor,
+  type ApplyDeidentificationResultsFn,
+  type ModelArmorOptions,
+  type ModelArmorPluginOptions,
+} from './model-armor.js';

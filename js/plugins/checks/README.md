@@ -52,7 +52,16 @@ import { googleAI } from '@genkit-ai/google-genai';
 export const ai = genkit({
   plugins: [
     googleAI(),
-    // ... any other plugins you need.
+    // Optional: configures auth for the Checks API. Without it, Application
+    // Default Credentials are used.
+    checksMiddleware.plugin({
+      authOptions: {
+        // Project to charge quota to.
+        // Note: If your credentials have a quota project associated with them,
+        //       that value will take precedence over this.
+        projectId: 'your-project-id',
+      },
+    }),
   ],
 });
 
@@ -68,12 +77,6 @@ export const poemFlow = ai.defineFlow(
       // Add checks middleware to your generate calls.
       use: [
         checksMiddleware({
-          authOptions: {
-            // Project to charge quota to.
-            // Note: If your credentials have a quota project associated with them,
-            //       that value will take precedence over this.
-            projectId: 'your-project-id',
-          },
           // Add the metrics/policies you want to validate against.
           metrics: [
             // This will use the default threshold determined by Checks.

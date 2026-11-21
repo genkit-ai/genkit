@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-import { modelRef, type ModelMiddleware } from '@genkit-ai/ai/model';
+import { modelRef } from '@genkit-ai/ai/model';
 import { stripUndefinedProps } from '@genkit-ai/core';
 import * as assert from 'assert';
 import { beforeEach, describe, it } from 'node:test';
-import { genkit, z, type GenkitBeta } from '../src/beta';
+import { generateMiddleware, genkit, z, type GenkitBeta } from '../src/beta';
 import type { PromptAction } from '../src/index';
 import {
   defineEchoModel,
@@ -27,40 +27,30 @@ import {
   type ProgrammableModel,
 } from './helpers';
 
-const wrapRequest: ModelMiddleware = async (req, next) => {
-  return next({
-    ...req,
-    messages: [
+const wrapRequest = generateMiddleware({ name: 'wrapRequest' }, () => ({
+  model: (req, ctx, next) => {
+    const text = req.messages
+      .map((m) => m.content.map((c) => c.text).join())
+      .join();
+    return next(
       {
-        role: 'user',
-        content: [
-          {
-            text:
-              '(' +
-              req.messages
-                .map((m) => m.content.map((c) => c.text).join())
-                .join() +
-              ')',
-          },
-        ],
+        ...req,
+        messages: [{ role: 'user', content: [{ text: `(${text})` }] }],
       },
-    ],
-  });
-};
-const wrapResponse: ModelMiddleware = async (req, next) => {
-  const res = await next(req);
-  return {
-    message: {
-      role: 'model',
-      content: [
-        {
-          text: '[' + res.message!.content.map((c) => c.text).join() + ']',
-        },
-      ],
-    },
-    finishReason: res.finishReason,
-  };
-};
+      ctx
+    );
+  },
+}));
+const wrapResponse = generateMiddleware({ name: 'wrapResponse' }, () => ({
+  model: async (req, ctx, next) => {
+    const res = await next(req, ctx);
+    const text = res.message!.content.map((c) => c.text).join();
+    return {
+      message: { role: 'model', content: [{ text: `[${text}]` }] },
+      finishReason: res.finishReason,
+    };
+  },
+}));
 
 describe('definePrompt', () => {
   let ai: GenkitBeta;
@@ -122,7 +112,7 @@ describe('definePrompt', () => {
 
     const response = await prompt(
       { name: 'Genkit' },
-      { use: [wrapRequest, wrapResponse] }
+      { use: [wrapRequest(), wrapResponse()] }
     );
     assert.strictEqual(response.text, '[Echo: (hi Genkit),; config: {}]');
   });
@@ -135,7 +125,7 @@ describe('definePrompt', () => {
           name: z.string(),
         }),
       },
-      use: [wrapRequest, wrapResponse],
+      use: [wrapRequest(), wrapResponse()],
       messages: async (input) => {
         return [
           {
@@ -158,7 +148,7 @@ describe('definePrompt', () => {
           name: z.string(),
         }),
       },
-      use: [wrapRequest, wrapResponse],
+      use: [wrapRequest(), wrapResponse()],
       messages: async (input) => {
         return [
           {
@@ -197,7 +187,7 @@ describe('definePrompt', () => {
 
     const response = await prompt(
       { name: 'Genkit' },
-      { use: [wrapRequest, wrapResponse] }
+      { use: [wrapRequest(), wrapResponse()] }
     );
     assert.strictEqual(response.text, '[Echo: (hi Genkit),; config: {}]');
   });
@@ -280,7 +270,7 @@ describe('definePrompt', () => {
 
       const response = await prompt(
         { name: 'Genkit' },
-        { use: [wrapRequest, wrapResponse] }
+        { use: [wrapRequest(), wrapResponse()] }
       );
       assert.strictEqual(response.text, '[Echo: (hi Genkit),; config: {}]');
     });
@@ -293,7 +283,7 @@ describe('definePrompt', () => {
             name: z.string(),
           }),
         },
-        use: [wrapRequest, wrapResponse],
+        use: [wrapRequest(), wrapResponse()],
         prompt: 'hi {{ name }}',
       });
 
@@ -309,7 +299,7 @@ describe('definePrompt', () => {
             name: z.string(),
           }),
         },
-        use: [wrapRequest, wrapResponse],
+        use: [wrapRequest(), wrapResponse()],
         prompt: 'hi {{ name }}',
       });
 
@@ -334,7 +324,7 @@ describe('definePrompt', () => {
 
       const response = await prompt(
         { name: 'Genkit' },
-        { use: [wrapRequest, wrapResponse] }
+        { use: [wrapRequest(), wrapResponse()] }
       );
       assert.strictEqual(response.text, '[Echo: (hi Genkit),; config: {}]');
     });
@@ -968,11 +958,21 @@ describe('definePrompt', () => {
 describe('prompt', () => {
   let ai: GenkitBeta;
   let pm: ProgrammableModel;
+  // Referenced by name from tests/prompts/test.variant.prompt.
+  let myMiddlewareCalls = 0;
+  const myMiddleware = generateMiddleware({ name: 'myMiddleware' }, () => ({
+    model: (req, ctx, next) => {
+      myMiddlewareCalls++;
+      return next(req, ctx);
+    },
+  }));
 
   beforeEach(() => {
+    myMiddlewareCalls = 0;
     ai = genkit({
       model: 'echoModel',
       promptDir: './tests/prompts',
+      plugins: [myMiddleware.plugin()],
     });
     defineEchoModel(ai);
     pm = defineProgrammableModel(ai);
@@ -1266,6 +1266,8 @@ describe('prompt', () => {
       text,
       'Echo: Hello from a variant of the hello prompt; config: {"temperature":13}'
     );
+    // `use: [myMiddleware]` in the .prompt file resolves registered middleware.
+    assert.strictEqual(myMiddlewareCalls, 1);
   });
 
   it('includes metadata expected by the dev ui', async () => {

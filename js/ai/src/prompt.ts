@@ -50,10 +50,10 @@ import {
   type OutputOptions,
   type ToolChoice,
 } from './generate.js';
+import type { GenerateMiddlewareArgument } from './generate/middleware.js';
 import { Message } from './message.js';
 import {
   GenerateActionOptionsSchema,
-  MiddlewareRef,
   type GenerateActionOptions,
   type GenerateRequest,
   type GenerateRequestSchema,
@@ -62,7 +62,6 @@ import {
   type MessageData,
   type ModelAction,
   type ModelArgument,
-  type ModelMiddleware,
   type ModelReference,
   type Part,
 } from './model.js';
@@ -133,7 +132,11 @@ export interface PromptConfig<
   metadata?: Record<string, any>;
   tools?: ToolArgument[];
   toolChoice?: ToolChoice;
-  use?: (ModelMiddleware | MiddlewareRef)[];
+  /**
+   * Generate middleware to apply when the prompt runs: `generateMiddleware`
+   * refs (e.g. `retry()`) or names of registered middleware.
+   */
+  use?: (GenerateMiddlewareArgument | string)[];
   context?: ActionContext;
 }
 
@@ -333,7 +336,9 @@ function definePromptAsync<
           toolChoice: resolvedOptions.toolChoice,
           context: resolvedOptions.context,
           output: resolvedOptions.output,
-          use: resolvedOptions.use,
+          use: resolvedOptions.use?.map((m) =>
+            typeof m === 'string' ? { name: m } : m
+          ),
           ...stripUndefinedProps(renderOptions),
           config: {
             ...resolvedOptions?.config,

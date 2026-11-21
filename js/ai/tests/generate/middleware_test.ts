@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { z } from '@genkit-ai/core';
+import { GenkitError, z } from '@genkit-ai/core';
 import { initNodeFeatures } from '@genkit-ai/core/node';
 import { Registry } from '@genkit-ai/core/registry';
 import * as assert from 'assert';
@@ -27,9 +27,10 @@ import {
 import {
   GenerateMiddlewareDef,
   generateMiddleware,
+  type GenerateMiddlewareArgument,
 } from '../../src/generate/middleware.js';
 import { resolveRestartedTools } from '../../src/generate/resolve-tool-requests.js';
-import { defineModel } from '../../src/model.js';
+import { defineModel, type ModelMiddleware } from '../../src/model.js';
 import { ToolInterruptError, defineTool, tool } from '../../src/tool.js';
 
 initNodeFeatures();
@@ -193,7 +194,7 @@ describe('generateMiddleware', () => {
     ]);
   });
 
-  it('supports configuration and old-style function middleware', async () => {
+  it('supports configuration', async () => {
     let configValue = '';
 
     const mockModel = defineModel(
@@ -219,20 +220,13 @@ describe('generateMiddleware', () => {
       })
     );
 
-    let oldStyleExecuted = false;
-    const oldStyleMiddleware = async (req: any, next: any) => {
-      oldStyleExecuted = true;
-      return next(req);
-    };
-
     await generate(registry, {
       model: mockModel,
       prompt: 'test',
-      use: [testMiddleware({ val: 'test_config' }), oldStyleMiddleware],
+      use: [testMiddleware({ val: 'test_config' })],
     });
 
     assert.strictEqual(configValue, 'test_config');
-    assert.strictEqual(oldStyleExecuted, true);
   });
 
   it('supports pre-registered middleware (e.g. installed via plugin)', async () => {
@@ -348,7 +342,7 @@ describe('generateMiddleware', () => {
         await generate(registry, {
           model: mockModel,
           prompt: 'test',
-          use: [streamModifyingMw as any],
+          use: [streamModifyingMw as unknown as GenerateMiddlewareArgument],
         });
       },
       (err: any) => {
@@ -514,38 +508,7 @@ describe('generateMiddleware', () => {
     ]);
   });
 
-  it('supports a combination of new middleware and old-style functional middleware', async () => {
-    const executionOrder: string[] = [];
-
-    const newMw = generateMiddleware({ name: 'newMw' }, () => ({
-      async generate(opts, ctx, next) {
-        executionOrder.push('newMw:gen:start');
-        const res = await next(opts, ctx);
-        executionOrder.push('newMw:gen:end');
-        return res;
-      },
-      async model(req, ctx, next) {
-        executionOrder.push('newMw:model:start');
-        const res = await next(req, ctx);
-        executionOrder.push('newMw:model:end');
-        return res;
-      },
-    }));
-
-    const oldMw1 = async (req: any, next: any) => {
-      executionOrder.push('oldMw1:model:start');
-      const res = await next(); // Validating 0-argument backwards-compatibility
-      executionOrder.push('oldMw1:model:end');
-      return res;
-    };
-
-    const oldMw2 = async (req: any, ctx: any, next: any) => {
-      executionOrder.push('oldMw2:model:start');
-      const res = await next(req, ctx);
-      executionOrder.push('oldMw2:model:end');
-      return res;
-    };
-
+  it('rejects plain model middleware functions with a migration hint', async () => {
     const mockModel = defineModel(
       registry,
       { name: 'mockModel' },
@@ -554,23 +517,21 @@ describe('generateMiddleware', () => {
         finishReason: 'stop',
       })
     );
+    const oldStyle: ModelMiddleware = async (req, next) => next(req);
 
-    await generate(registry, {
-      model: mockModel,
-      prompt: 'test mixed',
-      use: [oldMw1, newMw(), oldMw2],
-    });
-
-    assert.deepStrictEqual(executionOrder, [
-      'newMw:gen:start', // Generate level ALWAYS runs first across full array
-      'oldMw1:model:start',
-      'newMw:model:start',
-      'oldMw2:model:start',
-      'oldMw2:model:end',
-      'newMw:model:end',
-      'oldMw1:model:end',
-      'newMw:gen:end',
-    ]);
+    await assert.rejects(
+      generate(registry, {
+        model: mockModel,
+        prompt: 'test',
+        // What a plain JS caller could still pass; the type rejects it.
+        use: [oldStyle as unknown as GenerateMiddlewareArgument],
+      }),
+      (err: GenkitError) => {
+        assert.strictEqual(err.status, 'INVALID_ARGUMENT');
+        assert.match(err.message, /generateMiddleware/);
+        return true;
+      }
+    );
   });
 
   it('injects tools from new-style generateMiddleware and executes tool requests', async () => {
