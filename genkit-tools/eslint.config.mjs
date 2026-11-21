@@ -27,6 +27,9 @@ export default defineConfig(
   {
     files: ['**/*.ts'],
     extends: [tseslint.configs.base, eslintConfigPrettier],
+    rules: {
+      'no-unsafe-finally': 'error',
+    },
   },
   {
     files: ['**/*.test.ts'],
