@@ -1,6 +1,6 @@
 ---
 name: genkit-tools-testing
-description: Guide for writing and reviewing Vitest unit tests (*_test.ts) in genkit-tools/. Use when creating, modifying, fixing, or reviewing tests under genkit-tools/.
+description: Guide for writing and reviewing Vitest unit tests (*.test.ts) in genkit-tools/. Use when creating, modifying, fixing, or reviewing tests under genkit-tools/.
 ---
 
 # Genkit Tools Testing Guide
@@ -16,5 +16,5 @@ description: Guide for writing and reviewing Vitest unit tests (*_test.ts) in ge
 
 ## 2. File Layout & Shared Fixtures
 
-- **Mirror `src/` in `tests/`**: Place tests in `tests/<subpath>/<name>_test.ts` mirroring `src/<subpath>/<name>.ts`.
-- **Keep fixtures separate from test suites**: Put reusable test builders and fixture constants in dedicated `testing/mock_data.ts` helpers rather than duplicating large inline objects across `*_test.ts` files.
+- **Mirror `src/` in `tests/`**: Place tests in `tests/<subpath>/<name>.test.ts` (kebab-case) mirroring `src/<subpath>/<name>.ts`.
+- **Keep fixtures separate from test suites**: Put reusable test builders and fixture constants in dedicated `testing/mock_data.ts` helpers rather than duplicating large inline objects across `*.test.ts` files.

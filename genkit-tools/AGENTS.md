@@ -10,5 +10,5 @@ This document defines high-level architectural and testing conventions for contr
 ## 2. Testing & Skill Enforcement
 
 - **CLI & MCP authoring**: When adding or modifying CLI commands (`cli/src/commands/`) or MCP tools (`cli/src/mcp/`), read and follow the `genkit-tools-cli` skill (`../.agents/skills/genkit-tools-cli/SKILL.md`).
-- **Unit tests (`*_test.ts`)**: Whenever creating, modifying, fixing, or reviewing unit tests in `genkit-tools/`, read and follow the `genkit-tools-testing` skill (`../.agents/skills/genkit-tools-testing/SKILL.md`) first.
+- **Unit tests (`*.test.ts`)**: Whenever creating, modifying, fixing, or reviewing unit tests in `genkit-tools/`, read and follow the `genkit-tools-testing` skill (`../.agents/skills/genkit-tools-testing/SKILL.md`) first.
 - **Verification**: Run tests from the package directory (e.g., `cd genkit-tools/common && pnpm test`) or `pnpm test:genkit-tools` from the repo root.
