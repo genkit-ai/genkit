@@ -243,10 +243,12 @@ func (m *InMemoryStreamManager) Subscribe(ctx context.Context, streamID string) 
 		return nil, nil, status.PublicErrorf(ErrStreamNotFound, "stream %q not found", streamID)
 	}
 
-	ch := make(chan StreamEvent, inMemoryStreamBufferSize)
-
 	state.mu.Lock()
 	defer state.mu.Unlock()
+
+	// Replay is queued before the caller can read the channel, so it must
+	// fit the entire history and a possible terminal event.
+	ch := make(chan StreamEvent, max(inMemoryStreamBufferSize, len(state.chunks)+1))
 
 	// Send all buffered chunks
 	for _, chunk := range state.chunks {
