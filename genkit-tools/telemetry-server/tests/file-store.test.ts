@@ -1011,7 +1011,7 @@ describe('index', () => {
 
     const result = index.search({ limit: 10 });
 
-    expect(result.data.length).toBe(1);
+    expect(result.data).toHaveLength(1);
     expect(result.data[0].id).toBe(TRACE_ID_1);
     expect(result.data[0].start).toBe(1000);
     expect(result.data[0].end).toBe(2000);
@@ -1048,7 +1048,7 @@ describe('index', () => {
 
     // After dedup: TRACE_ID_1 (5000), trace_4 (4000), TRACE_ID_3 (3000), TRACE_ID_2 (2000), trace_5 (1000)
     const result = index.search({ limit: 2 });
-    expect(result.data.length).toBe(2);
+    expect(result.data).toHaveLength(2);
     expect(result.data[0].id).toBe(TRACE_ID_1);
     expect(result.data[0].start).toBe(5000);
     expect(result.data[0].end).toBe(5500); // has endTime from second post
@@ -1057,7 +1057,7 @@ describe('index', () => {
 
     // Page 2 - get remaining 3
     const result2 = index.search({ limit: 3, startFromIndex: 2 });
-    expect(result2.data.length).toBe(3);
+    expect(result2.data).toHaveLength(3);
     expect(result2.data[0].id).toBe(TRACE_ID_3);
     expect(result2.data[1].id).toBe(TRACE_ID_2);
     expect(result2.data[2].id).toBe('trace_5');
@@ -1079,7 +1079,7 @@ describe('index', () => {
     const result = index.search({ limit: 10 });
 
     // Should be sorted by start time descending: 300, 200, 100
-    expect(result.data.length).toBe(3);
+    expect(result.data).toHaveLength(3);
     expect(result.data[0].id).toBe(TRACE_ID_2); // start: 300
     expect(result.data[1].id).toBe(TRACE_ID_3); // start: 200
     expect(result.data[2].id).toBe(TRACE_ID_1); // start: 100
@@ -1098,7 +1098,7 @@ describe('index', () => {
 
     const result = index.search({ limit: 10 });
 
-    expect(result.data.length).toBe(1);
+    expect(result.data).toHaveLength(1);
     expect(result.data[0].id).toBe(TRACE_ID_1);
     expect(result.data[0].start).toBe(1000);
     // end should not be set for in-progress spans
@@ -1129,7 +1129,7 @@ describe('index', () => {
     const result = index.search({ limit: 10 });
 
     // Should only have one entry
-    expect(result.data.length).toBe(1);
+    expect(result.data).toHaveLength(1);
     expect(result.data[0].id).toBe(TRACE_ID_1);
     expect(result.data[0].start).toBe(1000);
     // Should have the end time from the completed span
@@ -1159,7 +1159,7 @@ describe('index', () => {
     const result = index.search({ limit: 10 });
 
     // Both should be returned, sorted by start time descending
-    expect(result.data.length).toBe(2);
+    expect(result.data).toHaveLength(2);
     expect(result.data[0].id).toBe(TRACE_ID_2); // start: 3000 (in-progress)
     expect(result.data[0].end).toBeUndefined();
     expect(result.data[1].id).toBe(TRACE_ID_1); // start: 1000 (completed)
@@ -1243,7 +1243,7 @@ describe('otlp-endpoint', () => {
     expect(getResp.status).toBe(200);
     const trace = await getResp.json();
     expect(trace.traceId).toBe(traceId);
-    expect(Object.keys(trace.spans).length).toBe(1);
+    expect(Object.keys(trace.spans)).toHaveLength(1);
     const span = Object.values(trace.spans)[0] as any;
     expect(span.traceId).toBe(traceId);
     expect(span.spanId).toBe('childSpanId1');
@@ -1299,7 +1299,7 @@ describe('otlp-endpoint', () => {
     expect(getResp.status).toBe(200);
     const trace = await getResp.json();
     expect(trace.traceId).toBe(traceId);
-    expect(Object.keys(trace.spans).length).toBe(2);
+    expect(Object.keys(trace.spans)).toHaveLength(2);
     const span1 = trace.spans['childSpanId1'];
     expect(span1.traceId).toBe(traceId);
     const span2 = trace.spans['childSpanId2'];
@@ -1396,7 +1396,7 @@ describe('otlp-endpoint (with parent)', () => {
     expect(getResp.status).toBe(200);
     const trace = await getResp.json();
     expect(trace.traceId).toBe(parentTraceId);
-    expect(Object.keys(trace.spans).length).toBe(1);
+    expect(Object.keys(trace.spans)).toHaveLength(1);
     const span = Object.values(trace.spans)[0] as any;
     expect(span.traceId).toBe(parentTraceId);
     expect(span.parentSpanId).toBe(parentSpanId);
@@ -1458,7 +1458,7 @@ describe('otlp-endpoint (with parent)', () => {
     expect(getResp.status).toBe(200);
     const trace = await getResp.json();
     expect(trace.traceId).toBe(parentTraceId);
-    expect(Object.keys(trace.spans).length).toBe(2);
+    expect(Object.keys(trace.spans)).toHaveLength(2);
     const span1 = trace.spans['childSpanId1'];
     expect(span1.traceId).toBe(parentTraceId);
     expect(span1.parentSpanId).toBe(parentSpanId);
@@ -1549,7 +1549,7 @@ describe('otlp-endpoint (with parent)', () => {
     expect(getResp.status).toBe(200);
     const trace = await getResp.json();
     expect(trace.traceId).toBe(parentTraceId);
-    expect(Object.keys(trace.spans).length).toBe(2);
+    expect(Object.keys(trace.spans)).toHaveLength(2);
     expect(trace.spans['childSpanId1']).toBeTruthy();
     expect(trace.spans['childSpanId2']).toBeTruthy();
   });
