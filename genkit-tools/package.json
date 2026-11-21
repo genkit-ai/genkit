@@ -7,6 +7,8 @@
   "scripts": {
     "preinstall": "npx only-allow pnpm",
     "build": "pnpm build:common-pkg && pnpm run \"/^(export:schemas|build:telemetry-server)$/\" && pnpm build:cli-pkg",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r typecheck",
     "build:cli": "pnpm build:cli-pkg",
     "build:cli-pkg": "cd cli && pnpm build",
     "build:telemetry-server": "cd telemetry-server && pnpm build",
@@ -19,9 +21,14 @@
     "pack:telemetry-server": "cd telemetry-server && pnpm pack --pack-destination ../../dist"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/eslint-plugin": "^1.6.28",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
     "json-schema": "^0.4.0",
     "only-allow": "^1.2.2",
     "tsx": "^4.23.15",
+    "typescript-eslint": "^8.72.1",
     "zod": "3.25.76",
     "zod-to-json-schema": "~3.25.2"
   },
